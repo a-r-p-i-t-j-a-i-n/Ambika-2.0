@@ -1,0 +1,27 @@
+/* CRITICAL: FORCED FULL WIDTH AND LEFT ALIGNMENT */
+
+:root {
+  font-family: 'Inter', system-ui, sans-serif;
+  line-height: 1.5;
+  color: #111827;
+  background-color: #ffffff;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
+#root {
+  width: 100vw !important; /* FORCED ABSOLUTE FULL WIDTH */
+  max-width: 100vw !important;
+  margin: 0 !important;   /* REMOVED AUTO-MARGINS */
+  padding: 0 !important;
+  text-align: left !important; /* FORCED LEFT ALIGNMENT */
+  display: block !important;    /* REMOVED FLEX THAT MIGHT CENTER */
+}
+
+* {
+  box-sizing: border-box;
+}
