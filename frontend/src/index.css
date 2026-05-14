@@ -1,27 +1,60 @@
-/* CRITICAL: FORCED FULL WIDTH AND LEFT ALIGNMENT */
+/* ─────────────────────────────────────────────────────────────────────
+   Ambika Dispatch — Global Base Styles
+   • No pure black. Base text resolves to deep navy (#0b2545).
+   • Body uses the theme's blue canvas; MUI takes over for surfaces.
+   • Full-width root for the app shell.
+   ───────────────────────────────────────────────────────────────────── */
 
 :root {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Inter', 'Plus Jakarta Sans', system-ui, sans-serif;
   line-height: 1.5;
-  color: #111827;
-  background-color: #ffffff;
+  color: #0b2545;           /* deepest readable navy — replaces black */
+  background-color: #eef3fc; /* premium cool canvas */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-body {
+html, body {
   margin: 0;
   padding: 0;
   width: 100%;
+  background-color: #eef3fc;
+  color: #0b2545;
 }
 
 #root {
-  width: 100vw !important; /* FORCED ABSOLUTE FULL WIDTH */
+  width: 100vw !important;
   max-width: 100vw !important;
-  margin: 0 !important;   /* REMOVED AUTO-MARGINS */
+  margin: 0 !important;
   padding: 0 !important;
-  text-align: left !important; /* FORCED LEFT ALIGNMENT */
-  display: block !important;    /* REMOVED FLEX THAT MIGHT CENTER */
+  text-align: left !important;
+  display: block !important;
+  color: #0b2545;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Default link color in the blue family */
+a {
+  color: #1d4ed8;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+a:hover {
+  color: #1e3a8a;
+}
+
+/* Selection in blue, never on a dark/black background */
+::selection {
+  background-color: rgba(29, 78, 216, 0.18);
+  color: #1e3a8a;
+}
+
+/* Subtle, branded scrollbars (Firefox) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(29, 78, 216, 0.28) transparent;
 }

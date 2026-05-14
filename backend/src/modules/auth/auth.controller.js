@@ -29,4 +29,15 @@ export const authController = {
   getMe: asyncHandler(async (req, res) => {
     res.json(ApiResponse.ok('User data retrieved', req.user));
   }),
+
+  getEmployees: asyncHandler(async (req, res) => {
+    const employees = await authService.getAllEmployees();
+    res.json(ApiResponse.ok('Employees retrieved successfully', employees));
+  }),
+
+  createEmployee: asyncHandler(async (req, res) => {
+    const user = await authService.register(req.body);
+    user.password = undefined;
+    res.status(201).json(ApiResponse.created('Employee created successfully', user));
+  }),
 };

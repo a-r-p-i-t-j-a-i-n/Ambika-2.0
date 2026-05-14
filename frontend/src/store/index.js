@@ -9,6 +9,7 @@ import './api/partyApi';
 import './api/skuApi';
 import './api/ppcApi';
 import './api/fmsApi';
+import './api/dispatchControlApi';
 
 export const store = configureStore({
   reducer: {

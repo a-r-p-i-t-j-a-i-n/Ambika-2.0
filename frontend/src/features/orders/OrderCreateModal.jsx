@@ -6,9 +6,9 @@ import {
 } from '@mui/material';
 import { X, Plus, Trash2, Save, FileText, Package } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
-import { useCreateOrderMutation } from '../../store/api/orderApi';
+import { useCreateOrderEntryMutation } from '../../store/api/dispatchControlApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
-import { useGetSkusQuery } from '../../store/api/skuApi';
+import { useGetSkuLookupQuery } from '../../store/api/skuApi';
 import { useSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 
@@ -22,9 +22,9 @@ const emptyItem = () => ({
 });
 
 const OrderCreateModal = ({ open, onClose }) => {
-  const [createOrder, { isLoading: isCreating }] = useCreateOrderMutation();
+  const [createOrderEntry, { isLoading: isCreating }] = useCreateOrderEntryMutation();
   const { data: partiesData } = useGetPartiesQuery({ limit: 200 });
-  const { data: skusData } = useGetSkusQuery({ limit: 500 });
+  const { data: skusData } = useGetSkuLookupQuery({ limit: 1000 });
   const { enqueueSnackbar } = useSnackbar();
 
   const parties = partiesData?.data || [];
@@ -126,7 +126,7 @@ const OrderCreateModal = ({ open, onClose }) => {
           orderQty: parseInt(item.orderQty),
         })),
       };
-      await createOrder(payload).unwrap();
+      await createOrderEntry(payload).unwrap();
       enqueueSnackbar('Sales Order created successfully!', { variant: 'success' });
       onClose();
     } catch (err) {

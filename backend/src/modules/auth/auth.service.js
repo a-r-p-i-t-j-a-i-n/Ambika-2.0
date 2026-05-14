@@ -34,4 +34,8 @@ export const authService = {
     }
     return user;
   },
+
+  async getAllEmployees() {
+    return User.find().select('-password');
+  },
 };

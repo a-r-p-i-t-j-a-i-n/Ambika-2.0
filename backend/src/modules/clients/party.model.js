@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
+import { baseSchemaFields, baseSchemaOptions } from '../../database/BaseSchema.js';
 
-const addressSchema = new mongoose.Schema({
+const { Schema, model } = mongoose;
+
+const addressSchema = new Schema({
   label:  { type: String, default: 'Primary' },
   line1:  { type: String },
   line2:  { type: String },
@@ -9,7 +12,9 @@ const addressSchema = new mongoose.Schema({
   pin:    { type: String },
 }, { _id: false });
 
-const partySchema = new mongoose.Schema({
+const partySchema = new Schema({
+  ...baseSchemaFields,
+
   code: {
     type: String,
     unique: true,
@@ -31,21 +36,23 @@ const partySchema = new mongoose.Schema({
   email:         { type: String, trim: true, lowercase: true },
   phone:         { type: String, trim: true },
 
+  // Specialized Email Routing for Dispatch/Communication
+  toEmails:  [{ type: String, trim: true, lowercase: true }],
+  ccEmails:  [{ type: String, trim: true, lowercase: true }],
+  bccEmails: [{ type: String, trim: true, lowercase: true }],
+
   creditPeriodDays: { type: Number, default: 30 },
   leadTimeDays:     { type: Number, default: 7 },
 
   addresses: [addressSchema],
 
-  isActive: { type: Boolean, default: true, index: true },
-}, {
-  timestamps: true,
-  toJSON:  { virtuals: true },
-  toObject: { virtuals: true },
-});
+}, baseSchemaOptions);
 
 // ── Indexes ──────────────────────────────────────────────────
 partySchema.index({ name: 'text', code: 'text', location: 'text' });
 partySchema.index({ isActive: 1, name: 1 });
+partySchema.index({ companyId: 1 });
 
-const Party = mongoose.model('Party', partySchema);
+const Party = model('Party', partySchema);
 export default Party;
+

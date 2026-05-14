@@ -46,6 +46,10 @@ export const scheduleController = {
   create:  asyncHandler(async (req, res) => { res.status(201).json(ApiResponse.created('Schedule created', await scheduleService.create(req.body))); }),
   getAll:  asyncHandler(async (req, res) => { const { docs, pagination } = await scheduleService.getAll(req.query); res.json(ApiResponse.ok('Schedules retrieved', docs, pagination)); }),
   getById: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Schedule retrieved', await scheduleService.getById(req.params.id))); }),
+  getBySoNumber: asyncHandler(async (req, res) => { 
+    const docs = await scheduleService.getBySoNumber(req.params.soNumber); 
+    res.json(ApiResponse.ok('Schedules retrieved', docs)); 
+  }),
   update:  asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Schedule updated', await scheduleService.update(req.params.id, req.body))); }),
   remove:  asyncHandler(async (req, res) => { await scheduleService.remove(req.params.id); res.json(ApiResponse.ok('Schedule deleted')); }),
 };
@@ -53,5 +57,6 @@ export const scheduleController = {
 // ── Routes ──────────────────────────────────────────────────
 const router = Router();
 router.route('/').get(scheduleController.getAll).post(scheduleController.create);
+router.get('/by-so/:soNumber', scheduleController.getBySoNumber);
 router.route('/:id').get(scheduleController.getById).put(scheduleController.update).delete(scheduleController.remove);
 export default router;

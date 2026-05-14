@@ -9,6 +9,13 @@ export const skuApi = baseApi.injectEndpoints({
       }),
       providesTags: ['SKU'],
     }),
+    getSkuLookup: builder.query({
+      query: (params) => ({
+        url: '/skus/lookup/list',
+        params,
+      }),
+      providesTags: ['SKU'],
+    }),
     createSku: builder.mutation({
       query: (body) => ({
         url: '/skus',
@@ -25,7 +32,15 @@ export const skuApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: ['SKU'],
     }),
+    bulkUpsertSkus: builder.mutation({
+      query: (body) => ({
+        url: '/skus/bulk-upsert',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: ['SKU'],
+    }),
   }),
 });
 
-export const { useGetSkusQuery, useCreateSkuMutation, useUpdateSkuMutation } = skuApi;
+export const { useGetSkusQuery, useGetSkuLookupQuery, useCreateSkuMutation, useUpdateSkuMutation, useBulkUpsertSkusMutation } = skuApi;

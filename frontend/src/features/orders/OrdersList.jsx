@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Search, Plus, Eye, Edit3, ShoppingCart, Clock, CheckCircle, AlertCircle, Package, ExternalLink } from 'lucide-react';
@@ -37,7 +38,7 @@ const StatCard = ({ title, value, icon: Icon, color, loading }) => (
       <Box>
         <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5 }}>{title}</Typography>
         {loading ? <Skeleton width={60} height={28} /> : (
-          <Typography sx={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>{value}</Typography>
+          <Typography sx={{ fontSize: '1.5rem', fontWeight: 800, color: '#0b2545', lineHeight: 1.2 }}>{value}</Typography>
         )}
       </Box>
       <Box sx={{ p: 0.75, borderRadius: '8px', bgcolor: alpha(color, 0.08), color }}>
@@ -67,6 +68,7 @@ const PipelineBar = ({ row }) => {
 };
 
 const OrdersList = () => {
+  const navigate = useNavigate();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -93,7 +95,9 @@ const OrdersList = () => {
   const stats = statsRes?.data?.summary || {};
   const parties = partiesData?.data || [];
 
-  const handleViewDetail = (order) => { setDetailOrderId(order._id); setIsDetailOpen(true); };
+  const handleViewDetail = (order) => { 
+    navigate(`/orders/${order._id}`);
+  };
   const handleUpdateClick = (order) => { setSelectedOrder(order); setIsUpdateOpen(true); };
 
   if (isLoading && !data) return <TableSkeleton columns={8} />;
@@ -154,8 +158,8 @@ const OrdersList = () => {
       {/* ── Header ─────────────────────────────────────────── */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 2 }}>
         <Box>
-          <Typography variant="h5" fontWeight={800} color="text.primary" sx={{ fontSize: { xs: '1.75rem', sm: '2.125rem' } }}>Sales Orders</Typography>
-          <Typography variant="body2" color="text.secondary">Order booking, tracking & dispatch pipeline</Typography>
+          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 700, color: '#0b2545', letterSpacing: '-0.015em', lineHeight: 1.25 }}>Sales Orders</Typography>
+          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>Order booking, tracking & dispatch pipeline</Typography>
         </Box>
         <Button 
           variant="contained" 

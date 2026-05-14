@@ -1,18 +1,27 @@
 import mongoose from 'mongoose';
 import { SCHEDULE_STATUS } from '../../config/constants.js';
 
+const actualDispatchSchema = new mongoose.Schema({
+  date:         { type: Date, required: true },
+  qty:          { type: Number, required: true },
+  invoiceNo:    { type: String },
+  invoiceDate:  { type: Date },
+  invoiceDoc:   { type: String }, // Individual Drive Link
+}, { _id: false });
+
 const phaseSchema = new mongoose.Schema({
   phaseNo:      { type: String, required: true }, // P1, P2, ... P10
   plannedDate:  { type: Date, default: null },
   plannedQty:   { type: Number, default: 0, min: 0 },
-  actualDates:  [{ type: Date }],
-  actualQtys:   [{ type: Number }],
-  totalActualQty: { type: Number, default: 0, min: 0 },
+  actualDispatches: [actualDispatchSchema],
+  totalActualQty: { type: Number, default: 0 },
+  status: { type: String, enum: ['PENDING', 'PARTIAL', 'COMPLETE'], default: 'PENDING' }
 }, { _id: false });
 
 const scheduleItemSchema = new mongoose.Schema({
   skuId:    { type: mongoose.Schema.Types.ObjectId, ref: 'SKU' },
   skuName:  { type: String, required: true },
+  skuCode:  { type: String, trim: true },
   poQty:          { type: Number, default: 0 },
   dispatchedQty:  { type: Number, default: 0 },
   balanceQty:     { type: Number, default: 0 },

@@ -19,7 +19,7 @@ export const challanService = {
     if (dc.soNumber && dc.items) {
       for (const item of dc.items) {
         try {
-          const skuCode = item.skuName; // fallback if skuCode not available
+          const skuCode = item.skuCode || item.skuName;
           await orderService.updateDispatchQty(dc.soNumber, skuCode, item.quantityPcs);
         } catch (_) { /* skip if order not found */ }
       }

@@ -3,9 +3,11 @@ import { Box, Typography, Paper, TextField, InputAdornment, Button } from '@mui/
 import { DataGrid } from '@mui/x-data-grid';
 import { Search, Plus } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
+import { useNavigate } from 'react-router-dom';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
 
 const PartiesList = () => {
+  const navigate = useNavigate();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -41,13 +43,17 @@ const PartiesList = () => {
     },
   ];
 
+  const handleRowClick = (params) => {
+    navigate(`/parties/${params.id}`);
+  };
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography variant="h4" fontWeight={800} color="text.primary" sx={{ fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>Parties Master</Typography>
-          <Typography variant="body2" color="text.secondary">Manage customer directory and credit terms</Typography>
+          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 700, color: '#0b2545', letterSpacing: '-0.015em', lineHeight: 1.25 }}>Parties Master</Typography>
+          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>Manage customer directory and credit terms</Typography>
         </Box>
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center', gap: 1.5, width: { xs: '100%', md: 'auto' } }}>
           <TextField size="small" placeholder="Search parties..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
@@ -69,11 +75,15 @@ const PartiesList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
+          onRowClick={handleRowClick}
           pageSizeOptions={[10, 25, 50]}
           disableRowSelectionOnClick
           rowHeight={48}
           columnHeaderHeight={44}
-          sx={{ border: 0 }}
+          sx={{ 
+            border: 0,
+            '& .MuiDataGrid-row': { cursor: 'pointer' }
+          }}
         />
       </Paper>
     </Box>

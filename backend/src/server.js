@@ -1,13 +1,28 @@
+import http from 'http';
+import { Server } from 'socket.io';
 import app from './app.js';
 import connectDB from './config/db.js';
 import env from './config/env.js';
 import { logger } from './utils/logger.js';
+import { initSocket } from './sockets/socketService.js';
 
 const startServer = async () => {
   // Connect to MongoDB
   await connectDB();
 
-  const server = app.listen(env.PORT, () => {
+  const server = http.createServer(app);
+  
+  const io = new Server(server, {
+    cors: {
+      origin: "*",
+      methods: ["GET", "POST"],
+      credentials: true
+    }
+  });
+
+  initSocket(io);
+
+  server.listen(env.PORT, () => {
     logger.info(`🚀 DPES Server running in ${env.NODE_ENV} mode on port ${env.PORT}`);
     logger.info(`📡 API Base: http://localhost:${env.PORT}/api/v1`);
     logger.info(`❤️  Health:   http://localhost:${env.PORT}/api/health`);

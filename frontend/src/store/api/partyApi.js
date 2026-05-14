@@ -5,9 +5,13 @@ export const partyApi = baseApi.injectEndpoints({
     getParties: builder.query({
       query: (params) => ({
         url: '/parties',
-        params, // Accepts search, page, limit, sort etc.
+        params,
       }),
       providesTags: ['Party'],
+    }),
+    getPartyById: builder.query({
+      query: (id) => `/parties/${id}`,
+      providesTags: (result, error, id) => [{ type: 'Party', id }],
     }),
     createParty: builder.mutation({
       query: (body) => ({
@@ -28,4 +32,9 @@ export const partyApi = baseApi.injectEndpoints({
   }),
 });
 
-export const { useGetPartiesQuery, useCreatePartyMutation, useUpdatePartyMutation } = partyApi;
+export const { 
+  useGetPartiesQuery, 
+  useGetPartyByIdQuery,
+  useCreatePartyMutation, 
+  useUpdatePartyMutation 
+} = partyApi;

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import Party from '../clients/party.model.js';
 import { SO_STATUS, STEP_STATUS } from '../../config/constants.js';
 
 // ── Workflow Step Sub-Schema (used by O2D tracker) ──────────
@@ -12,12 +13,13 @@ const workflowStepSchema = new mongoose.Schema({
 
 // ── Order Line Item ─────────────────────────────────────────
 const orderItemSchema = new mongoose.Schema({
-  skuId:   { type: mongoose.Schema.Types.ObjectId, ref: 'SKU', required: true },
+  skuId:   { type: mongoose.Schema.Types.ObjectId, ref: 'SKU' },
   skuName: { type: String, required: true },
   skuCode: { type: String, required: true },
   orderQty:      { type: Number, required: true, min: 0 },
   dispatchedQty: { type: Number, default: 0, min: 0 },
   balanceQty:    { type: Number, default: 0, min: 0 },
+  extraSentQty:   { type: Number, default: 0, min: 0 },
   asnCode:       { type: String, trim: true, default: null }, // ASN Code / FCI Code
   remark:        { type: String, default: null }, // "Short Close", "Extra Sent"
 }, { _id: true });
@@ -124,7 +126,9 @@ salesOrderSchema.pre('save', function (next) {
   if (this.items && this.items.length > 0) {
     // Auto-calc balance per item
     this.items.forEach((item) => {
+      const variance = (item.dispatchedQty || 0) - (item.orderQty || 0);
       item.balanceQty = Math.max(0, (item.orderQty || 0) - (item.dispatchedQty || 0));
+      item.extraSentQty = Math.max(0, variance);
     });
     this.totalOrderQty      = this.items.reduce((s, i) => s + (i.orderQty || 0), 0);
     this.totalDispatchedQty = this.items.reduce((s, i) => s + (i.dispatchedQty || 0), 0);
@@ -150,5 +154,5 @@ salesOrderSchema.index({ orderDate: -1 });
 salesOrderSchema.index({ financialYear: 1 });
 salesOrderSchema.index({ month: 1 });
 
-const SalesOrder = mongoose.model('SalesOrder', salesOrderSchema);
+const SalesOrder = mongoose.models.SalesOrder || mongoose.model('SalesOrder', salesOrderSchema, 'salesorders');
 export default SalesOrder;

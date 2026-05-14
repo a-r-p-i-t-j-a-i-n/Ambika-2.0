@@ -4,7 +4,7 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 
 export const partyController = {
   create: asyncHandler(async (req, res) => {
-    const party = await partyService.create(req.body);
+    const party = await partyService.create(req.body, req.user?._id);
     res.status(201).json(ApiResponse.created('Party created', party));
   }),
 
@@ -19,12 +19,12 @@ export const partyController = {
   }),
 
   update: asyncHandler(async (req, res) => {
-    const party = await partyService.update(req.params.id, req.body);
+    const party = await partyService.update(req.params.id, req.body, req.user?._id);
     res.json(ApiResponse.ok('Party updated', party));
   }),
 
   remove: asyncHandler(async (req, res) => {
-    await partyService.remove(req.params.id);
+    await partyService.remove(req.params.id, req.user?._id);
     res.json(ApiResponse.ok('Party deleted'));
   }),
 };

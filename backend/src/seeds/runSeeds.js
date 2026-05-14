@@ -11,8 +11,8 @@ import { logger } from '../utils/logger.js';
 import { setCounter } from '../utils/docNumberGenerator.js';
 
 // Models
-import Party from '../modules/party/party.model.js';
-import SKU from '../modules/sku/sku.model.js';
+import Party from '../modules/clients/party.model.js';
+import SKU from '../modules/skus/sku.model.js';
 import SalesOrder from '../modules/order/order.model.js';
 import DeliveryChallan from '../modules/challan/challan.model.js';
 import Invoice from '../modules/invoice/invoice.model.js';

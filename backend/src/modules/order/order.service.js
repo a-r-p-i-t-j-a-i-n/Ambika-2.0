@@ -126,15 +126,21 @@ export const orderService = {
   /**
    * Update dispatch quantity for a specific SKU in an order (called by Challan module).
    */
-  async updateDispatchQty(soNumber, skuCode, additionalQty) {
+  async updateDispatchQty(soNumber, skuRef, additionalQty) {
     const order = await SalesOrder.findOne({ soNumber });
     if (!order) throw new AppError(`Sales Order ${soNumber} not found`, 404);
 
-    const item = order.items.find((i) => i.skuCode === skuCode);
-    if (!item) throw new AppError(`SKU ${skuCode} not found in order ${soNumber}`, 404);
+    const normalizedRef = String(skuRef || '').trim().toLowerCase();
+    const item = order.items.find((i) => (
+      String(i.skuCode || '').trim().toLowerCase() === normalizedRef
+      || String(i.skuName || '').trim().toLowerCase() === normalizedRef
+      || String(i._id || '') === String(skuRef || '')
+    ));
+    if (!item) throw new AppError(`SKU ${skuRef} not found in order ${soNumber}`, 404);
 
     item.dispatchedQty = (item.dispatchedQty || 0) + additionalQty;
-    item.balanceQty = item.orderQty - item.dispatchedQty;
+    item.balanceQty = Math.max(0, item.orderQty - item.dispatchedQty);
+    item.extraSentQty = Math.max(0, item.dispatchedQty - item.orderQty);
 
     await order.save(); // pre-save recalculates totals & status
     return order.toObject();

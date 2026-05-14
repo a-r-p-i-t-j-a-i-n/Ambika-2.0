@@ -68,8 +68,8 @@ const PPCPlanning = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography variant="h4" fontWeight={800} color="text.primary" sx={{ fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>PPC Schedule vs Supply</Typography>
-          <Typography variant="body2" color="text.secondary">Production planning & dispatch tracking matrix</Typography>
+          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 700, color: '#0b2545', letterSpacing: '-0.015em', lineHeight: 1.25 }}>PPC Schedule vs Supply</Typography>
+          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>Production planning & dispatch tracking matrix</Typography>
         </Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, width: { xs: '100%', md: 'auto' } }}>
           <TextField select size="small" value={month} onChange={(e) => setCurrentDate(currentDate.month(e.target.value - 1))}

@@ -13,7 +13,19 @@ export const authApi = baseApi.injectEndpoints({
       query: () => '/auth/me',
       providesTags: ['Auth'],
     }),
+    getEmployees: builder.query({
+      query: () => '/auth/employees',
+      providesTags: ['Employees'],
+    }),
+    createEmployee: builder.mutation({
+      query: (employeeData) => ({
+        url: '/auth/employees',
+        method: 'POST',
+        body: employeeData,
+      }),
+      invalidatesTags: ['Employees'],
+    }),
   }),
 });
 
-export const { useLoginMutation, useGetMeQuery } = authApi;
+export const { useLoginMutation, useGetMeQuery, useGetEmployeesQuery, useCreateEmployeeMutation } = authApi;

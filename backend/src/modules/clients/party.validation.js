@@ -10,6 +10,11 @@ export const createPartySchema = Joi.object({
   contactPerson:     Joi.string().trim().max(100).allow('', null),
   email:             Joi.string().email().trim().allow('', null),
   phone:             Joi.string().trim().max(20).allow('', null),
+  
+  toEmails:          Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
+  ccEmails:          Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
+  bccEmails:         Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
+
   creditPeriodDays:  Joi.number().integer().min(0).max(365).default(30),
   leadTimeDays:      Joi.number().integer().min(0).max(90).default(7),
   addresses: Joi.array().items(Joi.object({

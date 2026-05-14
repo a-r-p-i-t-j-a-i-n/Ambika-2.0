@@ -22,8 +22,20 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['ADMIN', 'PPC', 'ACCOUNTS', 'DISPATCH'],
-    default: 'DISPATCH',
+    enum: [
+      'MD',
+      'Chief of Staff',
+      'EA',
+      'Factory Incharge (Palghar)',
+      'Production Head',
+      'QC Head',
+      'Store Manager',
+      'Data Entry Operator (Store & Prodn)',
+      'Process Coordinator',
+      'Process Coordinator & Accounts',
+      'Accountant'
+    ],
+    required: true,
   },
   isActive: {
     type: Boolean,

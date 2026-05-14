@@ -1,0 +1,135 @@
+import Joi from 'joi';
+import { PAGINATION } from '../../config/constants.js';
+
+const optionalString = Joi.string().trim().allow('', null);
+
+const orderItemSchema = Joi.object({
+  skuId: optionalString,
+  skuName: optionalString,
+  itemName: optionalString,
+  skuCode: optionalString,
+  orderQty: Joi.number().min(0),
+  quantity: Joi.number().min(0),
+  dispatchedQty: Joi.number().min(0).default(0),
+  totalDispatchQty: Joi.number().min(0),
+  asnCode: optionalString,
+  fciCode: optionalString,
+  asnFciCode: optionalString,
+  remark: optionalString,
+  remarks: optionalString,
+}).or('skuName', 'itemName', 'skuCode').or('orderQty', 'quantity');
+
+const planLineSchema = Joi.object({
+  orderItemId: optionalString,
+  itemId: optionalString,
+  skuCode: optionalString,
+  skuName: optionalString,
+  itemName: optionalString,
+  phaseNo: optionalString,
+  planType: optionalString,
+  dispatchPlanType: optionalString,
+  plannedDate: Joi.date(),
+  planDate: Joi.date(),
+  date: Joi.date(),
+  plannedQty: Joi.number().min(0),
+  planQty: Joi.number().min(0),
+  qty: Joi.number().min(0),
+}).or('skuCode', 'skuName', 'itemName', 'orderItemId', 'itemId').or('plannedDate', 'planDate', 'date').or('plannedQty', 'planQty', 'qty');
+
+const dispatchItemSchema = Joi.object({
+  orderItemId: optionalString,
+  itemId: optionalString,
+  skuCode: optionalString,
+  skuName: optionalString,
+  itemName: optionalString,
+  quantityPcs: Joi.number().min(0),
+  actualQty: Joi.number().min(0),
+  dispatchQty: Joi.number().min(0),
+  qty: Joi.number().min(0),
+  noOfBoxes: Joi.number().min(0),
+  pcsPerBox: Joi.number().min(1),
+  weightKg: Joi.number().min(0),
+  weightKgs: Joi.number().min(0),
+}).or('skuCode', 'skuName', 'itemName', 'orderItemId', 'itemId').or('quantityPcs', 'actualQty', 'dispatchQty', 'qty');
+
+export const orderEntrySchema = Joi.object({
+  soNumber: optionalString,
+  poNumber: Joi.string().trim().required(),
+  poDate: Joi.date().allow(null),
+  partyId: optionalString,
+  partyName: optionalString,
+  clientName: optionalString,
+  customerName: optionalString,
+  location: optionalString,
+  state: optionalString,
+  email: optionalString,
+  clientEmail: optionalString,
+  phone: optionalString,
+  contactPerson: optionalString,
+  gstNo: optionalString,
+  orderDate: Joi.date().default(Date.now),
+  receivedAt: Joi.date(),
+  financialYear: optionalString,
+  transport: optionalString,
+  transportMode: optionalString,
+  partyGroup: optionalString,
+  orderDocument: optionalString,
+  orderDocumentUrl: optionalString,
+  leadTimeDays: Joi.number().integer().min(0),
+  creditPeriodDays: Joi.number().integer().min(0),
+  status: optionalString,
+  remark: optionalString,
+  remarks: optionalString,
+  addresses: Joi.array().items(Joi.object().unknown(true)),
+  items: Joi.array().items(orderItemSchema).min(1).required(),
+}).or('partyId', 'partyName', 'clientName', 'customerName');
+
+export const planDispatchSchema = Joi.object({
+  soNumber: Joi.string().trim().required(),
+  status: optionalString,
+  pdfUrl: optionalString,
+  allowOverPlan: Joi.boolean().default(false),
+  planLines: Joi.array().items(planLineSchema).min(1),
+  items: Joi.array().items(planLineSchema).min(1),
+}).or('planLines', 'items');
+
+export const actualDispatchSchema = Joi.object({
+  soNumber: Joi.string().trim().required(),
+  dcNumber: optionalString,
+  dcDate: Joi.date(),
+  challanDate: Joi.date(),
+  poNumber: optionalString,
+  partyName: optionalString,
+  vehicleNo: optionalString,
+  vehicleNumber: optionalString,
+  transportMode: optionalString,
+  transporterName: optionalString,
+  clientEmail: optionalString,
+  invoiceNo: optionalString,
+  dispatchedThrough: optionalString,
+  deliveryAddress: optionalString,
+  pdfUrl: optionalString,
+  sendEmail: Joi.boolean(),
+  emailStatus: optionalString,
+  remark: optionalString,
+  remarks: optionalString,
+  status: optionalString,
+  items: Joi.array().items(dispatchItemSchema).min(1).required(),
+});
+
+export const soNumberParamSchema = Joi.object({
+  soNumber: Joi.string().trim().required(),
+});
+
+export const dashboardQuerySchema = Joi.object({
+  from: Joi.date(),
+  to: Joi.date(),
+  partyId: optionalString,
+  status: optionalString,
+  page: Joi.number().integer().min(1),
+  limit: Joi.number().integer().min(1).max(PAGINATION.MAX_LIMIT),
+}).unknown(true);
+
+export const normalizeRowsSchema = Joi.object({
+  rows: Joi.array().items(Joi.object().unknown(true)).required(),
+});

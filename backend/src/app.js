@@ -12,13 +12,18 @@ import { AppError } from './utils/apiResponse.js';
 
 // ── Route Imports ───────────────────────────────────────────
 import authRoutes    from './modules/auth/auth.routes.js';
-import partyRoutes    from './modules/party/party.routes.js';
-import skuRoutes      from './modules/sku/sku.routes.js';
+import clientRoutes  from './modules/clients/client.routes.js';
+import skuRoutes     from './modules/skus/sku.routes.js';
+import poRoutes      from './modules/purchase-orders/purchase-order.routes.js';
+// Unified Order Management (O2D)
 import orderRoutes    from './modules/order/order.routes.js';
+import partyRoutes    from './modules/clients/party.routes.js';
 import scheduleRoutes from './modules/schedule/schedule.routes.js';
 import challanRoutes  from './modules/challan/challan.routes.js';
 import fmsRoutes      from './modules/fms/fms.routes.js';
 import ppcRoutes      from './modules/ppc/ppc.routes.js';
+import dispatchControlRoutes from './modules/dispatch-control/dispatch-control.routes.js';
+
 
 const app = express();
 
@@ -61,14 +66,20 @@ app.get('/api/health', (_req, res) => {
 });
 
 // ── API Routes ──────────────────────────────────────────────
-app.use('/api/v1/auth',      authRoutes);
+app.use('/api/v1/auth',            authRoutes);
+app.use('/api/v1/clients',         clientRoutes);
+app.use('/api/v1/skus',            skuRoutes);
+app.use('/api/v1/purchase-orders', poRoutes);
+app.use('/api/v1/sales-orders',    orderRoutes); // Unified
+app.use('/api/v1/orders',          orderRoutes); // Unified
+
+// Legacy mount points
 app.use('/api/v1/parties',   partyRoutes);
-app.use('/api/v1/skus',      skuRoutes);
-app.use('/api/v1/orders',    orderRoutes);
 app.use('/api/v1/schedules', scheduleRoutes);
 app.use('/api/v1/challans',  challanRoutes);
 app.use('/api/v1/fms',       fmsRoutes);
 app.use('/api/v1/ppc',       ppcRoutes);
+app.use('/api/v1/dispatch-control', dispatchControlRoutes);
 
 // ── 404 Handler ─────────────────────────────────────────────
 app.all('*', (req, _res, next) => {

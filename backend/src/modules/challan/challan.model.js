@@ -5,6 +5,7 @@ const dcItemSchema = new mongoose.Schema({
   srNo:        { type: Number, required: true },
   skuId:       { type: mongoose.Schema.Types.ObjectId, ref: 'SKU' },
   skuName:     { type: String, required: true },
+  skuCode:     { type: String, trim: true },
   quantityPcs: { type: Number, required: true, min: 0 },
   noOfBoxes:   { type: Number, default: 0, min: 0 },
   pcsPerBox:   { type: Number, default: 100, min: 1 },
@@ -30,9 +31,15 @@ const deliveryChallanSchema = new mongoose.Schema({
 
   dispatchedThrough: { type: String, default: 'Freight Paid' },
   vehicleNo:         { type: String },
+  transportMode:     { type: String, default: 'Road' },
+  transporterName:   { type: String },
+  clientEmail:       { type: String },
+  invoiceNo:         { type: String },
   deliveryAddress:   { type: String },
 
   pdfUrl:  { type: String, default: null },
+  sendEmail: { type: Boolean, default: false },
+  emailStatus: { type: String, default: null },
   week:    { type: String },
   remark:  { type: String },
 

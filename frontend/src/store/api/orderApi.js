@@ -55,6 +55,10 @@ export const orderApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (result, error, { id }) => [{ type: 'Order', id }, 'Order'],
     }),
+    getOrderSchedule: builder.query({
+      query: (soNumber) => `/schedules/by-so/${encodeURIComponent(soNumber)}`,
+      providesTags: (result, error, soNumber) => [{ type: 'Order', id: soNumber }],
+    }),
   }),
 });
 
@@ -66,5 +70,6 @@ export const {
   useCreateOrderMutation, 
   useUpdateOrderMutation,
   useDeleteOrderMutation,
-  useUpdateWorkflowStepMutation 
+  useUpdateWorkflowStepMutation,
+  useGetOrderScheduleQuery
 } = orderApi;

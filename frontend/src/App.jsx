@@ -11,6 +11,11 @@ import PPCPlanning from './features/ppc/PPCPlanning';
 import Dashboard from './features/dashboard/Dashboard';
 import ChallansList from './features/execution/ChallansList';
 import InvoicesList from './features/ledger/InvoicesList';
+import EmployeesList from './features/employees/EmployeesList';
+import PlanCreation from './features/planning/PlanCreation';
+import PartyDetails from './features/masters/PartyDetails';
+import OrderDetails from './features/orders/OrderDetails';
+import DispatchControlTower from './features/dashboard/DispatchControlTower';
 
 function App() {
   return (
@@ -22,12 +27,17 @@ function App() {
         <Route element={<MainLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/dispatch-control-tower" element={<DispatchControlTower />} />
+          <Route path="/employees" element={<EmployeesList />} />
           <Route path="/orders" element={<OrdersList />} />
+          <Route path="/orders/:id" element={<OrderDetails />} />
+          <Route path="/dispatch-planning" element={<PlanCreation />} />
           <Route path="/ppc-planning" element={<PPCPlanning />} />
           <Route path="/challans" element={<ChallansList />} />
           <Route path="/invoices" element={<InvoicesList />} />
           <Route path="/skus" element={<SkusList />} />
           <Route path="/parties" element={<PartiesList />} />
+          <Route path="/parties/:id" element={<PartyDetails />} />
         </Route>
       </Route>
 
