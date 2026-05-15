@@ -12,7 +12,7 @@ import Dashboard from './features/dashboard/Dashboard';
 import ChallansList from './features/execution/ChallansList';
 import InvoicesList from './features/ledger/InvoicesList';
 import EmployeesList from './features/employees/EmployeesList';
-import PlanCreation from './features/planning/PlanCreation';
+import PlanWorkspace from './features/planning/PlanWorkspace';
 import PartyDetails from './features/masters/PartyDetails';
 import OrderDetails from './features/orders/OrderDetails';
 import DispatchControlTower from './features/dashboard/DispatchControlTower';
@@ -31,7 +31,7 @@ function App() {
           <Route path="/employees" element={<EmployeesList />} />
           <Route path="/orders" element={<OrdersList />} />
           <Route path="/orders/:id" element={<OrderDetails />} />
-          <Route path="/dispatch-planning" element={<PlanCreation />} />
+          <Route path="/dispatch-planning" element={<PlanWorkspace />} />
           <Route path="/ppc-planning" element={<PPCPlanning />} />
           <Route path="/challans" element={<ChallansList />} />
           <Route path="/invoices" element={<InvoicesList />} />

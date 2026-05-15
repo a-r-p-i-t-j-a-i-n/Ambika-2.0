@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -23,6 +24,7 @@ import challanRoutes  from './modules/challan/challan.routes.js';
 import fmsRoutes      from './modules/fms/fms.routes.js';
 import ppcRoutes      from './modules/ppc/ppc.routes.js';
 import dispatchControlRoutes from './modules/dispatch-control/dispatch-control.routes.js';
+import uploadRoutes from './common/uploads/upload.routes.js';
 
 
 const app = express();
@@ -80,6 +82,13 @@ app.use('/api/v1/challans',  challanRoutes);
 app.use('/api/v1/fms',       fmsRoutes);
 app.use('/api/v1/ppc',       ppcRoutes);
 app.use('/api/v1/dispatch-control', dispatchControlRoutes);
+app.use('/api/v1/uploads',          uploadRoutes);
+
+// ── Static — uploaded files (served as /uploads/...) ────────
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads'), {
+  maxAge: '1h',
+  fallthrough: true,
+}));
 
 // ── 404 Handler ─────────────────────────────────────────────
 app.all('*', (req, _res, next) => {

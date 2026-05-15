@@ -6,7 +6,7 @@ import { Search, Plus, Eye, Edit3, ShoppingCart, Clock, CheckCircle, AlertCircle
 import { alpha } from '@mui/material/styles';
 import { useGetOrdersQuery, useGetOrderStatsQuery } from '../../store/api/orderApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
-import OrderCreateModal from './OrderCreateModal';
+import OrderEntryDrawer from './OrderEntryDrawer';
 import OrderUpdateModal from './OrderUpdateModal';
 import OrderDetailDrawer from './OrderDetailDrawer';
 import TableSkeleton from '../../components/TableSkeleton';
@@ -255,7 +255,7 @@ const OrdersList = () => {
       </Paper>
 
       {/* ── Modals & Drawers ─────────────────────────────── */}
-      <OrderCreateModal open={isCreateOpen} onClose={() => setIsCreateOpen(false)} />
+      <OrderEntryDrawer open={isCreateOpen} onClose={() => setIsCreateOpen(false)} />
       <OrderUpdateModal open={isUpdateOpen} onClose={() => setIsUpdateOpen(false)} order={selectedOrder} />
       <OrderDetailDrawer open={isDetailOpen} onClose={() => setIsDetailOpen(false)} orderId={detailOrderId} />
     </Box>

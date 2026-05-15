@@ -10,13 +10,19 @@ const actualDispatchSchema = new mongoose.Schema({
 }, { _id: false });
 
 const phaseSchema = new mongoose.Schema({
-  phaseNo:      { type: String, required: true }, // P1, P2, ... P10
+  phaseNo:      { type: String, required: true }, // P1, P2, ... P10 — display label
   plannedDate:  { type: Date, default: null },
   plannedQty:   { type: Number, default: 0, min: 0 },
   actualDispatches: [actualDispatchSchema],
   totalActualQty: { type: Number, default: 0 },
-  status: { type: String, enum: ['PENDING', 'PARTIAL', 'COMPLETE'], default: 'PENDING' }
-}, { _id: false });
+  // Lifecycle: PLANNED → IN_PROGRESS (first DC) → DISPATCHED (qty met) → DELAYED (date passed, short) → CANCELLED
+  status: {
+    type: String,
+    enum: ['PLANNED', 'IN_PROGRESS', 'DISPATCHED', 'DELAYED', 'CANCELLED'],
+    default: 'PLANNED',
+  },
+  notes: { type: String, default: null }, // planner note (e.g. "MD approval pending")
+}, { _id: true }); // _id is the stable handle the UI / DCs reference as phaseId
 
 const scheduleItemSchema = new mongoose.Schema({
   skuId:    { type: mongoose.Schema.Types.ObjectId, ref: 'SKU' },
@@ -52,6 +58,8 @@ const dispatchScheduleSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 dispatchScheduleSchema.index({ soNumber: 1, status: 1 });
+dispatchScheduleSchema.index({ 'items.phases.plannedDate': 1 });
+dispatchScheduleSchema.index({ 'items.phases.status': 1 });
 
 const DispatchSchedule = mongoose.model('DispatchSchedule', dispatchScheduleSchema);
 export default DispatchSchedule;

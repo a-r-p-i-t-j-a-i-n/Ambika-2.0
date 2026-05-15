@@ -25,6 +25,7 @@ const planLineSchema = Joi.object({
   skuCode: optionalString,
   skuName: optionalString,
   itemName: optionalString,
+  phaseId: optionalString,           // edit-existing-phase support
   phaseNo: optionalString,
   planType: optionalString,
   dispatchPlanType: optionalString,
@@ -34,6 +35,7 @@ const planLineSchema = Joi.object({
   plannedQty: Joi.number().min(0),
   planQty: Joi.number().min(0),
   qty: Joi.number().min(0),
+  notes: optionalString,
 }).or('skuCode', 'skuName', 'itemName', 'orderItemId', 'itemId').or('plannedDate', 'planDate', 'date').or('plannedQty', 'planQty', 'qty');
 
 const dispatchItemSchema = Joi.object({
@@ -52,6 +54,15 @@ const dispatchItemSchema = Joi.object({
   weightKgs: Joi.number().min(0),
 }).or('skuCode', 'skuName', 'itemName', 'orderItemId', 'itemId').or('quantityPcs', 'actualQty', 'dispatchQty', 'qty');
 
+const objectIdString = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
+
+const phaseRefSchema = Joi.object({
+  scheduleId: objectIdString,
+  itemId:     objectIdString,
+  phaseId:    objectIdString.required(),
+  phaseNo:    optionalString,
+});
+
 export const orderEntrySchema = Joi.object({
   soNumber: optionalString,
   poNumber: Joi.string().trim().required(),
@@ -61,6 +72,7 @@ export const orderEntrySchema = Joi.object({
   clientName: optionalString,
   customerName: optionalString,
   location: optionalString,
+  place: optionalString,
   state: optionalString,
   email: optionalString,
   clientEmail: optionalString,
@@ -75,6 +87,7 @@ export const orderEntrySchema = Joi.object({
   partyGroup: optionalString,
   orderDocument: optionalString,
   orderDocumentUrl: optionalString,
+  orderDocumentName: optionalString,
   leadTimeDays: Joi.number().integer().min(0),
   creditPeriodDays: Joi.number().integer().min(0),
   status: optionalString,
@@ -114,8 +127,11 @@ export const actualDispatchSchema = Joi.object({
   remark: optionalString,
   remarks: optionalString,
   status: optionalString,
+  // The dispatcher MUST pick a phase OR explicitly flag the DC as unplanned.
+  phaseRef: phaseRefSchema,
+  isUnplanned: Joi.boolean().default(false),
   items: Joi.array().items(dispatchItemSchema).min(1).required(),
-});
+}).or('phaseRef', 'isUnplanned');
 
 export const soNumberParamSchema = Joi.object({
   soNumber: Joi.string().trim().required(),
@@ -132,4 +148,34 @@ export const dashboardQuerySchema = Joi.object({
 
 export const normalizeRowsSchema = Joi.object({
   rows: Joi.array().items(Joi.object().unknown(true)).required(),
+});
+
+const phaseSkuLineSchema = Joi.object({
+  orderItemId: optionalString,
+  skuCode: optionalString,
+  skuName: optionalString,
+  plannedQty: Joi.number().min(0).required(),
+});
+
+export const createPhaseSchema = Joi.object({
+  plannedDate: Joi.date().required(),
+  notes: optionalString,
+  status: Joi.string().valid('PLANNED', 'IN_PROGRESS', 'DISPATCHED', 'DELAYED', 'CANCELLED'),
+  // Either provide explicit lines OR ask the server to auto-fill from balance.
+  autoFillFromBalance: Joi.boolean().default(false),
+  allowOverPlan: Joi.boolean().default(false),
+  lines: Joi.array().items(phaseSkuLineSchema),
+});
+
+export const updatePhaseSchema = Joi.object({
+  plannedDate: Joi.date(),
+  notes: optionalString,
+  status: Joi.string().valid('PLANNED', 'IN_PROGRESS', 'DISPATCHED', 'DELAYED', 'CANCELLED'),
+  allowOverPlan: Joi.boolean().default(false),
+  lines: Joi.array().items(phaseSkuLineSchema),
+}).min(1);
+
+export const phaseParamSchema = Joi.object({
+  soNumber: Joi.string().trim().required(),
+  phaseId: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });

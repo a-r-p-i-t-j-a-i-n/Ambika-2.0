@@ -10,6 +10,8 @@ const dcItemSchema = new mongoose.Schema({
   noOfBoxes:   { type: Number, default: 0, min: 0 },
   pcsPerBox:   { type: Number, default: 100, min: 1 },
   weightKg:    { type: Number, default: 0, min: 0 },
+  // Reference back to the order line item — survives SKU renames
+  orderItemId: { type: mongoose.Schema.Types.ObjectId },
 }, { _id: true });
 
 const deliveryChallanSchema = new mongoose.Schema({
@@ -49,6 +51,17 @@ const deliveryChallanSchema = new mongoose.Schema({
     default: DC_STATUS.CREATED,
     index: true,
   },
+
+  // ── Plan-vs-Actual linkage (the core design choice) ────────
+  // Every DC explicitly references the plan phase it fulfils.
+  // If the operator chooses "Unplanned" we flag it for the risk panel.
+  phaseRef: {
+    scheduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'DispatchSchedule' },
+    itemId:     { type: mongoose.Schema.Types.ObjectId }, // scheduleItem._id
+    phaseId:    { type: mongoose.Schema.Types.ObjectId }, // phase._id
+    phaseNo:    { type: String },                          // denormalized label
+  },
+  isUnplanned: { type: Boolean, default: false },
 }, { timestamps: true });
 
 // Auto-calc totals before save
@@ -63,6 +76,8 @@ deliveryChallanSchema.pre('save', function (next) {
 
 deliveryChallanSchema.index({ dcDate: -1 });
 deliveryChallanSchema.index({ dcNumber: 'text', soNumber: 'text', partyName: 'text' });
+deliveryChallanSchema.index({ 'phaseRef.phaseId': 1 });
+deliveryChallanSchema.index({ 'phaseRef.scheduleId': 1, dcDate: -1 });
 
 const DeliveryChallan = mongoose.model('DeliveryChallan', deliveryChallanSchema);
 export default DeliveryChallan;

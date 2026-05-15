@@ -49,6 +49,7 @@ const salesOrderSchema = new mongoose.Schema({
   },
   partyName:  { type: String, trim: true },
   location:   { type: String, trim: true },
+  place:      { type: String, trim: true, default: null }, // ship-to place; may differ from party HQ
   orderDate:  { type: Date, required: true, index: true },
   receivedAt: { type: Date, default: Date.now },
   financialYear: { type: String, trim: true }, // "25-26"
@@ -58,6 +59,7 @@ const salesOrderSchema = new mongoose.Schema({
   partyGroup:    { type: String, trim: true, default: null },
   month:         { type: String, trim: true },  // Derived from orderDate (e.g. "Dec", "Jan")
   orderDocument: { type: String, default: null }, // PO document link (URL or future S3 key)
+  orderDocumentName: { type: String, default: null }, // Original filename for display
 
   leadTimeDays:  { type: Number, default: 7 },
 

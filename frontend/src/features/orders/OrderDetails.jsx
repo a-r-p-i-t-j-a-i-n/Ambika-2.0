@@ -1,17 +1,20 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, Chip, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Skeleton, Button, IconButton,
-  Breadcrumbs, Link,
+  Breadcrumbs, Link, Stack,
 } from '@mui/material';
 import {
   ArrowLeft, FileText, ExternalLink, CheckCircle2, Clock, Truck, Calendar,
-  Package, MapPin, Hash, User, TrendingDown, TrendingUp,
+  Package, MapPin, Hash, User, TrendingDown, TrendingUp, CalendarPlus,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useGetOrderByIdQuery, useGetOrderScheduleQuery } from '../../store/api/orderApi';
+import { useGetOrderComparisonQuery } from '../../store/api/dispatchControlApi';
 import dayjs from 'dayjs';
+import PlanVsActualPanel from './components/PlanVsActualPanel';
+import DispatchEntry from '../execution/DispatchEntry';
 
 // ─── Premium blue palette (aligned with theme) ──────────────────────────────
 const C = {
@@ -173,10 +176,13 @@ const StatBlock = ({ label, value, color, accent }) => (
 const OrderDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [dispatchOpen, setDispatchOpen] = useState(false);
   const { data: orderRes, isLoading } = useGetOrderByIdQuery(id);
   const order = orderRes?.data;
   const { data: scheduleRes } = useGetOrderScheduleQuery(order?.soNumber, { skip: !order?.soNumber });
+  const { data: comparisonRes } = useGetOrderComparisonQuery(order?.soNumber, { skip: !order?.soNumber });
   const schedule = scheduleRes?.data?.[0];
+  const comparison = comparisonRes?.data;
 
   // Performance metrics
   const totalPlanned = schedule?.items?.reduce((sum, item) => sum + (item.phases?.reduce((ps, p) => ps + (p.plannedQty || 0), 0) || 0), 0) || 0;
@@ -230,7 +236,31 @@ const OrderDetails = () => {
             {order.soNumber}
           </Typography>
           <StatusBadge value={order.status} />
+          <Box sx={{ ml: 'auto' }} />
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<CalendarPlus size={14} />}
+              onClick={() => navigate(`/dispatch-planning?so=${encodeURIComponent(order.soNumber)}`)}
+            >
+              Plan Phases
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<Truck size={14} />}
+              onClick={() => setDispatchOpen(true)}
+            >
+              Record Dispatch
+            </Button>
+          </Stack>
         </Box>
+      </Box>
+
+      {/* ── Plan vs Actual (new) ─────────────────────────────────── */}
+      <Box sx={{ mb: 3 }}>
+        <PlanVsActualPanel comparison={comparison} />
       </Box>
 
       {/* ── Performance Insights ─────────────────────────────────── */}
@@ -552,6 +582,12 @@ const OrderDetails = () => {
           </Box>
         </Grid>
       </Grid>
+
+      <DispatchEntry
+        open={dispatchOpen}
+        onClose={() => setDispatchOpen(false)}
+        presetOrder={order}
+      />
     </Box>
   );
 };
