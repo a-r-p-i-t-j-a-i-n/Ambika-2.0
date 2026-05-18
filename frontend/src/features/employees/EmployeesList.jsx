@@ -1,24 +1,33 @@
 import React, { useState } from 'react';
 import { Box, Typography, Paper, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Chip, InputAdornment, IconButton, Tooltip, CircularProgress } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Plus, UserCog, Search, RefreshCw, AlertCircle, Mail, ShieldCheck } from 'lucide-react';
+import { Plus, UserCog, Search, RefreshCw, AlertCircle, Mail, ShieldCheck, Phone, Crown } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useGetEmployeesQuery, useCreateEmployeeMutation } from '../../store/api/authApi';
 import { enqueueSnackbar } from 'notistack';
 
+// Stored value (matches User.role enum) → display label shown to the user.
+// MD is the root admin — keep the value as "MD" but label it clearly.
 const ROLES = [
-  'MD',
-  'Chief of Staff',
-  'EA',
-  'Factory Incharge (Palghar)',
-  'Production Head',
-  'QC Head',
-  'Store Manager',
-  'Data Entry Operator (Store & Prodn)',
-  'Process Coordinator',
-  'Process Coordinator & Accounts',
-  'Accountant'
+  { value: 'MD',                                       label: 'MD (Admin — full access)' },
+  { value: 'Chief of Staff',                           label: 'Chief of Staff' },
+  { value: 'EA',                                       label: 'EA' },
+  { value: 'Factory Incharge (Palghar)',               label: 'Factory Incharge (Palghar)' },
+  { value: 'Production Head',                          label: 'Production Head' },
+  { value: 'QC Head',                                  label: 'QC Head' },
+  { value: 'Store Manager',                            label: 'Store Manager' },
+  { value: 'Data Entry Operator (Store & Prodn)',      label: 'Data Entry Operator (Store & Prodn)' },
+  { value: 'Process Coordinator',                      label: 'Process Coordinator' },
+  { value: 'Process Coordinator & Accounts',           label: 'Process Coordinator & Accounts' },
+  { value: 'Accountant',                               label: 'Accountant' },
 ];
+
+const fmtMobile = (m) => {
+  if (!m) return '—';
+  const s = String(m).replace(/\D/g, '');
+  if (s.length === 10) return `+91 ${s.slice(0, 5)} ${s.slice(5)}`;
+  return m;
+};
 
 const EmployeesList = () => {
   const { data, isLoading, isError, refetch, error } = useGetEmployeesQuery();
@@ -26,27 +35,32 @@ const EmployeesList = () => {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [open, setOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    password: '',
-    role: 'MD',
-  });
+  const blankForm = { name: '', email: '', mobile: '', password: '', role: 'MD' };
+  const [formData, setFormData] = useState(blankForm);
+  const [formError, setFormError] = useState('');
 
   const handleOpen = () => setOpen(true);
   const handleClose = () => {
     setOpen(false);
-    setFormData({ name: '', email: '', password: '', role: 'MD' });
+    setFormData(blankForm);
+    setFormError('');
   };
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
+    if (formError) setFormError('');
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // Client-side mobile check — server enforces the canonical rule.
+    const cleaned = formData.mobile.replace(/[\s\-()+]/g, '').replace(/^91/, '').replace(/^0/, '');
+    if (!/^[6-9]\d{9}$/.test(cleaned)) {
+      setFormError('Mobile must be a valid 10-digit Indian number (used for WhatsApp alerts).');
+      return;
+    }
     try {
-      await createEmployee(formData).unwrap();
+      await createEmployee({ ...formData, mobile: cleaned }).unwrap();
       enqueueSnackbar('Employee created successfully', { variant: 'success' });
       handleClose();
     } catch (err) {
@@ -56,10 +70,12 @@ const EmployeesList = () => {
 
   const filteredRows = React.useMemo(() => {
     if (!data?.data) return [];
-    return data.data.filter(row => 
-      row.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.role.toLowerCase().includes(searchTerm.toLowerCase())
+    const q = searchTerm.toLowerCase();
+    return data.data.filter(row =>
+      row.name.toLowerCase().includes(q) ||
+      row.email.toLowerCase().includes(q) ||
+      row.role.toLowerCase().includes(q) ||
+      (row.mobile || '').includes(q)
     );
   }, [data, searchTerm]);
 
@@ -89,10 +105,10 @@ const EmployeesList = () => {
         </Box>
       )
     },
-    { 
-      field: 'email', 
-      headerName: 'CONTACT', 
-      flex: 1, 
+    {
+      field: 'email',
+      headerName: 'EMAIL',
+      flex: 1,
       minWidth: 220,
       renderCell: (p) => (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -101,23 +117,39 @@ const EmployeesList = () => {
         </Box>
       )
     },
-    { 
-      field: 'role', 
-      headerName: 'DESIGNATION', 
-      width: 220,
+    {
+      field: 'mobile',
+      headerName: 'MOBILE',
+      width: 170,
       renderCell: (p) => (
-        <Chip 
-          icon={<ShieldCheck size={14} style={{ marginLeft: 8 }} />}
-          label={p.value} 
-          size="small" 
-          sx={{ 
-            fontWeight: 700, 
-            bgcolor: alpha('#2563eb', 0.08), 
-            color: '#2563eb',
-            '& .MuiChip-icon': { color: 'inherit' }
-          }} 
-        />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Phone size={14} color="#64748b" />
+          <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', color: 'text.secondary' }}>
+            {fmtMobile(p.value)}
+          </Typography>
+        </Box>
       )
+    },
+    {
+      field: 'role',
+      headerName: 'DESIGNATION',
+      width: 240,
+      renderCell: (p) => {
+        const isMd = p.value === 'MD';
+        return (
+          <Chip
+            icon={isMd ? <Crown size={14} style={{ marginLeft: 8 }} /> : <ShieldCheck size={14} style={{ marginLeft: 8 }} />}
+            label={isMd ? 'MD (Admin)' : p.value}
+            size="small"
+            sx={{
+              fontWeight: 700,
+              bgcolor: isMd ? alpha('#f59e0b', 0.12) : alpha('#2563eb', 0.08),
+              color: isMd ? '#b45309' : '#2563eb',
+              '& .MuiChip-icon': { color: 'inherit' },
+            }}
+          />
+        );
+      }
     },
     { 
       field: 'isActive', 
@@ -251,6 +283,26 @@ const EmployeesList = () => {
                 InputProps={{ sx: { borderRadius: '12px' } }}
               />
               <TextField
+                label="Mobile Number"
+                name="mobile"
+                value={formData.mobile}
+                onChange={handleChange}
+                required
+                fullWidth
+                placeholder="9876543210"
+                helperText={formError || 'Used for WhatsApp notifications. 10-digit Indian number.'}
+                error={!!formError}
+                InputProps={{
+                  sx: { borderRadius: '12px' },
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Phone size={16} color="#64748b" />
+                      <Typography sx={{ ml: 0.75, fontSize: '0.85rem', color: 'text.secondary', fontWeight: 600 }}>+91</Typography>
+                    </InputAdornment>
+                  ),
+                }}
+              />
+              <TextField
                 label="Password"
                 name="password"
                 type="password"
@@ -268,11 +320,13 @@ const EmployeesList = () => {
                 onChange={handleChange}
                 required
                 fullWidth
+                helperText={formData.role === 'MD' ? 'MD has full administrative access — including creating other accounts.' : ' '}
                 SelectProps={{ sx: { borderRadius: '12px' } }}
               >
-                {ROLES.map((role) => (
-                  <MenuItem key={role} value={role}>
-                    {role}
+                {ROLES.map((r) => (
+                  <MenuItem key={r.value} value={r.value}>
+                    {r.value === 'MD' && <Crown size={14} style={{ marginRight: 8, color: '#b45309' }} />}
+                    {r.label}
                   </MenuItem>
                 ))}
               </TextField>

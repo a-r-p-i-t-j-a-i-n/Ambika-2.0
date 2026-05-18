@@ -1,0 +1,4 @@
+# Netlify / Cloudflare Pages SPA fallback.
+# Any request that doesn't match a real file or _headers rule is served
+# index.html so React Router can resolve client-side routes.
+/*    /index.html   200

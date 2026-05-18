@@ -21,6 +21,11 @@ export const updateSku = async (req, res) => {
   res.json(ApiResponse.ok('SKU updated successfully', sku));
 };
 
+export const deleteSku = async (req, res) => {
+  const result = await skuService.deleteSku(req.params.id, req.user?._id);
+  res.json(ApiResponse.ok('SKU deleted successfully', result));
+};
+
 export const bulkUpsertSkus = async (req, res) => {
   const skus = await skuService.bulkUpsertSkus(req.body.items, req.user?._id);
   res.json(ApiResponse.ok('SKUs imported successfully', skus, { count: skus.length }));

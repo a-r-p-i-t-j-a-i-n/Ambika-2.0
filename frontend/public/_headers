@@ -1,0 +1,16 @@
+# Static asset cache + basic security headers (Netlify / Cloudflare Pages).
+
+# Long-lived cache for hashed JS / CSS / fonts.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Never cache the SPA shell — it must always pick up the newest asset hashes.
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+# Baseline security headers.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()

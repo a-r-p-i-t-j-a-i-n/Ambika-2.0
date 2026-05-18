@@ -2,11 +2,96 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DPES - Dispatch Planning & Execution</title>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <title>Ambika Dispatch — Planning &amp; Execution Suite</title>
+    <meta name="description" content="Ambika Dispatch is a unified workspace for sales orders, production planning, and dispatch execution — built for high-velocity operations teams." />
+    <meta name="author" content="Ambika Group" />
+    <meta name="application-name" content="Ambika Dispatch" />
+    <meta name="theme-color" content="#1e3a8a" />
+    <meta name="color-scheme" content="light" />
+
+    <!-- iOS / Android web-app polish -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Ambika Dispatch" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- Discourage indexing of an internal ERP -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="googlebot" content="noindex, nofollow" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+
+    <!-- Preconnect / preload to reduce first-contentful paint -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    />
+
+    <!-- Initial paint background — avoids white flash before React mounts -->
+    <style>
+      html, body { background-color: #eef3fc; margin: 0; padding: 0; }
+      #initial-boot {
+        position: fixed; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        flex-direction: column; gap: 14px;
+        background: linear-gradient(135deg, #eef3fc 0%, #f5f8ff 100%);
+        font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        color: #1e3a8a;
+        z-index: 0;
+      }
+      #initial-boot .ring {
+        width: 44px; height: 44px;
+        border: 3px solid rgba(29,78,216,0.18);
+        border-top-color: #1d4ed8;
+        border-radius: 50%;
+        animation: ambika-spin 720ms linear infinite;
+      }
+      #initial-boot span {
+        font-size: 0.82rem; font-weight: 600; letter-spacing: 0.02em; color: #475a8a;
+      }
+      @keyframes ambika-spin { to { transform: rotate(360deg); } }
+      /* React mounts into #root and overlays the boot screen; nothing further needed. */
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="initial-boot" aria-hidden="true">
+      <div class="ring"></div>
+      <span>Starting Ambika Dispatch…</span>
+    </div>
+
+    <noscript>
+      <div style="padding: 32px; font-family: 'Inter', system-ui, sans-serif; color: #0b2545; max-width: 520px; margin: 64px auto; text-align: center;">
+        <h1 style="font-size: 1.4rem; font-weight: 800; color: #1e3a8a; margin-bottom: 8px;">JavaScript is required</h1>
+        <p style="color: #475a8a; line-height: 1.6;">Ambika Dispatch is an interactive workspace. Please enable JavaScript in your browser to continue.</p>
+      </div>
+    </noscript>
+
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Remove the boot splash once React has rendered its first frame.
+      window.addEventListener('DOMContentLoaded', () => {
+        requestAnimationFrame(() => {
+          const root = document.getElementById('root');
+          if (!root) return;
+          const obs = new MutationObserver(() => {
+            if (root.firstChild) {
+              const boot = document.getElementById('initial-boot');
+              if (boot) boot.remove();
+              obs.disconnect();
+            }
+          });
+          obs.observe(root, { childList: true });
+        });
+      });
+    </script>
   </body>
 </html>

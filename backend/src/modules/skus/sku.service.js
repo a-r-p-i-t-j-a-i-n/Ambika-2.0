@@ -50,6 +50,17 @@ export const getSkuById = async (id) => {
   return sku;
 };
 
+export const deleteSku = async (id, userId) => {
+  const sku = await Sku.findOne({ _id: id, isDeleted: false });
+  if (!sku) throw new AppError('SKU not found', 404);
+  sku.isDeleted = true;
+  sku.isActive = false;
+  sku.deletedAt = new Date();
+  sku.deletedBy = userId;
+  await sku.save();
+  return { ok: true, code: sku.code, name: sku.name };
+};
+
 export const updateSku = async (id, data, userId) => {
   const sku = await Sku.findOne({ _id: id, isDeleted: false });
   if (!sku) throw new AppError('SKU not found', 404);
@@ -104,10 +115,22 @@ export const getSkuLookup = async (query = {}) => {
       { aliases: new RegExp(query.search, 'i') },
     ];
   }
+  // Master-only filter — excludes client-specific SKUs (those that have a clientId).
+  // Used by the calculator / revise dialog so universal pickers don't show
+  // party-prefixed entries like "ATOMBERG-MG-1.1-JAR-DRAW-TOOLS".
+  if (String(query.masterOnly) === 'true') {
+    filter.$or = [
+      ...(filter.$or || []),
+    ];
+    filter.clientId = { $in: [null, undefined] };
+  }
 
   return Sku.find(filter)
-    .select('name code category pcsPerBox weightPerPc weightPerBox unit aliases')
+    .select(
+      'name code category pcsPerBox weightPerPc weightPerBox unit aliases ' +
+      'sellingPrice rmCost gstRate sellingPriceFrom rmCostFrom marginFloor clientId',
+    )
     .sort({ name: 1 })
-    .limit(Math.min(parseInt(query.limit, 10) || 500, 1000))
+    .limit(Math.min(parseInt(query.limit, 10) || 500, 2000))
     .lean();
 };

@@ -40,7 +40,21 @@ export const skuApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: ['SKU'],
     }),
+    deleteSku: builder.mutation({
+      query: (id) => ({
+        url: `/skus/${id}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: ['SKU'],
+    }),
   }),
 });
 
-export const { useGetSkusQuery, useGetSkuLookupQuery, useCreateSkuMutation, useUpdateSkuMutation, useBulkUpsertSkusMutation } = skuApi;
+export const {
+  useGetSkusQuery,
+  useGetSkuLookupQuery,
+  useCreateSkuMutation,
+  useUpdateSkuMutation,
+  useBulkUpsertSkusMutation,
+  useDeleteSkuMutation,
+} = skuApi;

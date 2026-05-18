@@ -6,11 +6,15 @@ import {
 } from '@mui/material';
 import {
   Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
-  Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight,
+  Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ShieldCheck,
+  IndianRupee, Calculator, FileSignature, ClipboardCheck, FolderOpen, BarChart3,
 } from 'lucide-react';
+import { Badge } from '@mui/material';
+import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { logout } from '../store/slices/authSlice';
+import { usePermissions } from '../hooks/usePermission';
 
 import AmbikaLogo from '../assets/ambikalogo.jpeg';
 
@@ -59,6 +63,14 @@ const PAGE_TITLES = {
   '/skus':                   'SKU Master',
   '/parties':                'Party Master',
   '/employees':              'Employees',
+  '/access-control':         'Access Control',
+  '/pricing':                'Pricing Hub',
+  '/pricing/approvals':      'Approval Inbox',
+  '/pricing/calculator':     'Turnover Calculator',
+  '/pricing/documents':      'Pricing Documents',
+  '/pricing/analytics':      'Pricing Analytics',
+  '/quotes':                 'Quotes',
+  '/profile':                'My Profile',
 };
 
 const MainLayout = () => {
@@ -68,20 +80,65 @@ const MainLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
-  const { user } = useSelector((state) => state.auth);
+  const { user, isAuthenticated } = useSelector((state) => state.auth);
+  const { can, canAny, isRoot } = usePermissions();
+
+  // Live badge for the Approval Inbox sidebar entry.
+  const { data: pendingRes } = useGetPendingRevisionsQuery(undefined, {
+    skip: !isAuthenticated || (!can('pricing.approve') && !isRoot),
+    pollingInterval: 60_000,
+  });
+  const pendingCount = pendingRes?.data?.length || 0;
 
   const sections = useMemo(() => {
-    if (user?.role === 'MD') {
-      return [
-        ...navSections,
-        {
-          title: 'Administration',
-          items: [{ text: 'Employees', icon: <UserCog size={19} />, path: '/employees' }],
-        },
-      ];
+    const out = [...navSections];
+
+    // Pricing & Revenue
+    const pricingItems = [];
+    if (can('pricing.view') || isRoot) {
+      pricingItems.push({ text: 'Pricing Hub', icon: <IndianRupee size={19} />, path: '/pricing' });
     }
-    return navSections;
-  }, [user]);
+    if (can('pricing.approve') || isRoot) {
+      pricingItems.push({
+        text: 'Approval Inbox',
+        icon: (
+          <Badge color="warning" variant={pendingCount > 0 ? 'standard' : 'dot'} badgeContent={pendingCount} invisible={pendingCount === 0} overlap="circular">
+            <ClipboardCheck size={19} />
+          </Badge>
+        ),
+        path: '/pricing/approvals',
+      });
+    }
+    if (can('pricing.view') || isRoot) {
+      pricingItems.push({ text: 'Turnover Calculator', icon: <Calculator size={19} />, path: '/pricing/calculator' });
+    }
+    if (can('pricing.view') || isRoot) {
+      pricingItems.push({ text: 'Documents', icon: <FolderOpen size={19} />, path: '/pricing/documents' });
+    }
+    if (can('pricing.view') || isRoot) {
+      pricingItems.push({ text: 'Analytics', icon: <BarChart3 size={19} />, path: '/pricing/analytics' });
+    }
+    if (can('quotes.view') || isRoot) {
+      pricingItems.push({ text: 'Quotes', icon: <FileSignature size={19} />, path: '/quotes' });
+    }
+    if (pricingItems.length > 0) {
+      out.push({ title: 'Pricing & Revenue', items: pricingItems });
+    }
+
+    // Administration
+    const adminItems = [];
+    if (canAny('accessControl.manageUsers', 'accessControl.manageRoles', 'accessControl.viewAuditLog') || isRoot) {
+      adminItems.push({ text: 'Access Control', icon: <ShieldCheck size={19} />, path: '/access-control' });
+    }
+    if (user?.role === 'MD' || isRoot) {
+      adminItems.push({ text: 'Employees', icon: <UserCog size={19} />, path: '/employees' });
+    }
+    if (adminItems.length > 0) {
+      out.push({ title: 'Administration', items: adminItems });
+    }
+
+    return out;
+  }, [user, can, canAny, isRoot, pendingCount]);
 
   const handleDrawerToggle = () => setMobileOpen((v) => !v);
   const handleLogout = () => { dispatch(logout()); navigate('/login'); };
@@ -235,35 +292,78 @@ const MainLayout = () => {
             display: 'flex',
             alignItems: 'center',
             gap: 1.25,
-            p: 1.25,
+            p: 0.5,
+            pl: 1.25,
             borderRadius: 2.5,
             background: 'linear-gradient(135deg, #f5f8ff 0%, #eaf0fb 100%)',
             border: '1px solid',
             borderColor: 'divider',
+            transition: 'all 0.18s ease',
+            '&:hover': {
+              borderColor: alpha(theme.palette.primary.main, 0.4),
+              boxShadow: `0 2px 8px ${alpha(theme.palette.primary.main, 0.12)}`,
+            },
           }}
         >
-          <Avatar
-            sx={{
-              width: 38, height: 38,
-              background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
-              color: '#ffffff', fontWeight: 700, fontSize: '0.85rem',
-            }}
-          >
-            {initials}
-          </Avatar>
-          <Box sx={{ minWidth: 0, flexGrow: 1 }}>
-            <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'text.primary', lineHeight: 1.2 }} noWrap>
-              {user?.name || 'User'}
-            </Typography>
-            <Typography sx={{ fontSize: '0.7rem', fontWeight: 500, color: 'text.secondary' }} noWrap>
-              {user?.role || 'Member'}
-            </Typography>
-          </Box>
+          {/* Clickable region — opens profile page */}
+          <Tooltip title="View my profile" arrow placement="top">
+            <Box
+              role="button"
+              tabIndex={0}
+              onClick={() => { navigate('/profile'); if (isMobile) setMobileOpen(false); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  navigate('/profile');
+                  if (isMobile) setMobileOpen(false);
+                }
+              }}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.25,
+                py: 0.75,
+                flexGrow: 1,
+                minWidth: 0,
+                cursor: 'pointer',
+                borderRadius: 2,
+                outline: 'none',
+                '&:focus-visible': {
+                  boxShadow: `0 0 0 2px ${alpha(theme.palette.primary.main, 0.35)}`,
+                },
+                '&:hover .user-name': { color: 'primary.dark' },
+              }}
+            >
+              <Avatar
+                sx={{
+                  width: 38, height: 38,
+                  background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
+                  color: '#ffffff', fontWeight: 700, fontSize: '0.85rem',
+                }}
+              >
+                {initials}
+              </Avatar>
+              <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+                <Typography
+                  className="user-name"
+                  sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'text.primary', lineHeight: 1.2, transition: 'color 0.15s' }}
+                  noWrap
+                >
+                  {user?.name || 'Loading…'}
+                </Typography>
+                <Typography sx={{ fontSize: '0.7rem', fontWeight: 500, color: 'text.secondary' }} noWrap>
+                  {user?.role || 'Member'}
+                </Typography>
+              </Box>
+            </Box>
+          </Tooltip>
+
           <Tooltip title="Sign out" arrow>
             <IconButton
               size="small"
               onClick={handleLogout}
               sx={{
+                mr: 0.5,
                 color: 'error.main',
                 bgcolor: alpha(theme.palette.error.main, 0.08),
                 '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.16), color: 'error.dark' },

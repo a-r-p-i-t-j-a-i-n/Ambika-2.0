@@ -19,7 +19,20 @@ const SkuSchema = new Schema({
   weightPerPc: { type: Number, default: 0, min: 0 },
   
   leadDays: { type: Number, default: 7, min: 0 },
-  sellingPrice: { type: Number, default: 0, min: 0 },
+
+  // ── Pricing (v2) ─────────────────────────────────────────────────
+  // sellingPrice and rmCost are DENORMALISED caches of the latest LIVE
+  // PriceRevision (effectiveFrom <= today). They keep all existing screens
+  // that read SKU.sellingPrice working. The source of truth is PriceRevision.
+  sellingPrice:        { type: Number, default: 0, min: 0 },
+  sellingPriceFrom:    { type: Date,   default: null },
+  rmCost:              { type: Number, default: 0, min: 0 },
+  rmCostFrom:          { type: Date,   default: null },
+  gstRate:             { type: Number, default: 18, min: 0, max: 28 },
+  marginFloor:         { type: Number, default: 0, min: 0 },
+  // Sticky note shown on the Pricing Master row (independent of per-revision reason).
+  // Used for the "Remarks" column in the Current SKU Prices export sheet.
+  pricingRemarks:      { type: String, default: '', trim: true, maxlength: 500 },
   
   dimensions: {
     length: { type: Number },

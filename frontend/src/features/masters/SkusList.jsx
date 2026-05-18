@@ -3,6 +3,10 @@ import {
   Box,
   Button,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   Drawer,
   IconButton,
@@ -15,9 +19,16 @@ import {
   alpha,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Edit3, PackagePlus, Plus, Save, Search, Upload, X } from 'lucide-react';
+import { AlertTriangle, Edit3, PackagePlus, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { useBulkUpsertSkusMutation, useCreateSkuMutation, useGetSkusQuery, useUpdateSkuMutation } from '../../store/api/skuApi';
+import {
+  useBulkUpsertSkusMutation,
+  useCreateSkuMutation,
+  useDeleteSkuMutation,
+  useGetSkusQuery,
+  useUpdateSkuMutation,
+} from '../../store/api/skuApi';
+import { usePermission } from '../../hooks/usePermission';
 
 const BRAND = { primary: '#2563eb', success: '#059669', warning: '#d97706', error: '#dc2626', wip: '#7c3aed' };
 
@@ -152,7 +163,10 @@ const SkusList = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedSku, setSelectedSku] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [bulkUpsertSkus, { isLoading: isImporting }] = useBulkUpsertSkusMutation();
+  const [deleteSku, { isLoading: isDeleting }] = useDeleteSkuMutation();
+  const canDelete = usePermission('masters.deleteSku');
 
   const { data, isLoading } = useGetSkusQuery({
     page: paginationModel.page + 1,
@@ -160,6 +174,17 @@ const SkusList = () => {
     search: searchTerm || undefined,
     sort: 'name',
   });
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget?._id) return;
+    try {
+      await deleteSku(deleteTarget._id).unwrap();
+      enqueueSnackbar(`SKU "${deleteTarget.code}" deleted`, { variant: 'success' });
+      setDeleteTarget(null);
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Unable to delete SKU', { variant: 'error' });
+    }
+  };
 
   const handleAdd = () => {
     setSelectedSku(null);
@@ -200,13 +225,29 @@ const SkusList = () => {
     { field: 'weightPerPc', headerName: 'WT/PC', width: 95, align: 'right', headerAlign: 'right',
       renderCell: (p) => <Typography variant="body2" fontWeight={700}>{p.value ? Number(p.value).toFixed(3) : '-'}</Typography>
     },
-    { field: 'actions', headerName: '', width: 70, sortable: false, align: 'center',
+    { field: 'actions', headerName: '', width: canDelete ? 110 : 70, sortable: false, align: 'center',
       renderCell: (p) => (
-        <Tooltip title="Edit SKU">
-          <IconButton size="small" onClick={() => handleEdit(p.row)} sx={{ color: BRAND.primary }}>
-            <Edit3 size={15} />
-          </IconButton>
-        </Tooltip>
+        <Stack direction="row" spacing={0.25}>
+          <Tooltip title="Edit SKU">
+            <IconButton size="small" onClick={() => handleEdit(p.row)} sx={{ color: BRAND.primary }}>
+              <Edit3 size={15} />
+            </IconButton>
+          </Tooltip>
+          {canDelete && (
+            <Tooltip title="Delete SKU">
+              <IconButton
+                size="small"
+                onClick={() => setDeleteTarget(p.row)}
+                sx={{
+                  color: BRAND.error,
+                  '&:hover': { bgcolor: alpha(BRAND.error, 0.08), color: BRAND.error },
+                }}
+              >
+                <Trash2 size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Stack>
       )
     },
   ];
@@ -252,6 +293,80 @@ const SkusList = () => {
 
       <Divider sx={{ display: 'none' }} />
       <SkuDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} sku={selectedSku} />
+
+      {/* Delete confirmation */}
+      <Dialog
+        open={!!deleteTarget}
+        onClose={() => !isDeleting && setDeleteTarget(null)}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ pt: 3, px: 3, pb: 1.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box sx={{
+            width: 40, height: 40, borderRadius: 2,
+            display: 'grid', placeItems: 'center',
+            bgcolor: alpha(BRAND.error, 0.10), color: BRAND.error,
+          }}>
+            <AlertTriangle size={20} />
+          </Box>
+          <Box>
+            <Typography sx={{ fontWeight: 800, fontSize: '1.05rem' }}>Delete this SKU?</Typography>
+            <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary' }}>
+              The SKU will be soft-deleted and hidden from all lists.
+            </Typography>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ px: 3 }}>
+          {deleteTarget && (
+            <Box sx={{
+              p: 2, borderRadius: 2,
+              bgcolor: alpha(BRAND.error, 0.04),
+              border: `1px solid ${alpha(BRAND.error, 0.18)}`,
+            }}>
+              <Stack direction="row" spacing={2} alignItems="center">
+                <Box>
+                  <Typography sx={{
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    fontWeight: 900, fontSize: '0.95rem', color: BRAND.error,
+                  }}>
+                    {deleteTarget.code}
+                  </Typography>
+                  <Typography sx={{ fontWeight: 600, fontSize: '0.86rem' }}>
+                    {deleteTarget.name}
+                  </Typography>
+                  {deleteTarget.category && (
+                    <Typography sx={{ fontSize: '0.74rem', color: 'text.secondary', mt: 0.25 }}>
+                      Category: {deleteTarget.category}
+                    </Typography>
+                  )}
+                </Box>
+              </Stack>
+            </Box>
+          )}
+          <Typography sx={{ mt: 2, fontSize: '0.82rem', color: 'text.secondary' }}>
+            Historical orders, challans and price revisions that reference this SKU will keep working —
+            only the master row is hidden. You can recover it from the database if needed.
+          </Typography>
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setDeleteTarget(null)} disabled={isDeleting} sx={{ color: 'text.secondary', fontWeight: 700 }}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            disabled={isDeleting}
+            onClick={handleDeleteConfirm}
+            startIcon={isDeleting ? <CircularProgress size={14} color="inherit" /> : <Trash2 size={14} />}
+            sx={{ fontWeight: 700, px: 3 }}
+          >
+            {isDeleting ? 'Deleting…' : 'Delete SKU'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

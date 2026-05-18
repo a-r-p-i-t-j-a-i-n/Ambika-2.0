@@ -10,6 +10,9 @@ import './api/skuApi';
 import './api/ppcApi';
 import './api/fmsApi';
 import './api/dispatchControlApi';
+import './api/accessControlApi';
+import './api/pricingApi';
+import './api/quoteApi';
 
 export const store = configureStore({
   reducer: {

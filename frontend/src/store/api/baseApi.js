@@ -12,6 +12,13 @@ export const baseApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ['Party', 'SKU', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison', 'Schedule', 'Challan', 'Invoice', 'Auth', 'PPC', 'Shipment', 'Payment', 'TransportBill', 'Employees'],
+  tagTypes: [
+    'Party', 'SKU', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison',
+    'Schedule', 'Challan', 'Invoice', 'Auth', 'PPC', 'Shipment', 'Payment',
+    'TransportBill', 'Employees',
+    'AccessUsers', 'AccessRoles', 'AccessAudit',
+    'Pricing', 'PriceHistory', 'PriceApprovals', 'Quote', 'CompanySettings',
+    'PricingReviewers', 'PricingDocuments', 'PricingAnalytics',
+  ],
   endpoints: () => ({}),
 });

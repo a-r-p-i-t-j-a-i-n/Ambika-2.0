@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useSelector } from 'react-redux';
+import AccessHydrator from './AccessHydrator';
 
 const ProtectedRoute = () => {
   const { isAuthenticated } = useSelector((state) => state.auth);
@@ -9,7 +10,11 @@ const ProtectedRoute = () => {
     return <Navigate to="/login" replace />;
   }
 
-  return <Outlet />;
+  return (
+    <AccessHydrator>
+      <Outlet />
+    </AccessHydrator>
+  );
 };
 
 export default ProtectedRoute;

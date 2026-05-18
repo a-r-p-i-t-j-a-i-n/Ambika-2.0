@@ -25,6 +25,9 @@ import fmsRoutes      from './modules/fms/fms.routes.js';
 import ppcRoutes      from './modules/ppc/ppc.routes.js';
 import dispatchControlRoutes from './modules/dispatch-control/dispatch-control.routes.js';
 import uploadRoutes from './common/uploads/upload.routes.js';
+import accessControlRoutes from './modules/access-control/access-control.routes.js';
+import pricingRoutes from './modules/pricing/pricing.routes.js';
+import quoteRoutes from './modules/quotes/quote.routes.js';
 
 
 const app = express();
@@ -83,6 +86,9 @@ app.use('/api/v1/fms',       fmsRoutes);
 app.use('/api/v1/ppc',       ppcRoutes);
 app.use('/api/v1/dispatch-control', dispatchControlRoutes);
 app.use('/api/v1/uploads',          uploadRoutes);
+app.use('/api/v1/access-control',   accessControlRoutes);
+app.use('/api/v1/pricing',          pricingRoutes);
+app.use('/api/v1/quotes',           quoteRoutes);
 
 // ── Static — uploaded files (served as /uploads/...) ────────
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads'), {

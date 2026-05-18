@@ -1,0 +1,3 @@
+# Internal ERP — block all crawlers.
+User-agent: *
+Disallow: /

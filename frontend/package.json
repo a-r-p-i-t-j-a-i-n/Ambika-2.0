@@ -1,12 +1,19 @@
 {
-  "name": "dpes-poc",
+  "name": "ambika-dispatch-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "description": "Ambika Dispatch — Planning & Execution Suite (web client)",
+  "engines": {
+    "node": ">=18.18 <21"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "build:prod": "cross-env NODE_ENV=production vite build",
+    "preview": "vite preview --host",
+    "clean": "rimraf dist",
+    "lint": "eslint src --ext .js,.jsx --max-warnings=0"
   },
   "dependencies": {
     "@emotion/react": "^11.11.4",
@@ -32,6 +39,8 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "cross-env": "^7.0.3",
+    "rimraf": "^5.0.10",
     "vite": "^5.3.4"
   }
 }

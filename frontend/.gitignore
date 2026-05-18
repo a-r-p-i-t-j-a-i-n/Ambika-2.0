@@ -7,10 +7,18 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Build artefacts
 node_modules
 dist
 dist-ssr
 *.local
+
+# Env files — local secrets stay out of git, templates stay in.
+.env.local
+.env.*.local
+# Keep these:
+!.env.example
+!.env.production
 
 # Editor directories and files
 .vscode/*
@@ -22,3 +30,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Vite cache
+.vite/

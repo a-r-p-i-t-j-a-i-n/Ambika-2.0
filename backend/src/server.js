@@ -5,10 +5,17 @@ import connectDB from './config/db.js';
 import env from './config/env.js';
 import { logger } from './utils/logger.js';
 import { initSocket } from './sockets/socketService.js';
+import { seedAccessControl } from './modules/access-control/role.seed.js';
+import { seedPricing } from './modules/pricing/pricing.seed.js';
 
 const startServer = async () => {
   // Connect to MongoDB
   await connectDB();
+
+  // Seed roles + backfill user role assignments. Idempotent.
+  await seedAccessControl();
+  // Seed pricing baseline + CompanySettings singleton. Idempotent.
+  await seedPricing();
 
   const server = http.createServer(app);
   
