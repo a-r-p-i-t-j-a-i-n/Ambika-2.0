@@ -1,37 +1,41 @@
-import React, { lazy, Suspense } from 'react';
+import React, { Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppLoader from './components/AppLoader';
 import RequirePermission from './components/RequirePermission';
+import { lazyWithRetry } from './utils/lazyWithRetry';
 
-// ─── Eager: shell + auth (needed before any route renders) ──────────────────
+// ─── Eager: shell, auth, and the post-login landing page ───────────────────
+// Dashboard is loaded eagerly because it's the default route after login —
+// lazy-loading it would force an extra round trip on every sign-in.
 import Login from './features/auth/Login';
+import Dashboard from './features/dashboard/Dashboard';
 
-// ─── Lazy: every authenticated screen ───────────────────────────────────────
-// Each import() becomes its own chunk thanks to vite's manualChunks config.
-const Dashboard            = lazy(() => import('./features/dashboard/Dashboard'));
-const DispatchControlTower = lazy(() => import('./features/dashboard/DispatchControlTower'));
-const Profile              = lazy(() => import('./features/profile/Profile'));
-const EmployeesList        = lazy(() => import('./features/employees/EmployeesList'));
-const OrdersList           = lazy(() => import('./features/orders/OrdersList'));
-const OrderDetails         = lazy(() => import('./features/orders/OrderDetails'));
-const PlanWorkspace        = lazy(() => import('./features/planning/PlanWorkspace'));
-const PPCPlanning          = lazy(() => import('./features/ppc/PPCPlanning'));
-const ChallansList         = lazy(() => import('./features/execution/ChallansList'));
-const InvoicesList         = lazy(() => import('./features/ledger/InvoicesList'));
-const SkusList             = lazy(() => import('./features/masters/SkusList'));
-const PartiesList          = lazy(() => import('./features/masters/PartiesList'));
-const PartyDetails         = lazy(() => import('./features/masters/PartyDetails'));
-const AccessControl        = lazy(() => import('./features/access-control/AccessControl'));
-const PricingHub           = lazy(() => import('./features/pricing/PricingHub'));
-const ApprovalInbox        = lazy(() => import('./features/pricing/ApprovalInbox'));
-const TurnoverCalculator   = lazy(() => import('./features/pricing/TurnoverCalculator'));
-const PricingDocuments     = lazy(() => import('./features/pricing/PricingDocuments'));
-const PricingAnalytics     = lazy(() => import('./features/pricing/PricingAnalytics'));
-const QuotesList           = lazy(() => import('./features/quotes/QuotesList'));
-const QuoteDetail          = lazy(() => import('./features/quotes/QuoteDetail'));
-const NotFound             = lazy(() => import('./components/NotFound'));
+// ─── Lazy: every other authenticated screen ────────────────────────────────
+// lazyWithRetry handles transient network failures and stale-deploy
+// hash mismatches without dumping the user into the ErrorBoundary.
+const DispatchControlTower = lazyWithRetry(() => import('./features/dashboard/DispatchControlTower'));
+const Profile              = lazyWithRetry(() => import('./features/profile/Profile'));
+const EmployeesList        = lazyWithRetry(() => import('./features/employees/EmployeesList'));
+const OrdersList           = lazyWithRetry(() => import('./features/orders/OrdersList'));
+const OrderDetails         = lazyWithRetry(() => import('./features/orders/OrderDetails'));
+const PlanWorkspace        = lazyWithRetry(() => import('./features/planning/PlanWorkspace'));
+const PPCPlanning          = lazyWithRetry(() => import('./features/ppc/PPCPlanning'));
+const ChallansList         = lazyWithRetry(() => import('./features/execution/ChallansList'));
+const InvoicesList         = lazyWithRetry(() => import('./features/ledger/InvoicesList'));
+const SkusList             = lazyWithRetry(() => import('./features/masters/SkusList'));
+const PartiesList          = lazyWithRetry(() => import('./features/masters/PartiesList'));
+const PartyDetails         = lazyWithRetry(() => import('./features/masters/PartyDetails'));
+const AccessControl        = lazyWithRetry(() => import('./features/access-control/AccessControl'));
+const PricingHub           = lazyWithRetry(() => import('./features/pricing/PricingHub'));
+const ApprovalInbox        = lazyWithRetry(() => import('./features/pricing/ApprovalInbox'));
+const TurnoverCalculator   = lazyWithRetry(() => import('./features/pricing/TurnoverCalculator'));
+const PricingDocuments     = lazyWithRetry(() => import('./features/pricing/PricingDocuments'));
+const PricingAnalytics     = lazyWithRetry(() => import('./features/pricing/PricingAnalytics'));
+const QuotesList           = lazyWithRetry(() => import('./features/quotes/QuotesList'));
+const QuoteDetail          = lazyWithRetry(() => import('./features/quotes/QuoteDetail'));
+const NotFound             = lazyWithRetry(() => import('./components/NotFound'));
 
 function App() {
   return (

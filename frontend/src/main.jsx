@@ -8,6 +8,15 @@ import { store } from './store';
 import theme from './theme/index';
 import App from './App.jsx';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// ─── Local Inter font weights (replaces blocking Google Fonts CDN call) ───
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+import '@fontsource/inter/800.css';
+import '@fontsource/inter/900.css';
+
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
