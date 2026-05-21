@@ -1,110 +1,615 @@
 import React, { useState, useMemo } from 'react';
-import { Box, Typography, Paper, TextField, MenuItem, Button } from '@mui/material';
-import { DataGrid } from '@mui/x-data-grid';
-import { Download, Calendar } from 'lucide-react';
-import { useGetPpcMonthDataQuery } from '../../store/api/ppcApi';
+import {
+  Box, Typography, Paper, Stack, Chip, Button, IconButton, TextField,
+  Tabs, Tab, Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
+  LinearProgress, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions,
+  alpha, useTheme, CircularProgress,
+} from '@mui/material';
+import {
+  Factory, ChevronLeft, ChevronRight, RefreshCw, Sparkles, Plus, ArrowRight,
+  Settings2, ClipboardList, LayoutGrid, CheckCircle2, TriangleAlert, Clock,
+  PackageCheck, Boxes,
+} from 'lucide-react';
 import dayjs from 'dayjs';
+import { enqueueSnackbar } from 'notistack';
+import {
+  useGetPpcBoardQuery, useGeneratePpcPlansMutation, useUpdatePpcPlanMutation,
+  useSavePpcDailyEntryMutation, useMovePpcWipMutation,
+} from '../../store/api/ppcApi';
+
+const STAGES = [
+  { key: 'cutting',   label: 'Cutting' },
+  { key: 'drawing',   label: 'Drawing' },
+  { key: 'buffing',   label: 'Buffing' },
+  { key: 'finishing', label: 'Finishing' },
+  { key: 'packing',   label: 'Packing' },
+];
+const stageLabel = (k) => (k === 'done' ? 'FG Ready' : (STAGES.find((s) => s.key === k)?.label || k));
+const nextStage = (k) => {
+  const i = STAGES.findIndex((s) => s.key === k);
+  return i >= 0 && i < STAGES.length - 1 ? STAGES[i + 1].key : 'done';
+};
+
+const fmt = (n) => (n == null ? '—' : Number(n).toLocaleString('en-IN'));
+
+const STATUS_META = (theme) => ({
+  NOT_PLANNED: { label: 'Not planned', color: theme.palette.text.secondary, bg: alpha(theme.palette.text.primary, 0.06), icon: Clock },
+  ON_TRACK:    { label: 'On track',    color: theme.palette.success.dark,   bg: alpha(theme.palette.success.main, 0.12), icon: CheckCircle2 },
+  BEHIND:      { label: 'Behind',      color: theme.palette.error.dark,     bg: alpha(theme.palette.error.main, 0.12),   icon: TriangleAlert },
+  DONE:        { label: 'Done',        color: theme.palette.primary.dark,   bg: alpha(theme.palette.primary.main, 0.12), icon: PackageCheck },
+});
+
+// ── KPI pill ──────────────────────────────────────────────────────────
+const Kpi = ({ label, value, hint, color, icon: Icon, theme }) => (
+  <Paper sx={{
+    flex: '1 1 150px', minWidth: 142, p: 1.3, borderRadius: 2,
+    border: `1px solid ${theme.palette.divider}`,
+    background: 'linear-gradient(180deg,#ffffff 0%,#f7f9ff 100%)',
+  }}>
+    <Stack direction="row" spacing={1} alignItems="center">
+      <Box sx={{
+        width: 26, height: 26, borderRadius: 1.25, flexShrink: 0,
+        display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color,
+      }}>
+        <Icon size={14} />
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'text.secondary' }}>
+          {label}
+        </Typography>
+        <Stack direction="row" spacing={0.75} alignItems="baseline">
+          <Typography sx={{ fontWeight: 800, fontSize: '1.15rem', color, fontVariantNumeric: 'tabular-nums' }}>
+            {value}
+          </Typography>
+          {hint && <Typography sx={{ fontSize: '0.62rem', color: 'text.disabled' }}>{hint}</Typography>}
+        </Stack>
+      </Box>
+    </Stack>
+  </Paper>
+);
 
 const PPCPlanning = () => {
-  const [currentDate, setCurrentDate] = useState(dayjs());
-  const year = currentDate.year();
-  const month = currentDate.month() + 1;
+  const theme = useTheme();
+  const statusMeta = STATUS_META(theme);
+  const [period, setPeriod] = useState(dayjs());
+  const [tab, setTab] = useState(0);
+  const [entryDate, setEntryDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [entryDraft, setEntryDraft] = useState({});
+  const [settingsRow, setSettingsRow] = useState(null);
+  const [moveCtx, setMoveCtx] = useState(null);
 
-  const { data, isLoading } = useGetPpcMonthDataQuery({ year, month });
+  const year = period.year();
+  const month = period.month() + 1;
 
-  const dynamicColumns = useMemo(() => {
-    const daysInMonth = currentDate.daysInMonth();
-    const cols = [];
-    for (let i = 1; i <= daysInMonth; i++) {
-      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-      cols.push({
-        field: `plan_${dateStr}`,
-        headerName: `${String(i).padStart(2, '0')}`,
-        width: 60,
-        align: 'center',
-        headerAlign: 'center',
-        sortable: false,
-        renderCell: (params) => {
-          const planData = params.row.dailyPlan?.find(p => p.date.startsWith(dateStr));
-          const plan = planData?.dispPlan;
-          const actual = planData?.dispActual;
-          return (
-            <Box sx={{ textAlign: 'center', lineHeight: 1.3 }}>
-              <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color: '#2563eb' }}>{plan || '-'}</Typography>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 500, color: actual ? '#059669' : '#94a3b8' }}>{actual || '-'}</Typography>
-            </Box>
-          );
-        }
-      });
+  const { data, isFetching, refetch } = useGetPpcBoardQuery({ year, month });
+  const rows = data?.data?.rows || [];
+  const kpis = data?.data?.kpis || {};
+  const plannedRows = useMemo(() => rows.filter((r) => r.planId), [rows]);
+
+  const [generate, { isLoading: generating }] = useGeneratePpcPlansMutation();
+  const [updatePlan] = useUpdatePpcPlanMutation();
+  const [saveDaily, { isLoading: savingDaily }] = useSavePpcDailyEntryMutation();
+  const [moveWip, { isLoading: moving }] = useMovePpcWipMutation();
+
+  const handleGenerate = async () => {
+    try {
+      const res = await generate({ year, month }).unwrap();
+      enqueueSnackbar(res?.message || 'Plans generated', { variant: 'success' });
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Failed to generate plans', { variant: 'error' });
     }
-    return cols;
-  }, [currentDate, year, month]);
+  };
 
-  const baseColumns = [
-    { field: 'soNumber', headerName: 'SO #', width: 130,
-      renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography>
-    },
-    { field: 'partyName', headerName: 'PARTY', width: 160,
-      renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value}</Typography>
-    },
-    { field: 'skuName', headerName: 'SKU', width: 160,
-      renderCell: (p) => <Typography variant="body2" fontWeight={500} noWrap>{p.value}</Typography>
-    },
-    { field: 'orderQty', headerName: 'ORD QTY', width: 80, type: 'number', align: 'right', headerAlign: 'right',
-      renderCell: (p) => <Typography variant="body2" fontWeight={700}>{p.value?.toLocaleString('en-IN') || '-'}</Typography>
-    },
-    { field: 'balanceQty', headerName: 'BAL QTY', width: 80, type: 'number', align: 'right', headerAlign: 'right',
-      renderCell: (p) => <Typography variant="body2" fontWeight={600} color="error.main">{p.value?.toLocaleString('en-IN') || '-'}</Typography>
-    },
-    { field: 'totalQtyToProduce', headerName: 'TO PROD', width: 80, type: 'number', align: 'right', headerAlign: 'right',
-      renderCell: (p) => <Typography variant="body2" fontWeight={600} color="warning.dark">{p.value?.toLocaleString('en-IN') || '-'}</Typography>
-    },
-  ];
+  const producedForDate = (row, dateStr) => {
+    const d = (row.days || []).find((x) => dayjs(x.date).format('YYYY-MM-DD') === dateStr);
+    return d ? d.producedQty : 0;
+  };
+  const targetForDate = (row, dateStr) => {
+    const d = (row.days || []).find((x) => dayjs(x.date).format('YYYY-MM-DD') === dateStr);
+    return d ? d.targetQty : 0;
+  };
 
-  const columns = [...baseColumns, ...dynamicColumns];
+  const handleSaveDaily = async () => {
+    const entries = plannedRows.map((r) => ({
+      planId: r.planId,
+      producedQty: Number(
+        entryDraft[r.planId] !== undefined ? entryDraft[r.planId] : producedForDate(r, entryDate),
+      ) || 0,
+    }));
+    try {
+      await saveDaily({ date: entryDate, entries }).unwrap();
+      setEntryDraft({});
+      enqueueSnackbar('Daily production saved', { variant: 'success' });
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Failed to save', { variant: 'error' });
+    }
+  };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: 3, minHeight: '100vh', bgcolor: '#f8fafc' }}>
-      {/* Header */}
-      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
-        <Box>
-          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 700, color: '#0b2545', letterSpacing: '-0.015em', lineHeight: 1.25 }}>PPC Schedule vs Supply</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>Production planning & dispatch tracking matrix</Typography>
-        </Box>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, width: { xs: '100%', md: 'auto' } }}>
-          <TextField select size="small" value={month} onChange={(e) => setCurrentDate(currentDate.month(e.target.value - 1))}
-            sx={{ width: { xs: 'calc(50% - 6px)', sm: 130 }, '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }}>
-            {Array.from({ length: 12 }).map((_, i) => (
-              <MenuItem key={i + 1} value={i + 1}>{dayjs().month(i).format('MMMM')}</MenuItem>
-            ))}
-          </TextField>
-          <TextField select size="small" value={year} onChange={(e) => setCurrentDate(currentDate.year(e.target.value))}
-            sx={{ width: { xs: 'calc(50% - 6px)', sm: 100 }, '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }}>
-            {[2024, 2025, 2026, 2027].map((y) => (
-              <MenuItem key={y} value={y}>{y}</MenuItem>
-            ))}
-          </TextField>
-          <Button fullWidth={false} variant="outlined" startIcon={<Download size={16} />} 
-            sx={{ width: { xs: '100%', sm: 'auto' }, borderColor: '#e2e8f0', color: '#475569', bgcolor: '#fff', '&:hover': { bgcolor: '#f1f5f9' } }}>
-            Export
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+      {/* ── Hero ───────────────────────────────────────────────── */}
+      <Box sx={{
+        position: 'relative', overflow: 'hidden', color: '#fff',
+        background: 'linear-gradient(135deg,#0b2545 0%,#1e3a8a 55%,#1d4ed8 100%)',
+        px: { xs: 2.5, md: 3 }, pt: { xs: 2.5, md: 2.75 }, pb: { xs: 4, md: 4.5 },
+      }}>
+        <Stack direction="row" spacing={1.75} alignItems="center">
+          <Box sx={{
+            width: 40, height: 40, borderRadius: 2, flexShrink: 0,
+            display: 'grid', placeItems: 'center',
+            background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)',
+          }}>
+            <Factory size={20} color="#fff" />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ color: '#fff', fontSize: { xs: '1.15rem', md: '1.4rem' }, fontWeight: 800, lineHeight: 1.15 }}>
+              PPC — Production Control
+            </Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.78)', fontSize: '0.78rem', mt: 0.25 }}>
+              What the factory must make, the daily target, and where every batch is on the floor.
+            </Typography>
+          </Box>
+
+          {/* Month nav */}
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{
+            bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 1.5, px: 0.5, py: 0.25,
+          }}>
+            <IconButton size="small" onClick={() => setPeriod((p) => p.subtract(1, 'month'))} sx={{ color: '#fff' }}>
+              <ChevronLeft size={16} />
+            </IconButton>
+            <Typography sx={{ color: '#fff', fontWeight: 800, fontSize: '0.82rem', minWidth: 96, textAlign: 'center' }}>
+              {period.format('MMM YYYY')}
+            </Typography>
+            <IconButton size="small" onClick={() => setPeriod((p) => p.add(1, 'month'))} sx={{ color: '#fff' }}>
+              <ChevronRight size={16} />
+            </IconButton>
+          </Stack>
+
+          <Tooltip title="Refresh">
+            <IconButton onClick={refetch} sx={{ color: '#fff', bgcolor: 'rgba(255,255,255,0.1)' }}>
+              <RefreshCw size={15} />
+            </IconButton>
+          </Tooltip>
+          <Button
+            variant="contained"
+            startIcon={generating ? <CircularProgress size={13} color="inherit" /> : <Sparkles size={15} />}
+            onClick={handleGenerate}
+            disabled={generating}
+            sx={{
+              fontWeight: 700, background: 'rgba(255,255,255,0.16)',
+              border: '1px solid rgba(255,255,255,0.25)', color: '#fff', boxShadow: 'none',
+              '&:hover': { background: 'rgba(255,255,255,0.24)' },
+            }}
+          >
+            Generate Plans
           </Button>
-        </Box>
+        </Stack>
       </Box>
 
-      {/* Data Grid */}
-      <Paper sx={{ flexGrow: 1, borderRadius: '16px', overflow: 'hidden' }}>
-        <DataGrid
-          rows={data?.data || []}
-          columns={columns}
-          getRowId={(row) => `${row.orderId}_${row.skuId}`}
-          loading={isLoading}
-          disableRowSelectionOnClick
-          rowHeight={48}
-          columnHeaderHeight={40}
-          sx={{ border: 0 }}
-        />
+      {/* ── KPI strip ──────────────────────────────────────────── */}
+      <Box sx={{ mx: { xs: 1.5, md: 2.5 }, mt: { xs: -2.75, md: -3 }, position: 'relative' }}>
+        <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
+          <Kpi theme={theme} label="To Produce"  value={fmt(kpis.totalToProduce)} icon={Factory}      color={theme.palette.primary.main}  hint={`${kpis.skuCount || 0} SKUs`} />
+          <Kpi theme={theme} label="Produced"    value={fmt(kpis.totalProduced)}  icon={CheckCircle2}  color={theme.palette.success.dark} />
+          <Kpi theme={theme} label="Balance"     value={fmt(kpis.totalBalance)}   icon={ClipboardList} color={theme.palette.warning.dark} />
+          <Kpi theme={theme} label="Behind"      value={fmt(kpis.behindCount)}    icon={TriangleAlert} color={theme.palette.error.dark}   hint="SKUs" />
+          <Kpi theme={theme} label="Today"       value={`${fmt(kpis.todayProduced)} / ${fmt(kpis.todayTarget)}`} icon={Clock} color={theme.palette.info.dark} hint="done / target" />
+          <Kpi theme={theme} label="In WIP"      value={fmt(kpis.totalWip)}       icon={Boxes}         color={theme.palette.secondary.main} hint="on the floor" />
+        </Stack>
+      </Box>
+
+      {/* ── Panel ──────────────────────────────────────────────── */}
+      <Paper sx={{ mx: { xs: 1.5, md: 2.5 }, mt: 2, mb: 3, borderRadius: 3, overflow: 'hidden' }}>
+        <Tabs
+          value={tab}
+          onChange={(_, v) => setTab(v)}
+          sx={{ borderBottom: `1px solid ${theme.palette.divider}`, px: 1.5,
+            '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.84rem', minHeight: 48 } }}
+        >
+          <Tab icon={<LayoutGrid size={15} />} iconPosition="start" label="Production Board" />
+          <Tab icon={<Boxes size={15} />} iconPosition="start" label="Shop-Floor (WIP)" />
+          <Tab icon={<ClipboardList size={15} />} iconPosition="start" label="Daily Entry" />
+        </Tabs>
+
+        {isFetching && <LinearProgress />}
+
+        {/* Banner: demand exists but not planned */}
+        {!isFetching && rows.length > 0 && kpis.unplannedCount > 0 && (
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{
+            px: 2, py: 1.25, bgcolor: alpha(theme.palette.warning.main, 0.08),
+            borderBottom: `1px solid ${theme.palette.divider}`,
+          }}>
+            <TriangleAlert size={16} color={theme.palette.warning.dark} />
+            <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: theme.palette.warning.dark, flex: 1 }}>
+              {kpis.unplannedCount} SKU(s) have order demand but no production plan yet.
+            </Typography>
+            <Button size="small" variant="contained" color="warning" onClick={handleGenerate} disabled={generating}
+              sx={{ fontWeight: 700, textTransform: 'none' }}>
+              Generate Plans
+            </Button>
+          </Stack>
+        )}
+
+        {/* ── TAB 0: Production Board ─────────────────────────── */}
+        {tab === 0 && (
+          <TableContainer sx={{ maxHeight: '64vh' }}>
+            <Table stickyHeader size="small">
+              <TableHead>
+                <TableRow sx={{ '& th': { fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', bgcolor: alpha(theme.palette.primary.main, 0.04) } }}>
+                  <TableCell>SKU</TableCell>
+                  <TableCell>Group</TableCell>
+                  <TableCell align="right">Order Demand</TableCell>
+                  <TableCell align="right">To Produce</TableCell>
+                  <TableCell align="right">Produced</TableCell>
+                  <TableCell align="right">Balance</TableCell>
+                  <TableCell align="center">Today</TableCell>
+                  <TableCell sx={{ minWidth: 130 }}>Achievement</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell align="center">Plan</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {rows.map((r) => {
+                  const meta = statusMeta[r.status] || statusMeta.NOT_PLANNED;
+                  const Icon = meta.icon;
+                  return (
+                    <TableRow key={r.skuId} hover>
+                      <TableCell>
+                        <Typography sx={{ fontFamily: 'ui-monospace,monospace', fontWeight: 800, fontSize: '0.78rem', color: theme.palette.primary.dark }}>
+                          {r.skuCode}
+                        </Typography>
+                        <Typography sx={{ fontSize: '0.72rem', color: 'text.secondary' }} noWrap>{r.skuName}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        {r.category ? (
+                          <Chip size="small" label={r.category} sx={{ height: 20, fontSize: '0.66rem', fontWeight: 700 }} />
+                        ) : '—'}
+                      </TableCell>
+                      <TableCell align="right"><Num v={r.openBalance} /></TableCell>
+                      <TableCell align="right"><Num v={r.netToProduce} bold /></TableCell>
+                      <TableCell align="right"><Num v={r.produced} color={theme.palette.success.dark} /></TableCell>
+                      <TableCell align="right"><Num v={r.balance} color={r.balance > 0 ? theme.palette.warning.dark : 'text.disabled'} /></TableCell>
+                      <TableCell align="center">
+                        <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                          {fmt(r.todayProduced)}<Box component="span" sx={{ color: 'text.disabled', fontWeight: 600 }}> / {fmt(r.todayTarget)}</Box>
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <LinearProgress
+                            variant="determinate"
+                            value={Math.min(100, r.achievementPct)}
+                            sx={{ flex: 1, height: 7, borderRadius: 4,
+                              bgcolor: alpha(theme.palette.text.primary, 0.08),
+                              '& .MuiLinearProgress-bar': { bgcolor: meta.color } }}
+                          />
+                          <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, minWidth: 32, color: meta.color }}>
+                            {r.achievementPct}%
+                          </Typography>
+                        </Stack>
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" icon={<Icon size={11} style={{ marginLeft: 6 }} />} label={meta.label}
+                          sx={{ height: 22, fontWeight: 700, fontSize: '0.68rem', color: meta.color, bgcolor: meta.bg, '& .MuiChip-icon': { color: 'inherit' } }} />
+                      </TableCell>
+                      <TableCell align="center">
+                        {r.planId ? (
+                          <Tooltip title="Adjust FG stock, WIP & buffer">
+                            <IconButton size="small" onClick={() => setSettingsRow(r)}>
+                              <Settings2 size={15} />
+                            </IconButton>
+                          </Tooltip>
+                        ) : (
+                          <Chip size="small" label="No plan" sx={{ height: 20, fontSize: '0.64rem' }} />
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {!isFetching && rows.length === 0 && (
+                  <TableRow><TableCell colSpan={10}>
+                    <EmptyState icon={Factory} title="No production demand this month"
+                      hint="SKUs with pending order quantity will appear here automatically." />
+                  </TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+
+        {/* ── TAB 1: WIP shop-floor board ─────────────────────── */}
+        {tab === 1 && (
+          <TableContainer sx={{ maxHeight: '64vh' }}>
+            <Table stickyHeader size="small">
+              <TableHead>
+                <TableRow sx={{ '& th': { fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', bgcolor: alpha(theme.palette.primary.main, 0.04) } }}>
+                  <TableCell>SKU</TableCell>
+                  <TableCell align="center">Start</TableCell>
+                  {STAGES.map((s) => <TableCell key={s.key} align="center">{s.label}</TableCell>)}
+                  <TableCell align="center">FG Ready</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {plannedRows.map((r) => (
+                  <TableRow key={r.skuId} hover>
+                    <TableCell>
+                      <Typography sx={{ fontFamily: 'ui-monospace,monospace', fontWeight: 800, fontSize: '0.76rem', color: theme.palette.primary.dark }}>
+                        {r.skuCode}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.7rem', color: 'text.secondary' }} noWrap>{r.skuName}</Typography>
+                    </TableCell>
+                    <TableCell align="center">
+                      <Tooltip title="Start a batch into Cutting">
+                        <IconButton size="small" color="primary"
+                          onClick={() => setMoveCtx({ row: r, from: 'start', to: 'cutting' })}>
+                          <Plus size={15} />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                    {STAGES.map((s) => {
+                      const qty = r.wip?.[s.key] || 0;
+                      return (
+                        <TableCell key={s.key} align="center">
+                          <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="center">
+                            <Box sx={{
+                              minWidth: 42, py: 0.35, borderRadius: 1,
+                              bgcolor: qty > 0 ? alpha(theme.palette.primary.main, 0.1) : alpha(theme.palette.text.primary, 0.04),
+                              color: qty > 0 ? theme.palette.primary.dark : 'text.disabled',
+                              fontWeight: 800, fontSize: '0.78rem', fontVariantNumeric: 'tabular-nums',
+                            }}>
+                              {fmt(qty)}
+                            </Box>
+                            {qty > 0 && (
+                              <Tooltip title={`Advance to ${stageLabel(nextStage(s.key))}`}>
+                                <IconButton size="small"
+                                  onClick={() => setMoveCtx({ row: r, from: s.key, to: nextStage(s.key) })}>
+                                  <ArrowRight size={13} />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </Stack>
+                        </TableCell>
+                      );
+                    })}
+                    <TableCell align="center">
+                      <Chip size="small" icon={<PackageCheck size={12} style={{ marginLeft: 6 }} />} label={fmt(r.produced)}
+                        sx={{ height: 24, fontWeight: 800, fontSize: '0.74rem',
+                          color: theme.palette.success.dark, bgcolor: alpha(theme.palette.success.main, 0.12),
+                          '& .MuiChip-icon': { color: 'inherit' } }} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!isFetching && plannedRows.length === 0 && (
+                  <TableRow><TableCell colSpan={8}>
+                    <EmptyState icon={Boxes} title="No production plans yet"
+                      hint='Click "Generate Plans" to create plans, then track each batch through the stages here.' />
+                  </TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+
+        {/* ── TAB 2: Daily production entry ───────────────────── */}
+        {tab === 2 && (
+          <Box>
+            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}` }}>
+              <TextField
+                type="date" size="small" label="Production date"
+                value={entryDate}
+                onChange={(e) => { setEntryDate(e.target.value); setEntryDraft({}); }}
+                InputLabelProps={{ shrink: true }}
+              />
+              <Box sx={{ flex: 1 }} />
+              <Button variant="contained" onClick={handleSaveDaily}
+                disabled={savingDaily || plannedRows.length === 0}
+                startIcon={savingDaily ? <CircularProgress size={13} color="inherit" /> : <CheckCircle2 size={15} />}
+                sx={{ fontWeight: 700, textTransform: 'none' }}>
+                Save Day
+              </Button>
+            </Stack>
+            <TableContainer sx={{ maxHeight: '58vh' }}>
+              <Table stickyHeader size="small">
+                <TableHead>
+                  <TableRow sx={{ '& th': { fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', bgcolor: alpha(theme.palette.primary.main, 0.04) } }}>
+                    <TableCell>SKU</TableCell>
+                    <TableCell align="right">Target this day</TableCell>
+                    <TableCell align="right">Produced this day</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {plannedRows.map((r) => {
+                    const draftVal = entryDraft[r.planId];
+                    const value = draftVal !== undefined ? draftVal : producedForDate(r, entryDate);
+                    const target = targetForDate(r, entryDate);
+                    return (
+                      <TableRow key={r.skuId} hover>
+                        <TableCell>
+                          <Typography sx={{ fontFamily: 'ui-monospace,monospace', fontWeight: 800, fontSize: '0.76rem', color: theme.palette.primary.dark }}>
+                            {r.skuCode}
+                          </Typography>
+                          <Typography sx={{ fontSize: '0.7rem', color: 'text.secondary' }} noWrap>{r.skuName}</Typography>
+                        </TableCell>
+                        <TableCell align="right">
+                          <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'text.secondary' }}>{fmt(target)}</Typography>
+                        </TableCell>
+                        <TableCell align="right">
+                          <TextField
+                            type="number" size="small" value={value}
+                            onChange={(e) => setEntryDraft((d) => ({ ...d, [r.planId]: e.target.value }))}
+                            sx={{ width: 110 }}
+                            inputProps={{ min: 0, style: { textAlign: 'right', fontWeight: 700 } }}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {!isFetching && plannedRows.length === 0 && (
+                    <TableRow><TableCell colSpan={3}>
+                      <EmptyState icon={ClipboardList} title="No production plans yet"
+                        hint='Generate plans first, then log the floor output here each day.' />
+                    </TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        )}
       </Paper>
+
+      {/* ── Plan settings dialog ───────────────────────────────── */}
+      <PlanSettingsDialog
+        row={settingsRow}
+        onClose={() => setSettingsRow(null)}
+        onSave={async (patch) => {
+          try {
+            await updatePlan({ id: settingsRow.planId, ...patch }).unwrap();
+            enqueueSnackbar('Plan updated', { variant: 'success' });
+            setSettingsRow(null);
+          } catch (err) {
+            enqueueSnackbar(err?.data?.message || 'Failed to update', { variant: 'error' });
+          }
+        }}
+      />
+
+      {/* ── WIP move dialog ────────────────────────────────────── */}
+      <MoveDialog
+        ctx={moveCtx}
+        busy={moving}
+        onClose={() => setMoveCtx(null)}
+        onConfirm={async (qty) => {
+          try {
+            await moveWip({ planId: moveCtx.row.planId, from: moveCtx.from, to: moveCtx.to, qty }).unwrap();
+            enqueueSnackbar('Stage updated', { variant: 'success' });
+            setMoveCtx(null);
+          } catch (err) {
+            enqueueSnackbar(err?.data?.message || 'Failed to move', { variant: 'error' });
+          }
+        }}
+      />
     </Box>
+  );
+};
+
+// ── Small cells & states ─────────────────────────────────────────────
+const Num = ({ v, bold, color }) => (
+  <Typography sx={{
+    fontSize: '0.82rem', fontWeight: bold ? 800 : 600,
+    color: color || 'text.primary', fontVariantNumeric: 'tabular-nums',
+  }}>
+    {v == null ? '—' : Number(v).toLocaleString('en-IN')}
+  </Typography>
+);
+
+const EmptyState = ({ icon: Icon, title, hint }) => (
+  <Stack alignItems="center" sx={{ py: 6, color: 'text.disabled', gap: 0.5 }}>
+    <Icon size={34} style={{ opacity: 0.4 }} />
+    <Typography sx={{ fontWeight: 800, fontSize: '0.92rem' }}>{title}</Typography>
+    <Typography sx={{ fontSize: '0.8rem', textAlign: 'center', maxWidth: 420 }}>{hint}</Typography>
+  </Stack>
+);
+
+// ── Plan settings dialog ─────────────────────────────────────────────
+const PlanSettingsDialog = ({ row, onClose, onSave }) => {
+  const [fgStock, setFgStock] = useState(0);
+  const [openingWip, setOpeningWip] = useState(0);
+  const [bufferPct, setBufferPct] = useState(3);
+
+  React.useEffect(() => {
+    if (row) {
+      setFgStock(row.fgStock || 0);
+      setOpeningWip(row.openingWip || 0);
+      setBufferPct(row.bufferPct ?? 3);
+    }
+  }, [row]);
+
+  if (!row) return null;
+  const base = Math.max(0, (row.openBalance || 0) - Number(fgStock || 0) - Number(openingWip || 0));
+  const preview = Math.ceil(base * (1 + (Number(bufferPct) || 0) / 100));
+
+  return (
+    <Dialog open={!!row} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontWeight: 800, fontSize: '1rem' }}>
+        Plan settings — {row.skuName}
+      </DialogTitle>
+      <DialogContent>
+        <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary', mb: 2 }}>
+          Open order demand: <strong>{fmt(row.openBalance)}</strong> pcs. Production target is
+          demand minus stock & WIP, plus a safety buffer.
+        </Typography>
+        <Stack spacing={2}>
+          <TextField label="FG stock (ready jars)" type="number" size="small" fullWidth
+            value={fgStock} onChange={(e) => setFgStock(e.target.value)} inputProps={{ min: 0 }} />
+          <TextField label="Opening WIP (already in pipeline)" type="number" size="small" fullWidth
+            value={openingWip} onChange={(e) => setOpeningWip(e.target.value)} inputProps={{ min: 0 }} />
+          <TextField label="Safety buffer %" type="number" size="small" fullWidth
+            value={bufferPct} onChange={(e) => setBufferPct(e.target.value)} inputProps={{ min: 0, max: 50 }} />
+          <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: (t) => alpha(t.palette.primary.main, 0.07) }}>
+            <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'text.secondary' }}>
+              New production target
+            </Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: '1.4rem', color: 'primary.dark' }}>
+              {fmt(preview)} pcs
+            </Typography>
+          </Box>
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button onClick={onClose} sx={{ fontWeight: 700 }}>Cancel</Button>
+        <Button variant="contained" sx={{ fontWeight: 700 }}
+          onClick={() => onSave({
+            fgStock: Number(fgStock) || 0,
+            openingWip: Number(openingWip) || 0,
+            bufferPct: Number(bufferPct) || 0,
+          })}>
+          Save
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+// ── WIP move dialog ──────────────────────────────────────────────────
+const MoveDialog = ({ ctx, busy, onClose, onConfirm }) => {
+  const [qty, setQty] = useState('');
+
+  React.useEffect(() => {
+    if (ctx) {
+      const cur = ctx.from === 'start' ? '' : String(ctx.row.wip?.[ctx.from] || '');
+      setQty(cur);
+    }
+  }, [ctx]);
+
+  if (!ctx) return null;
+  const max = ctx.from === 'start' ? null : (ctx.row.wip?.[ctx.from] || 0);
+  const title = ctx.from === 'start'
+    ? `Start a batch — ${ctx.row.skuName}`
+    : `Advance — ${ctx.row.skuName}`;
+
+  return (
+    <Dialog open={!!ctx} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontWeight: 800, fontSize: '1rem' }}>{title}</DialogTitle>
+      <DialogContent>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+          <Chip label={stageLabel(ctx.from)} size="small" sx={{ fontWeight: 700 }} />
+          <ArrowRight size={16} />
+          <Chip label={stageLabel(ctx.to)} size="small" color="primary" sx={{ fontWeight: 700 }} />
+        </Stack>
+        <TextField
+          autoFocus type="number" size="small" fullWidth label="Quantity (pcs)"
+          value={qty} onChange={(e) => setQty(e.target.value)}
+          inputProps={{ min: 1, ...(max != null ? { max } : {}) }}
+          helperText={max != null ? `Available at ${stageLabel(ctx.from)}: ${fmt(max)}` : 'Pieces entering production'}
+        />
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button onClick={onClose} sx={{ fontWeight: 700 }}>Cancel</Button>
+        <Button variant="contained" disabled={busy || !(Number(qty) > 0)} sx={{ fontWeight: 700 }}
+          onClick={() => onConfirm(Number(qty))}>
+          {ctx.to === 'done' ? 'Mark Produced' : 'Move'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 };
 

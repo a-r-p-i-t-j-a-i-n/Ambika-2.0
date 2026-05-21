@@ -76,6 +76,10 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (params) => ({ url: '/challans', params }),
       providesTags: ['Challan'],
     }),
+    getChallanById: builder.query({
+      query: (id) => `/challans/${id}`,
+      providesTags: (_r, _e, id) => [{ type: 'Challan', id }],
+    }),
     // Upload — `file` is a single File from a drop / input.
     uploadOrderDocument: builder.mutation({
       query: (file) => {
@@ -107,5 +111,6 @@ export const {
   useDeletePhaseMutation,
   useNormalizeSheetRowsMutation,
   useGetChallansQuery,
+  useGetChallanByIdQuery,
   useUploadOrderDocumentMutation,
 } = dispatchControlApi;

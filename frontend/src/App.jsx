@@ -23,6 +23,8 @@ const OrderDetails         = lazyWithRetry(() => import('./features/orders/Order
 const PlanWorkspace        = lazyWithRetry(() => import('./features/planning/PlanWorkspace'));
 const PPCPlanning          = lazyWithRetry(() => import('./features/ppc/PPCPlanning'));
 const ChallansList         = lazyWithRetry(() => import('./features/execution/ChallansList'));
+const ChallanDetail        = lazyWithRetry(() => import('./features/execution/ChallanDetail'));
+const PhaseDetail          = lazyWithRetry(() => import('./features/execution/PhaseDetail'));
 const InvoicesList         = lazyWithRetry(() => import('./features/ledger/InvoicesList'));
 const SkusList             = lazyWithRetry(() => import('./features/masters/SkusList'));
 const PartiesList          = lazyWithRetry(() => import('./features/masters/PartiesList'));
@@ -53,9 +55,11 @@ function App() {
             <Route path="/employees" element={<EmployeesList />} />
             <Route path="/orders" element={<OrdersList />} />
             <Route path="/orders/:id" element={<OrderDetails />} />
+            <Route path="/orders/:id/phase/:phaseNo" element={<PhaseDetail />} />
             <Route path="/dispatch-planning" element={<PlanWorkspace />} />
             <Route path="/ppc-planning" element={<PPCPlanning />} />
             <Route path="/challans" element={<ChallansList />} />
+            <Route path="/challans/:id" element={<ChallanDetail />} />
             <Route path="/invoices" element={<InvoicesList />} />
             <Route path="/skus" element={<SkusList />} />
             <Route path="/parties" element={<PartiesList />} />

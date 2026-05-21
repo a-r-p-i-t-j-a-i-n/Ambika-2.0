@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
   Stack, Typography, Box, CircularProgress, alpha, useTheme, Autocomplete,
-  MenuItem, Chip, Switch, FormControlLabel, IconButton,
+  MenuItem, Chip, Switch, FormControlLabel, IconButton, Tooltip,
 } from '@mui/material';
 import {
   IndianRupee, Upload, X, Paperclip, ShieldAlert, Calendar, Sparkles,
@@ -24,6 +24,14 @@ const REASON_PRESETS = [
 ];
 
 const UPLOAD_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1') + '/uploads/order-document';
+
+// Buy-side items (raw material, consumables, packing) have ONE price stream —
+// their purchase cost (RM_COST). Finished goods can have both a selling price
+// and a cost. This keeps a consumable's price from being filed as "Selling".
+const BUY_SIDE_KINDS = ['RAW_MATERIAL', 'CONSUMABLE', 'PACKING'];
+const streamFor = (sku, fallback = 'SELLING') => (
+  BUY_SIDE_KINDS.includes(sku?.itemType) ? 'RM_COST' : fallback
+);
 
 const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLING' }) => {
   const theme = useTheme();
@@ -51,11 +59,15 @@ const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLI
   useEffect(() => {
     if (!open) return;
     const preset = presetSku
-      ? allSkus.find((s) => s._id === presetSku.skuId) || { _id: presetSku.skuId, code: presetSku.code, name: presetSku.name, sellingPrice: presetSku.currentPrice }
+      ? allSkus.find((s) => s._id === presetSku.skuId)
+        || {
+          _id: presetSku.skuId, code: presetSku.code, name: presetSku.name,
+          sellingPrice: presetSku.currentPrice, itemType: presetSku.itemType,
+        }
       : null;
     setForm({
       sku: preset,
-      priceType: defaultPriceType,
+      priceType: streamFor(preset, defaultPriceType),
       newPrice: '',
       effectiveFrom: dayjs().format('YYYY-MM-DD'),
       reason: '',
@@ -67,6 +79,10 @@ const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLI
     });
   }, [open, presetSku, defaultPriceType, allSkus]);
 
+  const isBuySideSku = BUY_SIDE_KINDS.includes(form.sku?.itemType);
+  const streamLabel = form.priceType === 'SELLING'
+    ? 'Selling Price'
+    : (isBuySideSku ? 'Purchase Price' : 'RM Cost');
   const currentPrice = form.priceType === 'SELLING' ? form.sku?.sellingPrice : form.sku?.rmCost;
   const newPriceNum = Number(form.newPrice);
   const changePct = useMemo(() => {
@@ -157,7 +173,7 @@ const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLI
                 fullWidth
                 options={allSkus}
                 value={form.sku}
-                onChange={(_, v) => setForm((f) => ({ ...f, sku: v }))}
+                onChange={(_, v) => setForm((f) => ({ ...f, sku: v, priceType: streamFor(v, f.priceType) }))}
                 getOptionLabel={(o) => o ? `${o.code} · ${o.name}` : ''}
                 isOptionEqualToValue={(a, b) => a._id === b._id}
                 openOnFocus
@@ -218,16 +234,34 @@ const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLI
                   />
                 )}
               />
-              <TextField
-                select
-                label="Type"
-                value={form.priceType}
-                onChange={(e) => setForm((f) => ({ ...f, priceType: e.target.value }))}
-                sx={{ minWidth: 140 }}
-              >
-                <MenuItem value="SELLING">Selling</MenuItem>
-                <MenuItem value="RM_COST">RM Cost</MenuItem>
-              </TextField>
+              {isBuySideSku ? (
+                <Tooltip title="Raw material, consumables & packing are bought from suppliers — tracked as a purchase price.">
+                  <Box sx={{
+                    minWidth: 150, px: 1.5, py: 0.5, borderRadius: 1,
+                    display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                    border: `1px solid ${alpha(theme.palette.warning.main, 0.4)}`,
+                    bgcolor: alpha(theme.palette.warning.main, 0.08),
+                  }}>
+                    <Typography sx={{ fontSize: '0.58rem', fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Price type
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.85rem', fontWeight: 800, color: theme.palette.warning.dark }}>
+                      Purchase Price
+                    </Typography>
+                  </Box>
+                </Tooltip>
+              ) : (
+                <TextField
+                  select
+                  label="Type"
+                  value={form.priceType}
+                  onChange={(e) => setForm((f) => ({ ...f, priceType: e.target.value }))}
+                  sx={{ minWidth: 140 }}
+                >
+                  <MenuItem value="SELLING">Selling</MenuItem>
+                  <MenuItem value="RM_COST">RM Cost</MenuItem>
+                </TextField>
+              )}
             </Stack>
 
             {form.sku && (
@@ -237,7 +271,7 @@ const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLI
                 border: `1px solid ${alpha(theme.palette.primary.main, 0.12)}`,
               }}>
                 <Typography sx={{ fontSize: '0.72rem', color: 'text.secondary', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Current {form.priceType === 'SELLING' ? 'Selling Price' : 'RM Cost'}
+                  Current {streamLabel}
                 </Typography>
                 <Stack direction="row" spacing={1} alignItems="baseline">
                   <Typography sx={{ fontWeight: 800, fontSize: '1.2rem', fontVariantNumeric: 'tabular-nums' }}>

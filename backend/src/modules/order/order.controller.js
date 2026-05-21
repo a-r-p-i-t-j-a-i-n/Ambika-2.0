@@ -4,7 +4,7 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 
 export const orderController = {
   create: asyncHandler(async (req, res) => {
-    const order = await orderService.create(req.body);
+    const order = await orderService.create({ ...req.body, createdBy: req.user?._id });
     res.status(201).json(ApiResponse.created('Sales Order created', order));
   }),
 

@@ -2,6 +2,11 @@ import Joi from 'joi';
 
 const priceType = Joi.string().valid('SELLING', 'RM_COST');
 
+// Optional item-kind filter for the Price Tracker. Empty string = all kinds.
+const itemType = Joi.string()
+  .valid('', 'FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE')
+  .default('');
+
 export const submitRevisionSchema = Joi.object({
   skuId:               Joi.string().hex().length(24).required(),
   priceType:           priceType.default('SELLING'),
@@ -27,6 +32,8 @@ export const rejectRevisionSchema = Joi.object({
 
 export const masterQuerySchema = Joi.object({
   priceType:     priceType.default('SELLING'),
+  itemType,
+  category:      Joi.string().allow('').max(80).default(''),
   search:        Joi.string().allow('').max(120).default(''),
   status:        Joi.string().valid('', 'changed', 'stable', 'stale', 'unpriced', 'pending').default(''),
   // Phase-1 filters
@@ -41,6 +48,7 @@ export const updateSkuRemarksSchema = Joi.object({
 
 export const exportQuerySchema = Joi.object({
   priceType: priceType.default('SELLING'),
+  itemType,
 });
 
 export const documentsQuerySchema = Joi.object({
@@ -54,6 +62,7 @@ export const documentsQuerySchema = Joi.object({
 
 export const analyticsQuerySchema = Joi.object({
   priceType: priceType.default('SELLING'),
+  itemType,
   months:    Joi.number().integer().min(3).max(24).default(12),
 });
 

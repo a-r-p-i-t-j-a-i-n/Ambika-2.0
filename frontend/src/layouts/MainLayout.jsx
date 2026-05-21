@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
-  Typography, Divider, IconButton, AppBar, Toolbar, useTheme, useMediaQuery,
+  Typography, IconButton, AppBar, Toolbar, useTheme, useMediaQuery,
   alpha, Avatar, Tooltip,
 } from '@mui/material';
 import {
   Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
-  Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ShieldCheck,
+  Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ShieldCheck,
   IndianRupee, Calculator, FileSignature, ClipboardCheck, FolderOpen, BarChart3,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
@@ -18,7 +18,8 @@ import { usePermissions } from '../hooks/usePermission';
 
 import AmbikaLogo from '../assets/ambikalogo.jpeg';
 
-const drawerWidth = 268;
+const EXPANDED_WIDTH = 268;
+const COLLAPSED_WIDTH = 76;
 
 const navSections = [
   {
@@ -75,6 +76,7 @@ const PAGE_TITLES = {
 
 const MainLayout = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const navigate = useNavigate();
@@ -82,6 +84,8 @@ const MainLayout = () => {
   const dispatch = useDispatch();
   const { user, isAuthenticated } = useSelector((state) => state.auth);
   const { can, canAny, isRoot } = usePermissions();
+
+  const drawerWidth = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
 
   // Live badge for the Approval Inbox sidebar entry.
   const { data: pendingRes } = useGetPendingRevisionsQuery(undefined, {
@@ -156,7 +160,9 @@ const MainLayout = () => {
     return key ? PAGE_TITLES[key] : 'Ambika Dispatch';
   }, [location.pathname]);
 
-  const drawerContent = (
+  // `mini` collapses the sidebar to icons only. The temporary (mobile)
+  // drawer always renders the full version, so it is passed mini=false.
+  const renderDrawerContent = (mini) => (
     <Box
       sx={{
         height: '100%',
@@ -168,10 +174,11 @@ const MainLayout = () => {
       {/* Brand header */}
       <Box
         sx={{
-          px: 2.5,
+          px: mini ? 1 : 2.5,
           py: 2.25,
           display: 'flex',
           alignItems: 'center',
+          justifyContent: mini ? 'center' : 'flex-start',
           gap: 1.5,
           background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)',
           color: '#ffffff',
@@ -190,81 +197,89 @@ const MainLayout = () => {
             justifyContent: 'center',
             background: 'rgba(255,255,255,0.14)',
             border: '1px solid rgba(255,255,255,0.22)',
-            backdropFilter: 'blur(8px)',
+            flexShrink: 0,
           }}
         >
           <img src={AmbikaLogo} alt="Ambika" style={{ width: 36, height: 36, objectFit: 'contain' }} />
         </Box>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.01em', lineHeight: 1.1, color: '#ffffff' }}>
-            Ambika Dispatch
-          </Typography>
-          <Typography sx={{ fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.78)' }}>
-            Planning &middot; Execution
-          </Typography>
-        </Box>
+        {!mini && (
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.01em', lineHeight: 1.1, color: '#ffffff' }}>
+              Ambika Dispatch
+            </Typography>
+            <Typography sx={{ fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.78)' }}>
+              Planning &middot; Execution
+            </Typography>
+          </Box>
+        )}
       </Box>
 
       {/* Sections */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', py: 1.25 }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', overflowX: 'hidden', py: 1.25 }}>
         {sections.map((section) => (
-          <Box key={section.title} sx={{ px: 1.75, mb: 1.5 }}>
-            <Typography
-              sx={{
-                px: 1.25,
-                py: 0.75,
-                fontSize: '0.66rem',
-                fontWeight: 700,
-                letterSpacing: '0.12em',
-                textTransform: 'uppercase',
-                color: 'text.secondary',
-              }}
-            >
-              {section.title}
-            </Typography>
+          <Box key={section.title} sx={{ px: mini ? 1 : 1.75, mb: 1.5 }}>
+            {mini ? (
+              <Box sx={{ height: 1, bgcolor: 'divider', mx: 1, mb: 1, opacity: 0.7 }} />
+            ) : (
+              <Typography
+                sx={{
+                  px: 1.25,
+                  py: 0.75,
+                  fontSize: '0.66rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  color: 'text.secondary',
+                }}
+              >
+                {section.title}
+              </Typography>
+            )}
             <List disablePadding>
               {section.items.map((item) => {
                 const isSelected = location.pathname.startsWith(item.path);
-                return (
-                  <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
-                    <ListItemButton
-                      onClick={() => { navigate(item.path); if (isMobile) setMobileOpen(false); }}
-                      selected={isSelected}
-                      sx={{
-                        position: 'relative',
-                        borderRadius: 2,
-                        px: 1.25,
-                        py: 0.9,
-                        color: 'text.primary',
-                        '&.Mui-selected': {
-                          background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.main, 0.04)} 100%)`,
-                          color: 'primary.dark',
-                          '& .MuiListItemIcon-root': { color: 'primary.main' },
-                          '& .MuiListItemText-primary': { color: 'primary.dark', fontWeight: 700 },
-                          '&:hover': {
-                            background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.14)} 0%, ${alpha(theme.palette.primary.main, 0.06)} 100%)`,
-                          },
-                          '&::before': {
-                            content: '""',
-                            position: 'absolute',
-                            left: -6,
-                            top: '20%',
-                            bottom: '20%',
-                            width: 3,
-                            borderRadius: 4,
-                            background: 'linear-gradient(180deg, #3b82f6 0%, #1e3a8a 100%)',
-                          },
+                const button = (
+                  <ListItemButton
+                    onClick={() => { navigate(item.path); if (isMobile) setMobileOpen(false); }}
+                    selected={isSelected}
+                    sx={{
+                      position: 'relative',
+                      borderRadius: 2,
+                      px: mini ? 0 : 1.25,
+                      py: 0.9,
+                      justifyContent: mini ? 'center' : 'flex-start',
+                      color: 'text.primary',
+                      '&.Mui-selected': {
+                        background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.main, 0.04)} 100%)`,
+                        color: 'primary.dark',
+                        '& .MuiListItemIcon-root': { color: 'primary.main' },
+                        '& .MuiListItemText-primary': { color: 'primary.dark', fontWeight: 700 },
+                        '&:hover': {
+                          background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.14)} 0%, ${alpha(theme.palette.primary.main, 0.06)} 100%)`,
                         },
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          left: mini ? 0 : -6,
+                          top: '20%',
+                          bottom: '20%',
+                          width: 3,
+                          borderRadius: 4,
+                          background: 'linear-gradient(180deg, #3b82f6 0%, #1e3a8a 100%)',
+                        },
+                      },
+                    }}
+                  >
+                    <ListItemIcon
+                      sx={{
+                        minWidth: mini ? 0 : 34,
+                        justifyContent: 'center',
+                        color: isSelected ? 'primary.main' : 'text.secondary',
                       }}
                     >
-                      <ListItemIcon
-                        sx={{
-                          minWidth: 34,
-                          color: isSelected ? 'primary.main' : 'text.secondary',
-                        }}
-                      >
-                        {item.icon}
-                      </ListItemIcon>
+                      {item.icon}
+                    </ListItemIcon>
+                    {!mini && (
                       <ListItemText
                         primary={item.text}
                         primaryTypographyProps={{
@@ -273,10 +288,20 @@ const MainLayout = () => {
                           color: isSelected ? 'primary.dark' : 'text.primary',
                         }}
                       />
-                      {isSelected && (
-                        <ChevronRight size={15} color={theme.palette.primary.main} style={{ opacity: 0.7 }} />
-                      )}
-                    </ListItemButton>
+                    )}
+                    {!mini && isSelected && (
+                      <ChevronRight size={15} color={theme.palette.primary.main} style={{ opacity: 0.7 }} />
+                    )}
+                  </ListItemButton>
+                );
+
+                return (
+                  <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
+                    {mini ? (
+                      <Tooltip title={item.text} placement="right" arrow>
+                        <Box sx={{ width: '100%' }}>{button}</Box>
+                      </Tooltip>
+                    ) : button}
                   </ListItem>
                 );
               })}
@@ -286,93 +311,122 @@ const MainLayout = () => {
       </Box>
 
       {/* User card + logout */}
-      <Box sx={{ p: 1.75, borderTop: '1px solid', borderColor: 'divider' }}>
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1.25,
-            p: 0.5,
-            pl: 1.25,
-            borderRadius: 2.5,
-            background: 'linear-gradient(135deg, #f5f8ff 0%, #eaf0fb 100%)',
-            border: '1px solid',
-            borderColor: 'divider',
-            transition: 'all 0.18s ease',
-            '&:hover': {
-              borderColor: alpha(theme.palette.primary.main, 0.4),
-              boxShadow: `0 2px 8px ${alpha(theme.palette.primary.main, 0.12)}`,
-            },
-          }}
-        >
-          {/* Clickable region — opens profile page */}
-          <Tooltip title="View my profile" arrow placement="top">
-            <Box
-              role="button"
-              tabIndex={0}
-              onClick={() => { navigate('/profile'); if (isMobile) setMobileOpen(false); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  navigate('/profile');
-                  if (isMobile) setMobileOpen(false);
-                }
-              }}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1.25,
-                py: 0.75,
-                flexGrow: 1,
-                minWidth: 0,
-                cursor: 'pointer',
-                borderRadius: 2,
-                outline: 'none',
-                '&:focus-visible': {
-                  boxShadow: `0 0 0 2px ${alpha(theme.palette.primary.main, 0.35)}`,
-                },
-                '&:hover .user-name': { color: 'primary.dark' },
-              }}
-            >
+      <Box sx={{ p: mini ? 1 : 1.75, borderTop: '1px solid', borderColor: 'divider' }}>
+        {mini ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+            <Tooltip title={`${user?.name || 'Profile'} — view profile`} placement="right" arrow>
               <Avatar
+                onClick={() => { navigate('/profile'); if (isMobile) setMobileOpen(false); }}
                 sx={{
-                  width: 38, height: 38,
+                  width: 38, height: 38, cursor: 'pointer',
                   background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
                   color: '#ffffff', fontWeight: 700, fontSize: '0.85rem',
                 }}
               >
                 {initials}
               </Avatar>
-              <Box sx={{ minWidth: 0, flexGrow: 1 }}>
-                <Typography
-                  className="user-name"
-                  sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'text.primary', lineHeight: 1.2, transition: 'color 0.15s' }}
-                  noWrap
+            </Tooltip>
+            <Tooltip title="Sign out" placement="right" arrow>
+              <IconButton
+                size="small"
+                onClick={handleLogout}
+                sx={{
+                  color: 'error.main',
+                  bgcolor: alpha(theme.palette.error.main, 0.08),
+                  '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.16), color: 'error.dark' },
+                }}
+              >
+                <LogOut size={16} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        ) : (
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.25,
+              p: 0.5,
+              pl: 1.25,
+              borderRadius: 2.5,
+              background: 'linear-gradient(135deg, #f5f8ff 0%, #eaf0fb 100%)',
+              border: '1px solid',
+              borderColor: 'divider',
+              transition: 'all 0.18s ease',
+              '&:hover': {
+                borderColor: alpha(theme.palette.primary.main, 0.4),
+                boxShadow: `0 2px 8px ${alpha(theme.palette.primary.main, 0.12)}`,
+              },
+            }}
+          >
+            <Tooltip title="View my profile" arrow placement="top">
+              <Box
+                role="button"
+                tabIndex={0}
+                onClick={() => { navigate('/profile'); if (isMobile) setMobileOpen(false); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    navigate('/profile');
+                    if (isMobile) setMobileOpen(false);
+                  }
+                }}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.25,
+                  py: 0.75,
+                  flexGrow: 1,
+                  minWidth: 0,
+                  cursor: 'pointer',
+                  borderRadius: 2,
+                  outline: 'none',
+                  '&:focus-visible': {
+                    boxShadow: `0 0 0 2px ${alpha(theme.palette.primary.main, 0.35)}`,
+                  },
+                  '&:hover .user-name': { color: 'primary.dark' },
+                }}
+              >
+                <Avatar
+                  sx={{
+                    width: 38, height: 38,
+                    background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
+                    color: '#ffffff', fontWeight: 700, fontSize: '0.85rem',
+                  }}
                 >
-                  {user?.name || 'Loading…'}
-                </Typography>
-                <Typography sx={{ fontSize: '0.7rem', fontWeight: 500, color: 'text.secondary' }} noWrap>
-                  {user?.role || 'Member'}
-                </Typography>
+                  {initials}
+                </Avatar>
+                <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+                  <Typography
+                    className="user-name"
+                    sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'text.primary', lineHeight: 1.2, transition: 'color 0.15s' }}
+                    noWrap
+                  >
+                    {user?.name || 'Loading…'}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.7rem', fontWeight: 500, color: 'text.secondary' }} noWrap>
+                    {user?.role || 'Member'}
+                  </Typography>
+                </Box>
               </Box>
-            </Box>
-          </Tooltip>
+            </Tooltip>
 
-          <Tooltip title="Sign out" arrow>
-            <IconButton
-              size="small"
-              onClick={handleLogout}
-              sx={{
-                mr: 0.5,
-                color: 'error.main',
-                bgcolor: alpha(theme.palette.error.main, 0.08),
-                '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.16), color: 'error.dark' },
-              }}
-            >
-              <LogOut size={16} />
-            </IconButton>
-          </Tooltip>
-        </Box>
+            <Tooltip title="Sign out" arrow>
+              <IconButton
+                size="small"
+                onClick={handleLogout}
+                sx={{
+                  mr: 0.5,
+                  color: 'error.main',
+                  bgcolor: alpha(theme.palette.error.main, 0.08),
+                  '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.16), color: 'error.dark' },
+                }}
+              >
+                <LogOut size={16} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
     </Box>
   );
@@ -413,21 +467,58 @@ const MainLayout = () => {
           ModalProps={{ keepMounted: true }}
           sx={{
             display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: EXPANDED_WIDTH },
           }}
         >
-          {drawerContent}
+          {renderDrawerContent(false)}
         </Drawer>
         <Drawer
           variant="permanent"
           open
           sx={{
             display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: drawerWidth,
+              overflowX: 'hidden',
+              transition: theme.transitions.create('width', {
+                easing: theme.transitions.easing.sharp,
+                duration: theme.transitions.duration.shorter,
+              }),
+            },
           }}
         >
-          {drawerContent}
+          {renderDrawerContent(collapsed)}
         </Drawer>
+
+        {/* Collapse / expand toggle — sits on the sidebar's edge (desktop only) */}
+        <Tooltip title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} placement="right" arrow>
+          <IconButton
+            onClick={() => setCollapsed((v) => !v)}
+            size="small"
+            sx={{
+              display: { xs: 'none', sm: 'flex' },
+              position: 'fixed',
+              top: 70,
+              left: drawerWidth - 13,
+              zIndex: (t) => t.zIndex.drawer + 2,
+              width: 26,
+              height: 26,
+              bgcolor: '#ffffff',
+              color: 'primary.main',
+              border: '1px solid',
+              borderColor: 'divider',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.18)',
+              transition: theme.transitions.create('left', {
+                easing: theme.transitions.easing.sharp,
+                duration: theme.transitions.duration.shorter,
+              }),
+              '&:hover': { bgcolor: '#ffffff', color: 'primary.dark', borderColor: 'primary.main' },
+            }}
+          >
+            {collapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          </IconButton>
+        </Tooltip>
       </Box>
 
       {/* Main content area */}

@@ -22,11 +22,27 @@ import { AppError } from '../../utils/apiResponse.js';
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
+// Buy-side items only have a purchase price (RM_COST). Finished goods follow
+// the requested stream. This makes the calculator resolve each line correctly
+// regardless of which stream the screen as a whole is set to.
+const BUY_SIDE_KINDS = ['RAW_MATERIAL', 'CONSUMABLE', 'PACKING'];
+const streamForSku = (sku, requested) => (
+  BUY_SIDE_KINDS.includes(sku?.itemType) ? 'RM_COST' : (requested || 'SELLING')
+);
+
+// End-of-day bound — effectiveFrom is stored at UTC-midnight of the chosen
+// date, so a price effective "today" must still match regardless of timezone.
+const endOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
+
 const fetchPriceAsOf = async (skuId, priceType, asOfDate) => {
   return PriceRevision
     .findOne({
       skuId, priceType, status: 'LIVE',
-      effectiveFrom: { $lte: asOfDate },
+      effectiveFrom: { $lte: endOfDay(asOfDate) },
     })
     .sort({ effectiveFrom: -1, createdAt: -1 })
     .lean();
@@ -48,7 +64,7 @@ export const previewCalculator = async ({
 
   const skuIds = [...new Set(lines.map((l) => l.skuId).filter(Boolean))];
   const skus = await SKU.find({ _id: { $in: skuIds } })
-    .select('_id code name gstRate sellingPrice rmCost')
+    .select('_id code name itemType gstRate sellingPrice rmCost')
     .lean();
   const skuById = new Map(skus.map((s) => [String(s._id), s]));
 
@@ -82,11 +98,14 @@ export const previewCalculator = async ({
     let effectiveFrom = null;
     let revisionId = null;
 
+    // Each line resolves against the stream that matches its own item kind.
+    const lineStream = streamForSku(sku, priceType);
+
     if (ln.manualPrice != null && ln.manualPrice !== '') {
       unitPrice = round2(ln.manualPrice);
       source = 'MANUAL';
     } else {
-      const rev = await fetchPriceAsOf(sku._id, priceType, date);
+      const rev = await fetchPriceAsOf(sku._id, lineStream, date);
       if (rev) {
         unitPrice = rev.newPrice;
         source = 'MASTER';
@@ -94,7 +113,7 @@ export const previewCalculator = async ({
         revisionId = rev._id;
       } else {
         // Fall back to SKU cache only if it has a value (older data path).
-        const cache = priceType === 'SELLING' ? sku.sellingPrice : sku.rmCost;
+        const cache = lineStream === 'SELLING' ? sku.sellingPrice : sku.rmCost;
         if (cache > 0) {
           unitPrice = cache;
           source = 'MASTER';

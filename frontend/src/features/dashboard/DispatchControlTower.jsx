@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Box, Typography, Paper, Grid, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, IconButton,
   Button, TextField, InputAdornment, Tooltip, Chip, Collapse,
-  LinearProgress, Badge, Divider
+  LinearProgress, Badge, Stack, Popover, MenuItem,
 } from '@mui/material';
 import {
   Search, Filter, ChevronDown, ChevronUp, ExternalLink,
@@ -23,6 +23,22 @@ const BRAND = {
   error: '#dc2626',
   slate: '#64748b',
   bg: '#f8fafc'
+};
+
+const ORDER_STATUSES = ['RECEIVED', 'PLANNING', 'IN_PROGRESS', 'COMPLETED', 'SHORT_CLOSED', 'CANCELLED'];
+const HEALTH_OPTIONS = [
+  { key: 'GOOD', label: 'On Track' },
+  { key: 'LACKING', label: 'Lacking' },
+  { key: 'AHEAD', label: 'Ahead' },
+  { key: 'PENDING', label: 'Pending' },
+];
+
+// Derived dispatch health of an order — same logic the row badge shows.
+const healthOf = (o) => {
+  const variance = (o.totalDispatchedQty || 0) - (o.totalOrderQty || 0);
+  if (variance < 0) return 'LACKING';
+  if (variance > 0) return 'AHEAD';
+  return (o.totalDispatchedQty || 0) > 0 ? 'GOOD' : 'PENDING';
 };
 
 const StatusChip = ({ status }) => {
@@ -49,6 +65,48 @@ const StatusChip = ({ status }) => {
   );
 };
 
+// ── Compact real-data KPI card ──────────────────────────────────────
+const StatCard = ({ label, value, sub, icon: Icon, color, bar, loading }) => (
+  <Paper sx={{
+    p: 1.75, borderRadius: '14px', border: '1px solid #e2e8f0', height: '100%',
+    bgcolor: '#fff', transition: 'transform .16s ease, box-shadow .16s ease',
+    '&:hover': { transform: 'translateY(-2px)', boxShadow: `0 10px 24px ${alpha(color, 0.14)}` },
+  }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.85 }}>
+      <Box sx={{
+        width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
+        display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color,
+        border: `1px solid ${alpha(color, 0.18)}`,
+      }}>
+        <Icon size={16} strokeWidth={2.3} />
+      </Box>
+      <Typography sx={{
+        fontSize: '0.6rem', fontWeight: 800, color: BRAND.slate,
+        textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1.2,
+      }}>
+        {label}
+      </Typography>
+    </Box>
+    {loading ? (
+      <LinearProgress sx={{ my: 1.25, borderRadius: 2 }} />
+    ) : (
+      <Typography sx={{ fontSize: '1.4rem', fontWeight: 900, color: '#0b2545', lineHeight: 1.1 }}>
+        {value}
+      </Typography>
+    )}
+    {bar != null && !loading && (
+      <LinearProgress variant="determinate" value={Math.min(bar, 100)}
+        sx={{ mt: 0.75, height: 5, borderRadius: 3, bgcolor: alpha(color, 0.12),
+          '& .MuiLinearProgress-bar': { bgcolor: color, borderRadius: 3 } }} />
+    )}
+    {sub && !loading && (
+      <Typography sx={{ fontSize: '0.64rem', fontWeight: 600, color: BRAND.slate, mt: 0.4 }}>
+        {sub}
+      </Typography>
+    )}
+  </Paper>
+);
+
 const Row = ({ order }) => {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
@@ -62,7 +120,7 @@ const Row = ({ order }) => {
   const totalActual = order.totalDispatchedQty || 0;
   const variance = totalActual - totalPlanned;
   const adherence = totalPlanned > 0 ? Math.round((totalActual / totalPlanned) * 100) : 0;
-  const status = variance < 0 ? 'LACKING' : variance > 0 ? 'AHEAD' : totalActual > 0 ? 'GOOD' : 'PENDING';
+  const status = healthOf(order);
 
   return (
     <React.Fragment>
@@ -77,8 +135,18 @@ const Row = ({ order }) => {
             {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
           </IconButton>
         </TableCell>
-        <TableCell>
-          <Typography variant="body2" fontWeight={800} color={BRAND.primary} sx={{ letterSpacing: '0.5px' }}>{order.soNumber}</Typography>
+        <TableCell
+          onClick={() => navigate(`/orders/${order._id}`)}
+          sx={{ cursor: 'pointer' }}
+        >
+          <Typography
+            variant="body2"
+            fontWeight={800}
+            color={BRAND.primary}
+            sx={{ letterSpacing: '0.5px', '&:hover': { textDecoration: 'underline' } }}
+          >
+            {order.soNumber}
+          </Typography>
           <Typography variant="caption" color="text.secondary" fontWeight={700}>{order.partyName}</Typography>
         </TableCell>
         <TableCell align="right">
@@ -178,13 +246,16 @@ const Row = ({ order }) => {
 
                           return (
                             <Grid item xs={12} md={3} lg={2.4} key={pIdx}>
-                              <Box sx={{ 
-                                p: 1.5, borderRadius: '12px', border: '1px solid #f1f5f9', 
-                                bgcolor: '#fff', position: 'relative',
-                                transition: 'transform 0.2s', '&:hover': { transform: 'translateY(-4px)' },
-                                boxShadow: isLate ? `0 0 10px ${alpha(BRAND.error, 0.15)}` : 'none',
-                                borderColor: isLate ? BRAND.error : '#f1f5f9'
-                              }}>
+                              <Box
+                                onClick={() => navigate(`/orders/${order._id}/phase/${phase.phaseNo}`)}
+                                sx={{
+                                  p: 1.5, borderRadius: '12px', border: '1px solid #f1f5f9',
+                                  bgcolor: '#fff', position: 'relative', cursor: 'pointer',
+                                  transition: 'transform 0.2s, box-shadow 0.2s',
+                                  '&:hover': { transform: 'translateY(-4px)', boxShadow: `0 10px 22px ${alpha(BRAND.primary, 0.16)}`, borderColor: BRAND.primary },
+                                  boxShadow: isLate ? `0 0 10px ${alpha(BRAND.error, 0.15)}` : 'none',
+                                  borderColor: isLate ? BRAND.error : '#f1f5f9',
+                                }}>
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, alignItems: 'center' }}>
                                   <Typography variant="caption" fontWeight={900} color="text.secondary">{phase.phaseNo}</Typography>
                                   {isLate && (
@@ -268,8 +339,51 @@ const Row = ({ order }) => {
 
 const DispatchControlTower = () => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterAnchor, setFilterAnchor] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [healthFilter, setHealthFilter] = useState('');
   const { data: ordersRes, isLoading } = useGetOrdersQuery({ limit: 100, sort: '-orderDate' });
+  const { data: dashRes } = useGetDispatchDashboardQuery();
   const orders = ordersRes?.data || [];
+  const summary = dashRes?.data?.summary || {};
+  const planHealth = dashRes?.data?.planHealth || {};
+
+  // Search + status + dispatch-health filters all drive the visible table.
+  const filtered = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return orders.filter((o) => {
+      if (q && !((o.soNumber || '').toLowerCase().includes(q)
+        || (o.partyName || '').toLowerCase().includes(q))) return false;
+      if (statusFilter && o.status !== statusFilter) return false;
+      if (healthFilter && healthOf(o) !== healthFilter) return false;
+      return true;
+    });
+  }, [orders, searchTerm, statusFilter, healthFilter]);
+
+  const activeFilters = (statusFilter ? 1 : 0) + (healthFilter ? 1 : 0);
+  const clearFilters = () => { setStatusFilter(''); setHealthFilter(''); };
+
+  // ── Six real-data KPIs ───────────────────────────────────────────
+  const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
+  const totalOrders = summary.totalOrders ?? orders.length;
+  const orderVol    = summary.totalOrderQty ?? orders.reduce((s, o) => s + (o.totalOrderQty || 0), 0);
+  const dispatched  = summary.totalDispatchedQty ?? orders.reduce((s, o) => s + (o.totalDispatchedQty || 0), 0);
+  const pending     = summary.totalBalanceQty ?? orders.reduce((s, o) => s + (o.totalBalanceQty || 0), 0);
+  const adherence   = summary.fulfillmentPct ?? (orderVol > 0 ? Math.round((dispatched / orderVol) * 100) : 0);
+  const onTrack     = orders.filter((o) => (o.totalOrderQty || 0) > 0 && (o.totalBalanceQty || 0) <= 0).length;
+  const lacking     = orders.filter((o) => (o.totalDispatchedQty || 0) < (o.totalOrderQty || 0)).length;
+  const overdueQty  = planHealth.overduePlanQty || 0;
+  const overdueCnt  = planHealth.overduePlanCount || 0;
+  const adhColor    = adherence >= 90 ? BRAND.success : adherence >= 50 ? BRAND.primary : BRAND.error;
+
+  const stats = [
+    { label: 'Total Orders',      value: fmt(totalOrders), sub: `${fmt(orderVol)} units ordered`,   icon: Package,      color: BRAND.primary },
+    { label: 'Overall Adherence', value: `${adherence}%`,  sub: 'dispatched vs ordered',             icon: TrendingUp,   color: adhColor, bar: adherence },
+    { label: 'On-Track Orders',   value: fmt(onTrack),     sub: 'fully dispatched',                  icon: CheckCircle2, color: BRAND.success },
+    { label: 'Lacking Orders',    value: fmt(lacking),     sub: 'still behind plan',                 icon: TrendingDown, color: BRAND.error },
+    { label: 'Dispatched',        value: fmt(dispatched),  sub: 'units shipped',                     icon: ExternalLink, color: BRAND.success },
+    { label: 'Pending Balance',   value: fmt(pending),     sub: `${overdueCnt} phase(s) overdue · ${fmt(overdueQty)}`, icon: Clock, color: BRAND.warning },
+  ];
 
   return (
     <Box sx={{ p: { xs: 2, md: 4 }, bgcolor: BRAND.bg, minHeight: '100vh' }}>
@@ -294,40 +408,49 @@ const DispatchControlTower = () => {
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> }}
             sx={{ width: 280, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: '10px' } }}
           />
-          <Button variant="contained" startIcon={<Filter size={16} />} sx={{ borderRadius: '10px', px: 3, boxShadow: 'none' }}>Filters</Button>
+          <Badge color="error" badgeContent={activeFilters} invisible={activeFilters === 0} overlap="circular">
+            <Button
+              variant={activeFilters ? 'contained' : 'outlined'}
+              startIcon={<Filter size={16} />}
+              onClick={(e) => setFilterAnchor(e.currentTarget)}
+              sx={{ borderRadius: '10px', px: 3, boxShadow: 'none', bgcolor: activeFilters ? BRAND.primary : '#fff' }}
+            >
+              Filters
+            </Button>
+          </Badge>
         </Box>
       </Box>
 
-      {/* ── Top Level KPIs ─────────────────────────────────── */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 2.5, borderRadius: '16px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-            <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase' }}>Overall Adherence</Typography>
-            <Typography variant="h4" fontWeight={900} color={BRAND.primary} sx={{ my: 0.5 }}>84%</Typography>
-            <LinearProgress variant="determinate" value={84} sx={{ height: 4, borderRadius: 2 }} />
-          </Paper>
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 2.5, borderRadius: '16px', border: '1px solid #e2e8f0', textAlign: 'center', bgcolor: alpha(BRAND.error, 0.02) }}>
-            <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase' }}>Lacking Orders</Typography>
-            <Typography variant="h4" fontWeight={900} color={BRAND.error} sx={{ my: 0.5 }}>12</Typography>
-            <Typography variant="caption" fontWeight={700} color={BRAND.error}>Critical attention required</Typography>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 2.5, borderRadius: '16px', border: '1px solid #e2e8f0', textAlign: 'center', bgcolor: alpha(BRAND.success, 0.02) }}>
-            <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase' }}>Perfect Dispatches</Typography>
-            <Typography variant="h4" fontWeight={900} color={BRAND.success} sx={{ my: 0.5 }}>45</Typography>
-            <Typography variant="caption" fontWeight={700} color={BRAND.success}>On track with plan</Typography>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 2.5, borderRadius: '16px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-            <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase' }}>Pending Balance</Typography>
-            <Typography variant="h4" fontWeight={900} color={BRAND.slate} sx={{ my: 0.5 }}>1.2M</Typography>
-            <Typography variant="caption" fontWeight={700} color={BRAND.slate}>Units to be shipped</Typography>
-          </Paper>
-        </Grid>
+      {/* ── Active filter chips ────────────────────────────── */}
+      {(activeFilters > 0 || searchTerm) && (
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap alignItems="center">
+          <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: BRAND.slate, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Showing {filtered.length} of {orders.length}
+          </Typography>
+          {searchTerm && (
+            <Chip size="small" label={`Search: ${searchTerm}`} onDelete={() => setSearchTerm('')}
+              sx={{ fontWeight: 700, bgcolor: alpha(BRAND.primary, 0.08), color: BRAND.primary }} />
+          )}
+          {statusFilter && (
+            <Chip size="small" label={`Status: ${statusFilter.replace('_', ' ')}`} onDelete={() => setStatusFilter('')}
+              sx={{ fontWeight: 700, bgcolor: alpha(BRAND.primary, 0.08), color: BRAND.primary }} />
+          )}
+          {healthFilter && (
+            <Chip size="small"
+              label={`Health: ${HEALTH_OPTIONS.find((h) => h.key === healthFilter)?.label || healthFilter}`}
+              onDelete={() => setHealthFilter('')}
+              sx={{ fontWeight: 700, bgcolor: alpha(BRAND.primary, 0.08), color: BRAND.primary }} />
+          )}
+        </Stack>
+      )}
+
+      {/* ── Top Level KPIs — 6 real-data cards ─────────────── */}
+      <Grid container spacing={1.75} sx={{ mb: 3 }}>
+        {stats.map((s) => (
+          <Grid item xs={6} sm={4} md={2} key={s.label}>
+            <StatCard {...s} loading={isLoading} />
+          </Grid>
+        ))}
       </Grid>
 
       {/* ── Main Comparison Table ──────────────────────────── */}
@@ -346,19 +469,66 @@ const DispatchControlTower = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {orders.map((order) => (
+            {filtered.map((order) => (
               <Row key={order._id} order={order} />
             ))}
-            {orders.length === 0 && !isLoading && (
+            {filtered.length === 0 && !isLoading && (
               <TableRow>
                 <TableCell colSpan={8} align="center" sx={{ py: 8 }}>
-                  <Typography variant="body1" color="text.secondary">No dispatch data found in the centralized hub.</Typography>
+                  <Typography variant="body1" color="text.secondary">
+                    {searchTerm ? `No orders match "${searchTerm}".` : 'No dispatch data found in the centralized hub.'}
+                  </Typography>
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* ── Filter popover ─────────────────────────────────── */}
+      <Popover
+        open={Boolean(filterAnchor)}
+        anchorEl={filterAnchor}
+        onClose={() => setFilterAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        PaperProps={{ sx: { p: 2.5, width: 310, borderRadius: '14px', mt: 1 } }}
+      >
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+          <Filter size={16} color={BRAND.primary} />
+          <Typography sx={{ fontWeight: 800, fontSize: '0.95rem' }}>Filter Orders</Typography>
+        </Stack>
+
+        <TextField
+          select fullWidth size="small" label="Order Status" value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)} sx={{ mb: 2 }}
+        >
+          <MenuItem value="">All statuses</MenuItem>
+          {ORDER_STATUSES.map((s) => (
+            <MenuItem key={s} value={s}>{s.replace('_', ' ')}</MenuItem>
+          ))}
+        </TextField>
+
+        <TextField
+          select fullWidth size="small" label="Dispatch Health" value={healthFilter}
+          onChange={(e) => setHealthFilter(e.target.value)} sx={{ mb: 2.5 }}
+        >
+          <MenuItem value="">Any health</MenuItem>
+          {HEALTH_OPTIONS.map((h) => (
+            <MenuItem key={h.key} value={h.key}>{h.label}</MenuItem>
+          ))}
+        </TextField>
+
+        <Stack direction="row" spacing={1}>
+          <Button fullWidth onClick={() => { clearFilters(); }} sx={{ fontWeight: 700 }}>
+            Clear all
+          </Button>
+          <Button fullWidth variant="contained" onClick={() => setFilterAnchor(null)}
+            sx={{ fontWeight: 700, boxShadow: 'none' }}>
+            Apply
+          </Button>
+        </Stack>
+      </Popover>
     </Box>
   );
 };

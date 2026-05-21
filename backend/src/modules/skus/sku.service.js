@@ -22,7 +22,9 @@ export const getSkus = async (query = {}) => {
   
   const filter = { isDeleted: false };
   if (query.clientId) filter.clientId = query.clientId;
-  
+  if (query.itemType) filter.itemType = query.itemType;
+  if (query.category) filter.category = query.category;
+
   if (query.search) {
     filter.$or = [
       { name: new RegExp(query.search, 'i') },
@@ -32,16 +34,27 @@ export const getSkus = async (query = {}) => {
     ];
   }
   
-  const [data, total] = await Promise.all([
+  const [data, total, itemTypeAgg] = await Promise.all([
     Sku.find(filter)
       .populate('clientId', 'companyName code')
       .skip(skip)
       .limit(limit)
       .sort({ createdAt: -1 }),
-    Sku.countDocuments(filter)
+    Sku.countDocuments(filter),
+    // Counts per item type across ALL non-deleted SKUs — drives the kind tabs,
+    // so they stay stable while the user filters the list.
+    Sku.aggregate([
+      { $match: { isDeleted: false } },
+      { $group: { _id: '$itemType', count: { $sum: 1 } } },
+    ]),
   ]);
-  
-  return { data, meta: { total, page, limit } };
+
+  const itemTypeCounts = itemTypeAgg.reduce((acc, r) => {
+    acc[r._id || 'FINISHED_GOOD'] = r.count;
+    return acc;
+  }, {});
+
+  return { data, meta: { total, page, limit, itemTypeCounts } };
 };
 
 export const getSkuById = async (id) => {
@@ -108,6 +121,8 @@ export const bulkUpsertSkus = async (items = [], userId) => {
 
 export const getSkuLookup = async (query = {}) => {
   const filter = { isDeleted: false, isActive: true };
+  if (query.itemType) filter.itemType = query.itemType;
+  if (query.category) filter.category = query.category;
   if (query.search) {
     filter.$or = [
       { name: new RegExp(query.search, 'i') },
@@ -127,7 +142,7 @@ export const getSkuLookup = async (query = {}) => {
 
   return Sku.find(filter)
     .select(
-      'name code category pcsPerBox weightPerPc weightPerBox unit aliases ' +
+      'name code itemType category pcsPerBox weightPerPc weightPerBox unit aliases ' +
       'sellingPrice rmCost gstRate sellingPriceFrom rmCostFrom marginFloor clientId',
     )
     .sort({ name: 1 })

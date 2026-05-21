@@ -2,11 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Stack, Chip, Button, TextField, Paper, alpha, useTheme,
   IconButton, Tooltip, ToggleButtonGroup, ToggleButton, Autocomplete,
-  Divider,
+  Divider, MenuItem,
 } from '@mui/material';
 import {
   Calculator, Plus, Trash2, Calendar, Clipboard, FileSignature, Download,
-  RefreshCw, Pencil, Sparkles, Search,
+  RefreshCw, Pencil, Sparkles, Search, ShoppingCart,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
@@ -26,6 +26,15 @@ const blankLine = () => ({
   key: Math.random().toString(36).slice(2),
   skuId: '', qty: 0, manualPrice: '', priceTouched: false,
 });
+
+const BUY_SIDE_KINDS = ['RAW_MATERIAL', 'CONSUMABLE', 'PACKING'];
+const CALC_KIND_OPTIONS = [
+  { value: '',              label: 'All Items' },
+  { value: 'FINISHED_GOOD', label: 'Finished Goods' },
+  { value: 'RAW_MATERIAL',  label: 'Raw Material' },
+  { value: 'CONSUMABLE',    label: 'Consumables' },
+  { value: 'PACKING',       label: 'Packing' },
+];
 
 const TurnoverCalculator = () => {
   const theme = useTheme();
@@ -49,6 +58,7 @@ const TurnoverCalculator = () => {
   const [poRef, setPoRef] = useState('');
   const [asOfDate, setAsOfDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [priceType, setPriceType] = useState('SELLING');
+  const [itemType, setItemType] = useState('');   // filters the SKU picker
   const [viewMode, setViewMode] = useState('with_gst'); // basic | with_gst | inclusive
   const [lines, setLines] = useState([blankLine(), blankLine(), blankLine()]);
   // Single, user-editable GST rate applied to the whole calculation.
@@ -130,6 +140,15 @@ const TurnoverCalculator = () => {
 
   const totalQty = lines.reduce((sum, l) => sum + Number(l.qty || 0), 0);
   const linesCount = lines.filter((l) => l.skuId && Number(l.qty) > 0).length;
+
+  // Item-kind filter for the SKU picker. Buy-side kinds switch the price
+  // stream to the purchase cost automatically.
+  const isBuySide = BUY_SIDE_KINDS.includes(itemType);
+  const handleKindChange = (v) => {
+    setItemType(v);
+    if (BUY_SIDE_KINDS.includes(v)) setPriceType('RM_COST');
+    else if (v === 'FINISHED_GOOD') setPriceType('SELLING');
+  };
 
   const handleSaveQuote = async (send = false) => {
     const cleaned = lines
@@ -224,7 +243,7 @@ const TurnoverCalculator = () => {
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative' }}>
+      <Box sx={{ px: { xs: 1.5, md: 2.5 }, mt: { xs: -3, md: -4 }, position: 'relative' }}>
         {/* Top filters */}
         <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
@@ -253,24 +272,51 @@ const TurnoverCalculator = () => {
               InputLabelProps={{ shrink: true }}
               InputProps={{ startAdornment: <Calendar size={14} style={{ marginRight: 6, color: theme.palette.text.secondary }} /> }}
             />
-            <ToggleButtonGroup
-              exclusive size="small"
-              value={priceType}
-              onChange={(_, v) => v && setPriceType(v)}
-              sx={{
-                '& .MuiToggleButton-root': {
-                  px: 1.5, py: 0.5, fontSize: '0.74rem', fontWeight: 700,
-                  border: `1px solid ${theme.palette.divider}`,
-                  '&.Mui-selected': {
-                    bgcolor: alpha(theme.palette.primary.main, 0.10),
-                    color: theme.palette.primary.dark,
-                  },
-                },
-              }}
+            <TextField
+              select size="small" label="Item kind"
+              value={itemType}
+              onChange={(e) => handleKindChange(e.target.value)}
+              sx={{ minWidth: 160 }}
+              SelectProps={{ displayEmpty: true }}
+              InputLabelProps={{ shrink: true }}
             >
-              <ToggleButton value="SELLING">Selling</ToggleButton>
-              <ToggleButton value="RM_COST">RM Cost</ToggleButton>
-            </ToggleButtonGroup>
+              {CALC_KIND_OPTIONS.map((o) => (
+                <MenuItem key={o.value || 'all'} value={o.value}>{o.label}</MenuItem>
+              ))}
+            </TextField>
+
+            {isBuySide ? (
+              <Chip
+                icon={<ShoppingCart size={13} />}
+                label="Purchase Price"
+                sx={{
+                  height: 36, fontWeight: 800, fontSize: '0.74rem', borderRadius: 1,
+                  color: theme.palette.warning.dark,
+                  bgcolor: alpha(theme.palette.warning.main, 0.10),
+                  border: `1px solid ${alpha(theme.palette.warning.main, 0.25)}`,
+                  '& .MuiChip-icon': { color: 'inherit' },
+                }}
+              />
+            ) : (
+              <ToggleButtonGroup
+                exclusive size="small"
+                value={priceType}
+                onChange={(_, v) => v && setPriceType(v)}
+                sx={{
+                  '& .MuiToggleButton-root': {
+                    px: 1.5, py: 0.5, fontSize: '0.74rem', fontWeight: 700,
+                    border: `1px solid ${theme.palette.divider}`,
+                    '&.Mui-selected': {
+                      bgcolor: alpha(theme.palette.primary.main, 0.10),
+                      color: theme.palette.primary.dark,
+                    },
+                  },
+                }}
+              >
+                <ToggleButton value="SELLING">Selling</ToggleButton>
+                <ToggleButton value="RM_COST">RM Cost</ToggleButton>
+              </ToggleButtonGroup>
+            )}
 
             <Box sx={{ flex: 1 }} />
 
@@ -325,14 +371,18 @@ const TurnoverCalculator = () => {
 
                   <Autocomplete
                     size="small"
-                    options={allSkus}
+                    options={itemType
+                      ? allSkus.filter((s) => s.itemType === itemType || s._id === l.skuId)
+                      : allSkus}
                     value={allSkus.find((s) => s._id === l.skuId) || null}
                     onChange={(_, v) => {
-                      // Auto-fill price from SKU master, but keep it editable.
-                      // priceTouched stays false so the API call still says MASTER.
-                      const masterPrice = priceType === 'SELLING'
-                        ? (v?.sellingPrice ?? '')
-                        : (v?.rmCost ?? '');
+                      // Auto-fill from the SKU master using the stream that
+                      // matches the item: buy-side items (raw material,
+                      // consumables, packing) always use their purchase price.
+                      const buySide = BUY_SIDE_KINDS.includes(v?.itemType);
+                      const masterPrice = (buySide || priceType === 'RM_COST')
+                        ? (v?.rmCost ?? '')
+                        : (v?.sellingPrice ?? '');
                       updateLine(l.key, {
                         skuId: v?._id || '',
                         manualPrice: masterPrice ? String(masterPrice) : '',

@@ -58,6 +58,9 @@ const PhaseCard = ({
   })));
   const [menuAnchor, setMenuAnchor] = useState(null);
 
+  // Open automatically when the page deep-links to this phase (?phase=P1).
+  useEffect(() => { if (defaultOpen) setOpen(true); }, [defaultOpen]);
+
   useEffect(() => {
     setDraftDate(plannedDate ? dayjs(plannedDate).format('YYYY-MM-DD') : '');
     setDraftStatus(status || 'PLANNED');

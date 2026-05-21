@@ -62,6 +62,9 @@ const deliveryChallanSchema = new mongoose.Schema({
     phaseNo:    { type: String },                          // denormalized label
   },
   isUnplanned: { type: Boolean, default: false },
+
+  // Who recorded this dispatch (shown on the Challan 360 page).
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
 // Auto-calc totals before save

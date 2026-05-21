@@ -1,593 +1,506 @@
-import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useMemo } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Box, Typography, Paper, Grid, Chip, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, Skeleton, Button, IconButton,
-  Breadcrumbs, Link, Stack,
+  Box, Typography, Paper, Chip, Table, TableBody, TableCell, TableContainer,
+  TableHead, TableRow, Skeleton, Button, IconButton, Stack, Tabs, Tab, alpha,
 } from '@mui/material';
 import {
-  ArrowLeft, FileText, ExternalLink, CheckCircle2, Clock, Truck, Calendar,
-  Package, MapPin, Hash, User, TrendingDown, TrendingUp, CalendarPlus,
+  ArrowLeft, ExternalLink, CheckCircle2, Clock, Truck, Calendar,
+  MapPin, Hash, User, CalendarPlus, Inbox, AlertTriangle, ChevronRight,
+  ClipboardList, FileText, Boxes,
 } from 'lucide-react';
-import { alpha } from '@mui/material/styles';
-import { useGetOrderByIdQuery, useGetOrderScheduleQuery } from '../../store/api/orderApi';
-import { useGetOrderComparisonQuery } from '../../store/api/dispatchControlApi';
 import dayjs from 'dayjs';
+import { useGetOrderByIdQuery, useGetOrderScheduleQuery } from '../../store/api/orderApi';
+import { useGetOrderComparisonQuery, useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import PlanVsActualPanel from './components/PlanVsActualPanel';
 import DispatchEntry from '../execution/DispatchEntry';
 
-// ─── Premium blue palette (aligned with theme) ──────────────────────────────
 const C = {
-  ink:        '#0b2545',
-  body:       '#1e3a8a',
-  text:       '#1d4ed8',
-  primary:    '#1d4ed8',
-  primaryDk:  '#1e3a8a',
-  primaryLt:  '#3b82f6',
-  accent:     '#2563eb',
-  success:    '#0f766e',
-  warning:    '#b45309',
-  error:      '#be123c',
-  wip:        '#5b6cff',
-  slate:      '#475a8a',
-  faint:      '#7d8fb3',
-  line:       '#dbe4f3',
-  lineSoft:   '#eaf0fb',
-  surface:    '#ffffff',
-  surfaceAlt: '#f5f8ff',
+  ink: '#0b2545', body: '#1e3a8a', primary: '#1d4ed8', primaryDk: '#1e3a8a',
+  success: '#0f766e', warning: '#b45309', error: '#be123c', wip: '#5b6cff',
+  slate: '#475a8a', faint: '#7d8fb3', line: '#dbe4f3', lineSoft: '#eaf0fb',
+  surface: '#ffffff', surfaceAlt: '#f5f8ff',
 };
 
-const WORKFLOW_STEPS = [
-  { key: 'poEntry',         label: 'PO Entry in Tally',         who: 'Upasana' },
-  { key: 'inventoryCheck',  label: 'Check Inventory',           who: 'Upasana' },
-  { key: 'scheduling',      label: 'Create Dispatch Schedule',  who: 'Aarti'   },
-  { key: 'emailSchedule',   label: 'Email Dispatch Schedule',   who: 'Aarti'   },
-];
-
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
+const fmtDT = (d) => (d ? dayjs(d).format('DD MMM YYYY · hh:mm A') : '—');
+const fmtD = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
 
-// ─── Components ─────────────────────────────────────────────────────────────
-const PhaseCard = ({ phase }) => {
-  const isPast = dayjs(phase.plannedDate).isBefore(dayjs(), 'day');
-  return (
-    <Box
-      sx={{
-        p: 1.25,
-        borderRadius: 2,
-        border: '1px solid',
-        borderColor: C.lineSoft,
-        bgcolor: C.surface,
-        display: 'flex',
-        flexDirection: 'column',
-        minWidth: 110,
-        flexShrink: 0,
-      }}
-    >
-      <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: C.slate, letterSpacing: '0.06em' }}>
-        {phase.phaseNo}
-      </Typography>
-      <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: C.ink, my: 0.5 }}>
-        {fmt(phase.plannedQty)}
-      </Typography>
-      <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color: isPast ? C.error : C.slate }}>
-        {dayjs(phase.plannedDate).format('DD MMM')}
-      </Typography>
-    </Box>
-  );
+const RISK_LABEL = {
+  OVERDUE_PLAN:        'phase overdue',
+  UNPLANNED_DISPATCH:  'dispatched without a plan phase',
+  OVER_DISPATCH:       'dispatched more than planned',
+  BALANCE_NOT_PLANNED: 'balance quantity not yet planned',
+};
+
+const STATUS_COLOR = {
+  RECEIVED: C.warning, PLANNING: C.wip, IN_PROGRESS: C.primary,
+  COMPLETED: C.success, CANCELLED: C.error, SHORT_CLOSED: C.slate,
 };
 
 const StatusBadge = ({ value }) => {
-  const map = {
-    RECEIVED: C.warning, PLANNING: C.wip, IN_PROGRESS: C.primary,
-    COMPLETED: C.success, CANCELLED: C.error, SHORT_CLOSED: C.slate,
-  };
-  const color = map[value] || C.slate;
+  const color = STATUS_COLOR[value] || C.slate;
   return (
-    <Chip
-      label={value?.replace('_', ' ')}
-      size="small"
-      sx={{
-        bgcolor: alpha(color, 0.10),
-        color,
-        fontWeight: 700,
-        fontSize: '0.65rem',
-        letterSpacing: '0.06em',
-        borderRadius: 1.5,
-        border: '1px solid',
-        borderColor: alpha(color, 0.22),
-      }}
-    />
+    <Chip label={(value || '').replace('_', ' ')} size="small" sx={{
+      bgcolor: alpha(color, 0.1), color, fontWeight: 800, fontSize: '0.64rem',
+      letterSpacing: '0.05em', border: `1px solid ${alpha(color, 0.22)}`,
+    }} />
   );
 };
 
-const Insight = ({ label, value, subtext, color, trendIcon: TrendIcon }) => (
-  <Paper
-    sx={{
-      p: 2,
-      borderRadius: 2.5,
-      border: '1px solid',
-      borderColor: C.line,
-      bgcolor: C.surface,
-      height: '100%',
-      minWidth: 0,
-      position: 'relative',
-      overflow: 'hidden',
-      '&::before': {
-        content: '""',
-        position: 'absolute',
-        inset: 0,
-        background: `linear-gradient(135deg, ${alpha(color, 0.04)} 0%, transparent 60%)`,
-        pointerEvents: 'none',
-      },
-    }}
-  >
-    <Typography sx={{ position: 'relative', fontSize: '0.66rem', fontWeight: 700, color: C.slate, textTransform: 'uppercase', letterSpacing: '0.08em', mb: 1 }}>
+const Kpi = ({ label, value, sub, color }) => (
+  <Box sx={{
+    flex: '1 1 130px', minWidth: 120, px: 1.5, py: 1, borderRadius: 2,
+    bgcolor: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.16)',
+  }}>
+    <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.7)' }}>
       {label}
     </Typography>
-    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
-      <Typography sx={{ fontSize: '1.4rem', fontWeight: 800, color, letterSpacing: '-0.02em', lineHeight: 1 }}>
-        {value}
-      </Typography>
-      {TrendIcon && <TrendIcon size={16} color={color} strokeWidth={2.5} />}
-    </Box>
-    <Typography sx={{ position: 'relative', fontSize: '0.74rem', fontWeight: 500, color: C.slate }}>
-      {subtext}
-    </Typography>
-  </Paper>
-);
-
-const StatBlock = ({ label, value, color, accent }) => (
-  <Paper
-    sx={{
-      p: 2.25,
-      borderRadius: 2.5,
-      border: '1px solid',
-      borderColor: accent ? 'transparent' : C.line,
-      background: accent
-        ? `linear-gradient(135deg, ${C.primaryDk} 0%, ${C.primary} 100%)`
-        : C.surface,
-      color: accent ? '#ffffff' : 'inherit',
-      boxShadow: accent ? `0 8px 20px ${alpha(C.primary, 0.22)}` : '0 1px 2px rgba(30,58,138,0.04)',
-    }}
-  >
-    <Typography sx={{
-      fontSize: '0.66rem',
-      fontWeight: 700,
-      color: accent ? 'rgba(255,255,255,0.85)' : C.slate,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-      mb: 0.75,
-    }}>
-      {label}
-    </Typography>
-    <Typography sx={{
-      fontSize: '1.6rem',
-      fontWeight: 800,
-      letterSpacing: '-0.02em',
-      lineHeight: 1.15,
-      color: accent ? '#ffffff' : (color || C.ink),
-    }}>
+    <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: color || '#fff', lineHeight: 1.2 }}>
       {value}
     </Typography>
-  </Paper>
+    {sub && <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.6)' }}>{sub}</Typography>}
+  </Box>
 );
 
-// ─── Page ───────────────────────────────────────────────────────────────────
+// ── Order Journey timeline node ──────────────────────────────────────
+const JourneyNode = ({ node, last }) => {
+  const color = node.late ? C.error : node.done ? C.success : C.faint;
+  const Icon = node.icon;
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 140, flexShrink: 0, position: 'relative' }}>
+      {!last && (
+        <Box sx={{ position: 'absolute', top: 17, left: '50%', width: '100%', height: 2,
+          bgcolor: node.done ? alpha(C.success, 0.4) : C.line }} />
+      )}
+      <Box sx={{
+        width: 36, height: 36, borderRadius: '50%', display: 'grid', placeItems: 'center',
+        bgcolor: node.done ? color : C.surface, color: node.done ? '#fff' : color,
+        border: `2px solid ${color}`, position: 'relative', zIndex: 1,
+      }}>
+        <Icon size={17} />
+      </Box>
+      <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: C.ink, mt: 0.75, textAlign: 'center' }}>
+        {node.label}
+      </Typography>
+      <Typography sx={{ fontSize: '0.64rem', color: node.late ? C.error : C.slate, textAlign: 'center', fontWeight: 600 }}>
+        {node.date ? fmtDT(node.date) : '—'}
+      </Typography>
+      {node.sub && (
+        <Typography sx={{ fontSize: '0.64rem', color: C.faint, textAlign: 'center' }}>
+          {node.late ? '⚠ ' : ''}{node.sub}
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
+const TABS = [
+  { key: 'plan',     label: 'Plan vs Actual', icon: ClipboardList },
+  { key: 'phases',   label: 'Phases',         icon: Calendar },
+  { key: 'dispatch', label: 'Dispatch History', icon: Truck },
+  { key: 'workflow', label: 'Workflow',       icon: CheckCircle2 },
+  { key: 'docs',     label: 'Documents',      icon: FileText },
+];
+
+const WORKFLOW_STEPS = [
+  { key: 'poEntry',        label: 'PO Entry in Tally' },
+  { key: 'inventoryCheck', label: 'Check Inventory' },
+  { key: 'scheduling',     label: 'Create Dispatch Schedule' },
+  { key: 'emailSchedule',  label: 'Email Dispatch Schedule' },
+];
+
 const OrderDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [dispatchOpen, setDispatchOpen] = useState(false);
+
+  const tab = TABS.some((t) => t.key === searchParams.get('tab')) ? searchParams.get('tab') : 'plan';
+  const setTab = (t) => {
+    const p = new URLSearchParams(searchParams);
+    p.set('tab', t);
+    setSearchParams(p, { replace: true });
+  };
+
   const { data: orderRes, isLoading } = useGetOrderByIdQuery(id);
   const order = orderRes?.data;
   const { data: scheduleRes } = useGetOrderScheduleQuery(order?.soNumber, { skip: !order?.soNumber });
   const { data: comparisonRes } = useGetOrderComparisonQuery(order?.soNumber, { skip: !order?.soNumber });
+  const { data: challansRes } = useGetChallansQuery(
+    { soNumber: order?.soNumber, limit: 100, sort: '-dcDate' }, { skip: !order?.soNumber },
+  );
   const schedule = scheduleRes?.data?.[0];
   const comparison = comparisonRes?.data;
+  const challans = challansRes?.data || [];
 
-  // Performance metrics
-  const totalPlanned = schedule?.items?.reduce((sum, item) => sum + (item.phases?.reduce((ps, p) => ps + (p.plannedQty || 0), 0) || 0), 0) || 0;
-  const totalActual = schedule?.items?.reduce((sum, item) => sum + (item.phases?.reduce((ps, p) => ps + (p.totalActualQty || 0), 0) || 0), 0) || 0;
-  const variance = totalActual - totalPlanned;
-  const adherence = totalPlanned > 0 ? Math.round((totalActual / totalPlanned) * 100) : 0;
-  const isLacking = variance < 0;
+  // Roll phases up across all SKUs, keyed by phaseNo.
+  const phaseRollup = useMemo(() => {
+    const map = new Map();
+    (schedule?.items || []).forEach((item) => {
+      (item.phases || []).forEach((ph) => {
+        const e = map.get(ph.phaseNo) || {
+          phaseNo: ph.phaseNo, plannedDate: ph.plannedDate, plannedQty: 0, actualQty: 0,
+          status: ph.status, skus: [],
+        };
+        e.plannedQty += ph.plannedQty || 0;
+        e.actualQty  += ph.totalActualQty || 0;
+        if (ph.plannedDate && (!e.plannedDate || dayjs(ph.plannedDate).isBefore(e.plannedDate))) {
+          e.plannedDate = ph.plannedDate;
+        }
+        e.skus.push({
+          skuName: item.skuName, skuCode: item.skuCode,
+          plannedQty: ph.plannedQty || 0, actualQty: ph.totalActualQty || 0, status: ph.status,
+        });
+        map.set(ph.phaseNo, e);
+      });
+    });
+    return [...map.values()].sort((a, b) => new Date(a.plannedDate || 0) - new Date(b.plannedDate || 0));
+  }, [schedule]);
 
-  if (isLoading) return <Box sx={{ p: 3 }}><Skeleton variant="rectangular" height={400} sx={{ borderRadius: 2 }} /></Box>;
-  if (!order) return <Box sx={{ p: 3 }}><Typography>Order not found</Typography></Box>;
+  const t = comparison?.totals || {};
+  const ordered  = t.orderQty   ?? order?.totalOrderQty ?? 0;
+  const planned  = t.plannedQty ?? phaseRollup.reduce((s, p) => s + p.plannedQty, 0);
+  const actual   = t.actualQty  ?? order?.totalDispatchedQty ?? 0;
+  const balance  = t.balanceQty ?? order?.totalBalanceQty ?? 0;
+  const fulfilment = ordered > 0 ? Math.round((actual / ordered) * 100) : 0;
+  const adherence  = planned > 0 ? Math.round((actual / planned) * 100) : 0;
 
-  const adherenceColor = adherence >= 90 ? C.success : adherence >= 50 ? C.warning : C.error;
+  // The journey — received → planned → each phase → completed.
+  const journey = useMemo(() => {
+    if (!order) return [];
+    const nodes = [{
+      key: 'received', label: 'Order Received', icon: Inbox, done: true,
+      date: order.createdAt || order.orderDate,
+      sub: order.createdBy?.name ? `by ${order.createdBy.name}` : 'PO booked',
+    }];
+    nodes.push({
+      key: 'planned', label: schedule ? 'Dispatch Planned' : 'Not Planned', icon: CalendarPlus,
+      done: !!schedule, date: schedule?.createdAt,
+      sub: schedule ? `${phaseRollup.length} phase(s)` : 'plan pending',
+    });
+    phaseRollup.forEach((ph) => {
+      const done = ph.plannedQty > 0 && ph.actualQty >= ph.plannedQty;
+      const late = !done && ph.plannedDate && dayjs(ph.plannedDate).isBefore(dayjs(), 'day');
+      nodes.push({
+        key: ph.phaseNo, label: `Phase ${ph.phaseNo}`, icon: Truck, done, late,
+        date: ph.plannedDate, sub: `${fmt(ph.actualQty)} / ${fmt(ph.plannedQty)} pcs`,
+      });
+    });
+    const completed = order.status === 'COMPLETED';
+    nodes.push({
+      key: 'done', label: completed ? 'Completed' : 'Pending Completion', icon: CheckCircle2,
+      done: completed, date: completed ? order.updatedAt : null,
+      sub: completed ? 'fully dispatched' : `${fmt(balance)} pcs left`,
+    });
+    return nodes;
+  }, [order, schedule, phaseRollup, balance]);
+
+  // What's lacking — every gap in plain words.
+  const lacking = useMemo(() => {
+    const out = [];
+    if (!schedule) out.push('No dispatch plan has been created for this order yet.');
+    if (balance > 0) out.push(`${fmt(balance)} pcs are still pending dispatch.`);
+    phaseRollup.forEach((ph) => {
+      if (ph.plannedQty > 0 && ph.actualQty < ph.plannedQty
+          && ph.plannedDate && dayjs(ph.plannedDate).isBefore(dayjs(), 'day')) {
+        out.push(`Phase ${ph.phaseNo} (due ${fmtD(ph.plannedDate)}) is short by ${fmt(ph.plannedQty - ph.actualQty)} pcs.`);
+      }
+    });
+    (comparison?.rows || []).forEach((r) => {
+      (r.risks || []).forEach((rk) => {
+        out.push(`${r.skuName}: ${RISK_LABEL[rk.type] || rk.type}${rk.qty ? ` (${fmt(rk.qty)} pcs)` : ''}.`);
+      });
+    });
+    return out;
+  }, [schedule, balance, phaseRollup, comparison]);
+
+  if (isLoading) return <Box sx={{ p: 3 }}><Skeleton variant="rectangular" height={420} sx={{ borderRadius: 2 }} /></Box>;
+  if (!order) return <Box sx={{ p: 3 }}><Typography>Order not found.</Typography></Box>;
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3.5 }, minHeight: '100vh' }}>
-      {/* ── Header ───────────────────────────────────────────────── */}
-      <Box sx={{ mb: 3 }}>
-        <Breadcrumbs sx={{ mb: 1, '& .MuiBreadcrumbs-separator': { color: C.faint } }}>
-          <Link
-            underline="hover"
-            sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '0.78rem', color: C.slate, fontWeight: 600 }}
-            onClick={() => navigate('/orders')}
-          >
-            <Package size={13} /> Orders
-          </Link>
-          <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: C.primary }}>
-            {order.soNumber}
-          </Typography>
-        </Breadcrumbs>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-          <IconButton
-            onClick={() => navigate(-1)}
-            size="small"
-            sx={{
-              bgcolor: C.surface,
-              border: '1px solid',
-              borderColor: C.line,
-              color: C.body,
-              '&:hover': { bgcolor: C.surfaceAlt, borderColor: alpha(C.primary, 0.4) },
-            }}
-          >
+    <Box sx={{ minHeight: '100vh', bgcolor: C.surfaceAlt, pb: 4 }}>
+      {/* ── Hero ─────────────────────────────────────────────── */}
+      <Box sx={{
+        background: `linear-gradient(135deg, ${C.ink} 0%, ${C.primaryDk} 55%, ${C.primary} 100%)`,
+        color: '#fff', px: { xs: 2, md: 3 }, pt: 2, pb: 2.5,
+      }}>
+        <Stack direction="row" alignItems="center" spacing={1.25} sx={{ mb: 1.5 }}>
+          <IconButton size="small" onClick={() => navigate('/orders')}
+            sx={{ color: '#fff', bgcolor: 'rgba(255,255,255,0.12)' }}>
             <ArrowLeft size={16} />
           </IconButton>
-          <Typography sx={{
-            fontSize: { xs: '1.15rem', sm: '1.35rem' },
-            fontWeight: 700,
-            color: C.ink,
-            letterSpacing: '-0.015em',
-            lineHeight: 1.2,
-          }}>
+          <Typography sx={{ fontSize: { xs: '1.1rem', md: '1.35rem' }, fontWeight: 800 }}>
             {order.soNumber}
           </Typography>
           <StatusBadge value={order.status} />
-          <Box sx={{ ml: 'auto' }} />
-          <Stack direction="row" spacing={1}>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<CalendarPlus size={14} />}
-              onClick={() => navigate(`/dispatch-planning?so=${encodeURIComponent(order.soNumber)}`)}
-            >
-              Plan Phases
-            </Button>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<Truck size={14} />}
-              onClick={() => setDispatchOpen(true)}
-            >
-              Record Dispatch
-            </Button>
-          </Stack>
-        </Box>
+          <Typography sx={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.8)' }}>
+            · {order.partyName}
+          </Typography>
+          <Box sx={{ flex: 1 }} />
+          <Button size="small" variant="contained" startIcon={<CalendarPlus size={14} />}
+            onClick={() => navigate(`/dispatch-planning?so=${encodeURIComponent(order.soNumber)}`)}
+            sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
+            Plan Phases
+          </Button>
+          <Button size="small" variant="contained" startIcon={<Truck size={14} />}
+            onClick={() => setDispatchOpen(true)}
+            sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
+            Record Dispatch
+          </Button>
+        </Stack>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Kpi label="Ordered"    value={fmt(ordered)} />
+          <Kpi label="Planned"    value={fmt(planned)} />
+          <Kpi label="Dispatched" value={fmt(actual)} color="#7ee0c8" />
+          <Kpi label="Balance"    value={fmt(balance)} color={balance > 0 ? '#ffd9a0' : '#7ee0c8'} />
+          <Kpi label="Fulfilment" value={`${fulfilment}%`} sub="of order qty" />
+          <Kpi label="Adherence"  value={`${adherence}%`} sub="actual vs plan" />
+          <Kpi label="Risks"      value={lacking.length} color={lacking.length ? '#ffb4b4' : '#7ee0c8'} />
+        </Stack>
       </Box>
 
-      {/* ── Plan vs Actual (new) ─────────────────────────────────── */}
-      <Box sx={{ mb: 3 }}>
-        <PlanVsActualPanel comparison={comparison} />
-      </Box>
-
-      {/* ── Performance Insights ─────────────────────────────────── */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={4}>
-          <Insight
-            label="Plan Adherence"
-            value={`${adherence}%`}
-            subtext={adherence >= 100 ? 'On track with plan' : 'Currently trailing plan'}
-            color={adherenceColor}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={4}>
-          <Insight
-            label="Variance Analysis"
-            value={variance === 0 ? '0' : (variance > 0 ? `+${fmt(variance)}` : fmt(variance))}
-            subtext={isLacking ? 'Lacking / behind plan' : 'Moving forward / ahead'}
-            color={isLacking ? C.error : C.success}
-            trendIcon={isLacking ? TrendingDown : TrendingUp}
-          />
-        </Grid>
-        <Grid item xs={12} sm={12} md={4}>
-          <Insight
-            label="Pending Dispatch"
-            value={fmt(order.totalBalanceQty)}
-            subtext="Total remaining across all phases"
-            color={C.primary}
-          />
-        </Grid>
-      </Grid>
-
-      {/* ── Main grid ────────────────────────────────────────────── */}
-      <Grid container spacing={2.5}>
-        {/* LEFT */}
-        <Grid item xs={12} lg={8}>
-          {/* Order totals */}
-          <Grid container spacing={2} sx={{ mb: 2.5 }}>
-            <Grid item xs={12} sm={4}>
-              <StatBlock label="Total Order Qty" value={fmt(order.totalOrderQty)} accent />
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <StatBlock label="Dispatched" value={fmt(order.totalDispatchedQty)} color={C.success} />
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <StatBlock label="Pending Balance" value={fmt(order.totalBalanceQty)} color={C.error} />
-            </Grid>
-          </Grid>
-
-          {/* SKU table */}
-          <Paper sx={{ borderRadius: 2.5, border: '1px solid', borderColor: C.line, overflow: 'hidden', mb: 2.5 }}>
-            <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: C.lineSoft, display: 'flex', alignItems: 'center', gap: 1.25 }}>
-              <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: alpha(C.primary, 0.10), border: `1px solid ${alpha(C.primary, 0.18)}`, color: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Package size={16} />
-              </Box>
-              <Typography sx={{ fontSize: '0.95rem', fontWeight: 700, color: C.ink }}>SKU Line Items</Typography>
-              <Chip
-                label={order.items?.length || 0}
-                size="small"
-                sx={{ ml: 'auto', fontWeight: 700, bgcolor: alpha(C.primary, 0.10), color: C.primaryDk, border: `1px solid ${alpha(C.primary, 0.18)}` }}
-              />
-            </Box>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>SKU Name</TableCell>
-                    <TableCell>Code</TableCell>
-                    <TableCell align="right">Order</TableCell>
-                    <TableCell align="right">Dispatch</TableCell>
-                    <TableCell align="right">Balance</TableCell>
-                    <TableCell sx={{ width: 110 }}>Status</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {order.items?.map((item, idx) => {
-                    const pct = item.orderQty > 0 ? Math.round((item.dispatchedQty / item.orderQty) * 100) : 0;
-                    const isDone = item.balanceQty <= 0;
-                    return (
-                      <TableRow key={idx} sx={{ '&:hover': { bgcolor: C.surfaceAlt } }}>
-                        <TableCell><Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.ink }}>{item.skuName}</Typography></TableCell>
-                        <TableCell><Typography sx={{ fontSize: '0.78rem', color: C.slate, fontWeight: 500 }}>{item.skuCode}</Typography></TableCell>
-                        <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.ink }}>{fmt(item.orderQty)}</Typography></TableCell>
-                        <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.success }}>{fmt(item.dispatchedQty)}</Typography></TableCell>
-                        <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: isDone ? C.success : C.error }}>{fmt(item.balanceQty)}</Typography></TableCell>
-                        <TableCell>
-                          <Box sx={{
-                            px: 1.25, py: 0.4, borderRadius: 1.25,
-                            bgcolor: alpha(isDone ? C.success : C.warning, 0.10),
-                            color: isDone ? C.success : C.warning,
-                            border: `1px solid ${alpha(isDone ? C.success : C.warning, 0.20)}`,
-                            fontSize: '0.66rem', fontWeight: 800, textAlign: 'center', letterSpacing: '0.04em',
-                          }}>
-                            {isDone ? 'COMPLETE' : `${pct}%`}
-                          </Box>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
-
-          {/* Dispatch Schedule */}
-          <Paper sx={{ p: 2.5, borderRadius: 2.5, border: '1px solid', borderColor: C.line, mb: 2.5 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2.5, flexWrap: 'wrap', gap: 1 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-                <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: alpha(C.primary, 0.10), border: `1px solid ${alpha(C.primary, 0.18)}`, color: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Calendar size={16} />
-                </Box>
-                <Typography sx={{ fontSize: '0.95rem', fontWeight: 700, color: C.ink }}>
-                  Dispatch Planning (Phases)
-                </Typography>
-              </Box>
-              {schedule?.pdfUrl && (
-                <Button
-                  size="small"
-                  startIcon={<ExternalLink size={14} />}
-                  href={schedule.pdfUrl}
-                  target="_blank"
-                  sx={{ fontWeight: 700, color: C.primary }}
-                >
-                  View Schedule PDF
-                </Button>
-              )}
-            </Box>
-
-            {!schedule ? (
-              <Box sx={{ p: 4, textAlign: 'center', bgcolor: C.surfaceAlt, borderRadius: 2, border: `1px dashed ${C.line}` }}>
-                <Typography sx={{ fontSize: '0.85rem', color: C.slate, fontWeight: 500 }}>
-                  No active dispatch schedule found for this order.
-                </Typography>
-                <Button size="small" sx={{ mt: 1, fontWeight: 700, color: C.primary }}>Create Schedule</Button>
-              </Box>
-            ) : (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {schedule.items?.map((item, idx) => (
-                  <Box key={idx} sx={{ p: 1.75, borderRadius: 2, bgcolor: C.surfaceAlt, border: '1px solid', borderColor: C.lineSoft }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.5, flexWrap: 'wrap', gap: 0.5 }}>
-                      <Typography sx={{ fontSize: '0.85rem', fontWeight: 700, color: C.primaryDk }}>{item.skuName}</Typography>
-                      <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: C.slate, letterSpacing: '0.04em' }}>CODE: {item.skuCode}</Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', gap: 1.25, overflowX: 'auto', pb: 0.5 }}>
-                      {item.phases?.map((phase, pIdx) => (
-                        <PhaseCard key={pIdx} phase={phase} />
-                      ))}
-                    </Box>
-                  </Box>
-                ))}
-              </Box>
-            )}
-          </Paper>
-
-          {/* Dispatch History */}
-          {schedule?.items?.some((i) => i.phases?.some((p) => p.actualDispatches?.length > 0)) && (
-            <Paper sx={{ borderRadius: 2.5, border: '1px solid', borderColor: C.line, overflow: 'hidden', mb: 2.5 }}>
-              <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: C.lineSoft, display: 'flex', alignItems: 'center', gap: 1.25 }}>
-                <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: alpha(C.success, 0.10), border: `1px solid ${alpha(C.success, 0.20)}`, color: C.success, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <FileText size={16} />
-                </Box>
-                <Typography sx={{ fontSize: '0.95rem', fontWeight: 700, color: C.ink }}>Dispatch History & Invoices</Typography>
-              </Box>
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Item / Phase</TableCell>
-                      <TableCell>Actual Date</TableCell>
-                      <TableCell align="right">Qty</TableCell>
-                      <TableCell>Invoice No</TableCell>
-                      <TableCell align="center">Doc</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {schedule.items.map((item) =>
-                      item.phases?.map((phase) =>
-                        phase.actualDispatches?.map((dispatch, dIdx) => (
-                          <TableRow key={`${item.skuCode}-${phase.phaseNo}-${dIdx}`} sx={{ '&:hover': { bgcolor: C.surfaceAlt } }}>
-                            <TableCell>
-                              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: C.ink, display: 'block' }}>{item.skuName}</Typography>
-                              <Typography sx={{ fontSize: '0.7rem', color: C.slate, fontWeight: 500 }}>{phase.phaseNo}</Typography>
-                            </TableCell>
-                            <TableCell><Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: C.text }}>{dayjs(dispatch.date).format('DD MMM YY')}</Typography></TableCell>
-                            <TableCell align="right"><Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: C.success }}>{fmt(dispatch.qty)}</Typography></TableCell>
-                            <TableCell><Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: C.primary }}>{dispatch.invoiceNo}</Typography></TableCell>
-                            <TableCell align="center">
-                              {dispatch.invoiceDoc && (
-                                <IconButton size="small" href={dispatch.invoiceDoc} target="_blank" sx={{ color: C.slate }}>
-                                  <ExternalLink size={14} />
-                                </IconButton>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        )),
-                      ),
-                    )}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Paper>
-          )}
-
-          {/* Workflow */}
-          <Paper sx={{ p: 2.5, borderRadius: 2.5, border: '1px solid', borderColor: C.line }}>
-            <Typography sx={{ fontSize: '0.95rem', fontWeight: 700, color: C.ink, mb: 2.5 }}>
-              Order Execution Workflow
-            </Typography>
-            <Grid container spacing={1.5}>
-              {WORKFLOW_STEPS.map((step) => {
-                const data = order[step.key] || {};
-                const isDone = data.status === 'DONE';
-                return (
-                  <Grid item xs={12} sm={6} key={step.key}>
-                    <Box sx={{
-                      p: 1.75, borderRadius: 2,
-                      border: '1px solid',
-                      borderColor: isDone ? alpha(C.success, 0.25) : C.lineSoft,
-                      bgcolor: isDone ? alpha(C.success, 0.04) : C.surface,
-                      display: 'flex', alignItems: 'center', gap: 1.5,
-                    }}>
-                      {isDone
-                        ? <CheckCircle2 color={C.success} size={20} />
-                        : <Clock color={C.faint} size={20} />}
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.ink }}>{step.label}</Typography>
-                        <Typography sx={{ fontSize: '0.7rem', color: C.slate, fontWeight: 500 }}>In-charge: {step.who}</Typography>
-                      </Box>
-                      <Chip
-                        label={data.status || 'PENDING'}
-                        size="small"
-                        sx={{
-                          fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.04em',
-                          bgcolor: isDone ? alpha(C.success, 0.10) : C.lineSoft,
-                          color: isDone ? C.success : C.slate,
-                          border: `1px solid ${isDone ? alpha(C.success, 0.20) : C.line}`,
-                        }}
-                      />
-                    </Box>
-                  </Grid>
-                );
-              })}
-            </Grid>
-          </Paper>
-        </Grid>
-
-        {/* RIGHT */}
-        <Grid item xs={12} lg={4}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {/* Customer & Commercials */}
-            <Paper sx={{ p: 2.5, borderRadius: 2.5, border: '1px solid', borderColor: C.line }}>
-              <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: C.slate, textTransform: 'uppercase', letterSpacing: '0.08em', mb: 2 }}>
-                Customer & Commercials
-              </Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                {[
-                  { icon: User,     label: 'Customer Name',  value: order.partyName },
-                  { icon: Hash,     label: 'PO Number',      value: order.poNumber },
-                  { icon: Calendar, label: 'PO Date',        value: order.poDate ? dayjs(order.poDate).format('DD MMM YYYY') : '—' },
-                  { icon: MapPin,   label: 'Location',       value: order.location || '—' },
-                  { icon: Truck,    label: 'Transport Mode', value: order.transport || 'Road' },
-                ].map(({ icon: Icon, label, value }) => (
-                  <Box key={label} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
-                    <Box sx={{ width: 32, height: 32, flexShrink: 0, borderRadius: 1.5, bgcolor: alpha(C.primary, 0.08), border: `1px solid ${alpha(C.primary, 0.16)}`, color: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Icon size={15} />
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography sx={{ fontSize: '0.7rem', color: C.slate, fontWeight: 600, letterSpacing: '0.02em' }}>{label}</Typography>
-                      <Typography sx={{ fontSize: '0.85rem', fontWeight: 700, color: C.ink, wordBreak: 'break-word' }}>{value}</Typography>
-                    </Box>
-                  </Box>
-                ))}
-              </Box>
-            </Paper>
-
-            {/* Quick Info */}
-            <Paper sx={{ p: 2.5, borderRadius: 2.5, border: '1px solid', borderColor: C.line }}>
-              <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: C.slate, textTransform: 'uppercase', letterSpacing: '0.08em', mb: 2 }}>
-                Quick Info
-              </Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-                {[
-                  ['Order Date',     dayjs(order.orderDate).format('DD MMM YYYY')],
-                  ['Lead Time',      `${order.leadTimeDays || 0} Days`],
-                  ['Financial Year', order.financialYear || '—'],
-                ].map(([k, v]) => (
-                  <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px dashed', borderColor: C.lineSoft }}>
-                    <Typography sx={{ fontSize: '0.8rem', color: C.slate, fontWeight: 500 }}>{k}</Typography>
-                    <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.ink }}>{v}</Typography>
-                  </Box>
-                ))}
-                {order.orderDocument && (
-                  <Button
-                    fullWidth
-                    href={order.orderDocument}
-                    target="_blank"
-                    startIcon={<ExternalLink size={15} />}
-                    sx={{
-                      mt: 1.25, borderRadius: 2,
-                      bgcolor: C.lineSoft,
-                      color: C.primaryDk,
-                      border: `1px solid ${C.line}`,
-                      fontWeight: 700,
-                      '&:hover': { bgcolor: C.line, color: C.ink },
-                      boxShadow: 'none',
-                    }}
-                  >
-                    View PO Document
-                  </Button>
-                )}
-              </Box>
-            </Paper>
-
-            {/* System meta */}
-            <Box sx={{ p: 1.5, textAlign: 'center' }}>
-              <Typography sx={{ fontSize: '0.72rem', color: C.faint, fontStyle: 'italic' }}>
-                System ID: {order.uniqueO2DId}
-              </Typography>
-            </Box>
+      <Box sx={{ px: { xs: 1.5, md: 2.5 }, mt: 2 }}>
+        {/* ── Order Journey ──────────────────────────────────── */}
+        <Paper sx={{ p: 2, borderRadius: 3, border: `1px solid ${C.line}`, mb: 2 }}>
+          <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: C.slate, textTransform: 'uppercase', letterSpacing: '0.07em', mb: 1.5 }}>
+            Order Journey
+          </Typography>
+          <Box sx={{ display: 'flex', overflowX: 'auto', pb: 1, alignItems: 'flex-start' }}>
+            {journey.map((n, i) => (
+              <JourneyNode key={n.key} node={n} last={i === journey.length - 1} />
+            ))}
           </Box>
-        </Grid>
-      </Grid>
+        </Paper>
 
-      <DispatchEntry
-        open={dispatchOpen}
-        onClose={() => setDispatchOpen(false)}
-        presetOrder={order}
-      />
+        {/* ── What's Lacking ─────────────────────────────────── */}
+        {lacking.length > 0 && (
+          <Paper sx={{ p: 2, borderRadius: 3, mb: 2,
+            border: `1px solid ${alpha(C.error, 0.25)}`, bgcolor: alpha(C.error, 0.035) }}>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <AlertTriangle size={16} color={C.error} />
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: C.error }}>
+                What's Lacking ({lacking.length})
+              </Typography>
+            </Stack>
+            <Stack spacing={0.5}>
+              {lacking.map((l, i) => (
+                <Typography key={i} sx={{ fontSize: '0.78rem', color: C.body, pl: 1 }}>• {l}</Typography>
+              ))}
+            </Stack>
+          </Paper>
+        )}
+
+        {/* ── Tabs ───────────────────────────────────────────── */}
+        <Paper sx={{ borderRadius: 3, border: `1px solid ${C.line}`, overflow: 'hidden' }}>
+          <Tabs value={tab} onChange={(_, v) => setTab(v)}
+            variant="scrollable" scrollButtons="auto"
+            sx={{ borderBottom: `1px solid ${C.line}`, px: 1,
+              '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.82rem', minHeight: 46 } }}>
+            {TABS.map((tb) => (
+              <Tab key={tb.key} value={tb.key} label={tb.label}
+                icon={<tb.icon size={14} />} iconPosition="start" />
+            ))}
+          </Tabs>
+
+          <Box sx={{ p: { xs: 1.5, md: 2.5 } }}>
+            {/* PLAN VS ACTUAL */}
+            {tab === 'plan' && (
+              comparison
+                ? <PlanVsActualPanel comparison={comparison} />
+                : <Empty icon={ClipboardList} text="Plan-vs-actual appears once the order is planned and dispatched." />
+            )}
+
+            {/* PHASES */}
+            {tab === 'phases' && (
+              phaseRollup.length === 0
+                ? <Empty icon={Calendar} text="No phases planned yet. Use 'Plan Phases' to schedule dispatches." />
+                : (
+                  <Stack spacing={2}>
+                    {phaseRollup.map((ph) => {
+                      const done = ph.plannedQty > 0 && ph.actualQty >= ph.plannedQty;
+                      const late = !done && ph.plannedDate && dayjs(ph.plannedDate).isBefore(dayjs(), 'day');
+                      const pct = ph.plannedQty > 0 ? Math.min(100, Math.round((ph.actualQty / ph.plannedQty) * 100)) : 0;
+                      const c = done ? C.success : late ? C.error : C.primary;
+                      return (
+                        <Box key={ph.phaseNo} sx={{ border: `1px solid ${C.line}`, borderRadius: 2, overflow: 'hidden' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, bgcolor: C.surfaceAlt, flexWrap: 'wrap' }}>
+                            <Chip label={`Phase ${ph.phaseNo}`} size="small" sx={{ fontWeight: 800, bgcolor: alpha(c, 0.12), color: c }} />
+                            <Stack direction="row" spacing={0.5} alignItems="center">
+                              <Calendar size={12} color={C.slate} />
+                              <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: late ? C.error : C.slate }}>
+                                {fmtD(ph.plannedDate)}{late ? ' · overdue' : ''}
+                              </Typography>
+                            </Stack>
+                            <Box sx={{ flex: 1 }} />
+                            <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: C.ink }}>
+                              {fmt(ph.actualQty)} / {fmt(ph.plannedQty)} pcs · {pct}%
+                            </Typography>
+                          </Box>
+                          <TableContainer>
+                            <Table size="small">
+                              <TableHead>
+                                <TableRow sx={{ '& th': { fontSize: '0.66rem', fontWeight: 800, color: C.slate, textTransform: 'uppercase' } }}>
+                                  <TableCell>SKU</TableCell>
+                                  <TableCell align="right">Planned</TableCell>
+                                  <TableCell align="right">Actual</TableCell>
+                                  <TableCell align="right">Balance</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {ph.skus.map((s, i) => (
+                                  <TableRow key={i}>
+                                    <TableCell>
+                                      <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: C.ink }}>{s.skuName}</Typography>
+                                      <Typography sx={{ fontSize: '0.68rem', color: C.faint }}>{s.skuCode}</Typography>
+                                    </TableCell>
+                                    <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 700 }}>{fmt(s.plannedQty)}</Typography></TableCell>
+                                    <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.success }}>{fmt(s.actualQty)}</Typography></TableCell>
+                                    <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: s.actualQty >= s.plannedQty ? C.success : C.warning }}>{fmt(Math.max(0, s.plannedQty - s.actualQty))}</Typography></TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </TableContainer>
+                        </Box>
+                      );
+                    })}
+                  </Stack>
+                )
+            )}
+
+            {/* DISPATCH HISTORY */}
+            {tab === 'dispatch' && (
+              challans.length === 0
+                ? <Empty icon={Truck} text="No delivery challans recorded for this order yet." />
+                : (
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow sx={{ '& th': { fontSize: '0.66rem', fontWeight: 800, color: C.slate, textTransform: 'uppercase' } }}>
+                          <TableCell>DC #</TableCell>
+                          <TableCell>Date</TableCell>
+                          <TableCell>Phase</TableCell>
+                          <TableCell align="right">Qty</TableCell>
+                          <TableCell>Vehicle</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell />
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {challans.map((dc) => (
+                          <TableRow key={dc._id} hover sx={{ cursor: 'pointer' }}
+                            onClick={() => navigate(`/challans/${dc._id}`)}>
+                            <TableCell><Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: C.primary }}>{dc.dcNumber}</Typography></TableCell>
+                            <TableCell><Typography sx={{ fontSize: '0.78rem', color: C.slate }}>{fmtD(dc.dcDate)}</Typography></TableCell>
+                            <TableCell>
+                              {dc.isUnplanned
+                                ? <Chip size="small" label="Unplanned" sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, bgcolor: alpha(C.warning, 0.12), color: C.warning }} />
+                                : <Typography sx={{ fontSize: '0.78rem', fontWeight: 700 }}>{dc.phaseRef?.phaseNo || '—'}</Typography>}
+                            </TableCell>
+                            <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 800 }}>{fmt(dc.totalQuantityPcs)}</Typography></TableCell>
+                            <TableCell><Typography sx={{ fontSize: '0.76rem', color: C.slate }}>{dc.vehicleNo || '—'}</Typography></TableCell>
+                            <TableCell><StatusBadge value={dc.status} /></TableCell>
+                            <TableCell><ChevronRight size={15} color={C.faint} /></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )
+            )}
+
+            {/* WORKFLOW */}
+            {tab === 'workflow' && (
+              <Stack spacing={1.25}>
+                {WORKFLOW_STEPS.map((step) => {
+                  const d = order[step.key] || {};
+                  const done = d.status === 'DONE';
+                  return (
+                    <Box key={step.key} sx={{
+                      display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: 2,
+                      border: `1px solid ${done ? alpha(C.success, 0.25) : C.line}`,
+                      bgcolor: done ? alpha(C.success, 0.04) : C.surface,
+                    }}>
+                      {done ? <CheckCircle2 size={20} color={C.success} /> : <Clock size={20} color={C.faint} />}
+                      <Box sx={{ flex: 1 }}>
+                        <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.ink }}>{step.label}</Typography>
+                        <Typography sx={{ fontSize: '0.68rem', color: C.slate }}>
+                          Planned: {fmtD(d.planned)}  ·  Actual: {fmtD(d.actual)}
+                        </Typography>
+                      </Box>
+                      <StatusBadge value={d.status || 'PENDING'} />
+                    </Box>
+                  );
+                })}
+              </Stack>
+            )}
+
+            {/* DOCUMENTS */}
+            {tab === 'docs' && (
+              <Stack spacing={1.25}>
+                <DocRow label="Purchase Order document" url={order.orderDocument} />
+                <DocRow label="Dispatch Schedule PDF" url={schedule?.pdfUrl} />
+                {challans.filter((d) => d.pdfUrl).map((d) => (
+                  <DocRow key={d._id} label={`Challan ${d.dcNumber}`} url={d.pdfUrl} />
+                ))}
+                {!order.orderDocument && !schedule?.pdfUrl && !challans.some((d) => d.pdfUrl) && (
+                  <Empty icon={FileText} text="No documents attached to this order yet." />
+                )}
+              </Stack>
+            )}
+          </Box>
+        </Paper>
+
+        {/* ── Customer & meta strip ──────────────────────────── */}
+        <Paper sx={{ p: 2, borderRadius: 3, border: `1px solid ${C.line}`, mt: 2 }}>
+          <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap>
+            {[
+              { icon: User, label: 'Customer', value: order.partyName },
+              { icon: Hash, label: 'PO Number', value: order.poNumber || '—' },
+              { icon: Calendar, label: 'PO Date', value: fmtD(order.poDate) },
+              { icon: MapPin, label: 'Location', value: order.location || '—' },
+              { icon: Truck, label: 'Transport', value: order.transport || 'Road' },
+              { icon: Calendar, label: 'Order Date', value: fmtD(order.orderDate) },
+              { icon: Boxes, label: 'SKU Lines', value: order.items?.length || 0 },
+              { icon: Clock, label: 'Booked', value: fmtDT(order.createdAt) },
+            ].map((m) => (
+              <Stack key={m.label} direction="row" spacing={1} alignItems="center">
+                <Box sx={{ width: 30, height: 30, borderRadius: 1.5, display: 'grid', placeItems: 'center',
+                  bgcolor: alpha(C.primary, 0.08), color: C.primary }}>
+                  <m.icon size={14} />
+                </Box>
+                <Box>
+                  <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: C.faint, textTransform: 'uppercase' }}>{m.label}</Typography>
+                  <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: C.ink }}>{m.value}</Typography>
+                </Box>
+              </Stack>
+            ))}
+          </Stack>
+        </Paper>
+      </Box>
+
+      <DispatchEntry open={dispatchOpen} onClose={() => setDispatchOpen(false)} presetOrder={order} />
+    </Box>
+  );
+};
+
+const Empty = ({ icon: Icon, text }) => (
+  <Stack alignItems="center" sx={{ py: 5, color: C.faint, gap: 1 }}>
+    <Icon size={32} style={{ opacity: 0.5 }} />
+    <Typography sx={{ fontSize: '0.82rem', textAlign: 'center', maxWidth: 420 }}>{text}</Typography>
+  </Stack>
+);
+
+const DocRow = ({ label, url }) => {
+  if (!url) return null;
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: 2, border: `1px solid ${C.line}` }}>
+      <FileText size={16} color={C.primary} />
+      <Typography sx={{ flex: 1, fontSize: '0.82rem', fontWeight: 700, color: C.ink }}>{label}</Typography>
+      <Button size="small" startIcon={<ExternalLink size={13} />} href={url} target="_blank" sx={{ fontWeight: 700 }}>
+        Open
+      </Button>
     </Box>
   );
 };

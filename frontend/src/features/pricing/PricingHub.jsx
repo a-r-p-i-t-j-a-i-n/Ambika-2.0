@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Stack, Chip, Button, TextField, InputAdornment,
   ToggleButtonGroup, ToggleButton, Paper, alpha, useTheme, IconButton, Tooltip,
@@ -8,8 +8,10 @@ import {
   IndianRupee, Search, Plus, RefreshCw, Sparkles, TriangleAlert,
   CircleDot, BadgeCheck, Hourglass, ArrowDownUp, SlidersHorizontal,
   Download, FileSpreadsheet, X, CalendarRange, UserCircle2,
+  LayoutGrid, PackageCheck, Layers, Wrench, Boxes, ShoppingCart,
 } from 'lucide-react';
 import dayjs from 'dayjs';
+import { useSearchParams } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
 import {
   useGetPriceMasterQuery,
@@ -22,34 +24,50 @@ import PriceHistoryDrawer from './components/PriceHistoryDrawer';
 import { usePermissions } from '../../hooks/usePermission';
 import { exportPricingWorkbook } from '../../utils/exportPricingExcel';
 
+// ── Item-kind navigation ──────────────────────────────────────────────
+// The Price Tracker's primary axis. RAW_MATERIAL / CONSUMABLE / PACKING are
+// the "buy side" (purchase prices); FINISHED_GOOD is the "sell side"
+// (selling prices). CIRCLE is intentionally omitted — not price-tracked.
+const BUY_SIDE_KINDS = ['RAW_MATERIAL', 'CONSUMABLE', 'PACKING'];
+
+const ITEM_KINDS = [
+  { key: '',              label: 'All Items',      icon: LayoutGrid,   side: null },
+  { key: 'FINISHED_GOOD', label: 'Finished Goods', icon: PackageCheck, side: 'sell' },
+  { key: 'RAW_MATERIAL',  label: 'Raw Material',   icon: Layers,       side: 'buy' },
+  { key: 'CONSUMABLE',    label: 'Consumables',    icon: Wrench,       side: 'buy' },
+  { key: 'PACKING',       label: 'Packing',        icon: Boxes,        side: 'buy' },
+];
+
 const KpiCard = ({ label, value, hint, color, icon: Icon, theme }) => (
   <Paper sx={{
-    flex: '1 1 180px',
-    minWidth: 168,
-    p: 1.75,
-    borderRadius: 2.5,
+    flex: '1 1 150px',
+    minWidth: 142,
+    p: 1.3,
+    borderRadius: 2,
     background: 'linear-gradient(180deg, #ffffff 0%, #f7f9ff 100%)',
     border: `1px solid ${theme.palette.divider}`,
     position: 'relative', overflow: 'hidden',
   }}>
-    <Stack direction="row" spacing={1} alignItems="flex-start">
+    <Stack direction="row" spacing={1} alignItems="center">
       <Box sx={{
-        width: 32, height: 32, borderRadius: 1.5,
-        display: 'grid', placeItems: 'center',
+        width: 26, height: 26, borderRadius: 1.25,
+        display: 'grid', placeItems: 'center', flexShrink: 0,
         bgcolor: alpha(color, 0.10), color,
       }}>
-        <Icon size={16} />
+        <Icon size={14} />
       </Box>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'text.secondary' }}>
+        <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.secondary', lineHeight: 1.2 }}>
           {label}
         </Typography>
-        <Typography sx={{ fontWeight: 800, fontSize: '1.4rem', lineHeight: 1.1, mt: 0.25, fontVariantNumeric: 'tabular-nums', color }}>
-          {value}
-        </Typography>
-        {hint && (
-          <Typography sx={{ fontSize: '0.7rem', color: 'text.disabled', mt: 0.25 }}>{hint}</Typography>
-        )}
+        <Stack direction="row" spacing={0.75} alignItems="baseline">
+          <Typography sx={{ fontWeight: 800, fontSize: '1.15rem', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums', color }}>
+            {value}
+          </Typography>
+          {hint && (
+            <Typography sx={{ fontSize: '0.62rem', color: 'text.disabled' }}>{hint}</Typography>
+          )}
+        </Stack>
       </Box>
     </Stack>
   </Paper>
@@ -64,19 +82,30 @@ const STATUS_CHIPS = (theme) => ([
   { key: 'pending',  label: 'Pending',   color: theme.palette.warning.dark,   icon: TriangleAlert, dot: '#f97316' },
 ]);
 
+// Validators for URL-supplied values — keeps a hand-edited link from sending
+// a junk filter to the API.
+const VALID_KINDS = ['FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE'];
+const VALID_STATUSES = ['changed', 'stable', 'stale', 'unpriced', 'pending'];
+
 const PricingHub = () => {
   const theme = useTheme();
-  const [priceType, setPriceType] = useState('SELLING');
-  const [status, setStatus] = useState('');
-  const [search, setSearch] = useState('');
-  const [drawerSku, setDrawerSku] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Filter state is initialised FROM the URL, so every view (kind, group,
+  // search, the open SKU history) is a shareable deep link.
+  const [priceType, setPriceType] = useState(() => (searchParams.get('stream') === 'RM_COST' ? 'RM_COST' : 'SELLING'));
+  const [itemType, setItemType]   = useState(() => (VALID_KINDS.includes(searchParams.get('kind')) ? searchParams.get('kind') : ''));
+  const [category, setCategory]   = useState(() => searchParams.get('group') || '');
+  const [status, setStatus]       = useState(() => (VALID_STATUSES.includes(searchParams.get('status')) ? searchParams.get('status') : ''));
+  const [search, setSearch]       = useState(() => searchParams.get('q') || '');
+  const [drawerSkuId, setDrawerSkuId] = useState(() => searchParams.get('sku') || '');
   const [reviseOpen, setReviseOpen] = useState(false);
   const [revisePresetSku, setRevisePresetSku] = useState(null);
 
   // Phase-1 advanced filters
-  const [effectiveFrom, setEffectiveFrom] = useState('');
-  const [effectiveTo,   setEffectiveTo]   = useState('');
-  const [revisedBy,     setRevisedBy]     = useState('');
+  const [effectiveFrom, setEffectiveFrom] = useState(() => searchParams.get('from') || '');
+  const [effectiveTo,   setEffectiveTo]   = useState(() => searchParams.get('to') || '');
+  const [revisedBy,     setRevisedBy]     = useState(() => searchParams.get('by') || '');
   const [filterAnchor,  setFilterAnchor]  = useState(null);
   const [exportAnchor,  setExportAnchor]  = useState(null);
   const [isExporting,   setIsExporting]   = useState(false);
@@ -84,16 +113,65 @@ const PricingHub = () => {
   const { can } = usePermissions();
   const canRevise = can('pricing.revise');
 
+  // Buy-side kinds have only one price stream — the purchase price (RM_COST).
+  // `effectivePriceType` is what the whole screen actually queries with, so
+  // there is never a stale-stream flicker when switching kinds.
+  const isBuySide = BUY_SIDE_KINDS.includes(itemType);
+  const effectivePriceType = isBuySide ? 'RM_COST' : priceType;
+  const streamLabel = isBuySide
+    ? 'Purchase Price'
+    : (effectivePriceType === 'SELLING' ? 'Selling Price' : 'RM Cost');
+
+  const handleKindChange = (key) => {
+    setItemType(key);
+    setCategory(''); // a sub-group only makes sense within one kind
+  };
+
   const masterQuery = useMemo(() => ({
-    priceType, search, status,
+    priceType: effectivePriceType, search, status,
+    ...(itemType ? { itemType } : {}),
+    ...(category ? { category } : {}),
     ...(effectiveFrom ? { effectiveFrom } : {}),
     ...(effectiveTo   ? { effectiveTo }   : {}),
     ...(revisedBy     ? { revisedBy }     : {}),
-  }), [priceType, search, status, effectiveFrom, effectiveTo, revisedBy]);
+  }), [effectivePriceType, search, status, itemType, category, effectiveFrom, effectiveTo, revisedBy]);
 
   const { data, isFetching, refetch } = useGetPriceMasterQuery(masterQuery);
   const rows = data?.data?.rows || [];
   const kpis = data?.data?.kpis || {};
+  const itemTypeCounts = data?.data?.itemTypeCounts || {};
+  const categories = data?.data?.categories || [];
+  const allItemsCount = Object.values(itemTypeCounts).reduce((a, b) => a + b, 0);
+
+  // Resolve the open SKU (from a row click or a shared URL) to a full object.
+  const drawerSku = useMemo(() => {
+    if (!drawerSkuId) return null;
+    const row = rows.find((r) => String(r.skuId) === String(drawerSkuId));
+    return row
+      ? { id: row.skuId, code: row.code, name: row.name }
+      : { id: drawerSkuId, code: '', name: '' };
+  }, [drawerSkuId, rows]);
+
+  // Mirror the active view into the URL query string, so the address bar is
+  // always a shareable deep link — kind, group, search, and the open SKU.
+  // The string compare makes the write a no-op when nothing changed, so this
+  // can never loop regardless of how setSearchParams is memoised.
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (priceType === 'RM_COST' && !BUY_SIDE_KINDS.includes(itemType)) next.set('stream', 'RM_COST');
+    if (itemType)      next.set('kind',   itemType);
+    if (category)      next.set('group',  category);
+    if (status)        next.set('status', status);
+    if (search)        next.set('q',      search);
+    if (effectiveFrom) next.set('from',   effectiveFrom);
+    if (effectiveTo)   next.set('to',     effectiveTo);
+    if (revisedBy)     next.set('by',     revisedBy);
+    if (drawerSkuId)   next.set('sku',    drawerSkuId);
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceType, itemType, category, status, search, effectiveFrom, effectiveTo, revisedBy, drawerSkuId]);
 
   const { data: reviewersRes } = useGetPricingReviewersQuery();
   const reviewers = reviewersRes?.data || [];
@@ -130,13 +208,16 @@ const PricingHub = () => {
     setExportAnchor(null);
     setIsExporting(true);
     try {
-      const res = await triggerExport({ priceType }).unwrap();
+      const res = await triggerExport({
+        priceType: effectivePriceType,
+        ...(itemType ? { itemType } : {}),
+      }).unwrap();
       const payload = res?.data || {};
       const filename = exportPricingWorkbook({
         current:   payload.current   || [],
         history:   payload.history   || [],
         documents: payload.documents || [],
-        priceType,
+        priceType: effectivePriceType,
       });
       enqueueSnackbar(`Downloaded: ${filename}`, { variant: 'success' });
     } catch (err) {
@@ -148,13 +229,22 @@ const PricingHub = () => {
 
   const statusChips = useMemo(() => STATUS_CHIPS(theme), [theme]);
 
+  const groupChipSx = (selected) => ({
+    height: 26, fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer',
+    color: selected ? '#fff' : theme.palette.primary.dark,
+    bgcolor: selected ? theme.palette.primary.main : alpha(theme.palette.primary.main, 0.07),
+    border: `1px solid ${selected ? theme.palette.primary.main : alpha(theme.palette.primary.main, 0.18)}`,
+    transition: 'all 0.12s ease',
+    '&:hover': { bgcolor: selected ? theme.palette.primary.main : alpha(theme.palette.primary.main, 0.14) },
+  });
+
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       {/* ── Hero ─────────────────────────────────────────────── */}
       <Box sx={{
         position: 'relative', overflow: 'hidden', color: '#ffffff',
         background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 6, md: 8 },
+        px: { xs: 2.5, md: 3 }, pt: { xs: 2.5, md: 2.75 }, pb: { xs: 4, md: 4.5 },
       }}>
         <Box aria-hidden sx={{
           position: 'absolute', width: 420, height: 420, borderRadius: '50%',
@@ -167,23 +257,23 @@ const PricingHub = () => {
           background: 'radial-gradient(circle, rgba(91,108,255,0.30) 0%, rgba(91,108,255,0) 60%)',
         }} />
 
-        <Stack direction="row" spacing={2.5} alignItems="center" sx={{ position: 'relative', mb: 1.5 }}>
+        <Stack direction="row" spacing={1.75} alignItems="center" sx={{ position: 'relative' }}>
           <Box sx={{
-            width: 52, height: 52, borderRadius: 2.5,
+            width: 40, height: 40, borderRadius: 2,
             display: 'grid', placeItems: 'center',
             background: 'rgba(255,255,255,0.14)',
             border: '1px solid rgba(255,255,255,0.22)',
             backdropFilter: 'blur(8px)',
+            flexShrink: 0,
           }}>
-            <IndianRupee size={26} strokeWidth={2.2} color="#ffffff" />
+            <IndianRupee size={20} strokeWidth={2.2} color="#ffffff" />
           </Box>
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ color: '#ffffff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ color: '#ffffff', fontSize: { xs: '1.15rem', md: '1.4rem' }, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.15 }}>
               Pricing Hub
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5, maxWidth: 720 }}>
-              Date-aware price master with full audit trail — every revision signed,
-              proof-attached, and approval-routed for changes above the threshold.
+            <Typography sx={{ color: 'rgba(255,255,255,0.78)', fontSize: '0.78rem', mt: 0.25, maxWidth: 640 }}>
+              Current, previous &amp; full price history for every item — proof-attached and fully audited.
             </Typography>
           </Box>
           <Stack direction="row" spacing={1}>
@@ -232,8 +322,8 @@ const PricingHub = () => {
       </Box>
 
       {/* ── KPI strip (overlapping the hero) ─────────────────── */}
-      <Box sx={{ mx: { xs: 2, md: 4 }, mt: { xs: -4, md: -5 }, position: 'relative' }}>
-        <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap>
+      <Box sx={{ mx: { xs: 1.5, md: 2.5 }, mt: { xs: -2.75, md: -3 }, position: 'relative' }}>
+        <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
           <KpiCard theme={theme} label="Total SKUs"        value={kpis.total ?? '—'}        icon={IndianRupee} color={theme.palette.primary.main} />
           <KpiCard theme={theme} label="Changed this week" value={kpis.changedThisWeek ?? '—'} icon={Sparkles}   color={theme.palette.success.dark} />
           <KpiCard theme={theme} label="Stable"            value={kpis.stable ?? '—'}        icon={BadgeCheck}  color={theme.palette.text.secondary} />
@@ -246,46 +336,114 @@ const PricingHub = () => {
 
       {/* ── Panel ────────────────────────────────────────────── */}
       <Paper sx={{
-        mx: { xs: 2, md: 4 }, mt: 2.5,
+        mx: { xs: 1.5, md: 2.5 }, mt: 2,
         borderRadius: 3, overflow: 'hidden',
         boxShadow: '0 10px 28px rgba(30, 58, 138, 0.07)',
       }}>
-        {/* Toolbar — two clean rows: (1) price stream + search + count, (2) status filters */}
+        {/* Toolbar */}
         <Box sx={{ borderBottom: `1px solid ${theme.palette.divider}` }}>
-          {/* Row 1: Price stream toggle + Search + Result count */}
+          {/* Row 0: Item-kind tabs — STEP 1, the primary navigation axis */}
+          <Box sx={{ px: 2, pt: 1.75, pb: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography sx={{
+                fontSize: '0.68rem', fontWeight: 800, color: 'text.disabled',
+                letterSpacing: '0.08em', textTransform: 'uppercase', mr: 0.25,
+              }}>
+                Kind
+              </Typography>
+              {ITEM_KINDS.map((kind) => {
+                const Icon = kind.icon;
+                const selected = itemType === kind.key;
+                const count = kind.key === '' ? allItemsCount : (itemTypeCounts[kind.key] || 0);
+                return (
+                  <Box
+                    key={kind.key || 'all'}
+                    onClick={() => handleKindChange(kind.key)}
+                    sx={{
+                      display: 'flex', alignItems: 'center', gap: 0.85,
+                      flexShrink: 0, whiteSpace: 'nowrap',
+                      px: 1.4, py: 0.8, borderRadius: 2, cursor: 'pointer',
+                      border: `1.5px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
+                      bgcolor: selected ? theme.palette.primary.main : '#fff',
+                      color: selected ? '#fff' : theme.palette.text.primary,
+                      transition: 'all 0.15s ease',
+                      '&:hover': {
+                        borderColor: theme.palette.primary.main,
+                        transform: 'translateY(-1px)',
+                      },
+                    }}
+                  >
+                    <Icon size={15} color={selected ? '#ffffff' : theme.palette.text.secondary} />
+                    <Typography sx={{
+                      fontSize: '0.8rem', fontWeight: 800, whiteSpace: 'nowrap',
+                      color: selected ? '#ffffff' : theme.palette.text.primary,
+                    }}>
+                      {kind.label}
+                    </Typography>
+                    <Box sx={{
+                      minWidth: 20, height: 18, px: 0.55, borderRadius: 0.75,
+                      display: 'grid', placeItems: 'center',
+                      bgcolor: selected ? '#ffffff' : alpha(theme.palette.text.primary, 0.07),
+                      color: selected ? theme.palette.primary.dark : theme.palette.text.secondary,
+                      fontSize: '0.67rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+                    }}>
+                      {count}
+                    </Box>
+                  </Box>
+                );
+              })}
+            </Stack>
+          </Box>
+
+          {/* Row 1: Price stream + Search + Result count */}
           <Stack
             direction={{ xs: 'column', md: 'row' }}
             spacing={1.5}
             alignItems={{ md: 'center' }}
             sx={{ px: 2, pt: 2, pb: 1.5 }}
           >
-            <ToggleButtonGroup
-              exclusive
-              value={priceType}
-              onChange={(_, v) => v && setPriceType(v)}
-              size="small"
-              sx={{
-                bgcolor: alpha(theme.palette.primary.main, 0.04),
-                p: 0.4,
-                borderRadius: 1.5,
-                '& .MuiToggleButton-root': {
-                  px: 2, py: 0.5, fontSize: '0.78rem', fontWeight: 700,
-                  border: 'none',
-                  borderRadius: '8px !important',
-                  color: 'text.secondary',
-                  textTransform: 'none',
-                  '&.Mui-selected': {
-                    bgcolor: '#fff',
-                    color: theme.palette.primary.dark,
-                    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)',
-                    '&:hover': { bgcolor: '#fff' },
+            {/* Price stream — a toggle for sell-side kinds, a fixed label for
+                buy-side kinds (which only have a purchase price). */}
+            {isBuySide ? (
+              <Stack direction="row" spacing={0.85} alignItems="center" sx={{
+                px: 1.5, py: 0.7, borderRadius: 1.5,
+                bgcolor: alpha(theme.palette.warning.main, 0.10),
+                border: `1px solid ${alpha(theme.palette.warning.main, 0.25)}`,
+              }}>
+                <ShoppingCart size={14} color={theme.palette.warning.dark} />
+                <Typography sx={{ fontSize: '0.78rem', fontWeight: 800, color: theme.palette.warning.dark }}>
+                  Purchase Price
+                </Typography>
+              </Stack>
+            ) : (
+              <ToggleButtonGroup
+                exclusive
+                value={priceType}
+                onChange={(_, v) => v && setPriceType(v)}
+                size="small"
+                sx={{
+                  bgcolor: alpha(theme.palette.primary.main, 0.04),
+                  p: 0.4,
+                  borderRadius: 1.5,
+                  '& .MuiToggleButton-root': {
+                    px: 2, py: 0.5, fontSize: '0.78rem', fontWeight: 700,
+                    border: 'none',
+                    borderRadius: '8px !important',
+                    color: 'text.secondary',
+                    textTransform: 'none',
+                    '&.Mui-selected': {
+                      bgcolor: '#fff',
+                      color: theme.palette.primary.dark,
+                      boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)',
+                      '&:hover': { bgcolor: '#fff' },
+                    },
                   },
-                },
-              }}
-            >
-              <ToggleButton value="SELLING">Selling Prices</ToggleButton>
-              <ToggleButton value="RM_COST">RM Costs</ToggleButton>
-            </ToggleButtonGroup>
+                }}
+              >
+                <ToggleButton value="SELLING">Selling Price</ToggleButton>
+                <ToggleButton value="RM_COST">RM Cost</ToggleButton>
+              </ToggleButtonGroup>
+            )}
 
             <TextField
               size="small"
@@ -391,6 +549,44 @@ const PricingHub = () => {
               );
             })}
           </Stack>
+
+          {/* Row 3: Sub-group chips for the active kind */}
+          {itemType && categories.length > 0 && (
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="center"
+              flexWrap="wrap"
+              useFlexGap
+              sx={{
+                px: 2, pb: 1.5,
+                borderTop: `1px dashed ${theme.palette.divider}`,
+                pt: 1.5,
+              }}
+            >
+              <Typography sx={{
+                fontSize: '0.68rem', fontWeight: 800, color: 'text.disabled',
+                letterSpacing: '0.08em', textTransform: 'uppercase', mr: 0.5,
+              }}>
+                Group
+              </Typography>
+              <Chip
+                size="small"
+                label="All groups"
+                onClick={() => setCategory('')}
+                sx={groupChipSx(category === '')}
+              />
+              {categories.map((c) => (
+                <Chip
+                  key={c.name}
+                  size="small"
+                  label={`${c.name} · ${c.count}`}
+                  onClick={() => setCategory(c.name)}
+                  sx={groupChipSx(category === c.name)}
+                />
+              ))}
+            </Stack>
+          )}
         </Box>
 
         {/* Active filter chips strip (shows when advanced filters applied) */}
@@ -475,8 +671,9 @@ const PricingHub = () => {
         <PriceMasterTable
           rows={rows}
           isLoading={isFetching}
-          priceType={priceType}
-          onRowClick={(row) => setDrawerSku({ id: row.skuId, code: row.code, name: row.name })}
+          priceType={effectivePriceType}
+          itemType={itemType}
+          onRowClick={(row) => setDrawerSkuId(String(row.skuId))}
           onRevise={(row) => { setRevisePresetSku(row); setReviseOpen(true); }}
           canRevise={canRevise}
         />
@@ -642,7 +839,7 @@ const PricingHub = () => {
         >
           {isExporting
             ? 'Building workbook…'
-            : `Download ${priceType === 'SELLING' ? 'Selling Prices' : 'RM Costs'} (.xlsx)`}
+            : `Download ${effectivePriceType === 'SELLING' ? 'Selling Prices' : (isBuySide ? 'Purchase Prices' : 'RM Costs')} (.xlsx)`}
         </Button>
       </Popover>
 
@@ -652,15 +849,16 @@ const PricingHub = () => {
         open={reviseOpen}
         onClose={() => setReviseOpen(false)}
         presetSku={revisePresetSku}
-        defaultPriceType={priceType}
+        defaultPriceType={effectivePriceType}
       />
       <PriceHistoryDrawer
         skuId={drawerSku?.id}
         skuCode={drawerSku?.code}
         skuName={drawerSku?.name}
-        priceType={priceType}
-        open={!!drawerSku}
-        onClose={() => setDrawerSku(null)}
+        priceType={effectivePriceType}
+        priceLabel={streamLabel}
+        open={!!drawerSkuId}
+        onClose={() => setDrawerSkuId('')}
         onRevise={(row) => { setRevisePresetSku(row); setReviseOpen(true); }}
         canRevise={canRevise}
       />

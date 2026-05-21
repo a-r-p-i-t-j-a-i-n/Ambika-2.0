@@ -1,25 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Box,
-  Button,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Divider,
-  Drawer,
-  IconButton,
-  InputAdornment,
-  Paper,
-  Stack,
-  TextField,
-  Tooltip,
-  Typography,
-  alpha,
+  Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
+  DialogTitle, Drawer, IconButton, InputAdornment, MenuItem, Paper, Stack,
+  TextField, Tooltip, Typography, alpha,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { AlertTriangle, Edit3, PackagePlus, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react';
+import {
+  AlertTriangle, Edit3, PackagePlus, Plus, Save, Search, Trash2, Upload, X,
+  PackageCheck, Layers, Wrench, Boxes, LayoutGrid,
+} from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useBulkUpsertSkusMutation,
@@ -31,6 +20,25 @@ import {
 import { usePermission } from '../../hooks/usePermission';
 
 const BRAND = { primary: '#2563eb', success: '#059669', warning: '#d97706', error: '#dc2626', wip: '#7c3aed' };
+
+// Item-type metadata — labels, colours and the kind tabs.
+const TYPE_META = {
+  FINISHED_GOOD: { label: 'Finished Good', color: '#0f766e' },
+  RAW_MATERIAL:  { label: 'Raw Material',  color: '#b45309' },
+  CONSUMABLE:    { label: 'Consumable',    color: '#1d4ed8' },
+  PACKING:       { label: 'Packing',       color: '#7c3aed' },
+  CIRCLE:        { label: 'Circle',        color: '#64748b' },
+};
+
+const SKU_KINDS = [
+  { key: '',              label: 'All Items',      icon: LayoutGrid },
+  { key: 'FINISHED_GOOD', label: 'Finished Goods', icon: PackageCheck },
+  { key: 'RAW_MATERIAL',  label: 'Raw Material',   icon: Layers },
+  { key: 'CONSUMABLE',    label: 'Consumables',    icon: Wrench },
+  { key: 'PACKING',       label: 'Packing',        icon: Boxes },
+];
+
+const TYPE_OPTIONS = ['FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE'];
 
 const sheetSkuItems = [
   { name: 'Dome Jar', code: 'DJ1500-204', category: 'Jar', pcsPerBox: 105, weightPerPc: 0.3307 },
@@ -53,19 +61,12 @@ const sheetSkuItems = [
 ];
 
 const emptyForm = {
-  name: '',
-  code: '',
-  category: '',
-  unit: 'PCS',
-  pcsPerBox: 1,
-  weightPerPc: 0,
-  weightPerBox: 0,
-  leadDays: 7,
-  aliasesText: '',
-  packingDetails: '',
+  name: '', code: '', itemType: 'FINISHED_GOOD', category: '', unit: 'PCS',
+  pcsPerBox: 1, weightPerPc: 0, weightPerBox: 0, leadDays: 7,
+  aliasesText: '', packingDetails: '',
 };
 
-const SkuDrawer = ({ open, onClose, sku }) => {
+const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [form, setForm] = useState(emptyForm);
   const [createSku, { isLoading: isCreating }] = useCreateSkuMutation();
@@ -77,6 +78,7 @@ const SkuDrawer = ({ open, onClose, sku }) => {
     setForm(sku ? {
       name: sku.name || '',
       code: sku.code || '',
+      itemType: sku.itemType || 'FINISHED_GOOD',
       category: sku.category || '',
       unit: sku.unit || 'PCS',
       pcsPerBox: sku.pcsPerBox || 1,
@@ -85,8 +87,8 @@ const SkuDrawer = ({ open, onClose, sku }) => {
       leadDays: sku.leadDays || 7,
       aliasesText: (sku.aliases || []).join(', '),
       packingDetails: sku.packingDetails || '',
-    } : emptyForm);
-  }, [open, sku]);
+    } : { ...emptyForm, itemType: defaultType || 'FINISHED_GOOD' });
+  }, [open, sku, defaultType]);
 
   const updateField = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
 
@@ -97,6 +99,7 @@ const SkuDrawer = ({ open, onClose, sku }) => {
     const payload = {
       name: form.name.trim(),
       code: form.code.trim().toUpperCase(),
+      itemType: form.itemType,
       category: form.category.trim(),
       unit: form.unit || 'PCS',
       pcsPerBox: Number(form.pcsPerBox) || 1,
@@ -110,7 +113,7 @@ const SkuDrawer = ({ open, onClose, sku }) => {
     try {
       if (sku?._id) await updateSku({ id: sku._id, ...payload }).unwrap();
       else await createSku(payload).unwrap();
-      enqueueSnackbar(sku?._id ? 'SKU updated' : 'SKU added', { variant: 'success' });
+      enqueueSnackbar(sku?._id ? 'SKU updated' : 'SKU registered', { variant: 'success' });
       onClose();
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Unable to save SKU', { variant: 'error' });
@@ -125,17 +128,34 @@ const SkuDrawer = ({ open, onClose, sku }) => {
             <PackagePlus size={20} />
           </Box>
           <Box>
-            <Typography variant="h6" fontWeight={900}>{sku?._id ? 'Edit SKU Item' : 'Add SKU Item'}</Typography>
-            <Typography variant="caption" color="text.secondary">Item name and SKU code master</Typography>
+            <Typography variant="h6" fontWeight={900}>{sku?._id ? 'Edit SKU Item' : 'Register New SKU'}</Typography>
+            <Typography variant="caption" color="text.secondary">Pick the type, enter a code &amp; name</Typography>
           </Box>
         </Stack>
         <IconButton onClick={onClose}><X size={18} /></IconButton>
       </Box>
 
       <Box sx={{ p: 2.5, flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {/* Item type — the first decision when registering */}
+        <TextField
+          select
+          label="Item Type"
+          value={form.itemType}
+          onChange={(e) => updateField('itemType', e.target.value)}
+          fullWidth
+          helperText="Finished goods are sold; raw material, consumables & packing are bought."
+        >
+          {TYPE_OPTIONS.map((t) => (
+            <MenuItem key={t} value={t}>{TYPE_META[t]?.label || t}</MenuItem>
+          ))}
+        </TextField>
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+          <TextField label="SKU Code" value={form.code} onChange={(e) => updateField('code', e.target.value.toUpperCase())} />
+          <TextField label="Category / Sub-group" value={form.category} onChange={(e) => updateField('category', e.target.value)} />
+        </Box>
         <TextField label="SKU Item Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} fullWidth />
-        <TextField label="SKU Code" value={form.code} onChange={(e) => updateField('code', e.target.value.toUpperCase())} fullWidth />
-        <TextField label="Category" value={form.category} onChange={(e) => updateField('category', e.target.value)} fullWidth />
+
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
           <TextField label="Unit" value={form.unit} onChange={(e) => updateField('unit', e.target.value.toUpperCase())} />
           <TextField label="Lead Days" type="number" value={form.leadDays} onChange={(e) => updateField('leadDays', e.target.value)} />
@@ -143,14 +163,14 @@ const SkuDrawer = ({ open, onClose, sku }) => {
           <TextField label="Weight Per Pc" type="number" value={form.weightPerPc} onChange={(e) => updateField('weightPerPc', e.target.value)} />
           <TextField label="Weight Per Box" type="number" value={form.weightPerBox} onChange={(e) => updateField('weightPerBox', e.target.value)} />
         </Box>
-        <TextField label="Aliases" value={form.aliasesText} onChange={(e) => updateField('aliasesText', e.target.value)} helperText="Comma separated old names or alternate spellings" fullWidth />
+        <TextField label="Aliases" value={form.aliasesText} onChange={(e) => updateField('aliasesText', e.target.value)} helperText="Comma separated old names or alternate codes" fullWidth />
         <TextField label="Packing Details" value={form.packingDetails} onChange={(e) => updateField('packingDetails', e.target.value)} minRows={3} multiline fullWidth />
       </Box>
 
       <Box sx={{ p: 2.5, borderTop: '1px solid #e2e8f0', display: 'flex', gap: 1.5, bgcolor: '#f8fafc' }}>
         <Button variant="outlined" onClick={onClose} fullWidth>Cancel</Button>
         <Button variant="contained" onClick={handleSave} disabled={isSaving} startIcon={isSaving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} fullWidth>
-          Save SKU
+          {sku?._id ? 'Save Changes' : 'Register SKU'}
         </Button>
       </Box>
     </Drawer>
@@ -161,6 +181,7 @@ const SkusList = () => {
   const { enqueueSnackbar } = useSnackbar();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchTerm, setSearchTerm] = useState('');
+  const [itemType, setItemType] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedSku, setSelectedSku] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -172,8 +193,17 @@ const SkusList = () => {
     page: paginationModel.page + 1,
     limit: paginationModel.pageSize,
     search: searchTerm || undefined,
+    ...(itemType ? { itemType } : {}),
     sort: 'name',
   });
+
+  const counts = data?.meta?.itemTypeCounts || {};
+  const allCount = Object.values(counts).reduce((a, b) => a + b, 0);
+
+  const handleKind = (key) => {
+    setItemType(key);
+    setPaginationModel((p) => ({ ...p, page: 0 }));
+  };
 
   const handleDeleteConfirm = async () => {
     if (!deleteTarget?._id) return;
@@ -186,15 +216,8 @@ const SkusList = () => {
     }
   };
 
-  const handleAdd = () => {
-    setSelectedSku(null);
-    setDrawerOpen(true);
-  };
-
-  const handleEdit = (sku) => {
-    setSelectedSku(sku);
-    setDrawerOpen(true);
-  };
+  const handleAdd = () => { setSelectedSku(null); setDrawerOpen(true); };
+  const handleEdit = (sku) => { setSelectedSku(sku); setDrawerOpen(true); };
 
   const handleImportSheetItems = async () => {
     try {
@@ -206,24 +229,33 @@ const SkusList = () => {
   };
 
   const columns = [
-    { field: 'name', headerName: 'SKU ITEM NAME', flex: 1, minWidth: 240,
+    { field: 'name', headerName: 'SKU ITEM NAME', flex: 1, minWidth: 220,
       renderCell: (p) => <Typography variant="body2" fontWeight={800}>{p.value}</Typography>
     },
-    { field: 'code', headerName: 'SKU CODE', width: 160,
+    { field: 'code', headerName: 'SKU CODE', width: 150,
       renderCell: (p) => <Typography variant="body2" fontWeight={900} color="primary.main">{p.value}</Typography>
     },
-    { field: 'category', headerName: 'CATEGORY', width: 150,
+    { field: 'itemType', headerName: 'TYPE', width: 140,
+      renderCell: (p) => {
+        const m = TYPE_META[p.value] || TYPE_META.FINISHED_GOOD;
+        return (
+          <Box sx={{ px: 1.2, py: 0.4, borderRadius: '8px', bgcolor: alpha(m.color, 0.1),
+            color: m.color, fontSize: '0.68rem', fontWeight: 800, border: `1px solid ${alpha(m.color, 0.2)}` }}>
+            {m.label}
+          </Box>
+        );
+      }
+    },
+    { field: 'category', headerName: 'GROUP', width: 150,
       renderCell: (p) => (
-        <Box sx={{ px: 1.3, py: 0.45, borderRadius: '8px', bgcolor: alpha(BRAND.wip, 0.07), color: BRAND.wip, fontSize: '0.7rem', fontWeight: 800 }}>
-          {p.value || 'General'}
-        </Box>
+        <Typography variant="body2" fontWeight={600} color="text.secondary">{p.value || '—'}</Typography>
       )
     },
-    { field: 'pcsPerBox', headerName: 'PCS/BOX', width: 100, align: 'center', headerAlign: 'center',
+    { field: 'pcsPerBox', headerName: 'PCS/BOX', width: 95, align: 'center', headerAlign: 'center',
       renderCell: (p) => <Typography variant="body2" fontWeight={700}>{p.value || '-'}</Typography>
     },
-    { field: 'weightPerPc', headerName: 'WT/PC', width: 95, align: 'right', headerAlign: 'right',
-      renderCell: (p) => <Typography variant="body2" fontWeight={700}>{p.value ? Number(p.value).toFixed(3) : '-'}</Typography>
+    { field: 'unit', headerName: 'UNIT', width: 80, align: 'center', headerAlign: 'center',
+      renderCell: (p) => <Typography variant="body2" fontWeight={700} color="text.secondary">{p.value || 'PCS'}</Typography>
     },
     { field: 'actions', headerName: '', width: canDelete ? 110 : 70, sortable: false, align: 'center',
       renderCell: (p) => (
@@ -235,14 +267,8 @@ const SkusList = () => {
           </Tooltip>
           {canDelete && (
             <Tooltip title="Delete SKU">
-              <IconButton
-                size="small"
-                onClick={() => setDeleteTarget(p.row)}
-                sx={{
-                  color: BRAND.error,
-                  '&:hover': { bgcolor: alpha(BRAND.error, 0.08), color: BRAND.error },
-                }}
-              >
+              <IconButton size="small" onClick={() => setDeleteTarget(p.row)}
+                sx={{ color: BRAND.error, '&:hover': { bgcolor: alpha(BRAND.error, 0.08), color: BRAND.error } }}>
                 <Trash2 size={15} />
               </IconButton>
             </Tooltip>
@@ -253,25 +279,68 @@ const SkusList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+      {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 700, color: '#0b2545', letterSpacing: '-0.015em', lineHeight: 1.25 }}>SKU Master</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>Item names and SKU codes used in order entry</Typography>
+          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 800, color: '#0b2545', letterSpacing: '-0.015em' }}>SKU Master</Typography>
+          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>
+            All items — finished goods, raw material, consumables &amp; packing
+          </Typography>
         </Box>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ width: { xs: '100%', md: 'auto' } }}>
-          <TextField size="small" placeholder="Search SKU item or code" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-            sx={{ width: { xs: '100%', sm: 270 }, '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }}
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ width: { xs: '100%', md: 'auto' } }}>
+          <TextField size="small" placeholder="Search SKU item or code" value={searchTerm}
+            onChange={(e) => { setSearchTerm(e.target.value); setPaginationModel((p) => ({ ...p, page: 0 })); }}
+            sx={{ width: { xs: '100%', sm: 250 }, '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }}
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }}
           />
-          <Button variant="outlined" startIcon={isImporting ? <CircularProgress size={16} /> : <Upload size={16} />} disabled={isImporting} onClick={handleImportSheetItems} sx={{ bgcolor: '#fff' }}>
+          <Button variant="outlined" startIcon={isImporting ? <CircularProgress size={16} /> : <Upload size={16} />} disabled={isImporting} onClick={handleImportSheetItems} sx={{ bgcolor: '#fff', whiteSpace: 'nowrap' }}>
             Load Sheet SKUs
           </Button>
-          <Button variant="contained" startIcon={<Plus size={16} />} onClick={handleAdd}>
-            Add SKU
+          <Button variant="contained" startIcon={<Plus size={16} />} onClick={handleAdd} sx={{ whiteSpace: 'nowrap' }}>
+            Register SKU
           </Button>
         </Stack>
       </Box>
+
+      {/* Kind tabs */}
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        {SKU_KINDS.map((kind) => {
+          const Icon = kind.icon;
+          const selected = itemType === kind.key;
+          const count = kind.key === '' ? allCount : (counts[kind.key] || 0);
+          return (
+            <Box
+              key={kind.key || 'all'}
+              onClick={() => handleKind(kind.key)}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 0.85, flexShrink: 0,
+                px: 1.5, py: 0.85, borderRadius: 2, cursor: 'pointer',
+                border: `1.5px solid ${selected ? BRAND.primary : '#e2e8f0'}`,
+                bgcolor: selected ? BRAND.primary : '#fff',
+                color: selected ? '#fff' : '#475569',
+                transition: 'all 0.15s ease',
+                '&:hover': { borderColor: BRAND.primary, transform: 'translateY(-1px)' },
+              }}
+            >
+              <Icon size={15} color={selected ? '#ffffff' : '#64748b'} />
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, whiteSpace: 'nowrap',
+                color: selected ? '#ffffff' : '#0b2545' }}>
+                {kind.label}
+              </Typography>
+              <Box sx={{
+                minWidth: 22, height: 18, px: 0.6, borderRadius: 0.75,
+                display: 'grid', placeItems: 'center',
+                bgcolor: selected ? 'rgba(255,255,255,0.24)' : alpha('#0b2545', 0.06),
+                color: selected ? '#fff' : '#475569',
+                fontSize: '0.68rem', fontWeight: 800,
+              }}>
+                {count}
+              </Box>
+            </Box>
+          );
+        })}
+      </Stack>
 
       <Paper sx={{ flexGrow: 1, borderRadius: '14px', overflow: 'hidden', border: '1px solid #e2e8f0', boxShadow: 'none' }}>
         <DataGrid
@@ -287,12 +356,24 @@ const SkusList = () => {
           disableRowSelectionOnClick
           rowHeight={48}
           columnHeaderHeight={44}
-          sx={{ border: 0 }}
+          slots={{
+            noRowsOverlay: () => (
+              <Stack alignItems="center" justifyContent="center" sx={{ height: '100%', color: 'text.disabled', gap: 0.5 }}>
+                <Typography sx={{ fontWeight: 800 }}>No SKUs here</Typography>
+                <Typography sx={{ fontSize: '0.8rem' }}>Try another type, clear the search, or register a new SKU.</Typography>
+              </Stack>
+            ),
+          }}
+          sx={{ border: 0, '--DataGrid-overlayHeight': '220px' }}
         />
       </Paper>
 
-      <Divider sx={{ display: 'none' }} />
-      <SkuDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} sku={selectedSku} />
+      <SkuDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        sku={selectedSku}
+        defaultType={itemType || 'FINISHED_GOOD'}
+      />
 
       {/* Delete confirmation */}
       <Dialog
@@ -303,11 +384,7 @@ const SkusList = () => {
         PaperProps={{ sx: { borderRadius: 3 } }}
       >
         <DialogTitle sx={{ pt: 3, px: 3, pb: 1.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Box sx={{
-            width: 40, height: 40, borderRadius: 2,
-            display: 'grid', placeItems: 'center',
-            bgcolor: alpha(BRAND.error, 0.10), color: BRAND.error,
-          }}>
+          <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND.error, 0.1), color: BRAND.error }}>
             <AlertTriangle size={20} />
           </Box>
           <Box>
@@ -317,52 +394,30 @@ const SkusList = () => {
             </Typography>
           </Box>
         </DialogTitle>
-
         <DialogContent sx={{ px: 3 }}>
           {deleteTarget && (
-            <Box sx={{
-              p: 2, borderRadius: 2,
-              bgcolor: alpha(BRAND.error, 0.04),
-              border: `1px solid ${alpha(BRAND.error, 0.18)}`,
-            }}>
-              <Stack direction="row" spacing={2} alignItems="center">
-                <Box>
-                  <Typography sx={{
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                    fontWeight: 900, fontSize: '0.95rem', color: BRAND.error,
-                  }}>
-                    {deleteTarget.code}
-                  </Typography>
-                  <Typography sx={{ fontWeight: 600, fontSize: '0.86rem' }}>
-                    {deleteTarget.name}
-                  </Typography>
-                  {deleteTarget.category && (
-                    <Typography sx={{ fontSize: '0.74rem', color: 'text.secondary', mt: 0.25 }}>
-                      Category: {deleteTarget.category}
-                    </Typography>
-                  )}
-                </Box>
-              </Stack>
+            <Box sx={{ p: 2, borderRadius: 2, bgcolor: alpha(BRAND.error, 0.04), border: `1px solid ${alpha(BRAND.error, 0.18)}` }}>
+              <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 900, fontSize: '0.95rem', color: BRAND.error }}>
+                {deleteTarget.code}
+              </Typography>
+              <Typography sx={{ fontWeight: 600, fontSize: '0.86rem' }}>{deleteTarget.name}</Typography>
+              <Typography sx={{ fontSize: '0.74rem', color: 'text.secondary', mt: 0.25 }}>
+                {TYPE_META[deleteTarget.itemType]?.label || 'Finished Good'}
+                {deleteTarget.category ? ` · ${deleteTarget.category}` : ''}
+              </Typography>
             </Box>
           )}
           <Typography sx={{ mt: 2, fontSize: '0.82rem', color: 'text.secondary' }}>
-            Historical orders, challans and price revisions that reference this SKU will keep working —
-            only the master row is hidden. You can recover it from the database if needed.
+            Historical orders, challans and price revisions that reference this SKU keep working — only the master row is hidden.
           </Typography>
         </DialogContent>
-
         <DialogActions sx={{ px: 3, pb: 3 }}>
           <Button onClick={() => setDeleteTarget(null)} disabled={isDeleting} sx={{ color: 'text.secondary', fontWeight: 700 }}>
             Cancel
           </Button>
-          <Button
-            variant="contained"
-            color="error"
-            disabled={isDeleting}
-            onClick={handleDeleteConfirm}
+          <Button variant="contained" color="error" disabled={isDeleting} onClick={handleDeleteConfirm}
             startIcon={isDeleting ? <CircularProgress size={14} color="inherit" /> : <Trash2 size={14} />}
-            sx={{ fontWeight: 700, px: 3 }}
-          >
+            sx={{ fontWeight: 700, px: 3 }}>
             {isDeleting ? 'Deleting…' : 'Delete SKU'}
           </Button>
         </DialogActions>

@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, Chip, ToggleButtonGroup, ToggleButton,
   TextField, MenuItem, alpha, useTheme, Skeleton, Tooltip,
@@ -13,6 +14,15 @@ import {
 } from 'recharts';
 import { useGetPricingAnalyticsQuery } from '../../store/api/pricingApi';
 import { fmtINR } from '../../utils/formatters';
+
+const BUY_SIDE_KINDS = ['RAW_MATERIAL', 'CONSUMABLE', 'PACKING'];
+const ITEM_KIND_OPTIONS = [
+  { value: '',              label: 'All Items' },
+  { value: 'FINISHED_GOOD', label: 'Finished Goods' },
+  { value: 'RAW_MATERIAL',  label: 'Raw Material' },
+  { value: 'CONSUMABLE',    label: 'Consumables' },
+  { value: 'PACKING',       label: 'Packing' },
+];
 
 const KpiCard = ({ label, value, hint, color, icon: Icon, theme, trend }) => (
   <Paper sx={{
@@ -110,10 +120,44 @@ const heatTextColor = (val, theme) => {
 
 const PricingAnalytics = () => {
   const theme = useTheme();
-  const [priceType, setPriceType] = useState('SELLING');
-  const [months, setMonths] = useState(12);
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const { data, isFetching } = useGetPricingAnalyticsQuery({ priceType, months });
+  // State initialised from the URL so an analytics view is shareable.
+  const [priceType, setPriceType] = useState(() => (searchParams.get('stream') === 'RM_COST' ? 'RM_COST' : 'SELLING'));
+  const [itemType, setItemType] = useState(() => (
+    BUY_SIDE_KINDS.includes(searchParams.get('kind')) || searchParams.get('kind') === 'FINISHED_GOOD'
+      ? searchParams.get('kind') : ''
+  ));
+  const [months, setMonths] = useState(() => {
+    const m = Number(searchParams.get('months'));
+    return [3, 6, 12, 24].includes(m) ? m : 12;
+  });
+
+  // Mirror the view into the URL so the address bar is a shareable link.
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (priceType === 'RM_COST' && !BUY_SIDE_KINDS.includes(itemType)) next.set('stream', 'RM_COST');
+    if (itemType) next.set('kind', itemType);
+    if (months !== 12) next.set('months', String(months));
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceType, itemType, months]);
+
+  // Buy-side kinds only have a purchase price — force the RM_COST stream.
+  const isBuySide = BUY_SIDE_KINDS.includes(itemType);
+  const effectivePriceType = isBuySide ? 'RM_COST' : priceType;
+  const streamWord = effectivePriceType === 'SELLING'
+    ? 'selling'
+    : (isBuySide ? 'purchase' : 'RM cost');
+
+  const analyticsQuery = useMemo(() => ({
+    priceType: effectivePriceType, months,
+    ...(itemType ? { itemType } : {}),
+  }), [effectivePriceType, months, itemType]);
+
+  const { data, isFetching } = useGetPricingAnalyticsQuery(analyticsQuery);
   const a = data?.data;
 
   const monthly = useMemo(() => (a?.monthlyTimeline || []).map((m) => ({
@@ -153,27 +197,62 @@ const PricingAnalytics = () => {
             </Box>
           </Stack>
 
-          <Stack direction="row" spacing={1}>
-            <ToggleButtonGroup
-              exclusive size="small" value={priceType}
-              onChange={(_, v) => v && setPriceType(v)}
-              sx={{
-                bgcolor: 'rgba(255,255,255,0.10)',
-                p: 0.3, borderRadius: 1.5,
-                '& .MuiToggleButton-root': {
-                  px: 1.5, py: 0.5, fontSize: '0.72rem', fontWeight: 700,
-                  border: 'none', borderRadius: '8px !important',
-                  color: 'rgba(255,255,255,0.7)', textTransform: 'none',
-                  '&.Mui-selected': {
-                    bgcolor: '#fff', color: theme.palette.primary.dark,
-                    '&:hover': { bgcolor: '#fff' },
-                  },
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <TextField
+              select size="small" value={itemType}
+              onChange={(e) => setItemType(e.target.value)}
+              sx={{ minWidth: 152 }}
+              SelectProps={{
+                displayEmpty: true,
+                sx: {
+                  bgcolor: 'rgba(255,255,255,0.16)',
+                  color: '#fff', borderRadius: 1.5,
+                  fontWeight: 700, fontSize: '0.78rem',
+                  '& .MuiSelect-icon': { color: '#fff' },
                 },
               }}
+              InputProps={{
+                sx: { '& fieldset': { border: '1px solid rgba(255,255,255,0.25)' } },
+              }}
             >
-              <ToggleButton value="SELLING">Selling</ToggleButton>
-              <ToggleButton value="RM_COST">RM Cost</ToggleButton>
-            </ToggleButtonGroup>
+              {ITEM_KIND_OPTIONS.map((o) => (
+                <MenuItem key={o.value || 'all'} value={o.value}>{o.label}</MenuItem>
+              ))}
+            </TextField>
+
+            {isBuySide ? (
+              <Stack direction="row" spacing={0.75} alignItems="center" sx={{
+                px: 1.5, borderRadius: 1.5,
+                bgcolor: 'rgba(255,255,255,0.16)',
+                border: '1px solid rgba(255,255,255,0.25)',
+              }}>
+                <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: '#fff' }}>
+                  Purchase Price
+                </Typography>
+              </Stack>
+            ) : (
+              <ToggleButtonGroup
+                exclusive size="small" value={priceType}
+                onChange={(_, v) => v && setPriceType(v)}
+                sx={{
+                  bgcolor: 'rgba(255,255,255,0.10)',
+                  p: 0.3, borderRadius: 1.5,
+                  '& .MuiToggleButton-root': {
+                    px: 1.5, py: 0.5, fontSize: '0.72rem', fontWeight: 700,
+                    border: 'none', borderRadius: '8px !important',
+                    color: 'rgba(255,255,255,0.7)', textTransform: 'none',
+                    '&.Mui-selected': {
+                      bgcolor: '#fff', color: theme.palette.primary.dark,
+                      '&:hover': { bgcolor: '#fff' },
+                    },
+                  },
+                }}
+              >
+                <ToggleButton value="SELLING">Selling</ToggleButton>
+                <ToggleButton value="RM_COST">RM Cost</ToggleButton>
+              </ToggleButtonGroup>
+            )}
+
             <TextField
               select size="small" value={months}
               onChange={(e) => setMonths(Number(e.target.value))}
@@ -198,7 +277,7 @@ const PricingAnalytics = () => {
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 5 }}>
+      <Box sx={{ px: { xs: 1.5, md: 2.5 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 5 }}>
         {/* KPIs */}
         <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap sx={{ mb: 2.5 }}>
           {isFetching && !a ? (
@@ -208,7 +287,7 @@ const PricingAnalytics = () => {
               <KpiCard theme={theme} label="This month change" value={`${a?.kpis?.thisMonthAvgChange?.toFixed(2) || '0.00'}%`}
                 color={a?.kpis?.thisMonthAvgChange >= 0 ? theme.palette.success.dark : theme.palette.error.dark}
                 icon={a?.kpis?.thisMonthAvgChange >= 0 ? TrendingUp : TrendingDown}
-                hint={`avg ${priceType === 'SELLING' ? 'selling' : 'RM'} change`}
+                hint={`avg ${streamWord} change`}
               />
               <KpiCard theme={theme} label="Revisions this month" value={a?.kpis?.thisMonthRevisions || 0}
                 color={theme.palette.primary.main} icon={Activity}
@@ -235,7 +314,7 @@ const PricingAnalytics = () => {
           <Paper sx={{ flex: 2, p: 2.5, borderRadius: 3, boxShadow: '0 10px 28px rgba(30,58,138,0.06)' }}>
             <ChartHeader
               title={`Price Index (rebased 100 = ${monthly.find((m) => m.index)?.name || 'start'})`}
-              subtitle={`Average ${priceType === 'SELLING' ? 'selling' : 'RM cost'} price per month`}
+              subtitle={`Average ${streamWord} price per month`}
               icon={LineChartIcon}
               theme={theme}
             />

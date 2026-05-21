@@ -4,6 +4,9 @@ export const createSkuSchema = Joi.object({
   clientId: Joi.string().allow('', null),
   name: Joi.string().required(),
   code: Joi.string().required(),
+  // No .default() on purpose — on update we must not silently reclassify a SKU.
+  // On create, the Mongoose schema default (FINISHED_GOOD) applies if omitted.
+  itemType: Joi.string().valid('FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE'),
   category: Joi.string().allow('', null),
   aliases: Joi.array().items(Joi.string().trim()).default([]),
   unit: Joi.string().default('PCS'),

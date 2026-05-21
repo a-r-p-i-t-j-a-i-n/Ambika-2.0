@@ -26,13 +26,14 @@ export const pricingApi = baseApi.injectEndpoints({
         'Pricing',
         { type: 'PriceHistory', id: body.skuId },
         'PriceApprovals',
+        'SKU', // refresh SKU lookups — the price cache the calculator reads
       ],
     }),
     correctRevision: builder.mutation({
       query: ({ id, ...body }) => ({
         url: `/pricing/revisions/${id}/correct`, method: 'POST', body,
       }),
-      invalidatesTags: ['Pricing', 'PriceHistory', 'PriceApprovals'],
+      invalidatesTags: ['Pricing', 'PriceHistory', 'PriceApprovals', 'SKU'],
     }),
     getPendingRevisions: builder.query({
       query: () => '/pricing/revisions',
@@ -40,7 +41,7 @@ export const pricingApi = baseApi.injectEndpoints({
     }),
     approveRevision: builder.mutation({
       query: (id) => ({ url: `/pricing/revisions/${id}/approve`, method: 'POST' }),
-      invalidatesTags: ['PriceApprovals', 'Pricing', 'PriceHistory'],
+      invalidatesTags: ['PriceApprovals', 'Pricing', 'PriceHistory', 'SKU'],
     }),
     rejectRevision: builder.mutation({
       query: ({ id, reason }) => ({

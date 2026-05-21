@@ -56,6 +56,7 @@ export const orderService = {
     const order = await SalesOrder.findById(id)
       .populate('partyId', 'name code location email phone creditPeriodDays leadTimeDays addresses')
       .populate('items.skuId', 'name code pcsPerBox weightPerPc')
+      .populate('createdBy', 'name email')
       .lean();
     if (!order) throw new AppError('Sales Order not found', 404);
     return order;

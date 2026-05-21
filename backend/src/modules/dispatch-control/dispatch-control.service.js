@@ -1283,6 +1283,13 @@ export const dispatchControlService = {
       } : {}).lean(),
     ]);
 
+    // Only schedules/challans tied to a LIVE order count toward the KPIs.
+    // Orphan schedules (order deleted, or never created) must never inflate
+    // overdue / planned / upcoming numbers.
+    const orderSoSet = new Set(orders.map((o) => o.soNumber));
+    const liveSchedules = schedules.filter((s) => orderSoSet.has(s.soNumber));
+    const liveChallans = challans.filter((c) => orderSoSet.has(c.soNumber));
+
     const orderTotals = orders.reduce((acc, order) => {
       acc.totalOrders += 1;
       acc.totalOrderQty += Number(order.totalOrderQty || 0);
@@ -1305,7 +1312,7 @@ export const dispatchControlService = {
       : 0;
 
     const monthlyMap = new Map();
-    schedules.forEach((schedule) => {
+    liveSchedules.forEach((schedule) => {
       (schedule.items || []).forEach((item) => {
         (item.phases || []).forEach((phase) => {
           if (!phase.plannedDate) return;
@@ -1318,7 +1325,7 @@ export const dispatchControlService = {
       });
     });
 
-    challans.forEach((challan) => {
+    liveChallans.forEach((challan) => {
       const key = new Date(challan.dcDate).toISOString().slice(0, 7);
       const row = monthlyMap.get(key) || { month: key, plannedQty: 0, actualQty: 0 };
       if (!row.actualQtyFromChallans) row.actualQtyFromChallans = 0;
@@ -1349,7 +1356,7 @@ export const dispatchControlService = {
     let overduePlanCount = 0;
     let overduePlanQty = 0;
 
-    schedules.forEach((schedule) => {
+    liveSchedules.forEach((schedule) => {
       (schedule.items || []).forEach((item) => {
         (item.phases || []).forEach((phase) => {
           const plannedDate = phase.plannedDate ? startOfDay(phase.plannedDate) : null;

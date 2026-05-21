@@ -111,6 +111,9 @@ const salesOrderSchema = new mongoose.Schema({
 
   saleOrderLink: { type: String, default: null },
   uniqueO2DId:   { type: String, unique: true, sparse: true },
+
+  // Who booked this order (shown on the Order 360 page).
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, {
   timestamps: true,
   toJSON:  { virtuals: true },

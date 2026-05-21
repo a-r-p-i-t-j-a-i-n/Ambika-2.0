@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, Button, TextField, InputAdornment, IconButton,
   Chip, Tooltip, alpha, useTheme,
@@ -32,6 +33,7 @@ const StatusBadge = ({ value }) => {
 
 const ChallansList = () => {
   const theme = useTheme();
+  const navigate = useNavigate();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchTerm, setSearchTerm] = useState('');
   const [entryOpen, setEntryOpen] = useState(false);
@@ -85,7 +87,7 @@ const ChallansList = () => {
     {
       field: 'pdfUrl', headerName: '', width: 50, align: 'center', sortable: false,
       renderCell: (p) => p.value ? (
-        <Tooltip title="Open document"><IconButton size="small" onClick={() => window.open(p.value, '_blank')}><ExternalLink size={13} /></IconButton></Tooltip>
+        <Tooltip title="Open document"><IconButton size="small" onClick={(e) => { e.stopPropagation(); window.open(p.value, '_blank'); }}><ExternalLink size={13} /></IconButton></Tooltip>
       ) : null,
     },
   ];
@@ -135,9 +137,10 @@ const ChallansList = () => {
           onPaginationModelChange={setPaginationModel}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
+          onRowClick={(p) => navigate(`/challans/${p.row._id}`)}
           rowHeight={48}
           columnHeaderHeight={42}
-          sx={{ border: 0 }}
+          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
         />
       </Paper>
 

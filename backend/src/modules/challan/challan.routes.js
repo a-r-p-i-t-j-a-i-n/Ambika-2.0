@@ -37,7 +37,9 @@ export const challanService = {
   async getById(id) {
     const doc = await DeliveryChallan.findById(id)
       .populate('partyId', 'name code location email phone addresses')
-      .populate('items.skuId', 'name code').lean();
+      .populate('items.skuId', 'name code')
+      .populate('createdBy', 'name email')
+      .lean();
     if (!doc) throw new AppError('Delivery Challan not found', 404);
     return doc;
   },

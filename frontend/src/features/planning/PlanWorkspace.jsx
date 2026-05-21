@@ -124,6 +124,14 @@ const PlanWorkspace = () => {
 
   const phaseGroups = useMemo(() => buildPhaseGroups(schedule), [schedule]);
 
+  // Deep-linked phase (?phase=P1) — opens that phase card automatically.
+  const focusPhase = searchParams.get('phase');
+  const focusPhaseInUrl = (phaseNo) => {
+    const np = new URLSearchParams(searchParams);
+    np.set('phase', phaseNo);
+    setSearchParams(np, { replace: true });
+  };
+
   const handleAddPhase = async (data) => {
     try {
       await createPhase({ soNumber, ...data }).unwrap();
@@ -225,7 +233,10 @@ const PlanWorkspace = () => {
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 300px' }, gap: 2 }}>
           <Stack spacing={2}>
             <OrderSnapshot schedule={schedule} comparison={comparison} />
-            <PhaseTimeline phaseChips={schedule.phaseChips || []} />
+            <PhaseTimeline
+              phaseChips={schedule.phaseChips || []}
+              onPhaseClick={(p) => focusPhaseInUrl(p.phaseNo)}
+            />
 
             {phaseGroups.length === 0 ? (
               <Paper sx={{ p: 4, borderRadius: '14px', textAlign: 'center' }}>
@@ -254,6 +265,7 @@ const PlanWorkspace = () => {
                     plannedDate={g.plannedDate}
                     status={g.status}
                     items={g.items}
+                    defaultOpen={g.phaseNo === focusPhase}
                     isSaving={isUpdating}
                     onSave={(data) => handleUpdatePhase(g.phaseId, data)}
                     onDelete={() => handleDeletePhase(g.phaseId)}

@@ -1,20 +1,26 @@
 import React, { useMemo } from 'react';
 import {
-  Box, Stack, Typography, Chip, alpha, useTheme, Tooltip,
+  Box, Stack, Typography, Chip, alpha, useTheme, Tooltip, Button,
 } from '@mui/material';
 import { DataGrid, useGridApiContext } from '@mui/x-data-grid';
-import { ArrowUp, ArrowDown, Calendar, HelpCircle } from 'lucide-react';
+import { ArrowUp, ArrowDown, Calendar, HelpCircle, Plus } from 'lucide-react';
 import dayjs from 'dayjs';
 import { fmtINR } from '../../../utils/formatters';
 
-const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
+// Column widths are kept tight on purpose so the whole table fits inside the
+// panel without horizontal clipping. The per-row price action lives INSIDE
+// the Current Price cell (column 4) so it is always visible — never pushed
+// off-screen the way a trailing actions column would be.
+const PriceMasterTable = ({
+  rows, isLoading, onRowClick, onRevise, canRevise = false,
+}) => {
   const theme = useTheme();
 
   const columns = useMemo(() => [
     {
       field: '__serial',
       headerName: '#',
-      width: 60,
+      width: 46,
       sortable: false,
       filterable: false,
       disableColumnMenu: true,
@@ -26,14 +32,14 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
       field: 'code',
       headerName: 'SKU',
       flex: 1,
-      minWidth: 200,
+      minWidth: 190,
       renderCell: (p) => (
         <Stack sx={{ py: 0.5 }}>
           <Typography sx={{
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            fontWeight: 800, fontSize: '0.82rem',
+            fontWeight: 800, fontSize: '0.8rem',
             color: theme.palette.primary.dark,
-            lineHeight: 1.1,
+            lineHeight: 1.15,
           }}>
             {p.value}
           </Typography>
@@ -44,24 +50,77 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
       ),
     },
     {
+      field: 'category',
+      headerName: 'Group',
+      width: 132,
+      renderCell: (p) => (p.value ? (
+        <Chip
+          size="small"
+          label={p.value}
+          sx={{
+            height: 22, fontSize: '0.69rem', fontWeight: 700,
+            bgcolor: alpha(theme.palette.primary.main, 0.07),
+            color: theme.palette.primary.dark,
+            border: `1px solid ${alpha(theme.palette.primary.main, 0.15)}`,
+          }}
+        />
+      ) : (
+        <Typography sx={{ color: 'text.disabled', fontSize: '0.82rem' }}>—</Typography>
+      )),
+    },
+    {
       field: 'currentPrice',
       headerName: 'Current Price',
-      width: 140,
+      width: 158,
       align: 'right', headerAlign: 'right',
-      renderCell: (p) => (
-        <Typography sx={{
-          fontWeight: 800, fontSize: '0.92rem',
-          fontVariantNumeric: 'tabular-nums',
-          color: p.value == null ? 'text.disabled' : 'text.primary',
-        }}>
-          {fmtINR(p.value)}
-        </Typography>
-      ),
+      renderCell: (p) => {
+        if (p.value != null) {
+          return (
+            <Typography sx={{
+              fontWeight: 800, fontSize: '0.92rem',
+              fontVariantNumeric: 'tabular-nums',
+              color: 'text.primary',
+            }}>
+              {fmtINR(p.value)}
+            </Typography>
+          );
+        }
+        // Unpriced — offer a one-click "Set price" right here so it is always
+        // visible. Falls back to a plain chip when the user cannot revise.
+        if (canRevise) {
+          return (
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<Plus size={13} />}
+              onClick={(e) => { e.stopPropagation(); onRevise?.(p.row); }}
+              sx={{
+                fontWeight: 800, fontSize: '0.7rem', textTransform: 'none',
+                borderRadius: 1.25, py: 0.3, px: 1.1, boxShadow: 'none',
+              }}
+            >
+              Set price
+            </Button>
+          );
+        }
+        return (
+          <Chip
+            size="small"
+            label="Unpriced"
+            sx={{
+              height: 22, fontSize: '0.68rem', fontWeight: 800,
+              bgcolor: alpha(theme.palette.error.main, 0.08),
+              color: theme.palette.error.dark,
+              border: `1px solid ${alpha(theme.palette.error.main, 0.20)}`,
+            }}
+          />
+        );
+      },
     },
     {
       field: 'previousPrice',
-      headerName: 'Previous Price',
-      width: 130,
+      headerName: 'Previous',
+      width: 116,
       align: 'right', headerAlign: 'right',
       renderCell: (p) => (
         <Typography sx={{
@@ -74,21 +133,21 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
     },
     {
       field: 'effectiveFrom',
-      headerName: 'Last Change Date',
-      width: 160,
-      renderCell: (p) => p.value ? (
-        <Stack direction="row" spacing={0.75} alignItems="center">
+      headerName: 'Last Change',
+      width: 140,
+      renderCell: (p) => (p.value ? (
+        <Stack direction="row" spacing={0.6} alignItems="center">
           <Calendar size={12} color={theme.palette.text.disabled} />
-          <Typography sx={{ fontSize: '0.82rem', color: 'text.secondary' }}>
+          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary' }}>
             {dayjs(p.value).format('DD MMM YYYY')}
           </Typography>
         </Stack>
-      ) : <Typography sx={{ color: 'text.disabled', fontSize: '0.82rem' }}>—</Typography>,
+      ) : <Typography sx={{ color: 'text.disabled', fontSize: '0.82rem' }}>—</Typography>),
     },
     {
       field: 'changeAmount',
-      headerName: 'Change Amount',
-      width: 150,
+      headerName: 'Change',
+      width: 128,
       align: 'right', headerAlign: 'right',
       sortable: true,
       valueGetter: (_value, row) => {
@@ -103,7 +162,7 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
         >
           <Stack direction="row" alignItems="center" spacing={0.4} sx={{ width: '100%', justifyContent: 'flex-end', cursor: 'help' }}>
             <Typography sx={{ fontSize: 'inherit', fontWeight: 'inherit', color: 'inherit', letterSpacing: 'inherit', textTransform: 'inherit' }}>
-              Change Amount
+              Change
             </Typography>
             <HelpCircle size={11} style={{ opacity: 0.55 }} />
           </Stack>
@@ -123,7 +182,7 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
             icon={<Icon size={12} style={{ marginLeft: 6 }} />}
             label={`${up ? '+' : '−'}${fmtINR(Math.abs(p.value))}`}
             sx={{
-              height: 24, fontWeight: 800, fontSize: '0.74rem',
+              height: 24, fontWeight: 800, fontSize: '0.73rem',
               color, bgcolor: bg, border: `1px solid ${alpha(color, 0.22)}`,
               '& .MuiChip-icon': { color: 'inherit' },
               fontVariantNumeric: 'tabular-nums',
@@ -132,17 +191,7 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
         );
       },
     },
-    {
-      field: 'revisedByName',
-      headerName: 'Revised By',
-      width: 150,
-      renderCell: (p) => (
-        <Typography sx={{ fontSize: '0.82rem', color: 'text.secondary' }} noWrap>
-          {p.value || '—'}
-        </Typography>
-      ),
-    },
-  ], [theme]);
+  ], [theme, canRevise, onRevise]);
 
   return (
     <Box>
@@ -152,9 +201,10 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
         getRowId={(r) => r.skuId}
         loading={isLoading}
         autoHeight
-        rowHeight={64}
+        rowHeight={62}
         disableRowSelectionOnClick
         onRowClick={(p) => onRowClick?.(p.row)}
+        slots={{ noRowsOverlay: NoRowsOverlay }}
         getRowClassName={(p) => {
           if (p.row.marginAlert) return 'row-margin-breach';
           if (p.row.statusTag === 'changed')  return 'row-changed';
@@ -164,6 +214,7 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
         sx={{
           border: 0,
           cursor: 'pointer',
+          '--DataGrid-overlayHeight': '260px',
           '& .MuiDataGrid-columnHeaders': {
             bgcolor: alpha(theme.palette.primary.main, 0.04),
             borderBottom: `1px solid ${alpha(theme.palette.primary.main, 0.12)}`,
@@ -171,7 +222,7 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
           '& .MuiDataGrid-columnHeaderTitle': {
             fontSize: '0.7rem',
             fontWeight: 800,
-            letterSpacing: '0.06em',
+            letterSpacing: '0.05em',
             textTransform: 'uppercase',
             color: theme.palette.text.secondary,
           },
@@ -188,6 +239,17 @@ const PriceMasterTable = ({ rows, isLoading, onRowClick }) => {
     </Box>
   );
 };
+
+// Friendly empty state — keeps the table from looking broken when a filter
+// (kind / group / search) matches nothing.
+const NoRowsOverlay = () => (
+  <Stack alignItems="center" justifyContent="center" sx={{ height: '100%', color: 'text.disabled', gap: 0.5 }}>
+    <Typography sx={{ fontWeight: 800, fontSize: '0.9rem' }}>No SKUs here</Typography>
+    <Typography sx={{ fontSize: '0.78rem' }}>
+      Try another kind, clear the group filter, or change your search.
+    </Typography>
+  </Stack>
+);
 
 // Live row number that respects current sort/filter order.
 const SerialCell = ({ rowId }) => {

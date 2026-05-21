@@ -39,7 +39,9 @@ const latestLiveRevision = async (skuId, priceType, asOfDate = new Date(), sessi
   return PriceRevision
     .findOne({
       skuId, priceType, status: 'LIVE',
-      effectiveFrom: { $lte: asOfDate },
+      // End-of-day bound so a price effective today (stored at UTC-midnight)
+      // is matched regardless of the server's timezone.
+      effectiveFrom: { $lte: dayjs(asOfDate).endOf('day').toDate() },
     })
     .sort({ effectiveFrom: -1, createdAt: -1 })
     .session(session)
@@ -297,7 +299,7 @@ export const correctRevision = async (revisionId, body, req) => {
 // ── Master / list views ─────────────────────────────────────────────
 
 export const getPriceMaster = async ({
-  priceType = 'SELLING', search = '', status = '',
+  priceType = 'SELLING', itemType = '', category = '', search = '', status = '',
   effectiveFrom = null, effectiveTo = null, revisedBy = '',
 } = {}) => {
   const today = new Date();
@@ -305,14 +307,16 @@ export const getPriceMaster = async ({
   const toDate   = effectiveTo   ? new Date(effectiveTo)   : null;
   const revisedByQ = (revisedBy || '').trim().toLowerCase();
 
-  // 1) Find all SKUs (optionally filtered by search).
+  // 1) Find all SKUs (optionally filtered by kind / sub-group / search).
   const skuFilter = {};
+  if (itemType) skuFilter.itemType = itemType;
+  if (category) skuFilter.category = category;
   if (search) {
     const rx = new RegExp(search.trim(), 'i');
     skuFilter.$or = [{ code: rx }, { name: rx }];
   }
   const skus = await SKU.find(skuFilter)
-    .select('_id code name category sellingPrice rmCost gstRate marginFloor sellingPriceFrom rmCostFrom pricingRemarks')
+    .select('_id code name itemType category sellingPrice rmCost gstRate marginFloor sellingPriceFrom rmCostFrom pricingRemarks')
     .lean();
 
   // 2) Fetch the most recent LIVE/SUPERSEDED revisions for these SKUs (capped at 2 per SKU).
@@ -343,9 +347,12 @@ export const getPriceMaster = async ({
   // 4) Build rows.
   const rows = skus.map((sku) => {
     const revs = byId.get(String(sku._id)) || [];
-    const live = revs.find((r) => r.status === 'LIVE' && new Date(r.effectiveFrom) <= today);
-    const prev = revs.find((r) => r._id !== live?._id && new Date(r.effectiveFrom) <= today);
-    const scheduled = revs.find((r) => r.status === 'LIVE' && new Date(r.effectiveFrom) > today);
+    // Compare at DAY granularity — effectiveFrom is stored at UTC-midnight of
+    // the chosen date, so a raw millisecond compare wrongly treats a price
+    // effective "today" as future for any server/timezone behind that instant.
+    const live = revs.find((r) => r.status === 'LIVE' && dayjs(r.effectiveFrom).isSameOrBefore(today, 'day'));
+    const prev = revs.find((r) => r._id !== live?._id && dayjs(r.effectiveFrom).isSameOrBefore(today, 'day'));
+    const scheduled = revs.find((r) => r.status === 'LIVE' && dayjs(r.effectiveFrom).isAfter(today, 'day'));
 
     const currentPrice    = live?.newPrice ?? null;
     const previousPrice   = prev?.newPrice ?? live?.oldPrice ?? null;
@@ -373,6 +380,7 @@ export const getPriceMaster = async ({
       skuId:           sku._id,
       code:            sku.code,
       name:            sku.name,
+      itemType:        sku.itemType || 'FINISHED_GOOD',
       category:        sku.category,
       gstRate:         sku.gstRate,
       currentPrice,
@@ -411,7 +419,26 @@ export const getPriceMaster = async ({
     marginBreach: rows.filter((r) => r.marginAlert).length,
   };
 
-  return { rows: filtered, kpis };
+  // 7) Navigation chrome: item-kind counts (the top tabs) + sub-group chips
+  //    for the active kind. Computed independently of search/status so the
+  //    tabs and chips stay stable while the user filters the list below.
+  const [itemTypeAgg, catAgg] = await Promise.all([
+    SKU.aggregate([{ $group: { _id: '$itemType', count: { $sum: 1 } } }]),
+    SKU.aggregate([
+      ...(itemType ? [{ $match: { itemType } }] : []),
+      { $group: { _id: { $ifNull: ['$category', ''] }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]),
+  ]);
+  const itemTypeCounts = itemTypeAgg.reduce((acc, r) => {
+    acc[r._id || 'FINISHED_GOOD'] = r.count;
+    return acc;
+  }, {});
+  const categories = catAgg
+    .filter((c) => c._id)
+    .map((c) => ({ name: c._id, count: c.count }));
+
+  return { rows: filtered, kpis, itemTypeCounts, categories };
 };
 
 export const getSkuHistory = async (skuId, priceType = 'SELLING') => {
@@ -563,17 +590,25 @@ export const listPricingDocuments = async ({
 //   topMovers      — biggest increases / decreases in window
 //   skuHeatmap     — SKU × month grid of average %-change per SKU per month
 export const getPricingAnalytics = async ({
-  priceType = 'SELLING', months = 12,
+  priceType = 'SELLING', itemType = '', months = 12,
 } = {}) => {
   const monthsBack = Math.max(3, Math.min(24, Number(months) || 12));
   const today = dayjs().endOf('day');
   const windowStart = today.subtract(monthsBack - 1, 'month').startOf('month').toDate();
+
+  // Optional: narrow analytics to one item kind by resolving its SKU ids first.
+  let skuIdFilter = null;
+  if (itemType) {
+    const ids = await SKU.find({ itemType }).select('_id').lean();
+    skuIdFilter = ids.map((x) => x._id);
+  }
 
   // Pull all LIVE-or-SUPERSEDED revisions in the window for the chosen stream.
   const revs = await PriceRevision.find({
     priceType,
     status: { $in: ['LIVE', 'SUPERSEDED'] },
     createdAt: { $gte: windowStart },
+    ...(skuIdFilter ? { skuId: { $in: skuIdFilter } } : {}),
   })
     .sort({ createdAt: 1 })
     .lean();
@@ -697,6 +732,7 @@ export const getPricingAnalytics = async ({
 
   return {
     priceType,
+    itemType: itemType || '',
     months: monthsBack,
     kpis: {
       thisMonthAvgChange:      thisMonth.avgChangePercent,
@@ -718,10 +754,15 @@ export const getPricingAnalytics = async ({
 //   current   → "Current SKU Prices" sheet
 //   history   → "Price Revision History" sheet (all revisions)
 //   documents → "Supporting Documents" sheet (revisions with attachments)
-export const getExportData = async ({ priceType = 'SELLING' } = {}) => {
-  const master = await getPriceMaster({ priceType });
+export const getExportData = async ({ priceType = 'SELLING', itemType = '' } = {}) => {
+  const master = await getPriceMaster({ priceType, itemType });
+  const revFilter = { priceType };
+  if (itemType) {
+    const ids = await SKU.find({ itemType }).select('_id').lean();
+    revFilter.skuId = { $in: ids.map((x) => x._id) };
+  }
   const allRevs = await PriceRevision
-    .find({ priceType })
+    .find(revFilter)
     .sort({ createdAt: -1 })
     .lean();
 

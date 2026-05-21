@@ -3,8 +3,9 @@ import {
   Drawer, Box, Stack, Typography, IconButton, Chip, Button, Divider, alpha, useTheme,
   Skeleton, Tooltip,
 } from '@mui/material';
-import { X, Paperclip, ArrowUp, ArrowDown, Edit3, History, CheckCircle2, AlertOctagon, Hourglass, FileEdit, ShieldCheck, CalendarClock, User as UserIcon } from 'lucide-react';
+import { X, Paperclip, ArrowUp, ArrowDown, Edit3, History, CheckCircle2, AlertOctagon, Hourglass, FileEdit, ShieldCheck, CalendarClock, User as UserIcon, Link2 } from 'lucide-react';
 import dayjs from 'dayjs';
+import { enqueueSnackbar } from 'notistack';
 import { useGetSkuPriceHistoryQuery } from '../../../store/api/pricingApi';
 import { fmtINR, fmtFromNow } from '../../../utils/formatters';
 
@@ -20,11 +21,22 @@ const STATUS_META = (theme) => ({
   SUPERSEDED:       { label: 'Superseded', color: theme.palette.text.secondary, bg: alpha(theme.palette.text.secondary, 0.06), icon: History },
 });
 
-const PriceHistoryDrawer = ({ skuId, skuCode, skuName, priceType, open, onClose, onRevise, canRevise }) => {
+const PriceHistoryDrawer = ({ skuId, skuCode, skuName, priceType, priceLabel, open, onClose, onRevise, canRevise }) => {
   const theme = useTheme();
   const statusMeta = STATUS_META(theme);
   const { data, isFetching } = useGetSkuPriceHistoryQuery({ skuId, priceType }, { skip: !skuId });
   const revs = data?.data || [];
+
+  // The page keeps the URL in sync with the open SKU, so the current address
+  // is already a shareable deep link straight to this price history.
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      enqueueSnackbar('Link copied — paste it to share this price history.', { variant: 'success' });
+    } catch {
+      enqueueSnackbar('Could not copy the link automatically.', { variant: 'error' });
+    }
+  };
 
   return (
     <Drawer
@@ -63,9 +75,14 @@ const PriceHistoryDrawer = ({ skuId, skuCode, skuName, priceType, open, onClose,
               {skuCode} · {skuName}
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.7rem', mt: 0.25 }}>
-              {priceType === 'SELLING' ? 'Selling Price' : 'RM Cost'}
+              {priceLabel || (priceType === 'SELLING' ? 'Selling Price' : 'RM Cost')}
             </Typography>
           </Box>
+          <Tooltip title="Copy a shareable link to this price history" arrow>
+            <IconButton size="small" onClick={handleCopyLink} sx={{ color: '#fff', '&:hover': { bgcolor: alpha('#fff', 0.12), color: '#fff' } }}>
+              <Link2 size={17} />
+            </IconButton>
+          </Tooltip>
           <IconButton size="small" onClick={onClose} sx={{ color: '#fff', '&:hover': { bgcolor: alpha('#fff', 0.12), color: '#fff' } }}>
             <X size={18} />
           </IconButton>
@@ -247,19 +264,28 @@ const PriceHistoryDrawer = ({ skuId, skuCode, skuName, priceType, open, onClose,
         px: 2.5, py: 1.75,
         borderTop: `1px solid ${theme.palette.divider}`,
         bgcolor: theme.palette.background.default,
-        display: 'flex', justifyContent: 'flex-end', gap: 1,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1,
       }}>
-        <Button onClick={onClose} sx={{ color: 'text.secondary', fontWeight: 700 }}>Close</Button>
-        {canRevise && (
-          <Button
-            variant="contained"
-            startIcon={<Edit3 size={14} />}
-            onClick={() => { onRevise?.({ skuId, code: skuCode, name: skuName }); onClose(); }}
-            sx={{ fontWeight: 700 }}
-          >
-            Revise this SKU
-          </Button>
-        )}
+        <Button
+          startIcon={<Link2 size={14} />}
+          onClick={handleCopyLink}
+          sx={{ color: theme.palette.primary.dark, fontWeight: 700 }}
+        >
+          Copy link
+        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button onClick={onClose} sx={{ color: 'text.secondary', fontWeight: 700 }}>Close</Button>
+          {canRevise && (
+            <Button
+              variant="contained"
+              startIcon={<Edit3 size={14} />}
+              onClick={() => { onRevise?.({ skuId, code: skuCode, name: skuName }); onClose(); }}
+              sx={{ fontWeight: 700 }}
+            >
+              Revise this SKU
+            </Button>
+          )}
+        </Stack>
       </Box>
     </Drawer>
   );
