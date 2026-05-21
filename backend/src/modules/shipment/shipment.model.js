@@ -3,7 +3,7 @@ import { STEP_STATUS, TRANSPORT_TYPE } from '../../config/constants.js';
 
 const shipmentSchema = new mongoose.Schema({
   dcId:       { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryChallan', index: true },
-  dcNumber:   { type: String, index: true },
+  dcNumber:   { type: String },
   invoiceId:  { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
 
   transportType:   { type: String, enum: Object.values(TRANSPORT_TYPE), default: TRANSPORT_TYPE.FREIGHT_PAID },
