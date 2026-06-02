@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Search, Plus, Eye, Edit3, ShoppingCart, Clock, CheckCircle, AlertCircle, Package, ExternalLink } from 'lucide-react';
+import { Search, Plus, Eye, Edit3, ShoppingCart, Clock, CheckCircle, AlertCircle, Package, ExternalLink, ListChecks } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useGetOrdersQuery, useGetOrderStatsQuery } from '../../store/api/orderApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
@@ -74,6 +74,7 @@ const OrdersList = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [partyFilter, setPartyFilter] = useState(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editOrder, setEditOrder] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState(null);
@@ -99,6 +100,9 @@ const OrdersList = () => {
     navigate(`/orders/${order._id}`);
   };
   const handleUpdateClick = (order) => { setSelectedOrder(order); setIsUpdateOpen(true); };
+  const handleEditOrder = (order) => { setEditOrder(order); setIsCreateOpen(true); };
+  const handleNewOrder = () => { setEditOrder(null); setIsCreateOpen(true); };
+  const handleDrawerClose = () => { setIsCreateOpen(false); setEditOrder(null); };
 
   if (isLoading && !data) return <TableSkeleton columns={8} />;
 
@@ -142,11 +146,12 @@ const OrdersList = () => {
     { field: 'status', headerName: 'STATUS', width: 120,
       renderCell: (p) => <StatusBadge value={p.value} />
     },
-    { field: 'actions', headerName: '', width: 80, sortable: false, align: 'center',
+    { field: 'actions', headerName: '', width: 116, sortable: false, align: 'center',
       renderCell: (p) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
-          <Tooltip title="Edit Workflow"><IconButton size="small" onClick={() => handleUpdateClick(p.row)} sx={{ color: BRAND.primary }}><Edit3 size={14} /></IconButton></Tooltip>
-          <Tooltip title="View Details"><IconButton size="small" onClick={() => handleViewDetail(p.row)} sx={{ color: '#94a3b8' }}><Eye size={14} /></IconButton></Tooltip>
+          <Tooltip title="Edit Order"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleEditOrder(p.row); }} sx={{ color: BRAND.primary }}><Edit3 size={14} /></IconButton></Tooltip>
+          <Tooltip title="Edit Workflow"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleUpdateClick(p.row); }} sx={{ color: BRAND.wip }}><ListChecks size={14} /></IconButton></Tooltip>
+          <Tooltip title="View Details"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleViewDetail(p.row); }} sx={{ color: '#94a3b8' }}><Eye size={14} /></IconButton></Tooltip>
         </Box>
       )
     }
@@ -163,8 +168,8 @@ const OrdersList = () => {
         </Box>
         <Button 
           variant="contained" 
-          startIcon={<Plus size={16} />} 
-          onClick={() => setIsCreateOpen(true)}
+          startIcon={<Plus size={16} />}
+          onClick={handleNewOrder}
           fullWidth={false}
           sx={{ width: { xs: '100%', sm: 'auto' } }}
         >
@@ -255,7 +260,7 @@ const OrdersList = () => {
       </Paper>
 
       {/* ── Modals & Drawers ─────────────────────────────── */}
-      <OrderEntryDrawer open={isCreateOpen} onClose={() => setIsCreateOpen(false)} />
+      <OrderEntryDrawer open={isCreateOpen} onClose={handleDrawerClose} order={editOrder} />
       <OrderUpdateModal open={isUpdateOpen} onClose={() => setIsUpdateOpen(false)} order={selectedOrder} />
       <OrderDetailDrawer open={isDetailOpen} onClose={() => setIsDetailOpen(false)} orderId={detailOrderId} />
     </Box>

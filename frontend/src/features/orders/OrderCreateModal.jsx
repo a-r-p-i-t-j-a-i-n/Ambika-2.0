@@ -24,7 +24,7 @@ const emptyItem = () => ({
 const OrderCreateModal = ({ open, onClose }) => {
   const [createOrderEntry, { isLoading: isCreating }] = useCreateOrderEntryMutation();
   const { data: partiesData } = useGetPartiesQuery({ limit: 200 });
-  const { data: skusData } = useGetSkuLookupQuery({ limit: 1000 });
+  const { data: skusData } = useGetSkuLookupQuery({ limit: 1000, itemType: 'FINISHED_GOOD' });
   const { enqueueSnackbar } = useSnackbar();
 
   const parties = partiesData?.data || [];

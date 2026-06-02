@@ -32,6 +32,11 @@ const OrderSnapshot = ({ schedule, comparison }) => {
   const riskCount = comparison?.totals?.riskCount || 0;
   const fulfilment = totals.fulfilmentPct ?? 0;
   const coverage   = totals.planCoveragePct ?? 0;
+  // Unplanned = ordered qty that has NOT yet been placed into any dispatch phase.
+  // Backend exposes this as totals.unplannedBalanceQty; fall back to a local calc.
+  const unplannedQty = totals.unplannedBalanceQty != null
+    ? Number(totals.unplannedBalanceQty)
+    : Math.max(0, Number(totals.orderQty || 0) - Number(totals.plannedQty || 0));
 
   return (
     <Paper sx={{ p: 2, borderRadius: '14px' }}>
@@ -62,6 +67,7 @@ const OrderSnapshot = ({ schedule, comparison }) => {
         <Stack direction="row" spacing={1.25} flexWrap="wrap" rowGap={1}>
           <Kpi label="Ordered"    value={Number(totals.orderQty || 0).toLocaleString('en-IN')} />
           <Kpi label="Planned"    value={Number(totals.plannedQty || 0).toLocaleString('en-IN')} color={theme.palette.primary.main} />
+          <Kpi label="Unplanned"  value={Number(unplannedQty).toLocaleString('en-IN')} color={unplannedQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
           <Kpi label="Dispatched" value={Number(totals.dispatchedQty || 0).toLocaleString('en-IN')} color={theme.palette.success.main} />
           <Kpi label="Balance"    value={Number(totals.balanceQty || 0).toLocaleString('en-IN')} color={totals.balanceQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
         </Stack>

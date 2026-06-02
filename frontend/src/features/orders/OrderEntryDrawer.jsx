@@ -16,7 +16,7 @@ import {
   useUploadOrderDocumentMutation,
 } from '../../store/api/dispatchControlApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
-import { useGetOrdersByPartyQuery } from '../../store/api/orderApi';
+import { useGetOrdersByPartyQuery, useUpdateOrderMutation } from '../../store/api/orderApi';
 import { useGetSkuLookupQuery } from '../../store/api/skuApi';
 
 const TRANSPORT_OPTIONS = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
@@ -181,15 +181,38 @@ const DocumentDrop = ({ value, valueName, onChange, uploading, error }) => {
   );
 };
 
+// Map a saved order's line items into the drawer's editable item shape,
+// preserving _id and dispatchedQty so an edit never wipes dispatch progress.
+const orderItemsToForm = (order) => {
+  const lines = order?.items || [];
+  if (!lines.length) return [emptyItem()];
+  return lines.map((it) => ({
+    _tempId: String(it._id || `${it.skuCode || 'row'}-${Math.random().toString(36).slice(2, 8)}`),
+    _id: it._id || undefined,
+    skuId: it.skuId?._id || it.skuId || '',
+    skuName: it.skuName || it.skuId?.name || '',
+    skuCode: it.skuCode || it.skuId?.code || '',
+    orderQty: it.orderQty ?? '',
+    dispatchedQty: Number(it.dispatchedQty || 0),
+    asnCode: it.asnCode || '',
+    remark: it.remark || '',
+  }));
+};
+
 // ── Main component ──────────────────────────────────────────────────────
-const OrderEntryDrawer = ({ open, onClose }) => {
+const OrderEntryDrawer = ({ open, onClose, order = null }) => {
   const theme = useTheme();
   const { enqueueSnackbar } = useSnackbar();
-  const [createOrderEntry, { isLoading: isSubmitting }] = useCreateOrderEntryMutation();
+  const isEditMode = Boolean(order && order._id);
+  const [createOrderEntry, { isLoading: isCreating }] = useCreateOrderEntryMutation();
+  const [updateOrder, { isLoading: isUpdatingOrder }] = useUpdateOrderMutation();
   const [uploadOrderDocument, { isLoading: isUploading }] = useUploadOrderDocumentMutation();
+  const isSubmitting = isCreating || isUpdatingOrder;
 
   const { data: partiesData } = useGetPartiesQuery({ limit: 250 });
-  const { data: skusData }    = useGetSkuLookupQuery({ limit: 1000 });
+  // Sales orders sell finished goods only — restrict the SKU picker to FINISHED_GOOD
+  // items (raw materials, consumables, packing, circles are not directly sellable).
+  const { data: skusData }    = useGetSkuLookupQuery({ limit: 1000, itemType: 'FINISHED_GOOD' });
   const parties = useMemo(() => partiesData?.data || [], [partiesData]);
   const skus    = useMemo(() => skusData?.data || [], [skusData]);
 
@@ -208,24 +231,44 @@ const OrderEntryDrawer = ({ open, onClose }) => {
   const [items, setItems] = useState([emptyItem()]);
   const [fieldErrors, setFieldErrors] = useState({});
 
-  // Reset on open.
+  // Reset on open — prefill from the order when editing, blank when creating.
   useEffect(() => {
     if (!open) return;
-    setForm({
-      poNumber: '',
-      poDate: dayjs().format('YYYY-MM-DD'),
-      party: null,
-      place: '',
-      orderDate: dayjs().format('YYYY-MM-DD'),
-      transport: 'Road',
-      partyGroup: '',
-      orderDocument: '',
-      orderDocumentName: '',
-      leadTimeDays: 7,
-    });
-    setItems([emptyItem()]);
+    if (isEditMode) {
+      const partyId = order.partyId?._id || order.partyId;
+      const resolvedParty =
+        parties.find((p) => p._id === partyId) ||
+        (partyId ? { _id: partyId, name: order.partyName || '', location: order.location || '' } : null);
+      setForm({
+        poNumber: order.poNumber || '',
+        poDate: order.poDate ? dayjs(order.poDate).format('YYYY-MM-DD') : '',
+        party: resolvedParty,
+        place: order.place || order.location || '',
+        orderDate: order.orderDate ? dayjs(order.orderDate).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+        transport: order.transport || 'Road',
+        partyGroup: order.partyGroup || '',
+        orderDocument: order.orderDocument || '',
+        orderDocumentName: order.orderDocumentName || '',
+        leadTimeDays: order.leadTimeDays || 7,
+      });
+      setItems(orderItemsToForm(order));
+    } else {
+      setForm({
+        poNumber: '',
+        poDate: dayjs().format('YYYY-MM-DD'),
+        party: null,
+        place: '',
+        orderDate: dayjs().format('YYYY-MM-DD'),
+        transport: 'Road',
+        partyGroup: '',
+        orderDocument: '',
+        orderDocumentName: '',
+        leadTimeDays: 7,
+      });
+      setItems([emptyItem()]);
+    }
     setFieldErrors({});
-  }, [open]);
+  }, [open, order, isEditMode, parties]);
 
   const handlePartyChange = (_, party) => {
     setForm((prev) => ({
@@ -335,16 +378,29 @@ const OrderEntryDrawer = ({ open, onClose }) => {
       orderDocument: form.orderDocument || null,
       orderDocumentName: form.orderDocumentName || null,
       leadTimeDays: Number(form.leadTimeDays) || 7,
-      items: validItems.map(({ _tempId, orderQty, ...rest }) => ({ ...rest, orderQty: Number(orderQty) })),
+      // On edit, keep _id + dispatchedQty per line so dispatch progress survives;
+      // the backend pre-save hook recomputes balance/extra/totals.
+      items: validItems.map(({ _tempId, _id, orderQty, dispatchedQty, ...rest }) => ({
+        ...rest,
+        ...(isEditMode && _id ? { _id } : {}),
+        ...(isEditMode ? { dispatchedQty: Number(dispatchedQty || 0) } : {}),
+        orderQty: Number(orderQty),
+      })),
     };
 
     try {
-      const res = await createOrderEntry(payload).unwrap();
-      const so = res?.data?.soNumber || 'order';
-      enqueueSnackbar(`Sales Order ${so} created`, { variant: 'success' });
+      if (isEditMode) {
+        const res = await updateOrder({ id: order._id, ...payload }).unwrap();
+        const so = res?.data?.soNumber || order.soNumber || 'order';
+        enqueueSnackbar(`Sales Order ${so} updated`, { variant: 'success' });
+      } else {
+        const res = await createOrderEntry(payload).unwrap();
+        const so = res?.data?.soNumber || 'order';
+        enqueueSnackbar(`Sales Order ${so} created`, { variant: 'success' });
+      }
       onClose?.();
     } catch (err) {
-      enqueueSnackbar(err?.data?.message || 'Failed to create order', { variant: 'error' });
+      enqueueSnackbar(err?.data?.message || `Failed to ${isEditMode ? 'update' : 'create'} order`, { variant: 'error' });
     }
   };
 
@@ -382,10 +438,10 @@ const OrderEntryDrawer = ({ open, onClose }) => {
           </Box>
           <Box sx={{ minWidth: 0 }}>
             <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: 'text.primary', lineHeight: 1.15 }}>
-              New Sales Order
+              {isEditMode ? `Edit Sales Order · ${order.soNumber || ''}` : 'New Sales Order'}
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <Sparkles size={11} /> Auto SO # · Validation enforced
+              <Sparkles size={11} /> {isEditMode ? 'Update PO, party & line items' : 'Auto SO # · Validation enforced'}
             </Typography>
           </Box>
         </Box>
@@ -399,7 +455,7 @@ const OrderEntryDrawer = ({ open, onClose }) => {
             disabled={!canSubmit}
             startIcon={isSubmitting ? <CircularProgress size={14} color="inherit" /> : <Save size={14} />}
           >
-            Submit Order
+            {isEditMode ? 'Save Changes' : 'Submit Order'}
           </Button>
         </Stack>
       </Box>
@@ -667,7 +723,7 @@ const OrderEntryDrawer = ({ open, onClose }) => {
           disabled={!canSubmit}
           startIcon={isSubmitting ? <CircularProgress size={14} color="inherit" /> : <Save size={14} />}
         >
-          Submit Order
+          {isEditMode ? 'Save Changes' : 'Submit Order'}
         </Button>
       </Box>
     </Drawer>

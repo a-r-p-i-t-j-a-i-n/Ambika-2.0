@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Stack, Chip, Button, TextField, InputAdornment,
-  ToggleButtonGroup, ToggleButton, Paper, alpha, useTheme, IconButton, Tooltip,
+  Paper, alpha, useTheme, IconButton, Tooltip,
   Popover, MenuItem, Divider, CircularProgress, Badge,
 } from '@mui/material';
 import {
   IndianRupee, Search, Plus, RefreshCw, Sparkles, TriangleAlert,
   CircleDot, BadgeCheck, Hourglass, ArrowDownUp, SlidersHorizontal,
   Download, FileSpreadsheet, X, CalendarRange, UserCircle2,
-  LayoutGrid, PackageCheck, Layers, Wrench, Boxes, ShoppingCart,
+  LayoutGrid, PackageCheck, Layers, Wrench, Boxes, ShoppingCart, Tag,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
@@ -122,6 +122,13 @@ const PricingHub = () => {
     ? 'Purchase Price'
     : (effectivePriceType === 'SELLING' ? 'Selling Price' : 'RM Cost');
 
+  // A selling price only exists for finished goods. Whenever the Selling Price
+  // stream is active, scope the entire view (rows, KPIs, export, sub-groups)
+  // to FINISHED_GOOD so raw materials / consumables / packing never appear and
+  // the SKU count reflects only sellable finished goods.
+  const sellingScope = effectivePriceType === 'SELLING';
+  const queryItemType = sellingScope ? 'FINISHED_GOOD' : itemType;
+
   const handleKindChange = (key) => {
     setItemType(key);
     setCategory(''); // a sub-group only makes sense within one kind
@@ -129,12 +136,12 @@ const PricingHub = () => {
 
   const masterQuery = useMemo(() => ({
     priceType: effectivePriceType, search, status,
-    ...(itemType ? { itemType } : {}),
+    ...(queryItemType ? { itemType: queryItemType } : {}),
     ...(category ? { category } : {}),
     ...(effectiveFrom ? { effectiveFrom } : {}),
     ...(effectiveTo   ? { effectiveTo }   : {}),
     ...(revisedBy     ? { revisedBy }     : {}),
-  }), [effectivePriceType, search, status, itemType, category, effectiveFrom, effectiveTo, revisedBy]);
+  }), [effectivePriceType, search, status, queryItemType, category, effectiveFrom, effectiveTo, revisedBy]);
 
   const { data, isFetching, refetch } = useGetPriceMasterQuery(masterQuery);
   const rows = data?.data?.rows || [];
@@ -173,6 +180,14 @@ const PricingHub = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [priceType, itemType, category, status, search, effectiveFrom, effectiveTo, revisedBy, drawerSkuId]);
 
+  // Keep the price stream in sync with the URL. The sidebar's "Selling Price"
+  // / "RM Cost" entries navigate here with ?stream=…, and this screen never
+  // unmounts between those clicks, so the active stream has to follow the URL.
+  useEffect(() => {
+    const next = searchParams.get('stream') === 'RM_COST' ? 'RM_COST' : 'SELLING';
+    setPriceType((prev) => (prev === next ? prev : next));
+  }, [searchParams]);
+
   const { data: reviewersRes } = useGetPricingReviewersQuery();
   const reviewers = reviewersRes?.data || [];
 
@@ -210,7 +225,7 @@ const PricingHub = () => {
     try {
       const res = await triggerExport({
         priceType: effectivePriceType,
-        ...(itemType ? { itemType } : {}),
+        ...(queryItemType ? { itemType: queryItemType } : {}),
       }).unwrap();
       const payload = res?.data || {};
       const filename = exportPricingWorkbook({
@@ -351,9 +366,11 @@ const PricingHub = () => {
               }}>
                 Kind
               </Typography>
-              {ITEM_KINDS.map((kind) => {
+              {ITEM_KINDS.filter((kind) => !sellingScope || kind.key === 'FINISHED_GOOD').map((kind) => {
                 const Icon = kind.icon;
-                const selected = itemType === kind.key;
+                // In selling scope the view is locked to finished goods, so show
+                // that tab as the active one regardless of the raw itemType state.
+                const selected = sellingScope ? kind.key === 'FINISHED_GOOD' : itemType === kind.key;
                 const count = kind.key === '' ? allItemsCount : (itemTypeCounts[kind.key] || 0);
                 return (
                   <Box
@@ -402,48 +419,29 @@ const PricingHub = () => {
             alignItems={{ md: 'center' }}
             sx={{ px: 2, pt: 2, pb: 1.5 }}
           >
-            {/* Price stream — a toggle for sell-side kinds, a fixed label for
-                buy-side kinds (which only have a purchase price). */}
-            {isBuySide ? (
-              <Stack direction="row" spacing={0.85} alignItems="center" sx={{
-                px: 1.5, py: 0.7, borderRadius: 1.5,
-                bgcolor: alpha(theme.palette.warning.main, 0.10),
-                border: `1px solid ${alpha(theme.palette.warning.main, 0.25)}`,
-              }}>
-                <ShoppingCart size={14} color={theme.palette.warning.dark} />
-                <Typography sx={{ fontSize: '0.78rem', fontWeight: 800, color: theme.palette.warning.dark }}>
-                  Purchase Price
-                </Typography>
-              </Stack>
-            ) : (
-              <ToggleButtonGroup
-                exclusive
-                value={priceType}
-                onChange={(_, v) => v && setPriceType(v)}
-                size="small"
-                sx={{
-                  bgcolor: alpha(theme.palette.primary.main, 0.04),
-                  p: 0.4,
-                  borderRadius: 1.5,
-                  '& .MuiToggleButton-root': {
-                    px: 2, py: 0.5, fontSize: '0.78rem', fontWeight: 700,
-                    border: 'none',
-                    borderRadius: '8px !important',
-                    color: 'text.secondary',
-                    textTransform: 'none',
-                    '&.Mui-selected': {
-                      bgcolor: '#fff',
-                      color: theme.palette.primary.dark,
-                      boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)',
-                      '&:hover': { bgcolor: '#fff' },
-                    },
-                  },
-                }}
-              >
-                <ToggleButton value="SELLING">Selling Price</ToggleButton>
-                <ToggleButton value="RM_COST">RM Cost</ToggleButton>
-              </ToggleButtonGroup>
-            )}
+            {/* Active price stream — a read-only indicator. The stream is now
+                chosen from the sidebar (Pricing Hub → Selling Price / RM Cost);
+                buy-side kinds only ever have a purchase price. */}
+            {(() => {
+              const streamMeta = isBuySide
+                ? { label: 'Purchase Price', color: theme.palette.warning.dark, Icon: ShoppingCart }
+                : effectivePriceType === 'RM_COST'
+                  ? { label: 'RM Cost',       color: theme.palette.info.dark,    Icon: Layers }
+                  : { label: 'Selling Price', color: theme.palette.primary.dark, Icon: Tag };
+              const { label, color, Icon } = streamMeta;
+              return (
+                <Stack direction="row" spacing={0.85} alignItems="center" sx={{
+                  px: 1.5, py: 0.7, borderRadius: 1.5, flexShrink: 0,
+                  bgcolor: alpha(color, 0.10),
+                  border: `1px solid ${alpha(color, 0.25)}`,
+                }}>
+                  <Icon size={14} color={color} />
+                  <Typography sx={{ fontSize: '0.78rem', fontWeight: 800, color }}>
+                    {label}
+                  </Typography>
+                </Stack>
+              );
+            })()}
 
             <TextField
               size="small"

@@ -3,8 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Typography, Stack, Autocomplete, TextField, Button,
   alpha, useTheme, CircularProgress, Skeleton, Chip,
+  ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
-import { Plus, CalendarPlus, Search, LayoutList } from 'lucide-react';
+import { Plus, CalendarPlus, Search, LayoutList, CalendarRange } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 
@@ -94,6 +95,7 @@ const PlanWorkspace = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [carryForwardPrefill, setCarryForwardPrefill] = useState(null);
+  const [viewMode, setViewMode] = useState('phases'); // 'phases' | 'monthly'
 
   const { data: ordersRes, isLoading: ordersLoading } = useGetOrdersQuery({ limit: 250, sort: '-orderDate' });
   const orders = ordersRes?.data || [];
@@ -123,6 +125,28 @@ const PlanWorkspace = () => {
   const [deletePhase, { isLoading: isDeleting }] = useDeletePhaseMutation();
 
   const phaseGroups = useMemo(() => buildPhaseGroups(schedule), [schedule]);
+
+  // Monthly view: bucket the phase groups by the month of their planned date,
+  // with a per-month planned/dispatched roll-up shown in the section header.
+  const monthlyGroups = useMemo(() => {
+    const map = new Map();
+    phaseGroups.forEach((g) => {
+      const key   = g.plannedDate ? dayjs(g.plannedDate).format('YYYY-MM') : 'unscheduled';
+      const label = g.plannedDate ? dayjs(g.plannedDate).format('MMMM YYYY') : 'Unscheduled';
+      const m = map.get(key) || { key, label, groups: [], plannedQty: 0, actualQty: 0 };
+      m.groups.push(g);
+      g.items.forEach(({ phaseRow }) => {
+        m.plannedQty += Number(phaseRow?.plannedQty || 0);
+        m.actualQty  += Number(phaseRow?.actualQty || 0);
+      });
+      map.set(key, m);
+    });
+    return [...map.values()].sort((a, b) => {
+      if (a.key === 'unscheduled') return 1;
+      if (b.key === 'unscheduled') return -1;
+      return a.key < b.key ? -1 : 1;
+    });
+  }, [phaseGroups]);
 
   // Deep-linked phase (?phase=P1) — opens that phase card automatically.
   const focusPhase = searchParams.get('phase');
@@ -167,6 +191,20 @@ const PlanWorkspace = () => {
     setCarryForwardPrefill({ skuCode: row.skuCode, qty: row.carryForwardSuggestionQty });
     setAddDialogOpen(true);
   };
+
+  const renderPhaseCard = (g) => (
+    <PhaseCard
+      key={g.phaseNo}
+      phaseNo={g.phaseNo}
+      plannedDate={g.plannedDate}
+      status={g.status}
+      items={g.items}
+      defaultOpen={g.phaseNo === focusPhase}
+      isSaving={isUpdating}
+      onSave={(data) => handleUpdatePhase(g.phaseId, data)}
+      onDelete={() => handleDeletePhase(g.phaseId)}
+    />
+  );
 
   return (
     <Box sx={{ p: { xs: 2, sm: 3 }, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -258,19 +296,55 @@ const PlanWorkspace = () => {
               </Paper>
             ) : (
               <Stack spacing={1.5}>
-                {phaseGroups.map((g) => (
-                  <PhaseCard
-                    key={g.phaseNo}
-                    phaseNo={g.phaseNo}
-                    plannedDate={g.plannedDate}
-                    status={g.status}
-                    items={g.items}
-                    defaultOpen={g.phaseNo === focusPhase}
-                    isSaving={isUpdating}
-                    onSave={(data) => handleUpdatePhase(g.phaseId, data)}
-                    onDelete={() => handleDeletePhase(g.phaseId)}
-                  />
-                ))}
+                {/* View toolbar — switch between a flat phase list and a month-grouped view. */}
+                <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" rowGap={1}>
+                  <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    {phaseGroups.length} phase{phaseGroups.length > 1 ? 's' : ''}
+                    {viewMode === 'monthly' && ` · ${monthlyGroups.length} month${monthlyGroups.length > 1 ? 's' : ''}`}
+                  </Typography>
+                  <ToggleButtonGroup
+                    size="small"
+                    exclusive
+                    value={viewMode}
+                    onChange={(_, v) => v && setViewMode(v)}
+                    sx={{ '& .MuiToggleButton-root': { px: 1.5, py: 0.5, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', gap: 0.5 } }}
+                  >
+                    <ToggleButton value="phases"><LayoutList size={14} /> Phases</ToggleButton>
+                    <ToggleButton value="monthly"><CalendarRange size={14} /> Monthly</ToggleButton>
+                  </ToggleButtonGroup>
+                </Stack>
+
+                {viewMode === 'phases' ? (
+                  phaseGroups.map(renderPhaseCard)
+                ) : (
+                  <Stack spacing={2}>
+                    {monthlyGroups.map((m) => (
+                      <Box key={m.key}>
+                        <Stack
+                          direction="row" alignItems="center" justifyContent="space-between"
+                          flexWrap="wrap" rowGap={0.5}
+                          sx={{
+                            mb: 1, px: 1.5, py: 1, borderRadius: '10px',
+                            bgcolor: alpha(theme.palette.primary.main, 0.06),
+                            border: '1px solid', borderColor: alpha(theme.palette.primary.main, 0.16),
+                          }}
+                        >
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <CalendarRange size={15} color={theme.palette.primary.main} />
+                            <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{m.label}</Typography>
+                            <Chip size="small" label={`${m.groups.length} phase${m.groups.length > 1 ? 's' : ''}`} sx={{ fontWeight: 700 }} />
+                          </Stack>
+                          <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>
+                            Planned {Number(m.plannedQty).toLocaleString('en-IN')} · Dispatched {Number(m.actualQty).toLocaleString('en-IN')}
+                          </Typography>
+                        </Stack>
+                        <Stack spacing={1.5}>
+                          {m.groups.map(renderPhaseCard)}
+                        </Stack>
+                      </Box>
+                    ))}
+                  </Stack>
+                )}
               </Stack>
             )}
           </Stack>

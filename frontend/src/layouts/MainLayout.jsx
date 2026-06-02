@@ -2,12 +2,12 @@ import React, { useState, useMemo } from 'react';
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
   Typography, IconButton, AppBar, Toolbar, useTheme, useMediaQuery,
-  alpha, Avatar, Tooltip,
+  alpha, Avatar, Tooltip, Collapse,
 } from '@mui/material';
 import {
   Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
-  Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ShieldCheck,
-  IndianRupee, Calculator, FileSignature, ClipboardCheck, FolderOpen, BarChart3,
+  Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
+  IndianRupee, Calculator, FileSignature, ClipboardCheck, FolderOpen, BarChart3, Tag,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -77,6 +77,10 @@ const PAGE_TITLES = {
 const MainLayout = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  // Tracks which expandable nav groups (e.g. Pricing Hub) the user has
+  // toggled. `undefined` for a group falls back to auto-open when the active
+  // route lives inside it.
+  const [openMenus, setOpenMenus] = useState({});
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const navigate = useNavigate();
@@ -100,7 +104,15 @@ const MainLayout = () => {
     // Pricing & Revenue
     const pricingItems = [];
     if (can('pricing.view') || isRoot) {
-      pricingItems.push({ text: 'Pricing Hub', icon: <IndianRupee size={19} />, path: '/pricing' });
+      pricingItems.push({
+        text: 'Pricing Hub',
+        icon: <IndianRupee size={19} />,
+        path: '/pricing',
+        children: [
+          { text: 'Selling Price', icon: <Tag size={17} />,          path: '/pricing',                 stream: 'SELLING' },
+          { text: 'RM Cost',       icon: <ShoppingCart size={17} />, path: '/pricing?stream=RM_COST',  stream: 'RM_COST' },
+        ],
+      });
     }
     if (can('pricing.approve') || isRoot) {
       pricingItems.push({
@@ -160,9 +172,76 @@ const MainLayout = () => {
     return key ? PAGE_TITLES[key] : 'Ambika Dispatch';
   }, [location.pathname]);
 
+  // A group is open if the user toggled it; otherwise it auto-opens whenever
+  // the active route lives under one of its children.
+  const isMenuOpen = (item) =>
+    openMenus[item.text] ??
+    item.children?.some((c) => location.pathname === c.path.split('?')[0]);
+
   // `mini` collapses the sidebar to icons only. The temporary (mobile)
   // drawer always renders the full version, so it is passed mini=false.
-  const renderDrawerContent = (mini) => (
+  const renderDrawerContent = (mini) => {
+    // Renders a single navigable row. `indent` is used for sub-items inside
+    // an expandable group so they sit visually under their parent.
+    const leafButton = (item, isSelected, { indent = false, onClick } = {}) => (
+      <ListItemButton
+        onClick={onClick || (() => { navigate(item.path); if (isMobile) setMobileOpen(false); })}
+        selected={isSelected}
+        sx={{
+          position: 'relative',
+          borderRadius: 2,
+          px: mini ? 0 : 1.25,
+          pl: !mini && indent ? 3.5 : (mini ? 0 : 1.25),
+          py: indent ? 0.7 : 0.9,
+          justifyContent: mini ? 'center' : 'flex-start',
+          color: 'text.primary',
+          '&.Mui-selected': {
+            background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.main, 0.04)} 100%)`,
+            color: 'primary.dark',
+            '& .MuiListItemIcon-root': { color: 'primary.main' },
+            '& .MuiListItemText-primary': { color: 'primary.dark', fontWeight: 700 },
+            '&:hover': {
+              background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.14)} 0%, ${alpha(theme.palette.primary.main, 0.06)} 100%)`,
+            },
+            '&::before': {
+              content: '""',
+              position: 'absolute',
+              left: mini ? 0 : -6,
+              top: '20%',
+              bottom: '20%',
+              width: 3,
+              borderRadius: 4,
+              background: 'linear-gradient(180deg, #3b82f6 0%, #1e3a8a 100%)',
+            },
+          },
+        }}
+      >
+        <ListItemIcon
+          sx={{
+            minWidth: mini ? 0 : (indent ? 30 : 34),
+            justifyContent: 'center',
+            color: isSelected ? 'primary.main' : 'text.secondary',
+          }}
+        >
+          {item.icon}
+        </ListItemIcon>
+        {!mini && (
+          <ListItemText
+            primary={item.text}
+            primaryTypographyProps={{
+              fontSize: indent ? '0.83rem' : '0.875rem',
+              fontWeight: isSelected ? 700 : 500,
+              color: isSelected ? 'primary.dark' : 'text.primary',
+            }}
+          />
+        )}
+        {!mini && isSelected && !indent && (
+          <ChevronRight size={15} color={theme.palette.primary.main} style={{ opacity: 0.7 }} />
+        )}
+      </ListItemButton>
+    );
+
+    return (
     <Box
       sx={{
         height: '100%',
@@ -237,71 +316,83 @@ const MainLayout = () => {
             )}
             <List disablePadding>
               {section.items.map((item) => {
-                const isSelected = location.pathname.startsWith(item.path);
-                const button = (
-                  <ListItemButton
-                    onClick={() => { navigate(item.path); if (isMobile) setMobileOpen(false); }}
-                    selected={isSelected}
-                    sx={{
-                      position: 'relative',
-                      borderRadius: 2,
-                      px: mini ? 0 : 1.25,
-                      py: 0.9,
-                      justifyContent: mini ? 'center' : 'flex-start',
-                      color: 'text.primary',
-                      '&.Mui-selected': {
-                        background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.main, 0.04)} 100%)`,
-                        color: 'primary.dark',
-                        '& .MuiListItemIcon-root': { color: 'primary.main' },
-                        '& .MuiListItemText-primary': { color: 'primary.dark', fontWeight: 700 },
-                        '&:hover': {
-                          background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.14)} 0%, ${alpha(theme.palette.primary.main, 0.06)} 100%)`,
-                        },
-                        '&::before': {
-                          content: '""',
-                          position: 'absolute',
-                          left: mini ? 0 : -6,
-                          top: '20%',
-                          bottom: '20%',
-                          width: 3,
-                          borderRadius: 4,
-                          background: 'linear-gradient(180deg, #3b82f6 0%, #1e3a8a 100%)',
-                        },
-                      },
-                    }}
-                  >
-                    <ListItemIcon
-                      sx={{
-                        minWidth: mini ? 0 : 34,
-                        justifyContent: 'center',
-                        color: isSelected ? 'primary.main' : 'text.secondary',
-                      }}
-                    >
-                      {item.icon}
-                    </ListItemIcon>
-                    {!mini && (
-                      <ListItemText
-                        primary={item.text}
-                        primaryTypographyProps={{
-                          fontSize: '0.875rem',
-                          fontWeight: isSelected ? 700 : 500,
-                          color: isSelected ? 'primary.dark' : 'text.primary',
-                        }}
-                      />
-                    )}
-                    {!mini && isSelected && (
-                      <ChevronRight size={15} color={theme.palette.primary.main} style={{ opacity: 0.7 }} />
-                    )}
-                  </ListItemButton>
-                );
+                // ── Expandable group (e.g. Pricing Hub → Selling / RM Cost) ──
+                if (item.children) {
+                  const groupActive = location.pathname === item.path;
 
+                  // Collapsed rail: no room for a dropdown — the parent icon
+                  // jumps straight to its first child.
+                  if (mini) {
+                    return (
+                      <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
+                        <Tooltip title={item.text} placement="right" arrow>
+                          <Box sx={{ width: '100%' }}>
+                            {leafButton(item, groupActive, {
+                              onClick: () => { navigate(item.children[0].path); if (isMobile) setMobileOpen(false); },
+                            })}
+                          </Box>
+                        </Tooltip>
+                      </ListItem>
+                    );
+                  }
+
+                  const open = isMenuOpen(item);
+                  const stream = new URLSearchParams(location.search).get('stream');
+                  return (
+                    <React.Fragment key={item.text}>
+                      <ListItem disablePadding sx={{ mb: 0.25 }}>
+                        <ListItemButton
+                          onClick={() => setOpenMenus((m) => ({ ...m, [item.text]: !open }))}
+                          sx={{
+                            borderRadius: 2, px: 1.25, py: 0.9,
+                            color: groupActive ? 'primary.dark' : 'text.primary',
+                          }}
+                        >
+                          <ListItemIcon sx={{ minWidth: 34, justifyContent: 'center', color: groupActive ? 'primary.main' : 'text.secondary' }}>
+                            {item.icon}
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={item.text}
+                            primaryTypographyProps={{
+                              fontSize: '0.875rem',
+                              fontWeight: groupActive ? 700 : 500,
+                              color: groupActive ? 'primary.dark' : 'text.primary',
+                            }}
+                          />
+                          {open
+                            ? <ChevronDown size={15} color={theme.palette.text.secondary} />
+                            : <ChevronRight size={15} color={theme.palette.text.secondary} />}
+                        </ListItemButton>
+                      </ListItem>
+                      <Collapse in={open} timeout="auto" unmountOnExit>
+                        <List disablePadding>
+                          {item.children.map((child) => {
+                            // Both children live at /pricing — the stream query
+                            // param decides which one is active.
+                            const childSelected =
+                              location.pathname === item.path &&
+                              (child.stream === 'RM_COST' ? stream === 'RM_COST' : stream !== 'RM_COST');
+                            return (
+                              <ListItem key={child.text} disablePadding sx={{ mb: 0.25 }}>
+                                {leafButton(child, childSelected, { indent: true })}
+                              </ListItem>
+                            );
+                          })}
+                        </List>
+                      </Collapse>
+                    </React.Fragment>
+                  );
+                }
+
+                // ── Plain leaf item ──
+                const isSelected = location.pathname.startsWith(item.path);
                 return (
                   <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
                     {mini ? (
                       <Tooltip title={item.text} placement="right" arrow>
-                        <Box sx={{ width: '100%' }}>{button}</Box>
+                        <Box sx={{ width: '100%' }}>{leafButton(item, isSelected)}</Box>
                       </Tooltip>
-                    ) : button}
+                    ) : leafButton(item, isSelected)}
                   </ListItem>
                 );
               })}
@@ -429,7 +520,8 @@ const MainLayout = () => {
         )}
       </Box>
     </Box>
-  );
+    );
+  };
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
