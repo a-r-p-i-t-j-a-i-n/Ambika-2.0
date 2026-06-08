@@ -13,6 +13,8 @@ import './api/dispatchControlApi';
 import './api/accessControlApi';
 import './api/pricingApi';
 import './api/quoteApi';
+import './api/o2dFmsApi';
+import './api/notificationApi';
 
 export const store = configureStore({
   reducer: {

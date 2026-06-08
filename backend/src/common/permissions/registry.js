@@ -70,6 +70,12 @@ export const PERMISSIONS = Object.freeze({
   // ── Settings ────────────────────────────────────────────────────
   'settings.view':               { module: 'Settings',       label: 'View company settings',                     risk: 'low' },
   'settings.edit':               { module: 'Settings',       label: 'Edit company settings (thresholds, GST)',   risk: 'high' },
+
+  // ── O2D FMS (Flow Management System) ─────────────────────────────
+  'o2dfms.view':                 { module: 'O2D FMS',        label: 'View processes, tasks & dashboard',         risk: 'low' },
+  'o2dfms.act':                  { module: 'O2D FMS',        label: 'Complete a step (do the operation)',        risk: 'medium' },
+  'o2dfms.manage':               { module: 'O2D FMS',        label: 'Reassign a step owner',                     risk: 'medium' },
+  'o2dfms.config':               { module: 'O2D FMS',        label: 'Configure the step catalog (Who/What/When)',risk: 'high' },
 });
 
 /** Sentinel granted to root users (MD). Bypasses every permission check. */

@@ -8,6 +8,7 @@ import {
   Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
   Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
   IndianRupee, Calculator, FileSignature, ClipboardCheck, FolderOpen, BarChart3, Tag,
+  Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -17,6 +18,7 @@ import { logout } from '../store/slices/authSlice';
 import { usePermissions } from '../hooks/usePermission';
 
 import AmbikaLogo from '../assets/ambikalogo.jpeg';
+import NotificationBell from '../features/notifications/NotificationBell';
 
 const EXPANDED_WIDTH = 268;
 const COLLAPSED_WIDTH = 76;
@@ -30,18 +32,20 @@ const navSections = [
     ],
   },
   {
-    title: 'Sales & Planning',
+    title: 'Order to Dispatch',
     items: [
-      { text: 'Sales Orders',      icon: <ShoppingCart size={19} />,    path: '/orders' },
-      { text: 'Dispatch Planning', icon: <CalendarPlus size={19} />,    path: '/dispatch-planning' },
-      { text: 'PPC Planning',      icon: <Package size={19} />,         path: '/ppc-planning' },
-    ],
-  },
-  {
-    title: 'Execution',
-    items: [
-      { text: 'Actual Dispatch',   icon: <Truck size={19} />,           path: '/challans' },
-      { text: 'Invoices & FMS',    icon: <FileText size={19} />,        path: '/invoices' },
+      {
+        text: 'O2D Pipeline',
+        icon: <Workflow size={19} />,
+        path: '/orders',
+        children: [
+          { text: 'Sales Orders',      icon: <ShoppingCart size={19} />, path: '/orders' },
+          { text: 'Dispatch Planning', icon: <CalendarPlus size={19} />, path: '/dispatch-planning' },
+          { text: 'Actual Dispatch',   icon: <Truck size={19} />,        path: '/challans' },
+        ],
+      },
+      { text: 'PPC Planning',   icon: <Package size={19} />,  path: '/ppc-planning' },
+      { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
     ],
   },
   {
@@ -71,6 +75,10 @@ const PAGE_TITLES = {
   '/pricing/documents':      'Pricing Documents',
   '/pricing/analytics':      'Pricing Analytics',
   '/quotes':                 'Quotes',
+  '/o2d-fms':                'O2D FMS — My Tasks',
+  '/o2d-fms/processes':      'O2D FMS — Processes',
+  '/o2d-fms/dashboard':      'O2D FMS — Management View',
+  '/o2d-fms/config':         'O2D FMS — Step Catalog',
   '/profile':                'My Profile',
 };
 
@@ -139,6 +147,25 @@ const MainLayout = () => {
     }
     if (pricingItems.length > 0) {
       out.push({ title: 'Pricing & Revenue', items: pricingItems });
+    }
+
+    // O2D FMS — Flow Management System (collapsible group)
+    const fmsChildren = [];
+    if (can('o2dfms.view') || isRoot) {
+      fmsChildren.push({ text: 'My Tasks',     icon: <ListChecks size={19} />,        path: '/o2d-fms' });
+      fmsChildren.push({ text: 'FMS Tracker',  icon: <Workflow size={19} />,          path: '/o2d-fms/processes' });
+      fmsChildren.push({ text: 'Dashboard',    icon: <Gauge size={19} />,             path: '/o2d-fms/dashboard' });
+      fmsChildren.push({ text: 'Scoreboard',   icon: <Trophy size={19} />,            path: '/o2d-fms/scores' });
+    }
+    if (can('o2dfms.config') || isRoot) {
+      fmsChildren.push({ text: 'Step Builder',   icon: <SlidersHorizontal size={19} />, path: '/o2d-fms/config' });
+      fmsChildren.push({ text: 'Task Templates', icon: <ClipboardList size={19} />,     path: '/o2d-fms/templates' });
+    }
+    if (fmsChildren.length > 0) {
+      out.push({
+        title: 'Process',
+        items: [{ text: 'O2D FMS', icon: <Gauge size={19} />, path: '/o2d-fms', children: fmsChildren }],
+      });
     }
 
     // Administration
@@ -367,11 +394,13 @@ const MainLayout = () => {
                       <Collapse in={open} timeout="auto" unmountOnExit>
                         <List disablePadding>
                           {item.children.map((child) => {
-                            // Both children live at /pricing — the stream query
-                            // param decides which one is active.
-                            const childSelected =
-                              location.pathname === item.path &&
-                              (child.stream === 'RM_COST' ? stream === 'RM_COST' : stream !== 'RM_COST');
+                            // Pricing children share /pricing and disambiguate via the
+                            // `stream` query param; all other children match by path.
+                            const childPath = child.path.split('?')[0];
+                            const childSelected = child.stream
+                              ? (location.pathname === item.path &&
+                                 (child.stream === 'RM_COST' ? stream === 'RM_COST' : stream !== 'RM_COST'))
+                              : location.pathname === childPath;
                             return (
                               <ListItem key={child.text} disablePadding sx={{ mb: 0.25 }}>
                                 {leafButton(child, childSelected, { indent: true })}
@@ -502,6 +531,8 @@ const MainLayout = () => {
               </Box>
             </Tooltip>
 
+            <NotificationBell />
+
             <Tooltip title="Sign out" arrow>
               <IconButton
                 size="small"
@@ -544,9 +575,10 @@ const MainLayout = () => {
           <IconButton edge="start" onClick={handleDrawerToggle} sx={{ mr: 1.5, color: 'primary.main' }}>
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap sx={{ fontWeight: 700, color: 'primary.dark' }}>
+          <Typography variant="h6" noWrap sx={{ fontWeight: 700, color: 'primary.dark', flexGrow: 1 }}>
             {pageTitle}
           </Typography>
+          <NotificationBell />
         </Toolbar>
       </AppBar>
 

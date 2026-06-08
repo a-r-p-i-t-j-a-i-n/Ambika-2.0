@@ -7,6 +7,7 @@ import { logger } from './utils/logger.js';
 import { initSocket } from './sockets/socketService.js';
 import { seedAccessControl } from './modules/access-control/role.seed.js';
 import { seedPricing } from './modules/pricing/pricing.seed.js';
+import { startO2DEscalationJob } from './jobs/o2d-fms.escalation.job.js';
 
 const startServer = async () => {
   // Connect to MongoDB
@@ -28,6 +29,11 @@ const startServer = async () => {
   });
 
   initSocket(io);
+
+  // O2D FMS — recurring SLA-breach escalation (email to owner + MD).
+  if (process.env.O2D_FMS_ESCALATION !== 'off') {
+    startO2DEscalationJob();
+  }
 
   server.listen(env.PORT, () => {
     logger.info(`🚀 DPES Server running in ${env.NODE_ENV} mode on port ${env.PORT}`);

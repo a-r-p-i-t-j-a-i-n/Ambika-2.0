@@ -37,6 +37,13 @@ const PricingDocuments     = lazyWithRetry(() => import('./features/pricing/Pric
 const PricingAnalytics     = lazyWithRetry(() => import('./features/pricing/PricingAnalytics'));
 const QuotesList           = lazyWithRetry(() => import('./features/quotes/QuotesList'));
 const QuoteDetail          = lazyWithRetry(() => import('./features/quotes/QuoteDetail'));
+const FmsMyTasks           = lazyWithRetry(() => import('./features/o2d-fms/MyTasksWorkspace'));
+const FmsProcessList       = lazyWithRetry(() => import('./features/o2d-fms/ProcessList'));
+const FmsProcessDetail     = lazyWithRetry(() => import('./features/o2d-fms/ProcessDetail'));
+const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsDashboard'));
+const FmsStepConfig        = lazyWithRetry(() => import('./features/o2d-fms/StepDefinitionsConfig'));
+const FmsTaskTemplates     = lazyWithRetry(() => import('./features/o2d-fms/TaskTemplates'));
+const FmsScoreboard        = lazyWithRetry(() => import('./features/o2d-fms/Scoreboard'));
 const NotFound             = lazyWithRetry(() => import('./components/NotFound'));
 
 function App() {
@@ -129,6 +136,15 @@ function App() {
                 </RequirePermission>
               }
             />
+
+            {/* O2D FMS — Flow Management System */}
+            <Route path="/o2d-fms" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsMyTasks /></RequirePermission>} />
+            <Route path="/o2d-fms/processes" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsProcessList /></RequirePermission>} />
+            <Route path="/o2d-fms/process/:id" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsProcessDetail /></RequirePermission>} />
+            <Route path="/o2d-fms/dashboard" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsDashboard /></RequirePermission>} />
+            <Route path="/o2d-fms/config" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsStepConfig /></RequirePermission>} />
+            <Route path="/o2d-fms/templates" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsTaskTemplates /></RequirePermission>} />
+            <Route path="/o2d-fms/scores" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsScoreboard /></RequirePermission>} />
           </Route>
         </Route>
 

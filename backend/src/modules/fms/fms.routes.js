@@ -2,6 +2,9 @@ import Invoice from '../invoice/invoice.model.js';
 import Shipment from '../shipment/shipment.model.js';
 import Payment from '../payment/payment.model.js';
 import TransportBill from '../transport/transport.model.js';
+import DeliveryChallan from '../challan/challan.model.js';
+import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
+import { logger } from '../../utils/logger.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { generateDocNumber } from '../../utils/docNumberGenerator.js';
@@ -16,7 +19,21 @@ export const fmsService = {
     if (!data.invoiceNo) {
       data.invoiceNo = await generateDocNumber('TAX_INVOICE', data.invoiceDate || new Date());
     }
-    return Invoice.create(data);
+    const invoice = await Invoice.create(data);
+
+    // Auto-advance the FMS "Invoicing" step. Resolve the SO via the linked challan
+    // (or a soNumber on the invoice). Non-fatal.
+    try {
+      let soNumber = data.soNumber;
+      if (!soNumber && data.dcId) {
+        const dc = await DeliveryChallan.findById(data.dcId).select('soNumber').lean();
+        soNumber = dc?.soNumber;
+      }
+      if (soNumber) await o2dFmsService.advanceByTrigger({ soNumber }, 'INVOICE');
+    } catch (err) {
+      logger.error(`[O2D-FMS] INVOICE advance failed: ${err.message}`);
+    }
+    return invoice;
   },
   async getAllInvoices(query) {
     const features = new ApiFeatures(Invoice.find(), query)

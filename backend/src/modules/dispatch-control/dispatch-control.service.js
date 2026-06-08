@@ -10,6 +10,7 @@ import { AppError } from '../../utils/apiResponse.js';
 import { generateDocNumber, generateO2DId } from '../../utils/docNumberGenerator.js';
 import { getFiscalYear } from '../../utils/fiscalYear.js';
 import { logger } from '../../utils/logger.js';
+import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 
 const PLAN_LABEL_PREFIX = 'Dispatch Plan';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -548,11 +549,21 @@ export const dispatchControlService = {
       items,
     });
 
+    // Build the O2D FMS process (config-driven step tracker) for this order, then
+    // auto-complete the "order received / entry" step. Non-fatal: order entry must
+    // never fail if the catalog is empty/misconfigured.
+    try {
+      await o2dFmsService.buildProcessForOrder(order);
+      await o2dFmsService.advanceByTrigger({ salesOrderId: order._id }, 'ORDER_ENTRY');
+    } catch (err) {
+      logger.error(`[O2D-FMS] Failed to build/advance process for SO ${order.soNumber}: ${err.message}`);
+    }
+
     return order.populate('partyId', 'name code location email phone addresses');
   },
 
   async planDispatch(data, actor = null) {
-    return withMaybeTransaction(async (session) => {
+    const result = await withMaybeTransaction(async (session) => {
       const orderQ = SalesOrder.findOne({ soNumber: data.soNumber });
       if (session) orderQ.session(session);
       const order = await orderQ;
@@ -655,6 +666,15 @@ export const dispatchControlService = {
 
       return buildComparison(order.soNumber);
     });
+
+    // Auto-advance the FMS "Dispatch Planning" step (non-fatal, post-commit).
+    try {
+      await o2dFmsService.advanceByTrigger({ soNumber: data.soNumber }, 'DISPATCH_PLAN', actor);
+    } catch (err) {
+      logger.error(`[O2D-FMS] DISPATCH_PLAN advance failed for ${data.soNumber}: ${err.message}`);
+    }
+
+    return result;
   },
 
   async createActualDispatch(data, actor = null) {
@@ -666,7 +686,7 @@ export const dispatchControlService = {
       throw new AppError('phaseRef.phaseId is required unless isUnplanned is true', 422);
     }
 
-    return withMaybeTransaction(async (session) => {
+    const result = await withMaybeTransaction(async (session) => {
       const orderQ = SalesOrder.findOne({ soNumber: data.soNumber });
       if (session) orderQ.session(session);
       const order = await orderQ;
@@ -780,6 +800,15 @@ export const dispatchControlService = {
         comparison: await buildComparison(order.soNumber),
       };
     });
+
+    // Auto-advance the FMS "Actual Dispatch" step (non-fatal, post-commit).
+    try {
+      await o2dFmsService.advanceByTrigger({ soNumber: data.soNumber }, 'ACTUAL_DISPATCH', actor);
+    } catch (err) {
+      logger.error(`[O2D-FMS] ACTUAL_DISPATCH advance failed for ${data.soNumber}: ${err.message}`);
+    }
+
+    return result;
   },
 
   async getComparison(soNumber) {

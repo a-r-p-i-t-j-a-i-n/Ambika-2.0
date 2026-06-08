@@ -3,6 +3,8 @@ import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { generateDocNumber, generateO2DId } from '../../utils/docNumberGenerator.js';
 import { getFiscalYear } from '../../utils/fiscalYear.js';
+import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
+import { logger } from '../../utils/logger.js';
 
 export const orderService = {
   /**
@@ -30,7 +32,17 @@ export const orderService = {
     data.scheduling     = { planned: addDays(received, 2),  status: 'PENDING' };
     data.emailSchedule  = { planned: addDays(received, 2),  status: 'PENDING' };
 
-    return SalesOrder.create(data);
+    const order = await SalesOrder.create(data);
+
+    // Build the O2D FMS process (config-driven step tracker) for this order.
+    // Non-fatal: order creation must never fail if the catalog is empty/misconfigured.
+    try {
+      await o2dFmsService.buildProcessForOrder(order);
+    } catch (err) {
+      logger.error(`[O2D-FMS] Failed to build process for SO ${order.soNumber}: ${err.message}`);
+    }
+
+    return order;
   },
 
   /**
@@ -153,6 +165,13 @@ export const orderService = {
   async remove(id) {
     const order = await SalesOrder.findByIdAndDelete(id);
     if (!order) throw new AppError('Sales Order not found', 404);
+    // Cascade: remove the order's O2D FMS process so no orphan tracker remains.
+    try {
+      const { O2DProcess } = await import('../o2d-fms/o2d-fms.model.js');
+      await O2DProcess.deleteOne({ salesOrderId: order._id });
+    } catch (err) {
+      logger.error(`[order.remove] failed to clean O2D process for ${order.soNumber}: ${err.message}`);
+    }
     return order;
   },
 

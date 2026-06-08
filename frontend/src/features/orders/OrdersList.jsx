@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton } from '@mui/material';
+import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Search, Plus, Eye, Edit3, ShoppingCart, Clock, CheckCircle, AlertCircle, Package, ExternalLink, ListChecks } from 'lucide-react';
+import { Search, Plus, Eye, Edit3, ShoppingCart, Clock, CheckCircle, AlertCircle, Package, ExternalLink, ListChecks, Trash2 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
-import { useGetOrdersQuery, useGetOrderStatsQuery } from '../../store/api/orderApi';
+import { useGetOrdersQuery, useGetOrderStatsQuery, useDeleteOrderMutation } from '../../store/api/orderApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
+import { usePermissions } from '../../hooks/usePermission';
 import OrderEntryDrawer from './OrderEntryDrawer';
 import OrderUpdateModal from './OrderUpdateModal';
 import OrderDetailDrawer from './OrderDetailDrawer';
@@ -79,6 +80,16 @@ const OrdersList = () => {
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const { can, isRoot } = usePermissions();
+  const canDelete = isRoot || can('orders.delete');
+  const [deleteOrder, { isLoading: deleting }] = useDeleteOrderMutation();
+
+  const confirmDelete = async () => {
+    try { await deleteOrder(deleteTarget._id).unwrap(); setDeleteTarget(null); }
+    catch (e) { /* surfaced below */ }
+  };
 
   const queryParams = {
     page: paginationModel.page + 1,
@@ -146,12 +157,15 @@ const OrdersList = () => {
     { field: 'status', headerName: 'STATUS', width: 120,
       renderCell: (p) => <StatusBadge value={p.value} />
     },
-    { field: 'actions', headerName: '', width: 116, sortable: false, align: 'center',
+    { field: 'actions', headerName: '', width: canDelete ? 150 : 116, sortable: false, align: 'center',
       renderCell: (p) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
           <Tooltip title="Edit Order"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleEditOrder(p.row); }} sx={{ color: BRAND.primary }}><Edit3 size={14} /></IconButton></Tooltip>
           <Tooltip title="Edit Workflow"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleUpdateClick(p.row); }} sx={{ color: BRAND.wip }}><ListChecks size={14} /></IconButton></Tooltip>
           <Tooltip title="View Details"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleViewDetail(p.row); }} sx={{ color: '#94a3b8' }}><Eye size={14} /></IconButton></Tooltip>
+          {canDelete && (
+            <Tooltip title="Delete Order (MD only)"><IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p.row); }} sx={{ color: BRAND.error }}><Trash2 size={14} /></IconButton></Tooltip>
+          )}
         </Box>
       )
     }
@@ -263,6 +277,23 @@ const OrdersList = () => {
       <OrderEntryDrawer open={isCreateOpen} onClose={handleDrawerClose} order={editOrder} />
       <OrderUpdateModal open={isUpdateOpen} onClose={() => setIsUpdateOpen(false)} order={selectedOrder} />
       <OrderDetailDrawer open={isDetailOpen} onClose={() => setIsDetailOpen(false)} orderId={detailOrderId} />
+
+      {/* Delete confirmation — MD only */}
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Delete this order?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This permanently deletes <b>{deleteTarget?.soNumber}</b> ({deleteTarget?.partyName}) and its O2D FMS process.
+            This cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={confirmDelete} disabled={deleting} startIcon={<Trash2 size={16} />}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

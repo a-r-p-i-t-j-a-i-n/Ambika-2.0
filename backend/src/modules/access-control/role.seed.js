@@ -37,6 +37,7 @@ const SEEDED_ROLES = [
       'planning.view', 'planning.editPhases', 'planning.reschedule',
       'execution.view',
       'masters.viewSku', 'masters.editSku', 'masters.viewParty',
+      'o2dfms.view', 'o2dfms.act', 'o2dfms.manage', 'o2dfms.config',
     ],
   },
   {
@@ -51,6 +52,7 @@ const SEEDED_ROLES = [
       'orders.view', 'orders.create',
       'planning.view',
       'masters.viewSku', 'masters.viewParty',
+      'o2dfms.view', 'o2dfms.act',
     ],
   },
   {
@@ -64,6 +66,7 @@ const SEEDED_ROLES = [
       'planning.view',
       'execution.view', 'execution.recordDispatch',
       'masters.viewSku', 'masters.viewParty',
+      'o2dfms.view', 'o2dfms.act',
     ],
   },
   {
@@ -78,6 +81,7 @@ const SEEDED_ROLES = [
       'orders.view',
       'execution.view',
       'masters.viewSku', 'masters.viewParty',
+      'o2dfms.view', 'o2dfms.act',
     ],
   },
   {
@@ -95,6 +99,7 @@ const SEEDED_ROLES = [
       'masters.viewSku', 'masters.viewParty',
       'settings.view',
       'accessControl.viewAuditLog',
+      'o2dfms.view',
     ],
   },
 ];

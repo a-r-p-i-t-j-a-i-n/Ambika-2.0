@@ -28,6 +28,8 @@ import uploadRoutes from './common/uploads/upload.routes.js';
 import accessControlRoutes from './modules/access-control/access-control.routes.js';
 import pricingRoutes from './modules/pricing/pricing.routes.js';
 import quoteRoutes from './modules/quotes/quote.routes.js';
+import o2dFmsRoutes from './modules/o2d-fms/o2d-fms.routes.js';
+import notificationRoutes from './modules/notifications/notification.routes.js';
 
 
 const app = express();
@@ -89,6 +91,8 @@ app.use('/api/v1/uploads',          uploadRoutes);
 app.use('/api/v1/access-control',   accessControlRoutes);
 app.use('/api/v1/pricing',          pricingRoutes);
 app.use('/api/v1/quotes',           quoteRoutes);
+app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (process tracking)
+app.use('/api/v1/notifications',    notificationRoutes);
 
 // ── Static — uploaded files (served as /uploads/...) ────────
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads'), {
