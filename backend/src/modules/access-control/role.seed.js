@@ -33,7 +33,7 @@ const SEEDED_ROLES = [
     permissions: [
       'pricing.view', 'pricing.revise',
       'quotes.view', 'quotes.create', 'quotes.edit', 'quotes.exportPdf',
-      'orders.view',
+      'orders.view', 'orders.intake',
       'planning.view', 'planning.editPhases', 'planning.reschedule',
       'execution.view',
       'masters.viewSku', 'masters.editSku', 'masters.viewParty',
@@ -49,7 +49,7 @@ const SEEDED_ROLES = [
     permissions: [
       'pricing.view',
       'quotes.view', 'quotes.create', 'quotes.edit', 'quotes.send', 'quotes.exportPdf',
-      'orders.view', 'orders.create',
+      'orders.view', 'orders.create', 'orders.intake',
       'planning.view',
       'masters.viewSku', 'masters.viewParty',
       'o2dfms.view', 'o2dfms.act',
@@ -66,7 +66,7 @@ const SEEDED_ROLES = [
       'planning.view',
       'execution.view', 'execution.recordDispatch',
       'masters.viewSku', 'masters.viewParty',
-      'o2dfms.view', 'o2dfms.act',
+      'o2dfms.view', 'o2dfms.act', 'orders.intake',
     ],
   },
   {
@@ -81,7 +81,7 @@ const SEEDED_ROLES = [
       'orders.view',
       'execution.view',
       'masters.viewSku', 'masters.viewParty',
-      'o2dfms.view', 'o2dfms.act',
+      'o2dfms.view', 'o2dfms.act', 'orders.intake',
     ],
   },
   {

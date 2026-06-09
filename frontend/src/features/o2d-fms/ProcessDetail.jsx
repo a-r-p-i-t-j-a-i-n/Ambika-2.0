@@ -82,7 +82,7 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
       </DialogTitle>
       <DialogContent dividers>
         {rows.map((r, i) => (
-          <Accordion key={r.stepCode} disableGutters sx={{ '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1 }}>
+          <Accordion key={r.stepCode} disableGutters TransitionProps={{ unmountOnExit: true }} sx={{ '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1 }}>
             <AccordionSummary expandIcon={<ChevronDown size={16} />}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                 <Chip size="small" variant="outlined" label={r.stepCode} />

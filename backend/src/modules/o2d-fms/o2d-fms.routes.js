@@ -18,6 +18,8 @@ import {
   checklistParamSchema,
   commentSchema,
   planOrderSchema,
+  attachmentsSchema,
+  attachmentParamSchema,
 } from './o2d-fms.validation.js';
 
 const router = Router();
@@ -75,6 +77,14 @@ router.patch('/processes/:id/steps/:stepCode/checklist/:itemId',
 router.post('/processes/:id/steps/:stepCode/comment',
   requirePermission('o2dfms.act'),
   validate(processStepParamSchema, 'params'), validate(commentSchema), c.addComment);
+
+router.post('/processes/:id/steps/:stepCode/attachments',
+  requirePermission('o2dfms.act'),
+  validate(processStepParamSchema, 'params'), validate(attachmentsSchema), c.addAttachments);
+
+router.delete('/processes/:id/steps/:stepCode/attachments/:attachmentId',
+  requirePermission('o2dfms.act'),
+  validate(attachmentParamSchema, 'params'), c.removeAttachment);
 
 router.patch('/processes/:id/plan',
   requirePermission('o2dfms.manage'),

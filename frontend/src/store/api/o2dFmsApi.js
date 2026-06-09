@@ -75,6 +75,29 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }],
     }),
+    // Generic file upload → S3 (or local). Returns { data: { url, key, fileName, mimeType, sizeBytes } }.
+    uploadFile: builder.mutation({
+      query: ({ file, folder = 'o2d-fms' }) => {
+        const fd = new FormData();
+        fd.append('file', file);
+        return { url: `/uploads?folder=${folder}`, method: 'POST', body: fd, formData: true };
+      },
+    }),
+    addStepAttachments: builder.mutation({
+      query: ({ id, stepCode, attachments }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/attachments`,
+        method: 'POST',
+        body: { attachments },
+      }),
+      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }],
+    }),
+    removeStepAttachment: builder.mutation({
+      query: ({ id, stepCode, attachmentId }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/attachments/${attachmentId}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }],
+    }),
     planOrder: builder.mutation({
       query: ({ id, steps }) => ({ url: `/o2d-fms/processes/${id}/plan`, method: 'PATCH', body: { steps } }),
       invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }, 'O2DProcess', 'O2DMyTasks', 'O2DDashboard'],
@@ -146,6 +169,9 @@ export const {
   useDeleteStepDefinitionMutation,
   useToggleChecklistItemMutation,
   useAddStepCommentMutation,
+  useUploadFileMutation,
+  useAddStepAttachmentsMutation,
+  useRemoveStepAttachmentMutation,
   usePlanOrderMutation,
   useGetTaskTemplatesQuery,
   useGetTaskTemplateQuery,

@@ -19,7 +19,7 @@ export const baseApi = createApi({
     'AccessUsers', 'AccessRoles', 'AccessAudit',
     'Pricing', 'PriceHistory', 'PriceApprovals', 'Quote', 'CompanySettings',
     'PricingReviewers', 'PricingDocuments', 'PricingAnalytics',
-    'O2DProcess', 'O2DStepDef', 'O2DMyTasks', 'O2DDashboard', 'O2DTemplate', 'Notification',
+    'O2DProcess', 'O2DStepDef', 'O2DMyTasks', 'O2DDashboard', 'O2DTemplate', 'Notification', 'OrderIntake',
   ],
   endpoints: () => ({}),
 });

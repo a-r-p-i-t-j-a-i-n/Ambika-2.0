@@ -44,6 +44,8 @@ const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsD
 const FmsStepConfig        = lazyWithRetry(() => import('./features/o2d-fms/StepDefinitionsConfig'));
 const FmsTaskTemplates     = lazyWithRetry(() => import('./features/o2d-fms/TaskTemplates'));
 const FmsScoreboard        = lazyWithRetry(() => import('./features/o2d-fms/Scoreboard'));
+const FmsTaskPage          = lazyWithRetry(() => import('./features/o2d-fms/TaskPage'));
+const OrderIntakeList      = lazyWithRetry(() => import('./features/order-intake/OrderIntakeList'));
 const NotFound             = lazyWithRetry(() => import('./components/NotFound'));
 
 function App() {
@@ -141,6 +143,8 @@ function App() {
             <Route path="/o2d-fms" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsMyTasks /></RequirePermission>} />
             <Route path="/o2d-fms/processes" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsProcessList /></RequirePermission>} />
             <Route path="/o2d-fms/process/:id" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsProcessDetail /></RequirePermission>} />
+            <Route path="/o2d-fms/task/:processId/:stepCode" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsTaskPage /></RequirePermission>} />
+            <Route path="/order-intake" element={<RequirePermission slug="orders.view" fallback="inline"><OrderIntakeList /></RequirePermission>} />
             <Route path="/o2d-fms/dashboard" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsDashboard /></RequirePermission>} />
             <Route path="/o2d-fms/config" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsStepConfig /></RequirePermission>} />
             <Route path="/o2d-fms/templates" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsTaskTemplates /></RequirePermission>} />

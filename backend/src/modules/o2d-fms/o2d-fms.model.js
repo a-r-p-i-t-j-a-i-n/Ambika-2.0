@@ -47,7 +47,8 @@ export const SLA_FROM = Object.freeze({
 // person ticking it done from the FMS advances it.
 export const TRIGGER_KEY = Object.freeze({
   MANUAL:          'MANUAL',
-  ORDER_ENTRY:     'ORDER_ENTRY',
+  ORDER_INTAKE:    'ORDER_INTAKE',   // client order logged via call/email/WhatsApp/meeting
+  ORDER_ENTRY:     'ORDER_ENTRY',    // formal Sales Order punched into the system
   DISPATCH_PLAN:   'DISPATCH_PLAN',
   ACTUAL_DISPATCH: 'ACTUAL_DISPATCH',
   INVOICE:         'INVOICE',
@@ -95,7 +96,22 @@ const ChecklistItemSchema = new Schema({
   text:   { type: String, required: true },
   done:   { type: Boolean, default: false },
   doneBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  doneByName: { type: String, default: null }, // denormalised for activity history
   doneAt: { type: Date, default: null },
+}, { _id: true });
+
+// A proof attachment on a step — any file or a voice note. uploadedByName is
+// denormalised so "who attached this, when" always renders without a populate.
+const StepAttachmentSchema = new Schema({
+  fileName: { type: String, required: true },
+  fileUrl:  { type: String, required: true }, // stable, signed-on-demand URL
+  fileKey:  { type: String, default: null },  // S3 key (for deletion)
+  fileType: { type: String, default: null },  // MIME
+  sizeBytes:{ type: Number, default: 0 },
+  kind:     { type: String, enum: ['file', 'audio', 'video', 'image'], default: 'file' },
+  uploadedBy:     { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  uploadedByName: { type: String, default: null },
+  uploadedAt:     { type: Date, default: Date.now },
 }, { _id: true });
 
 // A comment / collaboration note on a step. userName is denormalised at write
@@ -127,7 +143,7 @@ const ProcessStepSchema = new Schema({
 
   link:    { type: String, default: null },
   remarks: { type: String, default: null },
-  attachments: [AttachmentSchema],
+  attachments: [StepAttachmentSchema],
 
   assignedTo:  { type: Schema.Types.ObjectId, ref: 'User', default: null }, // Who (per-order, override-able)
   buddyUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null }, // backup who can also do it
@@ -140,7 +156,10 @@ const ProcessStepSchema = new Schema({
 const O2DProcessSchema = new Schema({
   ...baseSchemaFields,
 
-  salesOrderId: { type: Schema.Types.ObjectId, ref: 'SalesOrder', required: true, unique: true },
+  // A process attaches to a Sales Order and/or an Order Intake. At least one is set.
+  salesOrderId: { type: Schema.Types.ObjectId, ref: 'SalesOrder', default: null, unique: true, sparse: true },
+  intakeId:     { type: Schema.Types.ObjectId, ref: 'OrderIntake', default: null, unique: true, sparse: true },
+  source:       { type: String, enum: ['SALES_ORDER', 'INTAKE'], default: 'SALES_ORDER' },
 
   // Denormalised for fast list/dashboard rendering without populating the order.
   soNumber:   { type: String, trim: true },

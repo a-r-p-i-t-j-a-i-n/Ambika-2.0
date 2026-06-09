@@ -2,17 +2,20 @@ import React, { useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Box, Stack, Typography,
   Chip, TextField, Button, Divider, Alert, IconButton, MenuItem, alpha,
-  Checkbox, FormControlLabel, LinearProgress, Avatar, Tooltip,
+  Checkbox, FormControlLabel, LinearProgress, Avatar, Tooltip, Paper,
 } from '@mui/material';
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
-  Users, MessageSquare, Send,
+  Users, MessageSquare, Send, Paperclip,
 } from 'lucide-react';
 import {
   useCompleteStepMutation, useAssignStepMutation, useToggleChecklistItemMutation,
   useAddStepCommentMutation, useGetProcessByIdQuery,
+  useUploadFileMutation, useAddStepAttachmentsMutation, useRemoveStepAttachmentMutation,
 } from '../../../store/api/o2dFmsApi';
 import { useListAccessUsersQuery } from '../../../store/api/accessControlApi';
+import AttachmentList from '../../../components/AttachmentList';
+import VoiceRecorder from '../../../components/VoiceRecorder';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
@@ -38,17 +41,23 @@ const MetaRow = ({ icon: Icon, label, value }) => (
  * + the task layer (checklist, comments, buddy). When opened from My Tasks the
  * passed `step` is partial, so we fetch the full process to hydrate checklist/comments.
  */
-const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct, canManage }) => {
+const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct, canManage, asPage = false }) => {
   const [link, setLink] = useState('');
   const [remarks, setRemarks] = useState('');
   const [assignee, setAssignee] = useState('');
   const [comment, setComment] = useState('');
   const [error, setError] = useState('');
 
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = React.useRef(null);
+
   const [completeStep, { isLoading: completing }] = useCompleteStepMutation();
   const [assignStep, { isLoading: assigning }] = useAssignStepMutation();
   const [toggleItem] = useToggleChecklistItemMutation();
   const [addComment, { isLoading: commenting }] = useAddStepCommentMutation();
+  const [uploadFile] = useUploadFileMutation();
+  const [addAttachments] = useAddStepAttachmentsMutation();
+  const [removeAttachment] = useRemoveStepAttachmentMutation();
   const { data: usersRes } = useListAccessUsersQuery(undefined, { skip: !canManage });
   const users = usersRes?.data || [];
 
@@ -93,25 +102,44 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct, ca
     catch (e) { setError(e?.data?.message || 'Could not update checklist.'); }
   };
 
+  // Upload one or more files (or a recorded voice note) → attach to this step.
+  const uploadAndAttach = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    setUploading(true); setError('');
+    try {
+      const attachments = [];
+      for (const f of files) {
+        const res = await uploadFile({ file: f, folder: 'o2d-fms' }).unwrap();
+        const d = res.data || res;
+        attachments.push({ fileName: d.fileName || f.name, fileUrl: d.url, fileKey: d.key, fileType: d.mimeType || f.type, sizeBytes: d.sizeBytes || f.size });
+      }
+      await addAttachments({ id: processId, stepCode: liveStep.stepCode, attachments }).unwrap();
+    } catch (e) {
+      setError(e?.data?.message || 'Upload failed.');
+    } finally { setUploading(false); }
+  };
+
   const handleComment = async () => {
     if (!comment.trim()) return;
     try { await addComment({ id: processId, stepCode: liveStep.stepCode, text: comment }).unwrap(); setComment(''); }
     catch (e) { setError(e?.data?.message || 'Could not add comment.'); }
   };
 
-  return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ pr: 6 }}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>{liveStep.taskTitle || liveStep.name}</Typography>
-          <Chip size="small" label={liveStep.stepCode} variant="outlined" />
-          <Chip size="small" label={tone.label} sx={{ bgcolor: alpha(tone.color, 0.12), color: tone.color, fontWeight: 600 }} />
-        </Stack>
-        {orderLabel && <Typography variant="caption" sx={{ color: 'text.secondary' }}>{orderLabel}</Typography>}
-        <IconButton onClick={() => onClose?.(false)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
-      </DialogTitle>
+  const headerChips = (
+    <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
+      <Typography variant="h6" sx={{ fontWeight: 700 }}>{liveStep.taskTitle || liveStep.name}</Typography>
+      <Chip size="small" label={liveStep.stepCode} variant="outlined" />
+      <Chip size="small" label={tone.label} sx={{ bgcolor: alpha(tone.color, 0.12), color: tone.color, fontWeight: 600 }} />
+    </Stack>
+  );
+  const markDoneBtn = (!done && canAct) ? (
+    <Button onClick={handleComplete} disabled={completing || checklistBlocks} variant="contained" startIcon={<CheckCircle2 size={16} />}>
+      Mark Done
+    </Button>
+  ) : null;
 
-      <DialogContent dividers>
+  const body = (
         <Stack spacing={2}>
           {liveStep.isOverdue && !done && (
             <Alert icon={<AlertTriangle size={18} />} severity="warning" sx={{ py: 0.5 }}>This step is past its planned time.</Alert>
@@ -175,6 +203,35 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct, ca
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>Completed by {liveStep.completedBy.name}</Typography>
           )}
 
+          {/* Attachments & proof (files + voice notes) */}
+          <Divider />
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Paperclip size={16} /><Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Attachments & proof</Typography>
+            </Stack>
+            {(liveStep.attachments || []).length > 0 && (
+              <Chip size="small" variant="outlined" label={`${liveStep.attachments.length}`} />
+            )}
+          </Stack>
+          <AttachmentList
+            attachments={liveStep.attachments || []}
+            onRemove={canAct ? (att) => removeAttachment({ id: processId, stepCode: liveStep.stepCode, attachmentId: att._id }) : undefined}
+          />
+          {(liveStep.attachments || []).length === 0 && (
+            <Typography variant="caption" color="text.disabled">No files or voice notes yet.</Typography>
+          )}
+          {canAct && (
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <input ref={fileInputRef} id="step-attach-input" name="stepAttachments" type="file" multiple hidden
+                onChange={(e) => { uploadAndAttach(e.target.files); e.target.value = ''; }} />
+              <Button size="small" variant="outlined" startIcon={<Paperclip size={15} />}
+                onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                {uploading ? 'Uploading…' : 'Attach files'}
+              </Button>
+              <VoiceRecorder onRecorded={(file) => uploadAndAttach([file])} disabled={uploading} />
+            </Stack>
+          )}
+
           {/* Comments */}
           <Divider />
           <Stack direction="row" spacing={1} alignItems="center">
@@ -233,15 +290,31 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct, ca
 
           {error && <Alert severity="error" sx={{ py: 0.5 }}>{error}</Alert>}
         </Stack>
-      </DialogContent>
+  );
 
+  // Inline page mode — used by the full Task page (no dialog chrome).
+  if (asPage) {
+    return (
+      <Box>
+        {headerChips}
+        {orderLabel && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{orderLabel}</Typography>}
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3, mt: 1.5 }}>{body}</Paper>
+        {markDoneBtn && <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>{markDoneBtn}</Stack>}
+      </Box>
+    );
+  }
+
+  return (
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ pr: 6 }}>
+        {headerChips}
+        {orderLabel && <Typography variant="caption" sx={{ color: 'text.secondary' }}>{orderLabel}</Typography>}
+        <IconButton onClick={() => onClose?.(false)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
+      </DialogTitle>
+      <DialogContent dividers>{body}</DialogContent>
       <DialogActions>
         <Button onClick={() => onClose?.(false)}>Close</Button>
-        {!done && canAct && (
-          <Button onClick={handleComplete} disabled={completing || checklistBlocks} variant="contained" startIcon={<CheckCircle2 size={16} />}>
-            Mark Done
-          </Button>
-        )}
+        {markDoneBtn}
       </DialogActions>
     </Dialog>
   );

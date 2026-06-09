@@ -11,6 +11,7 @@ import { generateDocNumber, generateO2DId } from '../../utils/docNumberGenerator
 import { getFiscalYear } from '../../utils/fiscalYear.js';
 import { logger } from '../../utils/logger.js';
 import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
+import { challanService } from '../challan/challan.routes.js';
 
 const PLAN_LABEL_PREFIX = 'Dispatch Plan';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -800,6 +801,17 @@ export const dispatchControlService = {
         comparison: await buildComparison(order.soNumber),
       };
     });
+
+    // Generate the delivery-challan PDF (S3) — non-fatal, post-commit.
+    try {
+      if (result?.challan?._id) {
+        const { pdfUrl } = await challanService.generatePdf(result.challan._id);
+        if (result.challan.toObject) result.challan = { ...result.challan.toObject(), pdfUrl };
+        else result.challan.pdfUrl = pdfUrl;
+      }
+    } catch (err) {
+      logger.error(`[challan] PDF generation failed: ${err.message}`);
+    }
 
     // Auto-advance the FMS "Actual Dispatch" step (non-fatal, post-commit).
     try {

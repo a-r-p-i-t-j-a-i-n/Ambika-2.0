@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import DeliveryChallan from './challan.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
@@ -6,6 +8,13 @@ import { orderService } from '../order/order.service.js';
 import asyncHandler from '../../middleware/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { Router } from 'express';
+import { pdfService } from '../../services/pdf.service.js';
+import { s3Enabled, buildKey, uploadBuffer } from '../../common/uploads/s3.service.js';
+import { logger } from '../../utils/logger.js';
+
+// Absolute base for this API (so PDF links work from the different-origin frontend
+// and from email/WhatsApp). Override with SERVER_URL in production.
+const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 
 // ── Service ─────────────────────────────────────────────────
 export const challanService = {
@@ -24,7 +33,43 @@ export const challanService = {
         } catch (_) { /* skip if order not found */ }
       }
     }
+    // Auto-generate the delivery-challan PDF (non-fatal).
+    try { const { pdfUrl } = await challanService.generatePdf(dc._id); dc.pdfUrl = pdfUrl; }
+    catch (err) { logger.error(`[challan] PDF generation failed for ${dc.dcNumber}: ${err.message}`); }
     return dc;
+  },
+
+  /** Generate (or regenerate) the challan PDF, store it (S3 or local) and save pdfUrl. */
+  async generatePdf(id) {
+    const dc = await DeliveryChallan.findById(id)
+      .populate('partyId', 'name location email addresses').lean();
+    if (!dc) throw new AppError('Delivery Challan not found', 404);
+
+    // Best-effort delivery address from the party if the DC didn't capture one.
+    if (!dc.deliveryAddress && dc.partyId) {
+      const a = (dc.partyId.addresses || [])[0];
+      dc.deliveryAddress = a
+        ? [a.line1, a.line2, a.city, a.state, a.pincode].filter(Boolean).join(', ')
+        : (dc.partyId.location || '');
+    }
+
+    const buffer = await pdfService.generateDeliveryChallanBuffer(dc);
+    const fileName = `${String(dc.dcNumber || 'DC').replace(/[^\w.-]/g, '_')}.pdf`;
+
+    let pdfUrl;
+    if (s3Enabled) {
+      const key = buildKey('challans', fileName);
+      await uploadBuffer({ buffer, key, contentType: 'application/pdf' });
+      pdfUrl = `${SERVER_BASE}/api/v1/uploads/file?key=${encodeURIComponent(key)}`;
+    } else {
+      const dir = path.resolve(process.cwd(), 'uploads', 'challans');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const fp = path.join(dir, `${Date.now()}-${fileName}`);
+      fs.writeFileSync(fp, buffer);
+      pdfUrl = `${SERVER_BASE}/uploads/challans/${path.basename(fp)}`;
+    }
+    await DeliveryChallan.updateOne({ _id: id }, { $set: { pdfUrl } });
+    return { pdfUrl };
   },
 
   async getAll(query) {
@@ -66,10 +111,12 @@ export const challanController = {
   getById: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('DC retrieved', await challanService.getById(req.params.id))); }),
   update:  asyncHandler(async (req, res) => { res.json(ApiResponse.ok('DC updated', await challanService.update(req.params.id, req.body))); }),
   remove:  asyncHandler(async (req, res) => { await challanService.remove(req.params.id); res.json(ApiResponse.ok('DC deleted')); }),
+  generatePdf: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('PDF generated', await challanService.generatePdf(req.params.id))); }),
 };
 
 // ── Routes ──────────────────────────────────────────────────
 const router = Router();
 router.route('/').get(challanController.getAll).post(challanController.create);
+router.post('/:id/pdf', challanController.generatePdf);
 router.route('/:id').get(challanController.getById).put(challanController.update).delete(challanController.remove);
 export default router;

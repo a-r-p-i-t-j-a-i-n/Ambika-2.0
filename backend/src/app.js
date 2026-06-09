@@ -30,12 +30,15 @@ import pricingRoutes from './modules/pricing/pricing.routes.js';
 import quoteRoutes from './modules/quotes/quote.routes.js';
 import o2dFmsRoutes from './modules/o2d-fms/o2d-fms.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
+import orderIntakeRoutes from './modules/order-intake/order-intake.routes.js';
 
 
 const app = express();
 
 // ── Security Middleware ─────────────────────────────────────
-app.use(helmet());
+// Allow the (different-origin) frontend to load files/images served by this API
+// — otherwise Helmet's default same-origin CORP blocks attachment previews.
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({ origin: '*', credentials: true }));
 app.use(mongoSanitize());
 app.use(hpp());
@@ -93,6 +96,7 @@ app.use('/api/v1/pricing',          pricingRoutes);
 app.use('/api/v1/quotes',           quoteRoutes);
 app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (process tracking)
 app.use('/api/v1/notifications',    notificationRoutes);
+app.use('/api/v1/order-intake',     orderIntakeRoutes);
 
 // ── Static — uploaded files (served as /uploads/...) ────────
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads'), {

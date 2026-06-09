@@ -8,7 +8,7 @@ import {
   Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
   Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
   IndianRupee, Calculator, FileSignature, ClipboardCheck, FolderOpen, BarChart3, Tag,
-  Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy,
+  Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -39,6 +39,7 @@ const navSections = [
         icon: <Workflow size={19} />,
         path: '/orders',
         children: [
+          { text: 'Order Intake',      icon: <PhoneCall size={19} />,    path: '/order-intake' },
           { text: 'Sales Orders',      icon: <ShoppingCart size={19} />, path: '/orders' },
           { text: 'Dispatch Planning', icon: <CalendarPlus size={19} />, path: '/dispatch-planning' },
           { text: 'Actual Dispatch',   icon: <Truck size={19} />,        path: '/challans' },
@@ -107,49 +108,11 @@ const MainLayout = () => {
   const pendingCount = pendingRes?.data?.length || 0;
 
   const sections = useMemo(() => {
-    const out = [...navSections];
+    // Clone sections (and their item arrays) so we can splice without mutating
+    // the static navSections definition.
+    const out = navSections.map((s) => ({ ...s, items: [...s.items] }));
 
-    // Pricing & Revenue
-    const pricingItems = [];
-    if (can('pricing.view') || isRoot) {
-      pricingItems.push({
-        text: 'Pricing Hub',
-        icon: <IndianRupee size={19} />,
-        path: '/pricing',
-        children: [
-          { text: 'Selling Price', icon: <Tag size={17} />,          path: '/pricing',                 stream: 'SELLING' },
-          { text: 'RM Cost',       icon: <ShoppingCart size={17} />, path: '/pricing?stream=RM_COST',  stream: 'RM_COST' },
-        ],
-      });
-    }
-    if (can('pricing.approve') || isRoot) {
-      pricingItems.push({
-        text: 'Approval Inbox',
-        icon: (
-          <Badge color="warning" variant={pendingCount > 0 ? 'standard' : 'dot'} badgeContent={pendingCount} invisible={pendingCount === 0} overlap="circular">
-            <ClipboardCheck size={19} />
-          </Badge>
-        ),
-        path: '/pricing/approvals',
-      });
-    }
-    if (can('pricing.view') || isRoot) {
-      pricingItems.push({ text: 'Turnover Calculator', icon: <Calculator size={19} />, path: '/pricing/calculator' });
-    }
-    if (can('pricing.view') || isRoot) {
-      pricingItems.push({ text: 'Documents', icon: <FolderOpen size={19} />, path: '/pricing/documents' });
-    }
-    if (can('pricing.view') || isRoot) {
-      pricingItems.push({ text: 'Analytics', icon: <BarChart3 size={19} />, path: '/pricing/analytics' });
-    }
-    if (can('quotes.view') || isRoot) {
-      pricingItems.push({ text: 'Quotes', icon: <FileSignature size={19} />, path: '/quotes' });
-    }
-    if (pricingItems.length > 0) {
-      out.push({ title: 'Pricing & Revenue', items: pricingItems });
-    }
-
-    // O2D FMS — Flow Management System (collapsible group)
+    // ── O2D FMS — collapsible group, placed directly UNDER "O2D Pipeline" ──
     const fmsChildren = [];
     if (can('o2dfms.view') || isRoot) {
       fmsChildren.push({ text: 'My Tasks',     icon: <ListChecks size={19} />,        path: '/o2d-fms' });
@@ -162,10 +125,42 @@ const MainLayout = () => {
       fmsChildren.push({ text: 'Task Templates', icon: <ClipboardList size={19} />,     path: '/o2d-fms/templates' });
     }
     if (fmsChildren.length > 0) {
-      out.push({
-        title: 'Process',
-        items: [{ text: 'O2D FMS', icon: <Gauge size={19} />, path: '/o2d-fms', children: fmsChildren }],
+      const fmsGroup = { text: 'O2D FMS', icon: <Gauge size={19} />, path: '/o2d-fms', children: fmsChildren };
+      const o2dSection = out.find((s) => s.title === 'Order to Dispatch');
+      if (o2dSection) {
+        const idx = o2dSection.items.findIndex((it) => it.text === 'O2D Pipeline');
+        o2dSection.items.splice(idx >= 0 ? idx + 1 : o2dSection.items.length, 0, fmsGroup);
+      } else {
+        out.push({ title: 'O2D FMS', items: [fmsGroup] });
+      }
+    }
+
+    // ── Pricing & Revenue — everything collapsed under ONE dropdown ──
+    const pricingChildren = [];
+    if (can('pricing.view') || isRoot) {
+      pricingChildren.push({ text: 'Selling Price', icon: <Tag size={17} />,          path: '/pricing',                stream: 'SELLING' });
+      pricingChildren.push({ text: 'RM Cost',       icon: <ShoppingCart size={17} />, path: '/pricing?stream=RM_COST', stream: 'RM_COST' });
+    }
+    if (can('pricing.approve') || isRoot) {
+      pricingChildren.push({
+        text: 'Approval Inbox',
+        icon: (
+          <Badge color="warning" variant={pendingCount > 0 ? 'standard' : 'dot'} badgeContent={pendingCount} invisible={pendingCount === 0} overlap="circular">
+            <ClipboardCheck size={17} />
+          </Badge>
+        ),
+        path: '/pricing/approvals',
       });
+    }
+    if (can('pricing.view') || isRoot) pricingChildren.push({ text: 'Turnover Calculator', icon: <Calculator size={17} />, path: '/pricing/calculator' });
+    if (can('pricing.view') || isRoot) pricingChildren.push({ text: 'Documents',           icon: <FolderOpen size={17} />, path: '/pricing/documents' });
+    if (can('pricing.view') || isRoot) pricingChildren.push({ text: 'Analytics',           icon: <BarChart3 size={17} />,  path: '/pricing/analytics' });
+    if (can('quotes.view')  || isRoot) pricingChildren.push({ text: 'Quotes',              icon: <FileSignature size={17} />, path: '/quotes' });
+    if (pricingChildren.length > 0) {
+      // Title-less section: the single expandable row IS the label, keeping it clean.
+      out.push({ title: '', items: [
+        { text: 'Pricing & Revenue', icon: <IndianRupee size={19} />, path: '/pricing', children: pricingChildren },
+      ]});
     }
 
     // Administration
@@ -322,11 +317,11 @@ const MainLayout = () => {
 
       {/* Sections */}
       <Box sx={{ flexGrow: 1, overflowY: 'auto', overflowX: 'hidden', py: 1.25 }}>
-        {sections.map((section) => (
-          <Box key={section.title} sx={{ px: mini ? 1 : 1.75, mb: 1.5 }}>
+        {sections.map((section, si) => (
+          <Box key={section.title || `sec-${si}`} sx={{ px: mini ? 1 : 1.75, mb: 1.5 }}>
             {mini ? (
               <Box sx={{ height: 1, bgcolor: 'divider', mx: 1, mb: 1, opacity: 0.7 }} />
-            ) : (
+            ) : section.title ? (
               <Typography
                 sx={{
                   px: 1.25,
@@ -340,7 +335,7 @@ const MainLayout = () => {
               >
                 {section.title}
               </Typography>
-            )}
+            ) : null}
             <List disablePadding>
               {section.items.map((item) => {
                 // ── Expandable group (e.g. Pricing Hub → Selling / RM Cost) ──

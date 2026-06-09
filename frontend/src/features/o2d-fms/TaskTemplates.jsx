@@ -60,7 +60,7 @@ const mergeStepsFromProcess = (defs, procSteps = []) => {
 const StepEditor = ({ row, onChange, users, hideRole = false }) => {
   const set = (k, v) => onChange({ ...row, [k]: v });
   return (
-    <Accordion disableGutters sx={{ '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1 }}>
+    <Accordion disableGutters TransitionProps={{ unmountOnExit: true }} sx={{ '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1 }}>
       <AccordionSummary expandIcon={<ChevronDown size={16} />}>
         <Stack direction="row" spacing={1} alignItems="center">
           <Chip size="small" variant="outlined" label={row.stepCode} />

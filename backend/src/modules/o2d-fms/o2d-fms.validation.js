@@ -36,7 +36,7 @@ export const stepDefinitionSchema = Joi.object({
   slaFrom:     Joi.string().valid('PREV_ACTUAL', 'ORDER_RECEIVED').default('PREV_ACTUAL'),
   sequence:    Joi.number().integer().min(1).required(),
   phase:       Joi.string().valid('PRE_PRODUCTION', 'PLANNING', 'EXECUTION', 'POST_DISPATCH').default('PRE_PRODUCTION'),
-  triggerKey:  Joi.string().valid('MANUAL', 'ORDER_ENTRY', 'DISPATCH_PLAN', 'ACTUAL_DISPATCH', 'INVOICE', 'POD', 'PAYMENT').default('MANUAL'),
+  triggerKey:  Joi.string().valid('MANUAL', 'ORDER_INTAKE', 'ORDER_ENTRY', 'DISPATCH_PLAN', 'ACTUAL_DISPATCH', 'INVOICE', 'POD', 'PAYMENT').default('MANUAL'),
   requiresLink:       Joi.boolean().default(false),
   requiresAttachment: Joi.boolean().default(false),
   allowIncompleteChecklist: Joi.boolean().default(false),
@@ -71,6 +71,23 @@ export const taskTemplateUpdateSchema = taskTemplateSchema.fork(['name'], (s) =>
 
 export const checklistToggleSchema = Joi.object({ done: Joi.boolean().required() });
 export const commentSchema = Joi.object({ text: Joi.string().trim().min(1).max(2000).required() });
+
+export const attachmentsSchema = Joi.object({
+  attachments: Joi.array().items(Joi.object({
+    fileName: Joi.string().required(),
+    fileUrl:  Joi.string().required(),
+    fileKey:  Joi.string().allow('', null),
+    fileType: Joi.string().allow('', null),
+    sizeBytes: Joi.number().min(0).default(0),
+    kind: Joi.string().valid('file', 'audio', 'video', 'image'),
+  })).min(1).required(),
+});
+
+export const attachmentParamSchema = Joi.object({
+  id: objectId.required(),
+  stepCode: Joi.string().trim().required(),
+  attachmentId: objectId.required(),
+});
 
 export const planOrderSchema = Joi.object({
   steps: Joi.array().items(Joi.object({

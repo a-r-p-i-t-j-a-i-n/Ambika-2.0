@@ -54,6 +54,16 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('Comment added', process));
   }),
 
+  addAttachments: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.addAttachments(req.params.id, req.params.stepCode, req.body.attachments, req.user);
+    res.json(ApiResponse.ok('Attachments added', process));
+  }),
+
+  removeAttachment: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.removeAttachment(req.params.id, req.params.stepCode, req.params.attachmentId);
+    res.json(ApiResponse.ok('Attachment removed', process));
+  }),
+
   planOrder: asyncHandler(async (req, res) => {
     const process = await o2dFmsService.planOrder(req.params.id, req.body.steps, req.user);
     res.json(ApiResponse.ok('Order plan updated', process));

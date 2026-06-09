@@ -7,9 +7,10 @@ import {
 import {
   ArrowLeft, ExternalLink, Truck, Calendar, Hash, User, Clock, MapPin,
   Package, FileText, CheckCircle2, AlertTriangle, CornerUpRight, Boxes, Scale,
+  Download, FileSearch, RefreshCw,
 } from 'lucide-react';
 import dayjs from 'dayjs';
-import { useGetChallanByIdQuery } from '../../store/api/dispatchControlApi';
+import { useGetChallanByIdQuery, useGenerateChallanPdfMutation } from '../../store/api/dispatchControlApi';
 
 const C = {
   ink: '#0b2545', body: '#1e3a8a', primary: '#1d4ed8', primaryDk: '#1e3a8a',
@@ -54,6 +55,7 @@ const ChallanDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { data: res, isLoading } = useGetChallanByIdQuery(id);
+  const [generatePdf, { isLoading: generating }] = useGenerateChallanPdfMutation();
   const dc = res?.data;
 
   if (isLoading) {
@@ -93,11 +95,22 @@ const ChallanDetail = () => {
             sx={{ bgcolor: alpha(statusColor, 0.25), color: '#fff', fontWeight: 800, fontSize: '0.66rem',
               border: '1px solid rgba(255,255,255,0.3)' }}
           />
-          {dc.pdfUrl && (
-            <Button size="small" variant="contained" startIcon={<ExternalLink size={14} />}
-              href={dc.pdfUrl} target="_blank"
+          {dc.pdfUrl ? (
+            <>
+              <Button size="small" variant="contained" startIcon={<Download size={14} />}
+                href={dc.pdfUrl} target="_blank" rel="noreferrer"
+                sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
+                Download
+              </Button>
+              <Button size="small" startIcon={<RefreshCw size={14} />} onClick={() => generatePdf(id)} disabled={generating}
+                sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.25)' }}>
+                Regenerate
+              </Button>
+            </>
+          ) : (
+            <Button size="small" variant="contained" startIcon={<FileText size={14} />} onClick={() => generatePdf(id)} disabled={generating}
               sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
-              Download PDF
+              {generating ? 'Generating…' : 'Generate PDF'}
             </Button>
           )}
         </Stack>
@@ -126,6 +139,28 @@ const ChallanDetail = () => {
               />
             ) : null}
           </Stack>
+        </Paper>
+
+        {/* ── PDF preview (review before download) ────────────── */}
+        <Paper sx={{ borderRadius: 3, border: `1px solid ${C.line}`, overflow: 'hidden' }}>
+          <Box sx={{ p: 2, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <FileSearch size={16} color={C.primary} />
+            <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: C.ink }}>Delivery Challan PDF</Typography>
+            {dc.pdfUrl && (
+              <Button size="small" startIcon={<Download size={14} />} href={dc.pdfUrl} target="_blank" rel="noreferrer" sx={{ ml: 'auto', fontWeight: 700 }}>
+                Download
+              </Button>
+            )}
+          </Box>
+          {dc.pdfUrl ? (
+            <Box component="iframe" title="Delivery Challan PDF" src={dc.pdfUrl}
+              sx={{ width: '100%', height: { xs: 420, md: 640 }, border: 0, display: 'block' }} />
+          ) : (
+            <Box sx={{ p: 5, textAlign: 'center', color: C.faint }}>
+              <FileText size={34} style={{ opacity: 0.5 }} />
+              <Typography sx={{ mt: 1 }}>No PDF yet — click “Generate PDF” above to create it.</Typography>
+            </Box>
+          )}
         </Paper>
 
         {/* ── When & How ──────────────────────────────────────── */}

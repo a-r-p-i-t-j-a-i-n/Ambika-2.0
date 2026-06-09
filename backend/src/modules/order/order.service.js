@@ -32,14 +32,20 @@ export const orderService = {
     data.scheduling     = { planned: addDays(received, 2),  status: 'PENDING' };
     data.emailSchedule  = { planned: addDays(received, 2),  status: 'PENDING' };
 
+    const intakeId = data.intakeId || null;
     const order = await SalesOrder.create(data);
 
-    // Build the O2D FMS process (config-driven step tracker) for this order.
-    // Non-fatal: order creation must never fail if the catalog is empty/misconfigured.
+    // Start / advance the O2D FMS. Non-fatal: order creation must never fail.
     try {
-      await o2dFmsService.buildProcessForOrder(order);
+      if (intakeId) {
+        // Converted from an Order Intake — reuse that process, link the SO, advance ORDER_ENTRY.
+        await o2dFmsService.linkIntakeProcessToOrder(intakeId, order);
+      } else {
+        await o2dFmsService.buildProcessForOrder(order);
+        await o2dFmsService.advanceByTrigger({ salesOrderId: order._id }, 'ORDER_ENTRY');
+      }
     } catch (err) {
-      logger.error(`[O2D-FMS] Failed to build process for SO ${order.soNumber}: ${err.message}`);
+      logger.error(`[O2D-FMS] Failed to start/advance process for SO ${order.soNumber}: ${err.message}`);
     }
 
     return order;

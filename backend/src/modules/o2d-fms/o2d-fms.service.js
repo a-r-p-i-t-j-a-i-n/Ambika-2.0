@@ -15,7 +15,7 @@ import { notificationsService } from '../notifications/notification.service.js';
 
 // Notify the owner (and buddy) that a step is now waiting on them.
 const notifyStepOwners = async (process, step) => {
-  const link = `/o2d-fms/process/${process._id}`;
+  const link = `/o2d-fms/task/${process._id}/${encodeURIComponent(step.stepCode)}`;
   const title = `Your turn: ${step.taskTitle || step.stepCode}`;
   const body = `Order ${process.soNumber || ''} — ${process.partyName || ''}`;
   if (step.assignedTo) await notificationsService.notify(step.assignedTo, { type: 'TASK_ASSIGNED', title, body, link });
@@ -83,43 +83,26 @@ export const o2dFmsService = {
    * StepDefinition catalog. Idempotent — returns the existing process if one
    * already exists. Safe to call without an owner/catalog.
    */
-  async buildProcessForOrder(order) {
-    const existing = await O2DProcess.findOne({ salesOrderId: order._id });
-    if (existing) return existing;
-
+  /** Seed step instances from the active catalog + default template. Shared by
+   *  the Sales-Order and Order-Intake process builders. */
+  async _seedSteps(received) {
     const defs = await StepDefinition.find({ isActive: true, isDeleted: { $ne: true } })
       .sort({ sequence: 1 }).lean();
-    if (!defs.length) {
-      logger.warn(`[O2D-FMS] No active StepDefinitions — process not created for SO ${order.soNumber}`);
-      return null;
-    }
+    if (!defs.length) return { steps: [], defs: [] };
 
-    // The default task template (if any) supplies the per-step task title,
-    // checklist, lead time, assignee and buddy.
     const template = await TaskTemplate.findOne({ isDefault: true, isActive: true, isDeleted: { $ne: true } }).lean();
     const tplByStep = new Map((template?.steps || []).map((t) => [t.stepCode, t]));
-
-    const received = order.receivedAt || order.createdAt || new Date();
 
     const steps = [];
     for (let i = 0; i < defs.length; i += 1) {
       const def = defs[i];
       const tpl = tplByStep.get(def.stepCode);
-
-      // Lead time: template override (any unit) wins over the StepDefinition SLA.
       const leadTimeMins = leadTimeToMins(tpl?.leadTime) ?? def.slaMinutes;
-
-      // Planned is known up-front only for the first step or for steps clocked
-      // from the order date. PREV_ACTUAL steps get their planned set when the
-      // previous step is completed.
       let planned = null;
       if (i === 0 || def.slaFrom === 'ORDER_RECEIVED') planned = addMinutes(received, leadTimeMins);
-
-      // Owner: template assignee (user→role) overrides the StepDefinition default.
       const assignedTo = tpl?.assigneeUserId
         || (tpl?.assigneeRole ? await resolveOwner({ defaultOwnerRole: tpl.assigneeRole }) : null)
         || await resolveOwner(def);
-
       steps.push({
         stepCode: def.stepCode,
         planned,
@@ -133,17 +116,77 @@ export const o2dFmsService = {
         startedAt: i === 0 ? received : null,
       });
     }
+    return { steps, defs };
+  },
+
+  async buildProcessForOrder(order) {
+    const existing = await O2DProcess.findOne({ salesOrderId: order._id });
+    if (existing) return existing;
+
+    const { steps, defs } = await this._seedSteps(order.receivedAt || order.createdAt || new Date());
+    if (!steps.length) {
+      logger.warn(`[O2D-FMS] No active StepDefinitions — process not created for SO ${order.soNumber}`);
+      return null;
+    }
+
+    // Direct Sales Order (no preceding intake): skip ORDER_INTAKE steps so they
+    // don't dangle forever, and start at the first remaining step.
+    const defMap = new Map(defs.map((d) => [d.stepCode, d]));
+    steps.forEach((s) => {
+      if (defMap.get(s.stepCode)?.triggerKey === 'ORDER_INTAKE') { s.status = O2D_STEP_STATUS.SKIPPED; s.startedAt = null; s.planned = null; }
+    });
+    const firstPending = steps.find((s) => s.status === O2D_STEP_STATUS.PENDING);
+    if (firstPending && !firstPending.startedAt) firstPending.startedAt = order.receivedAt || new Date();
 
     return O2DProcess.create({
       salesOrderId: order._id,
+      source: 'SALES_ORDER',
       soNumber: order.soNumber,
       poNumber: order.poNumber,
       partyName: order.partyName,
       uniqueO2DId: order.uniqueO2DId,
-      currentStepCode: defs[0].stepCode,
+      currentStepCode: firstPending?.stepCode || defs[0].stepCode,
       createdBy: order.createdBy,
       steps,
     });
+  },
+
+  /** Start the FMS from an Order Intake (call/email/WhatsApp). Completes the
+   *  ORDER_INTAKE step. The Sales Order is linked later on conversion. */
+  async buildProcessForIntake(intake) {
+    const existing = await O2DProcess.findOne({ intakeId: intake._id });
+    if (existing) return existing;
+
+    const { steps, defs } = await this._seedSteps(intake.receivedAt || new Date());
+    if (!steps.length) return null;
+
+    const process = await O2DProcess.create({
+      intakeId: intake._id,
+      source: 'INTAKE',
+      soNumber: null,
+      partyName: intake.partyName,
+      currentStepCode: defs[0].stepCode,
+      createdBy: intake.createdBy,
+      steps,
+    });
+    // Auto-complete the "order received" step (whatever is mapped to ORDER_INTAKE).
+    try { await this.advanceByTrigger({ processId: process._id }, 'ORDER_INTAKE', intake.createdBy ? { _id: intake.createdBy } : null); }
+    catch (err) { logger.error(`[O2D-FMS] ORDER_INTAKE advance failed: ${err.message}`); }
+    return process;
+  },
+
+  /** Conversion: attach the now-created Sales Order to the intake's process and
+   *  advance the ORDER_ENTRY step. Keeps a single process across the lifecycle. */
+  async linkIntakeProcessToOrder(intakeId, order) {
+    const process = await O2DProcess.findOne({ intakeId });
+    if (!process) return null;
+    process.salesOrderId = order._id;
+    process.soNumber = order.soNumber;
+    process.poNumber = order.poNumber;
+    if (!process.uniqueO2DId) process.uniqueO2DId = order.uniqueO2DId;
+    await process.save();
+    await this.advanceByTrigger({ processId: process._id }, 'ORDER_ENTRY', order.createdBy ? { _id: order.createdBy } : null);
+    return process;
   },
 
   async listProcesses(query) {
@@ -159,7 +202,8 @@ export const o2dFmsService = {
       .populate('steps.assignedTo', 'name email role')
       .populate('steps.buddyUserId', 'name email role')
       .populate('steps.completedBy', 'name email role')
-      .populate('steps.comments.userId', 'name');
+      .populate('steps.comments.userId', 'name')
+      .populate('activityTimeline.actorId', 'name');
     if (!process) throw new AppError('O2D process not found', 404);
     const defMap = await loadDefMap();
     return enrichSteps(process, defMap);
@@ -170,7 +214,8 @@ export const o2dFmsService = {
       .populate('steps.assignedTo', 'name email role')
       .populate('steps.buddyUserId', 'name email role')
       .populate('steps.completedBy', 'name email role')
-      .populate('steps.comments.userId', 'name');
+      .populate('steps.comments.userId', 'name')
+      .populate('activityTimeline.actorId', 'name');
     if (!process) return null;
     const defMap = await loadDefMap();
     return enrichSteps(process, defMap);
@@ -273,10 +318,12 @@ export const o2dFmsService = {
    * @param orderRef  { salesOrderId } or { soNumber }
    */
   async advanceByTrigger(orderRef, triggerKey, actor = null) {
-    const query = orderRef?.salesOrderId
-      ? { salesOrderId: orderRef.salesOrderId }
-      : { soNumber: orderRef?.soNumber };
-    if (!query.salesOrderId && !query.soNumber) return null;
+    let query = null;
+    if (orderRef?.processId) query = { _id: orderRef.processId };
+    else if (orderRef?.salesOrderId) query = { salesOrderId: orderRef.salesOrderId };
+    else if (orderRef?.intakeId) query = { intakeId: orderRef.intakeId };
+    else if (orderRef?.soNumber) query = { soNumber: orderRef.soNumber };
+    if (!query) return null;
 
     const process = await O2DProcess.findOne(query).select('_id steps').lean();
     if (!process) return null;
@@ -294,16 +341,13 @@ export const o2dFmsService = {
     );
   },
 
-  /** The doer's "My Tasks" — pending steps where I'm the owner OR the buddy. */
+  /** The doer's "My Tasks" — every step where I'm the owner OR buddy, with its
+   *  status, so the UI can show actionable (pending) vs completed. */
   async getMyTasks(user, query = {}) {
     const uid = String(user._id);
     const filter = {
-      isCompleted: false,
       isDeleted: { $ne: true },
-      steps: { $elemMatch: {
-        status: O2D_STEP_STATUS.PENDING,
-        $or: [{ assignedTo: user._id }, { buddyUserId: user._id }],
-      } },
+      steps: { $elemMatch: { $or: [{ assignedTo: user._id }, { buddyUserId: user._id }] } },
     };
     const processes = await O2DProcess.find(filter).lean();
     const defMap = await loadDefMap();
@@ -311,12 +355,12 @@ export const o2dFmsService = {
     const tasks = [];
     for (const p of processes) {
       for (const s of p.steps) {
-        if (s.status !== O2D_STEP_STATUS.PENDING) continue;
         const isOwner = String(s.assignedTo) === uid;
         const isBuddy = String(s.buddyUserId) === uid;
         if (!isOwner && !isBuddy) continue;
         const def = defMap.get(s.stepCode);
         const checklist = s.checklist || [];
+        const isDone = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED].includes(s.status);
         tasks.push({
           processId: p._id,
           salesOrderId: p.salesOrderId,
@@ -328,16 +372,25 @@ export const o2dFmsService = {
           tool: def?.tool || null,
           description: s.instructions || def?.description || '',
           asBuddy: isBuddy && !isOwner,
+          status: s.status,
           requiresLink: !!def?.requiresLink,
           requiresAttachment: !!def?.requiresAttachment,
           checklistTotal: checklist.length,
           checklistDone: checklist.filter((c) => c.done).length,
           planned: s.planned,
-          isOverdue: !!(s.planned && new Date(s.planned) < new Date()),
+          completedAt: s.actual,
+          delayMins: s.delayMins || 0,
+          isOverdue: !isDone && !!(s.planned && new Date(s.planned) < new Date()),
         });
       }
     }
-    tasks.sort((a, b) => new Date(a.planned || 0) - new Date(b.planned || 0));
+    // Actionable first (pending, most overdue), completed after.
+    tasks.sort((a, b) => {
+      const ap = a.status === O2D_STEP_STATUS.PENDING ? 0 : 1;
+      const bp = b.status === O2D_STEP_STATUS.PENDING ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      return new Date(a.planned || 0) - new Date(b.planned || 0);
+    });
     return tasks;
   },
 
@@ -351,7 +404,13 @@ export const o2dFmsService = {
     if (!item) throw new AppError('Checklist item not found', 404);
     item.done = !!done;
     item.doneBy = done ? user?._id || null : null;
+    item.doneByName = done ? user?.name || null : null;
     item.doneAt = done ? new Date() : null;
+    process.activityTimeline.push({
+      action: done ? 'CHECKLIST_TICKED' : 'CHECKLIST_UNTICKED',
+      description: `${stepCode} · ${item.text}`,
+      actorId: user?._id || null,
+    });
     await process.save();
     const defMap = await loadDefMap();
     return enrichSteps(process, defMap);
@@ -371,6 +430,51 @@ export const o2dFmsService = {
         .populate('steps.assignedTo steps.buddyUserId steps.completedBy', 'name email role'),
       defMap,
     );
+  },
+
+  /** Attach proof files / voice notes to a step. */
+  async addAttachments(processId, stepCode, items, user) {
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    const step = process.steps.find((s) => s.stepCode === stepCode);
+    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+
+    const kindOf = (mime = '') => (mime.startsWith('audio/') ? 'audio'
+      : mime.startsWith('video/') ? 'video'
+      : mime.startsWith('image/') ? 'image' : 'file');
+
+    for (const it of items || []) {
+      step.attachments.push({
+        fileName: it.fileName, fileUrl: it.fileUrl, fileKey: it.fileKey || null,
+        fileType: it.fileType || null, sizeBytes: it.sizeBytes || 0,
+        kind: it.kind || kindOf(it.fileType), uploadedBy: user?._id || null,
+        uploadedByName: user?.name || null, uploadedAt: new Date(),
+      });
+    }
+    process.activityTimeline.push({
+      action: 'STEP_ATTACHMENT', description: `${items?.length || 0} file(s) attached to ${stepCode}`, actorId: user?._id || null,
+    });
+    await process.save();
+    const defMap = await loadDefMap();
+    return enrichSteps(
+      await O2DProcess.findById(processId)
+        .populate('steps.assignedTo steps.buddyUserId steps.completedBy', 'name email role'),
+      defMap,
+    );
+  },
+
+  /** Remove an attachment from a step (and from S3 if applicable). */
+  async removeAttachment(processId, stepCode, attachmentId) {
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    const step = process.steps.find((s) => s.stepCode === stepCode);
+    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    const att = step.attachments.id(attachmentId);
+    if (att?.fileKey) { try { const { deleteObject } = await import('../../common/uploads/s3.service.js'); await deleteObject(att.fileKey); } catch { /* non-fatal */ } }
+    step.attachments.pull(attachmentId);
+    await process.save();
+    const defMap = await loadDefMap();
+    return enrichSteps(process, defMap);
   },
 
   /** Per-order custom plan: override task/assignee/buddy/leadTime/checklist per step. */
@@ -400,11 +504,15 @@ export const o2dFmsService = {
         const prev = new Map((step.checklist || []).map((c) => [c.text, c]));
         step.checklist = sp.checklist.map((c) => {
           const old = prev.get(c.text);
-          return { text: c.text, done: old?.done || false, doneBy: old?.doneBy || null, doneAt: old?.doneAt || null };
+          return { text: c.text, done: old?.done || false, doneBy: old?.doneBy || null, doneByName: old?.doneByName || null, doneAt: old?.doneAt || null };
         });
       }
+      process.activityTimeline.push({
+        action: 'STEP_PLAN_UPDATED',
+        description: `${sp.stepCode} · task/plan updated`,
+        actorId: actor?._id || null,
+      });
     }
-    process.activityTimeline.push({ action: 'ORDER_PLANNED', description: 'Per-order plan updated', actorId: actor?._id || null });
     await process.save();
     const defMap = await loadDefMap();
     return enrichSteps(process, defMap);

@@ -40,6 +40,7 @@ export const PERMISSIONS = Object.freeze({
   // ── Sales Orders ────────────────────────────────────────────────
   'orders.view':                 { module: 'Orders',         label: 'View sales orders',                         risk: 'low' },
   'orders.create':               { module: 'Orders',         label: 'Create a sales order',                      risk: 'medium' },
+  'orders.intake':               { module: 'Orders',         label: 'Log an order intake (call/email/WhatsApp)', risk: 'medium' },
   'orders.edit':                 { module: 'Orders',         label: 'Edit an existing sales order',              risk: 'medium' },
   'orders.delete':               { module: 'Orders',         label: 'Delete a sales order',                      risk: 'critical' },
 

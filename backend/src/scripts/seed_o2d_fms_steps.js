@@ -18,10 +18,10 @@ import { StepDefinition } from '../modules/o2d-fms/o2d-fms.model.js';
 // PLANNER, SALES_EXEC, DISPATCH_SUPERVISOR, FINANCE, VIEWER, MD.
 const STEPS = [
   // ── Pre-production ──────────────────────────────────────────────
-  { stepCode: '1.01', name: 'Order Received',            sequence: 1,  phase: 'PRE_PRODUCTION', tool: 'Order Form',
-    defaultOwnerRole: 'SALES_EXEC',          slaMinutes: 0,   slaFrom: 'ORDER_RECEIVED', triggerKey: 'ORDER_ENTRY' },
-  { stepCode: '2.02', name: 'PO Entry in Tally & Dispatch vs PO', sequence: 2, phase: 'PRE_PRODUCTION', tool: 'Excel & Tally',
-    defaultOwnerRole: 'SALES_EXEC',          slaMinutes: 60,  slaFrom: 'PREV_ACTUAL', triggerKey: 'MANUAL' },
+  { stepCode: '1.01', name: 'Order Received (Call / Email / WhatsApp)', sequence: 1, phase: 'PRE_PRODUCTION', tool: 'Order Intake',
+    defaultOwnerRole: 'SALES_EXEC',          slaMinutes: 0,   slaFrom: 'ORDER_RECEIVED', triggerKey: 'ORDER_INTAKE' },
+  { stepCode: '2.02', name: 'Sales Order Entry (Tally & Dispatch vs PO)', sequence: 2, phase: 'PRE_PRODUCTION', tool: 'Excel & Tally',
+    defaultOwnerRole: 'SALES_EXEC',          slaMinutes: 60,  slaFrom: 'PREV_ACTUAL', triggerKey: 'ORDER_ENTRY' },
   { stepCode: '2.03', name: 'Check Inventory',           sequence: 3,  phase: 'PRE_PRODUCTION',
     defaultOwnerRole: 'DISPATCH_SUPERVISOR', slaMinutes: 60,  slaFrom: 'PREV_ACTUAL', triggerKey: 'MANUAL' },
   { stepCode: '2.04', name: 'Payment / Credit Check',    sequence: 4,  phase: 'PRE_PRODUCTION',

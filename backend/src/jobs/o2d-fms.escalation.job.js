@@ -13,6 +13,7 @@ import { o2dFmsService } from '../modules/o2d-fms/o2d-fms.service.js';
 import { emailService } from '../services/email.service.js';
 import User from '../modules/auth/auth.model.js';
 import { logger } from '../utils/logger.js';
+import { frontendUrl } from '../utils/frontendUrl.js';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN') : '—');
 
@@ -43,6 +44,8 @@ export const runO2DEscalationScan = async () => {
 
     const subject = `⚠ SLA Breach — ${b.stepName} overdue · ${b.soNumber || ''}`;
     const ownerLine = b.owner?.name ? `Owner: ${b.owner.name}` : 'Owner: (unassigned)';
+    // Absolute app link so it works from email / WhatsApp / any external channel.
+    const link = frontendUrl(`/o2d-fms/task/${b.processId}/${encodeURIComponent(b.stepCode)}`);
     const html = `
       <p>An O2D step has crossed its SLA and is still pending.</p>
       <table cellpadding="6" style="border-collapse:collapse">
@@ -51,12 +54,13 @@ export const runO2DEscalationScan = async () => {
         <tr><td><b>${ownerLine.split(':')[0]}</b></td><td>${ownerLine.split(': ')[1] || ''}</td></tr>
         <tr><td><b>Planned by</b></td><td>${fmt(b.planned)}</td></tr>
       </table>
+      <p><a href="${link}">Open this task →</a></p>
       <p>Please action this step or reassign it.</p>`;
 
     try {
       await emailService.sendEmail({
         to, subject,
-        text: `SLA breach: step ${b.stepName} (${b.stepCode}) for order ${b.soNumber} was due ${fmt(b.planned)} and is still pending. ${ownerLine}.`,
+        text: `SLA breach: step ${b.stepName} (${b.stepCode}) for order ${b.soNumber} was due ${fmt(b.planned)} and is still pending. ${ownerLine}. Open: ${link}`,
         html,
       });
       sent += 1;
