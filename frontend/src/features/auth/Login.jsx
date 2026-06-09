@@ -8,6 +8,7 @@ import { useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useLoginMutation } from '../../store/api/authApi';
 import { setCredentials } from '../../store/slices/authSlice';
+import { baseApi } from '../../store/api/baseApi';
 import AmbikaLogo from '../../assets/ambikalogo.jpeg';
 
 const Feature = ({ icon: Icon, title, desc }) => (
@@ -44,6 +45,9 @@ const Login = () => {
     e.preventDefault();
     try {
       const response = await login({ email, password }).unwrap();
+      // Clear any cached data from a previous session before this user's queries run,
+      // so a new login never shows the old user's data (until a manual refresh).
+      dispatch(baseApi.util.resetApiState());
       dispatch(setCredentials({ user: response.data.user, token: response.data.token }));
       navigate('/dashboard');
     } catch (err) {

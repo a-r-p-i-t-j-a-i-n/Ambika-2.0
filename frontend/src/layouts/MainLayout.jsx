@@ -15,6 +15,7 @@ import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { logout } from '../store/slices/authSlice';
+import { baseApi } from '../store/api/baseApi';
 import { usePermissions } from '../hooks/usePermission';
 
 import AmbikaLogo from '../assets/ambikalogo.jpeg';
@@ -179,7 +180,12 @@ const MainLayout = () => {
   }, [user, can, canAny, isRoot, pendingCount]);
 
   const handleDrawerToggle = () => setMobileOpen((v) => !v);
-  const handleLogout = () => { dispatch(logout()); navigate('/login'); };
+  const handleLogout = () => {
+    dispatch(logout());
+    // Wipe all cached API data so the next user never sees the previous user's data.
+    dispatch(baseApi.util.resetApiState());
+    navigate('/login');
+  };
 
   const initials = (user?.name || user?.email || 'U')
     .split(' ')

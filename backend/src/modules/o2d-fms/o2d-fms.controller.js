@@ -2,6 +2,9 @@ import asyncHandler from '../../middleware/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { o2dFmsService } from './o2d-fms.service.js';
 
+// Privileged = root or has act/manage. Assignees/buddies can act regardless (checked in the service).
+const isPriv = (req) => !!(req.userIsRoot || req.userPermissions?.has('o2dfms.act') || req.userPermissions?.has('o2dfms.manage'));
+
 export const o2dFmsController = {
   // ── Processes ──────────────────────────────────────────────
   listProcesses: asyncHandler(async (req, res) => {
@@ -34,7 +37,7 @@ export const o2dFmsController = {
   }),
 
   completeStep: asyncHandler(async (req, res) => {
-    const process = await o2dFmsService.completeStep(req.params.id, req.params.stepCode, req.body, req.user);
+    const process = await o2dFmsService.completeStep(req.params.id, req.params.stepCode, req.body, req.user, { privileged: isPriv(req) });
     res.json(ApiResponse.ok(`Step '${req.params.stepCode}' completed`, process));
   }),
 
@@ -45,22 +48,22 @@ export const o2dFmsController = {
 
   toggleChecklist: asyncHandler(async (req, res) => {
     const process = await o2dFmsService.toggleChecklistItem(
-      req.params.id, req.params.stepCode, req.params.itemId, req.body.done, req.user);
+      req.params.id, req.params.stepCode, req.params.itemId, req.body.done, req.user, isPriv(req));
     res.json(ApiResponse.ok('Checklist updated', process));
   }),
 
   addComment: asyncHandler(async (req, res) => {
-    const process = await o2dFmsService.addComment(req.params.id, req.params.stepCode, req.body.text, req.user);
+    const process = await o2dFmsService.addComment(req.params.id, req.params.stepCode, req.body.text, req.user, isPriv(req));
     res.json(ApiResponse.ok('Comment added', process));
   }),
 
   addAttachments: asyncHandler(async (req, res) => {
-    const process = await o2dFmsService.addAttachments(req.params.id, req.params.stepCode, req.body.attachments, req.user);
+    const process = await o2dFmsService.addAttachments(req.params.id, req.params.stepCode, req.body.attachments, req.user, isPriv(req));
     res.json(ApiResponse.ok('Attachments added', process));
   }),
 
   removeAttachment: asyncHandler(async (req, res) => {
-    const process = await o2dFmsService.removeAttachment(req.params.id, req.params.stepCode, req.params.attachmentId);
+    const process = await o2dFmsService.removeAttachment(req.params.id, req.params.stepCode, req.params.attachmentId, req.user, isPriv(req));
     res.json(ApiResponse.ok('Attachment removed', process));
   }),
 

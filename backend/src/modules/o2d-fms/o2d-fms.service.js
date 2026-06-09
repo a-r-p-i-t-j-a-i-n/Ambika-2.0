@@ -31,6 +31,18 @@ const computeDelayMins = (planned, actual) => {
   return Math.max(0, Math.round((new Date(actual).getTime() - new Date(planned).getTime()) / 60000));
 };
 
+// A step can be acted on by the assigned doer, the buddy, or a privileged user
+// (root / o2dfms.act / o2dfms.manage). This is why a plain-Viewer doer who was
+// explicitly assigned a task can still complete it.
+const isAssigneeOrBuddy = (step, user) => {
+  const uid = String(user?._id || '');
+  return !!uid && (String(step.assignedTo) === uid || String(step.buddyUserId) === uid);
+};
+const assertCanAct = (step, user, privileged) => {
+  if (privileged || isAssigneeOrBuddy(step, user)) return;
+  throw new AppError('This step is assigned to someone else — you can view it but not action it.', 403);
+};
+
 /** Resolve a StepDefinition's default owner to a User _id (or null). */
 const resolveOwner = async (def) => {
   if (def.defaultOwnerUserId) return def.defaultOwnerUserId;
@@ -237,6 +249,7 @@ export const o2dFmsService = {
     if (idx === -1) throw new AppError(`Step '${stepCode}' not found on this process`, 404);
 
     const step = process.steps[idx];
+    if (!opts.bypassRequirements) assertCanAct(step, user, opts.privileged);
     if ([O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED].includes(step.status)) {
       throw new AppError(`Step '${stepCode}' is already completed`, 409);
     }
@@ -401,11 +414,12 @@ export const o2dFmsService = {
   },
 
   /** Tick / untick a checklist item on a step. */
-  async toggleChecklistItem(processId, stepCode, itemId, done, user) {
+  async toggleChecklistItem(processId, stepCode, itemId, done, user, privileged = false) {
     const process = await O2DProcess.findById(processId);
     if (!process) throw new AppError('O2D process not found', 404);
     const step = process.steps.find((s) => s.stepCode === stepCode);
     if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    assertCanAct(step, user, privileged);
     const item = step.checklist.id(itemId);
     if (!item) throw new AppError('Checklist item not found', 404);
     item.done = !!done;
@@ -423,11 +437,12 @@ export const o2dFmsService = {
   },
 
   /** Add a comment to a step. */
-  async addComment(processId, stepCode, text, user) {
+  async addComment(processId, stepCode, text, user, privileged = false) {
     const process = await O2DProcess.findById(processId);
     if (!process) throw new AppError('O2D process not found', 404);
     const step = process.steps.find((s) => s.stepCode === stepCode);
     if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    assertCanAct(step, user, privileged);
     step.comments.push({ userId: user?._id || null, userName: user?.name || null, text, at: new Date() });
     await process.save();
     const defMap = await loadDefMap();
@@ -439,11 +454,12 @@ export const o2dFmsService = {
   },
 
   /** Attach proof files / voice notes to a step. */
-  async addAttachments(processId, stepCode, items, user) {
+  async addAttachments(processId, stepCode, items, user, privileged = false) {
     const process = await O2DProcess.findById(processId);
     if (!process) throw new AppError('O2D process not found', 404);
     const step = process.steps.find((s) => s.stepCode === stepCode);
     if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    assertCanAct(step, user, privileged);
 
     const kindOf = (mime = '') => (mime.startsWith('audio/') ? 'audio'
       : mime.startsWith('video/') ? 'video'
@@ -470,11 +486,12 @@ export const o2dFmsService = {
   },
 
   /** Remove an attachment from a step (and from S3 if applicable). */
-  async removeAttachment(processId, stepCode, attachmentId) {
+  async removeAttachment(processId, stepCode, attachmentId, user, privileged = false) {
     const process = await O2DProcess.findById(processId);
     if (!process) throw new AppError('O2D process not found', 404);
     const step = process.steps.find((s) => s.stepCode === stepCode);
     if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    assertCanAct(step, user, privileged);
     const att = step.attachments.id(attachmentId);
     if (att?.fileKey) { try { const { deleteObject } = await import('../../common/uploads/s3.service.js'); await deleteObject(att.fileKey); } catch { /* non-fatal */ } }
     step.attachments.pull(attachmentId);

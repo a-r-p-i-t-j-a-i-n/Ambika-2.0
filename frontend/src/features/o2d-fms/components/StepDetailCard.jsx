@@ -14,6 +14,7 @@ import {
   useUploadFileMutation, useAddStepAttachmentsMutation, useRemoveStepAttachmentMutation,
 } from '../../../store/api/o2dFmsApi';
 import { useListAccessUsersQuery } from '../../../store/api/accessControlApi';
+import { useSelector } from 'react-redux';
 import AttachmentList from '../../../components/AttachmentList';
 import VoiceRecorder from '../../../components/VoiceRecorder';
 
@@ -41,7 +42,8 @@ const MetaRow = ({ icon: Icon, label, value }) => (
  * + the task layer (checklist, comments, buddy). When opened from My Tasks the
  * passed `step` is partial, so we fetch the full process to hydrate checklist/comments.
  */
-const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct, canManage, asPage = false }) => {
+const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false }) => {
+  const myId = useSelector((s) => s.auth?.user?._id);
   const [link, setLink] = useState('');
   const [remarks, setRemarks] = useState('');
   const [assignee, setAssignee] = useState('');
@@ -68,6 +70,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct, ca
   const liveStep = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
 
   if (!step) return null;
+  // The assigned doer or buddy can always act on their own step, even if their
+  // role doesn't carry the global o2dfms.act permission.
+  const isMine = !!myId && [liveStep?.assignedTo?._id, liveStep?.buddyUserId?._id]
+    .filter(Boolean).map(String).includes(String(myId));
+  const canAct = canActProp || isMine;
   const done = ['DONE', 'DELAYED'].includes(liveStep.status);
   const tone = STATUS_TONE[liveStep.status] || STATUS_TONE.PENDING;
   const checklist = liveStep.checklist || [];

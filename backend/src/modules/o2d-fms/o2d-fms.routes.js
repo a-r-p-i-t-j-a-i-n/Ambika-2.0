@@ -62,8 +62,10 @@ router.get('/processes/by-order/:orderId',
 router.get('/processes/:id',
   requirePermission('o2dfms.view'), validate(mongoIdParamSchema, 'params'), c.getProcess);
 
+// Act-on-a-step endpoints are gated at view-level; the service then enforces
+// that the caller is the assignee/buddy or a privileged user.
 router.patch('/processes/:id/steps/:stepCode/complete',
-  requirePermission('o2dfms.act'),
+  requirePermission('o2dfms.view'),
   validate(processStepParamSchema, 'params'), validate(completeStepSchema), c.completeStep);
 
 router.patch('/processes/:id/steps/:stepCode/assign',
@@ -71,19 +73,19 @@ router.patch('/processes/:id/steps/:stepCode/assign',
   validate(processStepParamSchema, 'params'), validate(assignStepSchema), c.assignStep);
 
 router.patch('/processes/:id/steps/:stepCode/checklist/:itemId',
-  requirePermission('o2dfms.act'),
+  requirePermission('o2dfms.view'),
   validate(checklistParamSchema, 'params'), validate(checklistToggleSchema), c.toggleChecklist);
 
 router.post('/processes/:id/steps/:stepCode/comment',
-  requirePermission('o2dfms.act'),
+  requirePermission('o2dfms.view'),
   validate(processStepParamSchema, 'params'), validate(commentSchema), c.addComment);
 
 router.post('/processes/:id/steps/:stepCode/attachments',
-  requirePermission('o2dfms.act'),
+  requirePermission('o2dfms.view'),
   validate(processStepParamSchema, 'params'), validate(attachmentsSchema), c.addAttachments);
 
 router.delete('/processes/:id/steps/:stepCode/attachments/:attachmentId',
-  requirePermission('o2dfms.act'),
+  requirePermission('o2dfms.view'),
   validate(attachmentParamSchema, 'params'), c.removeAttachment);
 
 router.patch('/processes/:id/plan',
