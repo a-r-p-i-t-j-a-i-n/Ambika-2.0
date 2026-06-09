@@ -35,6 +35,9 @@ import orderIntakeRoutes from './modules/order-intake/order-intake.routes.js';
 
 const app = express();
 
+// Trust the reverse proxy (Render) to properly set X-Forwarded-For headers
+app.set('trust proxy', 1);
+
 // ── Security Middleware ─────────────────────────────────────
 // Allow the (different-origin) frontend to load files/images served by this API
 // — otherwise Helmet's default same-origin CORP blocks attachment previews.
