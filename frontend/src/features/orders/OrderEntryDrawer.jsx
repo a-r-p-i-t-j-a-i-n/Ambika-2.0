@@ -200,7 +200,7 @@ const orderItemsToForm = (order) => {
 };
 
 // ── Main component ──────────────────────────────────────────────────────
-const OrderEntryDrawer = ({ open, onClose, order = null }) => {
+const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   const theme = useTheme();
   const { enqueueSnackbar } = useSnackbar();
   const isEditMode = Boolean(order && order._id);
@@ -252,6 +252,32 @@ const OrderEntryDrawer = ({ open, onClose, order = null }) => {
         leadTimeDays: order.leadTimeDays || 7,
       });
       setItems(orderItemsToForm(order));
+    } else if (intake) {
+      // Punch-in form pre-filled from an Order Intake (client auto-selected, rough
+      // items carried over). The user adds the PO number and confirms SKUs.
+      const pid = intake.partyId?._id || intake.partyId;
+      const resolvedParty =
+        parties.find((p) => p._id === pid) ||
+        (pid ? { _id: pid, name: intake.partyName || intake.partyId?.name || '', location: '' } : null);
+      setForm({
+        poNumber: '',
+        poDate: dayjs().format('YYYY-MM-DD'),
+        party: resolvedParty,
+        place: resolvedParty?.location || '',
+        orderDate: dayjs().format('YYYY-MM-DD'),
+        transport: 'Road',
+        partyGroup: '',
+        orderDocument: '',
+        orderDocumentName: '',
+        leadTimeDays: resolvedParty?.leadTimeDays || 7,
+      });
+      setItems((intake.items || []).length
+        ? intake.items.map((it) => ({
+            _tempId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            skuId: '', skuName: it.skuName || '', skuCode: it.skuCode || '',
+            orderQty: it.qty || '', asnCode: '', remark: '',
+          }))
+        : [emptyItem()]);
     } else {
       setForm({
         poNumber: '',
@@ -268,7 +294,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null }) => {
       setItems([emptyItem()]);
     }
     setFieldErrors({});
-  }, [open, order, isEditMode, parties]);
+  }, [open, order, intake, isEditMode, parties]);
 
   const handlePartyChange = (_, party) => {
     setForm((prev) => ({
@@ -386,6 +412,8 @@ const OrderEntryDrawer = ({ open, onClose, order = null }) => {
         ...(isEditMode ? { dispatchedQty: Number(dispatchedQty || 0) } : {}),
         orderQty: Number(orderQty),
       })),
+      // When punching in from an intake, link it so the FMS process is reused.
+      ...(intake && !isEditMode ? { intakeId: intake._id } : {}),
     };
 
     try {

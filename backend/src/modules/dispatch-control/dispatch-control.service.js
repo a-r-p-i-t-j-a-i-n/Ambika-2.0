@@ -550,12 +550,18 @@ export const dispatchControlService = {
       items,
     });
 
-    // Build the O2D FMS process (config-driven step tracker) for this order, then
-    // auto-complete the "order received / entry" step. Non-fatal: order entry must
-    // never fail if the catalog is empty/misconfigured.
+    // Start / advance the O2D FMS. Non-fatal: order entry must never fail.
     try {
-      await o2dFmsService.buildProcessForOrder(order);
-      await o2dFmsService.advanceByTrigger({ salesOrderId: order._id }, 'ORDER_ENTRY');
+      if (data.intakeId) {
+        // This SO was punched in from an Order Intake — reuse that process, link the
+        // SO, advance ORDER_ENTRY, and mark the intake converted.
+        await o2dFmsService.linkIntakeProcessToOrder(data.intakeId, order);
+        const OrderIntake = (await import('../order-intake/order-intake.model.js')).default;
+        await OrderIntake.findByIdAndUpdate(data.intakeId, { intakeStatus: 'CONVERTED', linkedSalesOrderId: order._id });
+      } else {
+        await o2dFmsService.buildProcessForOrder(order);
+        await o2dFmsService.advanceByTrigger({ salesOrderId: order._id }, 'ORDER_ENTRY');
+      }
     } catch (err) {
       logger.error(`[O2D-FMS] Failed to build/advance process for SO ${order.soNumber}: ${err.message}`);
     }

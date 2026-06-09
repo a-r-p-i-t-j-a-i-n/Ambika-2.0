@@ -95,6 +95,7 @@ export const orderEntrySchema = Joi.object({
   remarks: optionalString,
   addresses: Joi.array().items(Joi.object().unknown(true)),
   items: Joi.array().items(orderItemSchema).min(1).required(),
+  intakeId: Joi.string().regex(/^[0-9a-fA-F]{24}$/).allow(null), // set when converting from an Order Intake
 }).or('partyId', 'partyName', 'clientName', 'customerName');
 
 export const planDispatchSchema = Joi.object({

@@ -139,7 +139,7 @@ const MyTasksWorkspace = () => {
                       <Typography variant="body2" sx={{ fontWeight: 700 }}>{t.name}</Typography>
                       <Chip size="small" variant="outlined" label={t.stepCode} />
                       {t.tool && <Chip size="small" label={t.tool} sx={{ bgcolor: alpha('#1d4ed8', 0.08) }} />}
-                      {t.asBuddy && <Chip size="small" color="secondary" label="As buddy" />}
+                      {t.asBuddy && <Chip size="small" color="secondary" variant="filled" label="🤝 You're the buddy" />}
                     </Stack>
                   </TableCell>
                   <TableCell>

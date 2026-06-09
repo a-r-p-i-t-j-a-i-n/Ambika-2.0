@@ -191,7 +191,7 @@ const MainLayout = () => {
 
   const pageTitle = useMemo(() => {
     const key = Object.keys(PAGE_TITLES).find((p) => location.pathname.startsWith(p));
-    return key ? PAGE_TITLES[key] : 'Ambika Dispatch';
+    return key ? PAGE_TITLES[key] : 'AGL ERP';
   }, [location.pathname]);
 
   // A group is open if the user toggled it; otherwise it auto-opens whenever
@@ -306,7 +306,7 @@ const MainLayout = () => {
         {!mini && (
           <Box sx={{ minWidth: 0 }}>
             <Typography sx={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.01em', lineHeight: 1.1, color: '#ffffff' }}>
-              Ambika Dispatch
+              AGL ERP
             </Typography>
             <Typography sx={{ fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.78)' }}>
               Planning &middot; Execution

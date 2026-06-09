@@ -94,12 +94,15 @@ export const o2dFmsService = {
     const tplByStep = new Map((template?.steps || []).map((t) => [t.stepCode, t]));
 
     const steps = [];
+    let cursor = received; // running planned-date cursor; each step adds its lead/SLA time
     for (let i = 0; i < defs.length; i += 1) {
       const def = defs[i];
       const tpl = tplByStep.get(def.stepCode);
       const leadTimeMins = leadTimeToMins(tpl?.leadTime) ?? def.slaMinutes;
-      let planned = null;
-      if (i === 0 || def.slaFrom === 'ORDER_RECEIVED') planned = addMinutes(received, leadTimeMins);
+      // Every step gets a planned due-date up-front, derived from the cumulative
+      // lead/SLA times (so the whole schedule is visible the moment the FMS starts).
+      cursor = addMinutes(cursor, leadTimeMins);
+      const planned = cursor;
       const assignedTo = tpl?.assigneeUserId
         || (tpl?.assigneeRole ? await resolveOwner({ defaultOwnerRole: tpl.assigneeRole }) : null)
         || await resolveOwner(def);
@@ -266,7 +269,10 @@ export const o2dFmsService = {
     const next = process.steps[idx + 1];
     if (next) {
       const nextDef = defMap.get(next.stepCode);
-      if (!next.planned || nextDef?.slaFrom !== 'ORDER_RECEIVED') {
+      // Planned dates are scheduled up-front from cumulative lead/SLA time. Only
+      // fill one in if it's somehow missing — never override the schedule (keeps
+      // the plan monotonic and faithful to the configured lead times).
+      if (!next.planned) {
         const mins = next.leadTimeMins ?? nextDef?.slaMinutes ?? 60;
         next.planned = addMinutes(actual, mins);
       }

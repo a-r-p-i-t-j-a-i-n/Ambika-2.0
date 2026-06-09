@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Button, IconButton, Chip, TextField, MenuItem,
   Switch, FormControlLabel, Divider, Accordion, AccordionSummary, AccordionDetails,
-  Skeleton, Tooltip, alpha, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete,
+  Skeleton, Tooltip, alpha, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, CircularProgress,
 } from '@mui/material';
 import {
   Plus, Trash2, Star, Pencil, ChevronDown, ListChecks, X, Save, ClipboardList,
@@ -16,7 +16,6 @@ import {
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useListAccessUsersQuery } from '../../store/api/accessControlApi';
 
-const ROLES = ['PLANNER', 'SALES_EXEC', 'DISPATCH_SUPERVISOR', 'FINANCE', 'VIEWER', 'MD'];
 const UNITS = ['MINUTES', 'HOURS', 'DAYS', 'WEEKS', 'MONTHS'];
 
 // Build editor rows from the step catalog, merged with any saved template steps.
@@ -57,14 +56,17 @@ const mergeStepsFromProcess = (defs, procSteps = []) => {
   });
 };
 
-const StepEditor = ({ row, onChange, users, hideRole = false }) => {
+const StepEditor = ({ row, onChange, users }) => {
   const set = (k, v) => onChange({ ...row, [k]: v });
   return (
     <Accordion disableGutters TransitionProps={{ unmountOnExit: true }} sx={{ '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1 }}>
       <AccordionSummary expandIcon={<ChevronDown size={16} />}>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Chip size="small" variant="outlined" label={row.stepCode} />
-          <Typography sx={{ fontWeight: 600 }}>{row.taskTitle || row.stepName}</Typography>
+          {/* Step NAME stays fixed (it comes from the Step Builder); the task title
+              is shown separately so configuring a template never "renames" the step. */}
+          <Typography sx={{ fontWeight: 700 }}>{row.stepName}</Typography>
+          {row.taskTitle && <Typography variant="caption" color="text.secondary">· task: {row.taskTitle}</Typography>}
           {row.checklist.length > 0 && <Chip size="small" icon={<ListChecks size={12} />} label={row.checklist.length} />}
         </Stack>
       </AccordionSummary>
@@ -79,14 +81,8 @@ const StepEditor = ({ row, onChange, users, hideRole = false }) => {
             </TextField>
           </Stack>
           <Stack direction="row" spacing={1}>
-            {!hideRole && (
-              <TextField select size="small" label="Assignee role" value={row.assigneeRole} onChange={(e) => set('assigneeRole', e.target.value)} sx={{ flex: 1 }}>
-                <MenuItem value=""><em>None</em></MenuItem>
-                {ROLES.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
-              </TextField>
-            )}
-            <TextField select size="small" label={hideRole ? 'Assign to' : 'Specific user (optional)'} value={row.assigneeUserId} onChange={(e) => set('assigneeUserId', e.target.value)} sx={{ flex: 1 }}>
-              <MenuItem value=""><em>By role</em></MenuItem>
+            <TextField select size="small" label="Assigned to" value={row.assigneeUserId} onChange={(e) => set('assigneeUserId', e.target.value)} sx={{ flex: 1 }}>
+              <MenuItem value=""><em>Unassigned</em></MenuItem>
               {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name}</MenuItem>)}
             </TextField>
             <TextField select size="small" label="Buddy (backup)" value={row.buddyUserId} onChange={(e) => set('buddyUserId', e.target.value)} sx={{ flex: 1 }}>
@@ -161,6 +157,12 @@ const TaskTemplates = () => {
   const [setDefault] = useSetDefaultTemplateMutation();
   const [deleteTpl] = useDeleteTaskTemplateMutation();
   const [planOrder] = usePlanOrderMutation();
+  const [settingId, setSettingId] = useState(null); // template id being set default
+
+  const handleSetDefault = async (id) => {
+    setSettingId(id);
+    try { await setDefault(id).unwrap(); } finally { setSettingId(null); }
+  };
 
   const templates = tplRes?.data || [];
   const defaultTpl = templates.find((t) => t.isDefault);
@@ -254,7 +256,7 @@ const TaskTemplates = () => {
         )}
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Per-step tasks ({editing.steps.length} steps)</Typography>
         {editing.steps.map((row, i) => (
-          <StepEditor key={row.stepCode} row={row} users={users} hideRole={custom}
+          <StepEditor key={row.stepCode} row={row} users={users}
             onChange={(updated) => setEditing({ ...editing, steps: editing.steps.map((s, j) => (j === i ? updated : s)) })} />
         ))}
         {error && <Typography color="error" sx={{ mt: 1 }}>{error}</Typography>}
@@ -318,8 +320,10 @@ const TaskTemplates = () => {
                 {tpl.isDefault ? (
                   <Chip size="small" variant="outlined" color="success" label="Active" />
                 ) : (
-                  <Button size="small" variant="outlined" startIcon={<Star size={14} />} onClick={() => setDefault(tpl._id)}>
-                    Use as default
+                  <Button size="small" variant="outlined" disabled={settingId === tpl._id}
+                    startIcon={settingId === tpl._id ? <CircularProgress size={14} /> : <Star size={14} />}
+                    onClick={() => handleSetDefault(tpl._id)}>
+                    {settingId === tpl._id ? 'Setting…' : 'Use as default'}
                   </Button>
                 )}
                 <Tooltip title="Edit"><IconButton size="small" onClick={() => startEdit(tpl)}><Pencil size={16} /></IconButton></Tooltip>

@@ -71,7 +71,7 @@ export const AppBootLoader = () => (
       background: 'linear-gradient(135deg, #eef3fc 0%, #f5f8ff 100%)',
     }}
   >
-    <AppLoader label="Starting Ambika Dispatch…" />
+    <AppLoader label="Starting AGL ERP…" />
   </Box>
 );
 

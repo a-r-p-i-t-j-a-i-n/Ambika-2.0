@@ -9,12 +9,13 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
-  useGetOrderIntakesQuery, useCreateOrderIntakeMutation, useConvertOrderIntakeMutation, useCancelOrderIntakeMutation,
+  useGetOrderIntakesQuery, useCreateOrderIntakeMutation, useCancelOrderIntakeMutation,
 } from '../../store/api/orderIntakeApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import AttachmentList from '../../components/AttachmentList';
 import VoiceRecorder from '../../components/VoiceRecorder';
+import OrderEntryDrawer from '../orders/OrderEntryDrawer';
 
 const CHANNELS = [
   { value: 'PHONE', label: 'Phone call', icon: Phone },
@@ -34,7 +35,6 @@ const OrderIntakeList = () => {
   const { data, isLoading } = useGetOrderIntakesQuery({ limit: 100, sort: '-createdAt' });
   const { data: partiesRes } = useGetPartiesQuery({ limit: 300 });
   const [createIntake, { isLoading: creating }] = useCreateOrderIntakeMutation();
-  const [convertIntake, { isLoading: converting }] = useConvertOrderIntakeMutation();
   const [cancelIntake] = useCancelOrderIntakeMutation();
   const [uploadFile] = useUploadFileMutation();
 
@@ -85,25 +85,8 @@ const OrderIntakeList = () => {
     } catch (e) { setError(e?.data?.message || 'Could not log the order.'); }
   };
 
-  // ── Convert ──
-  const openConvert = (intake) => setConvert({
-    ...intake,
-    items: (intake.items?.length ? intake.items : [{ skuName: '', qty: 1 }]).map((it) => ({ skuName: it.skuName, skuCode: it.skuCode, qty: it.qty || 1 })),
-    poNumber: '',
-  });
-  const setConvItem = (i, k, v) => setConvert((c) => ({ ...c, items: c.items.map((it, j) => (j === i ? { ...it, [k]: v } : it)) }));
-
-  const doConvert = async () => {
-    setError('');
-    const items = convert.items.filter((it) => it.skuName && Number(it.qty) > 0);
-    if (!items.length) { setError('Add at least one item with quantity.'); return; }
-    try {
-      const res = await convertIntake({ id: convert._id, poNumber: convert.poNumber || undefined, items }).unwrap();
-      const orderId = res.data?.order?._id;
-      setConvert(null);
-      if (orderId) navigate(`/orders/${orderId}`);
-    } catch (e) { setError(e?.data?.message || 'Could not convert.'); }
-  };
+  // ── Convert → open the real Sales Order punch-in form, pre-filled from the intake ──
+  const openConvert = (intake) => setConvert(intake);
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 } }}>
@@ -221,31 +204,8 @@ const OrderIntakeList = () => {
         </DialogActions>
       </Dialog>
 
-      {/* ── Convert dialog ── */}
-      <Dialog open={!!convert} onClose={() => setConvert(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Convert to Sales Order — {convert?.intakeNo}</DialogTitle>
-        <DialogContent dividers>
-          {convert && (
-            <Stack spacing={2}>
-              <Typography variant="body2" color="text.secondary">{convert.partyName || convert.partyId?.name}</Typography>
-              <TextField size="small" label="PO Number (optional)" value={convert.poNumber} onChange={(e) => setConvert((c) => ({ ...c, poNumber: e.target.value }))} fullWidth />
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Items</Typography>
-              {convert.items.map((it, i) => (
-                <Stack key={i} direction="row" spacing={1} alignItems="center">
-                  <TextField size="small" placeholder="SKU / item" value={it.skuName} onChange={(e) => setConvItem(i, 'skuName', e.target.value)} sx={{ flex: 1 }} />
-                  <TextField size="small" type="number" placeholder="Qty" value={it.qty} onChange={(e) => setConvItem(i, 'qty', e.target.value)} sx={{ width: 90 }} />
-                </Stack>
-              ))}
-              <Button size="small" startIcon={<Plus size={14} />} onClick={() => setConvert((c) => ({ ...c, items: [...c.items, { skuName: '', qty: 1 }] }))}>Add item</Button>
-              {error && <Typography color="error" variant="body2">{error}</Typography>}
-            </Stack>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConvert(null)}>Cancel</Button>
-          <Button variant="contained" onClick={doConvert} disabled={converting}>Create Sales Order</Button>
-        </DialogActions>
-      </Dialog>
+      {/* ── Convert → full Sales Order punch-in form, pre-filled from the intake ── */}
+      <OrderEntryDrawer open={!!convert} intake={convert} onClose={() => setConvert(null)} />
     </Box>
   );
 };

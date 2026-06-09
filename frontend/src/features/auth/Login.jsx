@@ -111,7 +111,7 @@ const Login = () => {
           </Box>
           <Box>
             <Typography sx={{ color: '#ffffff', fontWeight: 800, fontSize: '1.2rem', letterSpacing: '-0.01em' }}>
-              Ambika Dispatch
+              AGL ERP
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.78)', fontWeight: 600, fontSize: '0.72rem', letterSpacing: '0.15em', textTransform: 'uppercase' }}>
               Planning &middot; Execution Suite
@@ -156,7 +156,7 @@ const Login = () => {
         </Box>
 
         <Typography sx={{ position: 'relative', color: 'rgba(255,255,255,0.65)', fontSize: '0.78rem' }}>
-          © {new Date().getFullYear()} Ambika Group. All rights reserved.
+          © {new Date().getFullYear()} AGL ERP. All rights reserved.
         </Typography>
       </Box>
 
@@ -185,8 +185,8 @@ const Login = () => {
         >
           {/* mobile-only brand */}
           <Box sx={{ display: { xs: 'flex', md: 'none' }, alignItems: 'center', gap: 1.25, mb: 2.5 }}>
-            <img src={AmbikaLogo} alt="Ambika" style={{ width: 36, height: 36, borderRadius: 8 }} />
-            <Typography sx={{ fontWeight: 800, color: 'primary.dark' }}>Ambika Dispatch</Typography>
+            <img src={AmbikaLogo} alt="AGL ERP" style={{ width: 36, height: 36, borderRadius: 8 }} />
+            <Typography sx={{ fontWeight: 800, color: 'primary.dark' }}>AGL ERP</Typography>
           </Box>
 
           <Typography

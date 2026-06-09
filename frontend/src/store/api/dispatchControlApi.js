@@ -8,7 +8,7 @@ export const dispatchControlApi = baseApi.injectEndpoints({
     }),
     createOrderEntry: builder.mutation({
       query: (body) => ({ url: '/dispatch-control/order-entry', method: 'POST', body }),
-      invalidatesTags: ['Order', 'DispatchDashboard', 'Party'],
+      invalidatesTags: ['Order', 'DispatchDashboard', 'Party', 'OrderIntake', 'O2DProcess', 'O2DMyTasks'],
     }),
     createDispatchPlan: builder.mutation({
       query: (body) => ({ url: '/dispatch-control/dispatch-plans', method: 'POST', body }),
