@@ -22,7 +22,9 @@ export const completeStepSchema = Joi.object({
 });
 
 export const assignStepSchema = Joi.object({
-  userId: objectId.allow(null),
+  assignees: Joi.array().items(objectId).default([]),
+  buddies:   Joi.array().items(objectId).default([]),
+  userId:    objectId.allow(null), // legacy single (mapped to assignees)
 });
 
 export const stepDefinitionSchema = Joi.object({
@@ -55,8 +57,10 @@ const templateStepJoi = Joi.object({
   checklist:    Joi.array().items(Joi.object({ text: Joi.string().trim().required() })).default([]),
   leadTime:     leadTimeJoi.default({ unit: 'HOURS' }),
   assigneeRole:   Joi.string().trim().allow('', null),
-  assigneeUserId: objectId.allow(null),
-  buddyUserId:    objectId.allow(null),
+  assigneeUserIds: Joi.array().items(objectId).default([]),
+  buddyUserIds:    Joi.array().items(objectId).default([]),
+  assigneeUserId: objectId.allow(null), // legacy single
+  buddyUserId:    objectId.allow(null), // legacy single
 });
 
 export const taskTemplateSchema = Joi.object({
@@ -94,8 +98,10 @@ export const planOrderSchema = Joi.object({
     stepCode:     Joi.string().trim().required(),
     taskTitle:    Joi.string().allow('', null),
     instructions: Joi.string().allow('', null),
-    assignedTo:   objectId.allow(null),
-    buddyUserId:  objectId.allow(null),
+    assignees:    Joi.array().items(objectId),
+    buddies:      Joi.array().items(objectId),
+    assignedTo:   objectId.allow(null), // legacy single
+    buddyUserId:  objectId.allow(null), // legacy single
     leadTime:     leadTimeJoi,
     checklist:    Joi.array().items(Joi.object({ text: Joi.string().trim().required() })),
   })).min(1).required(),

@@ -47,6 +47,10 @@ router.delete('/step-definitions/:id',
 router.get('/my-tasks',
   requirePermission('o2dfms.view'), c.myTasks);
 
+// All doers' tasks — managers/MD oversight.
+router.get('/all-tasks',
+  requirePermission('o2dfms.manage'), c.allTasks);
+
 router.get('/dashboard',
   requirePermission('o2dfms.view'), c.dashboard);
 

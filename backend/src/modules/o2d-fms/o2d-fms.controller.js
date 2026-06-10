@@ -27,6 +27,10 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('My tasks retrieved', tasks));
   }),
 
+  allTasks: asyncHandler(async (_req, res) => {
+    res.json(ApiResponse.ok('All tasks retrieved', await o2dFmsService.getAllTasks()));
+  }),
+
   dashboard: asyncHandler(async (req, res) => {
     const data = await o2dFmsService.getDashboard();
     res.json(ApiResponse.ok('O2D FMS dashboard', data));
@@ -42,7 +46,12 @@ export const o2dFmsController = {
   }),
 
   assignStep: asyncHandler(async (req, res) => {
-    const process = await o2dFmsService.assignStep(req.params.id, req.params.stepCode, req.body.userId, req.user);
+    const { assignees, buddies, userId } = req.body;
+    const payload = {
+      assignees: assignees?.length ? assignees : (userId ? [userId] : []),
+      buddies: buddies || [],
+    };
+    const process = await o2dFmsService.assignStep(req.params.id, req.params.stepCode, payload, req.user);
     res.json(ApiResponse.ok(`Step '${req.params.stepCode}' reassigned`, process));
   }),
 

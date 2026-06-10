@@ -145,8 +145,14 @@ const ProcessStepSchema = new Schema({
   remarks: { type: String, default: null },
   attachments: [StepAttachmentSchema],
 
-  assignedTo:  { type: Schema.Types.ObjectId, ref: 'User', default: null }, // Who (per-order, override-able)
-  buddyUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null }, // backup who can also do it
+  // Multiple doers / buddies can share a step — any of them can action it, and
+  // because it's one step record, their ticks/completion stay consistent for all.
+  assignees:   [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  buddies:     [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  // Legacy "primary" mirrors (assignees[0] / buddies[0]) — kept for dashboard
+  // aggregation and back-compat with older processes.
+  assignedTo:  { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  buddyUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   completedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
 
   escalatedAt: { type: Date, default: null }, // set when an SLA-breach email was sent (dedup guard)
@@ -195,7 +201,10 @@ const TemplateStepSchema = new Schema({
     value: { type: Number, default: null },
     unit:  { type: String, enum: Object.values(LEAD_TIME_UNIT), default: LEAD_TIME_UNIT.HOURS },
   },
-  assigneeRole:   { type: String, default: null },
+  assigneeRole:    { type: String, default: null },
+  assigneeUserIds: [{ type: Schema.Types.ObjectId, ref: 'User' }], // multiple doers
+  buddyUserIds:    [{ type: Schema.Types.ObjectId, ref: 'User' }], // multiple buddies
+  // Legacy single fields (back-compat).
   assigneeUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   buddyUserId:    { type: Schema.Types.ObjectId, ref: 'User', default: null },
 }, { _id: true });

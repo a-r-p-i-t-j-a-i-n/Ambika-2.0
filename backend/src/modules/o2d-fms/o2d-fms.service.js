@@ -13,15 +13,15 @@ import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
 import { notificationsService } from '../notifications/notification.service.js';
 
-// Notify the owner (and buddy) that a step is now waiting on them.
+// Notify every assigned doer (and every buddy) that a step is waiting on them.
 const notifyStepOwners = async (process, step) => {
   const link = `/o2d-fms/task/${process._id}/${encodeURIComponent(step.stepCode)}`;
   const title = `Your turn: ${step.taskTitle || step.stepCode}`;
   const body = `Order ${process.soNumber || ''} — ${process.partyName || ''}`;
-  if (step.assignedTo) await notificationsService.notify(step.assignedTo, { type: 'TASK_ASSIGNED', title, body, link });
-  if (step.buddyUserId && String(step.buddyUserId) !== String(step.assignedTo)) {
-    await notificationsService.notify(step.buddyUserId, { type: 'TASK_ASSIGNED', title: `Backup: ${title}`, body, link });
-  }
+  const doers = stepDoerIds(step);
+  const buddies = stepBuddyIds(step).filter((id) => !doers.includes(id));
+  for (const id of doers) await notificationsService.notify(id, { type: 'TASK_ASSIGNED', title, body, link });
+  for (const id of buddies) await notificationsService.notify(id, { type: 'TASK_ASSIGNED', title: `Backup (buddy): ${title}`, body, link });
 };
 
 const addMinutes = (date, mins) => new Date(new Date(date).getTime() + (mins || 0) * 60000);
@@ -31,12 +31,17 @@ const computeDelayMins = (planned, actual) => {
   return Math.max(0, Math.round((new Date(actual).getTime() - new Date(planned).getTime()) / 60000));
 };
 
-// A step can be acted on by the assigned doer, the buddy, or a privileged user
-// (root / o2dfms.act / o2dfms.manage). This is why a plain-Viewer doer who was
-// explicitly assigned a task can still complete it.
+// Union of array + legacy-single user ids on a step.
+const idStr = (v) => (v ? String(v._id || v) : null);
+const stepDoerIds  = (step) => [...new Set([...(step.assignees || []).map(idStr), idStr(step.assignedTo)].filter(Boolean))];
+const stepBuddyIds = (step) => [...new Set([...(step.buddies || []).map(idStr), idStr(step.buddyUserId)].filter(Boolean))];
+
+// A step can be acted on by ANY assigned doer, ANY buddy, or a privileged user
+// (root / o2dfms.act / o2dfms.manage). Because it's one shared step record, when
+// one of them ticks the checklist or completes it, it's consistent for everyone.
 const isAssigneeOrBuddy = (step, user) => {
   const uid = String(user?._id || '');
-  return !!uid && (String(step.assignedTo) === uid || String(step.buddyUserId) === uid);
+  return !!uid && (stepDoerIds(step).includes(uid) || stepBuddyIds(step).includes(uid));
 };
 const assertCanAct = (step, user, privileged) => {
   if (privileged || isAssigneeOrBuddy(step, user)) return;
@@ -115,16 +120,32 @@ export const o2dFmsService = {
       // lead/SLA times (so the whole schedule is visible the moment the FMS starts).
       cursor = addMinutes(cursor, leadTimeMins);
       const planned = cursor;
-      const assignedTo = tpl?.assigneeUserId
-        || (tpl?.assigneeRole ? await resolveOwner({ defaultOwnerRole: tpl.assigneeRole }) : null)
-        || await resolveOwner(def);
+
+      // Doers: template multi-list → legacy single → role → step-definition default.
+      let assignees = (tpl?.assigneeUserIds?.length ? tpl.assigneeUserIds
+        : (tpl?.assigneeUserId ? [tpl.assigneeUserId] : []))
+        .map((x) => String(x));
+      if (!assignees.length && tpl?.assigneeRole) {
+        const u = await resolveOwner({ defaultOwnerRole: tpl.assigneeRole });
+        if (u) assignees = [String(u)];
+      }
+      if (!assignees.length) {
+        const u = await resolveOwner(def);
+        if (u) assignees = [String(u)];
+      }
+      const buddies = (tpl?.buddyUserIds?.length ? tpl.buddyUserIds
+        : (tpl?.buddyUserId ? [tpl.buddyUserId] : []))
+        .map((x) => String(x));
+
       steps.push({
         stepCode: def.stepCode,
         planned,
         leadTimeMins,
         status: O2D_STEP_STATUS.PENDING,
-        assignedTo,
-        buddyUserId: tpl?.buddyUserId || null,
+        assignees,
+        buddies,
+        assignedTo: assignees[0] || null,   // primary mirror
+        buddyUserId: buddies[0] || null,
         taskTitle: tpl?.taskTitle || def.name,
         instructions: tpl?.instructions || def.description || null,
         checklist: (tpl?.checklist || []).map((c) => ({ text: c.text, done: false })),
@@ -214,6 +235,7 @@ export const o2dFmsService = {
 
   async getProcessById(id) {
     const process = await O2DProcess.findById(id)
+      .populate('steps.assignees steps.buddies', 'name email role')
       .populate('steps.assignedTo', 'name email role')
       .populate('steps.buddyUserId', 'name email role')
       .populate('steps.completedBy', 'name email role')
@@ -226,6 +248,7 @@ export const o2dFmsService = {
 
   async getProcessByOrder(salesOrderId) {
     const process = await O2DProcess.findOne({ salesOrderId })
+      .populate('steps.assignees steps.buddies', 'name email role')
       .populate('steps.assignedTo', 'name email role')
       .populate('steps.buddyUserId', 'name email role')
       .populate('steps.completedBy', 'name email role')
@@ -308,22 +331,26 @@ export const o2dFmsService = {
     return enrichSteps(process, defMap);
   },
 
-  /** Per-order owner override. */
-  async assignStep(processId, stepCode, userId, actor) {
+  /** Per-order reassignment — set multiple doers and/or buddies on a step. */
+  async assignStep(processId, stepCode, { assignees = [], buddies = [] }, actor) {
     const process = await O2DProcess.findById(processId);
     if (!process) throw new AppError('O2D process not found', 404);
     const step = process.steps.find((s) => s.stepCode === stepCode);
     if (!step) throw new AppError(`Step '${stepCode}' not found on this process`, 404);
 
-    step.assignedTo = userId || null;
+    step.assignees = assignees || [];
+    step.buddies = buddies || [];
+    step.assignedTo = step.assignees[0] || null;   // primary mirror
+    step.buddyUserId = step.buddies[0] || null;
     process.activityTimeline.push({
       action: 'STEP_REASSIGNED',
-      description: `${stepCode} reassigned`,
+      description: `${stepCode} reassigned (${step.assignees.length} doer(s), ${step.buddies.length} buddy(ies))`,
       actorId: actor?._id || null,
     });
     await process.save();
-    // Notify the newly-assigned owner if this step is still pending.
-    if (userId && step.status === O2D_STEP_STATUS.PENDING) await notifyStepOwners(process, step);
+    if (step.status === O2D_STEP_STATUS.PENDING && (step.assignees.length || step.buddies.length)) {
+      await notifyStepOwners(process, step);
+    }
     const defMap = await loadDefMap();
     return enrichSteps(process, defMap);
   },
@@ -344,15 +371,37 @@ export const o2dFmsService = {
     else if (orderRef?.soNumber) query = { soNumber: orderRef.soNumber };
     if (!query) return null;
 
-    const process = await O2DProcess.findOne(query).select('_id steps').lean();
+    const process = await O2DProcess.findOne(query);
     if (!process) return null;
 
     const defMap = await loadDefMap();
-    const target = (process.steps || []).find((s) =>
+    const target = process.steps.find((s) =>
       ![O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED].includes(s.status)
       && defMap.get(s.stepCode)?.triggerKey === triggerKey);
     if (!target) return null;
 
+    // If the step still has an unfinished checklist, the real action only makes it
+    // the ACTIVE task — the assigned doer must still tick the checklist to finish it.
+    // (So the step is never shown "complete" while its checklist is pending.)
+    const pendingChecklist = (target.checklist || []).some((c) => !c.done);
+    if (pendingChecklist) {
+      if (!target.startedAt) target.startedAt = new Date();
+      process.currentStepCode = target.stepCode;
+      target.comments.push({
+        userName: 'System',
+        text: `${triggerKey.replace('_', ' ').toLowerCase()} done automatically — please complete the checklist to finish this step.`,
+        at: new Date(),
+      });
+      process.activityTimeline.push({
+        action: 'TRIGGER_AWAITS_CHECKLIST',
+        description: `${target.stepCode} · ${triggerKey} done; checklist pending`,
+        actorId: actor?._id || null,
+      });
+      await process.save();
+      return enrichSteps(process, defMap);
+    }
+
+    // No checklist left — the real action IS the proof, so auto-complete & advance.
     return this.completeStep(
       process._id, target.stepCode,
       { remarks: `Auto-completed by ${triggerKey}` }, actor,
@@ -366,7 +415,10 @@ export const o2dFmsService = {
     const uid = String(user._id);
     const filter = {
       isDeleted: { $ne: true },
-      steps: { $elemMatch: { $or: [{ assignedTo: user._id }, { buddyUserId: user._id }] } },
+      steps: { $elemMatch: { $or: [
+        { assignees: user._id }, { assignedTo: user._id },
+        { buddies: user._id }, { buddyUserId: user._id },
+      ] } },
     };
     const processes = await O2DProcess.find(filter).lean();
     const defMap = await loadDefMap();
@@ -374,8 +426,8 @@ export const o2dFmsService = {
     const tasks = [];
     for (const p of processes) {
       for (const s of p.steps) {
-        const isOwner = String(s.assignedTo) === uid;
-        const isBuddy = String(s.buddyUserId) === uid;
+        const isOwner = stepDoerIds(s).includes(uid);
+        const isBuddy = stepBuddyIds(s).includes(uid);
         if (!isOwner && !isBuddy) continue;
         const def = defMap.get(s.stepCode);
         const checklist = s.checklist || [];
@@ -410,6 +462,41 @@ export const o2dFmsService = {
       if (ap !== bp) return ap - bp;
       return new Date(a.planned || 0) - new Date(b.planned || 0);
     });
+    return tasks;
+  },
+
+  /** Manager/MD view — every step across every order as a task row, with the
+   *  doers, status and timing. Frontend filters & computes stats client-side. */
+  async getAllTasks() {
+    const processes = await O2DProcess.find({ isDeleted: { $ne: true } })
+      .populate('steps.assignees steps.assignedTo steps.completedBy', 'name')
+      .lean();
+    const defMap = await loadDefMap();
+    const now = Date.now();
+    const tasks = [];
+    for (const p of processes) {
+      for (const s of p.steps) {
+        const def = defMap.get(s.stepCode);
+        const isDone = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED].includes(s.status);
+        const doerObjs = (s.assignees?.length ? s.assignees : [s.assignedTo]).filter(Boolean);
+        tasks.push({
+          processId: p._id,
+          stepCode: s.stepCode,
+          soNumber: p.soNumber || (p.source === 'INTAKE' ? 'Intake' : ''),
+          partyName: p.partyName,
+          name: s.taskTitle || def?.name || s.stepCode,
+          status: s.status,
+          doers: doerObjs.map((u) => ({ _id: String(u._id || u), name: u.name || 'User' })),
+          completedBy: s.completedBy?.name || null,
+          planned: s.planned,
+          completedAt: s.actual,
+          delayMins: s.delayMins || 0,
+          checklistTotal: (s.checklist || []).length,
+          checklistDone: (s.checklist || []).filter((c) => c.done).length,
+          isOverdue: !isDone && !!(s.planned && new Date(s.planned) < now),
+        });
+      }
+    }
     return tasks;
   },
 
@@ -510,8 +597,20 @@ export const o2dFmsService = {
       if (!step) continue;
       if (sp.taskTitle !== undefined) step.taskTitle = sp.taskTitle;
       if (sp.instructions !== undefined) step.instructions = sp.instructions;
-      if (sp.assignedTo !== undefined) step.assignedTo = sp.assignedTo || null;
-      if (sp.buddyUserId !== undefined) step.buddyUserId = sp.buddyUserId || null;
+      if (sp.assignees !== undefined) {
+        step.assignees = sp.assignees || [];
+        step.assignedTo = step.assignees[0] || null;
+      } else if (sp.assignedTo !== undefined) {
+        step.assignedTo = sp.assignedTo || null;
+        step.assignees = sp.assignedTo ? [sp.assignedTo] : [];
+      }
+      if (sp.buddies !== undefined) {
+        step.buddies = sp.buddies || [];
+        step.buddyUserId = step.buddies[0] || null;
+      } else if (sp.buddyUserId !== undefined) {
+        step.buddyUserId = sp.buddyUserId || null;
+        step.buddies = sp.buddyUserId ? [sp.buddyUserId] : [];
+      }
       if (sp.leadTime !== undefined) {
         const mins = leadTimeToMins(sp.leadTime);
         if (mins != null) {
