@@ -50,7 +50,12 @@ const makeStorage = (folder) => {
 export const makeUploader = (folder = 'misc', { field = 'file', maxMb = 15 } = {}) =>
   multer({ storage: makeStorage(folder), fileFilter, limits: { fileSize: maxMb * 1024 * 1024 } }).single(field);
 
-const absolute = (req, pathPart) => `${req.protocol}://${req.get('host')}${pathPart}`;
+// Prefer the configured public base (deployed) over the request host, so the
+// stored URL never bakes in "localhost" or an internal proxy hostname.
+const absolute = (req, pathPart) => {
+  const base = (process.env.SERVER_URL || process.env.SERVER_BASE || '').replace(/\/+$/, '');
+  return base ? `${base}${pathPart}` : `${req.protocol}://${req.get('host')}${pathPart}`;
+};
 
 /** Reusable upload handler — returns an ABSOLUTE, stable URL the whole app can store/open. */
 export const handleUpload = (folder = 'misc') => asyncHandler(async (req, res) => {

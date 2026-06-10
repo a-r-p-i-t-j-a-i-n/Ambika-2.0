@@ -128,8 +128,8 @@ const MyTasksWorkspace = () => {
           <Button size="small" sx={{ mt: 1 }} onClick={() => { setSearch(''); setFilter('all'); }}>Clear filters</Button>
         </Paper>
       ) : (
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-          <Table size="small">
+        <Paper sx={{ borderRadius: 3, overflowX: 'auto' }}>
+          <Table size="small" sx={{ minWidth: 860 }}>
             <TableHead>
               <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
                 <TableCell sx={{ width: 44 }}>#</TableCell>

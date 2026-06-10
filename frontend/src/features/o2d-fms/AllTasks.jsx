@@ -121,8 +121,8 @@ const AllTasks = () => {
       </Paper>
 
       {isLoading ? <Skeleton variant="rounded" height={360} /> : (
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-          <Table size="small">
+        <Paper sx={{ borderRadius: 3, overflowX: 'auto' }}>
+          <Table size="small" sx={{ minWidth: 980 }}>
             <TableHead>
               <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
                 <TableCell sx={{ width: 48 }}>#</TableCell>

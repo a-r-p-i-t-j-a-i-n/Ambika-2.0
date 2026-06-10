@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Box, Stack, Typography,
-  Chip, TextField, Button, Divider, Alert, IconButton, MenuItem, alpha,
+  Chip, TextField, Button, Divider, Alert, IconButton, alpha, Autocomplete,
   Checkbox, FormControlLabel, LinearProgress, Avatar, Tooltip, Paper,
 } from '@mui/material';
 import {
@@ -312,16 +312,28 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               <Divider />
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Reassign — multiple doers & buddies allowed</Typography>
               <Stack spacing={1}>
-                <TextField select size="small" label="Doers" value={assignSel}
-                  onChange={(e) => setAssignSel(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-                  SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'Unassigned' }}>
-                  {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name} — {u.email}</MenuItem>)}
-                </TextField>
-                <TextField select size="small" label="Buddies (backup)" value={buddySel}
-                  onChange={(e) => setBuddySel(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-                  SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'None' }}>
-                  {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name} — {u.email}</MenuItem>)}
-                </TextField>
+                <Autocomplete
+                  multiple size="small"
+                  options={users}
+                  getOptionLabel={(u) => u.name ? `${u.name} — ${u.email}` : (u.email || '')}
+                  isOptionEqualToValue={(o, v) => o._id === v._id}
+                  value={users.filter((u) => assignSel.includes(u._id))}
+                  onChange={(_, v) => setAssignSel(v.map((u) => u._id))}
+                  disableCloseOnSelect
+                  ChipProps={{ size: 'small' }}
+                  renderInput={(p) => <TextField {...p} label="Doers" placeholder="Type to search…" />}
+                />
+                <Autocomplete
+                  multiple size="small"
+                  options={users}
+                  getOptionLabel={(u) => u.name ? `${u.name} — ${u.email}` : (u.email || '')}
+                  isOptionEqualToValue={(o, v) => o._id === v._id}
+                  value={users.filter((u) => buddySel.includes(u._id))}
+                  onChange={(_, v) => setBuddySel(v.map((u) => u._id))}
+                  disableCloseOnSelect
+                  ChipProps={{ size: 'small' }}
+                  renderInput={(p) => <TextField {...p} label="Buddies (backup)" placeholder="Type to search…" />}
+                />
                 <Button onClick={handleAssign} disabled={assigning} startIcon={<UserCog size={16} />} variant="outlined" sx={{ alignSelf: 'flex-start' }}>Save assignment</Button>
               </Stack>
             </>

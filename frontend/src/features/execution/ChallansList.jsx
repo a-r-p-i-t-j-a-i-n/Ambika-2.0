@@ -9,6 +9,7 @@ import { Plus, Search, Truck, ExternalLink, AlertTriangle, CheckCircle2 } from '
 import dayjs from 'dayjs';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import DispatchEntry from './DispatchEntry';
+import { resolveFileUrl } from '../../utils/fileUrl';
 
 const STATUS_COLOR = (theme, value) => ({
   CREATED:    theme.palette.info.main,
@@ -87,7 +88,7 @@ const ChallansList = () => {
     {
       field: 'pdfUrl', headerName: '', width: 50, align: 'center', sortable: false,
       renderCell: (p) => p.value ? (
-        <Tooltip title="Open document"><IconButton size="small" onClick={(e) => { e.stopPropagation(); window.open(p.value, '_blank'); }}><ExternalLink size={13} /></IconButton></Tooltip>
+        <Tooltip title="Open document"><IconButton size="small" onClick={(e) => { e.stopPropagation(); window.open(resolveFileUrl(p.value), '_blank'); }}><ExternalLink size={13} /></IconButton></Tooltip>
       ) : null,
     },
   ];

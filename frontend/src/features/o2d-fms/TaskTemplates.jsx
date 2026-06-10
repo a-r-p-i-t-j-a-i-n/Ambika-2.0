@@ -78,19 +78,31 @@ const StepEditor = ({ row, onChange, users }) => {
               {UNITS.map((u) => <MenuItem key={u} value={u}>{u.toLowerCase()}</MenuItem>)}
             </TextField>
           </Stack>
-          <Stack direction="row" spacing={1}>
-            <TextField select size="small" label="Assigned to (one or more)" value={row.assigneeUserIds}
-              onChange={(e) => set('assigneeUserIds', typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-              SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'Unassigned' }}
-              sx={{ flex: 1 }}>
-              {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name}</MenuItem>)}
-            </TextField>
-            <TextField select size="small" label="Buddy / backup (one or more)" value={row.buddyUserIds}
-              onChange={(e) => set('buddyUserIds', typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-              SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'None' }}
-              sx={{ flex: 1 }}>
-              {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name}</MenuItem>)}
-            </TextField>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            {/* Autocomplete (not Select) — doesn't lock page scroll, shows picks as
+                removable chips, and supports type-to-search. */}
+            <Autocomplete
+              multiple size="small" sx={{ flex: 1 }}
+              options={users}
+              getOptionLabel={(u) => u.name || u.email || ''}
+              isOptionEqualToValue={(o, v) => o._id === v._id}
+              value={users.filter((u) => row.assigneeUserIds.includes(u._id))}
+              onChange={(_, v) => set('assigneeUserIds', v.map((u) => u._id))}
+              disableCloseOnSelect
+              ChipProps={{ size: 'small' }}
+              renderInput={(p) => <TextField {...p} label="Assigned to (one or more)" placeholder="Type to search…" />}
+            />
+            <Autocomplete
+              multiple size="small" sx={{ flex: 1 }}
+              options={users}
+              getOptionLabel={(u) => u.name || u.email || ''}
+              isOptionEqualToValue={(o, v) => o._id === v._id}
+              value={users.filter((u) => row.buddyUserIds.includes(u._id))}
+              onChange={(_, v) => set('buddyUserIds', v.map((u) => u._id))}
+              disableCloseOnSelect
+              ChipProps={{ size: 'small' }}
+              renderInput={(p) => <TextField {...p} label="Buddy / backup (one or more)" placeholder="Type to search…" />}
+            />
           </Stack>
           {/* Checklist editor */}
           <Box>

@@ -14,6 +14,7 @@ import { useGetOrderByIdQuery, useGetOrderScheduleQuery } from '../../store/api/
 import { useGetOrderComparisonQuery, useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import PlanVsActualPanel from './components/PlanVsActualPanel';
 import DispatchEntry from '../execution/DispatchEntry';
+import { resolveFileUrl } from '../../utils/fileUrl';
 
 const C = {
   ink: '#0b2545', body: '#1e3a8a', primary: '#1d4ed8', primaryDk: '#1e3a8a',
@@ -498,7 +499,7 @@ const DocRow = ({ label, url }) => {
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: 2, border: `1px solid ${C.line}` }}>
       <FileText size={16} color={C.primary} />
       <Typography sx={{ flex: 1, fontSize: '0.82rem', fontWeight: 700, color: C.ink }}>{label}</Typography>
-      <Button size="small" startIcon={<ExternalLink size={13} />} href={url} target="_blank" sx={{ fontWeight: 700 }}>
+      <Button size="small" startIcon={<ExternalLink size={13} />} href={resolveFileUrl(url)} target="_blank" sx={{ fontWeight: 700 }}>
         Open
       </Button>
     </Box>

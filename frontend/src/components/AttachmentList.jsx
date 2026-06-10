@@ -5,6 +5,7 @@ import {
 import {
   X, FileText, Image as ImageIcon, Music, Video, File, Download, ExternalLink, Trash2, Eye,
 } from 'lucide-react';
+import { resolveFileUrl } from '../utils/fileUrl';
 
 // Decide how to preview from MIME (preferred) or filename extension.
 const typeOf = (att) => {
@@ -33,6 +34,9 @@ const AttachmentList = ({ attachments = [], onRemove, dense = false }) => {
   if (!attachments.length) return null;
 
   const t = preview ? typeOf(preview) : null;
+  // Always resolve against the current API host — stored URLs may carry the
+  // host they were uploaded on (e.g. localhost during testing).
+  const src = preview ? resolveFileUrl(preview) : '';
 
   return (
     <>
@@ -65,15 +69,15 @@ const AttachmentList = ({ attachments = [], onRemove, dense = false }) => {
           <IconButton onClick={() => setPreview(null)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
         </DialogTitle>
         <DialogContent dividers sx={{ minHeight: 200 }}>
-          {t === 'image' && <Box component="img" src={preview.fileUrl} alt={preview.fileName} sx={{ width: '100%', borderRadius: 1 }} />}
-          {t === 'pdf' && <Box component="iframe" title={preview.fileName} src={preview.fileUrl} sx={{ width: '100%', height: '70vh', border: 0 }} />}
+          {t === 'image' && <Box component="img" src={src} alt={preview.fileName} sx={{ width: '100%', borderRadius: 1 }} />}
+          {t === 'pdf' && <Box component="iframe" title={preview.fileName} src={src} sx={{ width: '100%', height: '70vh', border: 0 }} />}
           {t === 'audio' && (
             <Stack alignItems="center" spacing={2} sx={{ py: 4 }}>
               <Music size={40} color="#7c3aed" />
-              <audio controls src={preview.fileUrl} style={{ width: '100%' }} />
+              <audio controls src={src} style={{ width: '100%' }} />
             </Stack>
           )}
-          {t === 'video' && <Box component="video" controls src={preview.fileUrl} sx={{ width: '100%', maxHeight: '70vh' }} />}
+          {t === 'video' && <Box component="video" controls src={src} sx={{ width: '100%', maxHeight: '70vh' }} />}
           {t === 'other' && (
             <Stack alignItems="center" spacing={1.5} sx={{ py: 5 }}>
               <File size={40} color="#475569" />
@@ -82,8 +86,8 @@ const AttachmentList = ({ attachments = [], onRemove, dense = false }) => {
           )}
         </DialogContent>
         <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-          <Button startIcon={<ExternalLink size={16} />} href={preview?.fileUrl} target="_blank" rel="noreferrer">Open in new tab</Button>
-          <Button startIcon={<Download size={16} />} variant="contained" component="a" href={preview?.fileUrl} target="_blank" rel="noreferrer" download>Download</Button>
+          <Button startIcon={<ExternalLink size={16} />} href={src} target="_blank" rel="noreferrer">Open in new tab</Button>
+          <Button startIcon={<Download size={16} />} variant="contained" component="a" href={src} target="_blank" rel="noreferrer" download>Download</Button>
         </Box>
       </Dialog>
     </>

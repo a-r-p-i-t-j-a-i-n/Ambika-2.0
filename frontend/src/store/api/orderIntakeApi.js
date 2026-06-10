@@ -22,6 +22,11 @@ export const orderIntakeApi = baseApi.injectEndpoints({
       query: (id) => ({ url: `/order-intake/${id}/cancel`, method: 'PATCH' }),
       invalidatesTags: ['OrderIntake'],
     }),
+    // MD-only: removes the intake (any status) and its orphan FMS process.
+    deleteOrderIntake: builder.mutation({
+      query: (id) => ({ url: `/order-intake/${id}`, method: 'DELETE' }),
+      invalidatesTags: ['OrderIntake', 'O2DProcess', 'O2DMyTasks', 'O2DDashboard'],
+    }),
   }),
 });
 
@@ -31,4 +36,5 @@ export const {
   useCreateOrderIntakeMutation,
   useConvertOrderIntakeMutation,
   useCancelOrderIntakeMutation,
+  useDeleteOrderIntakeMutation,
 } = orderIntakeApi;

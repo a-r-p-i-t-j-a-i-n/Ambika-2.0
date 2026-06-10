@@ -85,6 +85,33 @@ export const orderIntakeService = {
     if (!intake) throw new AppError('Order intake not found', 404);
     return intake.toObject();
   },
+
+  /**
+   * MD-only hard removal (soft-delete). Allowed for ANY status, including
+   * CONVERTED. If the intake was never converted, its FMS process is retired
+   * too; a converted intake's process belongs to the Sales Order and is kept.
+   */
+  async remove(id, actor) {
+    const intake = await OrderIntake.findById(id);
+    if (!intake) throw new AppError('Order intake not found', 404);
+
+    intake.isDeleted = true;
+    intake.updatedBy = actor?._id;
+    await intake.save();
+
+    if (intake.intakeStatus !== INTAKE_STATUS.CONVERTED) {
+      try {
+        const { O2DProcess } = await import('../o2d-fms/o2d-fms.model.js');
+        await O2DProcess.updateOne(
+          { intakeId: intake._id, salesOrderId: null },
+          { $set: { isDeleted: true, updatedBy: actor?._id } },
+        );
+      } catch (err) {
+        logger.error(`[order-intake] FMS cleanup failed for ${intake.intakeNo}: ${err.message}`);
+      }
+    }
+    return { id: intake._id, intakeNo: intake.intakeNo };
+  },
 };
 
 export default orderIntakeService;

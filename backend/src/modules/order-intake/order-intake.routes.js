@@ -2,7 +2,7 @@ import { Router } from 'express';
 import Joi from 'joi';
 import asyncHandler from '../../middleware/asyncHandler.js';
 import validate from '../../middleware/validate.js';
-import { ApiResponse } from '../../utils/apiResponse.js';
+import { ApiResponse, AppError } from '../../utils/apiResponse.js';
 import { protect } from '../../middleware/auth.middleware.js';
 import { attachUserPermissions, requirePermission } from '../../middleware/permission.middleware.js';
 import { orderIntakeService } from './order-intake.service.js';
@@ -66,5 +66,11 @@ router.patch('/:id/cancel', requirePermission('orders.intake', 'orders.create'),
   validate(idParam, 'params'), asyncHandler(async (req, res) => {
     res.json(ApiResponse.ok('Order intake cancelled', await orderIntakeService.cancel(req.params.id, req.user)));
   }));
+
+// MD-only: delete an intake (any status, including CONVERTED).
+router.delete('/:id', validate(idParam, 'params'), asyncHandler(async (req, res) => {
+  if (!req.userIsRoot) throw new AppError('Only the MD can delete order intakes', 403);
+  res.json(ApiResponse.ok('Order intake deleted', await orderIntakeService.remove(req.params.id, req.user)));
+}));
 
 export default router;

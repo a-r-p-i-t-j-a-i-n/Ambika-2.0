@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useGetChallanByIdQuery, useGenerateChallanPdfMutation } from '../../store/api/dispatchControlApi';
+import { resolveFileUrl } from '../../utils/fileUrl';
 
 const C = {
   ink: '#0b2545', body: '#1e3a8a', primary: '#1d4ed8', primaryDk: '#1e3a8a',
@@ -57,6 +58,8 @@ const ChallanDetail = () => {
   const { data: res, isLoading } = useGetChallanByIdQuery(id);
   const [generatePdf, { isLoading: generating }] = useGenerateChallanPdfMutation();
   const dc = res?.data;
+  // Resolve against the current API host (stored URLs may carry the upload-time host).
+  const pdfHref = dc?.pdfUrl ? resolveFileUrl({ fileUrl: dc.pdfUrl, fileKey: dc.pdfKey }) : '';
 
   if (isLoading) {
     return <Box sx={{ p: 3 }}><Skeleton variant="rectangular" height={420} sx={{ borderRadius: 2 }} /></Box>;
@@ -98,7 +101,7 @@ const ChallanDetail = () => {
           {dc.pdfUrl ? (
             <>
               <Button size="small" variant="contained" startIcon={<Download size={14} />}
-                href={dc.pdfUrl} target="_blank" rel="noreferrer"
+                href={pdfHref} target="_blank" rel="noreferrer"
                 sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
                 Download
               </Button>
@@ -147,13 +150,13 @@ const ChallanDetail = () => {
             <FileSearch size={16} color={C.primary} />
             <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: C.ink }}>Delivery Challan PDF</Typography>
             {dc.pdfUrl && (
-              <Button size="small" startIcon={<Download size={14} />} href={dc.pdfUrl} target="_blank" rel="noreferrer" sx={{ ml: 'auto', fontWeight: 700 }}>
+              <Button size="small" startIcon={<Download size={14} />} href={pdfHref} target="_blank" rel="noreferrer" sx={{ ml: 'auto', fontWeight: 700 }}>
                 Download
               </Button>
             )}
           </Box>
           {dc.pdfUrl ? (
-            <Box component="iframe" title="Delivery Challan PDF" src={dc.pdfUrl}
+            <Box component="iframe" title="Delivery Challan PDF" src={pdfHref}
               sx={{ width: '100%', height: { xs: 420, md: 640 }, border: 0, display: 'block' }} />
           ) : (
             <Box sx={{ p: 5, textAlign: 'center', color: C.faint }}>

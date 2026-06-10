@@ -36,9 +36,9 @@ const ProcessList = () => {
         />
       </Stack>
 
-      <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
+      <Paper sx={{ borderRadius: 3, overflowX: 'auto' }}>
         {isLoading ? <Skeleton variant="rounded" height={300} /> : (
-          <Table size="small">
+          <Table size="small" sx={{ minWidth: 760 }}>
             <TableHead>
               <TableRow>
                 <TableCell>Order</TableCell><TableCell>Current step</TableCell>

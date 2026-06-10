@@ -163,8 +163,11 @@ const O2DProcessSchema = new Schema({
   ...baseSchemaFields,
 
   // A process attaches to a Sales Order and/or an Order Intake. At least one is set.
-  salesOrderId: { type: Schema.Types.ObjectId, ref: 'SalesOrder', default: null, unique: true, sparse: true },
-  intakeId:     { type: Schema.Types.ObjectId, ref: 'OrderIntake', default: null, unique: true, sparse: true },
+  // Uniqueness is enforced by PARTIAL indexes below — `unique sparse` is wrong here
+  // because both fields default to null, and sparse indexes DO index explicit nulls,
+  // so the second intake-only (or second direct-SO) process would E11000.
+  salesOrderId: { type: Schema.Types.ObjectId, ref: 'SalesOrder', default: null },
+  intakeId:     { type: Schema.Types.ObjectId, ref: 'OrderIntake', default: null },
   source:       { type: String, enum: ['SALES_ORDER', 'INTAKE'], default: 'SALES_ORDER' },
 
   // Denormalised for fast list/dashboard rendering without populating the order.
@@ -180,7 +183,9 @@ const O2DProcessSchema = new Schema({
   steps: [ProcessStepSchema],
 }, baseSchemaOptions);
 
-// salesOrderId uniqueness is declared inline on the field above.
+// One process per Sales Order / per Intake — but only when the id is actually set.
+O2DProcessSchema.index({ salesOrderId: 1 }, { unique: true, partialFilterExpression: { salesOrderId: { $type: 'objectId' } } });
+O2DProcessSchema.index({ intakeId: 1 },     { unique: true, partialFilterExpression: { intakeId: { $type: 'objectId' } } });
 O2DProcessSchema.index({ currentStepCode: 1, isCompleted: 1 });
 O2DProcessSchema.index({ 'steps.assignedTo': 1, 'steps.status': 1 });
 

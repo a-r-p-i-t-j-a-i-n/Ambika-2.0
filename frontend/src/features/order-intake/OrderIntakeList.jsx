@@ -2,15 +2,17 @@ import React, { useState, useRef } from 'react';
 import {
   Box, Paper, Stack, Typography, Button, IconButton, Chip, TextField, MenuItem, Autocomplete,
   Table, TableBody, TableCell, TableHead, TableRow, Dialog, DialogTitle, DialogContent, DialogActions,
-  Skeleton, Tooltip, alpha, Divider,
+  Skeleton, Tooltip, alpha, Divider, ToggleButtonGroup, ToggleButton, CircularProgress,
 } from '@mui/material';
 import {
-  Plus, Phone, Mail, MessageCircle, Users, FileText, Trash2, ArrowRightCircle, X, PhoneCall,
+  Plus, Phone, Mail, MessageCircle, Users, FileText, Trash2, ArrowRightCircle, X, PhoneCall, Ban,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   useGetOrderIntakesQuery, useCreateOrderIntakeMutation, useCancelOrderIntakeMutation,
+  useDeleteOrderIntakeMutation,
 } from '../../store/api/orderIntakeApi';
+import { usePermissions } from '../../hooks/usePermission';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import AttachmentList from '../../components/AttachmentList';
@@ -32,20 +34,44 @@ const blankForm = { partyId: null, channel: 'PHONE', contactName: '', items: [],
 
 const OrderIntakeList = () => {
   const navigate = useNavigate();
+  const { isRoot } = usePermissions();
   const { data, isLoading } = useGetOrderIntakesQuery({ limit: 100, sort: '-createdAt' });
   const { data: partiesRes } = useGetPartiesQuery({ limit: 300 });
   const [createIntake, { isLoading: creating }] = useCreateOrderIntakeMutation();
   const [cancelIntake] = useCancelOrderIntakeMutation();
+  const [deleteIntake, { isLoading: deleting }] = useDeleteOrderIntakeMutation();
   const [uploadFile] = useUploadFileMutation();
 
-  const intakes = data?.data || [];
+  const allIntakes = data?.data || [];
   const parties = partiesRes?.data || [];
 
   const [form, setForm] = useState(null);     // null = closed; object = logging
   const [convert, setConvert] = useState(null); // intake being converted
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [deleteTarget, setDeleteTarget] = useState(null); // intake pending MD delete
+  const [deleteError, setDeleteError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef(null);
+
+  const counts = {
+    ALL: allIntakes.length,
+    NEW: allIntakes.filter((i) => i.intakeStatus === 'NEW').length,
+    CONVERTED: allIntakes.filter((i) => i.intakeStatus === 'CONVERTED').length,
+    CANCELLED: allIntakes.filter((i) => i.intakeStatus === 'CANCELLED').length,
+  };
+  const intakes = statusFilter === 'ALL' ? allIntakes : allIntakes.filter((i) => i.intakeStatus === statusFilter);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError('');
+    try {
+      await deleteIntake(deleteTarget._id).unwrap();
+      setDeleteTarget(null);
+    } catch (e) {
+      setDeleteError(e?.data?.message || 'Could not delete this intake.');
+    }
+  };
 
   // ── Log form helpers ──
   const addItem = () => setForm((f) => ({ ...f, items: [...f.items, { skuName: '', qty: 1 }] }));
@@ -103,38 +129,74 @@ const OrderIntakeList = () => {
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setForm({ ...blankForm }); setError(''); }}>Log order</Button>
       </Stack>
 
-      <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
+      {/* ── Status filter ── */}
+      {!isLoading && allIntakes.length > 0 && (
+        <Paper sx={{ p: 1.25, borderRadius: 3, mb: 2 }}>
+          <ToggleButtonGroup size="small" value={statusFilter} exclusive onChange={(_, v) => v && setStatusFilter(v)} sx={{ flexWrap: 'wrap' }}>
+            <ToggleButton value="ALL">All ({counts.ALL})</ToggleButton>
+            <ToggleButton value="NEW" sx={{ color: '#1d4ed8' }}>New ({counts.NEW})</ToggleButton>
+            <ToggleButton value="CONVERTED" sx={{ color: '#0f766e' }}>Converted ({counts.CONVERTED})</ToggleButton>
+            <ToggleButton value="CANCELLED" sx={{ color: '#94a3b8' }}>Cancelled ({counts.CANCELLED})</ToggleButton>
+          </ToggleButtonGroup>
+        </Paper>
+      )}
+
+      {/* overflowX lets the table scroll sideways on small screens instead of clipping the action buttons */}
+      <Paper sx={{ borderRadius: 3, overflowX: 'auto' }}>
         {isLoading ? <Skeleton variant="rounded" height={300} /> : (
-          <Table size="small">
+          <Table size="small" sx={{ minWidth: 880 }}>
             <TableHead>
               <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
-                <TableCell>Intake</TableCell><TableCell>Client</TableCell><TableCell>Channel</TableCell>
-                <TableCell>Items</TableCell><TableCell>Logged</TableCell><TableCell>Status</TableCell>
-                <TableCell align="right">Action</TableCell>
+                <TableCell sx={{ width: 100 }}>Intake</TableCell><TableCell>Client</TableCell><TableCell sx={{ width: 130 }}>Channel</TableCell>
+                <TableCell sx={{ width: 64 }}>Items</TableCell><TableCell sx={{ width: 150 }}>Logged</TableCell><TableCell sx={{ width: 110 }}>Status</TableCell>
+                <TableCell align="right" sx={{ width: 200 }}>Action</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {intakes.length === 0 ? (
-                <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>No order intakes yet. Click “Log order”.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                  {statusFilter === 'ALL' ? 'No order intakes yet. Click “Log order”.' : 'No intakes match this filter.'}
+                </TableCell></TableRow>
               ) : intakes.map((it) => {
                 const cm = channelMeta(it.channel); const CIcon = cm.icon;
                 return (
                   <TableRow key={it._id} hover>
-                    <TableCell><Typography variant="body2" sx={{ fontWeight: 600 }}>{it.intakeNo}</Typography></TableCell>
-                    <TableCell>{it.partyName || it.partyId?.name}</TableCell>
+                    <TableCell><Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{it.intakeNo}</Typography></TableCell>
+                    <TableCell sx={{ maxWidth: 240 }}><Typography variant="body2" noWrap title={it.partyName || it.partyId?.name}>{it.partyName || it.partyId?.name}</Typography></TableCell>
                     <TableCell><Chip size="small" icon={<CIcon size={13} />} label={cm.label} variant="outlined" /></TableCell>
                     <TableCell>{it.items?.length || 0}</TableCell>
-                    <TableCell><Typography variant="caption">{fmt(it.createdAt)}</Typography></TableCell>
+                    <TableCell><Typography variant="caption" noWrap>{fmt(it.createdAt)}</Typography></TableCell>
                     <TableCell><Chip size="small" label={it.intakeStatus} sx={{ bgcolor: alpha(STATUS_TONE[it.intakeStatus] || '#64748b', 0.12), color: STATUS_TONE[it.intakeStatus] || '#64748b', fontWeight: 700 }} /></TableCell>
-                    <TableCell align="right">
-                      {it.intakeStatus === 'NEW' ? (
-                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                          <Button size="small" variant="contained" startIcon={<ArrowRightCircle size={14} />} onClick={() => openConvert(it)}>Convert to SO</Button>
-                          <Tooltip title="Cancel"><IconButton size="small" onClick={() => cancelIntake(it._id)}><Trash2 size={15} /></IconButton></Tooltip>
-                        </Stack>
-                      ) : it.intakeStatus === 'CONVERTED' && it.linkedSalesOrderId ? (
-                        <Button size="small" onClick={() => navigate(`/orders/${it.linkedSalesOrderId._id || it.linkedSalesOrderId}`)}>View SO</Button>
-                      ) : <Typography variant="caption" color="text.disabled">—</Typography>}
+                    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
+                        {it.intakeStatus === 'NEW' && (
+                          <>
+                            <Button size="small" variant="contained" startIcon={<ArrowRightCircle size={14} />}
+                              onClick={() => openConvert(it)}
+                              sx={{ whiteSpace: 'nowrap', minWidth: 0, px: 1.25, py: 0.4, fontSize: '0.72rem', borderRadius: 1.5, boxShadow: 'none' }}>
+                              Convert to SO
+                            </Button>
+                            <Tooltip title="Cancel this intake"><IconButton size="small" onClick={() => cancelIntake(it._id)}><Ban size={15} /></IconButton></Tooltip>
+                          </>
+                        )}
+                        {it.intakeStatus === 'CONVERTED' && it.linkedSalesOrderId && (
+                          <Button size="small" variant="outlined"
+                            onClick={() => navigate(`/orders/${it.linkedSalesOrderId._id || it.linkedSalesOrderId}`)}
+                            sx={{ whiteSpace: 'nowrap', minWidth: 0, px: 1.25, py: 0.4, fontSize: '0.72rem', borderRadius: 1.5 }}>
+                            View SO
+                          </Button>
+                        )}
+                        {it.intakeStatus === 'CANCELLED' && !isRoot && (
+                          <Typography variant="caption" color="text.disabled">—</Typography>
+                        )}
+                        {isRoot && (
+                          <Tooltip title="Delete (MD only)">
+                            <IconButton size="small" color="error" onClick={() => { setDeleteError(''); setDeleteTarget(it); }}>
+                              <Trash2 size={15} />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 );
@@ -206,6 +268,38 @@ const OrderIntakeList = () => {
 
       {/* ── Convert → full Sales Order punch-in form, pre-filled from the intake ── */}
       <OrderEntryDrawer open={!!convert} intake={convert} onClose={() => setConvert(null)} />
+
+      {/* ── MD-only delete confirmation ── */}
+      <Dialog open={!!deleteTarget} onClose={() => !deleting && setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete this intake?</DialogTitle>
+        <DialogContent dividers>
+          <Stack direction="row" spacing={1.5} alignItems="flex-start">
+            <Box sx={{ p: 1, borderRadius: 2, bgcolor: alpha('#be123c', 0.1), color: '#be123c', display: 'flex' }}><Trash2 size={20} /></Box>
+            <Box>
+              <Typography variant="body2">
+                You're about to delete <b>{deleteTarget?.intakeNo}</b> ({deleteTarget?.partyName || deleteTarget?.partyId?.name}). This can't be undone.
+              </Typography>
+              {deleteTarget?.intakeStatus === 'CONVERTED' ? (
+                <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>
+                  This intake is already converted — the linked Sales Order and its FMS process will NOT be touched; only the intake record is removed.
+                </Typography>
+              ) : (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  Its FMS process (and any tasks from it) will be removed too.
+                </Typography>
+              )}
+              {deleteError && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>{deleteError}</Typography>}
+            </Box>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={confirmDelete} disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={14} color="inherit" /> : <Trash2 size={16} />}>
+            {deleting ? 'Deleting…' : 'Yes, delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
