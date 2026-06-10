@@ -9,6 +9,10 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       query: () => '/o2d-fms/my-tasks',
       providesTags: ['O2DMyTasks'],
     }),
+    getAllTasks: builder.query({
+      query: () => '/o2d-fms/all-tasks',
+      providesTags: ['O2DMyTasks', 'O2DProcess'],
+    }),
     getFmsDashboard: builder.query({
       query: () => '/o2d-fms/dashboard',
       providesTags: ['O2DDashboard'],
@@ -40,10 +44,10 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       ],
     }),
     assignStep: builder.mutation({
-      query: ({ id, stepCode, userId }) => ({
+      query: ({ id, stepCode, assignees = [], buddies = [] }) => ({
         url: `/o2d-fms/processes/${id}/steps/${stepCode}/assign`,
         method: 'PATCH',
-        body: { userId },
+        body: { assignees, buddies },
       }),
       invalidatesTags: (r, e, { id }) => [
         { type: 'O2DProcess', id }, 'O2DProcess', 'O2DMyTasks', 'O2DDashboard',
@@ -155,6 +159,7 @@ export const o2dFmsApi = baseApi.injectEndpoints({
 
 export const {
   useGetMyTasksQuery,
+  useGetAllTasksQuery,
   useGetFmsDashboardQuery,
   useGetFmsScoresQuery,
   useGetProcessesQuery,

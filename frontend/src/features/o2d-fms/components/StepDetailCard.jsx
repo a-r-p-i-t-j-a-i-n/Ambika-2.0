@@ -46,7 +46,8 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const myId = useSelector((s) => s.auth?.user?._id);
   const [link, setLink] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [assignee, setAssignee] = useState('');
+  const [assignSel, setAssignSel] = useState([]); // selected doer ids (reassign)
+  const [buddySel, setBuddySel] = useState([]);    // selected buddy ids (reassign)
   const [comment, setComment] = useState('');
   const [error, setError] = useState('');
 
@@ -69,11 +70,25 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const { data: procRes } = useGetProcessByIdQuery(processId, { skip: !open || !processId });
   const liveStep = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
 
+  // Seed reassign multi-selects from the step's current doers/buddies.
+  React.useEffect(() => {
+    const a = (liveStep?.assignees?.length ? liveStep.assignees : [liveStep?.assignedTo]).filter(Boolean);
+    const b = (liveStep?.buddies?.length ? liveStep.buddies : [liveStep?.buddyUserId]).filter(Boolean);
+    setAssignSel(a.map((u) => String(u._id || u)));
+    setBuddySel(b.map((u) => String(u._id || u)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, processId, liveStep?.stepCode]);
+
   if (!step) return null;
+  // All doers + buddies on the step (arrays, with legacy single fallback).
+  const doerList = (liveStep.assignees?.length ? liveStep.assignees : [liveStep.assignedTo]).filter(Boolean);
+  const buddyList = (liveStep.buddies?.length ? liveStep.buddies : [liveStep.buddyUserId]).filter(Boolean);
   // The assigned doer or buddy can always act on their own step, even if their
   // role doesn't carry the global o2dfms.act permission.
-  const isMine = !!myId && [liveStep?.assignedTo?._id, liveStep?.buddyUserId?._id]
-    .filter(Boolean).map(String).includes(String(myId));
+  const idStr = (u) => String(u._id || u);
+  const isDoerForMe = !!myId && doerList.map(idStr).includes(String(myId));
+  const isBuddyForMe = !!myId && buddyList.map(idStr).includes(String(myId));
+  const isMine = isDoerForMe || isBuddyForMe;
   const canAct = canActProp || isMine;
   const done = ['DONE', 'DELAYED'].includes(liveStep.status);
   const tone = STATUS_TONE[liveStep.status] || STATUS_TONE.PENDING;
@@ -97,8 +112,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const handleAssign = async () => {
     setError('');
     try {
-      await assignStep({ id: processId, stepCode: liveStep.stepCode, userId: assignee || null }).unwrap();
-      onClose?.(true);
+      await assignStep({ id: processId, stepCode: liveStep.stepCode, assignees: assignSel, buddies: buddySel }).unwrap();
     } catch (e) {
       setError(e?.data?.message || 'Could not reassign the step.');
     }
@@ -148,6 +162,17 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
 
   const body = (
         <Stack spacing={2}>
+          {isBuddyForMe && !isDoerForMe && (
+            <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, bgcolor: alpha('#7c3aed', 0.1), borderColor: alpha('#7c3aed', 0.4) }}>
+              <Box sx={{ color: '#6d28d9', display: 'flex' }}><Users size={18} /></Box>
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 700, color: '#5b21b6' }}>You're the buddy (backup) on this step</Typography>
+                <Typography variant="caption" sx={{ color: '#6d28d9' }}>
+                  Step in if the main doer{doerList.length ? ` (${doerList.map((u) => u.name || 'User').join(', ')})` : ''} can't — you have full access to complete it.
+                </Typography>
+              </Box>
+            </Paper>
+          )}
           {liveStep.isOverdue && !done && (
             <Alert icon={<AlertTriangle size={18} />} severity="warning" sx={{ py: 0.5 }}>This step is past its planned time.</Alert>
           )}
@@ -155,12 +180,13 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           {/* Who / What / How / When */}
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
             <MetaRow icon={ClipboardList} label="What" value={liveStep.instructions || liveStep.description || liveStep.name} />
-            <MetaRow icon={User} label="Doer" value={liveStep.assignedTo?.name || liveStep.defaultOwnerRole || 'Unassigned'} />
+            <MetaRow icon={User} label={doerList.length > 1 ? 'Doers' : 'Doer'}
+              value={doerList.length ? doerList.map((u) => u.name || 'User').join(', ') : (liveStep.defaultOwnerRole || 'Unassigned')} />
             <MetaRow icon={Wrench} label="How (tool)" value={liveStep.tool} />
             <MetaRow icon={Clock} label="When (SLA)" value={liveStep.slaMinutes != null ? `${liveStep.slaMinutes} min` : '—'} />
           </Box>
-          {liveStep.buddyUserId?.name && (
-            <MetaRow icon={Users} label="Buddy (backup)" value={liveStep.buddyUserId.name} />
+          {buddyList.length > 0 && (
+            <MetaRow icon={Users} label={buddyList.length > 1 ? 'Buddies (backup)' : 'Buddy (backup)'} value={buddyList.map((u) => u.name || 'User').join(', ')} />
           )}
 
           {/* Checklist */}
@@ -284,13 +310,19 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           {!done && canManage && (
             <>
               <Divider />
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Reassign doer</Typography>
-              <Stack direction="row" spacing={1}>
-                <TextField select size="small" label="Assign to" value={assignee} onChange={(e) => setAssignee(e.target.value)} sx={{ flex: 1 }}>
-                  <MenuItem value=""><em>Unassigned</em></MenuItem>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Reassign — multiple doers & buddies allowed</Typography>
+              <Stack spacing={1}>
+                <TextField select size="small" label="Doers" value={assignSel}
+                  onChange={(e) => setAssignSel(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
+                  SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'Unassigned' }}>
                   {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name} — {u.email}</MenuItem>)}
                 </TextField>
-                <Button onClick={handleAssign} disabled={assigning} startIcon={<UserCog size={16} />} variant="outlined">Assign</Button>
+                <TextField select size="small" label="Buddies (backup)" value={buddySel}
+                  onChange={(e) => setBuddySel(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
+                  SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'None' }}>
+                  {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name} — {u.email}</MenuItem>)}
+                </TextField>
+                <Button onClick={handleAssign} disabled={assigning} startIcon={<UserCog size={16} />} variant="outlined" sx={{ alignSelf: 'flex-start' }}>Save assignment</Button>
               </Stack>
             </>
           )}

@@ -2,14 +2,23 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
   Box, Paper, Stack, Typography, Chip, Button, Skeleton, alpha,
   TextField, InputAdornment, ToggleButtonGroup, ToggleButton, MenuItem,
-  Table, TableBody, TableCell, TableHead, TableRow, TablePagination, Tooltip,
+  Table, TableBody, TableCell, TableHead, TableRow, TablePagination,
 } from '@mui/material';
-import { ClipboardList, AlertTriangle, ArrowRight, Inbox, Search, ArrowUpDown } from 'lucide-react';
+import { ClipboardList, AlertTriangle, Inbox, Search, ArrowUpDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetMyTasksQuery } from '../../store/api/o2dFmsApi';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const isDueSoon = (d) => d && (new Date(d) - Date.now()) > 0 && (new Date(d) - Date.now()) < 24 * 3600 * 1000;
+
+// Status chip shown in the dedicated Status column.
+const statusChip = (t) => {
+  if (t.isOverdue) return <Chip size="small" color="error" label="Overdue" />;
+  if (t.status === 'DELAYED') return <Chip size="small" color="warning" label="Done late" />;
+  if (t.status === 'DONE') return <Chip size="small" color="success" label="Done" />;
+  if (isDueSoon(t.planned)) return <Chip size="small" color="warning" variant="outlined" label="Due soon" />;
+  return <Chip size="small" variant="outlined" label="Pending" />;
+};
 
 const MyTasksWorkspace = () => {
   // Poll so updates made by the MD (re-plan / reassign) appear without a manual refresh.
@@ -97,6 +106,13 @@ const MyTasksWorkspace = () => {
         </Paper>
       )}
 
+      {!isLoading && counts.buddy > 0 && (
+        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'flex', alignItems: 'center', gap: 0.75, mb: 1 }}>
+          <Box component="span" sx={{ width: 14, height: 14, borderRadius: 0.5, bgcolor: alpha('#7c3aed', 0.16), border: '1px solid', borderColor: alpha('#7c3aed', 0.45) }} />
+          Purple rows are steps where you're the backup (buddy) — step in if the main doer can't.
+        </Typography>
+      )}
+
       {isLoading ? (
         <Skeleton variant="rounded" height={360} />
       ) : tasks.length === 0 ? (
@@ -116,12 +132,12 @@ const MyTasksWorkspace = () => {
           <Table size="small">
             <TableHead>
               <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
-                <TableCell sx={{ width: 48 }}>#</TableCell>
-                <TableCell>Task</TableCell>
+                <TableCell sx={{ width: 44 }}>#</TableCell>
+                <TableCell sx={{ width: 300 }}>Task</TableCell>
                 <TableCell>Order</TableCell>
-                <TableCell>Due / planned</TableCell>
-                <TableCell align="center">Checklist</TableCell>
-                <TableCell align="right">Action</TableCell>
+                <TableCell sx={{ width: 120 }}>Status</TableCell>
+                <TableCell sx={{ width: 170 }}>Due / planned</TableCell>
+                <TableCell align="center" sx={{ width: 96 }}>Checklist</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -130,46 +146,36 @@ const MyTasksWorkspace = () => {
                   key={`${t.processId}-${t.stepCode}`}
                   hover
                   onClick={() => openTask(t)}
-                  sx={{ cursor: 'pointer', bgcolor: t.isOverdue ? alpha('#be123c', 0.04) : 'inherit' }}
+                  sx={{
+                    cursor: 'pointer',
+                    // Overdue → light red; buddy → purple; else default.
+                    bgcolor: t.isOverdue ? alpha('#be123c', 0.06) : (t.asBuddy ? alpha('#7c3aed', 0.16) : 'inherit'),
+                    '&:hover': t.asBuddy && !t.isOverdue ? { bgcolor: `${alpha('#7c3aed', 0.22)} !important` } : undefined,
+                  }}
                 >
                   <TableCell>{page * rowsPerPage + i + 1}</TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                      <ClipboardList size={15} />
-                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{t.name}</Typography>
-                      <Chip size="small" variant="outlined" label={t.stepCode} />
-                      {t.tool && <Chip size="small" label={t.tool} sx={{ bgcolor: alpha('#1d4ed8', 0.08) }} />}
-                      {t.asBuddy && <Chip size="small" color="secondary" variant="filled" label="🤝 You're the buddy" />}
+                  <TableCell sx={{ maxWidth: 300 }}>
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                      <ClipboardList size={15} style={{ flexShrink: 0 }} />
+                      <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap title={t.name}>{t.name}</Typography>
+                      <Chip size="small" variant="outlined" label={t.stepCode} sx={{ flexShrink: 0 }} />
+                      {t.tool && <Chip size="small" label={t.tool} sx={{ bgcolor: alpha('#1d4ed8', 0.08), flexShrink: 0 }} />}
                     </Stack>
                   </TableCell>
-                  <TableCell>
-                    <Typography variant="body2">{t.soNumber}</Typography>
-                    <Typography variant="caption" color="text.secondary">{t.partyName}</Typography>
+                  <TableCell sx={{ maxWidth: 220 }}>
+                    <Typography variant="body2" noWrap>{t.soNumber}</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap display="block">{t.partyName}</Typography>
                   </TableCell>
-                  <TableCell>
-                    {isDone(t) ? (
-                      <Stack spacing={0.25}>
-                        <Chip size="small" color={t.status === 'DELAYED' ? 'warning' : 'success'} label={t.status === 'DELAYED' ? 'Done (late)' : 'Done'} />
-                        <Typography variant="caption" color="text.secondary">{fmt(t.completedAt)}</Typography>
-                      </Stack>
-                    ) : (
-                      <>
-                        <Typography variant="body2" sx={{ color: t.isOverdue ? '#be123c' : 'text.primary', fontWeight: t.isOverdue ? 700 : 400 }}>
-                          {fmt(t.planned)}
-                        </Typography>
-                        {t.isOverdue && <Chip size="small" color="error" icon={<AlertTriangle size={11} />} label="Overdue" sx={{ mt: 0.25 }} />}
-                      </>
-                    )}
+                  <TableCell>{statusChip(t)}</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    <Typography variant="body2" sx={{ color: t.isOverdue ? '#be123c' : 'text.primary', fontWeight: t.isOverdue ? 700 : 400 }}>
+                      {isDone(t) ? fmt(t.completedAt) : fmt(t.planned)}
+                    </Typography>
                   </TableCell>
                   <TableCell align="center">
                     {t.checklistTotal > 0
                       ? <Chip size="small" variant="outlined" color={t.checklistDone === t.checklistTotal ? 'success' : 'default'} label={`${t.checklistDone}/${t.checklistTotal}`} />
                       : <Typography variant="caption" color="text.disabled">—</Typography>}
-                  </TableCell>
-                  <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                    <Button size="small" variant={isDone(t) ? 'outlined' : 'contained'} endIcon={<ArrowRight size={14} />} onClick={() => openTask(t)}>
-                      {isDone(t) ? 'View' : 'Do it'}
-                    </Button>
                   </TableCell>
                 </TableRow>
               ))}

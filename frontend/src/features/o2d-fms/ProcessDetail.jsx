@@ -42,7 +42,8 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
           stepCode: s.stepCode, stepName: s.name,
           taskTitle: s.taskTitle || '', instructions: s.instructions || '',
           checklist: (s.checklist || []).map((c) => c.text),
-          assignedTo: s.assignedTo?._id || '', buddyUserId: s.buddyUserId?._id || '',
+          assignees: (s.assignees?.length ? s.assignees : (s.assignedTo ? [s.assignedTo] : [])).map((x) => String(x._id || x)),
+          buddies: (s.buddies?.length ? s.buddies : (s.buddyUserId ? [s.buddyUserId] : [])).map((x) => String(x._id || x)),
           leadValue: lt.value, leadUnit: lt.unit,
         };
       }));
@@ -62,8 +63,8 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
         stepCode: r.stepCode,
         taskTitle: r.taskTitle || undefined,
         instructions: r.instructions || undefined,
-        assignedTo: r.assignedTo || null,
-        buddyUserId: r.buddyUserId || null,
+        assignees: r.assignees || [],
+        buddies: r.buddies || [],
         leadTime: r.leadValue ? { value: Number(r.leadValue), unit: r.leadUnit } : undefined,
         checklist: r.checklist.filter(Boolean).map((text) => ({ text })),
       })) }).unwrap();
@@ -86,8 +87,8 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
             <AccordionSummary expandIcon={<ChevronDown size={16} />}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                 <Chip size="small" variant="outlined" label={r.stepCode} />
-                <Typography sx={{ fontWeight: 600 }}>{r.taskTitle || r.stepName}</Typography>
-                {r.assignedTo && <Chip size="small" sx={{ bgcolor: alpha('#1d4ed8', 0.1) }} label={nameOf(r.assignedTo) || 'Doer'} />}
+                <Typography sx={{ fontWeight: 600 }}>{r.stepName}</Typography>
+                {r.assignees.length > 0 && <Chip size="small" sx={{ bgcolor: alpha('#1d4ed8', 0.1) }} label={r.assignees.map((id) => nameOf(id)).filter(Boolean).join(', ') || `${r.assignees.length} doer(s)`} />}
                 {r.checklist.length > 0 && <Chip size="small" variant="outlined" label={`✓ ${r.checklist.length}`} />}
                 {r.leadValue && <Chip size="small" variant="outlined" label={`${r.leadValue} ${r.leadUnit.toLowerCase()}`} />}
               </Stack>
@@ -97,12 +98,14 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
                 <TextField size="small" label="Task title" value={r.taskTitle} onChange={(e) => upd(i, { taskTitle: e.target.value })} fullWidth placeholder={r.stepName} />
                 <TextField size="small" label="Instructions" value={r.instructions} onChange={(e) => upd(i, { instructions: e.target.value })} fullWidth multiline minRows={2} />
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                  <TextField select size="small" label="Doer" value={r.assignedTo} onChange={(e) => upd(i, { assignedTo: e.target.value })} sx={{ flex: 1 }}>
-                    <MenuItem value=""><em>—</em></MenuItem>
+                  <TextField select size="small" label="Doers (one or more)" value={r.assignees} sx={{ flex: 1 }}
+                    onChange={(e) => upd(i, { assignees: typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value })}
+                    SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || '—' }}>
                     {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name}</MenuItem>)}
                   </TextField>
-                  <TextField select size="small" label="Buddy (backup)" value={r.buddyUserId} onChange={(e) => upd(i, { buddyUserId: e.target.value })} sx={{ flex: 1 }}>
-                    <MenuItem value=""><em>—</em></MenuItem>
+                  <TextField select size="small" label="Buddies (backup)" value={r.buddies} sx={{ flex: 1 }}
+                    onChange={(e) => upd(i, { buddies: typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value })}
+                    SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || '—' }}>
                     {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name}</MenuItem>)}
                   </TextField>
                   <TextField size="small" label="Lead" type="number" value={r.leadValue} onChange={(e) => upd(i, { leadValue: e.target.value })} sx={{ width: 90 }} />
@@ -146,6 +149,12 @@ const STATUS = {
 
 const PHASE_LABEL = {
   PRE_PRODUCTION: 'Pre-Production', PLANNING: 'Planning', EXECUTION: 'Execution', POST_DISPATCH: 'Post-Dispatch',
+};
+
+// Names of all doers on a step (arrays, with legacy single fallback).
+const doerNames = (s) => {
+  const list = (s.assignees?.length ? s.assignees : [s.assignedTo]).filter(Boolean);
+  return list.map((u) => u.name || 'User').join(', ');
 };
 
 // One labelled line inside a Sheet-view step column.
@@ -271,13 +280,8 @@ const ProcessDetail = () => {
                           <Typography variant="caption" color="text.secondary">{s.stepCode}{isCurrent ? ' · current' : ''}</Typography>
                         </TableCell>
                         <TableCell>
-                          {s.assignedTo?.name
-                            ? <Stack direction="row" spacing={0.75} alignItems="center">
-                                <Avatar sx={{ width: 22, height: 22, fontSize: 10, bgcolor: alpha('#1d4ed8', 0.15), color: '#1e3a8a' }}>
-                                  {s.assignedTo.name.split(' ').map((x) => x[0]).slice(0, 2).join('')}
-                                </Avatar>
-                                <Typography variant="body2">{s.assignedTo.name}</Typography>
-                              </Stack>
+                          {doerNames(s)
+                            ? <Typography variant="body2">{doerNames(s)}</Typography>
                             : <Typography variant="caption" color="text.secondary">{s.defaultOwnerRole || 'Unassigned'}</Typography>}
                         </TableCell>
                         <TableCell><Chip size="small" label={s.isOverdue ? 'Overdue' : tn.label} sx={{ bgcolor: alpha(s.isOverdue ? '#be123c' : tn.color, 0.12), color: s.isOverdue ? '#be123c' : tn.color, fontWeight: 600 }} /></TableCell>
@@ -309,7 +313,7 @@ const ProcessDetail = () => {
                       <Typography sx={{ fontWeight: 700, lineHeight: 1.2, mb: 1, minHeight: 34 }}>{s.name}</Typography>
                       <Chip size="small" label={s.isOverdue ? 'Overdue' : tn.label}
                         sx={{ mb: 1, bgcolor: alpha(head, 0.12), color: head, fontWeight: 600 }} />
-                      <SheetRow label="Doer" value={s.assignedTo?.name || s.defaultOwnerRole || 'Unassigned'} />
+                      <SheetRow label="Doer(s)" value={doerNames(s) || s.defaultOwnerRole || 'Unassigned'} />
                       <SheetRow label="Planned" value={fmt(s.planned)} />
                       <SheetRow label="Actual" value={fmt(s.actual)} />
                       <SheetRow label="Delay" value={s.delayMins > 0 ? `+${s.delayMins}m` : '—'} />
@@ -341,7 +345,7 @@ const ProcessDetail = () => {
                             sx={{ p: 1, borderRadius: 2, cursor: 'pointer', '&:hover': { boxShadow: 2 } }}>
                             <Typography variant="body2" sx={{ fontWeight: 600 }}>{s.name}</Typography>
                             <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mt: 0.25, flexWrap: 'wrap' }}>
-                              <Typography variant="caption" color="text.secondary">{s.stepCode} · {s.assignedTo?.name || 'Unassigned'}</Typography>
+                              <Typography variant="caption" color="text.secondary">{s.stepCode} · {doerNames(s) || 'Unassigned'}</Typography>
                               {s.checklistTotal > 0 && <Chip size="small" variant="outlined" label={`✓ ${s.checklistDone}/${s.checklistTotal}`} />}
                             </Stack>
                           </Paper>

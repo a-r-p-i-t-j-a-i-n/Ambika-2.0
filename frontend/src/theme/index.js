@@ -241,6 +241,13 @@ const theme = createTheme({
         root: { borderColor: BLUE.line },
       },
     },
+    // Clean row separators on every <Table> across the app.
+    MuiTableCell: {
+      styleOverrides: {
+        root: { borderBottom: `1px solid ${BLUE.line}` },
+        head: { borderBottom: `2px solid ${BLUE.line}` },
+      },
+    },
     MuiDataGrid: {
       styleOverrides: {
         root: {

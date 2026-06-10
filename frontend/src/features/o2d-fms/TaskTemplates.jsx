@@ -30,9 +30,8 @@ const mergeSteps = (defs, tplSteps = []) => {
       instructions: t.instructions || '',
       checklist: (t.checklist || []).map((c) => c.text),
       leadTime: { value: t.leadTime?.value ?? '', unit: t.leadTime?.unit || 'HOURS' },
-      assigneeRole: t.assigneeRole || '',
-      assigneeUserId: t.assigneeUserId?._id || t.assigneeUserId || '',
-      buddyUserId: t.buddyUserId?._id || t.buddyUserId || '',
+      assigneeUserIds: (t.assigneeUserIds?.length ? t.assigneeUserIds : (t.assigneeUserId ? [t.assigneeUserId] : [])).map((x) => String(x._id || x)),
+      buddyUserIds: (t.buddyUserIds?.length ? t.buddyUserIds : (t.buddyUserId ? [t.buddyUserId] : [])).map((x) => String(x._id || x)),
     };
   });
 };
@@ -49,9 +48,8 @@ const mergeStepsFromProcess = (defs, procSteps = []) => {
       instructions: s.instructions || '',
       checklist: (s.checklist || []).map((c) => c.text),
       leadTime: { value: '', unit: 'HOURS' },
-      assigneeRole: '',
-      assigneeUserId: s.assignedTo?._id || s.assignedTo || '',
-      buddyUserId: s.buddyUserId?._id || s.buddyUserId || '',
+      assigneeUserIds: (s.assignees?.length ? s.assignees : (s.assignedTo ? [s.assignedTo] : [])).map((x) => String(x._id || x)),
+      buddyUserIds: (s.buddies?.length ? s.buddies : (s.buddyUserId ? [s.buddyUserId] : [])).map((x) => String(x._id || x)),
     };
   });
 };
@@ -81,12 +79,16 @@ const StepEditor = ({ row, onChange, users }) => {
             </TextField>
           </Stack>
           <Stack direction="row" spacing={1}>
-            <TextField select size="small" label="Assigned to" value={row.assigneeUserId} onChange={(e) => set('assigneeUserId', e.target.value)} sx={{ flex: 1 }}>
-              <MenuItem value=""><em>Unassigned</em></MenuItem>
+            <TextField select size="small" label="Assigned to (one or more)" value={row.assigneeUserIds}
+              onChange={(e) => set('assigneeUserIds', typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
+              SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'Unassigned' }}
+              sx={{ flex: 1 }}>
               {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name}</MenuItem>)}
             </TextField>
-            <TextField select size="small" label="Buddy (backup)" value={row.buddyUserId} onChange={(e) => set('buddyUserId', e.target.value)} sx={{ flex: 1 }}>
-              <MenuItem value=""><em>None</em></MenuItem>
+            <TextField select size="small" label="Buddy / backup (one or more)" value={row.buddyUserIds}
+              onChange={(e) => set('buddyUserIds', typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
+              SelectProps={{ multiple: true, renderValue: (sel) => users.filter((u) => sel.includes(u._id)).map((u) => u.name).join(', ') || 'None' }}
+              sx={{ flex: 1 }}>
               {users.map((u) => <MenuItem key={u._id} value={u._id}>{u.name}</MenuItem>)}
             </TextField>
           </Stack>
@@ -155,13 +157,26 @@ const TaskTemplates = () => {
   const [createTpl] = useCreateTaskTemplateMutation();
   const [updateTpl] = useUpdateTaskTemplateMutation();
   const [setDefault] = useSetDefaultTemplateMutation();
-  const [deleteTpl] = useDeleteTaskTemplateMutation();
+  const [deleteTpl, { isLoading: deleting }] = useDeleteTaskTemplateMutation();
   const [planOrder] = usePlanOrderMutation();
   const [settingId, setSettingId] = useState(null); // template id being set default
+  const [deleteTarget, setDeleteTarget] = useState(null); // template pending delete confirmation
+  const [deleteError, setDeleteError] = useState('');
 
   const handleSetDefault = async (id) => {
     setSettingId(id);
     try { await setDefault(id).unwrap(); } finally { setSettingId(null); }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError('');
+    try {
+      await deleteTpl(deleteTarget._id).unwrap();
+      setDeleteTarget(null);
+    } catch (e) {
+      setDeleteError(e?.data?.message || 'Could not delete this template. Please try again.');
+    }
   };
 
   const templates = tplRes?.data || [];
@@ -187,8 +202,8 @@ const TaskTemplates = () => {
           stepCode: s.stepCode,
           taskTitle: s.taskTitle || undefined,
           instructions: s.instructions || undefined,
-          assignedTo: s.assigneeUserId || null,
-          buddyUserId: s.buddyUserId || null,
+          assignees: s.assigneeUserIds || [],
+          buddies: s.buddyUserIds || [],
           leadTime: s.leadTime.value ? { value: Number(s.leadTime.value), unit: s.leadTime.unit } : undefined,
           checklist: s.checklist.filter(Boolean).map((text) => ({ text })),
         })) }).unwrap();
@@ -199,16 +214,15 @@ const TaskTemplates = () => {
     const payload = {
       name: editing.name, description: editing.description, isDefault: editing.isDefault,
       steps: editing.steps
-        .filter((s) => s.taskTitle || s.checklist.length || s.assigneeRole || s.assigneeUserId || s.leadTime.value)
+        .filter((s) => s.taskTitle || s.checklist.length || s.assigneeUserIds?.length || s.leadTime.value)
         .map((s) => ({
           stepCode: s.stepCode,
           taskTitle: s.taskTitle || undefined,
           instructions: s.instructions || undefined,
           checklist: s.checklist.filter(Boolean).map((text) => ({ text })),
           leadTime: s.leadTime.value ? { value: Number(s.leadTime.value), unit: s.leadTime.unit } : undefined,
-          assigneeRole: s.assigneeRole || undefined,
-          assigneeUserId: s.assigneeUserId || undefined,
-          buddyUserId: s.buddyUserId || undefined,
+          assigneeUserIds: s.assigneeUserIds || [],
+          buddyUserIds: s.buddyUserIds || [],
         })),
     };
     try {
@@ -327,7 +341,7 @@ const TaskTemplates = () => {
                   </Button>
                 )}
                 <Tooltip title="Edit"><IconButton size="small" onClick={() => startEdit(tpl)}><Pencil size={16} /></IconButton></Tooltip>
-                <Tooltip title="Delete"><IconButton size="small" onClick={() => deleteTpl(tpl._id)}><Trash2 size={16} /></IconButton></Tooltip>
+                <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => { setDeleteError(''); setDeleteTarget(tpl); }}><Trash2 size={16} /></IconButton></Tooltip>
               </Stack>
             </Paper>
           ))}
@@ -368,6 +382,34 @@ const TaskTemplates = () => {
         defs={defs}
         onReady={({ processId, orderLabel, steps }) => { setOrderPick(false); setEditing({ mode: 'custom', processId, orderLabel, steps }); }}
       />
+
+      {/* Delete confirmation */}
+      <Dialog open={!!deleteTarget} onClose={() => !deleting && setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete this template?</DialogTitle>
+        <DialogContent dividers>
+          <Stack direction="row" spacing={1.5} alignItems="flex-start">
+            <Box sx={{ p: 1, borderRadius: 2, bgcolor: alpha('#be123c', 0.1), color: '#be123c', display: 'flex' }}><Trash2 size={20} /></Box>
+            <Box>
+              <Typography variant="body2">
+                You're about to delete <b>{deleteTarget?.name}</b>. This can't be undone.
+              </Typography>
+              {deleteTarget?.isDefault && (
+                <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>
+                  This is the default template — new orders will fall back to the basic step catalog until you set another default.
+                </Typography>
+              )}
+              {deleteError && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>{deleteError}</Typography>}
+            </Box>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={confirmDelete} disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={14} color="inherit" /> : <Trash2 size={16} />}>
+            {deleting ? 'Deleting…' : 'Yes, delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

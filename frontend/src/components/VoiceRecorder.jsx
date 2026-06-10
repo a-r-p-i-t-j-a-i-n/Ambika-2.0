@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Button, Stack, Typography, Box, IconButton, Tooltip } from '@mui/material';
+import { Button, Stack, Typography, Box, IconButton, Tooltip, Alert } from '@mui/material';
 import { Mic, Square, Trash2, Check, RotateCcw } from 'lucide-react';
 
 const mmss = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
@@ -13,6 +13,7 @@ const VoiceRecorder = ({ onRecorded, disabled }) => {
   const [phase, setPhase] = useState('idle'); // idle | recording | review
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState('');
+  const [blocked, setBlocked] = useState(false); // mic permission denied/blocked
   const [preview, setPreview] = useState(null); // { url, file }
 
   const recRef = useRef(null);
@@ -24,7 +25,13 @@ const VoiceRecorder = ({ onRecorded, disabled }) => {
 
   const start = async () => {
     setError('');
-    if (!navigator.mediaDevices?.getUserMedia) { setError('Recording not supported in this browser.'); return; }
+    setBlocked(false);
+    // getUserMedia only works in a secure context (https or localhost).
+    if (!window.isSecureContext) {
+      setError('Recording needs a secure (https) connection — open the site over https:// or use localhost.');
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) { setError('Recording isn’t supported in this browser.'); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -46,7 +53,14 @@ const VoiceRecorder = ({ onRecorded, disabled }) => {
       setSeconds(0);
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
     } catch (e) {
-      setError(e?.name === 'NotAllowedError' ? 'Microphone permission denied.' : 'Could not start recording.');
+      if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') {
+        setBlocked(true);
+        setError('Microphone access is blocked.');
+      } else if (e?.name === 'NotFoundError') {
+        setError('No microphone found on this device.');
+      } else {
+        setError('Could not start recording. Please try again.');
+      }
     }
   };
 
@@ -85,24 +99,37 @@ const VoiceRecorder = ({ onRecorded, disabled }) => {
   }
 
   return (
-    <Stack direction="row" spacing={1} alignItems="center">
-      {phase !== 'recording' ? (
-        <Button size="small" variant="outlined" startIcon={<Mic size={15} />} onClick={start} disabled={disabled}>
-          Record voice note
-        </Button>
-      ) : (
-        <Button size="small" variant="contained" color="error" startIcon={<Square size={14} />} onClick={stop}
-          sx={{ animation: 'pulse 1.2s infinite', '@keyframes pulse': { '50%': { opacity: 0.6 } } }}>
-          Stop
-        </Button>
+    <Stack spacing={1} sx={{ width: blocked ? '100%' : 'auto' }}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        {phase !== 'recording' ? (
+          <Button size="small" variant="outlined" startIcon={<Mic size={15} />} onClick={start} disabled={disabled}>
+            {blocked ? 'Retry microphone' : 'Record voice note'}
+          </Button>
+        ) : (
+          <Button size="small" variant="contained" color="error" startIcon={<Square size={14} />} onClick={stop}
+            sx={{ animation: 'pulse 1.2s infinite', '@keyframes pulse': { '50%': { opacity: 0.6 } } }}>
+            Stop
+          </Button>
+        )}
+        {phase === 'recording' && (
+          <Stack direction="row" spacing={0.75} alignItems="center">
+            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'error.main' }} />
+            <Typography variant="caption" sx={{ fontWeight: 700, color: 'error.main' }}>{mmss(seconds)}</Typography>
+          </Stack>
+        )}
+        {error && !blocked && <Typography variant="caption" color="error">{error}</Typography>}
+      </Stack>
+
+      {/* Permission blocked → guide the user to re-enable it (browsers don't re-prompt once denied). */}
+      {blocked && (
+        <Alert severity="warning" sx={{ py: 0.5 }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>Microphone is blocked for this site.</Typography>
+          <Typography variant="caption" component="div">
+            Click the <b>🔒 / camera-mic icon</b> in the browser address bar → set <b>Microphone = Allow</b> → then press <b>Retry microphone</b>.
+            On phones: Site settings → Microphone → Allow.
+          </Typography>
+        </Alert>
       )}
-      {phase === 'recording' && (
-        <Stack direction="row" spacing={0.75} alignItems="center">
-          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'error.main' }} />
-          <Typography variant="caption" sx={{ fontWeight: 700, color: 'error.main' }}>{mmss(seconds)}</Typography>
-        </Stack>
-      )}
-      {error && <Typography variant="caption" color="error">{error}</Typography>}
     </Stack>
   );
 };

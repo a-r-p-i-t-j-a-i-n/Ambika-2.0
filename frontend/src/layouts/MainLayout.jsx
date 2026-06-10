@@ -113,10 +113,18 @@ const MainLayout = () => {
     // the static navSections definition.
     const out = navSections.map((s) => ({ ...s, items: [...s.items] }));
 
-    // ── O2D FMS — collapsible group, placed directly UNDER "O2D Pipeline" ──
+    // ── Tasks + O2D FMS — two sibling collapsible groups under "O2D Pipeline" ──
+    // Tasks = the doer/oversight task lists; O2D FMS = the flow itself + config.
+    const taskChildren = [];
+    if (can('o2dfms.view') || isRoot) {
+      taskChildren.push({ text: 'My Tasks',  icon: <ListChecks size={19} />, path: '/o2d-fms' });
+    }
+    if (can('o2dfms.manage') || isRoot) {
+      taskChildren.push({ text: 'All Tasks', icon: <ClipboardList size={19} />, path: '/o2d-fms/all-tasks' });
+    }
+
     const fmsChildren = [];
     if (can('o2dfms.view') || isRoot) {
-      fmsChildren.push({ text: 'My Tasks',     icon: <ListChecks size={19} />,        path: '/o2d-fms' });
       fmsChildren.push({ text: 'FMS Tracker',  icon: <Workflow size={19} />,          path: '/o2d-fms/processes' });
       fmsChildren.push({ text: 'Dashboard',    icon: <Gauge size={19} />,             path: '/o2d-fms/dashboard' });
       fmsChildren.push({ text: 'Scoreboard',   icon: <Trophy size={19} />,            path: '/o2d-fms/scores' });
@@ -125,14 +133,22 @@ const MainLayout = () => {
       fmsChildren.push({ text: 'Step Builder',   icon: <SlidersHorizontal size={19} />, path: '/o2d-fms/config' });
       fmsChildren.push({ text: 'Task Templates', icon: <ClipboardList size={19} />,     path: '/o2d-fms/templates' });
     }
+
+    const o2dSection = out.find((s) => s.title === 'Order to Dispatch');
+    // Insert directly under "O2D Pipeline", Tasks first then O2D FMS.
+    const groupsToAdd = [];
+    if (taskChildren.length > 0) {
+      groupsToAdd.push({ text: 'Tasks', icon: <ListChecks size={19} />, path: '/o2d-fms', children: taskChildren });
+    }
     if (fmsChildren.length > 0) {
-      const fmsGroup = { text: 'O2D FMS', icon: <Gauge size={19} />, path: '/o2d-fms', children: fmsChildren };
-      const o2dSection = out.find((s) => s.title === 'Order to Dispatch');
+      groupsToAdd.push({ text: 'O2D FMS', icon: <Gauge size={19} />, path: '/o2d-fms/processes', children: fmsChildren });
+    }
+    if (groupsToAdd.length > 0) {
       if (o2dSection) {
         const idx = o2dSection.items.findIndex((it) => it.text === 'O2D Pipeline');
-        o2dSection.items.splice(idx >= 0 ? idx + 1 : o2dSection.items.length, 0, fmsGroup);
+        o2dSection.items.splice(idx >= 0 ? idx + 1 : o2dSection.items.length, 0, ...groupsToAdd);
       } else {
-        out.push({ title: 'O2D FMS', items: [fmsGroup] });
+        out.push({ title: 'O2D FMS', items: groupsToAdd });
       }
     }
 
