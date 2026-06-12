@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import {
-  Box, Paper, Stack, Typography, Button, IconButton, Chip, TextField, MenuItem,
+  Box, Paper, Stack, Typography, Button, IconButton, Chip, TextField, MenuItem, Menu,
   Switch, FormControlLabel, Divider, Accordion, AccordionSummary, AccordionDetails,
   Skeleton, Tooltip, alpha, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, CircularProgress,
 } from '@mui/material';
 import {
   Plus, Trash2, Star, Pencil, ChevronDown, ListChecks, X, Save, ClipboardList,
-  LayoutTemplate, Target,
+  LayoutTemplate, Target, HelpCircle, FormInput, Paperclip, ShieldCheck, Link2,
 } from 'lucide-react';
+import { ACTION_LINKS, actionLinkMeta, TRIGGER_TO_ACTION } from './actionLinks';
 import {
   useGetTaskTemplatesQuery, useCreateTaskTemplateMutation, useUpdateTaskTemplateMutation,
   useSetDefaultTemplateMutation, useDeleteTaskTemplateMutation, useGetStepDefinitionsQuery,
@@ -26,9 +27,18 @@ const mergeSteps = (defs, tplSteps = []) => {
     return {
       stepCode: d.stepCode,
       stepName: d.name,
+      triggerKey: d.triggerKey || 'MANUAL',
       taskTitle: t.taskTitle || '',
       instructions: t.instructions || '',
       checklist: (t.checklist || []).map((c) => c.text),
+      verifications: (t.verifications || []).map((v) => v.question),
+      formFields: (t.formFields || []).map((f) => ({ label: f.label, fieldType: f.fieldType || 'TEXT', required: f.required !== false })),
+      proof: { required: !!t.proof?.required, minCount: t.proof?.minCount || 1 },
+      approval: {
+        required: !!t.approval?.required,
+        approverIds: (t.approval?.approverIds || []).map((x) => String(x._id || x)),
+      },
+      actionLink: t.actionLink || '',
       leadTime: { value: t.leadTime?.value ?? '', unit: t.leadTime?.unit || 'HOURS' },
       assigneeUserIds: (t.assigneeUserIds?.length ? t.assigneeUserIds : (t.assigneeUserId ? [t.assigneeUserId] : [])).map((x) => String(x._id || x)),
       buddyUserIds: (t.buddyUserIds?.length ? t.buddyUserIds : (t.buddyUserId ? [t.buddyUserId] : [])).map((x) => String(x._id || x)),
@@ -54,8 +64,30 @@ const mergeStepsFromProcess = (defs, procSteps = []) => {
   });
 };
 
-const StepEditor = ({ row, onChange, users }) => {
+// What "+ Add requirement" can add (checklist always shows; these are the extras).
+const REQ_TYPES = [
+  { key: 'verifications', label: 'Yes/No verification questions', icon: HelpCircle, hint: '"Stock physically verified?" — No demands a remark' },
+  { key: 'formFields', label: 'Data capture (form fields)', icon: FormInput, hint: 'Record values: Vehicle No., Qty loaded…' },
+  { key: 'proof', label: 'Proof attachments required', icon: Paperclip, hint: 'Step needs photo / file / voice note(s)' },
+  { key: 'approval', label: 'Approval gate', icon: ShieldCheck, hint: 'A named person must approve before completion' },
+];
+
+const StepEditor = ({ row, onChange, users, advanced = true }) => {
   const set = (k, v) => onChange({ ...row, [k]: v });
+  const [reqMenu, setReqMenu] = useState(null); // anchor for "+ Add requirement"
+
+  const addRequirement = (key) => {
+    setReqMenu(null);
+    if (key === 'verifications') set('verifications', [...(row.verifications || []), '']);
+    if (key === 'formFields') set('formFields', [...(row.formFields || []), { label: '', fieldType: 'TEXT', required: true }]);
+    if (key === 'proof') set('proof', { required: true, minCount: row.proof?.minCount || 1 });
+    if (key === 'approval') set('approval', { required: true, approverIds: row.approval?.approverIds || [] });
+  };
+
+  const suggestedLink = !row.actionLink && TRIGGER_TO_ACTION[row.triggerKey];
+  const reqCount = (row.verifications?.length || 0) + (row.formFields?.length || 0)
+    + (row.proof?.required ? 1 : 0) + (row.approval?.required ? 1 : 0);
+
   return (
     <Accordion disableGutters TransitionProps={{ unmountOnExit: true }} sx={{ '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1 }}>
       <AccordionSummary expandIcon={<ChevronDown size={16} />}>
@@ -66,6 +98,8 @@ const StepEditor = ({ row, onChange, users }) => {
           <Typography sx={{ fontWeight: 700 }}>{row.stepName}</Typography>
           {row.taskTitle && <Typography variant="caption" color="text.secondary">· task: {row.taskTitle}</Typography>}
           {row.checklist.length > 0 && <Chip size="small" icon={<ListChecks size={12} />} label={row.checklist.length} />}
+          {reqCount > 0 && <Chip size="small" color="secondary" variant="outlined" label={`+${reqCount} req`} />}
+          {row.actionLink && <Chip size="small" icon={<Link2 size={12} />} label="linked" sx={{ bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} />}
         </Stack>
       </AccordionSummary>
       <AccordionDetails>
@@ -78,6 +112,22 @@ const StepEditor = ({ row, onChange, users }) => {
               {UNITS.map((u) => <MenuItem key={u} value={u}>{u.toLowerCase()}</MenuItem>)}
             </TextField>
           </Stack>
+
+          {/* ── Connect to the real system action (Do-it-now deep link) ── */}
+          {advanced && (
+            <Box>
+              <TextField select size="small" fullWidth label="Connect to system action — shows a 'Do it now' link on the task"
+                value={row.actionLink || ''} onChange={(e) => set('actionLink', e.target.value)}>
+                <MenuItem value=""><em>None</em></MenuItem>
+                {ACTION_LINKS.map((a) => <MenuItem key={a.key} value={a.key}>{a.label}</MenuItem>)}
+              </TextField>
+              {suggestedLink && (
+                <Chip size="small" icon={<Link2 size={12} />} clickable onClick={() => set('actionLink', suggestedLink)}
+                  label={`Suggestion: connect to "${actionLinkMeta(suggestedLink)?.label}" (matches this step's trigger)`}
+                  sx={{ mt: 0.75, bgcolor: alpha('#1d4ed8', 0.08), color: '#1d4ed8' }} />
+              )}
+            </Box>
+          )}
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
             {/* Autocomplete (not Select) — doesn't lock page scroll, shows picks as
                 removable chips, and supports type-to-search. */}
@@ -106,7 +156,7 @@ const StepEditor = ({ row, onChange, users }) => {
           </Stack>
           {/* Checklist editor */}
           <Box>
-            <Typography variant="caption" sx={{ fontWeight: 700 }}>Checklist</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 700 }}>Checklist (tick / untick)</Typography>
             {row.checklist.map((text, i) => (
               <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                 <TextField size="small" value={text} fullWidth
@@ -116,6 +166,111 @@ const StepEditor = ({ row, onChange, users }) => {
             ))}
             <Button size="small" startIcon={<Plus size={14} />} onClick={() => set('checklist', [...row.checklist, ''])} sx={{ mt: 0.5 }}>Add item</Button>
           </Box>
+
+          {advanced && (
+            <>
+              {/* ── Yes/No verification questions ── */}
+              {(row.verifications || []).length > 0 && (
+                <Box>
+                  <Stack direction="row" spacing={0.75} alignItems="center">
+                    <HelpCircle size={14} color="#7c3aed" />
+                    <Typography variant="caption" sx={{ fontWeight: 700 }}>Yes/No verification — "No" demands a remark</Typography>
+                  </Stack>
+                  {row.verifications.map((q, i) => (
+                    <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+                      <TextField size="small" value={q} fullWidth placeholder="e.g. Stock physically verified?"
+                        onChange={(e) => { const v = [...row.verifications]; v[i] = e.target.value; set('verifications', v); }} />
+                      <IconButton size="small" onClick={() => set('verifications', row.verifications.filter((_, j) => j !== i))}><X size={14} /></IconButton>
+                    </Stack>
+                  ))}
+                  <Button size="small" startIcon={<Plus size={14} />} onClick={() => set('verifications', [...row.verifications, ''])} sx={{ mt: 0.5 }}>Add question</Button>
+                </Box>
+              )}
+
+              {/* ── Data-capture fields ── */}
+              {(row.formFields || []).length > 0 && (
+                <Box>
+                  <Stack direction="row" spacing={0.75} alignItems="center">
+                    <FormInput size={14} color="#0369a1" />
+                    <Typography variant="caption" sx={{ fontWeight: 700 }}>Data to capture</Typography>
+                  </Stack>
+                  {row.formFields.map((f, i) => (
+                    <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+                      <TextField size="small" value={f.label} fullWidth placeholder="e.g. Vehicle No."
+                        onChange={(e) => { const v = [...row.formFields]; v[i] = { ...f, label: e.target.value }; set('formFields', v); }} />
+                      <TextField select size="small" value={f.fieldType} sx={{ width: 110 }}
+                        onChange={(e) => { const v = [...row.formFields]; v[i] = { ...f, fieldType: e.target.value }; set('formFields', v); }}>
+                        <MenuItem value="TEXT">Text</MenuItem><MenuItem value="NUMBER">Number</MenuItem><MenuItem value="DATE">Date</MenuItem>
+                      </TextField>
+                      <Tooltip title={f.required ? 'Required — blocks completion' : 'Optional'}>
+                        <Switch size="small" checked={f.required}
+                          onChange={(e) => { const v = [...row.formFields]; v[i] = { ...f, required: e.target.checked }; set('formFields', v); }} />
+                      </Tooltip>
+                      <IconButton size="small" onClick={() => set('formFields', row.formFields.filter((_, j) => j !== i))}><X size={14} /></IconButton>
+                    </Stack>
+                  ))}
+                  <Button size="small" startIcon={<Plus size={14} />}
+                    onClick={() => set('formFields', [...row.formFields, { label: '', fieldType: 'TEXT', required: true }])} sx={{ mt: 0.5 }}>Add field</Button>
+                </Box>
+              )}
+
+              {/* ── Proof attachments gate ── */}
+              {row.proof?.required && (
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Paperclip size={14} color="#b45309" />
+                  <Typography variant="caption" sx={{ fontWeight: 700 }}>Proof required — at least</Typography>
+                  <TextField size="small" type="number" value={row.proof.minCount} sx={{ width: 80 }}
+                    inputProps={{ min: 1 }}
+                    onChange={(e) => set('proof', { ...row.proof, minCount: Math.max(1, Number(e.target.value) || 1) })} />
+                  <Typography variant="caption">file(s) / photo(s) / voice note(s)</Typography>
+                  <IconButton size="small" onClick={() => set('proof', { required: false, minCount: 1 })}><X size={14} /></IconButton>
+                </Stack>
+              )}
+
+              {/* ── Approval gate ── */}
+              {row.approval?.required && (
+                <Box>
+                  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
+                    <ShieldCheck size={14} color="#0f766e" />
+                    <Typography variant="caption" sx={{ fontWeight: 700 }}>Approval gate — step completes only after approval by:</Typography>
+                    <IconButton size="small" onClick={() => set('approval', { required: false, approverIds: [] })}><X size={14} /></IconButton>
+                  </Stack>
+                  <Autocomplete
+                    multiple size="small"
+                    options={users}
+                    getOptionLabel={(u) => u.name || u.email || ''}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    value={users.filter((u) => (row.approval.approverIds || []).includes(u._id))}
+                    onChange={(_, v) => set('approval', { ...row.approval, approverIds: v.map((u) => u._id) })}
+                    disableCloseOnSelect
+                    ChipProps={{ size: 'small' }}
+                    renderInput={(p) => <TextField {...p} label="Approver(s)" placeholder="Type to search…" />}
+                  />
+                </Box>
+              )}
+
+              {/* ── Add requirement ── */}
+              <Box>
+                <Button size="small" variant="outlined" startIcon={<Plus size={14} />} onClick={(e) => setReqMenu(e.currentTarget)}>
+                  Add requirement
+                </Button>
+                <Menu anchorEl={reqMenu} open={!!reqMenu} onClose={() => setReqMenu(null)}>
+                  {REQ_TYPES.map((r) => {
+                    const Icon = r.icon;
+                    return (
+                      <MenuItem key={r.key} onClick={() => addRequirement(r.key)} sx={{ alignItems: 'flex-start', py: 1 }}>
+                        <Icon size={16} style={{ marginRight: 10, marginTop: 2, flexShrink: 0 }} />
+                        <Box>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{r.label}</Typography>
+                          <Typography variant="caption" color="text.secondary">{r.hint}</Typography>
+                        </Box>
+                      </MenuItem>
+                    );
+                  })}
+                </Menu>
+              </Box>
+            </>
+          )}
         </Stack>
       </AccordionDetails>
     </Accordion>
@@ -226,12 +381,21 @@ const TaskTemplates = () => {
     const payload = {
       name: editing.name, description: editing.description, isDefault: editing.isDefault,
       steps: editing.steps
-        .filter((s) => s.taskTitle || s.checklist.length || s.assigneeUserIds?.length || s.leadTime.value)
+        .filter((s) => s.taskTitle || s.checklist.length || s.assigneeUserIds?.length || s.leadTime.value
+          || s.verifications?.some(Boolean) || s.formFields?.some((f) => f.label)
+          || s.proof?.required || s.approval?.required || s.actionLink)
         .map((s) => ({
           stepCode: s.stepCode,
           taskTitle: s.taskTitle || undefined,
           instructions: s.instructions || undefined,
           checklist: s.checklist.filter(Boolean).map((text) => ({ text })),
+          verifications: (s.verifications || []).filter(Boolean).map((question) => ({ question })),
+          formFields: (s.formFields || []).filter((f) => f.label?.trim())
+            .map((f) => ({ label: f.label.trim(), fieldType: f.fieldType, required: !!f.required })),
+          proof: s.proof?.required ? { required: true, minCount: s.proof.minCount || 1 } : null,
+          approval: s.approval?.required && s.approval.approverIds?.length
+            ? { required: true, approverIds: s.approval.approverIds } : null,
+          actionLink: s.actionLink || null,
           leadTime: s.leadTime.value ? { value: Number(s.leadTime.value), unit: s.leadTime.unit } : undefined,
           assigneeUserIds: s.assigneeUserIds || [],
           buddyUserIds: s.buddyUserIds || [],
@@ -282,7 +446,7 @@ const TaskTemplates = () => {
         )}
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Per-step tasks ({editing.steps.length} steps)</Typography>
         {editing.steps.map((row, i) => (
-          <StepEditor key={row.stepCode} row={row} users={users}
+          <StepEditor key={row.stepCode} row={row} users={users} advanced={!custom}
             onChange={(updated) => setEditing({ ...editing, steps: editing.steps.map((s, j) => (j === i ? updated : s)) })} />
         ))}
         {error && <Typography color="error" sx={{ mt: 1 }}>{error}</Typography>}

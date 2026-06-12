@@ -13,10 +13,10 @@ import { enqueueSnackbar } from 'notistack';
 import { useGetSkuLookupQuery } from '../../store/api/skuApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { usePreviewCalculatorMutation, useGetCompanySettingsQuery } from '../../store/api/pricingApi';
-import { useCreateQuoteMutation } from '../../store/api/quoteApi';
+import { useCreateQuoteMutation, useUpdateQuoteMutation, useGetQuoteQuery, useSendQuoteMutation } from '../../store/api/quoteApi';
 import { printCalculatorQuote } from '../../utils/printCalculatorQuote';
 import { fmtINR, fmtInt } from '../../utils/formatters';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePermissions } from '../../hooks/usePermission';
 
 // priceTouched flag distinguishes auto-filled (from master) vs user override.
@@ -47,7 +47,16 @@ const TurnoverCalculator = () => {
   const companySettings = settingsRes?.data || {};
   const [preview, { data: previewRes, isLoading: previewing }] = usePreviewCalculatorMutation();
   const [createQuote, { isLoading: savingQuote }] = useCreateQuoteMutation();
+  const [updateQuote, { isLoading: updatingQuote }] = useUpdateQuoteMutation();
+  const [sendQuote] = useSendQuoteMutation();
   const navigate = useNavigate();
+
+  // Edit mode: /pricing/calculator?edit=<quoteId> loads an existing DRAFT so it
+  // can be revised and re-saved in place instead of creating a new quote.
+  const [searchParams] = useSearchParams();
+  const editId = searchParams.get('edit') || null;
+  const { data: editQuoteRes } = useGetQuoteQuery(editId, { skip: !editId });
+  const hydratedRef = useRef(false);
   const { can } = usePermissions();
   const canSaveQuote = can('quotes.create');
 
@@ -66,6 +75,33 @@ const TurnoverCalculator = () => {
   const [globalGstRate, setGlobalGstRate] = useState(18);
 
   const debouncedRequest = useRef(null);
+
+  // Hydrate the form from an existing draft exactly once (guarded so it never
+  // clobbers edits the user makes after it loads).
+  const allParties = useMemo(() => partiesRes?.data || [], [partiesRes]);
+  useEffect(() => {
+    const eq = editQuoteRes?.data;
+    if (!editId || !eq || hydratedRef.current) return;
+    hydratedRef.current = true;
+
+    setParty(
+      allParties.find((p) => p._id === eq.partyId)
+      || (eq.partyId ? { _id: eq.partyId, name: eq.partyName } : null),
+    );
+    setPoRef(eq.poReference || '');
+    setAsOfDate(dayjs(eq.asOfDate).format('YYYY-MM-DD'));
+    setPriceType(eq.priceType || 'SELLING');
+    setViewMode(eq.pdfIncludeGst === false ? 'basic' : 'with_gst');
+    setLines(
+      (eq.lines || []).map((l) => ({
+        key: Math.random().toString(36).slice(2),
+        skuId: l.skuId,
+        qty: l.qty,
+        manualPrice: l.source === 'MANUAL' ? String(l.unitPrice) : '',
+        priceTouched: l.source === 'MANUAL',
+      })),
+    );
+  }, [editId, editQuoteRes, allParties]);
 
   const runPreview = () => {
     const cleaned = lines
@@ -162,17 +198,28 @@ const TurnoverCalculator = () => {
       enqueueSnackbar('Add at least one line to save a quote.', { variant: 'warning' });
       return;
     }
+    const payload = {
+      asOfDate, priceType,
+      partyId: party?._id || null,
+      partyName: party?.name || '',
+      poReference: poRef,
+      lines: cleaned,
+      // "Basic" view = no GST anywhere; carry that choice into the saved
+      // quote's PDF so the View PDF matches what was on screen.
+      pdfIncludeGst: viewMode !== 'basic',
+    };
     try {
-      const res = await createQuote({
-        asOfDate, priceType,
-        partyId: party?._id || null,
-        partyName: party?.name || '',
-        poReference: poRef,
-        lines: cleaned,
-        send,
-      }).unwrap();
-      enqueueSnackbar(`Quote ${res.data.quoteNumber} ${send ? 'saved & marked sent' : 'saved as draft'}.`, { variant: 'success' });
-      navigate(`/quotes/${res.data._id}`);
+      if (editId) {
+        // Editing an existing draft — update in place, then optionally send.
+        const res = await updateQuote({ id: editId, ...payload }).unwrap();
+        if (send) await sendQuote(editId).unwrap();
+        enqueueSnackbar(`Quote ${res.data.quoteNumber} ${send ? 'updated & marked sent' : 'updated'}.`, { variant: 'success' });
+        navigate(`/quotes/${editId}`);
+      } else {
+        const res = await createQuote({ ...payload, send }).unwrap();
+        enqueueSnackbar(`Quote ${res.data.quoteNumber} ${send ? 'saved & marked sent' : 'saved as draft'}.`, { variant: 'success' });
+        navigate(`/quotes/${res.data._id}`);
+      }
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save quote', { variant: 'error' });
     }
@@ -232,12 +279,22 @@ const TurnoverCalculator = () => {
             <Calculator size={26} color="#fff" />
           </Box>
           <Box sx={{ flex: 1 }}>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
-              Turnover Calculator
-            </Typography>
+            <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
+                Turnover Calculator
+              </Typography>
+              {editId && editQuoteRes?.data && (
+                <Chip
+                  label={`Editing draft ${editQuoteRes.data.quoteNumber}`}
+                  size="small"
+                  sx={{ fontWeight: 800, color: '#fff', bgcolor: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.3)' }}
+                />
+              )}
+            </Stack>
             <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5, maxWidth: 720 }}>
-              Pick SKUs, enter quantities — prices auto-fill from the master as of the selected date.
-              Manual overrides are flagged. Server-side math, ready to save as a quote.
+              {editId
+                ? 'Revising an existing draft — change lines, quantities or prices, then Update the draft or Update & Send.'
+                : 'Pick SKUs, enter quantities — prices auto-fill from the master as of the selected date. Manual overrides are flagged. Server-side math, ready to save as a quote.'}
             </Typography>
           </Box>
         </Stack>
@@ -397,13 +454,28 @@ const TurnoverCalculator = () => {
                     filterOptions={(opts, state) => {
                       const q = state.inputValue.trim().toLowerCase();
                       if (!q) return opts.slice(0, 200);
-                      return opts.filter((o) => {
+                      // Rank matches so the query is treated like a prefix first:
+                      // code/name STARTING with the term beats a mid-string match,
+                      // and a code match beats a name/category/alias match. This is
+                      // why typing "MG" surfaces "MG…" SKUs above "PK--MG…" ones.
+                      const rank = (o) => {
                         const code = (o.code || '').toLowerCase();
                         const name = (o.name || '').toLowerCase();
                         const cat  = (o.category || '').toLowerCase();
                         const aliases = (o.aliases || []).join(' ').toLowerCase();
-                        return code.includes(q) || name.includes(q) || cat.includes(q) || aliases.includes(q);
-                      }).slice(0, 200);
+                        if (code.startsWith(q)) return 0;
+                        if (name.startsWith(q)) return 1;
+                        if (code.includes(q)) return 2;
+                        if (name.includes(q)) return 3;
+                        if (cat.includes(q) || aliases.includes(q)) return 4;
+                        return 99;
+                      };
+                      return opts
+                        .map((o) => ({ o, r: rank(o) }))
+                        .filter((x) => x.r < 99)
+                        .sort((a, b) => a.r - b.r || (a.o.code || '').localeCompare(b.o.code || ''))
+                        .map((x) => x.o)
+                        .slice(0, 200);
                     }}
                     ListboxProps={{
                       sx: { maxHeight: 380, py: 0.5 },
@@ -482,7 +554,7 @@ const TurnoverCalculator = () => {
                   <TextField
                     size="small"
                     type="number"
-                    inputProps={{ min: 0, style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }}
+                    inputProps={{ min: 0, style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 } }}
                     value={l.qty}
                     onChange={(e) => updateLine(l.key, { qty: e.target.value })}
                     placeholder="0"
@@ -527,6 +599,34 @@ const TurnoverCalculator = () => {
                 </Box>
               );
             })}
+          </Box>
+
+          {/* Column totals — keep the Qty total visually under the QTY column. */}
+          <Box sx={{
+            display: 'grid',
+            gridTemplateColumns: '40px minmax(280px, 2.4fr) 110px 130px 100px minmax(140px, 1fr) 40px',
+            alignItems: 'center', px: 2, py: 1.25, gap: 1.5,
+            bgcolor: alpha(theme.palette.primary.main, 0.05),
+            borderTop: `2px solid ${theme.palette.primary.main}`,
+          }}>
+            <Box />
+            <Typography sx={{
+              fontSize: '0.74rem', fontWeight: 800, color: 'text.secondary',
+              letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'right',
+            }}>
+              Total Quantity
+            </Typography>
+            <Typography sx={{
+              fontWeight: 800, fontSize: '0.95rem', textAlign: 'right',
+              fontVariantNumeric: 'tabular-nums', color: theme.palette.primary.dark,
+              pr: '14px', // match the qty TextField's inner right padding so digits line up
+            }}>
+              {fmtInt(totalQty)}
+            </Typography>
+            <Box />
+            <Box />
+            <Box />
+            <Box />
           </Box>
 
           <Box sx={{
@@ -659,10 +759,10 @@ const TurnoverCalculator = () => {
                 startIcon={<FileSignature size={14} />}
                 variant="outlined"
                 sx={{ fontWeight: 700 }}
-                disabled={linesCount === 0 || savingQuote}
+                disabled={linesCount === 0 || savingQuote || updatingQuote}
                 onClick={() => handleSaveQuote(false)}
               >
-                Save Draft
+                {editId ? 'Update Draft' : 'Save Draft'}
               </Button>
             )}
             {canSaveQuote && (
@@ -670,10 +770,10 @@ const TurnoverCalculator = () => {
                 startIcon={<FileSignature size={14} />}
                 variant="contained"
                 sx={{ fontWeight: 700, px: 3 }}
-                disabled={linesCount === 0 || savingQuote}
+                disabled={linesCount === 0 || savingQuote || updatingQuote}
                 onClick={() => handleSaveQuote(true)}
               >
-                Save & Send Quote
+                {editId ? 'Update & Send Quote' : 'Save & Send Quote'}
               </Button>
             )}
           </Stack>

@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Stack, Chip, Button, Paper, alpha, useTheme, IconButton,
-  Tooltip, Skeleton, Divider,
+  Tooltip, Skeleton, Divider, Menu, MenuItem, ListItemIcon,
 } from '@mui/material';
 import {
   ArrowLeft, Download, Send, CheckCircle2, ShieldOff, Repeat, Hourglass, Trash2,
+  Pencil, Share2, MessageCircle, Mail, Copy,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
@@ -41,6 +42,37 @@ const QuoteDetail = () => {
 
   const q = data?.data;
   const statusMeta = STATUS_META(theme);
+  const [shareAnchor, setShareAnchor] = useState(null);
+
+  // Plain-text summary used for WhatsApp / email / clipboard sharing.
+  const buildShareText = () => {
+    if (!q) return '';
+    const total = q.pdfIncludeGst === false ? q.totals.subtotal : q.totals.grandTotal;
+    const totalLabel = q.pdfIncludeGst === false ? 'Total' : 'Grand Total (incl. GST)';
+    return [
+      `*Quotation ${q.quoteNumber}*`,
+      q.partyName ? `Customer: ${q.partyName}` : null,
+      q.poReference ? `PO Ref: ${q.poReference}` : null,
+      `Items: ${q.lines.length}`,
+      `${totalLabel}: ${fmtINR(total)}`,
+      `Valid until: ${dayjs(q.validUntil).format('DD MMM YYYY')}`,
+    ].filter(Boolean).join('\n');
+  };
+
+  const shareVia = (channel) => {
+    const text = buildShareText();
+    if (channel === 'whatsapp') {
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+    } else if (channel === 'email') {
+      const subject = `Quotation ${q.quoteNumber}`;
+      window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+    } else if (channel === 'copy') {
+      navigator.clipboard?.writeText(text)
+        .then(() => enqueueSnackbar('Quote summary copied — paste it anywhere', { variant: 'success' }))
+        .catch(() => enqueueSnackbar('Could not copy', { variant: 'error' }));
+    }
+    setShareAnchor(null);
+  };
 
   const openPdf = () => {
     const token = localStorage.getItem('token');
@@ -156,6 +188,32 @@ const QuoteDetail = () => {
                 View PDF
               </Button>
             </Tooltip>
+
+            <Button startIcon={<Share2 size={14} />} onClick={(e) => setShareAnchor(e.currentTarget)}
+              sx={{ fontWeight: 700, color: '#fff', border: '1px solid rgba(255,255,255,0.25)', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}>
+              Share
+            </Button>
+            <Menu anchorEl={shareAnchor} open={Boolean(shareAnchor)} onClose={() => setShareAnchor(null)}>
+              <MenuItem onClick={() => shareVia('whatsapp')}>
+                <ListItemIcon><MessageCircle size={16} color="#25D366" /></ListItemIcon>
+                Share on WhatsApp
+              </MenuItem>
+              <MenuItem onClick={() => shareVia('email')}>
+                <ListItemIcon><Mail size={16} /></ListItemIcon>
+                Share via Email
+              </MenuItem>
+              <MenuItem onClick={() => shareVia('copy')}>
+                <ListItemIcon><Copy size={16} /></ListItemIcon>
+                Copy summary
+              </MenuItem>
+            </Menu>
+
+            {q.status === 'DRAFT' && can('quotes.edit') && (
+              <Button startIcon={<Pencil size={14} />} onClick={() => navigate(`/pricing/calculator?edit=${q._id}`)}
+                sx={{ fontWeight: 700, color: '#fff', border: '1px solid rgba(255,255,255,0.25)', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}>
+                Edit draft
+              </Button>
+            )}
             {q.status === 'DRAFT' && (
               <Button startIcon={<Send size={14} />} onClick={() => handleAction(sendQuote, 'Quote marked as sent')}
                 sx={{ fontWeight: 700, color: '#fff', bgcolor: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', '&:hover': { bgcolor: 'rgba(255,255,255,0.24)' } }}>

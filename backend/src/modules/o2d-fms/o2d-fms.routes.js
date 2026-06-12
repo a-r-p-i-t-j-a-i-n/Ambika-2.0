@@ -17,6 +17,8 @@ import {
   checklistToggleSchema,
   checklistParamSchema,
   commentSchema,
+  verificationAnswerSchema,
+  formFieldValueSchema,
   planOrderSchema,
   attachmentsSchema,
   attachmentParamSchema,
@@ -79,6 +81,21 @@ router.patch('/processes/:id/steps/:stepCode/assign',
 router.patch('/processes/:id/steps/:stepCode/checklist/:itemId',
   requirePermission('o2dfms.view'),
   validate(checklistParamSchema, 'params'), validate(checklistToggleSchema), c.toggleChecklist);
+
+// Yes/No verification answers (itemId = verification subdoc id).
+router.patch('/processes/:id/steps/:stepCode/verification/:itemId',
+  requirePermission('o2dfms.view'),
+  validate(checklistParamSchema, 'params'), validate(verificationAnswerSchema), c.answerVerification);
+
+// Data-capture field values (itemId = formField subdoc id).
+router.patch('/processes/:id/steps/:stepCode/field/:itemId',
+  requirePermission('o2dfms.view'),
+  validate(checklistParamSchema, 'params'), validate(formFieldValueSchema), c.fillFormField);
+
+// Approval gate — service checks the caller is a named approver (or privileged).
+router.post('/processes/:id/steps/:stepCode/approve',
+  requirePermission('o2dfms.view'),
+  validate(processStepParamSchema, 'params'), c.approveStep);
 
 router.post('/processes/:id/steps/:stepCode/comment',
   requirePermission('o2dfms.view'),

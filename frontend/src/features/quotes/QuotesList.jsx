@@ -21,11 +21,12 @@ const STATUS_META = (theme) => ({
   CONVERTED_TO_SO: { color: theme.palette.info.dark,      bg: alpha(theme.palette.info.main, 0.10),     label: 'Converted',     icon: Repeat },
 });
 
-const QuotesList = () => {
+const QuotesList = ({ initialStatus = '', lockStatus = false, title = 'Quotes' }) => {
   const theme = useTheme();
   const navigate = useNavigate();
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(initialStatus);
   const { data, isFetching } = useListQuotesQuery({ status: status || undefined });
+  const isDraftsView = lockStatus && initialStatus === 'DRAFT';
   const statusMeta = useMemo(() => STATUS_META(theme), [theme]);
 
   const rows = useMemo(() => {
@@ -138,10 +139,12 @@ const QuotesList = () => {
           </Box>
           <Box sx={{ flex: 1 }}>
             <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
-              Quotes
+              {title}
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>
-              Saved snapshots from the calculator — prices frozen at the as-of date.
+              {isDraftsView
+                ? 'Work-in-progress quotes — open one to edit, share on WhatsApp / email, or send.'
+                : 'Saved snapshots from the calculator — prices frozen at the as-of date.'}
             </Typography>
           </Box>
           <Button
@@ -163,6 +166,7 @@ const QuotesList = () => {
       </Box>
 
       <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative' }}>
+        {!lockStatus && (
         <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
           <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
             {['', 'DRAFT', 'SENT', 'ACCEPTED', 'EXPIRED', 'CONVERTED_TO_SO'].map((s) => {
@@ -188,6 +192,7 @@ const QuotesList = () => {
             })}
           </Stack>
         </Paper>
+        )}
 
         <Paper sx={{ borderRadius: 3, overflow: 'hidden', mb: 4 }}>
           <DataGrid
@@ -204,9 +209,9 @@ const QuotesList = () => {
           {!isFetching && rows.length === 0 && (
             <Box sx={{ p: 6, textAlign: 'center', color: 'text.disabled' }}>
               <FileSignature size={32} style={{ opacity: 0.4, marginBottom: 8 }} />
-              <Typography sx={{ fontWeight: 700 }}>No quotes yet</Typography>
+              <Typography sx={{ fontWeight: 700 }}>{isDraftsView ? 'No saved drafts' : 'No quotes yet'}</Typography>
               <Typography sx={{ fontSize: '0.84rem', mb: 2 }}>
-                Build one in the Turnover Calculator and click "Save as Quote".
+                Build one in the Turnover Calculator and click "{isDraftsView ? 'Save Draft' : 'Save as Quote'}".
               </Typography>
               <Button variant="contained" startIcon={<Plus size={14} />} onClick={() => navigate('/pricing/calculator')} sx={{ fontWeight: 700 }}>
                 Open Calculator

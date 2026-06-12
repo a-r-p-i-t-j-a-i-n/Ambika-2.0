@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Box, Typography, Paper, IconButton, Tooltip, Button, TextField, InputAdornment } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Search, Download, Eye, DollarSign } from 'lucide-react';
@@ -20,8 +21,10 @@ const PaymentBadge = ({ value }) => {
 };
 
 const InvoicesList = () => {
+  const [searchParams] = useSearchParams();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [searchTerm, setSearchTerm] = useState('');
+  // Deep-link support: ?so=AGL/SO-… (from an FMS task) pre-filters to that order.
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('so') || '');
 
   const { data, isLoading } = useGetInvoicesQuery({
     page: paginationModel.page + 1,

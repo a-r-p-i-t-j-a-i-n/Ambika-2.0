@@ -71,6 +71,29 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       },
       invalidatesTags: ['O2DMyTasks'],
     }),
+    answerVerification: builder.mutation({
+      query: ({ id, stepCode, itemId, answer, remark }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/verification/${itemId}`,
+        method: 'PATCH',
+        body: { answer, remark },
+      }),
+      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }, 'O2DMyTasks'],
+    }),
+    fillFormField: builder.mutation({
+      query: ({ id, stepCode, itemId, value }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/field/${itemId}`,
+        method: 'PATCH',
+        body: { value },
+      }),
+      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }, 'O2DMyTasks'],
+    }),
+    approveStep: builder.mutation({
+      query: ({ id, stepCode }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/approve`,
+        method: 'POST',
+      }),
+      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }, 'O2DProcess', 'O2DMyTasks'],
+    }),
     addStepComment: builder.mutation({
       query: ({ id, stepCode, text }) => ({
         url: `/o2d-fms/processes/${id}/steps/${stepCode}/comment`,
@@ -173,6 +196,9 @@ export const {
   useReorderStepDefinitionsMutation,
   useDeleteStepDefinitionMutation,
   useToggleChecklistItemMutation,
+  useAnswerVerificationMutation,
+  useFillFormFieldMutation,
+  useApproveStepMutation,
   useAddStepCommentMutation,
   useUploadFileMutation,
   useAddStepAttachmentsMutation,

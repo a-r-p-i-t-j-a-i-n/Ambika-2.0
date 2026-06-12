@@ -48,6 +48,39 @@ const assertCanAct = (step, user, privileged) => {
   throw new AppError('This step is assigned to someone else — you can view it but not action it.', 403);
 };
 
+/**
+ * Generalised completion gate. Returns human-readable reasons the step can't
+ * be completed yet — checklist, yes/no verifications, required data fields,
+ * proof attachments and approval are ALL checked. Empty array = good to go.
+ */
+const unmetRequirements = (step, def, payload = {}) => {
+  const unmet = [];
+  if (def?.requiresLink && !payload.link && !step.link) unmet.push('a link is required');
+
+  const attachCount = (step.attachments?.length || 0) + (payload.attachments?.length || 0);
+  if (def?.requiresAttachment && attachCount === 0) unmet.push('an attachment is required');
+  if (step.proof?.required && attachCount < (step.proof.minCount || 1)) {
+    unmet.push(`attach at least ${step.proof.minCount || 1} proof file(s) (${attachCount} so far)`);
+  }
+
+  const pendingChecklist = (step.checklist || []).filter((c) => !c.done).length;
+  if (pendingChecklist > 0 && !def?.allowIncompleteChecklist) {
+    unmet.push(`${pendingChecklist} checklist item(s) remaining`);
+  }
+
+  const unanswered = (step.verifications || []).filter((v) => !v.answer).length;
+  if (unanswered > 0) unmet.push(`${unanswered} verification question(s) unanswered`);
+
+  const emptyFields = (step.formFields || [])
+    .filter((f) => f.required && (f.value === null || f.value === undefined || f.value === ''));
+  if (emptyFields.length > 0) {
+    unmet.push(`fill in: ${emptyFields.map((f) => f.label).join(', ')}`);
+  }
+
+  if (step.approval?.required && !step.approval.approvedBy) unmet.push('approval is pending');
+  return unmet;
+};
+
 /** Resolve a StepDefinition's default owner to a User _id (or null). */
 const resolveOwner = async (def) => {
   if (def.defaultOwnerUserId) return def.defaultOwnerUserId;
@@ -149,6 +182,16 @@ export const o2dFmsService = {
         taskTitle: tpl?.taskTitle || def.name,
         instructions: tpl?.instructions || def.description || null,
         checklist: (tpl?.checklist || []).map((c) => ({ text: c.text, done: false })),
+        // Requirement types beyond the checklist (template-driven, all optional).
+        verifications: (tpl?.verifications || []).map((v) => ({ question: v.question, answer: null })),
+        formFields: (tpl?.formFields || []).map((f) => ({
+          label: f.label, fieldType: f.fieldType || 'TEXT', required: f.required !== false, value: null,
+        })),
+        proof: tpl?.proof?.required ? { required: true, minCount: tpl.proof.minCount || 1 } : null,
+        approval: tpl?.approval?.required
+          ? { required: true, approverIds: (tpl.approval.approverIds || []).map(String) }
+          : null,
+        actionLink: tpl?.actionLink || null,
         startedAt: i === 0 ? received : null,
       });
     }
@@ -280,15 +323,10 @@ export const o2dFmsService = {
     const defMap = await loadDefMap();
     const def = defMap.get(stepCode);
     if (!opts.bypassRequirements) {
-      if (def?.requiresLink && !payload.link) throw new AppError('This step requires a link', 422);
-      if (def?.requiresAttachment && !(payload.attachments?.length || step.attachments?.length)) {
-        throw new AppError('This step requires an attachment', 422);
-      }
-      // Checklist gate: every item must be ticked unless the step allows otherwise.
-      const pending = (step.checklist || []).filter((c) => !c.done).length;
-      if (pending > 0 && !def?.allowIncompleteChecklist) {
-        throw new AppError(`Complete all checklist items first (${pending} remaining)`, 422);
-      }
+      // One gate for every requirement type: checklist, yes/no verifications,
+      // data fields, proof attachments, approval, link.
+      const unmet = unmetRequirements(step, def, payload);
+      if (unmet.length) throw new AppError(`Cannot complete yet — ${unmet.join('; ')}.`, 422);
     }
 
     const actual = new Date();
@@ -380,28 +418,28 @@ export const o2dFmsService = {
       && defMap.get(s.stepCode)?.triggerKey === triggerKey);
     if (!target) return null;
 
-    // If the step still has an unfinished checklist, the real action only makes it
-    // the ACTIVE task — the assigned doer must still tick the checklist to finish it.
-    // (So the step is never shown "complete" while its checklist is pending.)
-    const pendingChecklist = (target.checklist || []).some((c) => !c.done);
-    if (pendingChecklist) {
+    // If the step still has unmet requirements (checklist, verifications, data
+    // fields, proof, approval), the real action only makes it the ACTIVE task —
+    // the doer must still satisfy them. A step is never shown "complete" early.
+    const unmet = unmetRequirements(target, defMap.get(target.stepCode), {});
+    if (unmet.length) {
       if (!target.startedAt) target.startedAt = new Date();
       process.currentStepCode = target.stepCode;
       target.comments.push({
         userName: 'System',
-        text: `${triggerKey.replace('_', ' ').toLowerCase()} done automatically — please complete the checklist to finish this step.`,
+        text: `${triggerKey.replace('_', ' ').toLowerCase()} done automatically — still needed: ${unmet.join('; ')}.`,
         at: new Date(),
       });
       process.activityTimeline.push({
         action: 'TRIGGER_AWAITS_CHECKLIST',
-        description: `${target.stepCode} · ${triggerKey} done; checklist pending`,
+        description: `${target.stepCode} · ${triggerKey} done; requirements pending`,
         actorId: actor?._id || null,
       });
       await process.save();
       return enrichSteps(process, defMap);
     }
 
-    // No checklist left — the real action IS the proof, so auto-complete & advance.
+    // Nothing left — the real action IS the proof, so auto-complete & advance.
     return this.completeStep(
       process._id, target.stepCode,
       { remarks: `Auto-completed by ${triggerKey}` }, actor,
@@ -521,6 +559,82 @@ export const o2dFmsService = {
     await process.save();
     const defMap = await loadDefMap();
     return enrichSteps(process, defMap);
+  },
+
+  /** Answer a Yes/No verification question. A "NO" must carry a remark. */
+  async answerVerification(processId, stepCode, itemId, answer, remark, user, privileged = false) {
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    const step = process.steps.find((s) => s.stepCode === stepCode);
+    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    assertCanAct(step, user, privileged);
+    const item = step.verifications.id(itemId);
+    if (!item) throw new AppError('Verification question not found', 404);
+    if (answer === 'NO' && !remark?.trim()) {
+      throw new AppError('Answering "No" needs a short remark explaining why', 422);
+    }
+    item.answer = answer || null; // null = cleared
+    item.remark = answer === 'NO' ? remark.trim() : null;
+    item.answeredBy = answer ? user?._id || null : null;
+    item.answeredByName = answer ? user?.name || null : null;
+    item.answeredAt = answer ? new Date() : null;
+    process.activityTimeline.push({
+      action: 'VERIFICATION_ANSWERED',
+      description: `${stepCode} · ${item.question} → ${answer || 'cleared'}`,
+      actorId: user?._id || null,
+    });
+    await process.save();
+    return enrichSteps(process, await loadDefMap());
+  },
+
+  /** Fill (or clear) a data-capture field on a step. */
+  async fillFormField(processId, stepCode, itemId, value, user, privileged = false) {
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    const step = process.steps.find((s) => s.stepCode === stepCode);
+    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    assertCanAct(step, user, privileged);
+    const item = step.formFields.id(itemId);
+    if (!item) throw new AppError('Field not found', 404);
+    const has = !(value === null || value === undefined || value === '');
+    item.value = has ? value : null;
+    item.filledBy = has ? user?._id || null : null;
+    item.filledByName = has ? user?.name || null : null;
+    item.filledAt = has ? new Date() : null;
+    process.activityTimeline.push({
+      action: 'FIELD_FILLED',
+      description: `${stepCode} · ${item.label}${has ? ` = ${String(value).slice(0, 80)}` : ' cleared'}`,
+      actorId: user?._id || null,
+    });
+    await process.save();
+    return enrichSteps(process, await loadDefMap());
+  },
+
+  /** Approve a step's approval gate. Only a named approver (or root) may approve. */
+  async approveStep(processId, stepCode, user, privileged = false) {
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    const step = process.steps.find((s) => s.stepCode === stepCode);
+    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+    if (!step.approval?.required) throw new AppError('This step has no approval gate', 409);
+    if (step.approval.approvedBy) throw new AppError('Already approved', 409);
+    const uid = String(user?._id || '');
+    const isApprover = (step.approval.approverIds || []).map(String).includes(uid);
+    if (!isApprover && !privileged) {
+      throw new AppError('Only the named approver can approve this step', 403);
+    }
+    step.approval.approvedBy = user?._id || null;
+    step.approval.approvedByName = user?.name || null;
+    step.approval.approvedAt = new Date();
+    process.activityTimeline.push({
+      action: 'STEP_APPROVED',
+      description: `${stepCode} approved by ${user?.name || 'user'}`,
+      actorId: user?._id || null,
+    });
+    await process.save();
+    // Tell the doers their gate is open.
+    await notifyStepOwners(process, step).catch(() => {});
+    return enrichSteps(process, await loadDefMap());
   },
 
   /** Add a comment to a step. */

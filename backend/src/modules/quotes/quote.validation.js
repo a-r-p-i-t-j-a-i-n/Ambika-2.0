@@ -15,6 +15,7 @@ export const createQuoteSchema = Joi.object({
   poReference: Joi.string().allow('').max(120),
   lines:       Joi.array().items(lineSchema).min(1).required(),
   notes:       Joi.string().allow('').max(2000),
+  pdfIncludeGst: Joi.boolean().default(true),
   send:        Joi.boolean().default(false),
 });
 
@@ -27,6 +28,7 @@ export const updateQuoteSchema = Joi.object({
   poReference: Joi.string().allow('').max(120),
   lines:       Joi.array().items(lineSchema),
   notes:       Joi.string().allow('').max(2000),
+  pdfIncludeGst: Joi.boolean(),
 }).min(1);
 
 export const rejectQuoteSchema = Joi.object({

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Search, Plus, Eye, Edit3, ShoppingCart, Clock, CheckCircle, AlertCircle, Package, ExternalLink, ListChecks, Trash2 } from 'lucide-react';
@@ -70,8 +70,10 @@ const PipelineBar = ({ row }) => {
 
 const OrdersList = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [searchTerm, setSearchTerm] = useState('');
+  // Deep-link support: ?so=AGL/SO-… (from an FMS task) pre-filters to that order.
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('so') || '');
   const [statusFilter, setStatusFilter] = useState('');
   const [partyFilter, setPartyFilter] = useState(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);

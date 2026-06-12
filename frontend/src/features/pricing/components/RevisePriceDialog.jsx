@@ -5,7 +5,7 @@ import {
   MenuItem, Chip, Switch, FormControlLabel, IconButton, Tooltip,
 } from '@mui/material';
 import {
-  IndianRupee, Upload, X, Paperclip, ShieldAlert, Calendar, Sparkles,
+  IndianRupee, Upload, X, Paperclip, ShieldAlert, Calendar, Sparkles, Eye,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
@@ -23,7 +23,9 @@ const REASON_PRESETS = [
   'Other',
 ];
 
-const UPLOAD_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1') + '/uploads/order-document';
+// Price-change proofs go into the dedicated "pricing" S3 folder (whitelisted on
+// the backend) so they don't mix with order documents in the bucket.
+const UPLOAD_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1') + '/uploads?folder=pricing';
 
 // Buy-side items (raw material, consumables, packing) have ONE price stream —
 // their purchase cost (RM_COST). Finished goods can have both a selling price
@@ -376,9 +378,16 @@ const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLI
                   <Typography sx={{ flex: 1, fontSize: '0.8rem', fontWeight: 600 }} noWrap>
                     {form.attachmentName}
                   </Typography>
-                  <IconButton size="small" onClick={() => setForm((f) => ({ ...f, attachmentUrl: '', attachmentName: '' }))}>
-                    <X size={14} />
-                  </IconButton>
+                  <Tooltip title="Preview attachment">
+                    <IconButton size="small" onClick={() => window.open(form.attachmentUrl, '_blank', 'noopener')}>
+                      <Eye size={14} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Remove">
+                    <IconButton size="small" onClick={() => setForm((f) => ({ ...f, attachmentUrl: '', attachmentName: '' }))}>
+                      <X size={14} />
+                    </IconButton>
+                  </Tooltip>
                 </Stack>
               ) : (
                 <Button

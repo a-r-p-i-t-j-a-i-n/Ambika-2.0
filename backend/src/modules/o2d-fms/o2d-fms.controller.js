@@ -61,6 +61,23 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('Checklist updated', process));
   }),
 
+  answerVerification: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.answerVerification(
+      req.params.id, req.params.stepCode, req.params.itemId, req.body.answer, req.body.remark, req.user, isPriv(req));
+    res.json(ApiResponse.ok('Verification updated', process));
+  }),
+
+  fillFormField: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.fillFormField(
+      req.params.id, req.params.stepCode, req.params.itemId, req.body.value, req.user, isPriv(req));
+    res.json(ApiResponse.ok('Field saved', process));
+  }),
+
+  approveStep: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.approveStep(req.params.id, req.params.stepCode, req.user, isPriv(req));
+    res.json(ApiResponse.ok('Step approved', process));
+  }),
+
   addComment: asyncHandler(async (req, res) => {
     const process = await o2dFmsService.addComment(req.params.id, req.params.stepCode, req.body.text, req.user, isPriv(req));
     res.json(ApiResponse.ok('Comment added', process));

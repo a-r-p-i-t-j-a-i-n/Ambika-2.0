@@ -1,0 +1,71 @@
+/**
+ * Action-link registry — connects an FMS step to the REAL screen where the
+ * work happens. The template designer picks one by key; at runtime the route
+ * placeholders are filled from the live process ({soNumber}, {orderId},
+ * {processId}, {intakeId}) so the doer lands on the exact page for THAT order.
+ *
+ * Keep keys stable — they are stored on templates and step instances.
+ */
+export const ACTION_LINKS = [
+  { key: 'ORDER_INTAKE',    label: 'Order Intake (log a client order)', route: '/order-intake' },
+  { key: 'ORDER_ENTRY',     label: 'Sales Order Entry (punch-in)',      route: '/orders?so={soNumber}' },
+  { key: 'ORDER_DETAILS',   label: 'Order Details page',                route: '/orders/{orderId}' },
+  { key: 'DISPATCH_PLAN',   label: 'Dispatch Planning',                 route: '/dispatch-planning?so={soNumber}' },
+  { key: 'PPC',             label: 'PPC Planning',                      route: '/ppc-planning' },
+  { key: 'ACTUAL_DISPATCH', label: 'Actual Dispatch (challan)',         route: '/challans?so={soNumber}' },
+  { key: 'INVOICE',         label: 'Invoicing',                         route: '/invoices?so={soNumber}' },
+  { key: 'CONTROL_TOWER',   label: 'Dispatch Control Tower',            route: '/dispatch-control-tower' },
+  { key: 'FMS_PROCESS',     label: "This order's FMS flow",             route: '/o2d-fms/process/{processId}' },
+];
+
+export const actionLinkMeta = (key) => ACTION_LINKS.find((a) => a.key === key) || null;
+
+// Steps already wired to an auto-advance trigger get the matching action
+// link suggested automatically in the template builder.
+export const TRIGGER_TO_ACTION = {
+  ORDER_INTAKE: 'ORDER_INTAKE',
+  ORDER_ENTRY: 'ORDER_ENTRY',
+  DISPATCH_PLAN: 'DISPATCH_PLAN',
+  ACTUAL_DISPATCH: 'ACTUAL_DISPATCH',
+  INVOICE: 'INVOICE',
+};
+
+/**
+ * Resolve a registry key + process context to a concrete path.
+ * Missing placeholder values: a missing query-param value drops that param;
+ * a missing path segment ({orderId}/{processId}) makes the link unresolvable → null.
+ */
+export const resolveActionLink = (key, ctx = {}) => {
+  const meta = actionLinkMeta(key);
+  if (!meta) return null;
+  const values = {
+    soNumber: ctx.soNumber || '',
+    orderId: ctx.orderId ? String(ctx.orderId) : '',
+    processId: ctx.processId ? String(ctx.processId) : '',
+    intakeId: ctx.intakeId ? String(ctx.intakeId) : '',
+  };
+
+  const [pathPart, queryPart] = meta.route.split('?');
+  // Path placeholders are mandatory.
+  let path = pathPart;
+  for (const [k, v] of Object.entries(values)) {
+    if (path.includes(`{${k}}`)) {
+      if (!v) return null;
+      path = path.replaceAll(`{${k}}`, encodeURIComponent(v));
+    }
+  }
+  // Query placeholders are best-effort.
+  const params = new URLSearchParams();
+  if (queryPart) {
+    for (const pair of queryPart.split('&')) {
+      const [k, raw] = pair.split('=');
+      const m = raw?.match(/^\{(\w+)\}$/);
+      const v = m ? values[m[1]] : raw;
+      if (v) params.set(k, v);
+    }
+  }
+  const qs = params.toString();
+  return qs ? `${path}?${qs}` : path;
+};
+
+export default ACTION_LINKS;

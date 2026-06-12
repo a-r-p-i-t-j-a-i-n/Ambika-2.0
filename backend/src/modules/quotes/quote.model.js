@@ -43,6 +43,10 @@ const QuoteSchema = new Schema({
   partyName:      { type: String, default: '' },
   poReference:    { type: String, default: '' },
 
+  // Whether the exported / viewed PDF shows GST columns & totals. Chosen in the
+  // Turnover Calculator (Basic = no GST). Persisted so the View PDF matches.
+  pdfIncludeGst:  { type: Boolean, default: true },
+
   lines: [QuoteLineSchema],
 
   totals: {

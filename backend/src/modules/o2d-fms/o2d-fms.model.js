@@ -100,6 +100,49 @@ const ChecklistItemSchema = new Schema({
   doneAt: { type: Date, default: null },
 }, { _id: true });
 
+// ── Requirement types (beyond checklist) ────────────────────────────────────
+// Each step can demand several KINDS of verification before it counts as done:
+// yes/no questions, data fields to capture, minimum proof attachments, and an
+// approval by a named person. All optional and template-driven.
+
+export const FORM_FIELD_TYPE = Object.freeze({ TEXT: 'TEXT', NUMBER: 'NUMBER', DATE: 'DATE' });
+
+// Yes/No verification question. "NO" requires a remark explaining why.
+const VerificationItemSchema = new Schema({
+  question: { type: String, required: true },
+  answer:   { type: String, enum: ['YES', 'NO', null], default: null },
+  remark:   { type: String, default: null },
+  answeredBy:     { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  answeredByName: { type: String, default: null },
+  answeredAt:     { type: Date, default: null },
+}, { _id: true });
+
+// Data-capture field (e.g. "Vehicle No.", "Qty loaded").
+const FormFieldItemSchema = new Schema({
+  label:     { type: String, required: true },
+  fieldType: { type: String, enum: Object.values(FORM_FIELD_TYPE), default: FORM_FIELD_TYPE.TEXT },
+  required:  { type: Boolean, default: true },
+  value:     { type: Schema.Types.Mixed, default: null },
+  filledBy:     { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  filledByName: { type: String, default: null },
+  filledAt:     { type: Date, default: null },
+}, { _id: true });
+
+// Proof gate config — step needs ≥ minCount attachments before completion.
+const ProofConfigSchema = new Schema({
+  required: { type: Boolean, default: false },
+  minCount: { type: Number, default: 1, min: 1 },
+}, { _id: false });
+
+// Approval gate — one of approverIds must approve before completion.
+const ApprovalSchema = new Schema({
+  required:    { type: Boolean, default: false },
+  approverIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  approvedBy:     { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  approvedByName: { type: String, default: null },
+  approvedAt:     { type: Date, default: null },
+}, { _id: false });
+
 // A proof attachment on a step — any file or a voice note. uploadedByName is
 // denormalised so "who attached this, when" always renders without a populate.
 const StepAttachmentSchema = new Schema({
@@ -139,6 +182,13 @@ const ProcessStepSchema = new Schema({
   taskTitle:    { type: String, default: null },
   instructions: { type: String, default: null },
   checklist:    [ChecklistItemSchema],
+  verifications:[VerificationItemSchema],
+  formFields:   [FormFieldItemSchema],
+  proof:        { type: ProofConfigSchema, default: null },
+  approval:     { type: ApprovalSchema, default: null },
+  // Key into the frontend action-link registry — renders a "Do it now →" deep
+  // link to the real screen (dispatch planning, order entry…) for THIS order.
+  actionLink:   { type: String, default: null },
   comments:     [StepCommentSchema],
 
   link:    { type: String, default: null },
@@ -202,6 +252,16 @@ const TemplateStepSchema = new Schema({
   taskTitle:    { type: String, default: null },
   instructions: { type: String, default: null },
   checklist:    [{ text: { type: String, required: true } }],
+  // Requirement types beyond the checklist (all optional).
+  verifications:[{ question: { type: String, required: true } }],
+  formFields:   [{
+    label:     { type: String, required: true },
+    fieldType: { type: String, enum: Object.values(FORM_FIELD_TYPE), default: FORM_FIELD_TYPE.TEXT },
+    required:  { type: Boolean, default: true },
+  }],
+  proof:        { type: ProofConfigSchema, default: null },
+  approval:     { type: ApprovalSchema, default: null }, // runtime fields stay null on templates
+  actionLink:   { type: String, default: null }, // frontend action-registry key
   leadTime:     {
     value: { type: Number, default: null },
     unit:  { type: String, enum: Object.values(LEAD_TIME_UNIT), default: LEAD_TIME_UNIT.HOURS },

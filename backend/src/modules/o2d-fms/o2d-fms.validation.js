@@ -55,6 +55,22 @@ const templateStepJoi = Joi.object({
   taskTitle:    Joi.string().allow('', null),
   instructions: Joi.string().allow('', null),
   checklist:    Joi.array().items(Joi.object({ text: Joi.string().trim().required() })).default([]),
+  // Requirement types beyond the checklist.
+  verifications: Joi.array().items(Joi.object({ question: Joi.string().trim().required() })).default([]),
+  formFields: Joi.array().items(Joi.object({
+    label:     Joi.string().trim().required(),
+    fieldType: Joi.string().valid('TEXT', 'NUMBER', 'DATE').default('TEXT'),
+    required:  Joi.boolean().default(true),
+  })).default([]),
+  proof: Joi.object({
+    required: Joi.boolean().default(false),
+    minCount: Joi.number().integer().min(1).default(1),
+  }).allow(null),
+  approval: Joi.object({
+    required:    Joi.boolean().default(false),
+    approverIds: Joi.array().items(objectId).default([]),
+  }).allow(null),
+  actionLink: Joi.string().trim().allow('', null),
   leadTime:     leadTimeJoi.default({ unit: 'HOURS' }),
   assigneeRole:   Joi.string().trim().allow('', null),
   assigneeUserIds: Joi.array().items(objectId).default([]),
@@ -75,6 +91,14 @@ export const taskTemplateUpdateSchema = taskTemplateSchema.fork(['name'], (s) =>
 
 export const checklistToggleSchema = Joi.object({ done: Joi.boolean().required() });
 export const commentSchema = Joi.object({ text: Joi.string().trim().min(1).max(2000).required() });
+
+export const verificationAnswerSchema = Joi.object({
+  answer: Joi.string().valid('YES', 'NO').allow(null).required(),
+  remark: Joi.string().trim().max(1000).allow('', null),
+});
+export const formFieldValueSchema = Joi.object({
+  value: Joi.alternatives().try(Joi.string().max(2000), Joi.number(), Joi.date()).allow('', null),
+});
 
 export const attachmentsSchema = Joi.object({
   attachments: Joi.array().items(Joi.object({

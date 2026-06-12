@@ -43,6 +43,10 @@ export function printCalculatorQuote({
   const includeGst = viewMode === 'with_gst' || viewMode === 'inclusive';
   const today = dayjs().format('DD MMM YYYY');
 
+  // Sum of the quantity column, shown as a footer total in the items table.
+  const totalQty = lines.reduce((sum, l) => sum + (Number(l.qty) || 0), 0);
+  const fmtQty = (n) => new Intl.NumberFormat('en-IN').format(Number(n) || 0);
+
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -70,7 +74,11 @@ export function printCalculatorQuote({
   tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
   tbody td.code { font-family: 'Courier New', ui-monospace, monospace; font-weight: 700; color: #1e3a8a; }
   tbody td.desc { color: #475569; font-size: 8.5pt; }
+  tbody td.qty { font-weight: 700; color: #0f172a; }
   tbody tr:nth-child(even) td { background: #f8fafc; }
+  tfoot td { padding: 9px 10px; border-top: 2px solid #1e3a8a; font-size: 9.5pt; }
+  tfoot td.foot-label { text-align: right; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 8.5pt; color: #475569; }
+  tfoot td.foot-total { font-weight: 800; color: #1e3a8a; }
   .totals { margin-top: 18px; display: flex; justify-content: flex-end; }
   .totals-box { width: 280px; }
   .totals-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 10pt; }
@@ -157,12 +165,22 @@ export function printCalculatorQuote({
               <div class="code">${escape(l.code)}</div>
               <div class="desc">${escape(l.name)}</div>
             </td>
-            <td class="num">${l.qty}</td>
+            <td class="num qty">${fmtQty(l.qty)}</td>
             <td class="num">${fmtINR(l.unitPrice)}</td>
             <td class="num"><strong>${fmtINR(l.lineSubtotal)}</strong></td>
           </tr>
         `).join('')}
       </tbody>
+      ${lines.length === 0 ? '' : `
+      <tfoot>
+        <tr>
+          <td></td>
+          <td class="foot-label">Total Quantity</td>
+          <td class="num qty foot-total">${fmtQty(totalQty)}</td>
+          <td></td>
+          <td></td>
+        </tr>
+      </tfoot>`}
     </table>
 
     <div class="totals">

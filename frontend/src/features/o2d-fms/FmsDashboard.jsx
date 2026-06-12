@@ -90,7 +90,7 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
               {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
             </Pie>
             <ReTooltip />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Legend wrapperStyle={{ fontSize: 12 }} height={28} verticalAlign="bottom" />
           </PieChart>
         </ResponsiveContainer>
       );
@@ -109,7 +109,7 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
                 stroke={s.color || PALETTE[i % PALETTE.length]} fill={s.color || PALETTE[i % PALETTE.length]} fillOpacity={0.35} />
             ))}
             <ReTooltip />
-            {series.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
+            {series.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} height={28} verticalAlign="bottom" />}
           </RadarChart>
         </ResponsiveContainer>
       );
@@ -125,7 +125,7 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
             <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-12} textAnchor="end" height={56} />
             <YAxis tick={{ fontSize: 11 }} unit={view.unit || ''} />
             <ReTooltip />
-            {series.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
+            {series.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} height={28} verticalAlign="bottom" />}
             {series.map((s, i) => (type === 'line'
               ? <Line key={s.dataKey} type="monotone" dataKey={s.dataKey} name={s.label} stroke={s.color || PALETTE[i % PALETTE.length]} strokeWidth={2} dot={{ r: 3 }} />
               : <Area key={s.dataKey} type="monotone" dataKey={s.dataKey} name={s.label} stroke={s.color || PALETTE[i % PALETTE.length]} fill={alpha(s.color || PALETTE[i % PALETTE.length], 0.25)} strokeWidth={2} />
@@ -156,7 +156,7 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
             </>
           )}
           <ReTooltip />
-          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
+          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} height={28} verticalAlign="bottom" />}
           {series.map((s, i) => (
             <Bar key={s.dataKey} dataKey={s.dataKey} name={s.label} stackId={stack}
               fill={s.color || PALETTE[i % PALETTE.length]} radius={horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}>
@@ -171,7 +171,7 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
   };
 
   return (
-    <Paper sx={{ p: 2, borderRadius: 3, height: 392, display: 'flex', flexDirection: 'column' }}>
+    <Paper sx={{ p: 2, borderRadius: 3 }}>
       <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" mb={1} flexWrap="wrap" gap={1}>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
           {view.icon}
@@ -192,7 +192,9 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
         ))}
       </ToggleButtonGroup>
 
-      <Box sx={{ flex: 1, minHeight: 0 }}>{renderChart()}</Box>
+      {/* Fixed pixel height — a percentage/flex height lets recharts' Legend
+          re-measure on every update and loop ("Maximum update depth exceeded"). */}
+      <Box sx={{ height: 264 }}>{renderChart()}</Box>
     </Paper>
   );
 };

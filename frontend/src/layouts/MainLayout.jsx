@@ -7,8 +7,8 @@ import {
 import {
   Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
   Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
-  IndianRupee, Calculator, FileSignature, ClipboardCheck, FolderOpen, BarChart3, Tag,
-  Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall,
+  IndianRupee, Calculator, FileSignature, FilePen, ClipboardCheck, FolderOpen, BarChart3, Tag,
+  Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -78,6 +78,7 @@ const PAGE_TITLES = {
   '/pricing/analytics':      'Pricing Analytics',
   '/quotes':                 'Quotes',
   '/o2d-fms':                'O2D FMS — My Tasks',
+  '/o2d-fms/master':         'O2D FMS — Master View',
   '/o2d-fms/processes':      'O2D FMS — Processes',
   '/o2d-fms/dashboard':      'O2D FMS — Management View',
   '/o2d-fms/config':         'O2D FMS — Step Catalog',
@@ -125,6 +126,7 @@ const MainLayout = () => {
 
     const fmsChildren = [];
     if (can('o2dfms.view') || isRoot) {
+      fmsChildren.push({ text: 'Master FMS',   icon: <LayoutGrid size={19} />,        path: '/o2d-fms/master' });
       fmsChildren.push({ text: 'FMS Tracker',  icon: <Workflow size={19} />,          path: '/o2d-fms/processes' });
       fmsChildren.push({ text: 'Dashboard',    icon: <Gauge size={19} />,             path: '/o2d-fms/dashboard' });
       fmsChildren.push({ text: 'Scoreboard',   icon: <Trophy size={19} />,            path: '/o2d-fms/scores' });
@@ -173,6 +175,7 @@ const MainLayout = () => {
     if (can('pricing.view') || isRoot) pricingChildren.push({ text: 'Documents',           icon: <FolderOpen size={17} />, path: '/pricing/documents' });
     if (can('pricing.view') || isRoot) pricingChildren.push({ text: 'Analytics',           icon: <BarChart3 size={17} />,  path: '/pricing/analytics' });
     if (can('quotes.view')  || isRoot) pricingChildren.push({ text: 'Quotes',              icon: <FileSignature size={17} />, path: '/quotes' });
+    if (can('quotes.view')  || isRoot) pricingChildren.push({ text: 'Saved Drafts',        icon: <FilePen size={17} />,       path: '/quotes/drafts' });
     if (pricingChildren.length > 0) {
       // Title-less section: the single expandable row IS the label, keeping it clean.
       out.push({ title: '', items: [

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, Button, TextField, InputAdornment, IconButton,
   Chip, Tooltip, alpha, useTheme,
@@ -35,8 +35,10 @@ const StatusBadge = ({ value }) => {
 const ChallansList = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [searchTerm, setSearchTerm] = useState('');
+  // Deep-link support: ?so=AGL/SO-… (from an FMS task) pre-filters to that order.
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('so') || '');
   const [entryOpen, setEntryOpen] = useState(false);
 
   const { data: challansRes, isLoading } = useGetChallansQuery({

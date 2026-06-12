@@ -4,6 +4,23 @@ import CompanySettings from '../pricing/company-settings.model.js';
 import { previewCalculator } from '../pricing/calculator.service.js';
 import { AppError } from '../../utils/apiResponse.js';
 
+// The calculator preview returns lines keyed by `code`/`name`, but the Quote
+// schema persists them as `skuCode`/`skuName`. Map between the two so saving a
+// quote doesn't fail Mongoose validation ("Path `skuCode`/`skuName` required").
+const toQuoteLines = (previewLines = []) => previewLines.map((l) => ({
+  skuId:        l.skuId,
+  skuCode:      l.code ?? l.skuCode ?? '?',
+  skuName:      l.name ?? l.skuName ?? 'Unknown SKU',
+  qty:          l.qty,
+  unitPrice:    l.unitPrice,
+  gstRate:      l.gstRate,
+  source:       l.source,
+  revisionId:   l.revisionId ?? null,
+  lineSubtotal: l.lineSubtotal,
+  lineGst:      l.lineGst,
+  lineTotal:    l.lineTotal,
+}));
+
 const nextQuoteNumber = async (prefix = 'Q') => {
   const year = dayjs().format('YY');
   const month = dayjs().format('MM');
@@ -41,7 +58,8 @@ export const createQuote = async (body, actor) => {
     partyId: body.partyId || null,
     partyName: body.partyName || '',
     poReference: body.poReference || '',
-    lines: preview.lines,
+    pdfIncludeGst: body.pdfIncludeGst !== false, // default true
+    lines: toQuoteLines(preview.lines),
     totals: preview.totals,
     gstBreakdown: preview.gstBreakdown,
     notes: body.notes || '',
@@ -66,7 +84,7 @@ export const updateQuote = async (id, body, actor) => {
       priceType: body.priceType || quote.priceType,
       lines: body.lines || quote.lines,
     });
-    quote.lines = preview.lines;
+    quote.lines = toQuoteLines(preview.lines);
     quote.totals = preview.totals;
     quote.gstBreakdown = preview.gstBreakdown;
     if (body.asOfDate) quote.asOfDate = body.asOfDate;
@@ -76,6 +94,7 @@ export const updateQuote = async (id, body, actor) => {
   if (body.partyName !== undefined) quote.partyName = body.partyName;
   if (body.poReference !== undefined) quote.poReference = body.poReference;
   if (body.notes !== undefined) quote.notes = body.notes;
+  if (body.pdfIncludeGst !== undefined) quote.pdfIncludeGst = body.pdfIncludeGst;
   if (body.validUntil !== undefined) quote.validUntil = body.validUntil;
   quote.updatedBy = actor._id;
   await quote.save();

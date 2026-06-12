@@ -6,13 +6,16 @@ import {
 } from '@mui/material';
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
-  Users, MessageSquare, Send, Paperclip,
+  Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import {
   useCompleteStepMutation, useAssignStepMutation, useToggleChecklistItemMutation,
   useAddStepCommentMutation, useGetProcessByIdQuery,
   useUploadFileMutation, useAddStepAttachmentsMutation, useRemoveStepAttachmentMutation,
+  useAnswerVerificationMutation, useFillFormFieldMutation, useApproveStepMutation,
 } from '../../../store/api/o2dFmsApi';
+import { resolveActionLink, actionLinkMeta } from '../actionLinks';
 import { useListAccessUsersQuery } from '../../../store/api/accessControlApi';
 import { useSelector } from 'react-redux';
 import AttachmentList from '../../../components/AttachmentList';
@@ -37,6 +40,68 @@ const MetaRow = ({ icon: Icon, label, value }) => (
   </Stack>
 );
 
+// One Yes/No verification question. Picking "No" asks for a remark first.
+const VerificationRow = ({ item, disabled, onAnswer }) => {
+  const [noMode, setNoMode] = useState(false);
+  const [remark, setRemark] = useState('');
+  const answered = !!item.answer;
+  return (
+    <Box sx={{ py: 0.5 }}>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Typography variant="body2" sx={{ flex: 1, minWidth: 200 }}>{item.question}</Typography>
+        <Button size="small" variant={item.answer === 'YES' ? 'contained' : 'outlined'} color="success"
+          disabled={disabled} sx={{ minWidth: 52, px: 1 }}
+          onClick={() => { setNoMode(false); onAnswer(item, item.answer === 'YES' ? null : 'YES'); }}>
+          Yes
+        </Button>
+        <Button size="small" variant={item.answer === 'NO' ? 'contained' : 'outlined'} color="error"
+          disabled={disabled} sx={{ minWidth: 52, px: 1 }}
+          onClick={() => (item.answer === 'NO' ? onAnswer(item, null) : setNoMode(true))}>
+          No
+        </Button>
+      </Stack>
+      {answered && (
+        <Typography variant="caption" color="text.secondary">
+          {item.answer === 'NO' && item.remark ? `Reason: ${item.remark} — ` : ''}by {item.answeredByName || 'user'}{item.answeredAt ? ` · ${fmt(item.answeredAt)}` : ''}
+        </Typography>
+      )}
+      {noMode && !disabled && (
+        <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+          <TextField size="small" fullWidth autoFocus placeholder="Why not? (required for No)"
+            value={remark} onChange={(e) => setRemark(e.target.value)} />
+          <Button size="small" variant="contained" color="error" disabled={!remark.trim()}
+            onClick={() => { onAnswer(item, 'NO', remark.trim()); setNoMode(false); setRemark(''); }}>
+            Save No
+          </Button>
+          <Button size="small" onClick={() => { setNoMode(false); setRemark(''); }}>Cancel</Button>
+        </Stack>
+      )}
+    </Box>
+  );
+};
+
+// One data-capture field. Saves on the Save button (shown once edited).
+const FormFieldRow = ({ item, disabled, onSave }) => {
+  const [val, setVal] = useState(item.value ?? '');
+  React.useEffect(() => { setVal(item.value ?? ''); }, [item.value]);
+  const dirty = String(val ?? '') !== String(item.value ?? '');
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 0.5 }}>
+      <TextField
+        size="small" fullWidth disabled={disabled}
+        label={`${item.label}${item.required ? ' *' : ''}`}
+        type={item.fieldType === 'NUMBER' ? 'number' : item.fieldType === 'DATE' ? 'date' : 'text'}
+        InputLabelProps={item.fieldType === 'DATE' ? { shrink: true } : undefined}
+        value={val} onChange={(e) => setVal(e.target.value)}
+        helperText={item.filledByName ? `Filled by ${item.filledByName}` : undefined}
+      />
+      {dirty && !disabled && (
+        <Button size="small" variant="contained" onClick={() => onSave(item, val)}>Save</Button>
+      )}
+    </Stack>
+  );
+};
+
 /**
  * Reusable step panel — SOP definition (Who/What/How/When) + Planned/Actual/Delay
  * + the task layer (checklist, comments, buddy). When opened from My Tasks the
@@ -54,9 +119,13 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const [uploading, setUploading] = useState(false);
   const fileInputRef = React.useRef(null);
 
+  const navigate = useNavigate();
   const [completeStep, { isLoading: completing }] = useCompleteStepMutation();
   const [assignStep, { isLoading: assigning }] = useAssignStepMutation();
   const [toggleItem] = useToggleChecklistItemMutation();
+  const [answerVerification] = useAnswerVerificationMutation();
+  const [fillFormField] = useFillFormFieldMutation();
+  const [approveStepMut, { isLoading: approving }] = useApproveStepMutation();
   const [addComment, { isLoading: commenting }] = useAddStepCommentMutation();
   const [uploadFile] = useUploadFileMutation();
   const [addAttachments] = useAddStepAttachmentsMutation();
@@ -95,12 +164,54 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const checklist = liveStep.checklist || [];
   const comments = liveStep.comments || [];
   const remaining = checklist.filter((c) => !c.done).length;
-  const checklistBlocks = remaining > 0 && !liveStep.allowIncompleteChecklist;
+  const proc = procRes?.data;
+
+  // ── Completion blockers (mirror of the backend gate) ──
+  const verifications = liveStep.verifications || [];
+  const formFields = liveStep.formFields || [];
+  const unanswered = verifications.filter((v) => !v.answer).length;
+  const emptyFields = formFields.filter((f) => f.required && (f.value === null || f.value === undefined || f.value === ''));
+  const proofNeed = liveStep.proof?.required ? Math.max(0, (liveStep.proof.minCount || 1) - (liveStep.attachments || []).length) : 0;
+  const approvalPending = !!liveStep.approval?.required && !liveStep.approval?.approvedBy;
+  const iAmApprover = !!myId && (liveStep.approval?.approverIds || []).map((u) => String(u._id || u)).includes(String(myId));
+
+  const blockers = [];
+  if (remaining > 0 && !liveStep.allowIncompleteChecklist) blockers.push(`${remaining} checklist item(s)`);
+  if (unanswered > 0) blockers.push(`${unanswered} verification question(s)`);
+  if (emptyFields.length > 0) blockers.push(`fields: ${emptyFields.map((f) => f.label).join(', ')}`);
+  if (proofNeed > 0) blockers.push(`${proofNeed} more proof attachment(s)`);
+  if (approvalPending) blockers.push('approval');
+  const checklistBlocks = blockers.length > 0;
+
+  // Action link → the real screen for THIS order.
+  const actionMeta = liveStep.actionLink ? actionLinkMeta(liveStep.actionLink) : null;
+  const actionTo = actionMeta ? resolveActionLink(liveStep.actionLink, {
+    soNumber: proc?.soNumber,
+    orderId: proc?.salesOrderId?._id || proc?.salesOrderId,
+    processId,
+    intakeId: proc?.intakeId?._id || proc?.intakeId,
+  }) : null;
+
+  const handleVerify = async (item, answer, vRemark) => {
+    setError('');
+    try { await answerVerification({ id: processId, stepCode: liveStep.stepCode, itemId: item._id, answer, remark: vRemark }).unwrap(); }
+    catch (e) { setError(e?.data?.message || 'Could not save the answer.'); }
+  };
+  const handleField = async (item, value) => {
+    setError('');
+    try { await fillFormField({ id: processId, stepCode: liveStep.stepCode, itemId: item._id, value }).unwrap(); }
+    catch (e) { setError(e?.data?.message || 'Could not save the field.'); }
+  };
+  const handleApprove = async () => {
+    setError('');
+    try { await approveStepMut({ id: processId, stepCode: liveStep.stepCode }).unwrap(); }
+    catch (e) { setError(e?.data?.message || 'Could not approve.'); }
+  };
 
   const handleComplete = async () => {
     setError('');
     if (liveStep.requiresLink && !link) { setError('This step requires a link.'); return; }
-    if (checklistBlocks) { setError(`Tick all checklist items first (${remaining} remaining).`); return; }
+    if (checklistBlocks) { setError(`Still needed before Mark Done: ${blockers.join('; ')}.`); return; }
     try {
       await completeStep({ id: processId, stepCode: liveStep.stepCode, link: link || undefined, remarks: remarks || undefined }).unwrap();
       onClose?.(true);
@@ -177,6 +288,27 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <Alert icon={<AlertTriangle size={18} />} severity="warning" sx={{ py: 0.5 }}>This step is past its planned time.</Alert>
           )}
 
+          {/* ── Do the real work → deep link to the connected screen for THIS order ── */}
+          {actionMeta && actionTo && !done && (
+            <Paper variant="outlined" sx={{
+              p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+              bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.35),
+            }}>
+              <Box sx={{ p: 0.9, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}><Zap size={18} /></Box>
+              <Box sx={{ flex: 1, minWidth: 180 }}>
+                <Typography variant="body2" sx={{ fontWeight: 700, color: '#1e3a8a' }}>
+                  This task is connected to: {actionMeta.label}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {proc?.soNumber ? `Opens directly for ${proc.soNumber}. ` : ''}Do the real work there — this step advances automatically.
+                </Typography>
+              </Box>
+              <Button variant="contained" endIcon={<ArrowRight size={15} />} onClick={() => navigate(actionTo)} sx={{ whiteSpace: 'nowrap' }}>
+                Do it now
+              </Button>
+            </Paper>
+          )}
+
           {/* Who / What / How / When */}
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
             <MetaRow icon={ClipboardList} label="What" value={liveStep.instructions || liveStep.description || liveStep.name} />
@@ -219,6 +351,77 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             </>
           )}
 
+          {/* ── Yes/No verification questions ── */}
+          {verifications.length > 0 && (
+            <>
+              <Divider />
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <HelpCircle size={16} color="#7c3aed" />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Verification questions</Typography>
+                </Stack>
+                <Typography variant="caption" color={unanswered ? 'warning.main' : 'success.main'}>
+                  {verifications.length - unanswered}/{verifications.length} answered
+                </Typography>
+              </Stack>
+              <Box>
+                {verifications.map((v) => (
+                  <VerificationRow key={v._id} item={v} disabled={done || !canAct} onAnswer={handleVerify} />
+                ))}
+              </Box>
+            </>
+          )}
+
+          {/* ── Data capture fields ── */}
+          {formFields.length > 0 && (
+            <>
+              <Divider />
+              <Stack direction="row" spacing={1} alignItems="center">
+                <FormInput size={16} color="#0369a1" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Data to record</Typography>
+              </Stack>
+              <Box>
+                {formFields.map((f) => (
+                  <FormFieldRow key={f._id} item={f} disabled={done || !canAct} onSave={handleField} />
+                ))}
+              </Box>
+            </>
+          )}
+
+          {/* ── Approval gate ── */}
+          {liveStep.approval?.required && (
+            <>
+              <Divider />
+              <Paper variant="outlined" sx={{
+                p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+                bgcolor: alpha(approvalPending ? '#b45309' : '#0f766e', 0.05),
+                borderColor: alpha(approvalPending ? '#b45309' : '#0f766e', 0.35),
+              }}>
+                <ShieldCheck size={18} color={approvalPending ? '#b45309' : '#0f766e'} />
+                <Box sx={{ flex: 1, minWidth: 160 }}>
+                  {approvalPending ? (
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      {(() => {
+                        const names = (liveStep.approval.approverIds || []).map((u) => u?.name).filter(Boolean);
+                        return names.length ? `Waiting for approval from ${names.join(' / ')}` : 'Waiting for the named approver to approve';
+                      })()}
+                    </Typography>
+                  ) : (
+                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f766e' }}>
+                      Approved by {liveStep.approval.approvedByName || 'approver'}{liveStep.approval.approvedAt ? ` · ${fmt(liveStep.approval.approvedAt)}` : ''}
+                    </Typography>
+                  )}
+                </Box>
+                {approvalPending && (iAmApprover || canManage) && !done && (
+                  <Button size="small" variant="contained" color="success" startIcon={<CheckCircle2 size={15} />}
+                    disabled={approving} onClick={handleApprove}>
+                    {approving ? 'Approving…' : 'Approve'}
+                  </Button>
+                )}
+              </Paper>
+            </>
+          )}
+
           <Divider />
           {/* Planned / Actual / Delay */}
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2 }}>
@@ -241,6 +444,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
             <Stack direction="row" spacing={1} alignItems="center">
               <Paperclip size={16} /><Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Attachments & proof</Typography>
+              {liveStep.proof?.required && (
+                <Chip size="small" color={proofNeed > 0 ? 'warning' : 'success'} variant="outlined"
+                  label={proofNeed > 0 ? `Proof: ${proofNeed} more needed` : `Proof complete (${liveStep.proof.minCount} required)`} />
+              )}
             </Stack>
             {(liveStep.attachments || []).length > 0 && (
               <Chip size="small" variant="outlined" label={`${liveStep.attachments.length}`} />
@@ -303,7 +510,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Complete this step</Typography>
               <TextField size="small" label={`Link${liveStep.requiresLink ? ' (required)' : ''}`} placeholder="https://…" value={link} onChange={(e) => setLink(e.target.value)} fullWidth />
               <TextField size="small" label="Remarks" value={remarks} onChange={(e) => setRemarks(e.target.value)} fullWidth multiline minRows={2} />
-              {checklistBlocks && <Alert severity="info" sx={{ py: 0.5 }}>Finish the checklist to enable “Mark Done”.</Alert>}
+              {checklistBlocks && <Alert severity="info" sx={{ py: 0.5 }}>To enable “Mark Done”, finish: {blockers.join('; ')}.</Alert>}
             </>
           )}
 
