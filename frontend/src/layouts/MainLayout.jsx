@@ -9,6 +9,7 @@ import {
   Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
   IndianRupee, Calculator, FileSignature, FilePen, ClipboardCheck, FolderOpen, BarChart3, Tag,
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
+  ReceiptText, Banknote, FileSpreadsheet, Wallet,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -51,6 +52,31 @@ const navSections = [
     ],
   },
   {
+    // Title-less section: the single expandable row IS the label — click the
+    // chevron to reveal all 11 procurement screens.
+    title: '',
+    items: [
+      {
+        text: 'Purchase FMS',
+        icon: <ShoppingCart size={19} />,
+        path: '/procurement',
+        children: [
+          { text: 'Purchase Indents',    icon: <ClipboardList size={19} />,   path: '/procurement/indents' },
+          { text: 'Purchase Orders',     icon: <ShoppingCart size={19} />,    path: '/procurement/purchase-orders' },
+          { text: 'Material Follow-ups', icon: <PhoneCall size={19} />,       path: '/procurement/follow-ups' },
+          { text: 'PI Forms',            icon: <FileText size={19} />,        path: '/procurement/proforma-invoices' },
+          { text: 'Advance Payments',    icon: <IndianRupee size={19} />,     path: '/procurement/advance-payments' },
+          { text: 'Goods Receipt (GRN)', icon: <Package size={19} />,         path: '/procurement/grns' },
+          { text: 'Incoming QC',         icon: <ClipboardCheck size={19} />,  path: '/procurement/incoming-qc' },
+          { text: 'Vendor Invoices',     icon: <ReceiptText size={19} />,     path: '/procurement/vendor-invoices' },
+          { text: 'Payment Vouchers',    icon: <Banknote size={19} />,        path: '/procurement/vouchers' },
+          { text: 'Tally Entries',       icon: <FileSpreadsheet size={19} />, path: '/procurement/tally-entries' },
+          { text: 'Final Payments',      icon: <Wallet size={19} />,          path: '/procurement/final-payments' },
+        ],
+      },
+    ],
+  },
+  {
     title: 'Master Data',
     items: [
       { text: 'SKU Master',        icon: <Package size={19} />,         path: '/skus' },
@@ -69,6 +95,19 @@ const PAGE_TITLES = {
   '/invoices':               'Invoices & FMS',
   '/skus':                   'SKU Master',
   '/parties':                'Party Master',
+  '/procurement/indents':    'Purchase Indents',
+  '/procurement/purchase-orders': 'Purchase Orders',
+  '/procurement/follow-ups': 'Material Follow-ups',
+  '/procurement/proforma-invoices': 'PI Forms',
+  '/procurement/advance-payments': 'Advance Payments',
+
+  '/procurement/grns': 'Goods Receipt Notes',
+  '/procurement/incoming-qc': 'Incoming QC',
+  '/procurement/vendor-invoices': 'Vendor Invoices',
+  '/procurement/vouchers':   'Payment Vouchers',
+  '/procurement/tally-entries': 'Tally Entries',
+  '/procurement/final-payments': 'Final Payments',
+
   '/employees':              'Employees',
   '/access-control':         'Access Control',
   '/pricing':                'Pricing Hub',

@@ -12,10 +12,23 @@ const { Schema, model } = mongoose;
 //   PACKING       — boxes, partitions, stickers, tape the company BUYS
 //   CIRCLE        — cut metal circles (reserved; not price-tracked today)
 // `category` is the sub-group WITHIN an itemType (e.g. CONSUMABLE → "Bearing").
-export const ITEM_TYPES = ['FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE'];
+export const ITEM_TYPES = [
+  'FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE',
+  // Purchase FMS purchasable categories (additive)
+  'PACKAGING', 'CHEMICAL', 'INK', 'BUTTER_PAPER', 'SUBLIMATION_PAPER',
+  'STATIONERY', 'SERVICE', 'SPARE_PART', 'JOB_WORK', 'WIP_MATERIAL',
+];
 
 // Which item types are bought from suppliers (buy side) vs sold to customers.
-export const BUY_SIDE_ITEM_TYPES = ['RAW_MATERIAL', 'CONSUMABLE', 'PACKING'];
+export const BUY_SIDE_ITEM_TYPES = [
+  'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE',
+  'PACKAGING', 'CHEMICAL', 'INK', 'BUTTER_PAPER', 'SUBLIMATION_PAPER',
+  'STATIONERY', 'SERVICE', 'SPARE_PART', 'JOB_WORK', 'WIP_MATERIAL',
+];
+
+// Item types that must NEVER enter Purchase FMS (produced internally, sold via O2D).
+// FG / SALE_PRODUCT / READY_STOCK_PRODUCT are defensive aliases for legacy or imported data.
+export const FG_BLOCKED_ITEM_TYPES = ['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT'];
 
 const SkuSchema = new Schema({
   ...baseSchemaFields,

@@ -15,6 +15,7 @@ import './api/pricingApi';
 import './api/quoteApi';
 import './api/o2dFmsApi';
 import './api/notificationApi';
+import './api/procurementApi';
 import './api/orderIntakeApi';
 
 export const store = configureStore({

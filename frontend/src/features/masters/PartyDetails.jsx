@@ -1,22 +1,25 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { 
-  Box, Typography, Paper, Grid, Divider, Button, 
+import {
+  Box, Typography, Paper, Grid, Divider, Button,
   Chip, Avatar, List, ListItem, ListItemText, ListItemIcon,
-  CircularProgress, IconButton, Tooltip
+  CircularProgress, IconButton, Tooltip,
+  Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
 } from '@mui/material';
-import { 
-  ArrowLeft, Mail, Phone, MapPin, CreditCard, 
-  Clock, Package, User, Hash, Globe, CheckCircle2 
+import {
+  ArrowLeft, Mail, Phone, MapPin, CreditCard,
+  Clock, Package, User, Hash, Globe, CheckCircle2, Pencil, Receipt,
 } from 'lucide-react';
 import { useGetPartyByIdQuery } from '../../store/api/partyApi';
 import { useGetSkusQuery } from '../../store/api/skuApi';
 import { alpha } from '@mui/material/styles';
+import PartyFormDrawer from './PartyFormDrawer';
 
 const PartyDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  
+  const [editOpen, setEditOpen] = useState(false);
+
   const { data: party, isLoading: partyLoading } = useGetPartyByIdQuery(id);
   const { data: skusData, isLoading: skusLoading } = useGetSkusQuery({ clientId: id, limit: 100 });
 
@@ -71,17 +74,21 @@ const PartyDetails = () => {
             <Typography variant="h4" fontWeight={800} color="text.primary">
               {party.name}
             </Typography>
-            <Chip 
-              label={party.status || 'ACTIVE'} 
+            <Chip
+              label={party.status || 'ACTIVE'}
               color={party.status === 'ACTIVE' ? 'success' : 'default'}
               size="small"
               sx={{ fontWeight: 700, borderRadius: '6px' }}
             />
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Hash size={14} /> {party.code} • <MapPin size={14} /> {party.location}
+            <Hash size={14} /> {party.code} • <MapPin size={14} /> {party.location || party.address || '—'}
           </Typography>
         </Box>
+        <Box sx={{ flexGrow: 1 }} />
+        <Button variant="contained" startIcon={<Pencil size={16} />} onClick={() => setEditOpen(true)}>
+          Edit Vendor
+        </Button>
       </Box>
 
       <Grid container spacing={3}>
@@ -114,6 +121,14 @@ const PartyDetails = () => {
                 <Typography sx={infoLabelStyle}>GST Number</Typography>
                 <Typography sx={infoValueStyle}>{party.gstNo || 'Not Provided'}</Typography>
               </Box>
+              <Box>
+                <Typography sx={infoLabelStyle}>PAN Number</Typography>
+                <Typography sx={infoValueStyle}>{party.panNo || 'Not Provided'}</Typography>
+              </Box>
+              <Box>
+                <Typography sx={infoLabelStyle}>Address / Location</Typography>
+                <Typography sx={infoValueStyle}>{party.location || party.address || 'Not Provided'}</Typography>
+              </Box>
             </Box>
           </Paper>
 
@@ -129,6 +144,16 @@ const PartyDetails = () => {
               <Box sx={{ flex: 1, p: 2, bgcolor: alpha('#7c3aed', 0.05), borderRadius: '12px', textAlign: 'center' }}>
                 <Typography variant="h5" fontWeight={800} color="#7c3aed">{party.leadTimeDays}</Typography>
                 <Typography variant="caption" fontWeight={700} color="text.secondary">Lead Days</Typography>
+              </Box>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
+              <Box sx={{ flex: 1, p: 2, bgcolor: alpha('#0f766e', 0.05), borderRadius: '12px', textAlign: 'center' }}>
+                <Typography variant="h5" fontWeight={800} color="#0f766e">{party.gstRate ?? 0}%</Typography>
+                <Typography variant="caption" fontWeight={700} color="text.secondary">GST Rate</Typography>
+              </Box>
+              <Box sx={{ flex: 1, p: 2, bgcolor: alpha('#b45309', 0.05), borderRadius: '12px', textAlign: 'center' }}>
+                <Typography variant="h5" fontWeight={800} color="#b45309">{party.tdsRate ?? 0}%</Typography>
+                <Typography variant="caption" fontWeight={700} color="text.secondary">TDS Rate</Typography>
               </Box>
             </Box>
           </Paper>
@@ -229,9 +254,55 @@ const PartyDetails = () => {
                 </Grid>
               </Paper>
             </Grid>
+
+            {/* Vendor Products Section (Purchase FMS) */}
+            <Grid item xs={12}>
+              <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+                <Typography variant="subtitle1" sx={{ ...sectionHeaderStyle, color: '#b45309' }}>
+                  <Receipt size={18} /> Vendor Products ({party.suppliedProducts?.length || 0})
+                </Typography>
+                {party.suppliedProducts?.length ? (
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Product Name</TableCell>
+                          <TableCell>SKU Code</TableCell>
+                          <TableCell align="right">Rate</TableCell>
+                          <TableCell>Unit</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {party.suppliedProducts.map((p, i) => (
+                          <TableRow key={p._id || i} hover>
+                            <TableCell sx={{ fontWeight: 600 }}>{p.productName || '—'}</TableCell>
+                            <TableCell>
+                              <Typography variant="body2" color="primary.main" fontWeight={700}>{p.skuCode || '—'}</Typography>
+                            </TableCell>
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {Number(p.rate || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </TableCell>
+                            <TableCell>{p.unit || 'Pcs'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                ) : (
+                  <Box sx={{ py: 4, textAlign: 'center', color: 'text.disabled' }}>
+                    <Package size={28} />
+                    <Typography variant="body2" sx={{ mt: 1 }}>
+                      No products added yet. Click “Edit Vendor” to add the products this vendor supplies.
+                    </Typography>
+                  </Box>
+                )}
+              </Paper>
+            </Grid>
           </Grid>
         </Grid>
       </Grid>
+
+      <PartyFormDrawer open={editOpen} party={party} onClose={() => setEditOpen(false)} />
     </Box>
   );
 };

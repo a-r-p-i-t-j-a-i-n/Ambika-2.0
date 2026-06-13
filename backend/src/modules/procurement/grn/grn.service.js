@@ -1,0 +1,447 @@
+import fs from 'fs';
+import path from 'path';
+import PDFDocument from 'pdfkit';
+import GoodsReceiptNote, { GRN_STATUS, GRN_QC_STATUS, HOW_ITEM_RECEIVED } from './grn.model.js';
+import VendorPurchaseOrder, { PO_STATUS, PO_FOLLOWUP_STATUS, PO_PI_STATUS } from '../purchase-order/purchaseOrder.model.js';
+import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
+import SKU from '../../skus/sku.model.js';
+import { inventoryService } from '../../inventory/inventory.service.js';
+import { assertPurchasable } from '../purchase-item-guard.js';
+import { ApiFeatures } from '../../../utils/apiFeatures.js';
+import { AppError } from '../../../utils/apiResponse.js';
+import { generateGrnNumber, generateGrnUniqueId } from '../../../utils/docNumberGenerator.js';
+import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
+import { logger } from '../../../utils/logger.js';
+import env from '../../../config/env.js';
+
+const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+const findOrThrow = async (id) => {
+  const grn = await GoodsReceiptNote.findOne({ _id: id, isDeleted: { $ne: true } });
+  if (!grn) throw new AppError('GRN not found', 404);
+  return grn;
+};
+
+/** Derive per-line short/extra/pending + totals (server-authoritative). */
+const computeLines = (items = []) => {
+  const lines = items.map((it) => {
+    const orderedQty = round2(it.orderedQty);
+    const prev = round2(it.previouslyReceivedQty);
+    const invoiceQty = round2(it.invoiceQty);
+    const receivedQty = round2(it.receivedQty);
+    const rate = round2(it.rate);
+    const pendingAvailable = Math.max(0, round2(orderedQty - prev)); // before this GRN
+    return {
+      ...it,
+      orderedQty, previouslyReceivedQty: prev, invoiceQty, receivedQty, rate,
+      shortQty: round2(invoiceQty - receivedQty),
+      extraQty: Math.max(0, round2(receivedQty - pendingAvailable)),
+      pendingQty: Math.max(0, round2(orderedQty - (prev + receivedQty))),
+      amount: round2(receivedQty * rate),
+    };
+  });
+  return {
+    lines,
+    totals: {
+      totalOrderedQty:  round2(lines.reduce((s, l) => s + l.orderedQty, 0)),
+      totalInvoiceQty:  round2(lines.reduce((s, l) => s + l.invoiceQty, 0)),
+      totalReceivedQty: round2(lines.reduce((s, l) => s + l.receivedQty, 0)),
+      totalShortQty:    round2(lines.reduce((s, l) => s + l.shortQty, 0)),
+      totalValue:       round2(lines.reduce((s, l) => s + l.amount, 0)),
+    },
+  };
+};
+
+// ─────────────────────────────────────────────────────────────
+// PDF — Goods Receiving & Inspection Report (A4)
+// ─────────────────────────────────────────────────────────────
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+
+export const buildGrnPdfBuffer = (grn, company = {}) => new Promise((resolve, reject) => {
+  try {
+    const M = 40;
+    const doc = new PDFDocument({ size: 'A4', margin: M });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+
+    const W = 595.28 - M * 2;
+    const navy = '#0b2545'; const blue = '#1d4ed8'; const line = '#dbe4f3';
+
+    doc.rect(0, 0, 595.28, 78).fill(navy);
+    doc.fill('#ffffff').font('Helvetica-Bold').fontSize(17).text(company.name || env.COMPANY_NAME, M, 16);
+    doc.font('Helvetica').fontSize(8.5).fill('#cdd9f0')
+      .text([company.address || env.COMPANY_ADDRESS, company.gstin ? `GSTIN: ${company.gstin}` : '', company.email || env.COMPANY_EMAIL].filter(Boolean).join('   •   '), M, 40, { width: W - 170 });
+    doc.font('Helvetica-Bold').fontSize(12).fill('#ffffff').text('GOODS RECEIVING & INSPECTION REPORT', M, 36, { width: W, align: 'right' });
+
+    let y = 96;
+    const half = W / 2 - 8;
+    doc.roundedRect(M, y, half, 84, 6).stroke(line);
+    doc.roundedRect(M + half + 16, y, half, 84, 6).stroke(line);
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('GRN DETAILS', M + 10, y + 8);
+    doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(grn.grnNumber || '', M + 10, y + 21);
+    doc.font('Helvetica').fontSize(8.5).fill(navy)
+      .text(`Date: ${fmtDate(grn.grnDate)}`, M + 10, y + 38)
+      .text(`PO No: ${grn.poNumber || '—'}`, M + 10, y + 51)
+      .text(`Challan No: ${grn.challanNumber || '—'}`, M + 10, y + 64);
+    const vx = M + half + 26;
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('SUPPLIER', vx, y + 8);
+    doc.font('Helvetica-Bold').fontSize(10.5).fill(navy).text(grn.vendorName || '—', vx, y + 21, { width: half - 20 });
+    doc.font('Helvetica').fontSize(8.5).fill(navy)
+      .text(`GST: ${grn.vendorGST || '—'}`, vx, y + 38, { width: half - 20 })
+      .text(`${grn.vendorAddress || ''}`, vx, y + 51, { width: half - 20, height: 24, ellipsis: true });
+    y += 98;
+
+    // Items table.
+    const cols = [
+      { key: 'sr', label: 'SR', w: 26, align: 'center' },
+      { key: 'name', label: 'DESCRIPTION OF GOODS', w: 220, align: 'left' },
+      { key: 'invoice', label: 'INVOICE QTY', w: 80, align: 'right' },
+      { key: 'received', label: 'RECEIVED QTY', w: 90, align: 'right' },
+      { key: 'unit', label: 'UNIT', w: W - 26 - 220 - 80 - 90, align: 'center' },
+    ];
+    const drawHead = () => {
+      doc.rect(M, y, W, 20).fill(navy);
+      let x = M; doc.font('Helvetica-Bold').fontSize(7.5).fill('#ffffff');
+      cols.forEach((c) => { doc.text(c.label, x + 4, y + 6.5, { width: c.w - 8, align: c.align }); x += c.w; });
+      y += 20;
+    };
+    drawHead();
+    doc.font('Helvetica').fontSize(8.5).fill(navy);
+    (grn.items || []).forEach((it, i) => {
+      if (y > 720) { doc.addPage(); y = M; drawHead(); doc.font('Helvetica').fontSize(8.5).fill(navy); }
+      const rowH = 18;
+      if (i % 2 === 1) doc.rect(M, y, W, rowH).fill('#f8fafc');
+      doc.fill(navy);
+      let x = M;
+      const cells = { sr: String(i + 1), name: `${it.itemName}${it.batchNo ? `  [Batch: ${it.batchNo}]` : ''}`, invoice: String(it.invoiceQty || 0), received: String(it.receivedQty || 0), unit: it.unit || 'Pcs' };
+      cols.forEach((c) => { doc.text(cells[c.key], x + 4, y + 5, { width: c.w - 8, align: c.align, ellipsis: true }); x += c.w; });
+      doc.moveTo(M, y + rowH).lineTo(M + W, y + rowH).strokeColor(line).lineWidth(0.5).stroke();
+      y += rowH;
+    });
+
+    y += 16;
+    if (y > 700) { doc.addPage(); y = M; }
+    const invoiceReceived = grn.invoiceNumber ? 'Yes' : 'No';
+    doc.font('Helvetica-Bold').fontSize(8.5).fill(navy).text(`Invoice Received: ${invoiceReceived}`, M, y);
+    doc.font('Helvetica').fontSize(8.5).text(`Invoice No: ${grn.invoiceNumber || '—'}   How Received: ${(grn.howItemReceived || '').replace(/_/g, ' ')}`, M, y + 14);
+    doc.font('Helvetica-Bold').fontSize(8.5).text('Remarks:', M, y + 34);
+    doc.font('Helvetica').fontSize(8.5).text(grn.remarks || '—', M, y + 47, { width: W - 180 });
+
+    doc.font('Helvetica-Bold').fontSize(9).fill(navy).text(`For ${company.name || env.COMPANY_NAME}`, M + W - 180, y + 30, { width: 180, align: 'center' });
+    doc.font('Helvetica').fontSize(8).text(`Prepared By: ${grn.preparedBy || grn.receivedBy || '—'}`, M + W - 180, y + 70, { width: 180, align: 'center' });
+
+    doc.end();
+  } catch (err) { reject(err); }
+});
+
+export const grnService = {
+  async create(data, user) {
+    const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } });
+    if (!po) throw new AppError('Purchase Order not found', 404);
+
+    // Rule 1: gate — material followed up to READY_FOR_GRN AND advance payment complete.
+    if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || po.piStatus !== PO_PI_STATUS.PAYMENT_COMPLETED) {
+      throw new AppError('GRN can only be created when the PO is READY_FOR_GRN and its advance payment is completed', 400);
+    }
+    if (po.poStatus === PO_STATUS.FULLY_RECEIVED) {
+      throw new AppError('This PO is already fully received', 400);
+    }
+
+    // Rule 2: auto-load lines from the PO (pending only).
+    const sourceItems = data.items?.length ? data.items : (po.items || [])
+      .filter((it) => round2((it.quantity || 0) - (it.receivedQty || 0)) > 0)
+      .map((it) => {
+        const pending = round2((it.quantity || 0) - (it.receivedQty || 0));
+        return {
+          poItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
+          orderedQty: it.quantity, previouslyReceivedQty: it.receivedQty || 0,
+          invoiceQty: pending, receivedQty: pending, rate: it.rate, batchNo: '', remarks: '',
+        };
+      });
+    if (!sourceItems.length) throw new AppError('Nothing left to receive on this PO', 400);
+
+    await assertPurchasable(sourceItems);
+    const { lines, totals } = computeLines(sourceItems);
+
+    const grnNumber = await generateGrnNumber(data.grnDate || new Date());
+    const uniqueId = await generateGrnUniqueId();
+
+    const grn = await GoodsReceiptNote.create({
+      grnNumber, uniqueId,
+      grnDate: data.grnDate || new Date(),
+      poId: po._id, poNumber: po.poNumber,
+      piId: po.piId || undefined, piNumber: po.piNumber || '',
+      indentId: po.indentId, indentNumber: po.indentNumber,
+      vendorId: po.vendorId, vendorName: po.vendorName, vendorGST: po.vendorGST,
+      vendorAddress: po.vendorAddress, vendorPhone: po.vendorPhone,
+      challanNumber: data.challanNumber || '',
+      invoiceNumber: data.invoiceNumber || '',
+      invoiceDate: data.invoiceDate || null,
+      vehicleNumber: data.vehicleNumber || '',
+      receivedBy: data.receivedBy || user?.name || '',
+      preparedBy: data.preparedBy || user?.name || '',
+      warehouse: data.warehouse || 'MAIN',
+      howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
+      challanDocument: data.challanDocument?.fileUrl ? { ...data.challanDocument, uploadedAt: new Date() } : undefined,
+      invoiceDocument: data.invoiceDocument?.fileUrl ? { ...data.invoiceDocument, uploadedAt: new Date() } : undefined,
+      items: lines,
+      ...totals,
+      grnStatus: GRN_STATUS.DRAFT,
+      qcStatus: GRN_QC_STATUS.PENDING,
+      remarks: data.remarks || '',
+      createdBy: user?._id,
+      activityTimeline: [{ action: 'CREATE', description: `GRN created for ${po.poNumber}`, actorId: user?._id }],
+    });
+    return grn;
+  },
+
+  async getAll(query) {
+    const features = new ApiFeatures(GoodsReceiptNote.find({ isDeleted: { $ne: true } }), query)
+      .filter().search(['grnNumber', 'poNumber', 'vendorName', 'invoiceNumber', 'uniqueId'])
+      .sort().select().paginate();
+    return features.exec();
+  },
+
+  async getById(id) {
+    const grn = await GoodsReceiptNote.findOne({ _id: id, isDeleted: { $ne: true } })
+      .populate('createdBy', 'name').lean();
+    if (!grn) throw new AppError('GRN not found', 404);
+    return grn;
+  },
+
+  async getByPo(poId) {
+    return GoodsReceiptNote.find({ poId, isDeleted: { $ne: true } }).sort('-createdAt').lean();
+  },
+
+  async getStats() {
+    const rows = await GoodsReceiptNote.aggregate([
+      { $match: { isDeleted: { $ne: true } } },
+      {
+        $group: {
+          _id: null,
+          total:           { $sum: 1 },
+          partialReceived: { $sum: { $cond: [{ $eq: ['$grnStatus', GRN_STATUS.PARTIAL_RECEIVED] }, 1, 0] } },
+          fullyReceived:   { $sum: { $cond: [{ $eq: ['$grnStatus', GRN_STATUS.FULLY_RECEIVED] }, 1, 0] } },
+          draft:           { $sum: { $cond: [{ $eq: ['$grnStatus', GRN_STATUS.DRAFT] }, 1, 0] } },
+          cancelled:       { $sum: { $cond: [{ $eq: ['$grnStatus', GRN_STATUS.CANCELLED] }, 1, 0] } },
+          receivedQty:     { $sum: { $cond: [{ $ne: ['$grnStatus', GRN_STATUS.CANCELLED] }, '$totalReceivedQty', 0] } },
+          pendingQty:      { $sum: { $cond: [{ $ne: ['$grnStatus', GRN_STATUS.CANCELLED] }, { $subtract: ['$totalOrderedQty', '$totalReceivedQty'] }, 0] } },
+        },
+      },
+    ]);
+    return rows[0] || { total: 0, partialReceived: 0, fullyReceived: 0, draft: 0, cancelled: 0, receivedQty: 0, pendingQty: 0 };
+  },
+
+  async update(id, data, user) {
+    const grn = await findOrThrow(id);
+    if (grn.grnStatus !== GRN_STATUS.DRAFT) throw new AppError('Only draft GRNs can be edited', 400);
+    const { items, challanDocument, invoiceDocument, ...rest } = data;
+    Object.assign(grn, rest);
+    if (challanDocument) grn.challanDocument = challanDocument.fileUrl ? { ...challanDocument, uploadedAt: new Date() } : {};
+    if (invoiceDocument) grn.invoiceDocument = invoiceDocument.fileUrl ? { ...invoiceDocument, uploadedAt: new Date() } : {};
+    if (items) {
+      await assertPurchasable(items);
+      const { lines, totals } = computeLines(items);
+      grn.items = lines;
+      Object.assign(grn, totals);
+    }
+    grn.updatedBy = user?._id;
+    grn.activityTimeline.push({ action: 'UPDATE', description: 'Draft GRN updated', actorId: user?._id });
+    return grn.save();
+  },
+
+  /**
+   * Complete a GRN: post stock via inventoryService, update PO + PI quantities,
+   * roll receipt status, generate the GRN PDF, and leave qcStatus PENDING for
+   * Step 1.9 Incoming QC. Idempotent (grnStatus + stockPosted + movement check).
+   */
+  async complete(id, data, user) {
+    const grn = await findOrThrow(id);
+    if (grn.grnStatus !== GRN_STATUS.DRAFT) throw new AppError('Only draft GRNs can be completed', 400);
+    if (grn.stockPosted) throw new AppError('Stock already posted for this GRN', 400);
+
+    const existing = await inventoryService.getMovementsByRef('GRN', grn._id);
+    if (existing.length) throw new AppError('Inventory movements already exist for this GRN', 400);
+
+    const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
+    if (!po) throw new AppError('Linked Purchase Order not found', 404);
+
+    const receivedLines = grn.items.filter((it) => round2(it.receivedQty) > 0);
+    if (!receivedLines.length) throw new AppError('Enter a received quantity on at least one item', 400);
+
+    // Rule 6: extra receipt requires remarks.
+    const extraNoRemarks = receivedLines.find((l) => round2(l.extraQty) > 0 && !(l.remarks || data.remarks || grn.remarks));
+    if (extraNoRemarks) {
+      throw new AppError(`"${extraNoRemarks.itemName}" was received over the ordered qty — remarks are required for extra receipt`, 400);
+    }
+
+    // Every received line must resolve to a SKU (stock cannot be posted otherwise).
+    for (const line of receivedLines) {
+      if (!line.skuId && line.skuCode) {
+        const sku = await SKU.findOne({ code: String(line.skuCode).trim().toUpperCase() }).select('_id').lean();
+        if (sku) line.skuId = sku._id;
+      }
+      if (!line.skuId) throw new AppError(`"${line.itemName}" is not linked to a SKU — add it to the SKU master before receiving`, 400);
+    }
+
+    const pi = grn.piId ? await ProformaInvoice.findOne({ _id: grn.piId, isDeleted: { $ne: true } }) : null;
+
+    // ── 1) Post stock — strictly through inventoryService ──
+    for (const line of receivedLines) {
+      const { movement } = await inventoryService.increaseStock({
+        skuId: line.skuId, skuCode: line.skuCode, skuName: line.itemName, unit: line.unit,
+        warehouse: grn.warehouse,
+        quantity: round2(line.receivedQty),
+        unitCost: round2(line.rate),
+        txnType: 'GRN_IN', sourceModule: 'PURCHASE_FMS',
+        refType: 'GRN', refId: grn._id, refNumber: grn.grnNumber,
+        batchNo: line.batchNo || '',
+        vendorId: grn.vendorId, vendorName: grn.vendorName,
+        poId: grn.poId, poNumber: grn.poNumber, piId: grn.piId, piNumber: grn.piNumber,
+        remarks: 'Stock added from Purchase GRN',
+        performedBy: user, movementDate: grn.grnDate,
+      });
+      line.movementId = movement._id;
+      line.movementNumber = movement.movementNumber;
+
+      // ── 2) PO line: receivedQty / pendingQty ──
+      const poItem = po.items.find((p) => String(p._id) === String(line.poItemId))
+        || po.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode);
+      if (poItem) {
+        poItem.receivedQty = round2((poItem.receivedQty || 0) + line.receivedQty);
+        poItem.pendingQty = Math.max(0, round2((poItem.quantity || 0) - poItem.receivedQty));
+      }
+
+      // ── 3) PI line: receivedQty / balanceQty ──
+      if (pi) {
+        const piItem = pi.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode)
+          || pi.items.find((p) => p.itemName === line.itemName);
+        if (piItem) {
+          piItem.receivedQty = round2((piItem.receivedQty || 0) + line.receivedQty);
+          piItem.balanceQty = Math.max(0, round2((piItem.quantity || 0) - piItem.receivedQty));
+        }
+      }
+    }
+
+    // ── 4) Roll PO status (Rules 4 & 5) ──
+    const poFullyReceived = po.items.every((p) => round2((p.quantity || 0) - (p.receivedQty || 0)) <= 0);
+    po.poStatus = poFullyReceived ? PO_STATUS.FULLY_RECEIVED : PO_STATUS.PARTIAL_RECEIVED;
+    po.updatedBy = user?._id;
+    po.activityTimeline.push({ action: 'GRN_RECEIVED', description: `${grn.grnNumber} received (${grn.totalReceivedQty})`, actorId: user?._id });
+    await po.save();
+    if (pi) { pi.updatedBy = user?._id; await pi.save(); }
+
+    // ── 5) Finalize GRN + QC handoff ──
+    grn.grnStatus = poFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED;
+    grn.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
+    grn.stockPosted = true;
+    grn.receivedAt = new Date();
+    grn.completedAt = new Date();
+    grn.completedBy = user?.name || '';
+    if (data.remarks) grn.remarks = data.remarks;
+    grn.updatedBy = user?._id;
+    grn.activityTimeline.push({ action: 'COMPLETE', description: `GRN completed — stock posted (${grn.grnStatus})`, actorId: user?._id });
+    await grn.save();
+
+    // ── 6) PDF (non-fatal) ──
+    try {
+      const { grnPdfUrl, grnPdfFileName } = await this.generatePdf(id);
+      grn.grnPdfUrl = grnPdfUrl;
+      grn.grnPdfFileName = grnPdfFileName;
+    } catch (err) { logger.error(`[grn] PDF generation failed for ${grn.grnNumber}: ${err.message}`); }
+
+    return grn;
+  },
+
+  /**
+   * Render the GRN PDF from in-memory form data for an on-screen preview.
+   * Pure read: resolves the PO only for the vendor snapshot + PO number, computes
+   * the same lines/totals as create(), and returns the PDF buffer. Saves NOTHING —
+   * no record, no status change, no inventory, no PDF upload. Mirrors create()'s
+   * data assembly so the preview matches the final document.
+   */
+  async previewPdf(data, user) {
+    let vendor = {
+      vendorName: data.vendorName || '',
+      vendorGST: data.vendorGST || '',
+      vendorAddress: data.vendorAddress || '',
+    };
+    let poNumber = data.poNumber || '';
+    if (data.poId) {
+      const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } }).lean();
+      if (po) {
+        vendor = { vendorName: po.vendorName, vendorGST: po.vendorGST, vendorAddress: po.vendorAddress, vendorPhone: po.vendorPhone };
+        poNumber = po.poNumber || poNumber;
+      }
+    }
+
+    const { lines, totals } = computeLines(data.items || []);
+    const grnLike = {
+      grnNumber: data.grnNumber || '(draft — generated on completion)',
+      grnDate: data.grnDate || new Date(),
+      poNumber,
+      challanNumber: data.challanNumber || '',
+      invoiceNumber: data.invoiceNumber || '',
+      howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
+      receivedBy: data.receivedBy || user?.name || '',
+      preparedBy: data.preparedBy || user?.name || '',
+      remarks: data.remarks || '',
+      ...vendor,
+      items: lines,
+      ...totals,
+    };
+
+    let company = {};
+    try {
+      const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
+      const s = await CompanySettings.findOne().lean();
+      if (s) company = { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, email: s.companyEmail };
+    } catch { /* env fallback */ }
+
+    return buildGrnPdfBuffer(grnLike, company);
+  },
+
+  async generatePdf(id) {
+    const grn = await GoodsReceiptNote.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
+    if (!grn) throw new AppError('GRN not found', 404);
+
+    let company = {};
+    try {
+      const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
+      const s = await CompanySettings.findOne().lean();
+      if (s) company = { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, email: s.companyEmail };
+    } catch { /* env fallback */ }
+
+    const buffer = await buildGrnPdfBuffer(grn, company);
+    const fileName = `${String(grn.grnNumber || 'GRN').replace(/[^\w.-]/g, '_')}.pdf`;
+    let grnPdfUrl;
+    if (s3Enabled) {
+      const key = buildKey('grns', fileName);
+      await uploadBuffer({ buffer, key, contentType: 'application/pdf' });
+      grnPdfUrl = `${SERVER_BASE}/api/v1/uploads/file?key=${encodeURIComponent(key)}`;
+    } else {
+      const dir = path.resolve(process.cwd(), 'uploads', 'grns');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const fp = path.join(dir, `${Date.now()}-${fileName}`);
+      fs.writeFileSync(fp, buffer);
+      grnPdfUrl = `${SERVER_BASE}/uploads/grns/${path.basename(fp)}`;
+    }
+    await GoodsReceiptNote.updateOne({ _id: id }, { $set: { grnPdfUrl, grnPdfFileName: fileName } });
+    return { grnPdfUrl, grnPdfFileName: fileName };
+  },
+
+  async cancel(id, data, user) {
+    const grn = await findOrThrow(id);
+    if ([GRN_STATUS.PARTIAL_RECEIVED, GRN_STATUS.FULLY_RECEIVED].includes(grn.grnStatus) || grn.stockPosted) {
+      throw new AppError('A completed GRN cannot be cancelled (stock already posted)', 400);
+    }
+    if (grn.grnStatus === GRN_STATUS.CANCELLED) throw new AppError('GRN is already cancelled', 400);
+    grn.grnStatus = GRN_STATUS.CANCELLED;
+    if (data.remarks) grn.remarks = data.remarks;
+    grn.updatedBy = user?._id;
+    grn.activityTimeline.push({ action: 'CANCEL', description: 'GRN cancelled', actorId: user?._id });
+    return grn.save();
+  },
+};

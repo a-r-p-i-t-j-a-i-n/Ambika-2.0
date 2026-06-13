@@ -24,10 +24,10 @@ export const partyApi = baseApi.injectEndpoints({
     updateParty: builder.mutation({
       query: ({ id, ...body }) => ({
         url: `/parties/${id}`,
-        method: 'PATCH',
+        method: 'PUT', // backend route exposes PUT for /parties/:id
         body,
       }),
-      invalidatesTags: ['Party'],
+      invalidatesTags: (result, error, { id }) => ['Party', { type: 'Party', id }],
     }),
   }),
 });

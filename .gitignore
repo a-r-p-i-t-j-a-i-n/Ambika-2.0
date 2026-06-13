@@ -3,3 +3,20 @@ node_modules/
 .env.*
 dist/
 build/
+
+# Backend analysis / documentation (local only — not for git)
+BACKEND_ANALYSIS.md
+BACKEND_API_DOCUMENTATION.md
+BACKEND_DATABASE_STRUCTURE.md
+BACKEND_FLOW_DIAGRAM.md
+BACKEND_ISSUES_AND_GAPS.md
+FMS_BACKEND_MODULE_PLAN.md
+
+# Frontend analysis / documentation (local only — not for git)
+FRONTEND_ANALYSIS.md
+FRONTEND_ROUTE_MAP.md
+FRONTEND_MODULES_AND_FIELDS.md
+FRONTEND_API_USAGE.md
+FRONTEND_COMPONENT_STRUCTURE.md
+FRONTEND_ISSUES_AND_GAPS.md
+FMS_FRONTEND_MODULE_PLAN.md

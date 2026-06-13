@@ -1,0 +1,240 @@
+import React, { useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import {
+  Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
+  Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
+} from '@mui/material';
+import {
+  ArrowLeft, Pencil, ClipboardCheck, Ban, Boxes, Building2, FileText, PackageCheck, FileDown,
+} from 'lucide-react';
+import { alpha } from '@mui/material/styles';
+import { useSnackbar } from 'notistack';
+import {
+  useGetIncomingQcByIdQuery,
+  useCancelIncomingQcMutation,
+  useGetInventoryMovementsByRefQuery,
+  useGetVendorInvoicesByQcQuery,
+} from '../../../store/api/procurementApi';
+import { QcStatusChip, QcResultChip, fmtDate } from './qcMeta';
+import IncomingQCFormDialog from './IncomingQCFormDialog';
+import IncomingQCCompleteDialog from './IncomingQCCompleteDialog';
+import IncomingQCPdfPreview from './IncomingQCPdfPreview';
+import VendorInvoiceFormDialog from '../vendor-invoices/VendorInvoiceFormDialog';
+import { ReceiptText } from 'lucide-react';
+
+const Field = ({ label, value }) => (
+  <Box sx={{ minWidth: 0 }}>
+    <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
+    <Typography sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
+  </Box>
+);
+
+const SectionCard = ({ icon, title, children }) => (
+  <Paper sx={{ p: 3, borderRadius: '18px' }}>
+    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>{icon} {title}</Typography>
+    {children}
+  </Paper>
+);
+
+const IncomingQCDetail = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { enqueueSnackbar } = useSnackbar();
+
+  const { data, isLoading } = useGetIncomingQcByIdQuery(id);
+  const qc = data?.data;
+  const [cancelQc] = useCancelIncomingQcMutation();
+
+  const isCompleted = qc && ['PASSED', 'FAILED', 'PARTIAL'].includes(qc.qcStatus);
+  const { data: movRes } = useGetInventoryMovementsByRefQuery({ refType: 'INCOMING_QC', refId: id }, { skip: !isCompleted });
+  const movements = movRes?.data || [];
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [completeOpen, setCompleteOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+
+  const qcPassed = qc && ['PASSED', 'PARTIAL'].includes(qc.qcStatus);
+  const { data: invByQcRes } = useGetVendorInvoicesByQcQuery(id, { skip: !qcPassed });
+  const existingInvoice = (invByQcRes?.data || [])[0] || null;
+
+  if (isLoading) return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
+  if (!qc) {
+    return (
+      <Box sx={{ p: 4, textAlign: 'center' }}>
+        <Typography variant="h6">Incoming QC not found</Typography>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/incoming-qc')}>Back to list</Button>
+      </Box>
+    );
+  }
+
+  const editable = ['DRAFT', 'IN_PROGRESS'].includes(qc.qcStatus);
+  const handleCancel = async () => {
+    try { await cancelQc({ id: qc._id }).unwrap(); enqueueSnackbar('QC cancelled', { variant: 'info' }); }
+    catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
+  };
+
+  return (
+    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <IconButton onClick={() => navigate('/procurement/incoming-qc')} sx={{ bgcolor: '#fff', boxShadow: 1 }}><ArrowLeft size={20} /></IconButton>
+        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><ClipboardCheck size={24} /></Box>
+        <Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            <Typography variant="h5" fontWeight={800}>{qc.qcNumber}</Typography>
+            <QcStatusChip status={qc.qcStatus} />
+            <QcResultChip result={qc.overallResult} />
+          </Box>
+          <Typography variant="body2" color="text.secondary">{qc.vendorName} · GRN {qc.grnNumber || '—'} · {fmtDate(qc.qcDate)}</Typography>
+        </Box>
+        <Box sx={{ flexGrow: 1 }} />
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {qc.grnId && <Button variant="outlined" startIcon={<PackageCheck size={16} />} onClick={() => navigate(`/procurement/grns/${qc.grnId}`)}>View GRN</Button>}
+          {editable && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
+          {editable && <Button variant="contained" color="success" startIcon={<ClipboardCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete QC</Button>}
+          {qc.qcPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>QC Report</Button>}
+          {qcPassed && existingInvoice && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${existingInvoice._id}`)}>View Invoice</Button>}
+          {qcPassed && !existingInvoice && <Button variant="contained" startIcon={<ReceiptText size={16} />} onClick={() => setInvoiceOpen(true)}>Create Invoice</Button>}
+          {editable && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
+        </Box>
+      </Box>
+
+      <Grid container spacing={3}>
+        <Grid item xs={12} md={6}>
+          <SectionCard icon={<FileText size={18} />} title="QC Information">
+            <Grid container spacing={2}>
+              <Grid item xs={6} sm={4}><Field label="QC Date" value={fmtDate(qc.qcDate)} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Result" value={<QcResultChip result={qc.overallResult} />} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Completed At" value={fmtDate(qc.completedAt)} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Checked By" value={qc.checkedByName || '—'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Prepared By" value={qc.preparedBy || '—'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Warehouse" value={qc.warehouse || 'MAIN'} /></Grid>
+              {qc.remarks ? <Grid item xs={12}><Field label="Remarks" value={qc.remarks} /></Grid> : null}
+            </Grid>
+          </SectionCard>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <SectionCard icon={<Building2 size={18} />} title="GRN · PO · PI · Vendor">
+            <Grid container spacing={2}>
+              <Grid item xs={6} sm={4}><Field label="Vendor" value={qc.vendorName || '—'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="GRN" value={qc.grnNumber || '—'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="PO" value={qc.poNumber || '—'} /></Grid>
+              <Grid item xs={6} sm={4}>
+                <Field label="PI" value={qc.piId
+                  ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${qc.piId}`)}>{qc.piNumber || 'View'}</Box>
+                  : (qc.piNumber || '—')} />
+              </Grid>
+              <Grid item xs={6} sm={4}><Field label="Indent" value={qc.indentNumber || '—'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Received / Accepted / Rejected" value={`${qc.totalReceived} / ${qc.totalAccepted} / ${qc.totalRejected}`} /></Grid>
+            </Grid>
+          </SectionCard>
+        </Grid>
+
+        {/* QC item table */}
+        <Grid item xs={12}>
+          <SectionCard icon={<ClipboardCheck size={18} />} title={`Inspection (${qc.items?.length || 0})`}>
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>#</TableCell>
+                    <TableCell>Item</TableCell>
+                    <TableCell>SKU</TableCell>
+                    <TableCell align="right">Received</TableCell>
+                    <TableCell align="right">Accepted</TableCell>
+                    <TableCell align="right">Rejected</TableCell>
+                    <TableCell align="right">Rework</TableCell>
+                    <TableCell>Defect</TableCell>
+                    <TableCell>Severity</TableCell>
+                    <TableCell>Reject Movement</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(qc.items || []).map((it, i) => (
+                    <TableRow key={it._id || i} hover>
+                      <TableCell>{i + 1}</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>{it.itemName}{it.batchNo ? <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Batch {it.batchNo}</Typography> : null}</TableCell>
+                      <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
+                      <TableCell align="right">{it.receivedQty}</TableCell>
+                      <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.acceptedQty}</TableCell>
+                      <TableCell align="right" sx={{ color: it.rejectedQty > 0 ? '#be123c' : 'text.secondary', fontWeight: it.rejectedQty > 0 ? 700 : 400 }}>{it.rejectedQty}</TableCell>
+                      <TableCell align="right" sx={{ color: it.reworkQty > 0 ? '#b45309' : 'text.secondary' }}>{it.reworkQty}</TableCell>
+                      <TableCell>{it.defectType || '—'}</TableCell>
+                      <TableCell>{it.defectSeverity ? <Chip size="small" variant="outlined" label={it.defectSeverity} /> : '—'}</TableCell>
+                      <TableCell><Typography variant="body2" color="text.secondary">{it.inventoryMovementNumber || '—'}</Typography></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </SectionCard>
+        </Grid>
+
+        {/* Inventory movements for rejected qty */}
+        {isCompleted && (
+          <Grid item xs={12}>
+            <SectionCard icon={<Boxes size={18} />} title={`Inventory Movements — Rejected Qty (${movements.length})`}>
+              {movements.length ? (
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Movement No</TableCell>
+                        <TableCell>SKU</TableCell>
+                        <TableCell>Txn</TableCell>
+                        <TableCell align="right">Qty Out</TableCell>
+                        <TableCell align="right">Balance After</TableCell>
+                        <TableCell>Warehouse</TableCell>
+                        <TableCell>Batch</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {movements.map((m) => (
+                        <TableRow key={m._id} hover>
+                          <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{m.movementNumber}</Typography></TableCell>
+                          <TableCell>{m.skuCode || m.skuName || '—'}</TableCell>
+                          <TableCell><Chip size="small" color="error" variant="outlined" label={m.txnType} sx={{ fontWeight: 700 }} /></TableCell>
+                          <TableCell align="right" sx={{ color: '#be123c', fontWeight: 700 }}>-{m.quantity}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 700 }}>{m.balanceAfter}</TableCell>
+                          <TableCell>{m.warehouse}</TableCell>
+                          <TableCell>{m.batchNo || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              ) : (
+                <Typography variant="body2" color="text.disabled">No rejected-qty movements (nothing rejected).</Typography>
+              )}
+            </SectionCard>
+          </Grid>
+        )}
+
+        {qc.activityTimeline?.length ? (
+          <Grid item xs={12}>
+            <SectionCard icon={<FileText size={18} />} title="Timeline">
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {[...qc.activityTimeline].reverse().map((ev, i) => (
+                  <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 100 }} />
+                    <Typography variant="body2" color="text.secondary">{ev.description}</Typography>
+                    <Box sx={{ flexGrow: 1 }} />
+                    <Typography variant="caption" color="text.disabled">{fmtDate(ev.timestamp)}</Typography>
+                  </Box>
+                ))}
+              </Box>
+            </SectionCard>
+          </Grid>
+        ) : null}
+      </Grid>
+
+      <IncomingQCFormDialog open={formOpen} qc={qc} onClose={() => setFormOpen(false)} />
+      <IncomingQCCompleteDialog open={completeOpen} qc={qc} onClose={() => setCompleteOpen(false)} />
+      <IncomingQCPdfPreview open={pdfOpen} qc={qc} onClose={() => setPdfOpen(false)} />
+      <VendorInvoiceFormDialog open={invoiceOpen} presetQc={qc ? { _id: qc._id, qcNumber: qc.qcNumber, vendorName: qc.vendorName, grnNumber: qc.grnNumber, poNumber: qc.poNumber, piId: qc.piId } : null} onClose={() => setInvoiceOpen(false)} />
+    </Box>
+  );
+};
+
+export default IncomingQCDetail;

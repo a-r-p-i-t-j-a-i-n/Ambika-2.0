@@ -136,11 +136,18 @@ const QuoteDetail = () => {
   const daysLeft = dayjs(q.validUntil).diff(dayjs(), 'day');
   const isExpired = daysLeft < 0;
 
-  // Shared column template + min width so wide currency values (e.g. crores)
-  // never get clipped — the table scrolls horizontally instead.
-  const GRID_COLS = '36px minmax(180px, 1.6fr) 92px 104px 60px 140px 132px 150px';
-  const TABLE_MIN_W = 1000;
+  // Lean, professional line table: per-line Subtotal / GST ₹ live in the
+  // summary box below, so we don't repeat them per row (that's what made the
+  // table overflow). GST column hidden for "basic" (no-GST) quotes.
+  const showGst = q.pdfIncludeGst !== false;
+  const GRID_COLS = showGst
+    ? '40px minmax(200px, 2.2fr) 100px 120px 64px 160px'
+    : '40px minmax(220px, 2.4fr) 110px 130px 170px';
+  const TABLE_MIN_W = showGst ? 760 : 700;
   const totalQty = q.lines.reduce((sum, l) => sum + (Number(l.qty) || 0), 0);
+  const colHeaders = showGst
+    ? ['#', 'SKU', 'Qty', 'Unit ₹', 'GST', 'Amount']
+    : ['#', 'SKU', 'Qty', 'Unit ₹', 'Amount'];
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
@@ -254,7 +261,7 @@ const QuoteDetail = () => {
             px: 2, py: 1.25, gap: 1,
             borderBottom: `1px solid ${theme.palette.divider}`,
           }}>
-            {['#', 'SKU', 'Qty', 'Unit ₹', 'GST', 'Subtotal', 'GST ₹', 'Line Total'].map((h, i) => (
+            {colHeaders.map((h, i) => (
               <Typography key={i} sx={{
                 fontSize: '0.7rem', fontWeight: 800, color: 'text.secondary',
                 letterSpacing: '0.08em', textTransform: 'uppercase',
@@ -288,10 +295,10 @@ const QuoteDetail = () => {
               </Box>
               <Typography sx={{ fontSize: '0.86rem', fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtInt(l.qty)}</Typography>
               <Typography sx={{ fontSize: '0.86rem', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtINR(l.unitPrice)}</Typography>
-              <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary', textAlign: 'right' }}>{l.gstRate}%</Typography>
-              <Typography sx={{ fontSize: '0.86rem', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtINR(l.lineSubtotal)}</Typography>
-              <Typography sx={{ fontSize: '0.82rem', color: 'text.secondary', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtINR(l.lineGst)}</Typography>
-              <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: theme.palette.primary.dark }}>{fmtINR(l.lineTotal)}</Typography>
+              {showGst && (
+                <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary', textAlign: 'right' }}>{l.gstRate}%</Typography>
+              )}
+              <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: theme.palette.primary.dark }}>{fmtINR(showGst ? l.lineTotal : l.lineSubtotal)}</Typography>
             </Box>
           ))}
 
@@ -316,7 +323,8 @@ const QuoteDetail = () => {
             }}>
               {fmtInt(totalQty)}
             </Typography>
-            <Box /><Box /><Box /><Box /><Box />
+            {/* Fill remaining columns so the grid stays single-row. */}
+            {Array.from({ length: showGst ? 3 : 2 }).map((_, i) => <Box key={i} />)}
           </Box>
           </Box>
           </Box>

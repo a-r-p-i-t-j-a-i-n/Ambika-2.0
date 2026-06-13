@@ -31,6 +31,22 @@ import quoteRoutes from './modules/quotes/quote.routes.js';
 import o2dFmsRoutes from './modules/o2d-fms/o2d-fms.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
 import orderIntakeRoutes from './modules/order-intake/order-intake.routes.js';
+// Purchase FMS
+import indentRoutes from './modules/procurement/indent/indent.routes.js';
+import vendorPoRoutes from './modules/procurement/purchase-order/purchaseOrder.routes.js';
+import followUpRoutes from './modules/procurement/follow-up/followUp.routes.js';
+import proformaInvoiceRoutes from './modules/procurement/proforma-invoice/proformaInvoice.routes.js';
+import advancePaymentRoutes from './modules/procurement/advance-payment/advancePayment.routes.js';
+
+// Shared inventory stock-movement foundation (reused by GRN etc.)
+import inventoryRoutes from './modules/inventory/inventory.routes.js';
+import grnRoutes from './modules/procurement/grn/grn.routes.js';
+import incomingQcRoutes from './modules/procurement/incoming-qc/incomingQc.routes.js';
+import vendorInvoiceRoutes from './modules/procurement/vendor-invoice/vendorInvoice.routes.js';
+import voucherRoutes from './modules/procurement/voucher/voucher.routes.js';
+import tallyEntryRoutes from './modules/procurement/tally-entry/tallyEntry.routes.js';
+import finalPaymentRoutes from './modules/procurement/final-payment/finalPayment.routes.js';
+
 
 
 const app = express();
@@ -100,6 +116,20 @@ app.use('/api/v1/quotes',           quoteRoutes);
 app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (process tracking)
 app.use('/api/v1/notifications',    notificationRoutes);
 app.use('/api/v1/order-intake',     orderIntakeRoutes);
+app.use('/api/v1/procurement/indents', indentRoutes); // Purchase FMS — Purchase Indents
+app.use('/api/v1/procurement/purchase-orders', vendorPoRoutes); // Purchase FMS — Vendor POs (Step 1.4)
+app.use('/api/v1/procurement/follow-ups', followUpRoutes); // Purchase FMS — Material Follow-ups (Step 1.5)
+app.use('/api/v1/procurement/proforma-invoices', proformaInvoiceRoutes); // Purchase FMS — PI Forms (Step 1.6)
+app.use('/api/v1/procurement/advance-payments', advancePaymentRoutes); // Purchase FMS — Advance Payments (Step 1.7)
+
+app.use('/api/v1/inventory', inventoryRoutes); // Shared inventory stock-movement foundation
+app.use('/api/v1/procurement/grns', grnRoutes); // Purchase FMS — Goods Receipt Notes (Step 1.8)
+app.use('/api/v1/procurement/incoming-qc', incomingQcRoutes); // Purchase FMS — Incoming QC (Step 1.9)
+app.use('/api/v1/procurement/vendor-invoices', vendorInvoiceRoutes); // Purchase FMS — Vendor Invoices (Step 1.10)
+app.use('/api/v1/procurement/vouchers', voucherRoutes); // Purchase FMS — Vouchers (Step 1.11)
+app.use('/api/v1/procurement/tally-entries', tallyEntryRoutes); // Purchase FMS — Purchase Entry in Tally (Step 1.12)
+app.use('/api/v1/procurement/final-payments', finalPaymentRoutes); // Purchase FMS — Make Payment (Step 1.13)
+
 
 // ── Static — uploaded files (served as /uploads/...) ────────
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads'), {

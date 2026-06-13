@@ -10,7 +10,12 @@ export const createPartySchema = Joi.object({
   contactPerson:     Joi.string().trim().max(100).allow('', null),
   email:             Joi.string().email().trim().allow('', null),
   phone:             Joi.string().trim().max(20).allow('', null),
-  
+
+  // Tax & financial (vendor)
+  panNo:             Joi.string().trim().max(20).allow('', null),
+  gstRate:           Joi.number().min(0).max(100).default(0),
+  tdsRate:           Joi.number().min(0).max(100).default(0),
+
   toEmails:          Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
   ccEmails:          Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
   bccEmails:         Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
@@ -25,6 +30,19 @@ export const createPartySchema = Joi.object({
     state: Joi.string().max(50).allow('', null),
     pin:   Joi.string().max(10).allow('', null),
   })).default([]),
+
+  // Procurement: products this party (vendor) supplies. Optional at the API
+  // level for backward compatibility (parties are also auto-created by order
+  // entry); the vendor form enforces "at least one product" on the client.
+  suppliedProducts: Joi.array().items(Joi.object({
+    _id:         Joi.string().optional(),
+    skuId:       Joi.string().regex(/^[0-9a-fA-F]{24}$/).allow('', null),
+    productName: Joi.string().trim().max(200).allow('', null),
+    skuCode:     Joi.string().trim().max(50).allow('', null),
+    rate:        Joi.number().min(0).default(0),
+    unit:        Joi.string().trim().max(20).allow('', null).default('Pcs'),
+  })).default([]),
+
   isActive: Joi.boolean().default(true),
 });
 

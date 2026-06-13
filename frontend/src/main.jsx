@@ -8,6 +8,7 @@ import { store } from './store';
 import theme from './theme/index';
 import App from './App.jsx';
 import ErrorBoundary from './components/ErrorBoundary';
+import { toastComponents } from './components/Toast';
 
 // ─── Local Inter font weights (replaces blocking Google Fonts CDN call) ───
 import '@fontsource/inter/400.css';
@@ -27,8 +28,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <CssBaseline />
           <SnackbarProvider
             maxSnack={3}
-            autoHideDuration={3000}
+            autoHideDuration={3500}
             anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+            Components={toastComponents}
           >
             <BrowserRouter>
               <App />

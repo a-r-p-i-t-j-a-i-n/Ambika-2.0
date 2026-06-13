@@ -1,7 +1,8 @@
-import mongoose from 'mongoose';
-import { logger } from '../utils/logger.js';
-import env from './env.js';
-
+import mongoose from "mongoose";
+import { logger } from "../utils/logger.js";
+import env from "./env.js";
+import dns from "dns";
+dns.setServers(["1.1.1.1", "8.8.8.8"]);
 const connectDB = async () => {
   try {
     const conn = await mongoose.connect(env.MONGO_URI, {
@@ -11,14 +12,16 @@ const connectDB = async () => {
       socketTimeoutMS: 45000,
     });
 
-    logger.info(`✅ MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`);
+    logger.info(
+      `✅ MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`,
+    );
 
-    mongoose.connection.on('error', (err) => {
+    mongoose.connection.on("error", (err) => {
       logger.error(`MongoDB connection error: ${err}`);
     });
 
-    mongoose.connection.on('disconnected', () => {
-      logger.warn('MongoDB disconnected. Attempting reconnect...');
+    mongoose.connection.on("disconnected", () => {
+      logger.warn("MongoDB disconnected. Attempting reconnect...");
     });
 
     return conn;

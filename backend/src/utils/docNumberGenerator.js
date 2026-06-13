@@ -36,6 +36,210 @@ export async function generateDocNumber(docType, date = new Date()) {
 }
 
 /**
+ * Generate next Purchase Indent number (Purchase FMS).
+ * Unpadded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "Ind-1/24-25"
+ */
+export async function generateIndentNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `IND_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `Ind-${counter.seq}/${fy}`;
+}
+
+/**
+ * Generate next Vendor Purchase Order number (Purchase FMS — Step 1.4).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "AGL/PO-001/26-27"
+ */
+export async function generateVendorPoNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `AGL/PO_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `AGL/PO-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Material Follow-up number (Purchase FMS — Step 1.5).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "FU-001/26-27"
+ */
+export async function generateFollowUpNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `FU_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `FU-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Proforma Invoice number (Purchase FMS — Step 1.6).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "PI-001/26-27"
+ */
+export async function generatePiNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `PI_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `PI-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate the short PI unique code (global, never resets).
+ * @returns {string} e.g. "PI-7"
+ */
+export async function generatePiUniqueCode() {
+  const counter = await Counter.findByIdAndUpdate(
+    'PI_UNIQUE',
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `PI-${counter.seq}`;
+}
+
+/**
+ * Generate next Advance Payment number (Purchase FMS — Step 1.7).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "ADV-001/26-27"
+ */
+export async function generateAdvancePaymentNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `ADV_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `ADV-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+
+ * Generate next Vendor Voucher number (Purchase FMS — Step 1.11).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "PV-001/26-27"
+ */
+export async function generateVoucherNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `PV_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `PV-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Purchase Tally Entry number (Purchase FMS — Step 1.12).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "TLY-001/26-27"
+ */
+export async function generateTallyEntryNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `TLY_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `TLY-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Vendor Final Payment number (Purchase FMS — Step 1.13).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "PAY-001/26-27"
+ */
+export async function generateFinalPaymentNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `PAY_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `PAY-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Incoming QC number (Purchase FMS — Step 1.9).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "AGL/QC-001/26-27"
+ */
+export async function generateQcNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `QC_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `AGL/QC-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Goods Receipt Note number (Purchase FMS — Step 1.8).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "GRN-001/26-27"
+ */
+export async function generateGrnNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `GRN_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `AGL/GRN-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate the short GRN unique id (global, never resets).
+ * @returns {string} e.g. "UID-1"
+ */
+export async function generateGrnUniqueId() {
+  const counter = await Counter.findByIdAndUpdate(
+    'GRN_UNIQUE',
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `UID-${counter.seq}`;
+}
+
+/**
+ * Generate next Inventory Stock Movement number.
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "MOV-001/26-27"
+ */
+export async function generateMovementNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `MOV_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `MOV-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+
  * Generate O2D tracker unique ID.
  * @param {Date} date
  * @returns {string} e.g. "AGL-O2D-42"

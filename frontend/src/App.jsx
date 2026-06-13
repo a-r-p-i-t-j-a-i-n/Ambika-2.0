@@ -44,6 +44,30 @@ const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsD
 const FmsStepConfig        = lazyWithRetry(() => import('./features/o2d-fms/StepDefinitionsConfig'));
 const FmsTaskTemplates     = lazyWithRetry(() => import('./features/o2d-fms/TaskTemplates'));
 const FmsScoreboard        = lazyWithRetry(() => import('./features/o2d-fms/Scoreboard'));
+// Purchase FMS
+const IndentList           = lazyWithRetry(() => import('./features/procurement/indents/IndentList'));
+const IndentDetail         = lazyWithRetry(() => import('./features/procurement/indents/IndentDetail'));
+const PurchaseOrderList    = lazyWithRetry(() => import('./features/procurement/purchase-orders/PurchaseOrderList'));
+const PurchaseOrderDetail  = lazyWithRetry(() => import('./features/procurement/purchase-orders/PurchaseOrderDetail'));
+const FollowUpList         = lazyWithRetry(() => import('./features/procurement/follow-ups/FollowUpList'));
+const FollowUpDetail       = lazyWithRetry(() => import('./features/procurement/follow-ups/FollowUpDetail'));
+const ProformaInvoiceList  = lazyWithRetry(() => import('./features/procurement/proforma-invoices/ProformaInvoiceList'));
+const ProformaInvoiceDetail = lazyWithRetry(() => import('./features/procurement/proforma-invoices/ProformaInvoiceDetail'));
+const AdvancePaymentList   = lazyWithRetry(() => import('./features/procurement/advance-payments/AdvancePaymentList'));
+
+const GrnList              = lazyWithRetry(() => import('./features/procurement/grn/GrnList'));
+const GrnDetail            = lazyWithRetry(() => import('./features/procurement/grn/GrnDetail'));
+const IncomingQCList       = lazyWithRetry(() => import('./features/procurement/incoming-qc/IncomingQCList'));
+const IncomingQCDetail     = lazyWithRetry(() => import('./features/procurement/incoming-qc/IncomingQCDetail'));
+const VendorInvoiceList    = lazyWithRetry(() => import('./features/procurement/vendor-invoices/VendorInvoiceList'));
+const VendorInvoiceDetail  = lazyWithRetry(() => import('./features/procurement/vendor-invoices/VendorInvoiceDetail'));
+const VoucherList          = lazyWithRetry(() => import('./features/procurement/vouchers/VoucherList'));
+const VoucherDetail        = lazyWithRetry(() => import('./features/procurement/vouchers/VoucherDetail'));
+const TallyEntryList       = lazyWithRetry(() => import('./features/procurement/tally-entry/TallyEntryList'));
+const TallyEntryDetail     = lazyWithRetry(() => import('./features/procurement/tally-entry/TallyEntryDetail'));
+const FinalPaymentList     = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentList'));
+const FinalPaymentDetail   = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentDetail'));
+
 const FmsTaskPage          = lazyWithRetry(() => import('./features/o2d-fms/TaskPage'));
 const FmsAllTasks          = lazyWithRetry(() => import('./features/o2d-fms/AllTasks'));
 const FmsMasterBoard       = lazyWithRetry(() => import('./features/o2d-fms/MasterFms'));
@@ -161,6 +185,31 @@ function App() {
             <Route path="/o2d-fms/config" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsStepConfig /></RequirePermission>} />
             <Route path="/o2d-fms/templates" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsTaskTemplates /></RequirePermission>} />
             <Route path="/o2d-fms/scores" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsScoreboard /></RequirePermission>} />
+
+            {/* Purchase FMS — Purchase Indents */}
+            <Route path="/procurement/indents" element={<IndentList />} />
+            <Route path="/procurement/indents/:id" element={<IndentDetail />} />
+            <Route path="/procurement/purchase-orders" element={<PurchaseOrderList />} />
+            <Route path="/procurement/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+            <Route path="/procurement/follow-ups" element={<FollowUpList />} />
+            <Route path="/procurement/follow-ups/:id" element={<FollowUpDetail />} />
+            <Route path="/procurement/proforma-invoices" element={<ProformaInvoiceList />} />
+            <Route path="/procurement/proforma-invoices/:id" element={<ProformaInvoiceDetail />} />
+            <Route path="/procurement/advance-payments" element={<AdvancePaymentList />} />
+
+            <Route path="/procurement/grns" element={<GrnList />} />
+            <Route path="/procurement/grns/:id" element={<GrnDetail />} />
+            <Route path="/procurement/incoming-qc" element={<IncomingQCList />} />
+            <Route path="/procurement/incoming-qc/:id" element={<IncomingQCDetail />} />
+            <Route path="/procurement/vendor-invoices" element={<VendorInvoiceList />} />
+            <Route path="/procurement/vendor-invoices/:id" element={<VendorInvoiceDetail />} />
+            <Route path="/procurement/vouchers" element={<VoucherList />} />
+            <Route path="/procurement/vouchers/:id" element={<VoucherDetail />} />
+            <Route path="/procurement/tally-entries" element={<TallyEntryList />} />
+            <Route path="/procurement/tally-entries/:id" element={<TallyEntryDetail />} />
+            <Route path="/procurement/final-payments" element={<FinalPaymentList />} />
+            <Route path="/procurement/final-payments/:id" element={<FinalPaymentDetail />} />
+
           </Route>
         </Route>
 

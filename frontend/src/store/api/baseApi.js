@@ -19,7 +19,18 @@ export const baseApi = createApi({
     'AccessUsers', 'AccessRoles', 'AccessAudit',
     'Pricing', 'PriceHistory', 'PriceApprovals', 'Quote', 'CompanySettings',
     'PricingReviewers', 'PricingDocuments', 'PricingAnalytics',
-    'O2DProcess', 'O2DStepDef', 'O2DMyTasks', 'O2DDashboard', 'O2DTemplate', 'Notification', 'OrderIntake',
+    'O2DProcess', 'O2DStepDef', 'O2DMyTasks', 'O2DDashboard', 'O2DTemplate', 'Notification',
+    'Indent', 'IndentStats','OrderIntake',
+    'PurchaseOrder', 'PurchaseOrderStats',
+    'FollowUp', 'FollowUpStats',
+    'ProformaInvoice', 'ProformaInvoiceStats',
+    'AdvancePayment', 'AdvancePaymentStats',
+
+    'Grn', 'GrnStats', 'InventoryStock', 'InventoryMovement',
+    'IncomingQc', 'IncomingQcStats',
+    'VendorInvoice', 'VendorInvoiceStats', 'Voucher', 'VoucherStats',
+    'TallyEntry', 'TallyEntryStats', 'FinalPayment', 'FinalPaymentStats',
+
   ],
   endpoints: () => ({}),
 });

@@ -1,0 +1,173 @@
+import AdvancePayment, { PAYMENT_STATUS } from './advancePayment.model.js';
+import ProformaInvoice, { PI_STATUS } from '../proforma-invoice/proformaInvoice.model.js';
+import VendorPurchaseOrder, { PO_PI_STATUS } from '../purchase-order/purchaseOrder.model.js';
+import { ApiFeatures } from '../../../utils/apiFeatures.js';
+import { AppError } from '../../../utils/apiResponse.js';
+import { generateAdvancePaymentNumber } from '../../../utils/docNumberGenerator.js';
+import { logger } from '../../../utils/logger.js';
+
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Keep the PO's PI mirror in sync (non-fatal). */
+const setPoPiStatus = async (poId, patch) => {
+  try { await VendorPurchaseOrder.updateOne({ _id: poId }, { $set: patch }); }
+  catch (err) { logger.error(`[advance-payment] PO sync failed for ${poId}: ${err.message}`); }
+};
+
+export const advancePaymentService = {
+  /**
+   * Record a payment event (Step 1.7).
+   *   PART_PAYMENT             → post amount, PI stays payable
+   *   FULL_PAYMENT             → amount must clear the balance → PI PAYMENT_COMPLETED
+   *   SHORT_PAYMENT_COMPLETED  → post amount, balance stays > 0, order closed short → PI PAYMENT_COMPLETED
+   *   CANCELLED                → record only, nothing posted
+   */
+  async create(data, user) {
+    const pi = await ProformaInvoice.findOne({ _id: data.piId, isDeleted: { $ne: true } });
+    if (!pi) throw new AppError('Proforma Invoice not found', 404);
+
+    const isCancelledEntry = data.paymentStatus === PAYMENT_STATUS.CANCELLED;
+    if (!isCancelledEntry && pi.piStatus !== PI_STATUS.READY_FOR_ADVANCE_PAYMENT) {
+      throw new AppError('Payments can only be recorded for a PI that is ready for advance payment', 400);
+    }
+
+    const previousBalance = round2(pi.balanceAmount);
+    const amount = round2(data.paidAmount || 0);
+
+    // ── Per-status posting rules ──
+    let newBalance = previousBalance;
+    if (!isCancelledEntry) {
+      if (amount > previousBalance) {
+        throw new AppError(`Paid amount (${amount}) exceeds the PI balance (${previousBalance})`, 400);
+      }
+      if (data.paymentStatus === PAYMENT_STATUS.FULL_PAYMENT && round2(amount) !== previousBalance) {
+        throw new AppError(`Full payment must clear the balance — enter ${previousBalance} or use Part Payment`, 400);
+      }
+      if (data.paymentStatus === PAYMENT_STATUS.SHORT_PAYMENT_COMPLETED && round2(previousBalance - amount) <= 0) {
+        throw new AppError('Short payment must leave a balance — use Full Payment instead', 400);
+      }
+      newBalance = round2(previousBalance - amount);
+    }
+
+    const paymentNumber = await generateAdvancePaymentNumber(data.paymentDate || new Date());
+    const payment = await AdvancePayment.create({
+      paymentNumber,
+      piId: pi._id,
+      piNumber: pi.piNumber,
+      poId: pi.poId,
+      poNumber: pi.poNumber,
+      indentNumber: pi.indentNumber,
+      vendorId: pi.vendorId,
+      vendorName: pi.vendorName,
+      paymentStatus: data.paymentStatus,
+      paymentDate: data.paymentDate,
+      paidAmount: isCancelledEntry ? 0 : amount,
+      paymentMode: data.paymentMode,
+      paymentReferenceNumber: data.paymentReferenceNumber || '',
+      remarks: data.remarks || '',
+      previousBalance,
+      balanceAmount: newBalance,
+      performedByName: user?.name || '',
+      createdBy: user?._id,
+      activityTimeline: [{
+        action: 'PAYMENT_RECORDED',
+        description: `Advance payment recorded — ${data.paymentMode || ''} ${data.paymentReferenceNumber || ''} ₹${isCancelledEntry ? 0 : amount}`.trim(),
+        actorId: user?._id,
+      }],
+    });
+
+    // ── Integration: post onto the PI (skip for CANCELLED) ──
+    if (!isCancelledEntry) {
+      pi.paidAmount = round2((pi.paidAmount || 0) + amount);
+      pi.balanceAmount = round2(pi.totalValue - pi.paidAmount);
+
+      const closesPayment =
+        pi.balanceAmount === 0 ||
+        data.paymentStatus === PAYMENT_STATUS.SHORT_PAYMENT_COMPLETED;
+      if (closesPayment) {
+        pi.piStatus = PI_STATUS.PAYMENT_COMPLETED;
+      }
+      pi.updatedBy = user?._id;
+      pi.activityTimeline.push({
+        action: 'ADVANCE_PAYMENT',
+        description: `${payment.paymentNumber} — ${data.paymentStatus} ₹${amount} via ${data.paymentMode || '—'} (ref ${data.paymentReferenceNumber || '—'}) by ${user?.name || '—'}`,
+        actorId: user?._id,
+      });
+      await pi.save();
+
+      if (closesPayment && pi.poId) {
+        await setPoPiStatus(pi.poId, { piStatus: PO_PI_STATUS.PAYMENT_COMPLETED });
+      }
+    } else {
+      pi.activityTimeline.push({
+        action: 'PAYMENT_CANCELLED_ENTRY',
+        description: `${payment.paymentNumber} recorded as CANCELLED — nothing posted`,
+        actorId: user?._id,
+      });
+      await pi.save();
+    }
+
+    return payment;
+  },
+
+  async getAll(query) {
+    const features = new ApiFeatures(
+      AdvancePayment.find({ isDeleted: { $ne: true } }),
+      query,
+    )
+      .filter()
+      .search(['paymentNumber', 'piNumber', 'poNumber', 'vendorName', 'paymentReferenceNumber'])
+      .sort()
+      .select()
+      .paginate();
+    return features.exec();
+  },
+
+  async getById(id) {
+    const payment = await AdvancePayment.findOne({ _id: id, isDeleted: { $ne: true } })
+      .populate('createdBy', 'name')
+      .lean();
+    if (!payment) throw new AppError('Payment not found', 404);
+    return payment;
+  },
+
+  async getByPi(piId) {
+    return AdvancePayment.find({ piId, isDeleted: { $ne: true } }).sort('-createdAt').lean();
+  },
+
+  /** Dashboard KPIs: payments + PI-side pending/outstanding amounts. */
+  async getStats() {
+    const [payRows, piRows] = await Promise.all([
+      AdvancePayment.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        {
+          $group: {
+            _id: null,
+            totalPayments: { $sum: 1 },
+            paidAmount:    { $sum: { $cond: [{ $ne: ['$paymentStatus', PAYMENT_STATUS.CANCELLED] }, '$paidAmount', 0] } },
+            cancelled:     { $sum: { $cond: [{ $eq: ['$paymentStatus', PAYMENT_STATUS.CANCELLED] }, 1, 0] } },
+          },
+        },
+      ]),
+      ProformaInvoice.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        {
+          $group: {
+            _id: null,
+            // Pending = PIs still awaiting payment.
+            pendingAmount: { $sum: { $cond: [{ $eq: ['$piStatus', PI_STATUS.READY_FOR_ADVANCE_PAYMENT] }, '$balanceAmount', 0] } },
+            // Outstanding = short-closed balances that will never be paid.
+            outstandingAmount: { $sum: { $cond: [{ $and: [
+              { $eq: ['$piStatus', PI_STATUS.PAYMENT_COMPLETED] },
+              { $gt: ['$balanceAmount', 0] },
+            ] }, '$balanceAmount', 0] } },
+            paymentCompleted: { $sum: { $cond: [{ $eq: ['$piStatus', PI_STATUS.PAYMENT_COMPLETED] }, 1, 0] } },
+          },
+        },
+      ]),
+    ]);
+    const p = payRows[0] || { totalPayments: 0, paidAmount: 0, cancelled: 0 };
+    const q = piRows[0] || { pendingAmount: 0, outstandingAmount: 0, paymentCompleted: 0 };
+    return { ...p, ...q };
+  },
+};
