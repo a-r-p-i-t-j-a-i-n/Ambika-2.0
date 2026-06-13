@@ -8,6 +8,10 @@
 /index.html
   Cache-Control: no-cache, no-store, must-revalidate
 
+# Update poller — must never be cached, or clients won't see new deploys.
+/version.json
+  Cache-Control: no-cache, no-store, must-revalidate
+
 # Baseline security headers.
 /*
   X-Content-Type-Options: nosniff

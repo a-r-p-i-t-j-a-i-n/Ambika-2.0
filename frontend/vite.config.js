@@ -1,6 +1,26 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Unique id stamped into every build. It's both (a) baked into the running
+// bundle as `__BUILD_ID__` and (b) written to dist/version.json. The app polls
+// version.json and, when the served id differs from the baked-in one, knows a
+// new deploy is live and offers a one-click refresh — so non-technical users
+// never have to hard-refresh or clear cache after we deploy.
+const BUILD_ID = String(Date.now());
+
+// Emits a tiny, un-hashed version.json at the dist root for the update poller.
+const emitVersionJson = () => ({
+  name: 'emit-version-json',
+  apply: 'build',
+  generateBundle() {
+    this.emitFile({
+      type: 'asset',
+      fileName: 'version.json',
+      source: JSON.stringify({ buildId: BUILD_ID }),
+    });
+  },
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Production build configuration
 //
@@ -15,7 +35,12 @@ import react from '@vitejs/plugin-react';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), emitVersionJson()],
+
+  // Bake the build id into the bundle so the running app knows its own version.
+  define: {
+    __BUILD_ID__: JSON.stringify(BUILD_ID),
+  },
 
   server: {
     port: 3000,

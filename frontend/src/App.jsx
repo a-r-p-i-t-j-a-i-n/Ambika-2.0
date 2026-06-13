@@ -4,6 +4,7 @@ import MainLayout from './layouts/MainLayout';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppLoader from './components/AppLoader';
 import RequirePermission from './components/RequirePermission';
+import UpdateBanner from './components/UpdateBanner';
 import { lazyWithRetry } from './utils/lazyWithRetry';
 
 // ─── Eager: shell, auth, and the post-login landing page ───────────────────
@@ -76,7 +77,9 @@ const NotFound             = lazyWithRetry(() => import('./components/NotFound')
 
 function App() {
   return (
-    <Suspense fallback={<AppLoader />}>
+    <>
+      <UpdateBanner />
+      <Suspense fallback={<AppLoader />}>
       <Routes>
         <Route path="/login" element={<Login />} />
 
@@ -216,7 +219,8 @@ function App() {
         {/* 404 — branded, no silent redirect */}
         <Route path="*" element={<NotFound />} />
       </Routes>
-    </Suspense>
+      </Suspense>
+    </>
   );
 }
 

@@ -23,6 +23,12 @@
   [headers.values]
     Cache-Control = "no-cache, no-store, must-revalidate"
 
+# Update poller — must never be cached, or clients won't see new deploys.
+[[headers]]
+  for = "/version.json"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
 # Baseline security headers.
 [[headers]]
   for = "/*"
