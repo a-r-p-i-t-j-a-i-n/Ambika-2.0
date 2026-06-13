@@ -136,6 +136,12 @@ const QuoteDetail = () => {
   const daysLeft = dayjs(q.validUntil).diff(dayjs(), 'day');
   const isExpired = daysLeft < 0;
 
+  // Shared column template + min width so wide currency values (e.g. crores)
+  // never get clipped — the table scrolls horizontally instead.
+  const GRID_COLS = '36px minmax(180px, 1.6fr) 92px 104px 60px 140px 132px 150px';
+  const TABLE_MIN_W = 1000;
+  const totalQty = q.lines.reduce((sum, l) => sum + (Number(l.qty) || 0), 0);
+
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       {/* Hero */}
@@ -239,9 +245,11 @@ const QuoteDetail = () => {
       {/* Body */}
       <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative' }}>
         <Paper sx={{ borderRadius: 3, overflow: 'hidden', mb: 2 }}>
+          <Box sx={{ overflowX: 'auto' }}>
+          <Box sx={{ minWidth: TABLE_MIN_W }}>
           <Box sx={{
             display: 'grid',
-            gridTemplateColumns: '40px minmax(220px, 2fr) 80px 110px 80px 120px 100px 130px',
+            gridTemplateColumns: GRID_COLS,
             bgcolor: alpha(theme.palette.primary.main, 0.04),
             px: 2, py: 1.25, gap: 1,
             borderBottom: `1px solid ${theme.palette.divider}`,
@@ -257,7 +265,7 @@ const QuoteDetail = () => {
           {q.lines.map((l, i) => (
             <Box key={i} sx={{
               display: 'grid',
-              gridTemplateColumns: '40px minmax(220px, 2fr) 80px 110px 80px 120px 100px 130px',
+              gridTemplateColumns: GRID_COLS,
               px: 2, py: 1.5, gap: 1,
               borderBottom: `1px solid ${theme.palette.divider}`,
               alignItems: 'center',
@@ -286,6 +294,32 @@ const QuoteDetail = () => {
               <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: theme.palette.primary.dark }}>{fmtINR(l.lineTotal)}</Typography>
             </Box>
           ))}
+
+          {/* Column totals — Qty total sits under the QTY column, in bold. */}
+          <Box sx={{
+            display: 'grid',
+            gridTemplateColumns: GRID_COLS,
+            px: 2, py: 1.5, gap: 1, alignItems: 'center',
+            bgcolor: alpha(theme.palette.primary.main, 0.05),
+            borderTop: `2px solid ${theme.palette.primary.main}`,
+          }}>
+            <Box />
+            <Typography sx={{
+              fontSize: '0.74rem', fontWeight: 800, color: 'text.secondary',
+              letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'right',
+            }}>
+              Total Quantity
+            </Typography>
+            <Typography sx={{
+              fontSize: '0.95rem', fontWeight: 800, textAlign: 'right',
+              fontVariantNumeric: 'tabular-nums', color: theme.palette.primary.dark,
+            }}>
+              {fmtInt(totalQty)}
+            </Typography>
+            <Box /><Box /><Box /><Box /><Box />
+          </Box>
+          </Box>
+          </Box>
         </Paper>
 
         <Paper sx={{ p: 2.5, borderRadius: 3, mb: 4 }}>
