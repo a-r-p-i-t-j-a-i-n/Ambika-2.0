@@ -85,14 +85,21 @@ if (env.NODE_ENV === 'development') {
 }
 
 // ── Health Check ────────────────────────────────────────────
-app.get('/api/health', (_req, res) => {
+// Root + /health respond 200 so platform health checks (Render) and any
+// keep-warm pinger don't log spurious 404s on `/`. Kept ultra-light (no DB
+// hit) so they're cheap to call frequently.
+const healthPayload = (_req, res) => {
   res.json({
     success: true,
     message: 'DPES API is running',
     env: env.NODE_ENV,
     timestamp: new Date().toISOString(),
   });
-});
+};
+app.get('/', healthPayload);
+app.head('/', (_req, res) => res.sendStatus(200));
+app.get('/health', healthPayload);
+app.get('/api/health', healthPayload);
 
 // ── API Routes ──────────────────────────────────────────────
 app.use('/api/v1/auth',            authRoutes);
