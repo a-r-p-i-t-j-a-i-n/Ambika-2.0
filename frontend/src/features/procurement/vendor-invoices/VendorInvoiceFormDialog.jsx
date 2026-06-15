@@ -15,6 +15,7 @@ import {
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fileHref } from '../indents/indentMeta';
 import { fmtINR } from './invoiceMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Create / edit a Vendor Invoice (Step 1.10). Only QC PASSED/PARTIAL is
@@ -179,7 +180,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
               )}
             </Grid>
             <Grid item xs={12} sm={4}><TextField label="Vendor Invoice No *" fullWidth value={form.invoiceNumber} onChange={(e) => set('invoiceNumber', e.target.value)} /></Grid>
-            <Grid item xs={6} sm={3}><TextField label="Invoice Date" type="date" fullWidth value={form.invoiceDate} onChange={(e) => set('invoiceDate', e.target.value)} InputLabelProps={{ shrink: true }} /></Grid>
+            <Grid item xs={6} sm={3}><DateInputDDMMYYYY label="Invoice Date" fullWidth value={form.invoiceDate} onChange={(val) => set('invoiceDate', val)} /></Grid>
           </Grid>
           {qc ? (
             <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'center' }}>

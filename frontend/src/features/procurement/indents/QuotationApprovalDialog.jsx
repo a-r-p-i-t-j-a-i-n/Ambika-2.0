@@ -9,6 +9,7 @@ import { useSnackbar } from 'notistack';
 import { useApproveQuotationMutation } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fileHref } from './indentMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Step 1.3 — Approved Quotation 1.03.
@@ -133,8 +134,8 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           </Grid>
 
           <Grid item xs={12} sm={5}>
-            <TextField label="Actual Date" type="date" fullWidth value={actualAt}
-              onChange={(e) => setActualAt(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Actual Date" fullWidth value={actualAt}
+              onChange={setActualAt} />
           </Grid>
           <Grid item xs={12} sm={7}>
             <TextField label="Remarks" fullWidth value={remarks} onChange={(e) => setRemarks(e.target.value)} />

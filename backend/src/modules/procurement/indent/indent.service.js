@@ -24,22 +24,70 @@ const findOrThrow = async (id) => {
   return indent;
 };
 
+const num = (n) => Number(n) || 0;
+
+// Normalise an incoming payload into the canonical items[] shape. Falls back to
+// the legacy single-product fields so older clients keep working.
+const buildItems = (data = {}) => {
+  const src = Array.isArray(data.items) && data.items.length
+    ? data.items
+    : (data.productNameRevised
+      ? [{
+        itemName: data.productNameRevised, skuCode: data.skuCode, skuId: data.skuId,
+        quantity: data.quantity, unit: data.unit, remarks: data.remarks,
+      }]
+      : []);
+  return src.map((it) => ({
+    skuId: it.skuId || undefined,
+    skuCode: (it.skuCode || '').trim().toUpperCase(),
+    itemName: (it.itemName || '').trim(),
+    quantity: num(it.quantity),
+    unit: (it.unit || '').trim() || 'Pcs',
+    revisedQuantity: num(it.revisedQuantity),
+    approvedQuantity: num(it.approvedQuantity),
+    remarks: (it.remarks || '').trim(),
+  }));
+};
+
+// Keep the legacy single-product fields + aggregates in sync with items[] so
+// search, the PO option label and any older reads stay consistent.
+const mirrorLegacy = (indent) => {
+  const items = indent.items || [];
+  const first = items[0] || {};
+  indent.productNameRevised = items.length > 1
+    ? `${first.itemName || ''} +${items.length - 1} more`
+    : (first.itemName || '');
+  indent.skuCode = first.skuCode || '';
+  indent.skuId = first.skuId || undefined;
+  indent.unit = first.unit || 'Pcs';
+  indent.quantity = items.reduce((s, it) => s + num(it.quantity), 0);
+  indent.revisedQuantity = items.reduce((s, it) => s + num(it.revisedQuantity), 0);
+  indent.approvedQuantity = items.reduce((s, it) => s + num(it.approvedQuantity), 0);
+};
+
 export const indentService = {
   async create(data, user) {
+    const items = buildItems(data);
+    if (!items.length) throw new AppError('Add at least one item to the indent', 400);
+    if (items.some((it) => !it.itemName)) throw new AppError('Every item needs a product name', 400);
     // Finished Goods are sell-side only — never indentable.
-    await assertPurchasable([{ skuId: data.skuId, skuCode: data.skuCode }]);
+    await assertPurchasable(items.map((it) => ({ skuId: it.skuId, skuCode: it.skuCode })));
+
     const indentNumber = await generateIndentNumber();
     const indent = new PurchaseIndent({
-      ...data,
       indentNumber,
       timestamp: data.timestamp || new Date(),
+      items,
       raisedBy: data.raisedBy || user?.name || '',
       raisedById: user?._id,
+      department: data.department || '',
+      remarks: data.remarks || '',
       approvalStatus: INDENT_APPROVAL_STATUS.DRAFT,
       overallStatus: INDENT_OVERALL_STATUS.INDENT_GENERATED,
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: 'Indent created (draft)', actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `Indent created (draft) — ${items.length} item(s)`, actorId: user?._id }],
     });
+    mirrorLegacy(indent);
     return indent.save();
   },
 
@@ -49,7 +97,7 @@ export const indentService = {
       query,
     )
       .filter()
-      .search(['indentNumber', 'productNameRevised', 'skuCode', 'raisedBy', 'department'])
+      .search(['indentNumber', 'productNameRevised', 'skuCode', 'raisedBy', 'department', 'items.itemName', 'items.skuCode'])
       .sort()
       .select()
       .paginate();
@@ -85,10 +133,23 @@ export const indentService = {
     if (indent.approvalStatus !== INDENT_APPROVAL_STATUS.DRAFT) {
       throw new AppError('Only draft indents can be edited', 400);
     }
-    if (data.skuId || data.skuCode) {
-      await assertPurchasable([{ skuId: data.skuId, skuCode: data.skuCode }]);
+
+    // Items (replace wholesale when provided in either shape).
+    if (Array.isArray(data.items) || data.productNameRevised !== undefined) {
+      const items = buildItems(data);
+      if (!items.length) throw new AppError('Add at least one item to the indent', 400);
+      if (items.some((it) => !it.itemName)) throw new AppError('Every item needs a product name', 400);
+      await assertPurchasable(items.map((it) => ({ skuId: it.skuId, skuCode: it.skuCode })));
+      indent.items = items;
+      mirrorLegacy(indent);
     }
-    Object.assign(indent, data);
+
+    // Header fields.
+    if (data.raisedBy !== undefined) indent.raisedBy = data.raisedBy;
+    if (data.department !== undefined) indent.department = data.department;
+    if (data.remarks !== undefined) indent.remarks = data.remarks;
+    if (data.timestamp) indent.timestamp = data.timestamp;
+
     indent.updatedBy = user?._id;
     indent.activityTimeline.push({ action: 'UPDATE', description: 'Draft indent updated', actorId: user?._id });
     return indent.save();
@@ -111,8 +172,22 @@ export const indentService = {
     if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
       throw new AppError('Indent is not awaiting approval', 400);
     }
-    indent.revisedQuantity = data.revisedQuantity ?? indent.revisedQuantity;
-    indent.approvedQuantity = data.approvedQuantity;
+    // Apply per-item approved/revised quantities.
+    if (Array.isArray(data.items) && data.items.length) {
+      data.items.forEach((row, i) => {
+        const target = (row._id && indent.items.id?.(row._id)) || indent.items[i];
+        if (target) {
+          target.revisedQuantity = num(row.revisedQuantity);
+          target.approvedQuantity = num(row.approvedQuantity);
+        }
+      });
+    } else if (data.approvedQuantity != null && indent.items[0]) {
+      // Legacy single-product approval.
+      indent.items[0].revisedQuantity = num(data.revisedQuantity);
+      indent.items[0].approvedQuantity = num(data.approvedQuantity);
+    }
+    mirrorLegacy(indent); // refresh aggregate approved/revised quantities
+
     indent.approvalStatus = INDENT_APPROVAL_STATUS.APPROVED;
     indent.approval = {
       approvedBy: data.approvedBy || user?.name || '',
@@ -128,7 +203,7 @@ export const indentService = {
       plannedAt: indent.quoteStep?.plannedAt || new Date(),
     };
     indent.updatedBy = user?._id;
-    indent.activityTimeline.push({ action: 'APPROVE', description: `Indent approved (qty ${data.approvedQuantity})`, actorId: user?._id });
+    indent.activityTimeline.push({ action: 'APPROVE', description: `Indent approved (total qty ${indent.approvedQuantity})`, actorId: user?._id });
     return indent.save();
   },
 

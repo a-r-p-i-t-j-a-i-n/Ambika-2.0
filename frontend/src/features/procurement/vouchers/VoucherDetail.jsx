@@ -24,6 +24,7 @@ import TallyEntryFormDialog from '../tally-entry/TallyEntryFormDialog';
 import { TallyStatusChip, CHECKLIST_TOTAL, checklistProgress } from '../tally-entry/tallyMeta';
 import FinalPaymentFormDialog from '../final-payments/FinalPaymentFormDialog';
 import { PaymentStatusChip } from '../final-payments/paymentMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -252,7 +253,7 @@ const VoucherDetail = () => {
           <Grid container spacing={2}>
             <Grid item xs={6}><TextField fullWidth size="small" type="number" label="Paid Amount" value={postForm.paidAmount} onChange={(e) => setPostForm((f) => ({ ...f, paidAmount: e.target.value }))} InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }} /></Grid>
             <Grid item xs={6}><TextField select fullWidth size="small" label="Mode" value={postForm.paymentMode} onChange={(e) => setPostForm((f) => ({ ...f, paymentMode: e.target.value }))}>{PAYMENT_MODES.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}</TextField></Grid>
-            <Grid item xs={6}><TextField fullWidth size="small" type="date" label="Payment Date" InputLabelProps={{ shrink: true }} value={postForm.paymentDate} onChange={(e) => setPostForm((f) => ({ ...f, paymentDate: e.target.value }))} /></Grid>
+            <Grid item xs={6}><DateInputDDMMYYYY fullWidth size="small" label="Payment Date" value={postForm.paymentDate} onChange={(val) => setPostForm((f) => ({ ...f, paymentDate: val }))} /></Grid>
             <Grid item xs={6}><TextField fullWidth size="small" label="Reference No" value={postForm.referenceNumber} onChange={(e) => setPostForm((f) => ({ ...f, referenceNumber: e.target.value }))} /></Grid>
             <Grid item xs={12}><TextField fullWidth size="small" multiline minRows={2} label="Remarks" value={postForm.remarks} onChange={(e) => setPostForm((f) => ({ ...f, remarks: e.target.value }))} /></Grid>
             <Grid item xs={12}>

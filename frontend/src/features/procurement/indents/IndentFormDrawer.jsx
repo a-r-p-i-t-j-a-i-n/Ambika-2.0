@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, TextField, Button, IconButton, Divider,
-  Grid, MenuItem, Autocomplete, CircularProgress, Tooltip,
+  Grid, MenuItem, Autocomplete, CircularProgress, Tooltip, Paper,
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
-import { X, Save, ClipboardList, Plus } from 'lucide-react';
+import { alpha } from '@mui/material/styles';
+import { X, Save, ClipboardList, Plus, Trash2 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useCreateIndentMutation,
@@ -23,19 +24,38 @@ const ITEM_TYPES = [
 ];
 
 /**
- * Create / edit a Purchase Indent.
+ * Create / edit a Purchase Indent (multi-item).
  * Editing is only allowed while the indent is a DRAFT (backend enforces this).
  */
-const blankForm = () => ({
-  productNameRevised: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs',
-  raisedBy: '', department: 'Stores',
-});
+const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', unit: 'Pcs', quantity: '', remarks: '' });
+const blankHeader = () => ({ raisedBy: '', department: 'Stores', remarks: '' });
+
+// Map an existing indent (new items[] or legacy single-product) → editable rows.
+const rowsFromIndent = (indent) => {
+  if (indent?.items?.length) {
+    return indent.items.map((it) => ({
+      itemName: it.itemName || '', skuCode: it.skuCode || '', skuId: it.skuId || '',
+      unit: normalizeUnit(it.unit) || 'Pcs', quantity: it.quantity ?? '', remarks: it.remarks || '',
+    }));
+  }
+  if (indent?.productNameRevised) {
+    return [{
+      itemName: indent.productNameRevised, skuCode: indent.skuCode || '', skuId: indent.skuId || '',
+      unit: normalizeUnit(indent.unit) || 'Pcs', quantity: indent.quantity ?? '', remarks: '',
+    }];
+  }
+  return [emptyItem()];
+};
+
+const HEAD = ['Product *', 'SKU', 'Qty *', 'Unit *', 'Remarks', ''];
+const COLS = { xs: '1fr', md: '2fr 1fr 0.8fr 0.9fr 1.5fr 40px' };
 
 const IndentFormDrawer = ({ open, onClose, indent = null }) => {
   const { enqueueSnackbar } = useSnackbar();
   const isEdit = Boolean(indent?._id);
 
-  const [form, setForm] = useState(blankForm());
+  const [header, setHeader] = useState(blankHeader());
+  const [items, setItems] = useState([emptyItem()]);
   const [errors, setErrors] = useState({});
 
   const [createIndent, { isLoading: creating }] = useCreateIndentMutation();
@@ -56,7 +76,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
   const [newSku, setNewSku] = useState({ name: '', code: '', unit: 'Pcs', itemType: 'RAW_MATERIAL' });
 
   const openAddProduct = () => {
-    setNewSku({ name: form.productNameRevised || '', code: '', unit: form.unit || 'Pcs', itemType: 'RAW_MATERIAL' });
+    setNewSku({ name: '', code: '', unit: 'Pcs', itemType: 'RAW_MATERIAL' });
     setAddOpen(true);
   };
 
@@ -73,14 +93,19 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
         itemType: newSku.itemType,
       }).unwrap();
       const sku = res?.data || {};
-      // Auto-select the freshly created product on the indent form.
-      setForm((f) => ({
-        ...f,
-        productNameRevised: sku.name || newSku.name.trim(),
-        skuCode: sku.code || newSku.code.trim().toUpperCase(),
-        skuId: sku._id || '',
-        unit: normalizeUnit(sku.unit) || newSku.unit || f.unit,
-      }));
+      // Append the freshly created product as a new indent row.
+      setItems((cur) => {
+        const row = {
+          ...emptyItem(),
+          itemName: sku.name || newSku.name.trim(),
+          skuCode: sku.code || newSku.code.trim().toUpperCase(),
+          skuId: sku._id || '',
+          unit: normalizeUnit(sku.unit) || newSku.unit || 'Pcs',
+        };
+        // Reuse a trailing empty row if present, else append.
+        const onlyTrailingEmpty = cur.length && !cur[cur.length - 1].itemName?.trim();
+        return onlyTrailingEmpty ? [...cur.slice(0, -1), row] : [...cur, row];
+      });
       enqueueSnackbar('Product added to SKU master', { variant: 'success' });
       setAddOpen(false);
     } catch (err) {
@@ -91,42 +116,47 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
   useEffect(() => {
     if (!open) return;
     if (indent) {
-      setForm({
-        productNameRevised: indent.productNameRevised || '',
-        skuCode: indent.skuCode || '',
-        skuId: indent.skuId || '',
-        quantity: indent.quantity ?? '',
-        unit: normalizeUnit(indent.unit) || 'Pcs',
-        raisedBy: indent.raisedBy || '',
-        department: indent.department || 'Stores',
-      });
+      setHeader({ raisedBy: indent.raisedBy || '', department: indent.department || 'Stores', remarks: indent.remarks || '' });
+      setItems(rowsFromIndent(indent));
     } else {
-      setForm(blankForm());
+      setHeader(blankHeader());
+      setItems([emptyItem()]);
     }
     setErrors({});
   }, [open, indent]);
 
-  const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const setHead = (k, v) => setHeader((h) => ({ ...h, [k]: v }));
+  const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+  const addRow = () => setItems((cur) => [...cur, emptyItem()]);
+  const removeRow = (idx) => setItems((cur) => (cur.length > 1 ? cur.filter((_, i) => i !== idx) : cur));
 
   const validate = () => {
     const e = {};
-    if (!form.productNameRevised.trim()) e.productNameRevised = 'Product name is required';
-    if (form.quantity === '' || Number(form.quantity) <= 0) e.quantity = 'Enter a quantity';
-    if (!form.unit.trim()) e.unit = 'Unit is required';
+    const valid = items.filter((it) => it.itemName.trim() && Number(it.quantity) > 0);
+    if (!valid.length) e.items = 'Add at least one product with a quantity';
+    items.forEach((it, i) => {
+      if (it.itemName.trim() && !(Number(it.quantity) > 0)) e[`qty_${i}`] = true;
+    });
     setErrors(e);
-    return Object.keys(e).length === 0;
+    return !e.items;
   };
 
   const handleSubmit = async () => {
-    if (!validate()) { enqueueSnackbar('Please fix the highlighted fields', { variant: 'warning' }); return; }
+    if (!validate()) { enqueueSnackbar('Add at least one product with a quantity', { variant: 'warning' }); return; }
     const payload = {
-      productNameRevised: form.productNameRevised.trim(),
-      skuCode: form.skuCode.trim(),
-      skuId: form.skuId || undefined,
-      quantity: Number(form.quantity),
-      unit: form.unit.trim(),
-      raisedBy: form.raisedBy.trim(),
-      department: form.department.trim(),
+      items: items
+        .filter((it) => it.itemName.trim() && Number(it.quantity) > 0)
+        .map((it) => ({
+          itemName: it.itemName.trim(),
+          skuCode: it.skuCode.trim(),
+          skuId: it.skuId || undefined,
+          quantity: Number(it.quantity),
+          unit: it.unit.trim() || 'Pcs',
+          remarks: it.remarks.trim(),
+        })),
+      raisedBy: header.raisedBy.trim(),
+      department: header.department.trim(),
+      remarks: header.remarks.trim(),
     };
     try {
       if (isEdit) {
@@ -142,8 +172,10 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
     }
   };
 
+  const totalQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
       PaperProps={{ sx: { borderRadius: { xs: 0, sm: '18px' }, display: 'flex', flexDirection: 'column', maxHeight: '92vh', overflow: 'hidden' } }}>
       {/* Header */}
       <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -155,7 +187,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
               {isEdit ? 'Edit Indent' : 'New Purchase Indent'}
             </Typography>
             <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.8)' }}>
-              {isEdit ? indent.indentNumber : 'Purchase FMS · raise a requirement'}
+              {isEdit ? indent.indentNumber : 'Purchase FMS · raise a multi-item requirement'}
             </Typography>
           </Box>
         </Box>
@@ -163,71 +195,114 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
       </Box>
 
       {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, bgcolor: '#f8fafc' }}>
-        <Grid container spacing={2}>
-          <Grid item xs={12}>
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, bgcolor: '#f8fafc', display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+        {/* Indent header */}
+        <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' }}>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={5}>
               <Autocomplete
-                sx={{ flexGrow: 1 }}
                 freeSolo
-                options={skuOptions}
-                loading={skusLoading}
-                getOptionLabel={(o) => (typeof o === 'string' ? o : o.name || '')}
-                value={form.productNameRevised}
-                onInputChange={(_e, v, reason) => { if (reason === 'input') setField('productNameRevised', v); }}
-                onChange={(_e, val) => {
-                  if (val && typeof val === 'object') {
-                    setForm((f) => ({ ...f, productNameRevised: val.name, skuCode: val.code, skuId: val._id, unit: normalizeUnit(val.unit) || f.unit }));
-                  }
-                }}
+                options={employeeNames}
+                loading={empLoading}
+                value={header.raisedBy}
+                onInputChange={(_e, v) => setHead('raisedBy', v)}
                 renderInput={(params) => (
-                  <TextField {...params} label="Product Name (Revised) *" error={!!errors.productNameRevised}
-                    helperText={errors.productNameRevised || "Pick from SKU master, type freely, or click + to add a new product"}
-                    InputProps={{ ...params.InputProps, endAdornment: (<>{skusLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
+                  <TextField {...params} label="Raised By" placeholder="Select employee or type"
+                    InputProps={{ ...params.InputProps, endAdornment: (<>{empLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
                 )}
               />
-              <Tooltip title="Add a new product to SKU master">
-                <Button variant="outlined" onClick={openAddProduct} sx={{ minWidth: 0, px: 1.5, height: 40, mt: 0.25 }}>
-                  <Plus size={18} />
-                </Button>
-              </Tooltip>
+            </Grid>
+            <Grid item xs={12} sm={3}>
+              <TextField label="Department" select fullWidth value={header.department}
+                onChange={(e) => setHead('department', e.target.value)}>
+                {DEPARTMENTS.map((d) => <MenuItem key={d} value={d}>{d}</MenuItem>)}
+              </TextField>
+            </Grid>
+            <Grid item xs={12} sm={4}>
+              <TextField label="Remarks" fullWidth value={header.remarks}
+                onChange={(e) => setHead('remarks', e.target.value)} placeholder="Optional" />
+            </Grid>
+          </Grid>
+        </Paper>
+
+        {/* Items */}
+        <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+            <Typography sx={{ fontWeight: 700, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ClipboardList size={18} /> Indent Items
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button size="small" variant="outlined" startIcon={<Plus size={15} />} onClick={openAddProduct}>New Product</Button>
+              <Button size="small" variant="contained" startIcon={<Plus size={15} />} onClick={addRow}>Add Item</Button>
             </Box>
-          </Grid>
-          <Grid item xs={12} sm={6}>
-            <TextField label="SKU Code" fullWidth value={form.skuCode}
-              onChange={(e) => setField('skuCode', e.target.value.toUpperCase())} placeholder="Optional" />
-          </Grid>
-          <Grid item xs={6} sm={3}>
-            <TextField label="Quantity *" type="number" fullWidth value={form.quantity}
-              onChange={(e) => setField('quantity', e.target.value)} error={!!errors.quantity} helperText={errors.quantity}
-              inputProps={{ min: 0 }} />
-          </Grid>
-          <Grid item xs={6} sm={3}>
-            <TextField label="Unit *" select fullWidth value={form.unit}
-              onChange={(e) => setField('unit', e.target.value)} error={!!errors.unit}>
-              {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
-            </TextField>
-          </Grid>
-          <Grid item xs={12} sm={6}>
-            <Autocomplete
-              freeSolo
-              options={employeeNames}
-              loading={empLoading}
-              value={form.raisedBy}
-              onInputChange={(_e, v) => setField('raisedBy', v)}
-              renderInput={(params) => (
-                <TextField {...params} label="Raised By" placeholder="Select employee or type"
-                  InputProps={{ ...params.InputProps, endAdornment: (<>{empLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
-              )}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6}>
-            <TextField label="Department" select fullWidth value={form.department}
-              onChange={(e) => setField('department', e.target.value)}>
-              {DEPARTMENTS.map((d) => <MenuItem key={d} value={d}>{d}</MenuItem>)}
-            </TextField>
-          </Grid>
-        </Grid>
+          </Box>
+
+          {/* Column heads (desktop) */}
+          <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: COLS.md, gap: 1, px: 1, mb: 0.5 }}>
+            {HEAD.map((h, i) => (
+              <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
+            ))}
+          </Box>
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {items.map((it, idx) => (
+              <Box key={idx} sx={{
+                display: 'grid', gridTemplateColumns: COLS, gap: 1, alignItems: 'center',
+                p: { xs: 1.5, md: 0.5 }, px: { md: 1 }, borderRadius: '10px',
+                border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
+                '&:hover': { bgcolor: { md: alpha('#2563eb', 0.03) } },
+              }}>
+                <Autocomplete
+                  size="small"
+                  freeSolo
+                  options={skuOptions}
+                  loading={skusLoading}
+                  getOptionLabel={(o) => (typeof o === 'string' ? o : o.name || '')}
+                  value={it.itemName}
+                  onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
+                  onChange={(_e, val) => {
+                    if (val && typeof val === 'object') {
+                      setItem(idx, { itemName: val.name, skuCode: val.code || '', skuId: val._id || '', unit: normalizeUnit(val.unit) || it.unit });
+                    }
+                  }}
+                  renderInput={(params) => (
+                    <TextField {...params} placeholder="Product name" />
+                  )}
+                />
+                <TextField size="small" placeholder="SKU" value={it.skuCode}
+                  onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
+                <TextField size="small" type="number" placeholder="0" value={it.quantity} error={!!errors[`qty_${idx}`]}
+                  onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} />
+                <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
+                  {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+                </TextField>
+                <TextField size="small" placeholder="Optional" value={it.remarks}
+                  onChange={(e) => setItem(idx, { remarks: e.target.value })} />
+                <Tooltip title={items.length > 1 ? 'Remove item' : 'At least one item required'}>
+                  <span>
+                    <IconButton size="small" color="error" onClick={() => removeRow(idx)} disabled={items.length <= 1}>
+                      <Trash2 size={16} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Box>
+            ))}
+          </Box>
+
+          {errors.items && <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>{errors.items}</Typography>}
+
+          <Divider sx={{ my: 2 }} />
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
+            <Box sx={{ textAlign: 'right' }}>
+              <Typography variant="caption" color="text.secondary" fontWeight={700}>ITEMS</Typography>
+              <Typography fontWeight={800}>{items.filter((it) => it.itemName.trim()).length}</Typography>
+            </Box>
+            <Box sx={{ textAlign: 'right' }}>
+              <Typography variant="caption" color="text.secondary" fontWeight={700}>TOTAL QTY</Typography>
+              <Typography variant="h6" fontWeight={800} color="primary.dark">{totalQty}</Typography>
+            </Box>
+          </Box>
+        </Paper>
       </Box>
 
       {/* Footer */}

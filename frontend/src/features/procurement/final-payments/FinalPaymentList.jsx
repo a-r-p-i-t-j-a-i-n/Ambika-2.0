@@ -17,6 +17,7 @@ import {
   useCancelFinalPaymentMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { fileHref } from '../indents/indentMeta';
 import { PaymentStatusChip, PAYMENT_STATUSES, paymentModeLabel, fmtINR, fmtDate } from './paymentMeta';
 import FinalPaymentFormDialog from './FinalPaymentFormDialog';
@@ -115,8 +116,8 @@ const FinalPaymentList = () => {
           <MenuItem value="">All</MenuItem>
           {PAYMENT_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>

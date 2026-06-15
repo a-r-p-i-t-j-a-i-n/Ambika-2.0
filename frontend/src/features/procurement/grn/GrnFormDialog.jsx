@@ -14,6 +14,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel } from './grnMeta';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Create / edit a Goods Receipt Note (Step 1.8).
@@ -45,9 +46,10 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
   const [previewUrl, setPreviewUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
 
-  // Only READY_FOR_GRN + PAYMENT_COMPLETED POs (server filters; we drop fully-received).
+  // READY_FOR_GRN POs whose PI step is settled — payment completed OR PI marked
+  // Not Required (comma list → server $in). We drop fully-received below.
   const { data: posRes, isLoading: posLoading } = useGetPurchaseOrdersQuery(
-    { limit: 200, sort: '-releasedAt', followUpStatus: 'READY_FOR_GRN', piStatus: 'PAYMENT_COMPLETED' },
+    { limit: 200, sort: '-releasedAt', followUpStatus: 'READY_FOR_GRN', piStatus: 'PAYMENT_COMPLETED,PI_NOT_REQUIRED' },
     { skip: !open || isEdit },
   );
   const poOptions = (posRes?.data || []).filter((p) => p.poStatus !== 'FULLY_RECEIVED' && p.poStatus !== 'CANCELLED');
@@ -101,6 +103,11 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
   }, { invoice: 0, received: 0, value: 0 }), [items]);
 
   const validItems = items.filter((it) => round2(it.receivedQty) > 0);
+
+  // Highlight the header Remarks field — and escalate it to a required/warning
+  // state when an over-pending (extra) receipt has no remark of its own.
+  const extraNeedsRemark = validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore) && !it.remarks?.trim());
+  const remarksRequired = extraNeedsRemark && !header.remarks.trim();
 
   const validateForm = () => {
     if (!isEdit && !po?._id) { enqueueSnackbar('Select an eligible PO first', { variant: 'warning' }); return false; }
@@ -220,8 +227,8 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
               )}
             </Grid>
             <Grid item xs={6} sm={3.5}>
-              <TextField label="GRN Date" type="date" fullWidth value={header.grnDate}
-                onChange={(e) => setHeader((h) => ({ ...h, grnDate: e.target.value }))} InputLabelProps={{ shrink: true }} />
+              <DateInputDDMMYYYY label="GRN Date" fullWidth value={header.grnDate}
+                onChange={(val) => setHeader((h) => ({ ...h, grnDate: val }))} />
             </Grid>
             <Grid item xs={6} sm={3.5}>
               <TextField label="How Item Received" select fullWidth value={header.howItemReceived}
@@ -231,7 +238,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
             </Grid>
             <Grid item xs={6} sm={3}><TextField label="Challan No" fullWidth value={header.challanNumber} onChange={(e) => setHeader((h) => ({ ...h, challanNumber: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Invoice No" fullWidth value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} /></Grid>
-            <Grid item xs={6} sm={3}><TextField label="Invoice Date" type="date" fullWidth value={header.invoiceDate} onChange={(e) => setHeader((h) => ({ ...h, invoiceDate: e.target.value }))} InputLabelProps={{ shrink: true }} /></Grid>
+            <Grid item xs={6} sm={3}><DateInputDDMMYYYY label="Invoice Date" fullWidth value={header.invoiceDate} onChange={(val) => setHeader((h) => ({ ...h, invoiceDate: val }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Vehicle No" fullWidth value={header.vehicleNumber} onChange={(e) => setHeader((h) => ({ ...h, vehicleNumber: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
@@ -312,8 +319,30 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
           )}
         </Paper>
 
-        <TextField label="Remarks" fullWidth value={header.remarks}
-          onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} sx={{ bgcolor: '#fff' }} />
+        <TextField
+          label="Remarks"
+          fullWidth
+          multiline
+          minRows={2}
+          value={header.remarks}
+          onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))}
+          error={remarksRequired}
+          placeholder="Add any notes about this receipt…"
+          helperText={remarksRequired
+            ? 'Remarks are required when receiving more than the pending quantity'
+            : 'Required for extra receipts'}
+          sx={{
+            bgcolor: remarksRequired ? alpha('#b45309', 0.06) : alpha('#2563eb', 0.05),
+            borderRadius: '12px',
+            '& .MuiOutlinedInput-root fieldset': {
+              borderColor: remarksRequired ? '#b45309' : '#2563eb',
+              borderWidth: 2,
+            },
+            '& .MuiInputLabel-root': {
+              fontWeight: 700,
+              color: remarksRequired ? '#b45309' : 'primary.main',
+            },
+          }} />
       </Box>
 
       {/* Footer */}

@@ -9,36 +9,65 @@ import {
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
-// ── Create (saved as DRAFT) ──────────────────────────────────
-export const createIndentSchema = Joi.object({
-  productNameRevised: Joi.string().trim().min(1).max(300).required(),
-  skuCode:            Joi.string().trim().max(60).allow('', null),
-  skuId:              objectId.allow('', null),
-  quantity:           Joi.number().min(0).required(),
-  unit:               Joi.string().trim().max(30).required(),
-  raisedBy:           Joi.string().trim().max(120).allow('', null),
-  department:         Joi.string().trim().max(80).allow('', null),
-  timestamp:          Joi.date().optional(),
+// ── Indent line item ─────────────────────────────────────────
+const indentItem = Joi.object({
+  _id:              Joi.string().optional(),
+  skuId:            objectId.allow('', null),
+  skuCode:          Joi.string().trim().max(60).allow('', null),
+  itemName:         Joi.string().trim().min(1).max(300).required(),
+  quantity:         Joi.number().min(0).required(),
+  unit:             Joi.string().trim().max(30).allow('', null).default('Pcs'),
+  revisedQuantity:  Joi.number().min(0).default(0),
+  approvedQuantity: Joi.number().min(0).default(0),
+  remarks:          Joi.string().trim().max(500).allow('', null),
 });
 
-// ── Update (only meaningful while DRAFT; service guards that) ──
-export const updateIndentSchema = Joi.object({
+// ── Create (saved as DRAFT) ──────────────────────────────────
+// Accepts the multi-item shape; legacy single-product fields are still allowed
+// for backward compatibility (the service synthesises one item from them).
+export const createIndentSchema = Joi.object({
+  items:              Joi.array().items(indentItem).min(1),
+  raisedBy:           Joi.string().trim().max(120).allow('', null),
+  department:         Joi.string().trim().max(80).allow('', null),
+  remarks:            Joi.string().trim().max(1000).allow('', null),
+  timestamp:          Joi.date().optional(),
+  // legacy single-product (back-compat)
   productNameRevised: Joi.string().trim().min(1).max(300),
   skuCode:            Joi.string().trim().max(60).allow('', null),
   skuId:              objectId.allow('', null),
   quantity:           Joi.number().min(0),
   unit:               Joi.string().trim().max(30),
+}).or('items', 'productNameRevised');
+
+// ── Update (only meaningful while DRAFT; service guards that) ──
+export const updateIndentSchema = Joi.object({
+  items:              Joi.array().items(indentItem).min(1),
   raisedBy:           Joi.string().trim().max(120).allow('', null),
   department:         Joi.string().trim().max(80).allow('', null),
+  remarks:            Joi.string().trim().max(1000).allow('', null),
+  // legacy single-product (back-compat)
+  productNameRevised: Joi.string().trim().min(1).max(300),
+  skuCode:            Joi.string().trim().max(60).allow('', null),
+  skuId:              objectId.allow('', null),
+  quantity:           Joi.number().min(0),
+  unit:               Joi.string().trim().max(30),
 }).min(1);
 
 // ── Approve ──────────────────────────────────────────────────
+// Per-item approved/revised quantities; legacy single scalar still accepted.
 export const approveIndentSchema = Joi.object({
-  revisedQuantity:  Joi.number().min(0).default(0),
-  approvedQuantity: Joi.number().min(0).required(),
+  items: Joi.array().items(Joi.object({
+    _id:              Joi.string().optional(),
+    itemName:         Joi.string().trim().max(300).allow('', null),
+    skuCode:          Joi.string().trim().max(60).allow('', null),
+    revisedQuantity:  Joi.number().min(0).default(0),
+    approvedQuantity: Joi.number().min(0).required(),
+  })),
+  revisedQuantity:  Joi.number().min(0),
+  approvedQuantity: Joi.number().min(0),
   approvedBy:       Joi.string().trim().max(120).allow('', null),
   remarks:          Joi.string().trim().max(1000).allow('', null),
-});
+}).or('items', 'approvedQuantity');
 
 // ── Reject ───────────────────────────────────────────────────
 export const rejectIndentSchema = Joi.object({

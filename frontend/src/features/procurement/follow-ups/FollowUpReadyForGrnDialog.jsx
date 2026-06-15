@@ -6,6 +6,7 @@ import {
 import { PackageCheck } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useMarkReadyForGrnMutation } from '../../../store/api/procurementApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -51,8 +52,8 @@ const FollowUpReadyForGrnDialog = ({ open, onClose, followUp }) => {
         </Alert>
         <Grid container spacing={2}>
           <Grid item xs={12}>
-            <TextField label="Final Material Date" type="date" fullWidth value={finalMaterialDate}
-              onChange={(e) => setFinalMaterialDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Final Material Date" fullWidth value={finalMaterialDate}
+              onChange={setFinalMaterialDate} />
           </Grid>
           <Grid item xs={12}>
             <TextField label="Remarks" fullWidth multiline minRows={2} value={remarks}

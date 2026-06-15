@@ -12,6 +12,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { PAYMENT_MODES, fmtINR } from './voucherMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const emptyForm = {
   invoiceId: '', paymentDate: '', paymentMode: 'NEFT', paidAmount: '',
@@ -143,7 +144,7 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
             </Grid>
           )}
 
-          <Grid item xs={6}><TextField fullWidth size="small" type="date" label="Payment Date" InputLabelProps={{ shrink: true }} value={form.paymentDate} onChange={set('paymentDate')} /></Grid>
+          <Grid item xs={6}><DateInputDDMMYYYY fullWidth size="small" label="Payment Date" value={form.paymentDate} onChange={(val) => setForm((f) => ({ ...f, paymentDate: val }))} /></Grid>
           <Grid item xs={6}>
             <TextField select fullWidth size="small" label="Payment Mode" value={form.paymentMode} onChange={set('paymentMode')}>
               {PAYMENT_MODES.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}

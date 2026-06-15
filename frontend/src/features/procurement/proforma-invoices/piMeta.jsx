@@ -27,6 +27,7 @@ const PO_PI_META = {
   PI_APPROVED:               { label: 'PI Approved',       color: 'success' },
   READY_FOR_ADVANCE_PAYMENT: { label: 'Ready For Payment', color: 'success' },
   PAYMENT_COMPLETED:         { label: 'Payment Completed', color: 'success' },
+  PI_NOT_REQUIRED:           { label: 'PI Not Required',   color: 'info' },
 };
 
 const pick = (map, key) => map[key] || { label: key || '—', color: 'default' };

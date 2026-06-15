@@ -69,29 +69,84 @@ export const buildGrnPdfBuffer = (grn, company = {}) => new Promise((resolve, re
     const W = 595.28 - M * 2;
     const navy = '#0b2545'; const blue = '#1d4ed8'; const line = '#dbe4f3';
 
-    doc.rect(0, 0, 595.28, 78).fill(navy);
-    doc.fill('#ffffff').font('Helvetica-Bold').fontSize(17).text(company.name || env.COMPANY_NAME, M, 16);
-    doc.font('Helvetica').fontSize(8.5).fill('#cdd9f0')
-      .text([company.address || env.COMPANY_ADDRESS, company.gstin ? `GSTIN: ${company.gstin}` : '', company.email || env.COMPANY_EMAIL].filter(Boolean).join('   •   '), M, 40, { width: W - 170 });
-    doc.font('Helvetica-Bold').fontSize(12).fill('#ffffff').text('GOODS RECEIVING & INSPECTION REPORT', M, 36, { width: W, align: 'right' });
+    // ── Header band: two fixed columns — company info (left ~58%), title (right) ──
+    // The band is measured first so the company address wraps within the left
+    // column and never overlaps the right-aligned report title.
+    const PW = 595.28;
+    const leftX = M;
+    const leftW = 300;                       // left column (company) — wraps here only
+    const titleX = M + 312;                  // 12px gutter after the left column
+    const titleW = PW - M - titleX;          // right column (title) — wraps here only
+    const padTop = 16;
 
-    let y = 96;
+    const nameStr = company.name || env.COMPANY_NAME || '';
+    const addrStr = company.address || env.COMPANY_ADDRESS || '';
+    const gstStr = company.gstin ? `GSTIN: ${company.gstin}` : '';
+    const emailStr = company.email || env.COMPANY_EMAIL || '';
+    const TITLE = 'GOODS RECEIVING & INSPECTION REPORT';
+
+    const nameH = doc.font('Helvetica-Bold').fontSize(16).heightOfString(nameStr, { width: leftW });
+    doc.font('Helvetica').fontSize(8.5);
+    const addrH = addrStr ? doc.heightOfString(addrStr, { width: leftW }) : 0;
+    const titleH = doc.font('Helvetica-Bold').fontSize(14).heightOfString(TITLE, { width: titleW, align: 'right' });
+
+    let leftBottom = padTop + nameH + 4 + addrH;
+    if (gstStr) leftBottom += 12;
+    if (emailStr) leftBottom += 12;
+    const HEADER_H = Math.max(90, leftBottom, padTop + titleH) + 12;
+
+    doc.rect(0, 0, PW, HEADER_H).fill(navy);
+    // Left column — name + wrapping address + gstin + email.
+    doc.fill('#ffffff').font('Helvetica-Bold').fontSize(16).text(nameStr, leftX, padTop, { width: leftW });
+    let hy = padTop + nameH + 4;
+    doc.font('Helvetica').fontSize(8.5).fill('#cdd9f0');
+    if (addrStr)  { doc.text(addrStr, leftX, hy, { width: leftW }); hy += addrH; }
+    if (gstStr)   { doc.text(gstStr, leftX, hy, { width: leftW }); hy += 12; }
+    if (emailStr) { doc.text(emailStr, leftX, hy, { width: leftW }); hy += 12; }
+    // Right column — report title (right-aligned, vertically centred in the band).
+    doc.font('Helvetica-Bold').fontSize(14).fill('#ffffff')
+      .text(TITLE, titleX, Math.max(padTop, (HEADER_H - titleH) / 2), { width: titleW, align: 'right' });
+
+    let y = HEADER_H + 16;
     const half = W / 2 - 8;
-    doc.roundedRect(M, y, half, 84, 6).stroke(line);
-    doc.roundedRect(M + half + 16, y, half, 84, 6).stroke(line);
-    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('GRN DETAILS', M + 10, y + 8);
-    doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(grn.grnNumber || '', M + 10, y + 21);
+    // ── GRN details + supplier cards — both sized to the taller column so the
+    // supplier address can wrap fully instead of being clipped. ──
+    const cardTop = y;
+    const liX = M + 10;
+    const riX = M + half + 16 + 10;
+    const cardInnerW = half - 20;
+
+    // Measure the supplier (right) column — vendor name + wrapping address.
+    const vNameH = doc.font('Helvetica-Bold').fontSize(10.5).heightOfString(grn.vendorName || '—', { width: cardInnerW });
+    doc.font('Helvetica').fontSize(8.5);
+    const vAddrStr = grn.vendorAddress || '';
+    const vAddrH = vAddrStr ? doc.heightOfString(vAddrStr, { width: cardInnerW - 42 }) : 11;
+
+    const leftBottomY = 66 + 13;                                  // last GRN line bottom
+    const rightBottomY = 22 + vNameH + 4 + 12 + Math.max(11, vAddrH);
+    const cardH = Math.max(86, leftBottomY, rightBottomY) + 8;
+
+    doc.roundedRect(M, cardTop, half, cardH, 6).stroke(line);
+    doc.roundedRect(M + half + 16, cardTop, half, cardH, 6).stroke(line);
+
+    // LEFT — GRN DETAILS
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('GRN DETAILS', liX, cardTop + 9);
+    doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(grn.grnNumber || '', liX, cardTop + 22, { width: cardInnerW });
     doc.font('Helvetica').fontSize(8.5).fill(navy)
-      .text(`Date: ${fmtDate(grn.grnDate)}`, M + 10, y + 38)
-      .text(`PO No: ${grn.poNumber || '—'}`, M + 10, y + 51)
-      .text(`Challan No: ${grn.challanNumber || '—'}`, M + 10, y + 64);
-    const vx = M + half + 26;
-    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('SUPPLIER', vx, y + 8);
-    doc.font('Helvetica-Bold').fontSize(10.5).fill(navy).text(grn.vendorName || '—', vx, y + 21, { width: half - 20 });
-    doc.font('Helvetica').fontSize(8.5).fill(navy)
-      .text(`GST: ${grn.vendorGST || '—'}`, vx, y + 38, { width: half - 20 })
-      .text(`${grn.vendorAddress || ''}`, vx, y + 51, { width: half - 20, height: 24, ellipsis: true });
-    y += 98;
+      .text(`Date: ${fmtDate(grn.grnDate)}`, liX, cardTop + 40)
+      .text(`PO No: ${grn.poNumber || '—'}`, liX, cardTop + 53)
+      .text(`Challan No: ${grn.challanNumber || '—'}`, liX, cardTop + 66);
+
+    // RIGHT — SUPPLIER (fixed label column → labels + values align, address wraps)
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('SUPPLIER', riX, cardTop + 9);
+    let ry = cardTop + 22;
+    doc.font('Helvetica-Bold').fontSize(10.5).fill(navy).text(grn.vendorName || '—', riX, ry, { width: cardInnerW }); ry += vNameH + 4;
+    const sLabelW = 42, sValX = riX + sLabelW, sValW = cardInnerW - sLabelW;
+    doc.font('Helvetica').fontSize(8.5);
+    doc.fill('#475a8a').text('GST', riX, ry); doc.fill(navy).text(grn.vendorGST || '—', sValX, ry, { width: sValW }); ry += 12;
+    doc.fill('#475a8a').text('Address', riX, ry); doc.fill(navy).text(vAddrStr || '—', sValX, ry, { width: sValW });
+
+    y = cardTop + cardH + 14;
 
     // Items table.
     const cols = [
@@ -108,15 +163,34 @@ export const buildGrnPdfBuffer = (grn, company = {}) => new Promise((resolve, re
       y += 20;
     };
     drawHead();
-    doc.font('Helvetica').fontSize(8.5).fill(navy);
+    const nameCol = cols.find((c) => c.key === 'name');
+    const PADY = 5;
     (grn.items || []).forEach((it, i) => {
-      if (y > 720) { doc.addPage(); y = M; drawHead(); doc.font('Helvetica').fontSize(8.5).fill(navy); }
-      const rowH = 18;
+      // Measure the description: item name (primary) + optional batch line
+      // (secondary). Row height auto-adjusts so long names wrap cleanly.
+      const itemName = it.itemName || '';
+      const batchStr = it.batchNo ? `Batch: ${it.batchNo}` : '';
+      doc.font('Helvetica').fontSize(8.5);
+      const nameH = doc.heightOfString(itemName, { width: nameCol.w - 8 });
+      const batchH = batchStr ? 10 : 0;
+      const rowH = Math.max(18, nameH + batchH + PADY * 2 - 2);
+
+      if (y + rowH > 770) { doc.addPage(); y = M; drawHead(); }
       if (i % 2 === 1) doc.rect(M, y, W, rowH).fill('#f8fafc');
-      doc.fill(navy);
+
+      const cells = { sr: String(i + 1), invoice: String(it.invoiceQty || 0), received: String(it.receivedQty || 0), unit: it.unit || 'Pcs' };
       let x = M;
-      const cells = { sr: String(i + 1), name: `${it.itemName}${it.batchNo ? `  [Batch: ${it.batchNo}]` : ''}`, invoice: String(it.invoiceQty || 0), received: String(it.receivedQty || 0), unit: it.unit || 'Pcs' };
-      cols.forEach((c) => { doc.text(cells[c.key], x + 4, y + 5, { width: c.w - 8, align: c.align, ellipsis: true }); x += c.w; });
+      cols.forEach((c) => {
+        if (c.key === 'name') {
+          doc.font('Helvetica').fontSize(8.5).fill(navy).text(itemName, x + 4, y + PADY, { width: c.w - 8 });
+          if (batchStr) {
+            doc.font('Helvetica').fontSize(7).fill('#64748b').text(batchStr, x + 8, y + PADY + nameH + 1, { width: c.w - 12 });
+          }
+        } else {
+          doc.font('Helvetica').fontSize(8.5).fill(navy).text(cells[c.key], x + 4, y + PADY, { width: c.w - 8, align: c.align, ellipsis: true });
+        }
+        x += c.w;
+      });
       doc.moveTo(M, y + rowH).lineTo(M + W, y + rowH).strokeColor(line).lineWidth(0.5).stroke();
       y += rowH;
     });
@@ -141,9 +215,11 @@ export const grnService = {
     const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } });
     if (!po) throw new AppError('Purchase Order not found', 404);
 
-    // Rule 1: gate — material followed up to READY_FOR_GRN AND advance payment complete.
-    if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || po.piStatus !== PO_PI_STATUS.PAYMENT_COMPLETED) {
-      throw new AppError('GRN can only be created when the PO is READY_FOR_GRN and its advance payment is completed', 400);
+    // Rule 1: gate — material followed up to READY_FOR_GRN AND the PI step is
+    // settled: either advance payment completed, or PI explicitly marked Not Required.
+    const piSettled = [PO_PI_STATUS.PAYMENT_COMPLETED, PO_PI_STATUS.PI_NOT_REQUIRED].includes(po.piStatus);
+    if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || !piSettled) {
+      throw new AppError('GRN can only be created when the PO is READY_FOR_GRN and its PI is completed or marked Not Required', 400);
     }
     if (po.poStatus === PO_STATUS.FULLY_RECEIVED) {
       throw new AppError('This PO is already fully received', 400);

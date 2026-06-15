@@ -38,6 +38,11 @@ export const purchaseOrderController = {
     res.json(ApiResponse.ok('Purchase order released to vendor', po));
   }),
 
+  piNotRequired: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.markPiNotRequired(req.params.id, req.body, req.user);
+    res.json(ApiResponse.ok('PI marked as Not Required', po));
+  }),
+
   cancel: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.cancel(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Purchase order cancelled', po));

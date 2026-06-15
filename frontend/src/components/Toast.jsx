@@ -26,13 +26,19 @@ const VARIANTS = {
 };
 
 const makeToast = (variant) =>
-  forwardRef(function Toast({ id, message, persist, ...props }, ref) {
+  forwardRef(function Toast(props, ref) {
     const { closeSnackbar } = useSnackbar();
+    // Drop notistack-injected props so they aren't forwarded to the DOM node.
+    const {
+      id, message, persist, style, className,
+      // eslint-disable-next-line no-unused-vars
+      variant: _v, iconVariant, hideIconVariant, anchorOrigin, autoHideDuration, action,
+    } = props;
     const { color, Icon } = VARIANTS[variant] || VARIANTS.default;
     const dismiss = useCallback(() => closeSnackbar(id), [id, closeSnackbar]);
 
     return (
-      <SnackbarContent ref={ref} role="alert" {...props}>
+      <SnackbarContent ref={ref} role="alert" style={style} className={className}>
         <Box
           sx={{
             display: 'flex',

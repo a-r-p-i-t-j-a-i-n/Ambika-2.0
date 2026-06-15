@@ -74,6 +74,12 @@ export const cancelPoSchema = Joi.object({
   remarks: Joi.string().trim().max(1000).allow('', null),
 });
 
+// ── Mark PI Not Required (reason mandatory, remarks optional) ──
+export const piNotRequiredSchema = Joi.object({
+  reason:  Joi.string().trim().min(1).max(500).required(),
+  remarks: Joi.string().trim().max(1000).allow('', null),
+});
+
 // ── List query ──
 export const poQuerySchema = Joi.object({
   page:           Joi.number().integer().min(1),

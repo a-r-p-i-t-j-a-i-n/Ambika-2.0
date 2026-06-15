@@ -15,6 +15,7 @@ import {
   useGetVendorInvoiceStatsQuery,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { InvoiceStatusChip, INVOICE_STATUSES, fmtINR, fmtDate } from './invoiceMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
@@ -111,8 +112,8 @@ const VendorInvoiceList = () => {
           <MenuItem value="">All</MenuItem>
           {INVOICE_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>

@@ -7,6 +7,7 @@ import { Wallet, Save } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useCreateAdvancePaymentMutation } from '../../../store/api/procurementApi';
 import { PAYMENT_STATUSES, PAYMENT_MODES, modeLabel, fmtINR } from './apMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Step 1.7 — record an Advance Payment against a PI (Google-form fields).
@@ -116,8 +117,8 @@ const AdvancePaymentFormDialog = ({ open, onClose, pi }) => {
             </TextField>
           </Grid>
           <Grid item xs={12} sm={6}>
-            <TextField label="Amount Date *" type="date" fullWidth value={paymentDate}
-              onChange={(e) => setPaymentDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Amount Date *" fullWidth value={paymentDate}
+              onChange={setPaymentDate} />
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField label={isCancelled ? 'Paid Amount (not posted)' : 'Paid Amount *'} type="number" fullWidth

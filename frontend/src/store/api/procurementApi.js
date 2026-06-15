@@ -86,6 +86,10 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/cancel`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
+    markPoPiNotRequired: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/pi-not-required`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', { type: 'PurchaseOrder', id }],
+    }),
 
     // ── Material Follow-ups (Step 1.5) ───────────────────────
     getFollowUps: builder.query({
@@ -420,6 +424,7 @@ export const {
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,
   useCancelPurchaseOrderMutation,
+  useMarkPoPiNotRequiredMutation,
   useGetFollowUpsQuery,
   useGetFollowUpStatsQuery,
   useGetFollowUpByIdQuery,

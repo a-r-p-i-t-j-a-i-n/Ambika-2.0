@@ -17,6 +17,7 @@ import {
   useCancelIncomingQcMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { QcStatusChip, QcResultChip, QC_STATUSES, QC_RESULTS, fmtDate } from './qcMeta';
 import IncomingQCFormDialog from './IncomingQCFormDialog';
 import IncomingQCCompleteDialog from './IncomingQCCompleteDialog';
@@ -144,8 +145,8 @@ const IncomingQCList = () => {
           <MenuItem value="">All</MenuItem>
           {QC_RESULTS.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>

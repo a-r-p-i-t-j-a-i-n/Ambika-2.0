@@ -12,6 +12,7 @@ import {
   useUpdateIncomingQcMutation,
 } from '../../../store/api/procurementApi';
 import { DEFECT_SEVERITIES } from './qcMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Create / edit an Incoming QC (Step 1.9). Only completed GRNs that are still
@@ -154,7 +155,7 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
                 />
               )}
             </Grid>
-            <Grid item xs={6} sm={2.4}><TextField label="QC Date" type="date" fullWidth value={header.qcDate} onChange={(e) => setHeader((h) => ({ ...h, qcDate: e.target.value }))} InputLabelProps={{ shrink: true }} /></Grid>
+            <Grid item xs={6} sm={2.4}><DateInputDDMMYYYY label="QC Date" fullWidth value={header.qcDate} onChange={(val) => setHeader((h) => ({ ...h, qcDate: val }))} /></Grid>
             <Grid item xs={6} sm={2.3}><TextField label="Checked By" fullWidth value={header.checkedByName} onChange={(e) => setHeader((h) => ({ ...h, checkedByName: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={2.3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
           </Grid>

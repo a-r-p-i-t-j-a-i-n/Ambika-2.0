@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { purchaseOrderController as c } from './purchaseOrder.controller.js';
 import {
@@ -12,6 +13,7 @@ import {
   approvePoSchema,
   releasePoSchema,
   cancelPoSchema,
+  piNotRequiredSchema,
   poQuerySchema,
   mongoIdParamSchema,
 } from './purchaseOrder.validation.js';
@@ -32,5 +34,12 @@ router.route('/:id')
 router.post('/:id/approve', validate(mongoIdParamSchema, 'params'), validate(approvePoSchema), c.approve);
 router.post('/:id/release', validate(mongoIdParamSchema, 'params'), validate(releasePoSchema), c.release);
 router.post('/:id/cancel',  validate(mongoIdParamSchema, 'params'), validate(cancelPoSchema), c.cancel);
+
+// PI is optional but never silently skipped — gated on procurement approval rights.
+router.post('/:id/pi-not-required',
+  requirePermission('procurement.markPiNotRequired', 'procurement.approve'),
+  validate(mongoIdParamSchema, 'params'),
+  validate(piNotRequiredSchema),
+  c.piNotRequired);
 
 export default router;

@@ -12,6 +12,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { CHECKLIST_ITEMS } from './tallyMeta';
 import { fmtINR } from '../vouchers/voucherMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const emptyChecklist = CHECKLIST_ITEMS.reduce((a, i) => ({ ...a, [i.key]: false }), {});
 const emptyForm = {
@@ -127,7 +128,7 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
               </ToggleButtonGroup>
             </Box>
           </Grid>
-          <Grid item xs={6}><TextField fullWidth size="small" type="date" label="Planned Date" InputLabelProps={{ shrink: true }} value={form.plannedAt} onChange={set('plannedAt')} /></Grid>
+          <Grid item xs={6}><DateInputDDMMYYYY fullWidth size="small" label="Planned Date" value={form.plannedAt} onChange={(val) => setForm((f) => ({ ...f, plannedAt: val }))} /></Grid>
 
           <Grid item xs={6}><TextField fullWidth size="small" label="Tally Voucher No" value={form.tallyVoucherNumber} onChange={set('tallyVoucherNumber')} /></Grid>
           <Grid item xs={6}><TextField fullWidth size="small" label="Tally Ledger Name" value={form.tallyLedgerName} onChange={set('tallyLedgerName')} /></Grid>

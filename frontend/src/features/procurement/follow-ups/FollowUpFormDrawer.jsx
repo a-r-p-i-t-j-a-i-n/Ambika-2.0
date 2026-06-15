@@ -12,6 +12,7 @@ import {
   useUpdateFollowUpMutation,
 } from '../../../store/api/procurementApi';
 import { FOLLOWUP_TYPES } from './fuMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Create / edit a Material Follow-up (Step 1.5).
@@ -136,8 +137,8 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
           ) : null}
 
           <Grid item xs={6}>
-            <TextField label="Planned Date *" type="date" fullWidth value={plannedAt}
-              onChange={(e) => setPlannedAt(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Planned Date *" fullWidth value={plannedAt}
+              onChange={setPlannedAt} />
           </Grid>
           <Grid item xs={6}>
             <TextField label="Follow-up Type" select fullWidth value={followUpType}

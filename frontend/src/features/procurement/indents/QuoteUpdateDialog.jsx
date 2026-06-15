@@ -9,6 +9,7 @@ import {
   useReceiveQuoteMutation,
   useApproveQuotationMutation,
 } from '../../../store/api/procurementApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Dual-purpose quote dialog.
@@ -102,8 +103,8 @@ const QuoteUpdateDialog = ({ open, onClose, indent, mode = 'receive' }) => {
               onChange={(e) => setFormLink(e.target.value)} placeholder="https://…" />
           </Grid>
           <Grid item xs={12} sm={5}>
-            <TextField label="Actual Date" type="date" fullWidth value={actualAt}
-              onChange={(e) => setActualAt(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Actual Date" fullWidth value={actualAt}
+              onChange={setActualAt} />
           </Grid>
           <Grid item xs={12}>
             <TextField label="Remarks" fullWidth multiline minRows={2} value={remarks}
