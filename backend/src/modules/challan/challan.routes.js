@@ -39,8 +39,12 @@ export const challanService = {
     return dc;
   },
 
-  /** Generate (or regenerate) the challan PDF, store it (S3 or local) and save pdfUrl. */
-  async generatePdf(id) {
+  /**
+   * Build the challan PDF buffer from the LIVE record — no upload, no save.
+   * Used by the preview/download endpoint so the document always reflects the
+   * current dispatch and nothing is persisted.
+   */
+  async renderBuffer(id) {
     const dc = await DeliveryChallan.findById(id)
       .populate('partyId', 'name location email addresses').lean();
     if (!dc) throw new AppError('Delivery Challan not found', 404);
@@ -55,6 +59,12 @@ export const challanService = {
 
     const buffer = await pdfService.generateDeliveryChallanBuffer(dc);
     const fileName = `${String(dc.dcNumber || 'DC').replace(/[^\w.-]/g, '_')}.pdf`;
+    return { buffer, fileName };
+  },
+
+  /** Generate (or regenerate) the challan PDF, store it (S3 or local) and save pdfUrl. */
+  async generatePdf(id) {
+    const { buffer, fileName } = await challanService.renderBuffer(id);
 
     let pdfUrl;
     if (s3Enabled) {
@@ -112,11 +122,19 @@ export const challanController = {
   update:  asyncHandler(async (req, res) => { res.json(ApiResponse.ok('DC updated', await challanService.update(req.params.id, req.body))); }),
   remove:  asyncHandler(async (req, res) => { await challanService.remove(req.params.id); res.json(ApiResponse.ok('DC deleted')); }),
   generatePdf: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('PDF generated', await challanService.generatePdf(req.params.id))); }),
+  // Inline, always-fresh preview — streams the PDF bytes, saves nothing.
+  previewPdf: asyncHandler(async (req, res) => {
+    const { buffer, fileName } = await challanService.renderBuffer(req.params.id);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `inline; filename="${fileName}"`);
+    res.send(buffer);
+  }),
 };
 
 // ── Routes ──────────────────────────────────────────────────
 const router = Router();
 router.route('/').get(challanController.getAll).post(challanController.create);
 router.post('/:id/pdf', challanController.generatePdf);
+router.get('/:id/pdf/preview', challanController.previewPdf); // inline, no-save preview/download
 router.route('/:id').get(challanController.getById).put(challanController.update).delete(challanController.remove);
 export default router;

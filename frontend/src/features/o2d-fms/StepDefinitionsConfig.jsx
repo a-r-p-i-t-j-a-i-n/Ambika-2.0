@@ -4,12 +4,13 @@ import {
   Chip, Button, IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, MenuItem, Switch, FormControlLabel, Skeleton, Tooltip, alpha,
 } from '@mui/material';
-import { Plus, Pencil, Trash2, Settings2, ChevronUp, ChevronDown, Zap, GripVertical } from 'lucide-react';
+import { Plus, Pencil, Trash2, Settings2, ChevronUp, ChevronDown, Zap, GripVertical, Layers } from 'lucide-react';
 import {
   useGetStepDefinitionsQuery, useCreateStepDefinitionMutation,
   useUpdateStepDefinitionMutation, useDeleteStepDefinitionMutation,
   useReorderStepDefinitionsMutation,
 } from '../../store/api/o2dFmsApi';
+import { FMS_CATALOGS, DEFAULT_FMS_KEY } from './fmsCatalogs';
 
 const ROLES = ['PLANNER', 'SALES_EXEC', 'DISPATCH_SUPERVISOR', 'FINANCE', 'VIEWER', 'MD'];
 const PHASES = ['PRE_PRODUCTION', 'PLANNING', 'EXECUTION', 'POST_DISPATCH'];
@@ -21,13 +22,16 @@ const TRIGGER_LABEL = {
 };
 
 const blank = {
-  stepCode: '', name: '', description: '', defaultOwnerRole: '', tool: '',
+  stepCode: '', name: '', description: '', defaultOwnerRole: '', ownerName: '', ownerEmail: '',
+  whenText: '', tool: '',
   slaMinutes: 60, slaFrom: 'PREV_ACTUAL', sequence: 1, phase: 'PRE_PRODUCTION',
   triggerKey: 'MANUAL', requiresLink: false, requiresAttachment: false, isActive: true,
 };
 
 const StepDefinitionsConfig = () => {
-  const { data, isLoading } = useGetStepDefinitionsQuery();
+  // Which FMS catalog we're viewing/editing (FMS 1.0 vs Current Sheet FMS).
+  const [fmsKey, setFmsKey] = useState(DEFAULT_FMS_KEY);
+  const { data, isLoading } = useGetStepDefinitionsQuery(fmsKey);
   const [createDef] = useCreateStepDefinitionMutation();
   const [updateDef] = useUpdateStepDefinitionMutation();
   const [deleteDef] = useDeleteStepDefinitionMutation();
@@ -82,7 +86,7 @@ const StepDefinitionsConfig = () => {
     try {
       const payload = { ...form, slaMinutes: Number(form.slaMinutes), sequence: Number(form.sequence) };
       if (form._id) await updateDef({ id: form._id, ...payload }).unwrap();
-      else await createDef(payload).unwrap();
+      else await createDef({ ...payload, fmsKey }).unwrap(); // new steps land in the active FMS
       setForm(null);
     } catch (e) {
       setError(e?.data?.message || 'Could not save the step.');
@@ -104,6 +108,35 @@ const StepDefinitionsConfig = () => {
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setForm({ ...blank, sequence: defs.length + 1 }); }}>
           Add step
         </Button>
+      </Stack>
+
+      {/* FMS catalog picker — click a card to view & edit that flow's steps. */}
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
+        {FMS_CATALOGS.map((fms) => {
+          const active = fms.key === fmsKey;
+          return (
+            <Paper
+              key={fms.key}
+              onClick={() => setFmsKey(fms.key)}
+              sx={{
+                flex: 1, p: 1.75, borderRadius: 3, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 1.5,
+                border: '2px solid', borderColor: active ? '#1d4ed8' : 'divider',
+                bgcolor: active ? alpha('#1d4ed8', 0.05) : 'background.paper',
+                transition: 'all .15s', '&:hover': { borderColor: '#1d4ed8' },
+              }}
+            >
+              <Box sx={{ width: 38, height: 38, borderRadius: 2, display: 'grid', placeItems: 'center',
+                bgcolor: active ? '#1d4ed8' : alpha('#1d4ed8', 0.1), color: active ? '#fff' : '#1d4ed8', flexShrink: 0 }}>
+                <Layers size={18} />
+              </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={{ fontWeight: 800, color: active ? '#1d4ed8' : 'text.primary' }}>{fms.label}</Typography>
+                <Typography variant="caption" color="text.secondary" noWrap>{fms.desc}</Typography>
+              </Box>
+            </Paper>
+          );
+        })}
       </Stack>
 
       <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
@@ -146,7 +179,10 @@ const StepDefinitionsConfig = () => {
                     <Typography sx={{ fontWeight: 600 }}>{dStep.name}</Typography>
                     <Typography variant="caption" color="text.secondary">{dStep.stepCode}</Typography>
                   </TableCell>
-                  <TableCell>{dStep.defaultOwnerUserId?.name || dStep.defaultOwnerRole || '—'}</TableCell>
+                  <TableCell>
+                    <Typography variant="body2">{dStep.defaultOwnerUserId?.name || dStep.ownerName || dStep.defaultOwnerRole || '—'}</Typography>
+                    {dStep.ownerEmail && <Typography variant="caption" color="text.secondary">{dStep.ownerEmail}</Typography>}
+                  </TableCell>
                   <TableCell>
                     {dStep.triggerKey && dStep.triggerKey !== 'MANUAL'
                       ? <Chip size="small" icon={<Zap size={12} />} label={TRIGGER_LABEL[dStep.triggerKey]} sx={{ bgcolor: alpha('#0f766e', 0.12), color: '#0f766e' }} />
@@ -183,6 +219,12 @@ const StepDefinitionsConfig = () => {
                 </TextField>
                 <TextField label="Tool (How)" value={form.tool || ''} onChange={set('tool')} size="small" fullWidth />
               </Stack>
+              {/* Free-text owner (the sheet's "Who" — used when the person isn't a system user). */}
+              <Stack direction="row" spacing={2}>
+                <TextField label="Owner name" value={form.ownerName || ''} onChange={set('ownerName')} size="small" fullWidth placeholder="e.g. Upasana" />
+                <TextField label="Owner email" value={form.ownerEmail || ''} onChange={set('ownerEmail')} size="small" fullWidth placeholder="pc@msambikaglobal.in" />
+              </Stack>
+              <TextField label="When (note)" value={form.whenText || ''} onChange={set('whenText')} size="small" fullWidth placeholder="e.g. Whenever Received / 10 days" />
               <Stack direction="row" spacing={2}>
                 <TextField label="SLA (minutes)" type="number" value={form.slaMinutes} onChange={set('slaMinutes')} size="small" fullWidth />
                 <TextField select label="SLA from (When)" value={form.slaFrom} onChange={set('slaFrom')} size="small" fullWidth>

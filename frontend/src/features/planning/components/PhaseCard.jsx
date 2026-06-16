@@ -115,13 +115,18 @@ const PhaseCard = ({
 
   return (
     <Paper sx={{ borderRadius: '14px', overflow: 'hidden' }}>
-      {/* Header bar */}
-      <Box sx={{
-        px: 2, py: 1.25,
-        display: 'flex', alignItems: 'center', gap: 1.5,
-        bgcolor: alpha(style.fg, 0.04),
-        borderBottom: open ? '1px solid' : 'none', borderColor: 'divider',
-      }}>
+      {/* Header bar — click anywhere (except the action buttons) to expand. */}
+      <Box
+        onClick={() => { if (!editing) setOpen((v) => !v); }}
+        sx={{
+          px: 2, py: 1.25,
+          display: 'flex', alignItems: 'center', gap: 1.5,
+          bgcolor: alpha(style.fg, 0.04),
+          borderBottom: open ? '1px solid' : 'none', borderColor: 'divider',
+          cursor: editing ? 'default' : 'pointer',
+          '&:hover': editing ? {} : { bgcolor: alpha(style.fg, 0.08) },
+        }}
+      >
         <Box sx={{
           width: 36, height: 36, borderRadius: '10px',
           bgcolor: alpha(style.fg, 0.10), color: style.fg,
@@ -164,7 +169,7 @@ const PhaseCard = ({
         </Box>
 
         {!editing && (
-          <Stack direction="row" spacing={0.5}>
+          <Stack direction="row" spacing={0.5} onClick={(e) => e.stopPropagation()}>
             <Tooltip title="Edit phase"><IconButton size="small" onClick={() => { setOpen(true); setEditing(true); }}><Edit3 size={14} /></IconButton></Tooltip>
             <IconButton size="small" onClick={(e) => setMenuAnchor(e.currentTarget)}><MoreVertical size={14} /></IconButton>
             <Menu open={Boolean(menuAnchor)} anchorEl={menuAnchor} onClose={() => setMenuAnchor(null)}>

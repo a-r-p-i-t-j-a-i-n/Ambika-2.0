@@ -84,6 +84,10 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (id) => ({ url: `/challans/${id}/pdf`, method: 'POST' }),
       invalidatesTags: (_r, _e, id) => [{ type: 'Challan', id }, 'Challan'],
     }),
+    updateChallan: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/challans/${id}`, method: 'PUT', body }),
+      invalidatesTags: (_r, _e, { id }) => [{ type: 'Challan', id }, 'Challan'],
+    }),
     // Upload — `file` is a single File from a drop / input.
     uploadOrderDocument: builder.mutation({
       query: (file) => {
@@ -117,5 +121,6 @@ export const {
   useGetChallansQuery,
   useGetChallanByIdQuery,
   useGenerateChallanPdfMutation,
+  useUpdateChallanMutation,
   useUploadOrderDocumentMutation,
 } = dispatchControlApi;

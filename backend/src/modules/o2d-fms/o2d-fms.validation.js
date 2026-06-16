@@ -28,11 +28,15 @@ export const assignStepSchema = Joi.object({
 });
 
 export const stepDefinitionSchema = Joi.object({
+  fmsKey:      Joi.string().trim().allow('', null),
   stepCode:    Joi.string().trim().required(),
   name:        Joi.string().trim().required(),
   description: Joi.string().allow('', null),
   defaultOwnerUserId: objectId.allow(null),
   defaultOwnerRole:   Joi.string().trim().allow('', null),
+  ownerName:   Joi.string().trim().allow('', null),
+  ownerEmail:  Joi.string().trim().allow('', null),
+  whenText:    Joi.string().trim().allow('', null),
   tool:        Joi.string().trim().allow('', null),
   slaMinutes:  Joi.number().integer().min(0).default(60),
   slaFrom:     Joi.string().valid('PREV_ACTUAL', 'ORDER_RECEIVED').default('PREV_ACTUAL'),
@@ -80,6 +84,7 @@ const templateStepJoi = Joi.object({
 });
 
 export const taskTemplateSchema = Joi.object({
+  fmsKey:      Joi.string().trim().allow('', null),
   name:        Joi.string().trim().required(),
   description: Joi.string().allow('', null),
   isDefault:   Joi.boolean().default(false),

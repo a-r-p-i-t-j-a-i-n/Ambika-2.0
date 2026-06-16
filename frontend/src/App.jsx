@@ -22,8 +22,10 @@ const EmployeesList        = lazyWithRetry(() => import('./features/employees/Em
 const OrdersList           = lazyWithRetry(() => import('./features/orders/OrdersList'));
 const OrderDetails         = lazyWithRetry(() => import('./features/orders/OrderDetails'));
 const PlanWorkspace        = lazyWithRetry(() => import('./features/planning/PlanWorkspace'));
+const GenerateDispatchPlanPdf = lazyWithRetry(() => import('./features/planning/GenerateDispatchPlanPdf'));
 const PPCPlanning          = lazyWithRetry(() => import('./features/ppc/PPCPlanning'));
 const ChallansList         = lazyWithRetry(() => import('./features/execution/ChallansList'));
+const GenerateChallanPdf   = lazyWithRetry(() => import('./features/execution/GenerateChallanPdf'));
 const ChallanDetail        = lazyWithRetry(() => import('./features/execution/ChallanDetail'));
 const PhaseDetail          = lazyWithRetry(() => import('./features/execution/PhaseDetail'));
 const InvoicesList         = lazyWithRetry(() => import('./features/ledger/InvoicesList'));
@@ -39,6 +41,11 @@ const PricingAnalytics     = lazyWithRetry(() => import('./features/pricing/Pric
 const QuotesList           = lazyWithRetry(() => import('./features/quotes/QuotesList'));
 const QuoteDetail          = lazyWithRetry(() => import('./features/quotes/QuoteDetail'));
 const FmsMyTasks           = lazyWithRetry(() => import('./features/o2d-fms/MyTasksWorkspace'));
+const InvoiceEntryForm     = lazyWithRetry(() => import('./features/o2d-fms/InvoiceEntryForm'));
+const InvoiceEmail         = lazyWithRetry(() => import('./features/o2d-fms/InvoiceEmail'));
+const TrackDelivery        = lazyWithRetry(() => import('./features/o2d-fms/TrackDelivery'));
+const PaymentSteps         = lazyWithRetry(() => import('./features/o2d-fms/PaymentSteps'));
+const TransportBill        = lazyWithRetry(() => import('./features/o2d-fms/TransportBill'));
 const FmsProcessList       = lazyWithRetry(() => import('./features/o2d-fms/ProcessList'));
 const FmsProcessDetail     = lazyWithRetry(() => import('./features/o2d-fms/ProcessDetail'));
 const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsDashboard'));
@@ -95,8 +102,15 @@ function App() {
             <Route path="/orders/:id" element={<OrderDetails />} />
             <Route path="/orders/:id/phase/:phaseNo" element={<PhaseDetail />} />
             <Route path="/dispatch-planning" element={<PlanWorkspace />} />
+            <Route path="/dispatch-planning/generate-pdf" element={<GenerateDispatchPlanPdf />} />
             <Route path="/ppc-planning" element={<PPCPlanning />} />
             <Route path="/challans" element={<ChallansList />} />
+            <Route path="/challans/generate-pdf" element={<GenerateChallanPdf />} />
+            <Route path="/o2d/invoice-entry" element={<RequirePermission slug="o2dfms.view" fallback="inline"><InvoiceEntryForm /></RequirePermission>} />
+            <Route path="/o2d/invoice-email" element={<RequirePermission slug="o2dfms.view" fallback="inline"><InvoiceEmail /></RequirePermission>} />
+            <Route path="/o2d/track-delivery" element={<RequirePermission slug="o2dfms.view" fallback="inline"><TrackDelivery /></RequirePermission>} />
+            <Route path="/o2d/payments" element={<RequirePermission slug="o2dfms.view" fallback="inline"><PaymentSteps /></RequirePermission>} />
+            <Route path="/o2d/transport-bill" element={<RequirePermission slug="o2dfms.view" fallback="inline"><TransportBill /></RequirePermission>} />
             <Route path="/challans/:id" element={<ChallanDetail />} />
             <Route path="/invoices" element={<InvoicesList />} />
             <Route path="/skus" element={<SkusList />} />

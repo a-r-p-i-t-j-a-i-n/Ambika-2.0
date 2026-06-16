@@ -5,7 +5,7 @@ import {
 import {
   ArrowLeft, History, CheckCircle2, ListChecks, RefreshCw, UserCog, Paperclip, MessageSquare, FileEdit,
 } from 'lucide-react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetProcessByIdQuery } from '../../store/api/o2dFmsApi';
 import { usePermissions } from '../../hooks/usePermission';
 import StepDetailCard from './components/StepDetailCard';
@@ -28,6 +28,8 @@ const ACTIVITY = {
 const TaskPage = () => {
   const { processId, stepCode } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const entryDone = searchParams.get('entryDone') === '1'; // returned from a connected form
   const { data, isLoading, refetch, isFetching } = useGetProcessByIdQuery(processId, { pollingInterval: 30_000 });
   const { can, isRoot } = usePermissions();
 
@@ -82,6 +84,7 @@ const TaskPage = () => {
             orderLabel={`${process.soNumber} · ${process.partyName}`}
             canAct={can('o2dfms.act') || isRoot}
             canManage={can('o2dfms.manage') || isRoot}
+            autoComplete={entryDone}
             onClose={() => refetch()}
           />
 

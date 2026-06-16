@@ -52,6 +52,11 @@ const deliveryChallanSchema = new mongoose.Schema({
     index: true,
   },
 
+  // ── Delivery tracking (O2D Step 2.9) ───────────────────────
+  deliveryStatus: { type: String, default: null }, // Delivered / Not Delivered / Cancelled
+  deliveryDate:   { type: Date, default: null },
+  newTrackDate:   { type: Date, default: null },    // re-track date when not yet delivered
+
   // ── Plan-vs-Actual linkage (the core design choice) ────────
   // Every DC explicitly references the plan phase it fulfils.
   // If the operator chooses "Unplanned" we flag it for the risk panel.

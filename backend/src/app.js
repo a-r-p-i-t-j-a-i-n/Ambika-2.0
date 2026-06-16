@@ -25,6 +25,8 @@ import fmsRoutes      from './modules/fms/fms.routes.js';
 import ppcRoutes      from './modules/ppc/ppc.routes.js';
 import dispatchControlRoutes from './modules/dispatch-control/dispatch-control.routes.js';
 import uploadRoutes from './common/uploads/upload.routes.js';
+import salesInvoiceRoutes from './modules/invoice/invoice.routes.js';
+import o2dFulfillmentRoutes from './modules/o2d-fulfillment/o2d-fulfillment.routes.js';
 import accessControlRoutes from './modules/access-control/access-control.routes.js';
 import pricingRoutes from './modules/pricing/pricing.routes.js';
 import quoteRoutes from './modules/quotes/quote.routes.js';
@@ -120,6 +122,8 @@ app.use('/api/v1/uploads',          uploadRoutes);
 app.use('/api/v1/access-control',   accessControlRoutes);
 app.use('/api/v1/pricing',          pricingRoutes);
 app.use('/api/v1/quotes',           quoteRoutes);
+app.use('/api/v1/sales-invoices',   salesInvoiceRoutes); // O2D Step 2.7/2.8 — invoice & e-way
+app.use('/api/v1/o2d-fulfillment',  o2dFulfillmentRoutes); // O2D Steps 2.9–2.13 — delivery/payment/transport
 app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (process tracking)
 app.use('/api/v1/notifications',    notificationRoutes);
 app.use('/api/v1/order-intake',     orderIntakeRoutes);

@@ -17,9 +17,16 @@ const invoiceSchema = new mongoose.Schema({
   amountReceived:  { type: Number, default: 0, min: 0 },
   balance:         { type: Number, default: 0, min: 0 },
 
-  invoiceUrl:   { type: String },
-  ewayBillUrl:  { type: String },
-  pdirUrls:     [{ type: String }],
+  invoiceUrl:   { type: String },          // legacy single (mirrors invoiceUrls[0])
+  ewayBillUrl:  { type: String },          // legacy single (mirrors ewayBillUrls[0])
+  invoiceUrls:  [{ type: String }],        // Step 2.7 — up to 5 invoice files
+  ewayBillUrls: [{ type: String }],        // Step 2.7 — up to 5 e-way bill files
+  pdirUrls:     [{ type: String }],        // Step 2.7 — up to 10 PDIR files
+
+  // Step 2.7 dispatch/transport details (from the client's invoice form).
+  transportType:   { type: String },       // Freight Paid / To Pay / Party Vehicle
+  transporterName: { type: String },
+  lrNo:            { type: String },
 
   // Step 2.07 - Invoice creation tracking
   creation: {

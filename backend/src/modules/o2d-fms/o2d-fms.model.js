@@ -60,6 +60,11 @@ export const TRIGGER_KEY = Object.freeze({
 const StepDefinitionSchema = new Schema({
   ...baseSchemaFields,
 
+  // Which FMS catalog this step belongs to. 'V1' = the original O2D flow (FMS 1.0);
+  // 'CURRENT_SHEET' = the live Google-sheet flow. Steps are grouped per-fms, so the
+  // same stepCode (e.g. '2.02') can exist independently in each FMS.
+  fmsKey: { type: String, default: 'V1', trim: true, index: true },
+
   stepCode: { type: String, required: true, trim: true }, // e.g. '2.02'
   name:     { type: String, required: true, trim: true }, // What — short task name
   description: { type: String, default: '' },             // What — fuller instruction
@@ -68,6 +73,14 @@ const StepDefinitionSchema = new Schema({
   // matches Role.key / legacy User.role). User wins when both are set.
   defaultOwnerUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   defaultOwnerRole:   { type: String, default: null, trim: true },
+  // Free-text owner from the client sheet (the "Who" column), when the person
+  // isn't a system user yet — e.g. "Upasana" / "pc@msambikaglobal.in".
+  ownerName:  { type: String, default: null, trim: true },
+  ownerEmail: { type: String, default: null, trim: true },
+
+  // The sheet's "When" column as free text (e.g. "Whenever Received", "10 days",
+  // "After 1 day of delivery"). The numeric SLA below drives the actual schedule.
+  whenText: { type: String, default: null, trim: true },
 
   tool: { type: String, default: null, trim: true },      // How — e.g. 'Excel & Tally', 'Order Form'
 
@@ -88,8 +101,9 @@ const StepDefinitionSchema = new Schema({
   isActive: { type: Boolean, default: true },
 }, baseSchemaOptions);
 
-StepDefinitionSchema.index({ stepCode: 1 }, { unique: true });
-StepDefinitionSchema.index({ isActive: 1, sequence: 1 });
+// stepCode is unique PER FMS (not globally) so each catalog can reuse codes.
+StepDefinitionSchema.index({ fmsKey: 1, stepCode: 1 }, { unique: true });
+StepDefinitionSchema.index({ fmsKey: 1, isActive: 1, sequence: 1 });
 
 // Checklist item on a live step (the doer ticks these off).
 const ChecklistItemSchema = new Schema({
@@ -276,14 +290,16 @@ const TemplateStepSchema = new Schema({
 
 const TaskTemplateSchema = new Schema({
   ...baseSchemaFields,
+  // Which FMS catalog this template builds on (its steps reference that FMS's codes).
+  fmsKey:      { type: String, default: 'V1', trim: true, index: true },
   name:        { type: String, required: true, trim: true },
   description: { type: String, default: '' },
-  isDefault:   { type: Boolean, default: false }, // the one auto-applied to new orders
+  isDefault:   { type: Boolean, default: false }, // the one auto-applied to new orders (per FMS)
   isActive:    { type: Boolean, default: true },
   steps:       [TemplateStepSchema],
 }, baseSchemaOptions);
 
-TaskTemplateSchema.index({ isDefault: 1, isActive: 1 });
+TaskTemplateSchema.index({ fmsKey: 1, isDefault: 1, isActive: 1 });
 
 export const StepDefinition = mongoose.models.StepDefinition || model('StepDefinition', StepDefinitionSchema);
 export const O2DProcess = mongoose.models.O2DProcess || model('O2DProcess', O2DProcessSchema, 'o2dprocesses');

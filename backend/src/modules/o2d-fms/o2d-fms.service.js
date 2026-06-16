@@ -24,6 +24,18 @@ const notifyStepOwners = async (process, step) => {
   for (const id of buddies) await notificationsService.notify(id, { type: 'TASK_ASSIGNED', title: `Backup (buddy): ${title}`, body, link });
 };
 
+// FMS catalog scoping. 'V1' (FMS 1.0) also matches legacy docs saved before the
+// fmsKey field existed (missing / null), so nothing disappears pre-migration.
+const DEFAULT_FMS_KEY = 'V1';
+// The FMS catalog that NEW orders run on. Switch this to change which flow the
+// runtime builds (V1 = original; CURRENT_SHEET = the client's live-sheet flow).
+const ACTIVE_FMS_KEY = process.env.O2D_ACTIVE_FMS || 'CURRENT_SHEET';
+const fmsScope = (fmsKey = DEFAULT_FMS_KEY) => (
+  fmsKey === DEFAULT_FMS_KEY
+    ? { $or: [{ fmsKey: DEFAULT_FMS_KEY }, { fmsKey: { $exists: false } }, { fmsKey: null }] }
+    : { fmsKey }
+);
+
 const addMinutes = (date, mins) => new Date(new Date(date).getTime() + (mins || 0) * 60000);
 const leadTimeToMins = (lt) => (lt?.value ? lt.value * (LEAD_TIME_UNIT_MINUTES[lt.unit] || 60) : null);
 const computeDelayMins = (planned, actual) => {
@@ -135,12 +147,14 @@ export const o2dFmsService = {
    */
   /** Seed step instances from the active catalog + default template. Shared by
    *  the Sales-Order and Order-Intake process builders. */
-  async _seedSteps(received) {
-    const defs = await StepDefinition.find({ isActive: true, isDeleted: { $ne: true } })
+  async _seedSteps(received, fmsKey = DEFAULT_FMS_KEY) {
+    // Runtime processes are built from ONE FMS catalog (V1 today). Scoping here is
+    // what keeps a second catalog (e.g. CURRENT_SHEET) from leaking into orders.
+    const defs = await StepDefinition.find({ isActive: true, isDeleted: { $ne: true }, ...fmsScope(fmsKey) })
       .sort({ sequence: 1 }).lean();
     if (!defs.length) return { steps: [], defs: [] };
 
-    const template = await TaskTemplate.findOne({ isDefault: true, isActive: true, isDeleted: { $ne: true } }).lean();
+    const template = await TaskTemplate.findOne({ isDefault: true, isActive: true, isDeleted: { $ne: true }, ...fmsScope(fmsKey) }).lean();
     const tplByStep = new Map((template?.steps || []).map((t) => [t.stepCode, t]));
 
     const steps = [];
@@ -202,7 +216,7 @@ export const o2dFmsService = {
     const existing = await O2DProcess.findOne({ salesOrderId: order._id });
     if (existing) return existing;
 
-    const { steps, defs } = await this._seedSteps(order.receivedAt || order.createdAt || new Date());
+    const { steps, defs } = await this._seedSteps(order.receivedAt || order.createdAt || new Date(), ACTIVE_FMS_KEY);
     if (!steps.length) {
       logger.warn(`[O2D-FMS] No active StepDefinitions — process not created for SO ${order.soNumber}`);
       return null;
@@ -217,7 +231,7 @@ export const o2dFmsService = {
     const firstPending = steps.find((s) => s.status === O2D_STEP_STATUS.PENDING);
     if (firstPending && !firstPending.startedAt) firstPending.startedAt = order.receivedAt || new Date();
 
-    return O2DProcess.create({
+    const proc = await O2DProcess.create({
       salesOrderId: order._id,
       source: 'SALES_ORDER',
       soNumber: order.soNumber,
@@ -228,6 +242,10 @@ export const o2dFmsService = {
       createdBy: order.createdBy,
       steps,
     });
+    // Notify the first active step's doers/buddies so they receive it immediately.
+    const firstStep = proc.steps.find((s) => s.stepCode === proc.currentStepCode);
+    if (firstStep) { try { await notifyStepOwners(proc, firstStep); } catch (e) { logger.error(`[O2D-FMS] notify first step failed: ${e.message}`); } }
+    return proc;
   },
 
   /** Start the FMS from an Order Intake (call/email/WhatsApp). Completes the
@@ -236,7 +254,7 @@ export const o2dFmsService = {
     const existing = await O2DProcess.findOne({ intakeId: intake._id });
     if (existing) return existing;
 
-    const { steps, defs } = await this._seedSteps(intake.receivedAt || new Date());
+    const { steps, defs } = await this._seedSteps(intake.receivedAt || new Date(), ACTIVE_FMS_KEY);
     if (!steps.length) return null;
 
     const process = await O2DProcess.create({
@@ -251,6 +269,10 @@ export const o2dFmsService = {
     // Auto-complete the "order received" step (whatever is mapped to ORDER_INTAKE).
     try { await this.advanceByTrigger({ processId: process._id }, 'ORDER_INTAKE', intake.createdBy ? { _id: intake.createdBy } : null); }
     catch (err) { logger.error(`[O2D-FMS] ORDER_INTAKE advance failed: ${err.message}`); }
+    // Notify whoever owns the current step (no-op auto-advance leaves step 1 active).
+    const fresh = await O2DProcess.findById(process._id);
+    const curStep = fresh?.steps.find((s) => s.stepCode === fresh.currentStepCode);
+    if (curStep) { try { await notifyStepOwners(fresh, curStep); } catch (e) { logger.error(`[O2D-FMS] notify intake step failed: ${e.message}`); } }
     return process;
   },
 
@@ -904,16 +926,17 @@ export const o2dFmsService = {
 
   // ── StepDefinition CRUD (config) ──────────────────────────────────────────
 
-  async listDefinitions() {
-    return StepDefinition.find({ isDeleted: { $ne: true } })
+  async listDefinitions(fmsKey = DEFAULT_FMS_KEY) {
+    return StepDefinition.find({ isDeleted: { $ne: true }, ...fmsScope(fmsKey) })
       .populate('defaultOwnerUserId', 'name email role')
       .sort({ sequence: 1 }).lean();
   },
 
   async createDefinition(data, actor) {
-    const exists = await StepDefinition.findOne({ stepCode: data.stepCode, isDeleted: { $ne: true } });
-    if (exists) throw new AppError(`Step code '${data.stepCode}' already exists`, 409);
-    return StepDefinition.create({ ...data, createdBy: actor?._id });
+    const fmsKey = data.fmsKey || DEFAULT_FMS_KEY;
+    const exists = await StepDefinition.findOne({ stepCode: data.stepCode, isDeleted: { $ne: true }, ...fmsScope(fmsKey) });
+    if (exists) throw new AppError(`Step code '${data.stepCode}' already exists in this FMS`, 409);
+    return StepDefinition.create({ ...data, fmsKey, createdBy: actor?._id });
   },
 
   async updateDefinition(id, data, actor) {
@@ -940,8 +963,8 @@ export const o2dFmsService = {
 
   // ── TaskTemplate CRUD (the reusable work plan) ────────────────────────────
 
-  async listTemplates() {
-    return TaskTemplate.find({ isDeleted: { $ne: true } })
+  async listTemplates(fmsKey = DEFAULT_FMS_KEY) {
+    return TaskTemplate.find({ isDeleted: { $ne: true }, ...fmsScope(fmsKey) })
       .populate('steps.assigneeUserId steps.buddyUserId', 'name email role')
       .sort({ isDefault: -1, name: 1 }).lean();
   },
@@ -954,23 +977,28 @@ export const o2dFmsService = {
   },
 
   async createTemplate(data, actor) {
-    if (data.isDefault) await TaskTemplate.updateMany({ isDefault: true }, { $set: { isDefault: false } });
-    return TaskTemplate.create({ ...data, createdBy: actor?._id });
+    const fmsKey = data.fmsKey || DEFAULT_FMS_KEY;
+    // "Default" is a singleton PER FMS, so only unset others in the same catalog.
+    if (data.isDefault) await TaskTemplate.updateMany({ isDefault: true, ...fmsScope(fmsKey) }, { $set: { isDefault: false } });
+    return TaskTemplate.create({ ...data, fmsKey, createdBy: actor?._id });
   },
 
   async updateTemplate(id, data, actor) {
-    if (data.isDefault) await TaskTemplate.updateMany({ _id: { $ne: id }, isDefault: true }, { $set: { isDefault: false } });
     const tpl = await TaskTemplate.findById(id);
     if (!tpl) throw new AppError('Template not found', 404);
+    const fmsKey = tpl.fmsKey || DEFAULT_FMS_KEY;
+    if (data.isDefault) await TaskTemplate.updateMany({ _id: { $ne: id }, isDefault: true, ...fmsScope(fmsKey) }, { $set: { isDefault: false } });
     Object.assign(tpl, data, { updatedBy: actor?._id });
     await tpl.save();
     return tpl.toObject();
   },
 
   async setDefaultTemplate(id) {
-    await TaskTemplate.updateMany({ isDefault: true }, { $set: { isDefault: false } });
+    const target = await TaskTemplate.findById(id).lean();
+    if (!target) throw new AppError('Template not found', 404);
+    const fmsKey = target.fmsKey || DEFAULT_FMS_KEY;
+    await TaskTemplate.updateMany({ isDefault: true, ...fmsScope(fmsKey) }, { $set: { isDefault: false } });
     const tpl = await TaskTemplate.findByIdAndUpdate(id, { $set: { isDefault: true, isActive: true } }, { new: true });
-    if (!tpl) throw new AppError('Template not found', 404);
     return tpl.toObject();
   },
 

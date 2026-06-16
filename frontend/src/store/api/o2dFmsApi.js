@@ -132,7 +132,8 @@ export const o2dFmsApi = baseApi.injectEndpoints({
 
     // ── Task templates ─────────────────────────────────────────
     getTaskTemplates: builder.query({
-      query: () => '/o2d-fms/templates',
+      // Optional fmsKey scopes templates to one FMS catalog (defaults to V1 server-side).
+      query: (fmsKey) => ({ url: '/o2d-fms/templates', params: fmsKey ? { fmsKey } : undefined }),
       providesTags: ['O2DTemplate'],
     }),
     getTaskTemplate: builder.query({
@@ -158,7 +159,8 @@ export const o2dFmsApi = baseApi.injectEndpoints({
 
     // ── Step definitions (config) ─────────────────────────────
     getStepDefinitions: builder.query({
-      query: () => '/o2d-fms/step-definitions',
+      // Optional fmsKey scopes the catalog to one FMS (defaults to V1 server-side).
+      query: (fmsKey) => ({ url: '/o2d-fms/step-definitions', params: fmsKey ? { fmsKey } : undefined }),
       providesTags: ['O2DStepDef'],
     }),
     createStepDefinition: builder.mutation({

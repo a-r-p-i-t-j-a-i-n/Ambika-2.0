@@ -9,6 +9,7 @@ import {
   LayoutTemplate, Target, HelpCircle, FormInput, Paperclip, ShieldCheck, Link2,
 } from 'lucide-react';
 import { ACTION_LINKS, actionLinkMeta, TRIGGER_TO_ACTION } from './actionLinks';
+import { FMS_CATALOGS, DEFAULT_FMS_KEY } from './fmsCatalogs';
 import {
   useGetTaskTemplatesQuery, useCreateTaskTemplateMutation, useUpdateTaskTemplateMutation,
   useSetDefaultTemplateMutation, useDeleteTaskTemplateMutation, useGetStepDefinitionsQuery,
@@ -318,8 +319,10 @@ const CustomOrderPicker = ({ open, onClose, defs, onReady }) => {
 };
 
 const TaskTemplates = () => {
-  const { data: tplRes, isLoading } = useGetTaskTemplatesQuery();
-  const { data: defRes } = useGetStepDefinitionsQuery();
+  // Which FMS catalog the templates & step list belong to.
+  const [fmsKey, setFmsKey] = useState(DEFAULT_FMS_KEY);
+  const { data: tplRes, isLoading } = useGetTaskTemplatesQuery(fmsKey);
+  const { data: defRes } = useGetStepDefinitionsQuery(fmsKey);
   const { data: usersRes } = useListAccessUsersQuery();
   const [createTpl] = useCreateTaskTemplateMutation();
   const [updateTpl] = useUpdateTaskTemplateMutation();
@@ -380,6 +383,7 @@ const TaskTemplates = () => {
     }
     const payload = {
       name: editing.name, description: editing.description, isDefault: editing.isDefault,
+      fmsKey, // template belongs to the FMS currently selected
       steps: editing.steps
         .filter((s) => s.taskTitle || s.checklist.length || s.assigneeUserIds?.length || s.leadTime.value
           || s.verifications?.some(Boolean) || s.formFields?.some((f) => f.label)
@@ -467,6 +471,35 @@ const TaskTemplates = () => {
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => setNewMenu(true)}>New</Button>
+      </Stack>
+
+      {/* FMS catalog picker — choose which flow these templates build on. */}
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
+        {FMS_CATALOGS.map((fms) => {
+          const active = fms.key === fmsKey;
+          return (
+            <Paper
+              key={fms.key}
+              onClick={() => setFmsKey(fms.key)}
+              sx={{
+                flex: 1, p: 1.75, borderRadius: 3, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 1.5,
+                border: '2px solid', borderColor: active ? '#1d4ed8' : 'divider',
+                bgcolor: active ? alpha('#1d4ed8', 0.05) : 'background.paper',
+                transition: 'all .15s', '&:hover': { borderColor: '#1d4ed8' },
+              }}
+            >
+              <Box sx={{ width: 38, height: 38, borderRadius: 2, display: 'grid', placeItems: 'center',
+                bgcolor: active ? '#1d4ed8' : alpha('#1d4ed8', 0.1), color: active ? '#fff' : '#1d4ed8', flexShrink: 0 }}>
+                <LayoutTemplate size={18} />
+              </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={{ fontWeight: 800, color: active ? '#1d4ed8' : 'text.primary' }}>{fms.label}</Typography>
+                <Typography variant="caption" color="text.secondary" noWrap>{fms.desc}</Typography>
+              </Box>
+            </Paper>
+          );
+        })}
       </Stack>
 
       {/* Active-default banner — at a glance, which template runs every new order. */}

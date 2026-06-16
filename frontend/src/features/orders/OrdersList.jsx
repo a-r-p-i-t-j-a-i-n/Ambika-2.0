@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -108,6 +108,16 @@ const OrdersList = () => {
 
   const stats = statsRes?.data?.summary || {};
   const parties = partiesData?.data || [];
+
+  // Keep a stable server rowCount. During a refetch the query's `data` is briefly
+  // undefined; if rowCount flips to 0 while rows still render, the server-mode
+  // DataGrid clamps the page and re-emits paginationModel in a loop ("Maximum
+  // update depth exceeded"). Holding the last known total avoids that flip.
+  const total = data?.meta?.total;
+  const [rowCountState, setRowCountState] = useState(0);
+  useEffect(() => {
+    if (typeof total === 'number') setRowCountState(total);
+  }, [total]);
 
   const handleViewDetail = (order) => { 
     navigate(`/orders/${order._id}`);
@@ -260,7 +270,8 @@ const OrdersList = () => {
           getRowId={(row) => row._id}
           loading={isLoading}
           paginationMode="server"
-          rowCount={data?.meta?.total || 0}
+          rowCount={rowCountState}
+          keepNonExistentRowsSelected
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
           pageSizeOptions={[10, 25, 50, 100]}

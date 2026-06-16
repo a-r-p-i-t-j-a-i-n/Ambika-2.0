@@ -107,7 +107,7 @@ const FormFieldRow = ({ item, disabled, onSave }) => {
  * + the task layer (checklist, comments, buddy). When opened from My Tasks the
  * passed `step` is partial, so we fetch the full process to hydrate checklist/comments.
  */
-const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false }) => {
+const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false }) => {
   const myId = useSelector((s) => s.auth?.user?._id);
   const [link, setLink] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -147,6 +147,26 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     setBuddySel(b.map((u) => String(u._id || u)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, processId, liveStep?.stepCode]);
+
+  // When the doer returns from a connected entry form (?entryDone=1), tick any
+  // remaining checklist items once so they only review proof/comments & submit.
+  // (Must stay above the early-return below to keep hook order stable.)
+  const autoTickedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!autoComplete || autoTickedRef.current) return;
+    const ls = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
+    if (!ls || ['DONE', 'DELAYED'].includes(ls.status) || !(ls.checklist || []).length) return;
+    const pending = (ls.checklist || []).filter((c) => !c.done);
+    autoTickedRef.current = true;
+    if (!pending.length) return;
+    (async () => {
+      for (const item of pending) {
+        try { await toggleItem({ id: processId, stepCode: ls.stepCode, itemId: item._id, done: true }).unwrap(); }
+        catch { /* ignore individual failures */ }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoComplete, processId, step?.stepCode, procRes?.data]);
 
   if (!step) return null;
   // All doers + buddies on the step (arrays, with legacy single fallback).
@@ -273,6 +293,19 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
 
   const body = (
         <Stack spacing={2}>
+          {/* Shared step already completed by someone — make it explicit. */}
+          {done && (
+            <Alert severity="success" icon={<CheckCircle2 size={18} />} sx={{ py: 0.5 }}>
+              Completed{liveStep.completedBy?.name ? ` by ${liveStep.completedBy.name}` : ''}{liveStep.actual ? ` · ${fmt(liveStep.actual)}` : ''}.
+              {' '}Nothing more to do on this step.
+            </Alert>
+          )}
+          {/* Returned from the connected entry form — checklist auto-marked. */}
+          {autoComplete && !done && (
+            <Alert severity="info" icon={<CheckCircle2 size={18} />} sx={{ py: 0.5 }}>
+              Entry submitted — checklist marked for you. Add any proof or comments, then <b>Mark Done</b>.
+            </Alert>
+          )}
           {isBuddyForMe && !isDoerForMe && (
             <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, bgcolor: alpha('#7c3aed', 0.1), borderColor: alpha('#7c3aed', 0.4) }}>
               <Box sx={{ color: '#6d28d9', display: 'flex' }}><Users size={18} /></Box>
@@ -303,7 +336,12 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                   {proc?.soNumber ? `Opens directly for ${proc.soNumber}. ` : ''}Do the real work there — this step advances automatically.
                 </Typography>
               </Box>
-              <Button variant="contained" endIcon={<ArrowRight size={15} />} onClick={() => navigate(actionTo)} sx={{ whiteSpace: 'nowrap' }}>
+              <Button variant="contained" endIcon={<ArrowRight size={15} />} sx={{ whiteSpace: 'nowrap' }}
+                onClick={() => {
+                  // Carry the task context so the form can bring the doer back here.
+                  const sep = actionTo.includes('?') ? '&' : '?';
+                  navigate(`${actionTo}${sep}fromTask=${processId}&fromStep=${encodeURIComponent(liveStep.stepCode)}`);
+                }}>
                 Do it now
               </Button>
             </Paper>

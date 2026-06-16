@@ -16,6 +16,15 @@ export const ACTION_LINKS = [
   { key: 'INVOICE',         label: 'Invoicing',                         route: '/invoices?so={soNumber}' },
   { key: 'CONTROL_TOWER',   label: 'Dispatch Control Tower',            route: '/dispatch-control-tower' },
   { key: 'FMS_PROCESS',     label: "This order's FMS flow",             route: '/o2d-fms/process/{processId}' },
+
+  // ── Current-Sheet FMS step forms (do-the-entry → return to task) ──
+  { key: 'DISPATCH_PLAN_PDF', label: 'Generate Dispatch Plan PDF',      route: '/dispatch-planning/generate-pdf' },
+  { key: 'CHALLAN_PDF',       label: 'Generate Challan PDF',            route: '/challans/generate-pdf' },
+  { key: 'INVOICE_ENTRY',     label: 'Create Invoice & Eway Bill (2.7)', route: '/o2d/invoice-entry' },
+  { key: 'INVOICE_EMAIL',     label: 'Email Invoice & Eway (2.8)',      route: '/o2d/invoice-email' },
+  { key: 'TRACK_DELIVERY',    label: 'Track Delivery (2.9)',            route: '/o2d/track-delivery' },
+  { key: 'PAYMENTS',          label: 'Payment Follow-up & Receipt (2.10–2.11)', route: '/o2d/payments' },
+  { key: 'TRANSPORT_BILL',    label: 'Transport Bill (2.12–2.13)',      route: '/o2d/transport-bill' },
 ];
 
 export const actionLinkMeta = (key) => ACTION_LINKS.find((a) => a.key === key) || null;

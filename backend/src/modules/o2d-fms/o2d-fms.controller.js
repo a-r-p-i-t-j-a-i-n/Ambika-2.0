@@ -99,8 +99,8 @@ export const o2dFmsController = {
   }),
 
   // ── Task templates ─────────────────────────────────────────
-  listTemplates: asyncHandler(async (_req, res) => {
-    res.json(ApiResponse.ok('Templates retrieved', await o2dFmsService.listTemplates()));
+  listTemplates: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Templates retrieved', await o2dFmsService.listTemplates(req.query.fmsKey)));
   }),
   getTemplate: asyncHandler(async (req, res) => {
     res.json(ApiResponse.ok('Template retrieved', await o2dFmsService.getTemplate(req.params.id)));
@@ -119,8 +119,8 @@ export const o2dFmsController = {
   }),
 
   // ── Step definitions (config) ──────────────────────────────
-  listDefinitions: asyncHandler(async (_req, res) => {
-    const defs = await o2dFmsService.listDefinitions();
+  listDefinitions: asyncHandler(async (req, res) => {
+    const defs = await o2dFmsService.listDefinitions(req.query.fmsKey);
     res.json(ApiResponse.ok('Step definitions retrieved', defs));
   }),
 

@@ -38,11 +38,12 @@ export const DC_STATUS = {
 
 // ── Invoice Statuses ────────────────────────────────────────
 export const INVOICE_STATUS = {
-  PENDING:  'PENDING',
-  CREATED:  'CREATED',
-  SENT:     'SENT',
-  PAID:     'PAID',
-  PARTIAL:  'PARTIAL',
+  PENDING:   'PENDING',
+  CREATED:   'CREATED',
+  SENT:      'SENT',
+  PAID:      'PAID',
+  PARTIAL:   'PARTIAL',
+  CANCELLED: 'CANCELLED',
 };
 
 // ── Payment Types ───────────────────────────────────────────

@@ -1,15 +1,16 @@
 import React, { useMemo } from 'react';
-import { Box, Paper, Typography, Tooltip, alpha, useTheme, Stack } from '@mui/material';
+import { Box, Paper, Typography, Tooltip, alpha, useTheme, Stack, LinearProgress } from '@mui/material';
 import { Calendar, CircleDot } from 'lucide-react';
 import dayjs from 'dayjs';
 
-const STATUS_COLOR = (theme, status) => ({
-  PLANNED:     theme.palette.primary.main,
-  IN_PROGRESS: theme.palette.warning.main,
-  DISPATCHED:  theme.palette.success.main,
-  DELAYED:     theme.palette.error.main,
-  CANCELLED:   theme.palette.text.disabled,
-}[status] || theme.palette.primary.main);
+const STATUS_META = (theme) => ({
+  PLANNED:     { color: theme.palette.primary.main,      label: 'Planned' },
+  IN_PROGRESS: { color: theme.palette.warning.main,      label: 'In progress' },
+  DISPATCHED:  { color: theme.palette.success.main,      label: 'Dispatched' },
+  DELAYED:     { color: theme.palette.error.main,        label: 'Delayed' },
+  CANCELLED:   { color: theme.palette.text.disabled,     label: 'Cancelled' },
+});
+const colorOf = (theme, status) => (STATUS_META(theme)[status]?.color || theme.palette.primary.main);
 
 // Group phases by phaseNo (a phase spans multiple SKUs in our model).
 const groupByPhaseNo = (phaseChips = []) => {
@@ -19,7 +20,6 @@ const groupByPhaseNo = (phaseChips = []) => {
     g.plannedQty += Number(p.plannedQty || 0);
     g.actualQty  += Number(p.actualQty || 0);
     g.skuCount += 1;
-    // Bias status towards the "worst" — DELAYED beats IN_PROGRESS beats PLANNED beats DISPATCHED beats CANCELLED.
     const priority = { DELAYED: 4, IN_PROGRESS: 3, PLANNED: 2, DISPATCHED: 1, CANCELLED: 0 };
     if ((priority[p.status] || 0) > (priority[g.status] || 0)) g.status = p.status;
     if (p.plannedDate && (!g.plannedDate || new Date(p.plannedDate) < new Date(g.plannedDate))) g.plannedDate = p.plannedDate;
@@ -28,8 +28,11 @@ const groupByPhaseNo = (phaseChips = []) => {
   return [...map.values()].sort((a, b) => new Date(a.plannedDate || 0) - new Date(b.plannedDate || 0));
 };
 
+const fmt = (n) => Number(n || 0).toLocaleString('en-IN');
+
 const PhaseTimeline = ({ phaseChips = [], onPhaseClick }) => {
   const theme = useTheme();
+  const meta = STATUS_META(theme);
   const phases = useMemo(() => groupByPhaseNo(phaseChips), [phaseChips]);
 
   if (!phases.length) {
@@ -45,114 +48,98 @@ const PhaseTimeline = ({ phaseChips = [], onPhaseClick }) => {
     );
   }
 
-  // Build a date range covering all phases (min..max) with at least 30 days padding.
-  const dates = phases.map((p) => dayjs(p.plannedDate));
-  const minD = dayjs.min ? dayjs.min(dates) : dates.reduce((a, b) => (a.isBefore(b) ? a : b), dates[0]);
-  const maxD = dayjs.max ? dayjs.max(dates) : dates.reduce((a, b) => (a.isAfter(b)  ? a : b), dates[0]);
-  const start = minD.subtract(7, 'day');
-  const end   = (maxD.isBefore(start.add(30, 'day')) ? start.add(30, 'day') : maxD.add(7, 'day'));
-  const totalDays = end.diff(start, 'day') + 1;
   const today = dayjs();
+  const isDone = (s) => s === 'DISPATCHED';
+  const isOverdue = (p) => dayjs(p.plannedDate).isBefore(today, 'day') && !isDone(p.status) && p.status !== 'CANCELLED';
 
-  const posPct = (d) => {
-    const days = Math.max(0, Math.min(totalDays, dayjs(d).diff(start, 'day')));
-    return (days / totalDays) * 100;
-  };
-
-  // Monthly tick marks
-  const monthTicks = [];
-  let cursor = start.startOf('month');
-  while (cursor.isBefore(end)) {
-    monthTicks.push({ date: cursor, left: posPct(cursor) });
-    cursor = cursor.add(1, 'month');
-  }
+  const overdue = phases.filter(isOverdue).length;
+  const dispatched = phases.filter((p) => isDone(p.status)).length;
+  const upcoming = phases.length - dispatched - overdue;
+  const range = `${dayjs(phases[0].plannedDate).format('DD MMM')} → ${dayjs(phases[phases.length - 1].plannedDate).format('DD MMM YYYY')}`;
 
   return (
     <Paper sx={{ p: 2, borderRadius: '14px' }}>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.25 }}>
+      {/* Header + legend */}
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5} sx={{ mb: 1 }}>
         <Calendar size={14} color={theme.palette.primary.main} />
         <Typography variant="subtitle2" fontWeight={800}>Plan Timeline</Typography>
-        <Typography variant="caption" color="text.secondary">
-          · {phases.length} phase{phases.length > 1 ? 's' : ''}
-        </Typography>
+        <Typography variant="caption" color="text.secondary">· {phases.length} phase{phases.length > 1 ? 's' : ''} · {range}</Typography>
+        <Box sx={{ flex: 1 }} />
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          {['PLANNED', 'IN_PROGRESS', 'DISPATCHED', 'DELAYED'].map((s) => (
+            <Stack key={s} direction="row" spacing={0.5} alignItems="center">
+              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: meta[s].color }} />
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.62rem' }}>{meta[s].label}</Typography>
+            </Stack>
+          ))}
+        </Stack>
       </Stack>
 
-      <Box sx={{ position: 'relative', height: 80, mx: 1 }}>
-        {/* Track */}
-        <Box sx={{
-          position: 'absolute', left: 0, right: 0, top: 38,
-          height: 4, borderRadius: 999, bgcolor: alpha(theme.palette.primary.main, 0.08),
-        }} />
+      {/* Today summary line */}
+      <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1.25 }}>
+        Today <strong>{today.format('DD MMM YYYY')}</strong>
+        {dispatched > 0 && <> · <span style={{ color: theme.palette.success.main, fontWeight: 700 }}>{dispatched} dispatched</span></>}
+        {overdue > 0 && <> · <span style={{ color: theme.palette.error.main, fontWeight: 700 }}>{overdue} overdue</span></>}
+        {upcoming > 0 && <> · <span style={{ color: theme.palette.primary.main, fontWeight: 700 }}>{upcoming} upcoming</span></>}
+      </Typography>
 
-        {/* Month ticks */}
-        {monthTicks.map((m) => (
-          <Box key={m.date.toISOString()} sx={{ position: 'absolute', left: `${m.left}%`, top: 0, transform: 'translateX(-50%)' }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', fontWeight: 600 }}>
-              {m.date.format('MMM YY')}
-            </Typography>
-            <Box sx={{ width: 1, height: 8, bgcolor: alpha(theme.palette.primary.main, 0.18), mx: 'auto', mt: 0.25 }} />
-          </Box>
-        ))}
-
-        {/* Today marker */}
-        {today.isAfter(start) && today.isBefore(end) && (
-          <Box sx={{
-            position: 'absolute', left: `${posPct(today)}%`, top: 18, bottom: 0,
-            width: 2, transform: 'translateX(-50%)',
-            background: `linear-gradient(180deg, ${theme.palette.error.main}, transparent)`,
-          }}>
-            <Box sx={{
-              position: 'absolute', top: -7, left: '50%', transform: 'translateX(-50%)',
-              fontSize: '0.6rem', fontWeight: 800, color: 'error.main',
-              bgcolor: 'background.paper', px: 0.5, borderRadius: '4px',
-              border: '1px solid', borderColor: 'error.main',
-            }}>TODAY</Box>
-          </Box>
-        )}
-
-        {/* Phase chips */}
-        {phases.map((p) => {
-          const color = STATUS_COLOR(theme, p.status);
+      {/* Connected stepper — evenly spaced so clustered dates never overlap */}
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', overflowX: 'auto', pb: 0.5 }}>
+        {phases.map((p, i) => {
+          const color = colorOf(theme, p.status);
           const pct = p.plannedQty > 0 ? Math.min(100, Math.round((p.actualQty / p.plannedQty) * 100)) : 0;
+          const overdueFlag = isOverdue(p);
           return (
-            <Tooltip
+            <Box
               key={p.phaseNo}
-              arrow
-              title={
-                <Box>
-                  <Typography variant="caption" fontWeight={800}>{p.phaseNo} · {dayjs(p.plannedDate).format('DD MMM YYYY')}</Typography><br/>
-                  <Typography variant="caption">Planned {p.plannedQty.toLocaleString('en-IN')} · Actual {p.actualQty.toLocaleString('en-IN')}</Typography><br/>
-                  <Typography variant="caption">{p.skuCount} SKU{p.skuCount > 1 ? 's' : ''} · {p.status}</Typography>
-                </Box>
-              }
+              onClick={() => onPhaseClick?.(p)}
+              sx={{ flex: 1, minWidth: 116, cursor: 'pointer', textAlign: 'center', '&:hover .pulse': { boxShadow: `0 0 0 6px ${alpha(color, 0.15)}` } }}
             >
-              <Box
-                onClick={() => onPhaseClick?.(p)}
-                sx={{
-                  position: 'absolute',
-                  left: `${posPct(p.plannedDate)}%`,
-                  top: 30,
-                  transform: 'translateX(-50%)',
-                  cursor: 'pointer',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center',
-                }}
-              >
-                <Box sx={{
-                  px: 1, py: 0.25, borderRadius: '999px',
-                  bgcolor: alpha(color, 0.12), color, border: `1.5px solid ${color}`,
-                  fontSize: '0.65rem', fontWeight: 800,
-                  whiteSpace: 'nowrap', mb: 0.25,
-                  display: 'flex', alignItems: 'center', gap: 0.5,
-                }}>
-                  <CircleDot size={10} />
-                  {p.phaseNo}
-                </Box>
-                <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: color, border: '2px solid', borderColor: 'background.paper', boxShadow: 1 }} />
-                <Typography variant="caption" sx={{ fontSize: '0.62rem', mt: 0.25, fontWeight: 700, color: 'text.secondary' }}>
-                  {dayjs(p.plannedDate).format('DD MMM')} · {pct}%
-                </Typography>
+              {/* connector + node */}
+              <Box sx={{ position: 'relative', height: 22, mb: 0.75 }}>
+                <Box sx={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 3, bgcolor: alpha(theme.palette.text.primary, 0.08), transform: 'translateY(-50%)' }} />
+                {/* hide half-connectors at the ends */}
+                {i === 0 && <Box sx={{ position: 'absolute', top: '50%', left: 0, width: '50%', height: 5, bgcolor: 'background.paper', transform: 'translateY(-50%)' }} />}
+                {i === phases.length - 1 && <Box sx={{ position: 'absolute', top: '50%', right: 0, width: '50%', height: 5, bgcolor: 'background.paper', transform: 'translateY(-50%)' }} />}
+                <Tooltip arrow title={
+                  <Box>
+                    <Typography variant="caption" fontWeight={800}>{p.phaseNo} · {dayjs(p.plannedDate).format('DD MMM YYYY')}</Typography><br />
+                    <Typography variant="caption">Planned {fmt(p.plannedQty)} · Actual {fmt(p.actualQty)} ({pct}%)</Typography><br />
+                    <Typography variant="caption">{p.skuCount} SKU{p.skuCount > 1 ? 's' : ''} · {meta[p.status]?.label || p.status}{overdueFlag ? ' · OVERDUE' : ''}</Typography>
+                  </Box>
+                }>
+                  <Box className="pulse" sx={{
+                    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                    width: 18, height: 18, borderRadius: '50%', bgcolor: color,
+                    border: `3px solid ${overdueFlag ? theme.palette.error.main : theme.palette.background.paper}`,
+                    boxShadow: overdueFlag ? `0 0 0 3px ${alpha(theme.palette.error.main, 0.25)}` : 1,
+                    display: 'grid', placeItems: 'center', transition: 'box-shadow .15s',
+                  }}>
+                    <CircleDot size={9} color="#fff" />
+                  </Box>
+                </Tooltip>
               </Box>
-            </Tooltip>
+
+              {/* phase number pill */}
+              <Box sx={{
+                display: 'inline-flex', alignItems: 'center', px: 1, py: 0.1, borderRadius: '999px',
+                bgcolor: alpha(color, 0.12), color, border: `1.5px solid ${color}`, fontSize: '0.66rem', fontWeight: 800,
+              }}>{p.phaseNo}</Box>
+
+              <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mt: 0.4, color: overdueFlag ? 'error.main' : 'text.primary', fontSize: '0.68rem' }}>
+                {dayjs(p.plannedDate).format('DD MMM YYYY')}
+              </Typography>
+              <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.64rem', fontVariantNumeric: 'tabular-nums' }}>
+                {fmt(p.actualQty)} / {fmt(p.plannedQty)}
+              </Typography>
+              <Box sx={{ px: 1.5, mt: 0.4 }}>
+                <LinearProgress
+                  variant="determinate" value={pct}
+                  sx={{ height: 5, borderRadius: 3, bgcolor: alpha(color, 0.12), '& .MuiLinearProgress-bar': { bgcolor: color } }}
+                />
+                <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.disabled' }}>{pct}%</Typography>
+              </Box>
+            </Box>
           );
         })}
       </Box>
