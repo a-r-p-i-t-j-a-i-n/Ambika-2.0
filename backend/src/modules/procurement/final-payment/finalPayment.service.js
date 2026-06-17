@@ -1,13 +1,104 @@
+import fs from 'fs';
+import path from 'path';
+import PDFDocument from 'pdfkit';
 import VendorFinalPayment, { FINAL_PAYMENT_STATUS } from './finalPayment.model.js';
 import VendorVoucher, { VOUCHER_STATUS } from '../voucher/voucher.model.js';
 import VendorInvoice, { INVOICE_STATUS } from '../vendor-invoice/vendorInvoice.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateFinalPaymentNumber } from '../../../utils/docNumberGenerator.js';
+import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { logger } from '../../../utils/logger.js';
+import env from '../../../config/env.js';
 
+const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const EPS = 0.01;
+
+// ─────────────────────────────────────────────────────────────
+// PDF — Vendor Payment Receipt (A4)
+// ─────────────────────────────────────────────────────────────
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+const INR = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const PAY_STATUS_LABEL = {
+  PART_PAYMENT: 'Part Payment', FULL_PAYMENT: 'Full Payment',
+  SHORT_PAYMENT_COMPLETED: 'Short Payment & Completed', CANCELLED: 'Cancelled',
+};
+
+export const buildFinalPaymentPdfBuffer = (p, company = {}) => new Promise((resolve, reject) => {
+  try {
+    const M = 40;
+    const doc = new PDFDocument({ size: 'A4', margin: M });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+
+    const W = 595.28 - M * 2;
+    const navy = '#0b2545'; const blue = '#1d4ed8'; const line = '#dbe4f3';
+
+    // Header band.
+    doc.rect(0, 0, 595.28, 84).fill(navy);
+    doc.fill('#ffffff').font('Helvetica-Bold').fontSize(17).text(company.name || env.COMPANY_NAME, M, 16, { width: W - 200 });
+    doc.font('Helvetica').fontSize(8.5).fill('#cdd9f0')
+      .text([company.address || env.COMPANY_ADDRESS, company.gstin ? `GSTIN: ${company.gstin}` : '', company.email || env.COMPANY_EMAIL].filter(Boolean).join('   •   '), M, 40, { width: W - 200 });
+    doc.font('Helvetica-Bold').fontSize(14).fill('#ffffff').text('PAYMENT RECEIPT', M, 34, { width: W, align: 'right' });
+
+    let y = 102;
+    const half = W / 2 - 8;
+    const CARD_H = 100;
+    doc.roundedRect(M, y, half, CARD_H, 6).stroke(line);
+    doc.roundedRect(M + half + 16, y, half, CARD_H, 6).stroke(line);
+
+    // Left — payment details.
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('PAYMENT DETAILS', M + 10, y + 8);
+    doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(p.paymentNumber || '', M + 10, y + 21);
+    doc.font('Helvetica').fontSize(8.5).fill(navy)
+      .text(`Date: ${fmtDate(p.paymentDate)}`, M + 10, y + 38)
+      .text(`Status: ${PAY_STATUS_LABEL[p.paymentStatus] || p.paymentStatus || '—'}`, M + 10, y + 51)
+      .text(`Mode: ${(p.paymentMode || '').replace(/_/g, ' ')}`, M + 10, y + 64)
+      .text(`Reference: ${p.paymentReferenceNumber || '—'}`, M + 10, y + 77);
+
+    // Right — vendor + linkage. The vendor name may wrap, so the linkage lines
+    // start below its measured height (no overlap).
+    const vx = M + half + 26;
+    const vW = half - 20;
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('PAID TO', vx, y + 8);
+    doc.font('Helvetica-Bold').fontSize(10.5).fill(navy);
+    const vNameH = doc.heightOfString(p.vendorName || '—', { width: vW });
+    doc.text(p.vendorName || '—', vx, y + 21, { width: vW });
+    let ly = y + 21 + vNameH + 4;
+    doc.font('Helvetica').fontSize(8.5).fill(navy);
+    doc.text(`Voucher: ${p.voucherNumber || '—'}`, vx, ly, { width: vW }); ly += 13;
+    doc.text(`Invoice: ${p.invoiceNumber || '—'}`, vx, ly, { width: vW }); ly += 13;
+    doc.text(`PO: ${p.poNumber || '—'}`, vx, ly, { width: vW });
+
+    y += CARD_H + 16;
+
+    // Amount summary band.
+    doc.roundedRect(M, y, W, 64, 6).fill('#f5f8ff');
+    const col = W / 3;
+    const cell = (label, value, i, strong) => {
+      const cx = M + i * col;
+      doc.font('Helvetica-Bold').fontSize(8).fill(blue).text(label, cx + 12, y + 12, { width: col - 24 });
+      doc.font('Helvetica-Bold').fontSize(strong ? 15 : 12).fill(navy).text(value, cx + 12, y + 30, { width: col - 24 });
+    };
+    cell('PREVIOUS BALANCE', INR(p.previousBalance), 0);
+    cell('PAID NOW', INR(p.paidAmount), 1, true);
+    cell('BALANCE AFTER', INR(p.balanceAfterPayment), 2);
+    y += 80;
+
+    // Remarks.
+    doc.font('Helvetica-Bold').fontSize(8.5).fill(navy).text('Remarks:', M, y);
+    doc.font('Helvetica').fontSize(8.5).text(p.remarks || '—', M, y + 13, { width: W - 200 });
+
+    // Signature.
+    doc.font('Helvetica-Bold').fontSize(9).fill(navy).text(`For ${company.name || env.COMPANY_NAME}`, M + W - 180, y + 4, { width: 180, align: 'center' });
+    doc.font('Helvetica').fontSize(8).text(`Prepared By: ${p.performedByName || '—'}`, M + W - 180, y + 44, { width: 180, align: 'center' });
+    doc.font('Helvetica').fontSize(8).text('Authorized Signatory', M + W - 180, y + 58, { width: 180, align: 'center' });
+
+    doc.end();
+  } catch (err) { reject(err); }
+});
 
 // Tally Entry completion is tracked on the voucher as a plain string enum.
 const VOUCHER_TALLY_COMPLETED = 'COMPLETED';
@@ -129,7 +220,44 @@ export const finalPaymentService = {
       } catch (err) { logger.error(`[final-payment] invoice update failed for ${v.invoiceId}: ${err.message}`); }
     }
 
+    // Generate the payment receipt PDF (non-fatal — payment stands even if PDF fails).
+    try {
+      const { paymentPdfUrl, paymentPdfFileName } = await this.generatePdf(payment._id);
+      payment.paymentPdfUrl = paymentPdfUrl;
+      payment.paymentPdfFileName = paymentPdfFileName;
+    } catch (err) { logger.error(`[final-payment] PDF generation failed for ${payment.paymentNumber}: ${err.message}`); }
+
     return payment;
+  },
+
+  /** Render + store the payment receipt PDF and persist its URL. */
+  async generatePdf(id) {
+    const p = await VendorFinalPayment.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
+    if (!p) throw new AppError('Final payment not found', 404);
+
+    let company = {};
+    try {
+      const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
+      const s = await CompanySettings.findOne().lean();
+      if (s) company = { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, email: s.companyEmail };
+    } catch { /* env fallback */ }
+
+    const buffer = await buildFinalPaymentPdfBuffer(p, company);
+    const fileName = `${String(p.paymentNumber || 'PAYMENT').replace(/[^\w.-]/g, '_')}.pdf`;
+    let paymentPdfUrl;
+    if (s3Enabled) {
+      const key = buildKey('final-payments', fileName);
+      await uploadBuffer({ buffer, key, contentType: 'application/pdf' });
+      paymentPdfUrl = `${SERVER_BASE}/api/v1/uploads/file?key=${encodeURIComponent(key)}`;
+    } else {
+      const dir = path.resolve(process.cwd(), 'uploads', 'final-payments');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const fp = path.join(dir, `${Date.now()}-${fileName}`);
+      fs.writeFileSync(fp, buffer);
+      paymentPdfUrl = `${SERVER_BASE}/uploads/final-payments/${path.basename(fp)}`;
+    }
+    await VendorFinalPayment.updateOne({ _id: id }, { $set: { paymentPdfUrl, paymentPdfFileName: fileName } });
+    return { paymentPdfUrl, paymentPdfFileName: fileName };
   },
 
   async getAll(query) {

@@ -66,6 +66,7 @@ export const PERMISSIONS = Object.freeze({
   // ── Procurement (Purchase FMS) ──────────────────────────────────
   'procurement.approve':           { module: 'Procurement',    label: 'Approve procurement documents (PO / PI)',   risk: 'high' },
   'procurement.markPiNotRequired': { module: 'Procurement',    label: 'Mark a PO\'s PI as Not Required',            risk: 'high' },
+  'procurement.invoiceExcess':     { module: 'Procurement',    label: 'Invoice more than the QC-accepted qty',     risk: 'high' },
 
   // ── Access Control ──────────────────────────────────────────────
   'accessControl.manageUsers':   { module: 'Access Control', label: 'Manage users (invite, suspend, assign)',    risk: 'high' },

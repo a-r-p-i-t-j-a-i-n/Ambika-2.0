@@ -1,52 +1,18 @@
 import React from 'react';
-import { Chip } from '@mui/material';
+import StatusChip from '../components/StatusChip';
 
 /** Shared meta for Material Follow-up screens (Purchase FMS Step 1.5). */
 
 export const FOLLOWUP_STATUSES = ['PENDING', 'DONE', 'RESCHEDULED', 'READY_FOR_GRN', 'CLOSED'];
 export const FOLLOWUP_TYPES = ['CALL', 'EMAIL', 'WHATSAPP', 'VISIT', 'OTHER'];
 
-const STATUS_META = {
-  PENDING:       { label: 'Pending',       color: 'warning' },
-  DONE:          { label: 'Done',          color: 'success' },
-  RESCHEDULED:   { label: 'Rescheduled',   color: 'info' },
-  READY_FOR_GRN: { label: 'Ready for GRN', color: 'success' },
-  CLOSED:        { label: 'Closed',        color: 'default' },
-};
+const TYPE_LABEL = { CALL: 'Call', EMAIL: 'Email', WHATSAPP: 'WhatsApp', VISIT: 'Visit', OTHER: 'Other' };
 
-const TYPE_META = {
-  CALL:     { label: 'Call',     color: 'info' },
-  EMAIL:    { label: 'Email',    color: 'primary' },
-  WHATSAPP: { label: 'WhatsApp', color: 'success' },
-  VISIT:    { label: 'Visit',    color: 'warning' },
-  OTHER:    { label: 'Other',    color: 'default' },
-};
+export const FuStatusChip = ({ status }) => <StatusChip status={status} />;
+export const PoFollowUpChip = ({ status }) => <StatusChip status={status} />;
 
-const pick = (map, key) => map[key] || { label: key || '—', color: 'default' };
-
-export const FuStatusChip = ({ status }) => {
-  const m = pick(STATUS_META, status);
-  return <Chip size="small" label={m.label} color={m.color} sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
-
-export const FuTypeChip = ({ type }) => {
-  const m = pick(TYPE_META, type);
-  return <Chip size="small" label={m.label} color={m.color} variant="outlined" sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
-
-// PO-level follow-up mirror (VendorPurchaseOrder.followUpStatus).
-const PO_FU_META = {
-  NOT_STARTED:   { label: 'Not Started',   color: 'default' },
-  PENDING:       { label: 'Pending',       color: 'warning' },
-  IN_PROGRESS:   { label: 'In Progress',   color: 'info' },
-  READY_FOR_GRN: { label: 'Ready for GRN', color: 'success' },
-  CLOSED:        { label: 'Closed',        color: 'default' },
-};
-
-export const PoFollowUpChip = ({ status }) => {
-  const m = pick(PO_FU_META, status);
-  return <Chip size="small" label={m.label} color={m.color} sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
+// Follow-up channel is a category (not a status) → neutral styling, no color coding.
+export const FuTypeChip = ({ type }) => <StatusChip status={type} tone="neutral" label={TYPE_LABEL[type] || type} />;
 
 export const fmtDate = (d) =>
   (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');

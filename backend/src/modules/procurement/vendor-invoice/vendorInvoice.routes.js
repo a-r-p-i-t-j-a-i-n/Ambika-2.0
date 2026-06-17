@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { attachUserPermissions } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { vendorInvoiceController as c } from './vendorInvoice.controller.js';
 import {
@@ -18,6 +19,7 @@ import {
 
 const router = Router();
 router.use(protect);
+router.use(attachUserPermissions); // so the excess-override check can read permissions
 
 router.route('/')
   .get(validate(invoiceQuerySchema, 'query'), c.getAll)

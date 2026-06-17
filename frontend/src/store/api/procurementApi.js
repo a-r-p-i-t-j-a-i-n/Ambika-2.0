@@ -391,6 +391,10 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/final-payments/${id}`, method: 'PATCH', body }),
       invalidatesTags: (_r, _e, { id }) => ['FinalPayment', 'FinalPaymentStats', { type: 'FinalPayment', id }],
     }),
+    generateFinalPaymentPdf: builder.mutation({
+      query: ({ id }) => ({ url: `/procurement/final-payments/${id}/pdf`, method: 'POST' }),
+      invalidatesTags: (_r, _e, { id }) => ['FinalPayment', { type: 'FinalPayment', id }],
+    }),
     cancelFinalPayment: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/final-payments/${id}/cancel`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['FinalPayment', 'FinalPaymentStats', 'Voucher', 'VoucherStats', 'VendorInvoice', { type: 'FinalPayment', id }],
@@ -496,5 +500,6 @@ export const {
   useGetFinalPaymentsByVoucherQuery,
   useCreateFinalPaymentMutation,
   useUpdateFinalPaymentMutation,
+  useGenerateFinalPaymentPdfMutation,
   useCancelFinalPaymentMutation,
 } = procurementApi;

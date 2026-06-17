@@ -1,18 +1,22 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog, Box, Typography, TextField, Button, IconButton, Divider,
   Grid, Autocomplete, CircularProgress, Paper, Chip, MenuItem,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { X, Save, ClipboardCheck, Building2, FileText } from 'lucide-react';
+import { X, Save, ClipboardCheck, Building2, FileText, Upload, ExternalLink } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useGetGrnsQuery,
   useCreateIncomingQcMutation,
   useUpdateIncomingQcMutation,
 } from '../../../store/api/procurementApi';
+import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
+import { fileHref } from '../indents/indentMeta';
 import { DEFECT_SEVERITIES } from './qcMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+
+const ACCEPT = '.pdf,image/*';
 
 /**
  * Create / edit an Incoming QC (Step 1.9). Only completed GRNs that are still
@@ -30,10 +34,24 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
   const [grn, setGrn] = useState(null);
   const [header, setHeader] = useState({ qcDate: todayStr(), checkedByName: '', preparedBy: '', remarks: '' });
   const [items, setItems] = useState([]);
+  const [doc, setDoc] = useState(null);
+  const fileRef = useRef(null);
 
   const [createQc, { isLoading: creating }] = useCreateIncomingQcMutation();
   const [updateQc, { isLoading: updating }] = useUpdateIncomingQcMutation();
+  const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
   const saving = creating || updating;
+
+  const handleUpload = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const res = await uploadDoc(f).unwrap();
+      const d = res?.data || {};
+      setDoc({ fileName: d.fileName || f.name, fileUrl: d.url, fileType: d.mimeType || f.type });
+      enqueueSnackbar('Attachment uploaded', { variant: 'success' });
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Upload failed', { variant: 'error' }); }
+  };
 
   // GRNs eligible for QC: completed + qcStatus PENDING.
   const { data: grnRes, isLoading: grnLoading } = useGetGrnsQuery(
@@ -58,6 +76,7 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
     if (qc) {
       setGrn({ _id: qc.grnId, grnNumber: qc.grnNumber, vendorName: qc.vendorName });
       setHeader({ qcDate: qc.qcDate ? qc.qcDate.slice(0, 10) : todayStr(), checkedByName: qc.checkedByName || '', preparedBy: qc.preparedBy || '', remarks: qc.remarks || '' });
+      setDoc(qc.qcReportDocument?.fileUrl ? { ...qc.qcReportDocument } : null);
       setItems((qc.items || []).map((it) => ({
         grnItemId: it.grnItemId, skuId: it.skuId || '', skuCode: it.skuCode || '', itemName: it.itemName,
         unit: it.unit || 'Pcs', batchNo: it.batchNo || '', receivedQty: it.receivedQty,
@@ -66,6 +85,7 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
       })));
     } else {
       setHeader({ qcDate: todayStr(), checkedByName: '', preparedBy: '', remarks: '' });
+      setDoc(null);
       if (presetGrn) { setGrn(presetGrn); setItems(linesFromGrn(presetGrn)); }
       else { setGrn(null); setItems([]); }
     }
@@ -85,11 +105,17 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
   const lineBalanced = (it) => round2(round2(it.acceptedQty) + round2(it.rejectedQty) + round2(it.reworkQty)) === round2(it.receivedQty);
   const allBalanced = items.length > 0 && items.every(lineBalanced);
 
+  // Highlight the Remarks field — escalate to amber when there are rejected /
+  // rework quantities and no overall remark explaining them.
+  const hasDefects = totals.rejected > 0 || totals.rework > 0;
+  const remarksSuggested = hasDefects && !header.remarks.trim();
+
   const handleSubmit = async (markComplete = false) => {
     if (!isEdit && !grn?._id) { enqueueSnackbar('Select a GRN first', { variant: 'warning' }); return; }
     if (items.length === 0) { enqueueSnackbar('No items to inspect', { variant: 'warning' }); return; }
     const payload = {
       ...header,
+      qcReportDocument: doc ? { fileName: doc.fileName, fileUrl: doc.fileUrl, fileType: doc.fileType } : undefined,
       items: items.map((it) => ({
         grnItemId: it.grnItemId, skuId: it.skuId || undefined, skuCode: it.skuCode || '', itemName: it.itemName,
         unit: it.unit, batchNo: it.batchNo, receivedQty: round2(it.receivedQty),
@@ -232,7 +258,51 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
           )}
         </Paper>
 
-        <TextField label="Remarks" fullWidth value={header.remarks} onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} sx={{ bgcolor: '#fff' }} />
+        <TextField
+          label="Remarks"
+          fullWidth
+          multiline
+          minRows={2}
+          value={header.remarks}
+          onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))}
+          placeholder="Add inspection notes…"
+          helperText={remarksSuggested
+            ? 'Recommended: note the reason for rejected / rework quantities'
+            : 'Inspection remarks'}
+          sx={{
+            bgcolor: remarksSuggested ? alpha('#b45309', 0.06) : alpha('#2563eb', 0.05),
+            borderRadius: '12px',
+            '& .MuiOutlinedInput-root fieldset': {
+              borderColor: remarksSuggested ? '#b45309' : '#2563eb',
+              borderWidth: 2,
+            },
+            '& .MuiInputLabel-root': {
+              fontWeight: 700,
+              color: remarksSuggested ? '#b45309' : 'primary.main',
+            },
+            '& .MuiFormHelperText-root': remarksSuggested ? { color: '#b45309' } : {},
+          }} />
+
+        {/* Attachment (QC report / photo / inspection document) */}
+        <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={handleUpload} />
+        <Box>
+          <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mb: 0.75 }}>
+            ATTACHMENT (QC report / photo — optional)
+          </Typography>
+          {doc?.fileUrl ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: '10px', bgcolor: '#fff' }}>
+              <FileText size={16} />
+              <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0 }} noWrap>{doc.fileName}</Typography>
+              <Button size="small" startIcon={<ExternalLink size={13} />} href={fileHref(doc.fileUrl)} target="_blank" rel="noopener">View</Button>
+              <Chip size="small" label="Remove" onDelete={() => setDoc(null)} onClick={() => setDoc(null)} deleteIcon={<X size={13} />} />
+            </Box>
+          ) : (
+            <Button variant="outlined" size="small" startIcon={uploading ? <CircularProgress size={14} /> : <Upload size={14} />}
+              onClick={() => fileRef.current?.click()} disabled={uploading}>
+              Upload PDF / Image
+            </Button>
+          )}
+        </Box>
       </Box>
 
       <Divider />
@@ -241,9 +311,9 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
           {items.length} item(s) · {allBalanced ? 'quantities balanced' : 'quantities not balanced'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving}>Cancel</Button>
+          <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || uploading}>Cancel</Button>
           <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-            onClick={() => handleSubmit()} disabled={saving}>
+            onClick={() => handleSubmit()} disabled={saving || uploading}>
             {isEdit ? 'Save Changes' : 'Create QC'}
           </Button>
         </Box>

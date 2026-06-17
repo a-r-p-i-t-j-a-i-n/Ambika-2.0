@@ -24,10 +24,12 @@ export const voucherService = {
     const existing = await VendorVoucher.findOne({ invoiceId: inv._id, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED } }).lean();
     if (existing) throw new AppError(`A voucher (${existing.voucherNumber}) already exists for this invoice`, 400);
 
-    const paidAmount = round2(data.paidAmount);
     const netPayableAmount = round2(inv.netPayableAmount);
     const voucherNumber = await generateVoucherNumber(data.voucherDate || new Date());
 
+    // Step 1.11 is voucher passing / approval only — NO payment is recorded here.
+    // paidAmount stays 0 and balance = net payable; the actual payment is recorded
+    // in Step 1.13 Final Payment.
     const voucher = await VendorVoucher.create({
       voucherNumber,
       voucherDate: data.voucherDate || new Date(),
@@ -38,15 +40,8 @@ export const voucherService = {
       advancePaid: round2(inv.advancePaid),
       debitNoteAmount: round2(inv.debitNoteAmount),
       netPayableAmount,
-      paidAmount,
-      balanceAmount: round2(netPayableAmount - paidAmount),
-      paymentMode: data.paymentMode,
-      referenceNumber: data.referenceNumber || '',
-      bankName: data.bankName || '',
-      utrNumber: data.utrNumber || '',
-      chequeNumber: data.chequeNumber || '',
-      paymentProof: data.paymentProof || { fileUrl: '', fileName: '' },
-      paymentDate: data.paymentDate || null,
+      paidAmount: 0,
+      balanceAmount: netPayableAmount,
       voucherStatus: VOUCHER_STATUS.DRAFT,
       remarks: data.remarks || '',
       createdBy: user?._id,
@@ -56,7 +51,18 @@ export const voucherService = {
   },
 
   async getAll(query) {
-    const features = new ApiFeatures(VendorVoucher.find({ isDeleted: { $ne: true } }), query)
+    // Eligibility helpers (used by Final Payment 1.13): minimum remaining balance
+    // and excluded voucher statuses. tallyEntryStatus passes through ApiFeatures.
+    const { minBalance, excludeStatus, ...rest } = query;
+    const base = { isDeleted: { $ne: true } };
+    if (minBalance !== undefined && minBalance !== '') {
+      base.balanceAmount = { $gte: Number(minBalance) || 0 };
+    }
+    if (excludeStatus) {
+      const list = String(excludeStatus).split(',').map((s) => s.trim()).filter(Boolean);
+      if (list.length) base.voucherStatus = { $nin: list };
+    }
+    const features = new ApiFeatures(VendorVoucher.find(base), rest)
       .filter().search(['voucherNumber', 'invoiceNumber', 'vendorName', 'referenceNumber'])
       .sort().select().paginate();
     return features.exec();
@@ -93,44 +99,42 @@ export const voucherService = {
   async update(id, data, user) {
     const v = await findOrThrow(id);
     if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) throw new AppError('Only draft vouchers can be edited', 400);
-    Object.assign(v, data);
-    if (data.paidAmount !== undefined) v.balanceAmount = round2(v.netPayableAmount - round2(data.paidAmount));
+    // Never accept payment/status mutations here — those belong to Step 1.13.
+    const { paidAmount, balanceAmount, voucherStatus, ...rest } = data;
+    Object.assign(v, rest);
+    v.paidAmount = 0;
+    v.balanceAmount = round2(v.netPayableAmount);
     v.updatedBy = user?._id;
     v.activityTimeline.push({ action: 'UPDATE', description: 'Voucher updated', actorId: user?._id });
     return v.save();
   },
 
-  // Rules 3-6: post the voucher → balance, status, and invoice update.
+  /**
+   * Step 1.11 — voucher passing / approval ONLY. No payment is recorded here:
+   * paidAmount stays 0, balance stays = net payable, and the invoice is NOT
+   * marked PAYMENT_COMPLETED. Moving to POSTED enables the Tally Entry (1.12);
+   * the actual vendor payment is recorded in Step 1.13 Final Payment.
+   */
   async post(id, data, user) {
     const v = await findOrThrow(id);
     if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) throw new AppError('Only draft vouchers can be posted', 400);
 
-    const paidAmount = round2(data.paidAmount);
-    if (paidAmount > round2(v.netPayableAmount)) {
-      throw new AppError(`Paid amount (${paidAmount}) exceeds net payable (${v.netPayableAmount})`, 400);
-    }
-    const balanceAmount = round2(v.netPayableAmount - paidAmount);
-    const fullyPaid = balanceAmount <= 0;
-
-    v.paidAmount = paidAmount;
-    v.balanceAmount = Math.max(0, balanceAmount);
-    v.paymentMode = data.paymentMode || v.paymentMode;
-    v.referenceNumber = data.referenceNumber || v.referenceNumber;
-    v.paymentDate = data.paymentDate || new Date();
-    v.voucherStatus = fullyPaid ? VOUCHER_STATUS.FULLY_PAID : VOUCHER_STATUS.PARTIALLY_PAID;
+    v.paidAmount = 0;
+    v.balanceAmount = round2(v.netPayableAmount);
+    v.voucherStatus = VOUCHER_STATUS.POSTED;
     v.postedAt = new Date();
-    if (data.remarks) v.remarks = data.remarks;
+    if (data?.remarks) v.remarks = data.remarks;
     v.updatedBy = user?._id;
-    v.activityTimeline.push({ action: 'POST', description: `Voucher posted — ${v.voucherStatus} (paid ₹${paidAmount})`, actorId: user?._id });
+    v.activityTimeline.push({ action: 'POST', description: 'Voucher passed / approved — pending final payment', actorId: user?._id });
     await v.save();
 
-    // Rule 6: link the voucher to the invoice; mark completed once fully paid.
+    // Link the voucher onto the invoice (do NOT mark it paid — that's Step 1.13).
     try {
       await VendorInvoice.updateOne(
         { _id: v.invoiceId },
-        { $set: { voucherId: v._id, voucherNumber: v.voucherNumber, ...(fullyPaid ? { invoiceStatus: INVOICE_STATUS.PAYMENT_COMPLETED } : {}) } },
+        { $set: { voucherId: v._id, voucherNumber: v.voucherNumber } },
       );
-    } catch (err) { logger.error(`[voucher] invoice update failed for ${v.invoiceId}: ${err.message}`); }
+    } catch (err) { logger.error(`[voucher] invoice link failed for ${v.invoiceId}: ${err.message}`); }
 
     return v;
   },

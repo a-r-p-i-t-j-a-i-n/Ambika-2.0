@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog, Box, Typography, TextField, Button, IconButton, Divider,
   Grid, Autocomplete, CircularProgress, Paper, Chip, MenuItem,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { X, Save, PackageCheck, Building2, FileText, Eye } from 'lucide-react';
+import { X, Save, PackageCheck, Building2, FileText, Eye, Upload, ExternalLink } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useGetPurchaseOrdersQuery,
@@ -12,9 +12,13 @@ import {
   useUpdateGrnMutation,
   usePreviewGrnPdfMutation,
 } from '../../../store/api/procurementApi';
+import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
+import { fileHref } from '../indents/indentMeta';
 import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel } from './grnMeta';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+
+const ACCEPT = '.pdf,image/*';
 
 /**
  * Create / edit a Goods Receipt Note (Step 1.8).
@@ -35,11 +39,25 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
     vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '',
   });
   const [items, setItems] = useState([]);
+  const [doc, setDoc] = useState(null);
+  const fileRef = useRef(null);
 
   const [createGrn, { isLoading: creating }] = useCreateGrnMutation();
   const [updateGrn, { isLoading: updating }] = useUpdateGrnMutation();
   const [previewGrnPdf, { isLoading: previewing }] = usePreviewGrnPdfMutation();
+  const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
   const saving = creating || updating;
+
+  const handleUpload = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const res = await uploadDoc(f).unwrap();
+      const d = res?.data || {};
+      setDoc({ fileName: d.fileName || f.name, fileUrl: d.url, fileType: d.mimeType || f.type });
+      enqueueSnackbar('Attachment uploaded', { variant: 'success' });
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Upload failed', { variant: 'error' }); }
+  };
 
   // PDF preview-before-submit state.
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -76,6 +94,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
         vehicleNumber: grn.vehicleNumber || '', receivedBy: grn.receivedBy || '', preparedBy: grn.preparedBy || '',
         howItemReceived: grn.howItemReceived || 'FULL_MATERIAL_RECEIVED', remarks: grn.remarks || '',
       });
+      setDoc(grn.challanDocument?.fileUrl ? { ...grn.challanDocument } : null);
       setItems((grn.items || []).map((it) => ({
         poItemId: it.poItemId, itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.orderedQty, previouslyReceivedQty: it.previouslyReceivedQty,
@@ -84,6 +103,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
       })));
     } else {
       setHeader({ grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '', vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '' });
+      setDoc(null);
       if (presetPo) { setPo(presetPo); setItems(linesFromPo(presetPo)); }
       else { setPo(null); setItems([]); }
     }
@@ -123,6 +143,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
   const buildPayload = () => ({
     ...header,
     invoiceDate: header.invoiceDate || undefined,
+    challanDocument: doc ? { fileName: doc.fileName, fileUrl: doc.fileUrl, fileType: doc.fileType } : undefined,
     items: validItems.map((it) => ({
       poItemId: it.poItemId, itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
       skuId: it.skuId || undefined, unit: it.unit || 'Pcs',
@@ -343,6 +364,27 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
               color: remarksRequired ? '#b45309' : 'primary.main',
             },
           }} />
+
+        {/* Attachment (challan / invoice copy / photo) */}
+        <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={handleUpload} />
+        <Box>
+          <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mb: 0.75 }}>
+            ATTACHMENT (challan / invoice copy — optional)
+          </Typography>
+          {doc?.fileUrl ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: '10px', bgcolor: '#fff' }}>
+              <FileText size={16} />
+              <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0 }} noWrap>{doc.fileName}</Typography>
+              <Button size="small" startIcon={<ExternalLink size={13} />} href={fileHref(doc.fileUrl)} target="_blank" rel="noopener">View</Button>
+              <Chip size="small" label="Remove" onDelete={() => setDoc(null)} onClick={() => setDoc(null)} deleteIcon={<X size={13} />} />
+            </Box>
+          ) : (
+            <Button variant="outlined" size="small" startIcon={uploading ? <CircularProgress size={14} /> : <Upload size={14} />}
+              onClick={() => fileRef.current?.click()} disabled={uploading}>
+              Upload PDF / Image
+            </Button>
+          )}
+        </Box>
       </Box>
 
       {/* Footer */}
@@ -352,13 +394,13 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
           {validItems.length} item(s) · received {totals.received} · {fmtINR(totals.value)} · stock posts on Complete
         </Typography>
         <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || previewing}>Cancel</Button>
+          <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || previewing || uploading}>Cancel</Button>
           <Button variant="outlined" startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
-            onClick={handlePreview} disabled={saving || previewing}>
+            onClick={handlePreview} disabled={saving || previewing || uploading}>
             Preview PDF
           </Button>
           <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-            onClick={handleSubmit} disabled={saving || previewing}>
+            onClick={handleSubmit} disabled={saving || previewing || uploading}>
             {isEdit ? 'Save Changes' : 'Create GRN'}
           </Button>
         </Box>

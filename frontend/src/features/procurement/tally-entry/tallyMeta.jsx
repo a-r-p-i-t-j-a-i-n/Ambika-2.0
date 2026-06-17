@@ -1,5 +1,5 @@
 import React from 'react';
-import { Chip } from '@mui/material';
+import StatusChip from '../components/StatusChip';
 
 /** Shared meta for Purchase Tally Entry screens (Purchase FMS Step 1.12). */
 
@@ -18,18 +18,7 @@ export const CHECKLIST_TOTAL = CHECKLIST_ITEMS.length;
 
 export const checklistProgress = (cl = {}) => CHECKLIST_ITEMS.filter((i) => cl?.[i.key]).length;
 
-const STATUS_META = {
-  PENDING:   { label: 'Pending',   color: 'warning' },
-  COMPLETED: { label: 'Completed', color: 'success' },
-  CANCELLED: { label: 'Cancelled', color: 'error' },
-};
-
-const pick = (map, key) => map[key] || { label: key || '—', color: 'default' };
-
-export const TallyStatusChip = ({ status }) => {
-  const m = pick(STATUS_META, status);
-  return <Chip size="small" label={m.label} color={m.color} sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
+export const TallyStatusChip = ({ status }) => <StatusChip status={status} />;
 
 export const fmtDate = (d) =>
   (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');

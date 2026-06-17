@@ -61,7 +61,7 @@ const VoucherList = () => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (r.voucherStatus === 'DRAFT') {
       a.push({ key: 'edit', label: 'Edit', icon: <Pencil size={16} />, fn: () => onEdit(r) });
-      a.push({ key: 'post', label: 'Post Payment', icon: <Send size={16} />, fn: () => onView(r) });
+      a.push({ key: 'post', label: 'Post Voucher', icon: <Send size={16} />, fn: () => onView(r) });
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onView(r) });
     }
     return a;

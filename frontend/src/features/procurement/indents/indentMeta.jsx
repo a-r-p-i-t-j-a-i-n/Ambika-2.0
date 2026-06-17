@@ -1,5 +1,5 @@
 import React from 'react';
-import { Chip } from '@mui/material';
+import StatusChip from '../components/StatusChip';
 
 /** Dropdown option sets shared across the Indent screens. */
 export const UNITS = ['Pcs', 'Kg', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
@@ -18,34 +18,6 @@ export const DEPARTMENTS = ['Stores', 'Production', 'QC', 'Admin', 'Maintenance'
 
 export const APPROVAL_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'];
 
-const APPROVAL_META = {
-  DRAFT:            { label: 'Draft',            color: 'default' },
-  PENDING_APPROVAL: { label: 'Pending Approval', color: 'warning' },
-  APPROVED:         { label: 'Approved',         color: 'success' },
-  REJECTED:         { label: 'Rejected',         color: 'error' },
-};
-
-const OVERALL_META = {
-  INDENT_GENERATED:   { label: 'Indent Generated',   color: 'default' },
-  INDENT_APPROVED:    { label: 'Indent Approved',    color: 'info' },
-  QUOTE_PENDING:      { label: 'Quote Pending',      color: 'warning' },
-  QUOTE_RECEIVED:     { label: 'Quote Received',     color: 'info' },
-  QUOTE_NOT_REQUIRED: { label: 'Quote Not Required', color: 'default' },
-  QUOTATION_APPROVED: { label: 'Quotation Approved', color: 'success' },
-  QUOTATION_NOT_APPROVED: { label: 'Quotation Not Approved', color: 'error' },
-  PO_READY:           { label: 'PO Ready',           color: 'success' },
-  CLOSED:             { label: 'Closed',             color: 'default' },
-};
-
-const QUOTE_META = {
-  PENDING:      { label: 'Pending',      color: 'warning' },
-  RECEIVED:     { label: 'Received',     color: 'success' },
-  NOT_REQUIRED: { label: 'Not Required', color: 'default' },
-  APPROVED:     { label: 'Approved',     color: 'success' },
-};
-
-const pick = (map, key) => map[key] || { label: key || '—', color: 'default' };
-
 /**
  * Resolve an uploaded file URL. Files are served from the API host root
  * (e.g. http://host/uploads/...), NOT under /api/v1.
@@ -58,29 +30,7 @@ export const fileHref = (url) => {
   return `${origin}${url.startsWith('/') ? '' : '/'}${url}`;
 };
 
-export const ApprovalChip = ({ status }) => {
-  const m = pick(APPROVAL_META, status);
-  return <Chip size="small" label={m.label} color={m.color} sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
-
-export const OverallChip = ({ status }) => {
-  const m = pick(OVERALL_META, status);
-  return <Chip size="small" label={m.label} color={m.color} variant="outlined" sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
-
-export const QuoteChip = ({ status }) => {
-  const m = pick(QUOTE_META, status);
-  return <Chip size="small" label={m.label} color={m.color} sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
-
-// Step 1.3 — Approved Quotation status.
-const QUOTATION_APPROVAL_META = {
-  YES:                    { label: 'Approved',      color: 'success' },
-  QUOTATION_NOT_APPROVED: { label: 'Not Approved',  color: 'error' },
-  PENDING:                { label: 'Pending',       color: 'warning' },
-};
-
-export const QuotationChip = ({ status }) => {
-  const m = pick(QUOTATION_APPROVAL_META, status);
-  return <Chip size="small" label={m.label} color={m.color} sx={{ fontWeight: 700, borderRadius: '6px' }} />;
-};
+export const ApprovalChip = ({ status }) => <StatusChip status={status} />;
+export const OverallChip = ({ status }) => <StatusChip status={status} />;
+export const QuoteChip = ({ status }) => <StatusChip status={status} />;
+export const QuotationChip = ({ status }) => <StatusChip status={status} />;
