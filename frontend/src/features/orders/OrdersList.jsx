@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -71,7 +71,6 @@ const PipelineBar = ({ row }) => {
 const OrdersList = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   // Deep-link support: ?so=AGL/SO-… (from an FMS task) pre-filters to that order.
   const [searchTerm, setSearchTerm] = useState(searchParams.get('so') || '');
   const [statusFilter, setStatusFilter] = useState('');
@@ -93,9 +92,11 @@ const OrdersList = () => {
     catch (e) { /* surfaced below */ }
   };
 
+  // Server applies the filters; the DataGrid paginates the result client-side.
+  // (Client pagination avoids the controlled server-pagination feedback that can
+  // trip "Maximum update depth exceeded".) A generous limit covers the list.
   const queryParams = {
-    page: paginationModel.page + 1,
-    limit: paginationModel.pageSize,
+    limit: 1000,
     search: searchTerm || undefined,
     status: statusFilter || undefined,
     partyId: partyFilter?._id || undefined,
@@ -109,17 +110,7 @@ const OrdersList = () => {
   const stats = statsRes?.data?.summary || {};
   const parties = partiesData?.data || [];
 
-  // Keep a stable server rowCount. During a refetch the query's `data` is briefly
-  // undefined; if rowCount flips to 0 while rows still render, the server-mode
-  // DataGrid clamps the page and re-emits paginationModel in a loop ("Maximum
-  // update depth exceeded"). Holding the last known total avoids that flip.
-  const total = data?.meta?.total;
-  const [rowCountState, setRowCountState] = useState(0);
-  useEffect(() => {
-    if (typeof total === 'number') setRowCountState(total);
-  }, [total]);
-
-  const handleViewDetail = (order) => { 
+  const handleViewDetail = (order) => {
     navigate(`/orders/${order._id}`);
   };
   const handleUpdateClick = (order) => { setSelectedOrder(order); setIsUpdateOpen(true); };
@@ -229,7 +220,7 @@ const OrdersList = () => {
         }}>
           <Tabs 
             value={statusFilter} 
-            onChange={(_, v) => { setStatusFilter(v); setPaginationModel(prev => ({ ...prev, page: 0 })); }}
+            onChange={(_, v) => setStatusFilter(v)}
             variant="scrollable"
             scrollButtons="auto"
             sx={{ 
@@ -244,7 +235,7 @@ const OrdersList = () => {
               options={parties}
               getOptionLabel={(opt) => opt.name || ''}
               value={partyFilter}
-              onChange={(_, val) => { setPartyFilter(val); setPaginationModel(prev => ({ ...prev, page: 0 })); }}
+              onChange={(_, val) => setPartyFilter(val)}
               size="small"
               fullWidth
               sx={{ width: { xs: '100%', sm: 220 } }}
@@ -256,7 +247,7 @@ const OrdersList = () => {
               placeholder="Search orders..." 
               value={searchTerm}
               fullWidth
-              onChange={(e) => { setSearchTerm(e.target.value); setPaginationModel(prev => ({ ...prev, page: 0 })); }}
+              onChange={(e) => setSearchTerm(e.target.value)}
               sx={{ width: { xs: '100%', sm: 200 }, '& .MuiOutlinedInput-root': { bgcolor: '#fff', fontSize: '0.8rem' } }}
               InputProps={{ startAdornment: <InputAdornment position="start"><Search size={14} color="#94a3b8" /></InputAdornment> }}
             />
@@ -269,11 +260,7 @@ const OrdersList = () => {
           columns={columns}
           getRowId={(row) => row._id}
           loading={isLoading}
-          paginationMode="server"
-          rowCount={rowCountState}
-          keepNonExistentRowsSelected
-          paginationModel={paginationModel}
-          onPaginationModelChange={setPaginationModel}
+          initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={48}

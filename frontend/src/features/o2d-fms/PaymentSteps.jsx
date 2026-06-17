@@ -19,7 +19,7 @@ const PaymentSteps = () => {
   const invoices = useMemo(() => invRes?.data || [], [invRes]);
   const [followUp, { isLoading: savingFU }] = usePaymentFollowUpMutation();
   const [receipt, { isLoading: savingRC }] = usePaymentReceiptMutation();
-  const { active: fromTask, returnToTask } = useReturnToTask();
+  const { finishToTask } = useReturnToTask();
 
   const [inv, setInv] = useState(null);
   const [fuStatus, setFuStatus] = useState('Yes');
@@ -32,7 +32,7 @@ const PaymentSteps = () => {
     try {
       await followUp({ invoiceId: inv._id, dcId: inv.dcId, status: fuStatus }).unwrap();
       enqueueSnackbar('Payment follow-up saved.', { variant: 'success' });
-      if (fromTask) setTimeout(returnToTask, 600);
+      setTimeout(() => finishToTask({ soNumber: inv.soNumber }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 
@@ -41,7 +41,7 @@ const PaymentSteps = () => {
     try {
       await receipt({ invoiceId: inv._id, dcId: inv.dcId, status: rcStatus, receivedDate: rcDate, receivedAmount: Number(rcAmount) || 0 }).unwrap();
       enqueueSnackbar('Payment receipt saved.', { variant: 'success' });
-      if (fromTask) setTimeout(returnToTask, 600);
+      setTimeout(() => finishToTask({ soNumber: inv.soNumber }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 

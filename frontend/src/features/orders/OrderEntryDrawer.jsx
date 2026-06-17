@@ -18,6 +18,7 @@ import {
 import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { useGetOrdersByPartyQuery, useUpdateOrderMutation } from '../../store/api/orderApi';
 import { useGetSkuLookupQuery } from '../../store/api/skuApi';
+import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
 
 const TRANSPORT_OPTIONS = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
 const PARTY_GROUPS = ['Domestic', 'Export', 'OEM', 'Distributor', 'Direct'];
@@ -207,6 +208,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   const [createOrderEntry, { isLoading: isCreating }] = useCreateOrderEntryMutation();
   const [updateOrder, { isLoading: isUpdatingOrder }] = useUpdateOrderMutation();
   const [uploadOrderDocument, { isLoading: isUploading }] = useUploadOrderDocumentMutation();
+  const openFmsTask = useOpenFmsTask();
   const isSubmitting = isCreating || isUpdatingOrder;
 
   const { data: partiesData } = useGetPartiesQuery({ limit: 250 });
@@ -421,12 +423,16 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
         const res = await updateOrder({ id: order._id, ...payload }).unwrap();
         const so = res?.data?.soNumber || order.soNumber || 'order';
         enqueueSnackbar(`Sales Order ${so} updated`, { variant: 'success' });
+        onClose?.();
       } else {
         const res = await createOrderEntry(payload).unwrap();
         const so = res?.data?.soNumber || 'order';
         enqueueSnackbar(`Sales Order ${so} created`, { variant: 'success' });
+        onClose?.();
+        // Jump the doer straight to the FMS task for this order so the step's
+        // checklist is completed and the entry shows in the tracker.
+        if (res?.data?.soNumber) await openFmsTask({ soNumber: res.data.soNumber });
       }
-      onClose?.();
     } catch (err) {
       enqueueSnackbar(err?.data?.message || `Failed to ${isEditMode ? 'update' : 'create'} order`, { variant: 'error' });
     }
@@ -642,7 +648,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
           >
             <Box sx={{
               display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: '2.2fr 1fr 0.9fr 1fr 1.2fr 40px' },
+              gridTemplateColumns: { xs: '1fr', md: '2.4fr 1fr 1fr 1.6fr 40px' },
               px: 1.5, py: 1, bgcolor: alpha(theme.palette.primary.main, 0.04),
               borderBottom: '1px solid', borderColor: 'divider',
               fontSize: '0.7rem', fontWeight: 700,
@@ -650,15 +656,14 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
             }}>
               <Box>SKU</Box>
               <Box>Code</Box>
-              <Box sx={{ textAlign: 'right' }}>Qty *</Box>
-              <Box>ASN / FCI</Box>
+              <Box sx={{ textAlign: 'right' }}>Quantity *</Box>
               <Box>Remark</Box>
               <Box />
             </Box>
             {items.map((it, idx) => (
               <Box key={it._tempId} sx={{
                 display: 'grid',
-                gridTemplateColumns: { xs: '1fr', md: '2.2fr 1fr 0.9fr 1fr 1.2fr 40px' },
+                gridTemplateColumns: { xs: '1fr', md: '2.4fr 1fr 1fr 1.6fr 40px' },
                 gap: 1,
                 px: 1.5, py: 1, alignItems: 'center',
                 borderBottom: idx === items.length - 1 ? 0 : '1px solid',
@@ -692,12 +697,6 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                   onChange={(e) => handleItemChange(idx, 'orderQty', e.target.value)}
                   inputProps={{ style: { textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' } }}
                   placeholder="0"
-                />
-                <TextField
-                  size="small"
-                  value={it.asnCode}
-                  onChange={(e) => handleItemChange(idx, 'asnCode', e.target.value)}
-                  placeholder="—"
                 />
                 <TextField
                   size="small"

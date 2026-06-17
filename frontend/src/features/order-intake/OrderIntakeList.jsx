@@ -18,6 +18,7 @@ import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import AttachmentList from '../../components/AttachmentList';
 import VoiceRecorder from '../../components/VoiceRecorder';
 import OrderEntryDrawer from '../orders/OrderEntryDrawer';
+import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
 
 const CHANNELS = [
   { value: 'PHONE', label: 'Phone call', icon: Phone },
@@ -38,6 +39,7 @@ const OrderIntakeList = () => {
   const { data, isLoading } = useGetOrderIntakesQuery({ limit: 100, sort: '-createdAt' });
   const { data: partiesRes } = useGetPartiesQuery({ limit: 300 });
   const [createIntake, { isLoading: creating }] = useCreateOrderIntakeMutation();
+  const openFmsTask = useOpenFmsTask();
   const [cancelIntake] = useCancelOrderIntakeMutation();
   const [deleteIntake, { isLoading: deleting }] = useDeleteOrderIntakeMutation();
   const [uploadFile] = useUploadFileMutation();
@@ -98,7 +100,7 @@ const OrderIntakeList = () => {
     setError('');
     if (!form.partyId) { setError('Please choose the client.'); return; }
     try {
-      await createIntake({
+      const res = await createIntake({
         partyId: form.partyId._id,
         partyName: form.partyId.name,
         channel: form.channel,
@@ -108,6 +110,8 @@ const OrderIntakeList = () => {
         attachments: form.attachments,
       }).unwrap();
       setForm(null);
+      // Open the FMS "Order Received" task for this intake (checklist auto-marked).
+      if (res?.data?._id) await openFmsTask({ intakeId: res.data._id });
     } catch (e) { setError(e?.data?.message || 'Could not log the order.'); }
   };
 

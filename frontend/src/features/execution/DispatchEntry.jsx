@@ -17,6 +17,7 @@ import {
   useGetDispatchablePhasesQuery,
 } from '../../store/api/dispatchControlApi';
 import PhasePicker from './components/PhasePicker';
+import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
 
 const TRANSPORT_MODES = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
 const DC_THROUGH = ['Freight Paid', 'To Pay', 'Party Vehicle'];
@@ -85,6 +86,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
   const phasesData = dispatchablePhasesRes?.data;
 
   const [createActualDispatch, { isLoading: isSaving }] = useCreateActualDispatchMutation();
+  const openFmsTask = useOpenFmsTask();
 
   // Reset whenever the drawer opens.
   useEffect(() => {
@@ -192,6 +194,8 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
       const dcNumber = res?.data?.challan?.dcNumber || 'DC';
       enqueueSnackbar(`${dcNumber} created — plan vs actual updated`, { variant: 'success' });
       onClose?.();
+      // Jump to the FMS task for this order (Create Delivery Challan step).
+      if (step1Order?.soNumber) await openFmsTask({ soNumber: step1Order.soNumber });
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Could not record dispatch', { variant: 'error' });
     }

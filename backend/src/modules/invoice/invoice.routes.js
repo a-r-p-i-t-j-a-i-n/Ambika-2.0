@@ -17,6 +17,7 @@ import { protect } from '../../middleware/auth.middleware.js';
 import { attachUserPermissions } from '../../middleware/permission.middleware.js';
 import { INVOICE_STATUS, STEP_STATUS } from '../../config/constants.js';
 import { emailService } from '../../services/email.service.js';
+import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 import { logger } from '../../utils/logger.js';
 
 // "Done"/"Yes" → DONE; "Cancelled" → SKIPPED; else keep as given.
@@ -37,6 +38,7 @@ export const invoiceService = {
       const dc = await DeliveryChallan.findById(data.dcId).lean();
       if (dc) {
         data.dcNumber = data.dcNumber || dc.dcNumber;
+        data.soNumber = data.soNumber || dc.soNumber;
         data.poNumber = data.poNumber || dc.poNumber;
         data.partyId = data.partyId || dc.partyId;
         data.partyName = data.partyName || dc.partyName;
@@ -58,6 +60,11 @@ export const invoiceService = {
     data.createdBy = actor?._id;
 
     const inv = await Invoice.create(data);
+    // Reflect into the FMS tracker — advance the order's "Create Invoice" step.
+    if (inv.soNumber && data.status !== 'CANCELLED') {
+      try { await o2dFmsService.advanceByTrigger({ soNumber: inv.soNumber }, 'INVOICE', actor); }
+      catch (e) { logger.error(`[invoice] FMS advance failed: ${e.message}`); }
+    }
     return inv.toObject();
   },
 
@@ -91,14 +98,22 @@ export const invoiceService = {
     const recipient = to || inv.partyId?.email;
     if (!recipient) throw new AppError('No recipient email — add one to send.', 400);
 
-    const attachmentUrls = [...(inv.invoiceUrls || []), ...(inv.ewayBillUrls || []), ...(inv.pdirUrls || [])].filter(Boolean);
+    // Build real file attachments (nodemailer streams each URL) AND keep links in
+    // the body as a fallback, so the client always gets the documents.
+    const tagged = [
+      ...(inv.invoiceUrls || []).map((u, i) => ({ url: u, name: `Invoice-${i + 1}`, label: 'Invoice' })),
+      ...(inv.ewayBillUrls || []).map((u, i) => ({ url: u, name: `EwayBill-${i + 1}`, label: 'E-way Bill' })),
+      ...(inv.pdirUrls || []).map((u, i) => ({ url: u, name: `PDIR-${i + 1}`, label: 'PDIR' })),
+    ].filter((a) => a.url);
+    const attachments = tagged.map((a) => ({ filename: a.name, path: a.url }));
     let emailStatus = 'SENT';
     try {
       await emailService.sendEmail({
         to: recipient,
         subject: subject || `Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`,
-        html: message || `<p>Dear ${inv.partyName || 'Customer'},</p><p>Please find your invoice <b>${inv.invoiceNo}</b> and supporting documents attached/linked below.</p>`
-          + attachmentUrls.map((u) => `<p><a href="${u}">${u}</a></p>`).join(''),
+        html: (message || `<p>Dear ${inv.partyName || 'Customer'},</p><p>Please find your invoice <b>${inv.invoiceNo}</b> and supporting documents attached.</p>`)
+          + (tagged.length ? `<p><b>Documents:</b></p>${tagged.map((a) => `<p>${a.label}: <a href="${a.url}">${a.url}</a></p>`).join('')}` : ''),
+        attachments,
       });
     } catch (err) {
       logger.error(`[invoice] email failed for ${inv.invoiceNo}: ${err.message}`);

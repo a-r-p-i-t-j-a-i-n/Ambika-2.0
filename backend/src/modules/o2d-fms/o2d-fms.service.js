@@ -134,6 +134,10 @@ const enrichSteps = (process, defMap) => {
 
 const loadDefMap = async () => {
   const defs = await StepDefinition.find({ isDeleted: { $ne: true } }).lean();
+  // V1 and CURRENT_SHEET can share stepCodes (1.01, 2.02…). Sort so the ACTIVE
+  // FMS's defs are inserted LAST and therefore win the Map key — keeping the live
+  // flow's names, trigger keys and requirements correct.
+  defs.sort((a, b) => ((a.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0) - ((b.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0));
   return new Map(defs.map((d) => [d.stepCode, d]));
 };
 
@@ -467,6 +471,26 @@ export const o2dFmsService = {
       { remarks: `Auto-completed by ${triggerKey}` }, actor,
       { bypassRequirements: true },
     );
+  },
+
+  /**
+   * Resolve the CURRENT (active) task for an order so a module entry can jump the
+   * doer straight to it: returns { processId, stepCode } or null. Picks the
+   * process's currentStepCode, else the first not-done/not-skipped step.
+   */
+  async getActiveTask({ soNumber, salesOrderId, intakeId } = {}) {
+    let q = null;
+    if (salesOrderId) q = { salesOrderId };
+    else if (intakeId) q = { intakeId };
+    else if (soNumber) q = { soNumber };
+    if (!q) return null;
+    const p = await O2DProcess.findOne({ ...q, isDeleted: { $ne: true } }).lean();
+    if (!p) return null;
+    const openCodes = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED];
+    const stepCode = p.currentStepCode
+      || (p.steps.find((s) => !openCodes.includes(s.status))?.stepCode)
+      || null;
+    return stepCode ? { processId: String(p._id), stepCode } : null;
   },
 
   /** The doer's "My Tasks" — every step where I'm the owner OR buddy, with its

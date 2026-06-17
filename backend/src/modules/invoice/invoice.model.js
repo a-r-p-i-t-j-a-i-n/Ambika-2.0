@@ -5,6 +5,7 @@ const invoiceSchema = new mongoose.Schema({
   invoiceNo:  { type: String, required: true, unique: true, trim: true, index: true },
   dcId:       { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryChallan', index: true },
   dcNumber:   { type: String, index: true },
+  soNumber:   { type: String, index: true },
   poNumber:   { type: String },
   partyId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Party', index: true },
   partyName:  { type: String },

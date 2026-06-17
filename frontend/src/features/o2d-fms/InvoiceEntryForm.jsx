@@ -80,7 +80,7 @@ const InvoiceEntryForm = () => {
   const { data: challansRes } = useGetChallansQuery({ limit: 300, sort: '-dcDate' });
   const challans = useMemo(() => challansRes?.data || [], [challansRes]);
   const [createInvoice, { isLoading: saving }] = useCreateSalesInvoiceMutation();
-  const { active: fromTask, returnToTask } = useReturnToTask();
+  const { finishToTask } = useReturnToTask();
 
   const [dc, setDc] = useState(null);
   const [form, setForm] = useState({
@@ -149,7 +149,9 @@ const InvoiceEntryForm = () => {
         pdirUrls: pdirFiles.map((f) => f.url),
       }).unwrap();
       enqueueSnackbar(`Invoice ${res.data.invoiceNo} saved.`, { variant: 'success' });
-      if (fromTask) setTimeout(returnToTask, 600); else reset();
+      // Open the order's FMS task (checklist auto-marked); reset only if none.
+      const opened = await finishToTask({ soNumber: dc?.soNumber });
+      if (!opened) reset();
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Could not save the invoice.', { variant: 'error' });
     }

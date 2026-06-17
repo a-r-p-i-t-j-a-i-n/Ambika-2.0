@@ -5,7 +5,7 @@ import {
   alpha, useTheme, CircularProgress, Skeleton, Chip,
   ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
-import { Plus, CalendarPlus, Search, LayoutList, CalendarRange } from 'lucide-react';
+import { Plus, CalendarPlus, Search, LayoutList, CalendarRange, ListChecks } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 
@@ -23,6 +23,7 @@ import PhaseTimeline from './components/PhaseTimeline';
 import PhaseCard from './components/PhaseCard';
 import RiskRail from './components/RiskRail';
 import AddPhaseDialog from './components/AddPhaseDialog';
+import { useReturnToTask } from '../o2d-fms/useReturnToTask';
 
 // Group an item's phases by phaseNo so the UI shows one card per phase.
 const buildPhaseGroups = (schedule) => {
@@ -110,8 +111,10 @@ const PlanWorkspace = () => {
 
   const onSelectOrder = (val) => {
     setSelectedOrder(val);
-    if (val?.soNumber) setSearchParams({ so: val.soNumber }, { replace: true });
-    else setSearchParams({}, { replace: true });
+    // Preserve any fromTask/fromStep context (don't wipe the whole query).
+    const next = new URLSearchParams(searchParams);
+    if (val?.soNumber) next.set('so', val.soNumber); else next.delete('so');
+    setSearchParams(next, { replace: true });
   };
 
   const soNumber = selectedOrder?.soNumber;
@@ -120,6 +123,7 @@ const PlanWorkspace = () => {
   const schedule   = scheduleRes?.data;
   const comparison = comparisonRes?.data;
 
+  const { finishToTask } = useReturnToTask();
   const [createPhase, { isLoading: isCreating }] = useCreatePhaseMutation();
   const [updatePhase, { isLoading: isUpdating }] = useUpdatePhaseMutation();
   const [deletePhase, { isLoading: isDeleting }] = useDeletePhaseMutation();
@@ -253,6 +257,15 @@ const PlanWorkspace = () => {
             disabled={!soNumber || scheduleLoading}
           >
             Add Phase
+          </Button>
+          {/* Once planning is done, jump to this order's FMS task (checklist auto-marked). */}
+          <Button
+            variant="outlined"
+            startIcon={<ListChecks size={14} />}
+            onClick={() => finishToTask({ soNumber })}
+            disabled={!soNumber}
+          >
+            Done → FMS Task
           </Button>
         </Stack>
       </Stack>

@@ -19,6 +19,19 @@ import { StepDefinition, TaskTemplate } from '../modules/o2d-fms/o2d-fms.model.j
 
 const FMS_KEY = 'CURRENT_SHEET';
 
+// Auto-advance triggers: when these real actions happen in the app, the matching
+// step is picked up by the FMS bridge (advanceByTrigger) and surfaced in the
+// tracker — so entries made directly in the modules still flow into the FMS.
+const TRIGGERS = {
+  '1.01': 'ORDER_INTAKE',     // order received / intake
+  '2.02': 'ORDER_ENTRY',      // PO recd entry in Tally = sales order punch-in
+  '2.04': 'DISPATCH_PLAN',    // create dispatch scheduler
+  '2.06': 'ACTUAL_DISPATCH',  // create delivery challan
+  '2.07': 'INVOICE',          // create invoice & e-way
+  '2.09': 'POD',              // track delivery
+  '2.11': 'PAYMENT',          // receive payment
+};
+
 // Mapped 1:1 from the client's sheet (Who / What / How / When per step).
 // triggerKey stays MANUAL throughout — this catalog is tracked by hand and must
 // NOT hook into V1's auto-advance bridges. SLAs are in minutes.
@@ -88,7 +101,7 @@ const run = async () => {
   for (const step of STEPS) {
     const res = await StepDefinition.updateOne(
       { fmsKey: FMS_KEY, stepCode: step.stepCode },
-      { $set: { ...step, fmsKey: FMS_KEY, triggerKey: 'MANUAL', isActive: true } },
+      { $set: { ...step, fmsKey: FMS_KEY, triggerKey: TRIGGERS[step.stepCode] || 'MANUAL', isActive: true } },
       { upsert: true },
     );
     if (res.upsertedCount) created += 1;

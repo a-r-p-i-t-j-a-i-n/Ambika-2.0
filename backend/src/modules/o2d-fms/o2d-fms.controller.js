@@ -27,6 +27,10 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('My tasks retrieved', tasks));
   }),
 
+  activeTask: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Active task', await o2dFmsService.getActiveTask(req.query)));
+  }),
+
   allTasks: asyncHandler(async (_req, res) => {
     res.json(ApiResponse.ok('All tasks retrieved', await o2dFmsService.getAllTasks()));
   }),

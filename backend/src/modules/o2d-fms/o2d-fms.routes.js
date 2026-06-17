@@ -49,6 +49,10 @@ router.delete('/step-definitions/:id',
 router.get('/my-tasks',
   requirePermission('o2dfms.view'), c.myTasks);
 
+// Resolve the active task for an order (used to jump to it after a module entry).
+router.get('/active-task',
+  requirePermission('o2dfms.view'), c.activeTask);
+
 // All doers' tasks — managers/MD oversight.
 router.get('/all-tasks',
   requirePermission('o2dfms.manage'), c.allTasks);

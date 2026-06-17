@@ -18,7 +18,7 @@ const TransportBill = () => {
   const [receive, { isLoading: savingRcv }] = useTransportBillReceiveMutation();
   const [payStatus, { isLoading: savingPay }] = useTransportBillPaymentMutation();
   const [upload, { isLoading: uploading }] = useUploadFileMutation();
-  const { active: fromTask, returnToTask } = useReturnToTask();
+  const { finishToTask } = useReturnToTask();
 
   const [dc, setDc] = useState(null);
   const [rcvStatus, setRcvStatus] = useState('Done');
@@ -38,7 +38,7 @@ const TransportBill = () => {
     try {
       await receive({ dcId: dc._id, status: rcvStatus, attachment: attachment?.url }).unwrap();
       enqueueSnackbar('Transport bill receipt saved.', { variant: 'success' });
-      if (fromTask) setTimeout(returnToTask, 600);
+      setTimeout(() => finishToTask({ soNumber: dc.soNumber }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 
@@ -47,7 +47,7 @@ const TransportBill = () => {
     try {
       await payStatus({ dcId: dc._id, status: payState }).unwrap();
       enqueueSnackbar('Transport bill payment status saved.', { variant: 'success' });
-      if (fromTask) setTimeout(returnToTask, 600);
+      setTimeout(() => finishToTask({ soNumber: dc.soNumber }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 

@@ -15,7 +15,7 @@ const TrackDelivery = () => {
   const { data: challansRes } = useGetChallansQuery({ limit: 300, sort: '-dcDate' });
   const challans = useMemo(() => challansRes?.data || [], [challansRes]);
   const [track, { isLoading }] = useTrackDeliveryMutation();
-  const { active: fromTask, returnToTask } = useReturnToTask();
+  const { finishToTask } = useReturnToTask();
 
   const [dc, setDc] = useState(null);
   const [status, setStatus] = useState('Delivered');
@@ -32,7 +32,7 @@ const TrackDelivery = () => {
         newTrackDate: status === 'Not Delivered' ? (newTrackDate || undefined) : undefined,
       }).unwrap();
       enqueueSnackbar(`Delivery for ${dc.dcNumber} updated.`, { variant: 'success' });
-      if (fromTask) setTimeout(returnToTask, 600);
+      setTimeout(() => finishToTask({ soNumber: dc.soNumber }), 600);
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Could not update delivery.', { variant: 'error' });
     }

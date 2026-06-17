@@ -18,6 +18,15 @@ import asyncHandler from '../../middleware/asyncHandler.js';
 import { protect } from '../../middleware/auth.middleware.js';
 import { attachUserPermissions } from '../../middleware/permission.middleware.js';
 import { STEP_STATUS, DC_STATUS, PAYMENT_TYPE, INVOICE_STATUS } from '../../config/constants.js';
+import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
+import { logger } from '../../utils/logger.js';
+
+// Best-effort: surface an entry into the FMS tracker via its trigger.
+const advance = async (soNumber, trigger) => {
+  if (!soNumber) return;
+  try { await o2dFmsService.advanceByTrigger({ soNumber }, trigger, null); }
+  catch (e) { logger.error(`[o2d-fulfillment] ${trigger} advance failed: ${e.message}`); }
+};
 
 // Yes/Done → DONE, Cancelled → SKIPPED, No → PENDING.
 const toStep = (s) => {
@@ -37,6 +46,7 @@ export const fulfillmentService = {
     else if (status === 'Cancelled') { dc.status = DC_STATUS.CANCELLED; }
     if (newTrackDate) dc.newTrackDate = newTrackDate;
     await dc.save();
+    if (status === 'Delivered') await advance(dc.soNumber, 'POD'); // reflect in FMS tracker
     return dc.toObject();
   },
 
@@ -81,6 +91,7 @@ export const fulfillmentService = {
         inv.status = inv.amountReceived >= (inv.invoiceAmount || 0) && inv.invoiceAmount > 0
           ? INVOICE_STATUS.PAID : INVOICE_STATUS.PARTIAL;
         await inv.save(); // pre-save recomputes balance
+        await advance(inv.soNumber, 'PAYMENT'); // reflect in FMS tracker
       }
     }
     return pay.toObject();

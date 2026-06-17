@@ -9,6 +9,10 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       query: () => '/o2d-fms/my-tasks',
       providesTags: ['O2DMyTasks'],
     }),
+    // Resolve the active task for an order → { processId, stepCode } (or null).
+    getActiveTask: builder.query({
+      query: (params) => ({ url: '/o2d-fms/active-task', params }),
+    }),
     getAllTasks: builder.query({
       query: () => '/o2d-fms/all-tasks',
       providesTags: ['O2DMyTasks', 'O2DProcess'],
@@ -184,6 +188,7 @@ export const o2dFmsApi = baseApi.injectEndpoints({
 
 export const {
   useGetMyTasksQuery,
+  useLazyGetActiveTaskQuery,
   useGetAllTasksQuery,
   useGetFmsDashboardQuery,
   useGetFmsScoresQuery,

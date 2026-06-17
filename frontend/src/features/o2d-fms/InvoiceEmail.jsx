@@ -3,7 +3,7 @@ import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, Chip, alpha, useTheme,
   CircularProgress, Divider, Link, Box,
 } from '@mui/material';
-import { Mail, Send, Paperclip, FileText, ShieldCheck, ClipboardList } from 'lucide-react';
+import { Mail, Send, Paperclip, FileText, ShieldCheck, ClipboardList, CheckCircle2 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import O2dStepShell from './components/O2dStepShell';
@@ -50,12 +50,13 @@ const InvoiceEmail = () => {
   const { data: invRes } = useGetSalesInvoicesQuery({ limit: 300, sort: '-invoiceDate' });
   const invoices = useMemo(() => invRes?.data || [], [invRes]);
   const [send, { isLoading }] = useSendSalesInvoiceMutation();
-  const { active: fromTask, returnToTask } = useReturnToTask();
+  const { finishToTask } = useReturnToTask();
 
   const [inv, setInv] = useState(null);
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
+  const [sentInfo, setSentInfo] = useState(null); // { to, at } after a successful send this session
 
   const allAttachments = useMemo(
     () => [...(inv?.invoiceUrls || []), ...(inv?.ewayBillUrls || []), ...(inv?.pdirUrls || [])].filter(Boolean),
@@ -64,6 +65,7 @@ const InvoiceEmail = () => {
 
   useEffect(() => {
     if (!inv) return;
+    setSentInfo(null);
     setTo(inv.partyId?.email || '');
     setSubject(`Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`);
     setMessage(
@@ -81,9 +83,13 @@ const InvoiceEmail = () => {
     try {
       const res = await send({ id: inv._id, to: to.trim(), subject, message: message.replace(/\n/g, '<br/>') }).unwrap();
       const st = res.data?.emailStatus;
-      if (st === 'SENT') enqueueSnackbar(`Email sent to ${res.data.recipient}.`, { variant: 'success' });
-      else enqueueSnackbar(`Email could not be sent (${st}). Check SMTP settings.`, { variant: 'warning' });
-      if (fromTask) setTimeout(returnToTask, 800);
+      if (st === 'SENT') {
+        setSentInfo({ to: res.data.recipient || to.trim(), at: new Date() });
+        enqueueSnackbar(`Email sent to ${res.data.recipient}.`, { variant: 'success' });
+      } else {
+        enqueueSnackbar(`Email could not be sent (${st}). Check SMTP settings.`, { variant: 'warning' });
+      }
+      setTimeout(() => finishToTask({ soNumber: inv.soNumber }), 800);
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Failed to send.', { variant: 'error' });
     }
@@ -138,6 +144,17 @@ const InvoiceEmail = () => {
             <Stack sx={{ p: 2, bgcolor: alpha(theme.palette.primary.main, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
               <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: 'text.secondary' }}>EMAIL PREVIEW — sends to the client</Typography>
             </Stack>
+            {/* Sent log — this session, or the last recorded send on the invoice. */}
+            {(sentInfo || inv.emailToClient?.actual) && (
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2.5, py: 1, bgcolor: alpha(theme.palette.success.main, 0.08), borderBottom: `1px solid ${theme.palette.divider}` }}>
+                <CheckCircle2 size={15} color={theme.palette.success.dark} />
+                <Typography variant="caption" sx={{ fontWeight: 700, color: theme.palette.success.dark }}>
+                  {sentInfo
+                    ? `Emailed to ${sentInfo.to} on ${dayjs(sentInfo.at).format('DD MMM YYYY · hh:mm A')}`
+                    : `Last emailed on ${dayjs(inv.emailToClient.actual).format('DD MMM YYYY · hh:mm A')}${inv.emailToClient.emailStatus && inv.emailToClient.emailStatus !== 'SENT' ? ` (${inv.emailToClient.emailStatus})` : ''}`}
+                </Typography>
+              </Stack>
+            )}
             <Stack spacing={2} sx={{ p: 2.5 }}>
               <TextField label="To" value={to} onChange={(e) => setTo(e.target.value)} size="small" fullWidth placeholder="client@email.com" />
               <TextField label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} size="small" fullWidth />
