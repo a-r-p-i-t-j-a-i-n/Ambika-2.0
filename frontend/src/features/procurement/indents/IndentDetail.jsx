@@ -41,6 +41,45 @@ const SectionCard = ({ icon, title, action, children }) => (
   </Paper>
 );
 
+// Indent items table — multi-item, with legacy single-product fallback.
+const itemsOf = (indent) => {
+  if (indent?.items?.length) return indent.items;
+  if (indent?.productNameRevised) {
+    return [{
+      itemName: indent.productNameRevised, skuCode: indent.skuCode, quantity: indent.quantity,
+      unit: indent.unit, revisedQuantity: indent.revisedQuantity, approvedQuantity: indent.approvedQuantity,
+    }];
+  }
+  return [];
+};
+
+const ITEM_COLS = '2fr 1fr 0.8fr 0.7fr 0.9fr 0.9fr 1.3fr';
+const ItemsTable = ({ items }) => (
+  <Box>
+    <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: ITEM_COLS, gap: 1, px: 1, mb: 0.5 }}>
+      {['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Remarks'].map((h, i) => (
+        <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem', textAlign: ['Qty', 'Revised', 'Approved'].includes(h) ? 'right' : 'left' }}>{h}</Typography>
+      ))}
+    </Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      {items.map((it, idx) => (
+        <Box key={it._id || idx} sx={{
+          display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: ITEM_COLS }, gap: 1, alignItems: 'center',
+          p: 1, borderRadius: '10px', border: '1px solid', borderColor: 'divider',
+        }}>
+          <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+          <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
+          <Typography variant="body2" sx={{ textAlign: { md: 'right' } }}>{it.quantity ?? '—'}</Typography>
+          <Typography variant="body2" color="text.secondary">{it.unit || '—'}</Typography>
+          <Typography variant="body2" sx={{ textAlign: { md: 'right' } }}>{it.revisedQuantity || '—'}</Typography>
+          <Typography variant="body2" sx={{ textAlign: { md: 'right' }, fontWeight: 700, color: '#0f766e' }}>{it.approvedQuantity || '—'}</Typography>
+          <Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography>
+        </Box>
+      ))}
+    </Box>
+  </Box>
+);
+
 const StepBlock = ({ step }) => (
   <Grid container spacing={2}>
     <Grid item xs={6} sm={3}><Field label="Status" value={<QuoteChip status={step?.status || 'PENDING'} />} /></Grid>
@@ -94,6 +133,7 @@ const IndentDetail = () => {
   const step12Done = ['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(indent.overallStatus);
   const quotationDone = !!indent.quotationApprovalStep?.statusDone;
   const isQuotationApproved = indent.overallStatus === 'QUOTATION_APPROVED';
+  const detailItems = itemsOf(indent);
 
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
@@ -125,19 +165,16 @@ const IndentDetail = () => {
       </Box>
 
       <Grid container spacing={3}>
-        {/* Item & requester */}
-        <Grid item xs={12} md={6}>
+        {/* Header + items */}
+        <Grid item xs={12}>
           <SectionCard icon={<Hash size={18} />} title="Indent Details">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Product Name (Revised)" value={indent.productNameRevised} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="SKU Code" value={indent.skuCode || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Raised On" value={fmtDate(indent.timestamp)} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Quantity" value={`${indent.quantity} ${indent.unit}`} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Revised Qty" value={indent.revisedQuantity || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Approved Qty" value={indent.approvedQuantity || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label={<><User size={12} /> Raised By</>} value={indent.raisedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label={<><Building2 size={12} /> Department</>} value={indent.department || '—'} /></Grid>
+            <Grid container spacing={2} sx={{ mb: 2 }}>
+              <Grid item xs={6} sm={3}><Field label="Raised On" value={fmtDate(indent.timestamp)} /></Grid>
+              <Grid item xs={6} sm={3}><Field label={<><User size={12} /> Raised By</>} value={indent.raisedBy || '—'} /></Grid>
+              <Grid item xs={6} sm={3}><Field label={<><Building2 size={12} /> Department</>} value={indent.department || '—'} /></Grid>
+              <Grid item xs={6} sm={3}><Field label="Remarks" value={indent.remarks || '—'} /></Grid>
             </Grid>
+            <ItemsTable items={detailItems} />
           </SectionCard>
         </Grid>
 

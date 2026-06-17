@@ -7,6 +7,7 @@ import { CalendarClock } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useRescheduleFollowUpMutation } from '../../../store/api/procurementApi';
 import { FOLLOWUP_TYPES } from './fuMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /** Push a follow-up to a new date (adds a communication-log entry). */
 const FollowUpRescheduleDialog = ({ open, onClose, followUp }) => {
@@ -48,8 +49,8 @@ const FollowUpRescheduleDialog = ({ open, onClose, followUp }) => {
       <DialogContent dividers>
         <Grid container spacing={2}>
           <Grid item xs={6}>
-            <TextField label="Next Follow-up Date *" type="date" fullWidth value={nextFollowUpDate}
-              onChange={(e) => setNextFollowUpDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Next Follow-up Date *" fullWidth value={nextFollowUpDate}
+              onChange={setNextFollowUpDate} />
           </Grid>
           <Grid item xs={6}>
             <TextField label="Follow-up Type" select fullWidth value={followUpType}

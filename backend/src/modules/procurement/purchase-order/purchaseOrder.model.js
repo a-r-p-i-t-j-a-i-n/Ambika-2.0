@@ -43,6 +43,14 @@ export const PO_PI_STATUS = {
   PI_APPROVED:               'PI_APPROVED',
   READY_FOR_ADVANCE_PAYMENT: 'READY_FOR_ADVANCE_PAYMENT',
   PAYMENT_COMPLETED:         'PAYMENT_COMPLETED', // Step 1.7
+  PI_NOT_REQUIRED:           'PI_NOT_REQUIRED',   // PI optional — explicitly skipped (audited)
+};
+
+// Advance payment lifecycle (independent of PI presence).
+export const PO_ADVANCE_PAYMENT_STATUS = {
+  NOT_STARTED:  'NOT_STARTED',
+  COMPLETED:    'COMPLETED',
+  NOT_REQUIRED: 'NOT_REQUIRED', // set when PI is marked Not Required
 };
 
 export const PO_STATUS = {
@@ -136,6 +144,16 @@ const vendorPurchaseOrderSchema = new Schema({
   piId:         { type: Schema.Types.ObjectId, ref: 'ProformaInvoice', default: null },
   piNumber:     { type: String, trim: true, default: '' },
   piReceivedAt: { type: Date, default: null },
+
+  // ── Step 1.7 — advance payment lifecycle ──
+  advancePaymentStatus: { type: String, enum: Object.values(PO_ADVANCE_PAYMENT_STATUS), default: PO_ADVANCE_PAYMENT_STATUS.NOT_STARTED, index: true },
+
+  // ── PI Not Required — full audit trail (kept forever) ──
+  piNotRequiredReason:  { type: String, trim: true, default: '' },
+  piNotRequiredRemarks: { type: String, trim: true, default: '' },
+  piNotRequiredBy:      { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  piNotRequiredByName:  { type: String, trim: true, default: '' },
+  piNotRequiredAt:      { type: Date, default: null },
 
 }, baseSchemaOptions);
 

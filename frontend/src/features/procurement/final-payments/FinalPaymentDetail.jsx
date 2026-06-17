@@ -1,19 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
 } from '@mui/material';
 import {
-  ArrowLeft, Ban, Wallet, Building2, FileText, Banknote, ReceiptText, ExternalLink,
+  ArrowLeft, Ban, Wallet, Building2, FileText, Banknote, ReceiptText, ExternalLink, FileDown,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
 import {
   useGetFinalPaymentByIdQuery,
   useCancelFinalPaymentMutation,
+  useGenerateFinalPaymentPdfMutation,
 } from '../../../store/api/procurementApi';
 import { fileHref } from '../indents/indentMeta';
 import { PaymentStatusChip, paymentModeLabel, fmtINR, fmtDate } from './paymentMeta';
+import PdfViewerModal from '../common/PdfViewerModal';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -35,6 +37,9 @@ const FinalPaymentDetail = () => {
   const { data, isLoading } = useGetFinalPaymentByIdQuery(id);
   const p = data?.data;
   const [cancelPayment, { isLoading: cancelling }] = useCancelFinalPaymentMutation();
+  const [genPdf, { isLoading: generating }] = useGenerateFinalPaymentPdfMutation();
+  const [receiptOpen, setReceiptOpen] = useState(false);
+  const [receiptUrl, setReceiptUrl] = useState('');
 
   if (isLoading) return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
   if (!p) {
@@ -51,6 +56,22 @@ const FinalPaymentDetail = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // Open the stored receipt in the modal, or generate one on demand (e.g. older payments).
+  const handleReceipt = async () => {
+    if (p.paymentPdfUrl) { setReceiptUrl(p.paymentPdfUrl); setReceiptOpen(true); return; }
+    setReceiptUrl('');
+    setReceiptOpen(true);
+    try {
+      const res = await genPdf({ id: p._id }).unwrap();
+      const url = res?.data?.paymentPdfUrl;
+      if (url) setReceiptUrl(url);
+      else { setReceiptOpen(false); enqueueSnackbar('Receipt generated', { variant: 'success' }); }
+    } catch (err) {
+      setReceiptOpen(false);
+      enqueueSnackbar(err?.data?.message || 'Failed to generate receipt', { variant: 'error' });
+    }
+  };
+
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
@@ -65,6 +86,9 @@ const FinalPaymentDetail = () => {
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button variant="contained" startIcon={generating ? <CircularProgress size={16} color="inherit" /> : <FileDown size={16} />} onClick={handleReceipt} disabled={generating}>
+            {p.paymentPdfUrl ? 'Receipt PDF' : 'Generate Receipt'}
+          </Button>
           {p.voucherId && <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate(`/procurement/vouchers/${p.voucherId}`)}>View Voucher</Button>}
           {p.proofDocument?.fileUrl && <Button variant="outlined" startIcon={<ExternalLink size={16} />} href={fileHref(p.proofDocument.fileUrl)} target="_blank" rel="noopener">Proof</Button>}
           {p.paymentStatus !== 'CANCELLED' && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel} disabled={cancelling}>Cancel</Button>}
@@ -133,6 +157,15 @@ const FinalPaymentDetail = () => {
           </Grid>
         ) : null}
       </Grid>
+
+      <PdfViewerModal
+        open={receiptOpen}
+        onClose={() => setReceiptOpen(false)}
+        url={receiptUrl}
+        loading={generating && !receiptUrl}
+        title={`Payment Receipt — ${p.paymentNumber}`}
+        fileName={p.paymentPdfFileName}
+      />
     </Box>
   );
 };

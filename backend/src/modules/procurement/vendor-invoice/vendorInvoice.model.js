@@ -28,6 +28,36 @@ const docSchema = new Schema({
   uploadedAt: { type: Date, default: null },
 }, { _id: false });
 
+// Invoice line item — sourced from the QC (received/accepted/rejected) with
+// rate/GST from the PO. All amounts are recomputed server-side.
+export const INVOICE_VARIANCE_STATUS = {
+  MATCHED: 'MATCHED',
+  SHORT:   'SHORT',
+  EXCESS:  'EXCESS',
+};
+
+const invoiceItemSchema = new Schema({
+  skuId:    { type: Schema.Types.ObjectId, ref: 'SKU' },
+  skuCode:  { type: String, trim: true, uppercase: true, default: '' },
+  itemName: { type: String, trim: true, default: '' },
+  unit:     { type: String, trim: true, default: 'Pcs' },
+  // ── Order-vs-received comparison (server-computed) ──
+  orderedQty:     { type: Number, default: 0, min: 0 }, // PO ordered qty
+  grnReceivedQty: { type: Number, default: 0, min: 0 }, // GRN received qty
+  receivedQty:    { type: Number, default: 0, min: 0 }, // QC received (= GRN received)
+  acceptedQty:    { type: Number, default: 0, min: 0 }, // QC accepted
+  rejectedQty:    { type: Number, default: 0, min: 0 }, // QC rejected
+  invoiceQty:     { type: Number, default: 0, min: 0 }, // ≤ acceptedQty unless overridden
+  varianceQty:    { type: Number, default: 0 },         // invoiceQty − acceptedQty
+  varianceStatus: { type: String, enum: Object.values(INVOICE_VARIANCE_STATUS), default: INVOICE_VARIANCE_STATUS.MATCHED },
+  rate:        { type: Number, default: 0, min: 0 },
+  gstRate:     { type: Number, default: 0, min: 0, max: 100 },
+  taxableAmount: { type: Number, default: 0, min: 0 }, // invoiceQty × rate
+  gstAmount:     { type: Number, default: 0, min: 0 }, // taxable × gst%
+  totalAmount:   { type: Number, default: 0, min: 0 }, // taxable + gst
+  remarks:  { type: String, trim: true, default: '' },
+}, { _id: true });
+
 const vendorInvoiceSchema = new Schema({
   ...baseSchemaFields,
 
@@ -50,7 +80,10 @@ const vendorInvoiceSchema = new Schema({
   vendorGST:  { type: String, trim: true, default: '' },
   vendorAddress: { type: String, trim: true, default: '' },
 
-  // ── Financials ──
+  // ── Line items (sourced from QC, priced from PO) ──
+  items: { type: [invoiceItemSchema], default: [] },
+
+  // ── Financials (recomputed from items when present) ──
   invoiceAmount:    { type: Number, default: 0, min: 0 }, // gross invoice value
   taxableAmount:    { type: Number, default: 0, min: 0 },
   gstAmount:        { type: Number, default: 0, min: 0 },

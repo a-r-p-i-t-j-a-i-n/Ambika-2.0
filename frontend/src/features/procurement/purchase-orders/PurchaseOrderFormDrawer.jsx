@@ -13,6 +13,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import { fmtINR } from './poMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Create / edit a Vendor Purchase Order (Step 1.4).
@@ -93,21 +94,28 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, po, presetIndent]);
 
-  // Seed the first line from the indent's approved item.
+  // Seed PO lines from the indent's approved items (multi-item, with a
+  // legacy single-product fallback). Uses approved → revised → requested qty.
   const applyIndent = (ind) => {
     setIndent(ind);
     if (!ind) return;
     setItems((cur) => {
       const hasContent = cur.some((it) => it.itemName);
       if (hasContent) return cur;
-      return [{
+      const src = ind.items?.length
+        ? ind.items
+        : (ind.productNameRevised
+          ? [{ itemName: ind.productNameRevised, skuCode: ind.skuCode, skuId: ind.skuId, unit: ind.unit, approvedQuantity: ind.approvedQuantity, quantity: ind.quantity }]
+          : []);
+      const lines = src.map((it) => ({
         ...emptyItem(),
-        itemName: ind.productNameRevised || '',
-        skuCode: ind.skuCode || '',
-        skuId: ind.skuId || '',
-        quantity: ind.approvedQuantity || ind.quantity || '',
-        unit: ind.unit || 'Pcs',
-      }];
+        itemName: it.itemName || '',
+        skuCode: it.skuCode || '',
+        skuId: it.skuId || '',
+        quantity: it.approvedQuantity || it.revisedQuantity || it.quantity || '',
+        unit: it.unit || 'Pcs',
+      }));
+      return lines.length ? lines : cur;
     });
   };
 
@@ -180,7 +188,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         enqueueSnackbar('Purchase order updated', { variant: 'success' });
       } else {
         const res = await createPo({ ...payload, indentId: indent._id }).unwrap();
-        enqueueSnackbar(`PO ${res?.data?.poNumber || ''} created`, { variant: 'success' });
+        enqueueSnackbar(`PO ${res?.data?.poNumber || ''} saved as draft`, { variant: 'success' });
       }
       onClose?.(true);
     } catch (err) {
@@ -275,8 +283,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           </Typography>
           <Grid container spacing={2}>
             <Grid item xs={6} sm={3}>
-              <TextField label="PO Date" type="date" fullWidth value={header.poDate}
-                onChange={(e) => setHeader((h) => ({ ...h, poDate: e.target.value }))} InputLabelProps={{ shrink: true }} />
+              <DateInputDDMMYYYY label="PO Date" fullWidth value={header.poDate}
+                onChange={(val) => setHeader((h) => ({ ...h, poDate: val }))} />
             </Grid>
             <Grid item xs={6} sm={3}>
               <TextField label="Lead Time" fullWidth value={header.leadTime} placeholder="e.g. 7 days"
@@ -411,7 +419,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving}>Cancel</Button>
           <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
             onClick={handleSubmit} disabled={saving}>
-            {isEdit ? 'Save Changes' : 'Create Purchase Order'}
+            {isEdit ? 'Save Changes' : 'Save as Draft'}
           </Button>
         </Box>
       </Box>

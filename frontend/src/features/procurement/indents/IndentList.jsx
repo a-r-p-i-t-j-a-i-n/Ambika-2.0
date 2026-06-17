@@ -19,6 +19,7 @@ import {
 import {
   ApprovalChip, QuoteChip, QuotationChip, APPROVAL_STATUSES, DEPARTMENTS, fileHref,
 } from './indentMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
@@ -33,6 +34,14 @@ const quoteStateOf = (row) => {
 };
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
+
+// Human summary of an indent's items (falls back to the legacy single product).
+const itemsSummary = (row) => {
+  const items = row.items || [];
+  if (!items.length) return row.productNameRevised || '—';
+  const first = items[0]?.itemName || '—';
+  return items.length > 1 ? `${first} +${items.length - 1} more` : first;
+};
 
 const KpiCard = ({ icon, label, value, color }) => (
   <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
@@ -129,10 +138,11 @@ const IndentList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'indentNumber', headerName: 'INDENT NO', width: 130,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
-    { field: 'productNameRevised', headerName: 'PRODUCT NAME', flex: 1, minWidth: 200,
+    { field: 'products', headerName: 'PRODUCTS', flex: 1, minWidth: 220, sortable: false,
+      valueGetter: (_v, row) => itemsSummary(row),
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value}</Typography> },
-    { field: 'quantity', headerName: 'QTY', width: 80, align: 'right', headerAlign: 'right' },
-    { field: 'unit', headerName: 'UNIT', width: 80 },
+    { field: 'itemsCount', headerName: 'ITEMS', width: 80, align: 'right', headerAlign: 'right', sortable: false,
+      valueGetter: (_v, row) => (row.items?.length || (row.productNameRevised ? 1 : 0)) },
     { field: 'raisedBy', headerName: 'RAISED BY', width: 130,
       renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     { field: 'department', headerName: 'DEPT', width: 120,
@@ -206,8 +216,8 @@ const IndentList = () => {
           <MenuItem value="">All</MenuItem>
           {DEPARTMENTS.map((d) => <MenuItem key={d} value={d}>{d}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY label="From" value={from} onChange={setFrom} sx={{ width: 160 }} />
+        <DateInputDDMMYYYY label="To" value={to} onChange={setTo} sx={{ width: 160 }} />
       </Paper>
 
       {/* Grid */}

@@ -1,6 +1,11 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { vendorInvoiceService } from './vendorInvoice.service.js';
+import { userHasPermission } from '../../../middleware/permission.middleware.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
+
+// May the user invoice more than the QC-accepted (excess) qty?
+const canOverrideExcess = (req) =>
+  userHasPermission(req, 'procurement.invoiceExcess') || userHasPermission(req, 'procurement.approve');
 
 export const vendorInvoiceController = {
   getAll: asyncHandler(async (req, res) => {
@@ -24,12 +29,12 @@ export const vendorInvoiceController = {
   }),
 
   create: asyncHandler(async (req, res) => {
-    const inv = await vendorInvoiceService.create(req.body, req.user);
+    const inv = await vendorInvoiceService.create(req.body, req.user, { allowExcess: canOverrideExcess(req) });
     res.status(201).json(ApiResponse.created('Vendor invoice created', inv));
   }),
 
   update: asyncHandler(async (req, res) => {
-    const inv = await vendorInvoiceService.update(req.params.id, req.body, req.user);
+    const inv = await vendorInvoiceService.update(req.params.id, req.body, req.user, { allowExcess: canOverrideExcess(req) });
     res.json(ApiResponse.ok('Vendor invoice updated', inv));
   }),
 

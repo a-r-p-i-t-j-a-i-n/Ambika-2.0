@@ -7,6 +7,7 @@ import { CheckCircle2 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useMarkFollowUpDoneMutation } from '../../../store/api/procurementApi';
 import { FOLLOWUP_TYPES } from './fuMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -31,13 +32,19 @@ const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
     setMessage('');
   }, [open, followUp]);
 
+  // A next follow-up date means follow-up continues later — final material date
+  // is hidden and never submitted; the two are mutually exclusive.
+  const hasNext = !!nextFollowUpDate;
+
   const handleSubmit = async () => {
+    if (!actualAt) { enqueueSnackbar('Actual Date is required', { variant: 'warning' }); return; }
     try {
       await markDone({
         id: followUp._id, actualAt, followUpType,
         remarks: remarks.trim(),
-        nextFollowUpDate: nextFollowUpDate || undefined,
-        finalMaterialDate: finalMaterialDate || undefined,
+        // Mutually exclusive: keep at most one of next / final.
+        nextFollowUpDate: hasNext ? nextFollowUpDate : null,
+        finalMaterialDate: hasNext ? null : (finalMaterialDate || null),
         message: message.trim(),
       }).unwrap();
       enqueueSnackbar('Follow-up marked done', { variant: 'success' });
@@ -61,8 +68,8 @@ const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
         </Box>
         <Grid container spacing={2}>
           <Grid item xs={6}>
-            <TextField label="Actual Date" type="date" fullWidth value={actualAt}
-              onChange={(e) => setActualAt(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Actual Date *" fullWidth value={actualAt} onChange={setActualAt}
+              error={!actualAt} helperText={!actualAt ? 'Required' : ''} />
           </Grid>
           <Grid item xs={6}>
             <TextField label="Follow-up Type" select fullWidth value={followUpType}
@@ -71,13 +78,16 @@ const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
             </TextField>
           </Grid>
           <Grid item xs={6}>
-            <TextField label="Next Date to Follow-up" type="date" fullWidth value={nextFollowUpDate}
-              onChange={(e) => setNextFollowUpDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <DateInputDDMMYYYY label="Next Date to Follow-up" fullWidth value={nextFollowUpDate} onChange={setNextFollowUpDate}
+              helperText="Optional — set to continue follow-up later" />
           </Grid>
-          <Grid item xs={6}>
-            <TextField label="Final Date of Material" type="date" fullWidth value={finalMaterialDate}
-              onChange={(e) => setFinalMaterialDate(e.target.value)} InputLabelProps={{ shrink: true }} />
-          </Grid>
+          {/* Final material date only applies when there is no further follow-up. */}
+          {!hasNext && (
+            <Grid item xs={6}>
+              <DateInputDDMMYYYY label="Final Date of Material" fullWidth value={finalMaterialDate} onChange={setFinalMaterialDate}
+                helperText="Optional — leave blank if not known" />
+            </Grid>
+          )}
           <Grid item xs={12}>
             <TextField label="Communication Message" fullWidth multiline minRows={2} value={message}
               onChange={(e) => setMessage(e.target.value)} placeholder="What did the vendor say?" />

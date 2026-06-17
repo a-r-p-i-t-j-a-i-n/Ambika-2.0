@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, CheckCircle2, Send, FileDown, Ban, ShoppingBag,
-  Building2, FileText, Truck, Mail, PhoneCall, PackageCheck, Eye,
+  Building2, FileText, Truck, Mail, PhoneCall, PackageCheck, Eye, CircleSlash,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -30,6 +30,7 @@ import FollowUpReadyForGrnDialog from '../follow-ups/FollowUpReadyForGrnDialog';
 import { PoPiChip, fmtINR as fmtPiINR } from '../proforma-invoices/piMeta';
 import ProformaInvoiceFormDrawer from '../proforma-invoices/ProformaInvoiceFormDrawer';
 import ProformaInvoiceApprovalDialog from '../proforma-invoices/ProformaInvoiceApprovalDialog';
+import PurchaseOrderPiNotRequiredDialog from './PurchaseOrderPiNotRequiredDialog';
 
 import { GrnStatusChip } from '../grn/grnMeta';
 import GrnFormDialog from '../grn/GrnFormDialog';
@@ -83,10 +84,13 @@ const PurchaseOrderDetail = () => {
   // Step 1.6 — proforma invoice linked to this PO.
   const [piFormOpen, setPiFormOpen] = useState(false);
   const [piApprovalOpen, setPiApprovalOpen] = useState(false);
+  const [piNotReqOpen, setPiNotReqOpen] = useState(false);
   const { data: piRes } = useGetProformaInvoicesByPoQuery(id, { skip: !fuRelevant });
   const livePi = (piRes?.data || []).find((p) => p.piStatus !== 'CANCELLED') || null;
-  const canCreatePi = data?.data?.poStatus === 'RELEASED_TO_VENDOR' && !livePi;
-  const canApprovePi = livePi && ['DRAFT', 'RECEIVED'].includes(livePi.piStatus) && livePi.approvalStatus !== 'APPROVED';
+  // PI is optional: once marked Not Required, all PI / advance-payment actions are disabled.
+  const isPiNotRequired = data?.data?.piStatus === 'PI_NOT_REQUIRED';
+  const canCreatePi = data?.data?.poStatus === 'RELEASED_TO_VENDOR' && !livePi && !isPiNotRequired;
+  const canApprovePi = !isPiNotRequired && livePi && ['DRAFT', 'RECEIVED'].includes(livePi.piStatus) && livePi.approvalStatus !== 'APPROVED';
 
 
   // Step 1.8 — goods receipt notes against this PO.
@@ -98,6 +102,11 @@ const PurchaseOrderDetail = () => {
   const canCreateGrn = ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED'].includes(data?.data?.poStatus);
   const totalReceived = (po?.items || []).reduce((s, it) => s + (it.receivedQty || 0), 0);
   const totalOrdered = (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0);
+
+  // PI optional: offer "Mark PI Not Required" only for a released PO with no PI
+  // in progress and no GRN yet (server enforces the same rules + permission).
+  const canMarkPiNotRequired = data?.data?.poStatus === 'RELEASED_TO_VENDOR'
+    && data?.data?.piStatus === 'NOT_RECEIVED' && !livePi && grns.length === 0;
 
 
   if (isLoading) return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
@@ -252,15 +261,31 @@ const PurchaseOrderDetail = () => {
                       Approve PI
                     </Button>
                   )}
+                  {canMarkPiNotRequired && (
+                    <Button size="small" variant="outlined" color="warning" startIcon={<CircleSlash size={14} />}
+                      onClick={() => setPiNotReqOpen(true)}>
+                      Mark PI Not Required
+                    </Button>
+                  )}
                 </Box>
               </Box>
-              <Grid container spacing={2}>
-                <Grid item xs={6} sm={2.4}><Field label="PI Status" value={<PoPiChip status={po.piStatus} />} /></Grid>
-                <Grid item xs={6} sm={2.4}><Field label="PI Number" value={po.piNumber || livePi?.piNumber || '—'} /></Grid>
-                <Grid item xs={6} sm={2.4}><Field label="PI Date" value={fmtFuDate(livePi?.piDate || po.piReceivedAt)} /></Grid>
-                <Grid item xs={6} sm={2.4}><Field label="Paid Amount" value={livePi ? fmtPiINR(livePi.paidAmount) : '—'} /></Grid>
-                <Grid item xs={6} sm={2.4}><Field label="Balance Amount" value={livePi ? fmtPiINR(livePi.balanceAmount) : '—'} /></Grid>
-              </Grid>
+              {isPiNotRequired ? (
+                <Grid container spacing={2}>
+                  <Grid item xs={6} sm={2.4}><Field label="PI Status" value={<PoPiChip status={po.piStatus} />} /></Grid>
+                  <Grid item xs={6} sm={3}><Field label="Reason" value={po.piNotRequiredReason || '—'} /></Grid>
+                  <Grid item xs={6} sm={3}><Field label="Remarks" value={po.piNotRequiredRemarks || '—'} /></Grid>
+                  <Grid item xs={6} sm={2}><Field label="Marked By" value={po.piNotRequiredByName || '—'} /></Grid>
+                  <Grid item xs={6} sm={1.6}><Field label="Marked Date" value={fmtDate(po.piNotRequiredAt)} /></Grid>
+                </Grid>
+              ) : (
+                <Grid container spacing={2}>
+                  <Grid item xs={6} sm={2.4}><Field label="PI Status" value={<PoPiChip status={po.piStatus} />} /></Grid>
+                  <Grid item xs={6} sm={2.4}><Field label="PI Number" value={po.piNumber || livePi?.piNumber || '—'} /></Grid>
+                  <Grid item xs={6} sm={2.4}><Field label="PI Date" value={fmtFuDate(livePi?.piDate || po.piReceivedAt)} /></Grid>
+                  <Grid item xs={6} sm={2.4}><Field label="Paid Amount" value={livePi ? fmtPiINR(livePi.paidAmount) : '—'} /></Grid>
+                  <Grid item xs={6} sm={2.4}><Field label="Balance Amount" value={livePi ? fmtPiINR(livePi.balanceAmount) : '—'} /></Grid>
+                </Grid>
+              )}
             </Paper>
           </Grid>
         )}
@@ -413,6 +438,7 @@ const PurchaseOrderDetail = () => {
       <FollowUpReadyForGrnDialog open={fuReadyOpen} followUp={lastDoneFollowUp} onClose={() => setFuReadyOpen(false)} />
       <ProformaInvoiceFormDrawer open={piFormOpen} presetPo={po} onClose={() => setPiFormOpen(false)} />
       <ProformaInvoiceApprovalDialog open={piApprovalOpen} pi={livePi} onClose={() => setPiApprovalOpen(false)} />
+      <PurchaseOrderPiNotRequiredDialog open={piNotReqOpen} po={po} onClose={() => setPiNotReqOpen(false)} />
 
       <GrnFormDialog open={grnFormOpen} presetPo={po} onClose={() => setGrnFormOpen(false)} />
 

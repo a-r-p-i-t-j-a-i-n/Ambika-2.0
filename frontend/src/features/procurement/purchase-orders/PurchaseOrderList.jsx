@@ -17,7 +17,9 @@ import {
   useCancelPurchaseOrderMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PoStatusChip, PoReleaseChip, PO_STATUSES, fmtINR, fmtDate } from './poMeta';
+import { PoPiChip } from '../proforma-invoices/piMeta';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
@@ -120,6 +122,8 @@ const PurchaseOrderList = () => {
       renderCell: (p) => <PoStatusChip status={p.value} /> },
     { field: 'releaseStatus', headerName: 'RELEASE', width: 120,
       renderCell: (p) => <PoReleaseChip status={p.value} /> },
+    { field: 'piStatus', headerName: 'PI', width: 150, sortable: false,
+      renderCell: (p) => <PoPiChip status={p.value} /> },
     { field: 'createdBy', headerName: 'CREATED BY', width: 120, sortable: false,
       valueGetter: (_v, row) => row.createdBy?.name || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
@@ -173,8 +177,8 @@ const PurchaseOrderList = () => {
           <MenuItem value="">All</MenuItem>
           {PO_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       {/* Grid */}

@@ -15,6 +15,7 @@ import {
   useGetTallyEntryStatsQuery,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { TallyStatusChip, TALLY_STATUSES, CHECKLIST_TOTAL, checklistProgress, fmtDate } from './tallyMeta';
 import TallyEntryFormDialog from './TallyEntryFormDialog';
 import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
@@ -119,8 +120,8 @@ const TallyEntryList = () => {
           <MenuItem value="">All</MenuItem>
           {TALLY_STATUSES.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>

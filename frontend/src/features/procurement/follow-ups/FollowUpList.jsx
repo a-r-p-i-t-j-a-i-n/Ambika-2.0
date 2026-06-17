@@ -16,6 +16,7 @@ import {
   useGetFollowUpStatsQuery,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { FuStatusChip, FuTypeChip, FOLLOWUP_STATUSES, fmtDate, fmtDelay, isDelayed } from './fuMeta';
 import FollowUpFormDrawer from './FollowUpFormDrawer';
 import FollowUpDoneDialog from './FollowUpDoneDialog';
@@ -177,8 +178,8 @@ const FollowUpList = () => {
           <MenuItem value="">All</MenuItem>
           {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} disabled={delayedOnly} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} disabled={delayedOnly} />
         <FormControlLabel
           control={<Switch size="small" checked={delayedOnly} onChange={(e) => setDelayedOnly(e.target.checked)} />}
           label={<Typography variant="caption" fontWeight={700}>Delayed only</Typography>}

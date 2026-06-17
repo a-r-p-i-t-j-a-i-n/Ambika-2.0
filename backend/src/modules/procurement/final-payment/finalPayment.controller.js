@@ -37,4 +37,9 @@ export const finalPaymentController = {
     const p = await finalPaymentService.cancel(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Final payment cancelled', p));
   }),
+
+  generatePdf: asyncHandler(async (req, res) => {
+    const out = await finalPaymentService.generatePdf(req.params.id);
+    res.json(ApiResponse.ok('Payment receipt generated', out));
+  }),
 };

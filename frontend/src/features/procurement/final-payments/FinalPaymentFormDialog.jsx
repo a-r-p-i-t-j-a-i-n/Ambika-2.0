@@ -11,6 +11,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { PAYMENT_MODES, fmtINR } from './paymentMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const STATUS_OPTIONS = [
   { value: 'PART_PAYMENT', label: 'Part Payment' },
@@ -33,15 +34,29 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
   const [form, setForm] = useState(emptyForm);
   const [proof, setProof] = useState(null);
 
+  // Eligibility is enforced server-side: Tally completed + remaining balance,
+  // excluding cancelled vouchers. (See voucher.service getAll.)
   const { data: vouRes } = useGetVouchersQuery(
-    { limit: 300, sort: '-createdAt' },
+    { limit: 300, sort: '-createdAt', tallyEntryStatus: 'COMPLETED', minBalance: 1, excludeStatus: 'CANCELLED' },
     { skip: !open || Boolean(presetVoucher) },
   );
-  // Eligible: tally completed + outstanding balance.
   const voucherOptions = useMemo(() => {
     if (presetVoucher) return [presetVoucher];
-    return (vouRes?.data || []).filter((v) => v.tallyEntryStatus === 'COMPLETED' && Number(v.balanceAmount) > 0);
+    return vouRes?.data || [];
   }, [vouRes, presetVoucher]);
+
+  // Diagnostics: surface WHY the dropdown may be empty (counts via meta.total).
+  const { data: tallyRes } = useGetVouchersQuery(
+    { limit: 1, tallyEntryStatus: 'COMPLETED' },
+    { skip: !open || Boolean(presetVoucher) },
+  );
+  const { data: balRes } = useGetVouchersQuery(
+    { limit: 1, minBalance: 1, excludeStatus: 'CANCELLED' },
+    { skip: !open || Boolean(presetVoucher) },
+  );
+  const eligibleCount = vouRes?.meta?.total ?? voucherOptions.length;
+  const tallyCompletedCount = tallyRes?.meta?.total ?? 0;
+  const balanceCount = balRes?.meta?.total ?? 0;
 
   const [createPayment, { isLoading: creating }] = useCreateFinalPaymentMutation();
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
@@ -128,6 +143,22 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
             </TextField>
           </Grid>
 
+          {!presetVoucher && voucherOptions.length === 0 && (
+            <Grid item xs={12}>
+              <Alert severity="info" icon={false} sx={{ borderRadius: '10px' }}>
+                <Typography variant="body2" fontWeight={700}>No voucher ready for payment.</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  A voucher must have <b>Tally Completed</b> and <b>Balance Amount &gt; 0</b>. A voucher already fully paid at the Voucher stage has a zero balance and won't appear here.
+                </Typography>
+                <Box sx={{ mt: 1, display: 'flex', gap: 2.5, flexWrap: 'wrap' }}>
+                  <Typography variant="caption" color="text.secondary">Tally completed: <b>{tallyCompletedCount}</b></Typography>
+                  <Typography variant="caption" color="text.secondary">With balance &gt; 0: <b>{balanceCount}</b></Typography>
+                  <Typography variant="caption" color="text.secondary">Ready (both): <b>{eligibleCount}</b></Typography>
+                </Box>
+              </Alert>
+            </Grid>
+          )}
+
           {selectedVoucher && (
             <Grid item xs={12}>
               <Box sx={{ p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
@@ -144,7 +175,7 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
             </TextField>
           </Grid>
 
-          <Grid item xs={6}><TextField fullWidth size="small" type="date" label="Amount Date" InputLabelProps={{ shrink: true }} value={form.paymentDate} onChange={set('paymentDate')} /></Grid>
+          <Grid item xs={6}><DateInputDDMMYYYY fullWidth size="small" label="Amount Date" value={form.paymentDate} onChange={(val) => setForm((f) => ({ ...f, paymentDate: val }))} /></Grid>
           <Grid item xs={6}><TextField fullWidth size="small" type="number" label="Paid Amount" value={form.paidAmount} onChange={set('paidAmount')} disabled={form.paymentStatus === 'FULL_PAYMENT'} InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }} /></Grid>
 
           <Grid item xs={6}>

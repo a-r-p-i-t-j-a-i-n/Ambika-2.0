@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
-  Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, InputAdornment, Alert,
+  Dialog, DialogTitle, DialogContent, DialogActions, TextField,
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, Send, Ban, Banknote, Building2, FileText, ReceiptText,
-  ExternalLink, CheckCircle2, FileSpreadsheet, Wallet,
+  FileSpreadsheet, Wallet, Info,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -17,8 +17,8 @@ import {
   useGetTallyEntriesByVoucherQuery,
   useGetFinalPaymentsByVoucherQuery,
 } from '../../../store/api/procurementApi';
-import { VoucherStatusChip, PAYMENT_MODES, fmtINR, fmtDate } from './voucherMeta';
-import { fileHref } from '../indents/indentMeta';
+import { VoucherStatusChip, fmtINR, fmtDate } from './voucherMeta';
+import StatusChip from '../components/StatusChip';
 import VoucherFormDialog from './VoucherFormDialog';
 import TallyEntryFormDialog from '../tally-entry/TallyEntryFormDialog';
 import { TallyStatusChip, CHECKLIST_TOTAL, checklistProgress } from '../tally-entry/tallyMeta';
@@ -46,13 +46,11 @@ const VoucherDetail = () => {
   const v = data?.data;
 
   const [formOpen, setFormOpen] = useState(false);
-  const [postOpen, setPostOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
 
   const [postVoucher, { isLoading: posting }] = usePostVoucherMutation();
   const [cancelVoucher, { isLoading: cancelling }] = useCancelVoucherMutation();
 
-  const [postForm, setPostForm] = useState({ paidAmount: '', paymentMode: 'NEFT', referenceNumber: '', paymentDate: '', remarks: '' });
   const [cancelRemarks, setCancelRemarks] = useState('');
 
   const [tallyFormOpen, setTallyFormOpen] = useState(false);
@@ -67,13 +65,6 @@ const VoucherDetail = () => {
   const totalPaid = payments.reduce((s, x) => s + Number(x.paidAmount || 0), 0);
   const lastPayment = payments[0] || null;
 
-  useEffect(() => {
-    if (v && postOpen) setPostForm({
-      paidAmount: v.paidAmount || v.netPayableAmount || '', paymentMode: v.paymentMode || 'NEFT',
-      referenceNumber: v.referenceNumber || '', paymentDate: '', remarks: '',
-    });
-  }, [v, postOpen]);
-
   if (isLoading) return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
   if (!v) {
     return (
@@ -85,16 +76,13 @@ const VoucherDetail = () => {
   }
 
   const isDraft = v.voucherStatus === 'DRAFT';
-  const netPayable = Number(v.netPayableAmount || 0);
-  const postPaid = Number(postForm.paidAmount || 0);
-  const postBalance = netPayable - postPaid;
 
-  const doPost = async () => {
-    if (!postPaid || postPaid <= 0) return enqueueSnackbar('Enter a valid paid amount', { variant: 'warning' });
+  // Step 1.11 = passing / approval only (no payment). Moves DRAFT → POSTED so the
+  // Tally Entry can be raised; payment is recorded later in Step 1.13.
+  const doApprove = async () => {
     try {
-      await postVoucher({ id: v._id, paidAmount: postPaid, paymentMode: postForm.paymentMode, referenceNumber: postForm.referenceNumber.trim() || undefined, paymentDate: postForm.paymentDate || undefined, remarks: postForm.remarks.trim() || undefined }).unwrap();
-      enqueueSnackbar(postBalance <= 0 ? 'Voucher fully paid — invoice marked Accounts Ready' : 'Voucher posted — partially paid', { variant: 'success' });
-      setPostOpen(false);
+      await postVoucher({ id: v._id }).unwrap();
+      enqueueSnackbar('Voucher posted — pending final payment', { variant: 'success' });
     } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to post voucher', { variant: 'error' }); }
   };
 
@@ -123,27 +111,26 @@ const VoucherDetail = () => {
           {v.invoiceId && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${v.invoiceId}`)}>View Invoice</Button>}
           {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {isDraft && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={() => setCancelOpen(true)}>Cancel</Button>}
-          {isDraft && <Button variant="contained" color="success" startIcon={<Send size={16} />} onClick={() => setPostOpen(true)}>Post Payment</Button>}
+          {isDraft && <Button variant="contained" color="success" startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />} onClick={doApprove} disabled={posting}>Post Voucher</Button>}
         </Box>
       </Box>
 
       <Grid container spacing={3}>
         <Grid item xs={12} md={7}>
-          <SectionCard icon={<Banknote size={18} />} title="Payment">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Payment Mode" value={v.paymentMode} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Payment Date" value={fmtDate(v.paymentDate)} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Reference No" value={v.referenceNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Bank" value={v.bankName || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="UTR No" value={v.utrNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Cheque No" value={v.chequeNumber || '—'} /></Grid>
-              <Grid item xs={12} sm={4}>
-                <Field label="Proof" value={v.paymentProof?.fileUrl
-                  ? <Button size="small" startIcon={<ExternalLink size={13} />} href={fileHref(v.paymentProof.fileUrl)} target="_blank" rel="noopener">{v.paymentProof.fileName || 'View'}</Button>
-                  : '—'} />
-              </Grid>
-              {v.remarks ? <Grid item xs={12}><Field label="Remarks" value={v.remarks} /></Grid> : null}
-            </Grid>
+          <SectionCard icon={<Wallet size={18} />} title="Payment Status">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
+              {v.finalPaymentStatus && v.finalPaymentStatus !== 'PENDING'
+                ? <PaymentStatusChip status={v.finalPaymentStatus} />
+                : <StatusChip status="PENDING" label="Pending Final Payment" />}
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, p: 1.5, borderRadius: '10px', bgcolor: alpha('#1d4ed8', 0.05) }}>
+              <Info size={16} color="#1d4ed8" style={{ marginTop: 2, flexShrink: 0 }} />
+              <Typography variant="body2" color="text.secondary">
+                This step only passes / approves the voucher — no payment is recorded here.
+                The actual vendor payment will be recorded in <b>Step 1.13 — Final Payment</b>.
+              </Typography>
+            </Box>
+            {v.remarks ? <Box sx={{ mt: 1.5 }}><Field label="Remarks" value={v.remarks} /></Box> : null}
           </SectionCard>
         </Grid>
 
@@ -240,33 +227,6 @@ const VoucherDetail = () => {
       <VoucherFormDialog open={formOpen} voucher={v} onClose={() => setFormOpen(false)} />
       <TallyEntryFormDialog open={tallyFormOpen} presetVoucher={v} onClose={() => setTallyFormOpen(false)} />
       <FinalPaymentFormDialog open={paymentFormOpen} presetVoucher={v} onClose={() => setPaymentFormOpen(false)} />
-
-      {/* Post payment dialog */}
-      <Dialog open={postOpen} onClose={() => setPostOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: '16px' } }}>
-        <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}><Send size={18} /> Post Payment</DialogTitle>
-        <DialogContent dividers>
-          <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9' }}>
-            <Typography variant="body2" fontWeight={700}>{v.vendorName}</Typography>
-            <Typography variant="caption" color="text.secondary">Net Payable {fmtINR(netPayable)}</Typography>
-          </Box>
-          <Grid container spacing={2}>
-            <Grid item xs={6}><TextField fullWidth size="small" type="number" label="Paid Amount" value={postForm.paidAmount} onChange={(e) => setPostForm((f) => ({ ...f, paidAmount: e.target.value }))} InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }} /></Grid>
-            <Grid item xs={6}><TextField select fullWidth size="small" label="Mode" value={postForm.paymentMode} onChange={(e) => setPostForm((f) => ({ ...f, paymentMode: e.target.value }))}>{PAYMENT_MODES.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}</TextField></Grid>
-            <Grid item xs={6}><TextField fullWidth size="small" type="date" label="Payment Date" InputLabelProps={{ shrink: true }} value={postForm.paymentDate} onChange={(e) => setPostForm((f) => ({ ...f, paymentDate: e.target.value }))} /></Grid>
-            <Grid item xs={6}><TextField fullWidth size="small" label="Reference No" value={postForm.referenceNumber} onChange={(e) => setPostForm((f) => ({ ...f, referenceNumber: e.target.value }))} /></Grid>
-            <Grid item xs={12}><TextField fullWidth size="small" multiline minRows={2} label="Remarks" value={postForm.remarks} onChange={(e) => setPostForm((f) => ({ ...f, remarks: e.target.value }))} /></Grid>
-            <Grid item xs={12}>
-              <Alert severity={postBalance <= 0 ? 'success' : 'warning'} icon={false} sx={{ borderRadius: '10px' }}>
-                Balance after: <b>{fmtINR(postBalance > 0 ? postBalance : 0)}</b> — {postBalance <= 0 ? 'Fully Paid (invoice → Accounts Ready)' : 'Partially Paid'}
-              </Alert>
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions sx={{ p: 2, gap: 1 }}>
-          <Button onClick={() => setPostOpen(false)} disabled={posting}>Cancel</Button>
-          <Button variant="contained" color="success" onClick={doPost} disabled={posting} startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <CheckCircle2 size={16} />}>Post</Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Cancel dialog */}
       <Dialog open={cancelOpen} onClose={() => setCancelOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: '16px' } }}>

@@ -86,6 +86,10 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/cancel`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
+    markPoPiNotRequired: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/pi-not-required`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', { type: 'PurchaseOrder', id }],
+    }),
 
     // ── Material Follow-ups (Step 1.5) ───────────────────────
     getFollowUps: builder.query({
@@ -387,6 +391,10 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/final-payments/${id}`, method: 'PATCH', body }),
       invalidatesTags: (_r, _e, { id }) => ['FinalPayment', 'FinalPaymentStats', { type: 'FinalPayment', id }],
     }),
+    generateFinalPaymentPdf: builder.mutation({
+      query: ({ id }) => ({ url: `/procurement/final-payments/${id}/pdf`, method: 'POST' }),
+      invalidatesTags: (_r, _e, { id }) => ['FinalPayment', { type: 'FinalPayment', id }],
+    }),
     cancelFinalPayment: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/final-payments/${id}/cancel`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['FinalPayment', 'FinalPaymentStats', 'Voucher', 'VoucherStats', 'VendorInvoice', { type: 'FinalPayment', id }],
@@ -420,6 +428,7 @@ export const {
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,
   useCancelPurchaseOrderMutation,
+  useMarkPoPiNotRequiredMutation,
   useGetFollowUpsQuery,
   useGetFollowUpStatsQuery,
   useGetFollowUpByIdQuery,
@@ -491,5 +500,6 @@ export const {
   useGetFinalPaymentsByVoucherQuery,
   useCreateFinalPaymentMutation,
   useUpdateFinalPaymentMutation,
+  useGenerateFinalPaymentPdfMutation,
   useCancelFinalPaymentMutation,
 } = procurementApi;

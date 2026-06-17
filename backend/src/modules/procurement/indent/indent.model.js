@@ -78,25 +78,44 @@ const quotationApprovalStepSchema = new Schema({
   remarks:    { type: String, trim: true, default: '' },
 }, { _id: false });
 
+// ── Indent line item (multi-item indent) ───────────────────────
+const indentItemSchema = new Schema({
+  skuId:    { type: Schema.Types.ObjectId, ref: 'SKU' }, // optional link to SKU master
+  skuCode:  { type: String, trim: true, uppercase: true, default: '' },
+  itemName: { type: String, required: [true, 'Product name is required'], trim: true },
+  quantity: { type: Number, required: [true, 'Quantity is required'], min: 0 },
+  unit:     { type: String, trim: true, default: 'Pcs' },
+  // Set per-item during approval.
+  revisedQuantity:  { type: Number, default: 0, min: 0 },
+  approvedQuantity: { type: Number, default: 0, min: 0 },
+  remarks:  { type: String, trim: true, default: '' },
+}, { _id: true });
+
 const indentSchema = new Schema({
   ...baseSchemaFields,
 
   indentNumber: { type: String, unique: true, trim: true, index: true }, // auto: Ind-1/24-25
   timestamp:    { type: Date, default: Date.now }, // when the indent was raised
 
-  // ── Line / item ──
-  productNameRevised: { type: String, required: [true, 'Product name is required'], trim: true },
+  // ── Items (source of truth) ──
+  items: { type: [indentItemSchema], default: [] },
+
+  // ── Legacy single-product mirror (kept in sync from items[0] + aggregates) ──
+  // Retained for backward compatibility, text search and any older reads — the
+  // multi-item `items[]` array above is authoritative.
+  productNameRevised: { type: String, trim: true, default: '' },
   skuCode:            { type: String, trim: true, uppercase: true, default: '' },
-  skuId:              { type: Schema.Types.ObjectId, ref: 'SKU' }, // optional link to SKU master
-  quantity:           { type: Number, required: [true, 'Quantity is required'], min: 0 },
-  unit:               { type: String, required: [true, 'Unit is required'], trim: true, default: 'Pcs' },
+  skuId:              { type: Schema.Types.ObjectId, ref: 'SKU' },
+  quantity:           { type: Number, min: 0, default: 0 },
+  unit:               { type: String, trim: true, default: 'Pcs' },
 
   // ── Raised by / department ──
   raisedBy:    { type: String, trim: true },                 // name as entered on the form
   raisedById:  { type: Schema.Types.ObjectId, ref: 'User' }, // resolved from req.user when available
   department:  { type: String, trim: true, default: '' },    // Stores | Production | QC | Admin
+  remarks:     { type: String, trim: true, default: '' },    // indent header remarks
 
-  // ── Approval ──
+  // ── Approval (aggregate mirror of per-item quantities) ──
   revisedQuantity:  { type: Number, default: 0, min: 0 },
   approvedQuantity: { type: Number, default: 0, min: 0 },
   approvalStatus:   { type: String, enum: Object.values(INDENT_APPROVAL_STATUS), default: INDENT_APPROVAL_STATUS.DRAFT, index: true },
@@ -122,7 +141,7 @@ const indentSchema = new Schema({
 }, baseSchemaOptions);
 
 // ── Indexes ──────────────────────────────────────────────────
-indentSchema.index({ indentNumber: 'text', productNameRevised: 'text', skuCode: 'text', raisedBy: 'text' });
+indentSchema.index({ indentNumber: 'text', productNameRevised: 'text', skuCode: 'text', raisedBy: 'text', 'items.itemName': 'text', 'items.skuCode': 'text' });
 indentSchema.index({ department: 1, approvalStatus: 1 });
 indentSchema.index({ overallStatus: 1, createdAt: -1 });
 

@@ -9,9 +9,11 @@ import {
   useGetVouchersQuery,
   useCreateTallyEntryMutation,
   useUpdateTallyEntryMutation,
+  useCompleteTallyEntryMutation,
 } from '../../../store/api/procurementApi';
 import { CHECKLIST_ITEMS } from './tallyMeta';
 import { fmtINR } from '../vouchers/voucherMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const emptyChecklist = CHECKLIST_ITEMS.reduce((a, i) => ({ ...a, [i.key]: false }), {});
 const emptyForm = {
@@ -47,7 +49,8 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
 
   const [createEntry, { isLoading: creating }] = useCreateTallyEntryMutation();
   const [updateEntry, { isLoading: updating }] = useUpdateTallyEntryMutation();
-  const busy = creating || updating;
+  const [completeEntry, { isLoading: completing }] = useCompleteTallyEntryMutation();
+  const busy = creating || updating || completing;
 
   useEffect(() => {
     if (!open) return;
@@ -72,9 +75,15 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const toggle = (k) => (e) => setChecklist((c) => ({ ...c, [k]: e.target.checked }));
 
+  const markingDone = form.statusDone === 'YES';
+
   const submit = async () => {
     if (!form.voucherId) return enqueueSnackbar('Select a voucher', { variant: 'warning' });
-    if (form.statusDone === 'NO' && !form.remarks.trim()) return enqueueSnackbar('Remarks are required when status is "No"', { variant: 'warning' });
+    if (!markingDone && !form.remarks.trim()) return enqueueSnackbar('Remarks are required when status is "No"', { variant: 'warning' });
+    // Completing requires the full checklist (mirror the backend rule for a clear message).
+    if (markingDone && !CHECKLIST_ITEMS.every((i) => checklist[i.key])) {
+      return enqueueSnackbar('Verify all checklist items to mark the Tally entry as done', { variant: 'warning' });
+    }
     const payload = {
       statusDone: form.statusDone,
       plannedAt: form.plannedAt || undefined,
@@ -84,9 +93,17 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
       remarks: form.remarks.trim() || undefined,
     };
     try {
-      if (isEdit) await updateEntry({ id: entry._id, ...payload }).unwrap();
-      else await createEntry({ voucherId: form.voucherId, ...payload }).unwrap();
-      enqueueSnackbar(isEdit ? 'Tally entry updated' : 'Tally entry created', { variant: 'success' });
+      // "Yes" must COMPLETE the entry — that's what marks the voucher tally-complete
+      // and makes it eligible for Final Payment (Step 1.13). Otherwise it stays a draft.
+      if (isEdit) {
+        if (markingDone) await completeEntry({ id: entry._id, ...payload }).unwrap();
+        else await updateEntry({ id: entry._id, ...payload }).unwrap();
+      } else {
+        const res = await createEntry({ voucherId: form.voucherId, ...payload }).unwrap();
+        const newId = res?.data?._id;
+        if (markingDone && newId) await completeEntry({ id: newId, ...payload }).unwrap();
+      }
+      enqueueSnackbar(markingDone ? 'Tally entry completed — voucher ready for Final Payment' : (isEdit ? 'Tally entry updated' : 'Tally entry saved (pending)'), { variant: 'success' });
       onClose?.(true);
     } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to save tally entry', { variant: 'error' }); }
   };
@@ -127,7 +144,7 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
               </ToggleButtonGroup>
             </Box>
           </Grid>
-          <Grid item xs={6}><TextField fullWidth size="small" type="date" label="Planned Date" InputLabelProps={{ shrink: true }} value={form.plannedAt} onChange={set('plannedAt')} /></Grid>
+          <Grid item xs={6}><DateInputDDMMYYYY fullWidth size="small" label="Planned Date" value={form.plannedAt} onChange={(val) => setForm((f) => ({ ...f, plannedAt: val }))} /></Grid>
 
           <Grid item xs={6}><TextField fullWidth size="small" label="Tally Voucher No" value={form.tallyVoucherNumber} onChange={set('tallyVoucherNumber')} /></Grid>
           <Grid item xs={6}><TextField fullWidth size="small" label="Tally Ledger Name" value={form.tallyLedgerName} onChange={set('tallyLedgerName')} /></Grid>
@@ -145,8 +162,8 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
       </DialogContent>
       <DialogActions sx={{ p: 2, gap: 1 }}>
         <Button onClick={() => onClose?.(false)} disabled={busy}>Cancel</Button>
-        <Button variant="contained" onClick={submit} disabled={busy} startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <FileSpreadsheet size={16} />}>
-          {isEdit ? 'Save' : 'Create Entry'}
+        <Button variant="contained" color={markingDone ? 'success' : 'primary'} onClick={submit} disabled={busy} startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <FileSpreadsheet size={16} />}>
+          {markingDone ? (isEdit ? 'Complete Entry' : 'Create & Complete') : (isEdit ? 'Save' : 'Create Entry')}
         </Button>
       </DialogActions>
     </Dialog>

@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Ban, FileDown,
+  Search, Plus, MoreVertical, Eye, Ban, FileDown, ReceiptText,
   Wallet, Coins, Hourglass, SplitSquareHorizontal, CheckCheck, Scissors,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
@@ -15,11 +15,14 @@ import {
   useGetFinalPaymentsQuery,
   useGetFinalPaymentStatsQuery,
   useCancelFinalPaymentMutation,
+  useGenerateFinalPaymentPdfMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { fileHref } from '../indents/indentMeta';
 import { PaymentStatusChip, PAYMENT_STATUSES, paymentModeLabel, fmtINR, fmtDate } from './paymentMeta';
 import FinalPaymentFormDialog from './FinalPaymentFormDialog';
+import PdfViewerModal from '../common/PdfViewerModal';
 
 const KpiCard = ({ icon, label, value, color, money }) => (
   <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
@@ -43,8 +46,10 @@ const FinalPaymentList = () => {
   const [formOpen, setFormOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [receipt, setReceipt] = useState({ open: false, url: '', title: '', fileName: '', loading: false });
 
   const [cancelPayment] = useCancelFinalPaymentMutation();
+  const [genPdf] = useGenerateFinalPaymentPdfMutation();
 
   const queryArgs = {
     page: paginationModel.page + 1, limit: paginationModel.pageSize, sort: '-createdAt',
@@ -60,6 +65,21 @@ const FinalPaymentList = () => {
   const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
   const onView = (r) => { navigate(`/procurement/final-payments/${r._id}`); closeMenu(); };
   const onProof = (r) => { window.open(fileHref(r.proofDocument?.fileUrl), '_blank'); closeMenu(); };
+  const onReceipt = async (r) => {
+    closeMenu();
+    const title = `Payment Receipt — ${r.paymentNumber}`;
+    if (r.paymentPdfUrl) { setReceipt({ open: true, url: r.paymentPdfUrl, title, fileName: r.paymentPdfFileName, loading: false }); return; }
+    setReceipt({ open: true, url: '', title, fileName: '', loading: true });
+    try {
+      const res = await genPdf({ id: r._id }).unwrap();
+      const url = res?.data?.paymentPdfUrl;
+      setReceipt((s) => ({ ...s, url: url || '', loading: false }));
+      if (!url) { setReceipt({ open: false, url: '', title: '', fileName: '', loading: false }); enqueueSnackbar('Receipt generated', { variant: 'success' }); }
+    } catch (err) {
+      setReceipt({ open: false, url: '', title: '', fileName: '', loading: false });
+      enqueueSnackbar(err?.data?.message || 'Failed to generate receipt', { variant: 'error' });
+    }
+  };
   const onCancel = async (r) => {
     closeMenu();
     try { await cancelPayment({ id: r._id }).unwrap(); enqueueSnackbar('Payment cancelled — amount reversed', { variant: 'info' }); }
@@ -68,6 +88,7 @@ const FinalPaymentList = () => {
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
+    a.push({ key: 'receipt', label: r.paymentPdfUrl ? 'Receipt PDF' : 'Generate Receipt', icon: <ReceiptText size={16} />, fn: () => onReceipt(r) });
     if (r.proofDocument?.fileUrl) a.push({ key: 'proof', label: 'View Proof', icon: <FileDown size={16} />, fn: () => onProof(r) });
     if (r.paymentStatus !== 'CANCELLED') a.push({ key: 'cancel', label: 'Cancel Payment', icon: <Ban size={16} />, fn: () => onCancel(r) });
     return a;
@@ -115,8 +136,8 @@ const FinalPaymentList = () => {
           <MenuItem value="">All</MenuItem>
           {PAYMENT_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>
@@ -133,6 +154,14 @@ const FinalPaymentList = () => {
       </Menu>
 
       <FinalPaymentFormDialog open={formOpen} onClose={() => setFormOpen(false)} />
+      <PdfViewerModal
+        open={receipt.open}
+        onClose={() => setReceipt((s) => ({ ...s, open: false }))}
+        url={receipt.url}
+        loading={receipt.loading}
+        title={receipt.title}
+        fileName={receipt.fileName}
+      />
     </Box>
   );
 };

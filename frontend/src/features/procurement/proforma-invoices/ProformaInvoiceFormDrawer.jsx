@@ -14,6 +14,7 @@ import {
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fileHref } from '../indents/indentMeta';
 import { fmtINR } from './piMeta';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
  * Create / edit a Proforma Invoice (Step 1.6).
@@ -188,8 +189,8 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
               )}
             </Grid>
             <Grid item xs={6} sm={3}>
-              <TextField label="PI Date" type="date" fullWidth value={piDate}
-                onChange={(e) => setPiDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+              <DateInputDDMMYYYY label="PI Date" fullWidth value={piDate}
+                onChange={setPiDate} />
             </Grid>
             <Grid item xs={6} sm={2}>
               <TextField label="Unique Code" fullWidth value={pi?.uniqueCode || '(auto)'} disabled />

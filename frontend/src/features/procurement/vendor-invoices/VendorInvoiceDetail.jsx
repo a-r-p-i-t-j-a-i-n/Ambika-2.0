@@ -12,12 +12,16 @@ import {
   useGetVendorInvoiceByIdQuery,
   useGetVouchersByInvoiceQuery,
 } from '../../../store/api/procurementApi';
-import { InvoiceStatusChip, fmtINR, fmtDate } from './invoiceMeta';
+import { InvoiceStatusChip, VarianceChip, varianceRowBg, fmtINR, fmtDate } from './invoiceMeta';
 import { fileHref } from '../indents/indentMeta';
 import { VoucherStatusChip } from '../vouchers/voucherMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
 import VoucherFormDialog from '../vouchers/VoucherFormDialog';
+
+const INV_ITEM_COLS = '2fr 0.8fr 0.8fr 0.6fr 0.9fr 0.9fr 0.95fr 1.4fr';
+const CMP_COLS = '1.8fr 1fr 0.5fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.95fr';
+const CMP_HEAD = ['Item Name', 'SKU', 'Unit', 'PO Ordered', 'GRN Recv', 'QC Accepted', 'QC Rejected', 'Invoice Qty', 'Variance', 'Status'];
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -120,6 +124,75 @@ const VendorInvoiceDetail = () => {
             </Grid>
           </SectionCard>
         </Grid>
+
+        {/* Order vs Received comparison */}
+        {inv.items?.length ? (
+          <Grid item xs={12}>
+            <SectionCard icon={<FileText size={18} />} title="Order vs Received Comparison">
+              <Box sx={{ overflowX: 'auto' }}>
+                <Box sx={{ minWidth: 940 }}>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: CMP_COLS, gap: 1, px: 1.25, py: 1, background: 'linear-gradient(90deg,#0b2545,#1d4ed8)', borderRadius: '8px 8px 0 0' }}>
+                    {CMP_HEAD.map((h, i) => (
+                      <Typography key={i} variant="caption" sx={{ fontWeight: 800, color: '#fff', textTransform: 'uppercase', fontSize: '0.55rem', letterSpacing: '0.03em', textAlign: i <= 1 ? 'left' : (i === 9 ? 'center' : 'right') }}>{h}</Typography>
+                    ))}
+                  </Box>
+                  {inv.items.map((it, i) => {
+                    const variance = Number(it.varianceQty ?? ((it.invoiceQty || 0) - (it.acceptedQty || 0)));
+                    const status = it.varianceStatus || (variance === 0 ? 'MATCHED' : (variance < 0 ? 'SHORT' : 'EXCESS'));
+                    return (
+                      <Box key={it._id || i} sx={{ display: 'grid', gridTemplateColumns: CMP_COLS, gap: 1, alignItems: 'center', px: 1.25, py: 0.85, borderTop: '1px solid', borderColor: 'divider', bgcolor: varianceRowBg(status) }}>
+                        <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+                        <Typography variant="body2" color="primary.main" fontWeight={700} noWrap>{it.skuCode || '—'}</Typography>
+                        <Typography variant="body2" color="text.secondary">{it.unit}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right' }}>{it.orderedQty ?? '—'}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right' }}>{it.grnReceivedQty ?? it.receivedQty ?? '—'}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right', color: '#0f766e', fontWeight: 700 }}>{it.acceptedQty}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right', color: it.rejectedQty > 0 ? '#b45309' : 'text.disabled' }}>{it.rejectedQty}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700 }}>{it.invoiceQty}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700, color: variance === 0 ? 'text.secondary' : (variance < 0 ? '#b45309' : '#be123c') }}>{variance > 0 ? `+${variance}` : variance}</Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'center' }}><VarianceChip status={status} /></Box>
+                      </Box>
+                    );
+                  })}
+                </Box>
+              </Box>
+            </SectionCard>
+          </Grid>
+        ) : null}
+
+        {/* Invoice items */}
+        {inv.items?.length ? (
+          <Grid item xs={12}>
+            <SectionCard icon={<FileText size={18} />} title={`Invoice Items (${inv.items.length})`}>
+              <Box sx={{ overflowX: 'auto' }}>
+                <Box sx={{ minWidth: 820 }}>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: INV_ITEM_COLS, gap: 1, px: 1, mb: 0.5 }}>
+                    {['Item / SKU', 'Inv Qty', 'Rate', 'GST %', 'Taxable', 'GST', 'Total', 'Remarks'].map((h, i) => (
+                      <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.6rem', textAlign: i === 0 || i === 7 ? 'left' : 'right' }}>{h}</Typography>
+                    ))}
+                  </Box>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                    {inv.items.map((it, i) => (
+                      <Box key={it._id || i} sx={{ display: 'grid', gridTemplateColumns: INV_ITEM_COLS, gap: 1, alignItems: 'center', px: 1, py: 0.75, borderRadius: '8px', border: '1px solid', borderColor: 'divider' }}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+                          {it.skuCode ? <Typography variant="caption" color="primary.main" fontWeight={700}>{it.skuCode}</Typography> : null}
+                        </Box>
+                        <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700 }}>{it.invoiceQty}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right' }}>{Number(it.rate || 0).toFixed(2)}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right' }}>{it.gstRate || 0}%</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right' }}>{Number(it.taxableAmount || 0).toFixed(2)}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right' }}>{Number(it.gstAmount || 0).toFixed(2)}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700 }}>{Number(it.totalAmount || 0).toFixed(2)}</Typography>
+                        <Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              </Box>
+            </SectionCard>
+          </Grid>
+        ) : null}
 
         {/* Financials */}
         <Grid item xs={12}>

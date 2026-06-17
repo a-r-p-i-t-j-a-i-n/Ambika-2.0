@@ -71,6 +71,10 @@ const finalPaymentSchema = new Schema({
   performedBy:     { type: Schema.Types.ObjectId, ref: 'User', default: null },
   performedByName: { type: String, trim: true, default: '' },
   cancelledAt:     { type: Date, default: null },
+
+  // ── Generated payment receipt PDF ──
+  paymentPdfUrl:      { type: String, trim: true, default: '' },
+  paymentPdfFileName: { type: String, trim: true, default: '' },
 }, baseSchemaOptions);
 
 finalPaymentSchema.index({ paymentNumber: 'text', voucherNumber: 'text', invoiceNumber: 'text', vendorName: 'text', paymentReferenceNumber: 'text' });

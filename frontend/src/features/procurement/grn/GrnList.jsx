@@ -17,6 +17,7 @@ import {
   useCancelGrnMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { GrnStatusChip, GRN_STATUSES, fmtDate } from './grnMeta';
 import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
@@ -162,8 +163,8 @@ const GrnList = () => {
           <MenuItem value="">All</MenuItem>
           {GRN_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>
-        <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-        <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
+        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       {/* Grid */}

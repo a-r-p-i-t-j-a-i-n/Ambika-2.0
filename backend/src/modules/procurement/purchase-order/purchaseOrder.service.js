@@ -6,7 +6,10 @@ import VendorPurchaseOrder, {
   PO_RELEASE_STATUS,
   PO_STATUS,
   PO_FOLLOWUP_STATUS,
+  PO_PI_STATUS,
+  PO_ADVANCE_PAYMENT_STATUS,
 } from './purchaseOrder.model.js';
+import GoodsReceiptNote from '../grn/grn.model.js';
 import PurchaseIndent, { INDENT_OVERALL_STATUS } from '../indent/indent.model.js';
 import Party from '../../clients/party.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
@@ -107,27 +110,63 @@ export const buildPoPdfBuffer = (po, company = {}) => new Promise((resolve, reje
     let y = 104;
 
     // ── PO info + vendor blocks ──
+    // Content is drawn first so the bordered boxes can size to the taller column
+    // (long addresses / emails wrap instead of overflowing a fixed-height box).
     const half = W / 2 - 8;
-    doc.roundedRect(PAGE.m, y, half, 92, 6).stroke(line);
-    doc.roundedRect(PAGE.m + half + 16, y, half, 92, 6).stroke(line);
+    const boxTop = y;
+    const leftX = PAGE.m;
+    const rightBoxX = PAGE.m + half + 16;
+    const leftInnerX = leftX + 10;
+    const rightInnerX = rightBoxX + 10;
+    const innerW = half - 20;
 
-    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('PO DETAILS', PAGE.m + 10, y + 8);
-    doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(po.poNumber || '', PAGE.m + 10, y + 21);
-    doc.font('Helvetica').fontSize(8.5).fill(navy)
-      .text(`PO Date: ${fmtDate(po.poDate)}`, PAGE.m + 10, y + 38)
-      .text(`Indent No: ${po.indentNumber || '—'}`, PAGE.m + 10, y + 51)
-      .text(`Lead Time: ${po.leadTime || '—'}`, PAGE.m + 10, y + 64)
-      .text(`Credit Period: ${po.creditPeriod ? `${po.creditPeriod} days` : '—'}`, PAGE.m + 10, y + 77);
+    // LEFT — PO DETAILS
+    let ly = boxTop + 10;
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('PO DETAILS', leftInnerX, ly); ly += 14;
+    doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(po.poNumber || '', leftInnerX, ly, { width: innerW }); ly += 17;
+    doc.font('Helvetica').fontSize(8.5).fill(navy);
+    [
+      `PO Date: ${fmtDate(po.poDate)}`,
+      `Indent No: ${po.indentNumber || '—'}`,
+      `Lead Time: ${po.leadTime || '—'}`,
+      `Credit Period: ${po.creditPeriod ? `${po.creditPeriod} days` : '—'}`,
+    ].forEach((t) => { doc.text(t, leftInnerX, ly, { width: innerW }); ly += 13; });
+    const leftBottom = ly;
 
-    const vx = PAGE.m + half + 26;
-    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('VENDOR / SUPPLIER', vx, y + 8);
-    doc.font('Helvetica-Bold').fontSize(10.5).fill(navy).text(po.vendorName || '—', vx, y + 21, { width: half - 20 });
-    doc.font('Helvetica').fontSize(8.5).fill(navy)
-      .text(`GST: ${po.vendorGST || '—'}    PAN: ${po.vendorPAN || '—'}`, vx, y + 38, { width: half - 20 })
-      .text(`Address: ${po.vendorAddress || '—'}`, vx, y + 51, { width: half - 20, height: 24, ellipsis: true })
-      .text(`Phone: ${po.vendorPhone || '—'}   Email: ${po.vendorEmail || '—'}`, vx, y + 77, { width: half - 20, ellipsis: true });
+    // RIGHT — VENDOR / SUPPLIER (fixed label column, wrapping values)
+    const vLabelW = 52;       // fixed-width label column → colons + values align
+    const vValX = rightInnerX + vLabelW + 8;
+    const vValW = innerW - vLabelW - 8;
+    let ry = boxTop + 10;
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('VENDOR / SUPPLIER', rightInnerX, ry); ry += 14;
+    doc.font('Helvetica-Bold').fontSize(10.5).fill(navy);
+    const vNameH = doc.heightOfString(po.vendorName || '—', { width: innerW });
+    doc.text(po.vendorName || '—', rightInnerX, ry, { width: innerW }); ry += vNameH + 6;
 
-    y += 106;
+    // One label:value row; value wraps within its column, row height auto-adjusts.
+    const vRow = (label, value) => {
+      doc.font('Helvetica').fontSize(8.5);
+      doc.fill('#475a8a').text(label, rightInnerX, ry, { width: vLabelW, lineBreak: false });
+      doc.fill('#475a8a').text(':', rightInnerX + vLabelW, ry);
+      const vh = doc.fill(navy).heightOfString(value || '—', { width: vValW });
+      doc.text(value || '—', vValX, ry, { width: vValW });
+      ry += Math.max(11, vh) + 2;
+    };
+    vRow('GST No.', po.vendorGST || '—');
+    vRow('PAN No.', po.vendorPAN || '—');
+    ry += 4;
+    vRow('Address', po.vendorAddress || '—');
+    ry += 4;
+    vRow('Phone No.', po.vendorPhone || '—');
+    vRow('Email', po.vendorEmail || '—');
+    const rightBottom = ry;
+
+    // Borders sized to the taller of the two columns.
+    const boxH = Math.max(leftBottom, rightBottom) - boxTop + 10;
+    doc.roundedRect(leftX, boxTop, half, boxH, 6).stroke(line);
+    doc.roundedRect(rightBoxX, boxTop, half, boxH, 6).stroke(line);
+
+    y = boxTop + boxH + 14;
 
     // ── Terms strip ──
     doc.roundedRect(PAGE.m, y, W, 30, 6).fill('#f5f8ff');
@@ -157,22 +196,43 @@ export const buildPoPdfBuffer = (po, company = {}) => new Promise((resolve, reje
     };
     drawHeaderRow();
 
-    doc.font('Helvetica').fontSize(8).fill(navy);
+    const nameCol = cols.find((c) => c.key === 'name');
+    const PADY = 5; // top/bottom cell padding
     (po.items || []).forEach((it, i) => {
-      if (y > PAGE.h - 200) { doc.addPage(); y = PAGE.m; drawHeaderRow(); doc.font('Helvetica').fontSize(8).fill(navy); }
-      const rowH = 18;
+      // Measure the description cell: item name (primary) + optional SKU line
+      // (secondary). Row height auto-adjusts so long names wrap cleanly.
+      const nameStr = it.itemName || '';
+      const skuStr = it.skuCode ? `SKU: ${it.skuCode}` : '';
+      doc.font('Helvetica').fontSize(8);
+      const nameH = doc.heightOfString(nameStr, { width: nameCol.w - 6 });
+      const skuH = skuStr ? 10 : 0;
+      const rowH = Math.max(18, nameH + skuH + PADY * 2 - 2);
+
+      if (y + rowH > PAGE.h - 150) { doc.addPage(); y = PAGE.m; drawHeaderRow(); }
+
       if (i % 2 === 1) doc.rect(PAGE.m, y, W, rowH).fill('#f8fafc');
-      doc.fill(navy);
-      let x = PAGE.m;
+
       const cells = {
         sr: String(i + 1),
-        name: `${it.itemName}${it.skuCode ? `  (${it.skuCode})` : ''}`,
         qty: String(it.quantity), unit: it.unit || 'Pcs',
         rate: Number(it.rate || 0).toFixed(2), taxable: Number(it.taxableAmount || 0).toFixed(2),
         gst: `${it.gstRate || 0}%`, tax: Number(it.taxAmount || 0).toFixed(2),
         total: Number(it.totalAmount || 0).toFixed(2),
       };
-      cols.forEach((c) => { doc.text(cells[c.key], x + 3, y + 5, { width: c.w - 6, align: c.align, ellipsis: true }); x += c.w; });
+      let x = PAGE.m;
+      cols.forEach((c) => {
+        if (c.key === 'name') {
+          doc.font('Helvetica').fontSize(8).fill(navy).text(nameStr, x + 3, y + PADY, { width: c.w - 6 });
+          if (skuStr) {
+            doc.font('Helvetica').fontSize(7).fill('#64748b')
+              .text(skuStr, x + 9, y + PADY + nameH + 1, { width: c.w - 12 });
+          }
+        } else {
+          doc.font('Helvetica').fontSize(8).fill(navy)
+            .text(cells[c.key], x + 3, y + PADY, { width: c.w - 6, align: c.align, ellipsis: true });
+        }
+        x += c.w;
+      });
       doc.moveTo(PAGE.m, y + rowH).lineTo(PAGE.m + W, y + rowH).strokeColor(line).lineWidth(0.5).stroke();
       y += rowH;
     });
@@ -222,6 +282,17 @@ export const purchaseOrderService = {
     if (!indent) throw new AppError('Indent not found', 404);
     if (!PO_CREATABLE_INDENT_STATES.includes(indent.overallStatus)) {
       throw new AppError('Purchase Order can only be created after the quotation is approved (Step 1.3)', 400);
+    }
+
+    // Rule: one active PO per indent — only a CANCELLED PO frees the indent to
+    // create another. Draft/approved/released/received POs all block re-creation.
+    const activePo = await VendorPurchaseOrder.findOne({
+      indentId: indent._id,
+      isDeleted: { $ne: true },
+      poStatus: { $ne: PO_STATUS.CANCELLED },
+    }).select('poNumber poStatus').lean();
+    if (activePo) {
+      throw new AppError(`Indent ${indent.indentNumber} already has an active PO (${activePo.poNumber}). Cancel it before creating a new one.`, 400);
     }
 
     const party = await Party.findOne({ _id: data.vendorId, isDeleted: { $ne: true } }).lean();
@@ -417,6 +488,47 @@ export const purchaseOrderService = {
     } catch (err) { logger.error(`[po] PDF generation failed for ${po.poNumber}: ${err.message}`); }
 
     return po;
+  },
+
+  /**
+   * Mark PI as Not Required — the audited "PI is optional" path.
+   * Only valid for a RELEASED PO that has no PI in progress and no GRN yet.
+   * Records reason/remarks/who/when forever and advances the PI gate so a GRN
+   * can proceed without a proforma invoice or advance payment.
+   */
+  async markPiNotRequired(id, data, user) {
+    const po = await findOrThrow(id);
+
+    if (po.poStatus !== PO_STATUS.RELEASED_TO_VENDOR) {
+      throw new AppError('PI can only be marked Not Required after the PO is released to the vendor', 400);
+    }
+    if (po.piStatus === PO_PI_STATUS.PI_NOT_REQUIRED) {
+      throw new AppError('PI is already marked as Not Required', 400);
+    }
+    // A PI already exists / is in progress → cannot skip it.
+    if (po.piStatus !== PO_PI_STATUS.NOT_RECEIVED || po.piId) {
+      throw new AppError('A proforma invoice already exists for this PO — it cannot be marked Not Required', 400);
+    }
+    // No downstream document may exist yet (GRN is the gateway to QC/Invoice/Voucher).
+    const grnCount = await GoodsReceiptNote.countDocuments({ poId: po._id, isDeleted: { $ne: true } });
+    if (grnCount > 0) {
+      throw new AppError('A GRN already exists for this PO — PI cannot be marked Not Required', 400);
+    }
+
+    po.piStatus = PO_PI_STATUS.PI_NOT_REQUIRED;
+    po.advancePaymentStatus = PO_ADVANCE_PAYMENT_STATUS.NOT_REQUIRED;
+    po.piNotRequiredReason = data.reason;
+    po.piNotRequiredRemarks = data.remarks || '';
+    po.piNotRequiredBy = user?._id;
+    po.piNotRequiredByName = user?.name || '';
+    po.piNotRequiredAt = new Date();
+    po.updatedBy = user?._id;
+    po.activityTimeline.push({
+      action: 'PI_NOT_REQUIRED',
+      description: `PI marked as Not Required. Reason: ${data.reason}${data.remarks ? ` | Remarks: ${data.remarks}` : ''}`,
+      actorId: user?._id,
+    });
+    return po.save();
   },
 
   async cancel(id, data, user) {

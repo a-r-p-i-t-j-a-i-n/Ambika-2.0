@@ -30,5 +30,6 @@ router.route('/:id')
   .patch(validate(mongoIdParamSchema, 'params'), validate(updateFinalPaymentSchema), c.update);
 
 router.post('/:id/cancel', validate(mongoIdParamSchema, 'params'), validate(cancelFinalPaymentSchema), c.cancel);
+router.post('/:id/pdf',    validate(mongoIdParamSchema, 'params'), c.generatePdf);
 
 export default router;
