@@ -11,6 +11,7 @@ import { useGetProcessByIdQuery, usePlanOrderMutation } from '../../store/api/o2
 import { useListAccessUsersQuery } from '../../store/api/accessControlApi';
 import { usePermissions } from '../../hooks/usePermission';
 import StepDetailCard from './components/StepDetailCard';
+import { ACTION_LINKS, actionLinkMeta } from './actionLinks';
 
 const UNITS = ['MINUTES', 'HOURS', 'DAYS', 'WEEKS', 'MONTHS'];
 
@@ -45,6 +46,12 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
           assignees: (s.assignees?.length ? s.assignees : (s.assignedTo ? [s.assignedTo] : [])).map((x) => String(x._id || x)),
           buddies: (s.buddies?.length ? s.buddies : (s.buddyUserId ? [s.buddyUserId] : [])).map((x) => String(x._id || x)),
           leadValue: lt.value, leadUnit: lt.unit,
+          actionLink: s.actionLink || '',
+          // Read-only gates carried from the template (shown so the full plan is visible).
+          verifications: (s.verifications || []).map((v) => v.question),
+          formFields: (s.formFields || []).map((f) => f.label),
+          proofRequired: !!s.proof?.required,
+          approvalRequired: !!s.approval?.required,
         };
       }));
     }
@@ -67,6 +74,7 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
         buddies: r.buddies || [],
         leadTime: r.leadValue ? { value: Number(r.leadValue), unit: r.leadUnit } : undefined,
         checklist: r.checklist.filter(Boolean).map((text) => ({ text })),
+        actionLink: r.actionLink || null,
       })) }).unwrap();
       onSaved?.();
       onClose();
@@ -91,12 +99,32 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
                 {r.assignees.length > 0 && <Chip size="small" sx={{ bgcolor: alpha('#1d4ed8', 0.1) }} label={r.assignees.map((id) => nameOf(id)).filter(Boolean).join(', ') || `${r.assignees.length} doer(s)`} />}
                 {r.checklist.length > 0 && <Chip size="small" variant="outlined" label={`✓ ${r.checklist.length}`} />}
                 {r.leadValue && <Chip size="small" variant="outlined" label={`${r.leadValue} ${r.leadUnit.toLowerCase()}`} />}
+                {r.actionLink && <Chip size="small" sx={{ bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} label={`🔗 ${actionLinkMeta(r.actionLink)?.label || r.actionLink}`} />}
+                {r.verifications.length > 0 && <Chip size="small" variant="outlined" color="secondary" label={`${r.verifications.length} Q`} />}
+                {r.formFields.length > 0 && <Chip size="small" variant="outlined" color="info" label={`${r.formFields.length} field`} />}
+                {r.proofRequired && <Chip size="small" variant="outlined" color="warning" label="proof" />}
+                {r.approvalRequired && <Chip size="small" variant="outlined" color="success" label="approval" />}
               </Stack>
             </AccordionSummary>
             <AccordionDetails>
               <Stack spacing={1.5}>
                 <TextField size="small" label="Task title" value={r.taskTitle} onChange={(e) => upd(i, { taskTitle: e.target.value })} fullWidth placeholder={r.stepName} />
                 <TextField size="small" label="Instructions" value={r.instructions} onChange={(e) => upd(i, { instructions: e.target.value })} fullWidth multiline minRows={2} />
+                {/* The connected system action ("Do it now" link) for this step. */}
+                <TextField select size="small" fullWidth label="Connect to system action — shows a 'Do it now' link on the task"
+                  value={r.actionLink || ''} onChange={(e) => upd(i, { actionLink: e.target.value })}>
+                  <MenuItem value=""><em>None</em></MenuItem>
+                  {ACTION_LINKS.map((a) => <MenuItem key={a.key} value={a.key}>{a.label}</MenuItem>)}
+                </TextField>
+                {(r.verifications.length > 0 || r.formFields.length > 0 || r.proofRequired || r.approvalRequired) && (
+                  <Box sx={{ p: 1, borderRadius: 1, bgcolor: alpha('#475569', 0.05), border: '1px dashed', borderColor: 'divider' }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>Requirements from template (completed on the task):</Typography>
+                    {r.verifications.length > 0 && <Typography variant="caption" display="block">• Verify: {r.verifications.join('; ')}</Typography>}
+                    {r.formFields.length > 0 && <Typography variant="caption" display="block">• Capture: {r.formFields.join(', ')}</Typography>}
+                    {r.proofRequired && <Typography variant="caption" display="block">• Proof attachment required</Typography>}
+                    {r.approvalRequired && <Typography variant="caption" display="block">• Approval required</Typography>}
+                  </Box>
+                )}
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                   <TextField select size="small" label="Doers (one or more)" value={r.assignees} sx={{ flex: 1 }}
                     onChange={(e) => upd(i, { assignees: typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value })}

@@ -789,6 +789,7 @@ export const o2dFmsService = {
           return { text: c.text, done: old?.done || false, doneBy: old?.doneBy || null, doneByName: old?.doneByName || null, doneAt: old?.doneAt || null };
         });
       }
+      if (sp.actionLink !== undefined) step.actionLink = sp.actionLink || null;
       process.activityTimeline.push({
         action: 'STEP_PLAN_UPDATED',
         description: `${sp.stepCode} · task/plan updated`,

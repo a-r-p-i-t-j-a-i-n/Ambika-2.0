@@ -133,6 +133,7 @@ export const planOrderSchema = Joi.object({
     buddyUserId:  objectId.allow(null), // legacy single
     leadTime:     leadTimeJoi,
     checklist:    Joi.array().items(Joi.object({ text: Joi.string().trim().required() })),
+    actionLink:   Joi.string().trim().allow('', null),
   })).min(1).required(),
 });
 
