@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box, Paper, Stack, Typography, Button, IconButton, Chip, TextField, MenuItem, Autocomplete,
   Table, TableBody, TableCell, TableHead, TableRow, Dialog, DialogTitle, DialogContent, DialogActions,
@@ -7,7 +7,7 @@ import {
 import {
   Plus, Phone, Mail, MessageCircle, Users, FileText, Trash2, ArrowRightCircle, X, PhoneCall, Ban,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useGetOrderIntakesQuery, useCreateOrderIntakeMutation, useCancelOrderIntakeMutation,
   useDeleteOrderIntakeMutation,
@@ -49,6 +49,7 @@ const OrderIntakeList = () => {
 
   const [form, setForm] = useState(null);     // null = closed; object = logging
   const [convert, setConvert] = useState(null); // intake being converted
+  const [searchParams, setSearchParams] = useSearchParams();
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [deleteTarget, setDeleteTarget] = useState(null); // intake pending MD delete
   const [deleteError, setDeleteError] = useState('');
@@ -117,6 +118,21 @@ const OrderIntakeList = () => {
 
   // ── Convert → open the real Sales Order punch-in form, pre-filled from the intake ──
   const openConvert = (intake) => setConvert(intake);
+
+  // Deep-link from an FMS task ("Do it now" on Sales Order Entry): ?convert=<intakeId>
+  // auto-opens that intake's conversion form so the doer fills the SO directly.
+  useEffect(() => {
+    const id = searchParams.get('convert');
+    if (!id || convert || !allIntakes.length) return;
+    const it = allIntakes.find((x) => String(x._id) === String(id));
+    if (it) {
+      setConvert(it);
+      const next = new URLSearchParams(searchParams);
+      next.delete('convert');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, allIntakes]);
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 } }}>

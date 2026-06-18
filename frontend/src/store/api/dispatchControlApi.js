@@ -76,6 +76,11 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (params) => ({ url: '/challans', params }),
       providesTags: ['Challan'],
     }),
+    // All dispatch schedules (plans) — for the O2D Master Data view.
+    getSchedules: builder.query({
+      query: (params) => ({ url: '/schedules', params }),
+      providesTags: ['Schedule'],
+    }),
     getChallanById: builder.query({
       query: (id) => `/challans/${id}`,
       providesTags: (_r, _e, id) => [{ type: 'Challan', id }],
@@ -119,6 +124,7 @@ export const {
   useDeletePhaseMutation,
   useNormalizeSheetRowsMutation,
   useGetChallansQuery,
+  useGetSchedulesQuery,
   useGetChallanByIdQuery,
   useGenerateChallanPdfMutation,
   useUpdateChallanMutation,

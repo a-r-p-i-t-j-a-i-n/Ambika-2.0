@@ -20,8 +20,9 @@ const PartyDetails = () => {
   const navigate = useNavigate();
   const [editOpen, setEditOpen] = useState(false);
 
-  const { data: party, isLoading: partyLoading } = useGetPartyByIdQuery(id);
-  const { data: skusData, isLoading: skusLoading } = useGetSkusQuery({ clientId: id, limit: 100 });
+  const { data: partyRes, isLoading: partyLoading } = useGetPartyByIdQuery(id);
+  const party = partyRes?.data; // API wraps the doc in { success, message, data }
+  const { data: skusData } = useGetSkusQuery({ clientId: id, limit: 100 });
 
   if (partyLoading) {
     return (
@@ -126,8 +127,12 @@ const PartyDetails = () => {
                 <Typography sx={infoValueStyle}>{party.panNo || 'Not Provided'}</Typography>
               </Box>
               <Box>
-                <Typography sx={infoLabelStyle}>Address / Location</Typography>
-                <Typography sx={infoValueStyle}>{party.location || party.address || 'Not Provided'}</Typography>
+                <Typography sx={infoLabelStyle}>Place</Typography>
+                <Typography sx={infoValueStyle}>{party.location || '—'}</Typography>
+              </Box>
+              <Box>
+                <Typography sx={infoLabelStyle}>Full Address</Typography>
+                <Typography sx={infoValueStyle} style={{ whiteSpace: 'pre-line' }}>{party.address || 'Not Provided'}</Typography>
               </Box>
             </Box>
           </Paper>
@@ -142,8 +147,8 @@ const PartyDetails = () => {
                 <Typography variant="caption" fontWeight={700} color="text.secondary">Credit Days</Typography>
               </Box>
               <Box sx={{ flex: 1, p: 2, bgcolor: alpha('#7c3aed', 0.05), borderRadius: '12px', textAlign: 'center' }}>
-                <Typography variant="h5" fontWeight={800} color="#7c3aed">{party.leadTimeDays}</Typography>
-                <Typography variant="caption" fontWeight={700} color="text.secondary">Lead Days</Typography>
+                <Typography variant="h5" fontWeight={800} color="#7c3aed">{party.approxDays || party.leadTimeDays || 0}</Typography>
+                <Typography variant="caption" fontWeight={700} color="text.secondary">Approx Days</Typography>
               </Box>
             </Box>
             <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
@@ -197,9 +202,10 @@ const PartyDetails = () => {
                   {[
                     { label: 'TO Emails', data: party.toEmails, color: '#2563eb' },
                     { label: 'CC Emails', data: party.ccEmails, color: '#7c3aed' },
-                    { label: 'BCC Emails', data: party.bccEmails, color: '#64748b' }
+                    { label: 'BCC Emails', data: party.bccEmails, color: '#64748b' },
+                    { label: 'Accounts Emails', data: party.accountsEmails, color: '#0f766e' },
                   ].map((group, idx) => (
-                    <Grid item xs={12} sm={4} key={idx}>
+                    <Grid item xs={12} sm={6} md={3} key={idx}>
                       <Box sx={{ height: '100%' }}>
                         <Typography variant="caption" fontWeight={800} sx={{ color: group.color, mb: 1, display: 'block' }}>
                           {group.label}
@@ -215,6 +221,49 @@ const PartyDetails = () => {
                     </Grid>
                   ))}
                 </Grid>
+              </Paper>
+            </Grid>
+
+            {/* Ordered SKUs (Sales) — imported from the Party Details sheet */}
+            <Grid item xs={12}>
+              <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+                <Typography variant="subtitle1" sx={sectionHeaderStyle}>
+                  <Package size={18} /> Ordered SKUs ({party.orderedSkus?.length || 0}) — auto-fill on Sales Order
+                </Typography>
+                {party.orderedSkus?.length ? (
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow sx={{ '& th': { fontWeight: 800, fontSize: '0.7rem', textTransform: 'uppercase', color: 'text.secondary' } }}>
+                          <TableCell>SKU</TableCell>
+                          <TableCell>Code</TableCell>
+                          <TableCell>Unit</TableCell>
+                          <TableCell align="right">Pcs / Box</TableCell>
+                          <TableCell align="right">Weight / Box</TableCell>
+                          <TableCell align="right">SP (₹)</TableCell>
+                          <TableCell align="center">Linked</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {party.orderedSkus.map((s, i) => (
+                          <TableRow key={s._id || i} hover>
+                            <TableCell sx={{ fontWeight: 600 }}>{s.skuName}</TableCell>
+                            <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{s.skuCode || '—'}</Typography></TableCell>
+                            <TableCell>{s.unit || 'Pcs'}</TableCell>
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{s.pcsPerBox || '—'}</TableCell>
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{s.weightPerBox || '—'}</TableCell>
+                            <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{Number(s.sellingPrice || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</TableCell>
+                            <TableCell align="center">{s.skuId ? <CheckCircle2 size={15} color="#0f766e" /> : <Typography variant="caption" color="text.disabled">—</Typography>}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                ) : (
+                  <Box sx={{ py: 3, textAlign: 'center', color: 'text.disabled' }}>
+                    <Package size={26} /><Typography variant="body2" sx={{ mt: 1 }}>No ordered SKUs recorded for this client.</Typography>
+                  </Box>
+                )}
               </Paper>
             </Grid>
 

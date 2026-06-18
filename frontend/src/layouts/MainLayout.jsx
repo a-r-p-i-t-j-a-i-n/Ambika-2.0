@@ -132,6 +132,7 @@ const PAGE_TITLES = {
   '/quotes':                 'Quotes',
   '/o2d-fms':                'O2D FMS — My Tasks',
   '/o2d-fms/master':         'O2D FMS — Master View',
+  '/o2d-fms/master-data':    'O2D Master Data',
   '/o2d-fms/processes':      'O2D FMS — Processes',
   '/o2d-fms/dashboard':      'O2D FMS — Management View',
   '/o2d-fms/config':         'O2D FMS — Step Catalog',
@@ -180,6 +181,7 @@ const MainLayout = () => {
     const fmsChildren = [];
     if (can('o2dfms.view') || isRoot) {
       fmsChildren.push({ text: 'Master FMS',   icon: <LayoutGrid size={19} />,        path: '/o2d-fms/master' });
+      fmsChildren.push({ text: 'Master Data',  icon: <FileSpreadsheet size={19} />,   path: '/o2d-fms/master-data' });
       fmsChildren.push({ text: 'FMS Tracker',  icon: <Workflow size={19} />,          path: '/o2d-fms/processes' });
       fmsChildren.push({ text: 'Dashboard',    icon: <Gauge size={19} />,             path: '/o2d-fms/dashboard' });
       fmsChildren.push({ text: 'Scoreboard',   icon: <Trophy size={19} />,            path: '/o2d-fms/scores' });

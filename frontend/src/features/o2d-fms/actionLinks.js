@@ -47,6 +47,17 @@ export const TRIGGER_TO_ACTION = {
 export const resolveActionLink = (key, ctx = {}) => {
   const meta = actionLinkMeta(key);
   if (!meta) return null;
+
+  // Sales Order Entry on an intake-based, not-yet-converted process → open the
+  // intake's conversion form directly (it links to the SAME FMS process), rather
+  // than dumping the doer on the orders list to hunt for a "New Order" button.
+  if (key === 'ORDER_ENTRY' && ctx.intakeId && !ctx.orderId) {
+    return `/order-intake?convert=${encodeURIComponent(String(ctx.intakeId))}`;
+  }
+  // SO already exists → open its detail page (not the bare list).
+  if (key === 'ORDER_ENTRY' && ctx.orderId) {
+    return `/orders/${encodeURIComponent(String(ctx.orderId))}`;
+  }
   const values = {
     soNumber: ctx.soNumber || '',
     orderId: ctx.orderId ? String(ctx.orderId) : '',

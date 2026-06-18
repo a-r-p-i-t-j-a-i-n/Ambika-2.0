@@ -24,6 +24,20 @@ const suppliedProductSchema = new Schema({
   unit:        { type: String, trim: true, default: 'Pcs' },
 }, { _id: true });
 
+// ── Customer: a SKU this client (party) regularly ORDERS from us ──
+// Built from the Party Details sheet (one row per SKU). When the party is
+// chosen on a Sales Order, these auto-fill the line items. skuId links to the
+// SKU master when a name/code match is found.
+const orderedSkuSchema = new Schema({
+  skuId:        { type: Schema.Types.ObjectId, ref: 'SKU', default: null },
+  skuName:      { type: String, trim: true },
+  skuCode:      { type: String, trim: true, uppercase: true },
+  unit:         { type: String, trim: true, default: 'Pcs' },
+  pcsPerBox:    { type: Number, default: 0 },
+  weightPerBox: { type: Number, default: 0 },
+  sellingPrice: { type: Number, default: 0 }, // "SP" from the sheet
+}, { _id: true });
+
 const partySchema = new Schema({
   ...baseSchemaFields,
 
@@ -40,7 +54,8 @@ const partySchema = new Schema({
     trim: true,
     index: true,
   },
-  location: { type: String, trim: true },
+  location: { type: String, trim: true }, // "Place" from the sheet (city/region)
+  address:  { type: String, trim: true }, // full postal address (from sheet)
   state:    { type: String, trim: true },
   gstNo:    { type: String, trim: true, uppercase: true },
 
@@ -57,17 +72,22 @@ const partySchema = new Schema({
   tdsRate:   { type: Number, min: 0, max: 100, default: 0 }, // applicable TDS %
 
   // Specialized Email Routing for Dispatch/Communication
-  toEmails:  [{ type: String, trim: true, lowercase: true }],
-  ccEmails:  [{ type: String, trim: true, lowercase: true }],
-  bccEmails: [{ type: String, trim: true, lowercase: true }],
+  toEmails:       [{ type: String, trim: true, lowercase: true }],
+  ccEmails:       [{ type: String, trim: true, lowercase: true }],
+  bccEmails:      [{ type: String, trim: true, lowercase: true }],
+  accountsEmails: [{ type: String, trim: true, lowercase: true }], // payment/accounts routing
 
-  creditPeriodDays: { type: Number, default: 30 },
+  creditPeriodDays: { type: Number, default: 30 }, // "Credit Period" from the sheet
   leadTimeDays:     { type: Number, default: 7 },
+  approxDays:       { type: Number, default: 0 },  // "Approx Days" from the sheet
 
   addresses: [addressSchema],
 
   // ── Procurement: products this party can supply (Party = Vendor in FMS) ──
   suppliedProducts: { type: [suppliedProductSchema], default: [] },
+
+  // ── Sales: SKUs this client regularly orders (auto-fill on Sales Order) ──
+  orderedSkus: { type: [orderedSkuSchema], default: [] },
 
 }, baseSchemaOptions);
 

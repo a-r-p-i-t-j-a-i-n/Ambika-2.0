@@ -40,20 +40,27 @@ const PartiesList = () => {
         </Box>
       )
     },
-    { field: 'leadTimeDays', headerName: 'LEAD TIME', width: 130, align: 'center', headerAlign: 'center',
-      renderCell: (p) => (
-        <Box sx={{ px: 1.5, py: 0.5, borderRadius: '8px', bgcolor: alpha('#7c3aed', 0.06), color: '#7c3aed', fontSize: '0.75rem', fontWeight: 700 }}>
-          {p.value || 0} days
-        </Box>
-      )
-    },
-    { field: 'suppliedProducts', headerName: 'PRODUCTS', width: 120, align: 'center', headerAlign: 'center', sortable: false,
+    { field: 'approxDays', headerName: 'APPROX DAYS', width: 130, align: 'center', headerAlign: 'center',
       renderCell: (p) => {
-        const n = Array.isArray(p.value) ? p.value.length : 0;
-        return n > 0 ? (
-          <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1.25, py: 0.5, borderRadius: '8px', bgcolor: alpha('#b45309', 0.08), color: '#b45309', fontSize: '0.72rem', fontWeight: 700 }}>
-            <Package size={13} /> {n}
+        const d = p.value || p.row.leadTimeDays || 0;
+        return d ? (
+          <Box sx={{ px: 1.5, py: 0.5, borderRadius: '8px', bgcolor: alpha('#7c3aed', 0.06), color: '#7c3aed', fontSize: '0.75rem', fontWeight: 700 }}>
+            {d} days
           </Box>
+        ) : <Typography variant="caption" color="text.disabled">—</Typography>;
+      }
+    },
+    { field: 'orderedSkus', headerName: 'SKUs', width: 110, align: 'center', headerAlign: 'center', sortable: false,
+      renderCell: (p) => {
+        const ordered = Array.isArray(p.row.orderedSkus) ? p.row.orderedSkus.length : 0;
+        const supplied = Array.isArray(p.row.suppliedProducts) ? p.row.suppliedProducts.length : 0;
+        const n = ordered || supplied;
+        return n > 0 ? (
+          <Tooltip title={ordered ? `${ordered} ordered SKU(s)` : `${supplied} supplied product(s)`}>
+            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1.25, py: 0.5, borderRadius: '8px', bgcolor: alpha('#b45309', 0.08), color: '#b45309', fontSize: '0.72rem', fontWeight: 700 }}>
+              <Package size={13} /> {n}
+            </Box>
+          </Tooltip>
         ) : <Typography variant="caption" color="text.disabled">—</Typography>;
       }
     },

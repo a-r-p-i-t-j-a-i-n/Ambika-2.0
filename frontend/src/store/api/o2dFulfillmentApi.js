@@ -3,6 +3,14 @@ import { baseApi } from './baseApi';
 // O2D post-dispatch step entries (2.9–2.13). Backend base: /o2d-fulfillment
 export const o2dFulfillmentApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    getPayments: builder.query({
+      query: () => '/o2d-fulfillment/payments',
+      providesTags: ['Payment'],
+    }),
+    getTransportBills: builder.query({
+      query: () => '/o2d-fulfillment/transport-bills',
+      providesTags: ['TransportBill'],
+    }),
     trackDelivery: builder.mutation({         // 2.9
       query: (body) => ({ url: '/o2d-fulfillment/track-delivery', method: 'POST', body }),
       invalidatesTags: ['Challan'],
@@ -27,6 +35,8 @@ export const o2dFulfillmentApi = baseApi.injectEndpoints({
 });
 
 export const {
+  useGetPaymentsQuery,
+  useGetTransportBillsQuery,
   useTrackDeliveryMutation,
   usePaymentFollowUpMutation,
   usePaymentReceiptMutation,

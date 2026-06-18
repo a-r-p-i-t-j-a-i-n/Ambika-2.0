@@ -122,12 +122,22 @@ export const fulfillmentService = {
     await tb.save();
     return tb.toObject();
   },
+
+  // ── Master-data lists ─────────────────────────────────────
+  async listPayments() {
+    return Payment.find().populate('partyId', 'name code').sort({ updatedAt: -1 }).limit(2000).lean();
+  },
+  async listTransportBills() {
+    return TransportBill.find().sort({ updatedAt: -1 }).limit(2000).lean();
+  },
 };
 
 const wrap = (fn, msg) => asyncHandler(async (req, res) => res.json(ApiResponse.ok(msg, await fn(req.body))));
 
 const router = Router();
 router.use(protect, attachUserPermissions);
+router.get('/payments',        asyncHandler(async (_req, res) => res.json(ApiResponse.ok('Payments', await fulfillmentService.listPayments()))));
+router.get('/transport-bills', asyncHandler(async (_req, res) => res.json(ApiResponse.ok('Transport bills', await fulfillmentService.listTransportBills()))));
 router.post('/track-delivery',          wrap((b) => fulfillmentService.trackDelivery(b), 'Delivery updated'));
 router.post('/payment-followup',        wrap((b) => fulfillmentService.paymentFollowUp(b), 'Payment follow-up saved'));
 router.post('/payment-receipt',         wrap((b) => fulfillmentService.paymentReceipt(b), 'Payment receipt saved'));
