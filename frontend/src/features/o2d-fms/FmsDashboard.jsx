@@ -8,6 +8,7 @@ import {
   Layers, Activity, CheckCircle2, AlertTriangle, ArrowRight, TrendingUp, ChevronLeft,
   ChevronRight, Clock, Users, ListChecks, Percent, Timer, Gauge, BarChart3, PieChart as PieIcon,
   LineChart as LineIcon, Activity as RadarIcon, AlignStartVertical,
+  ShoppingCart, Truck, PackageCheck, FileText, Wallet, IndianRupee, Boxes, Route, ClipboardList,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip as ReTooltip, ResponsiveContainer, CartesianGrid, Cell,
@@ -223,11 +224,41 @@ const FmsDashboard = () => {
   const completionRate = totals.total ? Math.round((totals.completed / totals.total) * 100) : 0;
   const avgOverdueMins = overdueList.length ? Math.round(sum(overdueList, 'overdueMins') / overdueList.length) : 0;
 
+  // ── Order business intelligence (qty + stage based, from the O2D step flow) ──
+  const o = d.orderStats || {};
+  const num = (v) => Number(v || 0).toLocaleString('en-IN');
+  const stageFunnel = d.stageFunnel || [];
+  const ORDER_STATUS_META = {
+    RECEIVED:     { label: 'Received',     color: '#b45309' },
+    PLANNING:     { label: 'Planning',     color: '#7c3aed' },
+    IN_PROGRESS:  { label: 'In Progress',  color: '#1d4ed8' },
+    COMPLETED:    { label: 'Completed',    color: '#0f766e' },
+    SHORT_CLOSED: { label: 'Short Closed', color: '#475569' },
+    CANCELLED:    { label: 'Cancelled',    color: '#be123c' },
+  };
+
   // ── Stat strip (paged) ──────────────────────────────────────────────────────
+  // Page 1-2: order operations (what the business cares about).
+  // Page 3+: FMS process health (where it's stuck, who's lagging).
   const STATS = [
+    // ── Orders ──
+    { label: 'Total orders', value: num(o.totalOrders ?? totals.total), icon: ShoppingCart, color: '#1d4ed8', sub: 'in the O2D flow' },
+    { label: 'Order volume', value: num(o.totalOrderQty), icon: Boxes, color: '#7c3aed', sub: 'pcs ordered' },
+    { label: 'Dispatched', value: num(o.totalDispatchedQty), icon: Truck, color: '#0f766e', sub: `${o.fulfillmentPct || 0}% fulfilled` },
+    { label: 'Pending qty', value: num(o.totalBalanceQty), icon: Clock, color: '#b45309', sub: 'pcs to dispatch' },
+    { label: 'Fulfilment', value: `${o.fulfillmentPct || 0}%`, icon: Percent, color: '#0f766e', sub: 'volume delivered' },
+    { label: 'Planning pending', value: num(o.planningPending), icon: ClipboardList, color: '#7c3aed', sub: 'orders to plan' },
+    // ── Stage flow ──
+    { label: 'Dispatched orders', value: num(o.dispatched), icon: PackageCheck, color: '#0f766e', sub: 'actual dispatch done' },
+    { label: 'Awaiting dispatch', value: num(o.awaitingDispatch), icon: Truck, color: '#b45309', sub: 'planned, not sent' },
+    { label: 'Invoiced', value: num(o.invoiced), icon: FileText, color: '#0369a1', sub: 'invoice raised' },
+    { label: 'Delivered (POD)', value: num(o.delivered), icon: CheckCircle2, color: '#0f766e', sub: 'proof of delivery' },
+    { label: 'Payment received', value: num(o.paid), icon: Wallet, color: '#0f766e', sub: 'fully paid' },
+    { label: 'Awaiting payment', value: num(o.awaitingPayment), icon: IndianRupee, color: '#be123c', sub: 'delivered, unpaid' },
+    // ── FMS process health ──
     { label: 'Total processes', value: totals.total, icon: Layers, color: '#1d4ed8' },
     { label: 'In progress', value: totals.inProgress, icon: Activity, color: '#0369a1' },
-    { label: 'Completed', value: totals.completed, icon: CheckCircle2, color: '#0f766e' },
+    { label: 'Completed', value: totals.completed, icon: CheckCircle2, color: '#0f766e', sub: 'fully closed' },
     { label: 'Overdue steps', value: totalOverdueSteps, icon: AlertTriangle, color: '#be123c', sub: 'past SLA, still pending' },
     { label: 'Completion rate', value: `${completionRate}%`, icon: Percent, color: '#0f766e', sub: 'orders fully done' },
     { label: 'Pending steps', value: totalPending, icon: Clock, color: '#475569', sub: 'awaiting action' },
@@ -262,6 +293,35 @@ const FmsDashboard = () => {
     { name: 'Pending', value: totalPending, color: '#475569' },
     { name: 'Overdue', value: totalOverdueSteps, color: '#be123c' },
     { name: 'Completed', value: totalCompletedSteps, color: '#0f766e' },
+  ];
+
+  // ── Order-journey datasets (the O2D stage funnel) ──
+  const funnelData = stageFunnel.map((s) => ({
+    name: s.label, done: s.done, pending: s.pending, total: s.total,
+    color: '#1d4ed8',
+  }));
+  const orderStatusData = (o.byStatus || []).map((r) => ({
+    name: ORDER_STATUS_META[r._id]?.label || r._id || 'Unknown',
+    value: r.count || 0,
+    color: ORDER_STATUS_META[r._id]?.color || '#475569',
+  })).filter((r) => r.value > 0);
+
+  // Views for the ORDER-JOURNEY panel.
+  const journeyViews = [
+    { key: 'stage-mix', label: 'Stage progress (done vs pending)', icon: <Route size={18} color="#1d4ed8" />,
+      data: funnelData, series: [
+        { dataKey: 'done', label: 'Completed', color: '#0f766e' },
+        { dataKey: 'pending', label: 'Pending', color: '#b45309' },
+      ], defaultType: 'stacked', allowed: ['stacked', 'barH', 'barV', 'line', 'area'] },
+    { key: 'stage-done', label: 'Orders cleared per stage', icon: <PackageCheck size={18} color="#0f766e" />,
+      data: funnelData, series: [{ dataKey: 'done', label: 'Completed', color: '#0f766e' }],
+      defaultType: 'barH', allowed: ['barH', 'barV', 'line', 'area', 'radar'] },
+    { key: 'stage-pending', label: 'Orders waiting per stage', icon: <Clock size={18} color="#b45309" />,
+      data: funnelData, series: [{ dataKey: 'pending', label: 'Pending', color: '#b45309' }],
+      defaultType: 'barH', allowed: ['barH', 'barV', 'pie', 'donut', 'radar'] },
+    { key: 'order-status', label: 'Orders by status', icon: <PieIcon size={18} color="#1d4ed8" />,
+      data: orderStatusData, series: [{ dataKey: 'value', label: 'Orders' }],
+      colorByRow: true, defaultType: 'donut', allowed: ['donut', 'pie', 'barV', 'barH'] },
   ];
 
   // Views for the LEFT panel (step-centric) and RIGHT panel (people + status).
@@ -308,7 +368,7 @@ const FmsDashboard = () => {
     <Box sx={{ p: { xs: 2, md: 3 } }}>
       <Typography variant="h5" sx={{ fontWeight: 800 }}>O2D FMS — Management View</Typography>
       <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
-        Where orders are stuck, and who is lagging. Updates every minute.
+        Live order operations, stage-by-stage progress, and where things are stuck. Updates every minute.
       </Typography>
 
       {/* ── Paged stat cards ── */}
@@ -339,7 +399,14 @@ const FmsDashboard = () => {
         ))}
       </Stack>
 
-      {/* ── Configurable charts ── */}
+      {/* ── Order journey funnel (business view) ── */}
+      <Grid container spacing={2} sx={{ mb: 2 }}>
+        <Grid item xs={12}>
+          <ChartPanel title="Order Journey — where every order stands" views={journeyViews} defaultViewKey="stage-mix" />
+        </Grid>
+      </Grid>
+
+      {/* ── Configurable charts (FMS process health) ── */}
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
           <ChartPanel title="Bottleneck — by step" views={leftViews} defaultViewKey="step-delay" />

@@ -6,8 +6,9 @@
  *   delayMins = max(0, round((actual - planned) / 60000))
  */
 
-import { StepDefinition, O2DProcess, TaskTemplate, O2D_STEP_STATUS, LEAD_TIME_UNIT_MINUTES } from './o2d-fms.model.js';
+import { StepDefinition, O2DProcess, TaskTemplate, O2D_STEP_STATUS, LEAD_TIME_UNIT_MINUTES, TRIGGER_KEY } from './o2d-fms.model.js';
 import User from '../auth/auth.model.js';
+import SalesOrder from '../order/order.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
@@ -806,7 +807,7 @@ export const o2dFmsService = {
   async getDashboard() {
     const now = new Date();
 
-    const [byStep, byPerson, totals, overdue] = await Promise.all([
+    const [byStep, byPerson, totals, overdue, stageAgg, orderTotals, orderByStatus] = await Promise.all([
       // Bottleneck: pending count, overdue count and total delay per step.
       O2DProcess.aggregate([
         { $match: { isDeleted: { $ne: true } } },
@@ -869,10 +870,64 @@ export const o2dFmsService = {
         { $sort: { overdueMins: -1 } },
         { $limit: 100 },
       ]),
+      // Stage funnel source: done / pending counts per stepCode across all orders.
+      O2DProcess.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        { $unwind: '$steps' },
+        { $group: {
+          _id: '$steps.stepCode',
+          done:    { $sum: { $cond: [{ $in: ['$steps.status', ['DONE', 'DELAYED']] }, 1, 0] } },
+          pending: { $sum: { $cond: [{ $eq: ['$steps.status', 'PENDING'] }, 1, 0] } },
+          total:   { $sum: 1 },
+        } },
+      ]),
+      // Order business totals (qty-based) — the real operational numbers.
+      SalesOrder.aggregate([
+        { $group: {
+          _id: null,
+          totalOrders:        { $sum: 1 },
+          totalOrderQty:      { $sum: '$totalOrderQty' },
+          totalDispatchedQty: { $sum: '$totalDispatchedQty' },
+          totalBalanceQty:    { $sum: '$totalBalanceQty' },
+        } },
+      ]),
+      // Orders grouped by lifecycle status.
+      SalesOrder.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 }, qty: { $sum: '$totalOrderQty' } } },
+      ]),
     ]);
 
     const defMap = await loadDefMap();
     const labelStep = (rows) => rows.map((r) => ({ ...r, name: defMap.get(r._id)?.name || r._id }));
+
+    // ── Build the O2D stage funnel: how many orders cleared each business stage.
+    // We bucket each step (by its definition's triggerKey) into a canonical stage
+    // so it works for any FMS catalog (V1 or CURRENT_SHEET). MANUAL steps are
+    // ignored here — they don't map to a business milestone.
+    const STAGE_ORDER = [
+      { key: TRIGGER_KEY.ORDER_INTAKE,    label: 'Order Received' },
+      { key: TRIGGER_KEY.ORDER_ENTRY,     label: 'Order Entry' },
+      { key: TRIGGER_KEY.DISPATCH_PLAN,   label: 'Dispatch Planned' },
+      { key: TRIGGER_KEY.ACTUAL_DISPATCH, label: 'Dispatched' },
+      { key: TRIGGER_KEY.INVOICE,         label: 'Invoiced' },
+      { key: TRIGGER_KEY.POD,             label: 'Delivered (POD)' },
+      { key: TRIGGER_KEY.PAYMENT,         label: 'Payment Received' },
+    ];
+    const stageMap = new Map(STAGE_ORDER.map((s) => [s.key, { ...s, done: 0, pending: 0, total: 0 }]));
+    stageAgg.forEach((row) => {
+      const trigger = defMap.get(row._id)?.triggerKey;
+      const bucket = trigger && stageMap.get(trigger);
+      if (!bucket) return;
+      bucket.done += row.done;
+      bucket.pending += row.pending;
+      bucket.total += row.total;
+    });
+    const stageFunnel = STAGE_ORDER.map((s) => stageMap.get(s.key)).filter((s) => s.total > 0);
+    const stageOf = (key) => stageMap.get(key) || { done: 0, pending: 0, total: 0 };
+
+    const ot = orderTotals[0] || { totalOrders: 0, totalOrderQty: 0, totalDispatchedQty: 0, totalBalanceQty: 0 };
+    const fulfillmentPct = ot.totalOrderQty > 0
+      ? Math.round((ot.totalDispatchedQty / ot.totalOrderQty) * 100) : 0;
 
     return {
       totals: totals[0] || { total: 0, completed: 0, inProgress: 0 },
@@ -880,6 +935,21 @@ export const o2dFmsService = {
       byStep: labelStep(byStep),
       byPerson,
       overdue: overdue.map((o) => ({ ...o, name: defMap.get(o.stepCode)?.name || o.stepCode })),
+      // ── Operational order intelligence (qty + stage based) ──
+      orderStats: {
+        ...ot,
+        fulfillmentPct,
+        byStatus: orderByStatus,
+        // Headline counts straight from the step flow.
+        planningPending: stageOf(TRIGGER_KEY.DISPATCH_PLAN).pending,
+        dispatched:      stageOf(TRIGGER_KEY.ACTUAL_DISPATCH).done,
+        invoiced:        stageOf(TRIGGER_KEY.INVOICE).done,
+        delivered:       stageOf(TRIGGER_KEY.POD).done,
+        paid:            stageOf(TRIGGER_KEY.PAYMENT).done,
+        awaitingDispatch: stageOf(TRIGGER_KEY.ACTUAL_DISPATCH).pending,
+        awaitingPayment:  stageOf(TRIGGER_KEY.PAYMENT).pending,
+      },
+      stageFunnel,
     };
   },
 

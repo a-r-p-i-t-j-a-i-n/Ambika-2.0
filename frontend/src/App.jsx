@@ -75,6 +75,7 @@ const TallyEntryList       = lazyWithRetry(() => import('./features/procurement/
 const TallyEntryDetail     = lazyWithRetry(() => import('./features/procurement/tally-entry/TallyEntryDetail'));
 const FinalPaymentList     = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentList'));
 const FinalPaymentDetail   = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentDetail'));
+const PurchaseMasterData   = lazyWithRetry(() => import('./features/procurement/PurchaseMasterData'));
 
 const FmsTaskPage          = lazyWithRetry(() => import('./features/o2d-fms/TaskPage'));
 const FmsAllTasks          = lazyWithRetry(() => import('./features/o2d-fms/AllTasks'));
@@ -228,6 +229,7 @@ function App() {
             <Route path="/procurement/tally-entries/:id" element={<TallyEntryDetail />} />
             <Route path="/procurement/final-payments" element={<FinalPaymentList />} />
             <Route path="/procurement/final-payments/:id" element={<FinalPaymentDetail />} />
+            <Route path="/procurement/master-data" element={<PurchaseMasterData />} />
 
           </Route>
         </Route>

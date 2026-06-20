@@ -24,6 +24,14 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
  * product rates from `party.suppliedProducts`.
  */
 const UNITS = ['Pcs', 'Kg', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
+
+// Hide the native number-input spinner arrows so the digits use the full cell width.
+const NO_SPIN = {
+  '& input[type=number]': { MozAppearance: 'textfield' },
+  '& input::-webkit-outer-spin-button, & input::-webkit-inner-spin-button': {
+    WebkitAppearance: 'none', margin: 0,
+  },
+};
 const GST_PRESETS = [0, 5, 12, 18, 28];
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -319,7 +327,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           </Box>
 
           {/* Header row */}
-          <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '2fr 0.9fr 0.6fr 0.6fr 0.7fr 0.8fr 0.8fr 0.7fr 0.85fr 36px', gap: 1, px: 1, mb: 0.5 }}>
+          <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px', gap: 1, px: 1, mb: 0.5 }}>
             {['Item Name', 'SKU', 'Qty', 'Unit', 'Rate', 'GST %', 'Taxable', 'Tax', 'Total', ''].map((h, i) => (
               <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
             ))}
@@ -331,7 +339,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
               return (
                 <Box key={idx} sx={{
                   display: 'grid',
-                  gridTemplateColumns: { xs: '1fr', md: '2fr 0.9fr 0.6fr 0.6fr 0.7fr 0.8fr 0.8fr 0.7fr 0.85fr 36px' },
+                  gridTemplateColumns: { xs: '1fr', md: '1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px' },
                   gap: 1, alignItems: 'center', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
                   borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
                   '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
@@ -355,12 +363,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   <TextField size="small" placeholder="SKU" value={it.skuCode}
                     onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
                   <TextField size="small" type="number" placeholder="0" value={it.quantity}
-                    onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} />
+                    onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                   <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
                     {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                   </TextField>
                   <TextField size="small" type="number" placeholder="0.00" value={it.rate}
-                    onChange={(e) => setItem(idx, { rate: e.target.value })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
+                    onChange={(e) => setItem(idx, { rate: e.target.value })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                   <Autocomplete
                     freeSolo disableClearable size="small"
                     options={GST_PRESETS.map(String)}

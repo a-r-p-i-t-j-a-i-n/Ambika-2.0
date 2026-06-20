@@ -68,6 +68,7 @@ const navSections = [
         icon: <ShoppingCart size={19} />,
         path: '/procurement',
         children: [
+          { text: 'Master Data',         icon: <FileSpreadsheet size={19} />, path: '/procurement/master-data' },
           { text: 'Purchase Indents',    icon: <ClipboardList size={19} />,   path: '/procurement/indents' },
           { text: 'Purchase Orders',     icon: <ShoppingCart size={19} />,    path: '/procurement/purchase-orders' },
           { text: 'Material Follow-ups', icon: <PhoneCall size={19} />,       path: '/procurement/follow-ups' },
@@ -121,6 +122,7 @@ const PAGE_TITLES = {
   '/procurement/vouchers':   'Payment Vouchers',
   '/procurement/tally-entries': 'Tally Entries',
   '/procurement/final-payments': 'Final Payments',
+  '/procurement/master-data': 'Purchase Master Data',
 
   '/employees':              'Employees',
   '/access-control':         'Access Control',
