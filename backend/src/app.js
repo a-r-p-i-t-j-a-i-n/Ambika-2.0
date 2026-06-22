@@ -67,7 +67,7 @@ app.use(cors({ origin: '*', credentials: true }));
 app.use(mongoSanitize());
 app.use(hpp());
 
-// ── Rate Limiting ───────────────────────────────────────────
+// ── Rate Limiting if ───────────────────────────────────────────
 const limiter = rateLimit({
   windowMs: env.RATE_LIMIT_WINDOW_MS,
   max: env.RATE_LIMIT_MAX,
