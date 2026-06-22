@@ -49,6 +49,7 @@ import voucherRoutes from './modules/procurement/voucher/voucher.routes.js';
 import tallyEntryRoutes from './modules/procurement/tally-entry/tallyEntry.routes.js';
 import finalPaymentRoutes from './modules/procurement/final-payment/finalPayment.routes.js';
 import vendorRoutes from './modules/vendors/vendor.routes.js';
+import transporterRoutes from './modules/transporters/transporter.routes.js';
 
 
 
@@ -115,6 +116,7 @@ app.use('/api/v1/orders',          orderRoutes); // Unified
 // Legacy mount points
 app.use('/api/v1/parties',   partyRoutes);
 app.use('/api/v1/vendors',   vendorRoutes);
+app.use('/api/v1/transporters', transporterRoutes);
 app.use('/api/v1/schedules', scheduleRoutes);
 app.use('/api/v1/challans',  challanRoutes);
 app.use('/api/v1/fms',       fmsRoutes);
