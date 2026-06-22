@@ -75,7 +75,16 @@ const VendorInvoiceList = () => {
   const columns = [
     { field: 'invoiceNumber', headerName: 'INVOICE NO', width: 140, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'invoiceDate', headerName: 'DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
-    { field: 'grnNumber', headerName: 'GRN', width: 130, renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
+    { field: 'grnNumber', headerName: 'GRN', width: 150, sortable: false,
+      renderCell: (p) => {
+        const list = (p.row.grnNumbers?.length ? p.row.grnNumbers : [p.row.grnNumber]).filter(Boolean);
+        if (!list.length) return <Typography variant="body2" color="text.disabled">—</Typography>;
+        return (
+          <Typography variant="body2" fontWeight={600} noWrap>
+            {list[0]}{list.length > 1 ? <Typography component="span" variant="caption" color="text.secondary"> +{list.length - 1} more</Typography> : null}
+          </Typography>
+        );
+      } },
     { field: 'poNumber', headerName: 'PO', width: 130, renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 150, renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
     { field: 'invoiceAmount', headerName: 'INVOICE AMT', width: 120, align: 'right', headerAlign: 'right', renderCell: (p) => fmtINR(p.value) },

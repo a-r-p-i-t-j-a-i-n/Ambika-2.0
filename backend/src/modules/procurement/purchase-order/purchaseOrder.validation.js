@@ -6,7 +6,8 @@ const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
 const poItemSchema = Joi.object({
   _id:      Joi.string().optional(),
-  itemName: Joi.string().trim().min(1).max(300).required(),
+  // itemName optional — JSL items are described by grade/width/finish instead.
+  itemName: Joi.string().trim().max(300).allow('', null),
   skuCode:  Joi.string().trim().max(60).allow('', null),
   skuId:    objectId.allow('', null),
   quantity: Joi.number().min(0.0001).required(),
@@ -17,12 +18,24 @@ const poItemSchema = Joi.object({
   taxableAmount: Joi.number().min(0).optional(),
   taxAmount:     Joi.number().min(0).optional(),
   totalAmount:   Joi.number().min(0).optional(),
+  // JSL-format fields (optional — ignored for OTHER).
+  grade:           Joi.string().trim().max(120).allow('', null),
+  width:           Joi.string().trim().max(60).allow('', null),
+  finish:          Joi.string().trim().max(120).allow('', null),
+  baseRate:        Joi.number().min(0).optional(),
+  upfrontDiscount: Joi.number().min(0).optional(),
+  bonanzaDiscount: Joi.number().min(0).optional(),
+  finalPrice:      Joi.number().optional(),
+  value:           Joi.number().optional(),
 });
+
+const poFormatType = Joi.string().valid('JSL', 'OTHER').default('OTHER');
 
 // ── Create (saved as DRAFT; only from an approved-quotation indent) ──
 export const createPoSchema = Joi.object({
   indentId:      objectId.required(),
   vendorId:      objectId.required(),
+  poFormatType:  poFormatType,
   poDate:        Joi.date().optional(),
   vendorName:    Joi.string().trim().max(200).allow('', null),
   vendorGST:     Joi.string().trim().max(20).allow('', null),
@@ -40,6 +53,7 @@ export const createPoSchema = Joi.object({
 
 // ── Update (DRAFT only — service guards) ──
 export const updatePoSchema = Joi.object({
+  poFormatType:  Joi.string().valid('JSL', 'OTHER'),
   poDate:        Joi.date(),
   vendorId:      objectId,
   vendorName:    Joi.string().trim().max(200).allow('', null),

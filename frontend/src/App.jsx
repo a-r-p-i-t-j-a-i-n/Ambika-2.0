@@ -65,6 +65,7 @@ const AdvancePaymentList   = lazyWithRetry(() => import('./features/procurement/
 
 const GrnList              = lazyWithRetry(() => import('./features/procurement/grn/GrnList'));
 const GrnDetail            = lazyWithRetry(() => import('./features/procurement/grn/GrnDetail'));
+const ServiceCompletionList = lazyWithRetry(() => import('./features/procurement/service-completions/ServiceCompletionList'));
 const IncomingQCList       = lazyWithRetry(() => import('./features/procurement/incoming-qc/IncomingQCList'));
 const IncomingQCDetail     = lazyWithRetry(() => import('./features/procurement/incoming-qc/IncomingQCDetail'));
 const VendorInvoiceList    = lazyWithRetry(() => import('./features/procurement/vendor-invoices/VendorInvoiceList'));
@@ -219,6 +220,7 @@ function App() {
 
             <Route path="/procurement/grns" element={<GrnList />} />
             <Route path="/procurement/grns/:id" element={<GrnDetail />} />
+            <Route path="/procurement/service-completions" element={<ServiceCompletionList />} />
             <Route path="/procurement/incoming-qc" element={<IncomingQCList />} />
             <Route path="/procurement/incoming-qc/:id" element={<IncomingQCDetail />} />
             <Route path="/procurement/vendor-invoices" element={<VendorInvoiceList />} />

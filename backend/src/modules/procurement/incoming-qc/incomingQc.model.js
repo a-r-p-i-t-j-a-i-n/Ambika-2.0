@@ -23,6 +23,12 @@ export const QC_STATUS = {
   CANCELLED:   'CANCELLED',
 };
 
+// QC can validate either received goods (a GRN) or a completed internal service.
+export const QC_SOURCE_TYPE = {
+  GRN:     'GRN',
+  SERVICE: 'SERVICE',
+};
+
 export const QC_RESULT = {
   PASS:         'PASS',
   FAIL:         'FAIL',
@@ -72,8 +78,15 @@ const incomingQcSchema = new Schema({
   qcNumber: { type: String, unique: true, trim: true, index: true }, // AGL/QC-001/26-27
   qcDate:   { type: Date, default: Date.now },
 
-  // ── Linkage (GRN → PO → PI → Indent → Vendor) ──
-  grnId:        { type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote', required: true, index: true },
+  // Source of the QC — received goods (GRN) or a completed internal service.
+  sourceType: { type: String, enum: Object.values(QC_SOURCE_TYPE), default: QC_SOURCE_TYPE.GRN, index: true },
+
+  // ── Service-completion linkage (sourceType = SERVICE) ──
+  serviceCompletionId:     { type: Schema.Types.ObjectId, ref: 'ServiceCompletion' },
+  serviceCompletionNumber: { type: String, trim: true, default: '' },
+
+  // ── Linkage (GRN → PO → PI → Indent → Vendor). grnId only for sourceType GRN. ──
+  grnId:        { type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote', index: true },
   grnNumber:    { type: String, trim: true, index: true },
   poId:         { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder' },
   poNumber:     { type: String, trim: true, default: '' },

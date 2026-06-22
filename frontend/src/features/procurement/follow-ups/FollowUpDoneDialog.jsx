@@ -10,8 +10,13 @@ import { FOLLOWUP_TYPES } from './fuMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
+const fmtLogDate = (d) => (d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 
-/** Mark a follow-up as DONE (records actual date, delay, next/final dates). */
+/**
+ * Record a follow-up cycle. Entering a Next Follow-up Date keeps the follow-up
+ * active (RESCHEDULED) so it can be continued later; entering a Final Material
+ * Date confirms delivery (READY_FOR_GRN). Prior communication history is shown.
+ */
 const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [actualAt, setActualAt] = useState(todayStr());
@@ -20,34 +25,56 @@ const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
   const [nextFollowUpDate, setNextFollowUpDate] = useState('');
   const [finalMaterialDate, setFinalMaterialDate] = useState('');
   const [message, setMessage] = useState('');
+  const [dateError, setDateError] = useState(false);
   const [markDone, { isLoading }] = useMarkFollowUpDoneMutation();
+
+  const DATE_ERROR_MSG = 'Please provide either Next Follow-up Date or Final Material Date.';
 
   useEffect(() => {
     if (!open) return;
     setActualAt(todayStr());
     setFollowUpType(followUp?.followUpType || 'CALL');
-    setRemarks('');
-    setNextFollowUpDate('');
-    setFinalMaterialDate('');
-    setMessage('');
+    setRemarks(followUp?.remarks || '');
+    // Hydrate from the saved follow-up so the previously entered date is shown.
+    setNextFollowUpDate(followUp?.nextFollowUpDate ? followUp.nextFollowUpDate.slice(0, 10) : '');
+    setFinalMaterialDate(followUp?.finalMaterialDate ? followUp.finalMaterialDate.slice(0, 10) : '');
+    setMessage(''); // a fresh message per cycle — history is shown above
+    setDateError(false);
   }, [open, followUp]);
 
-  // A next follow-up date means follow-up continues later — final material date
-  // is hidden and never submitted; the two are mutually exclusive.
-  const hasNext = !!nextFollowUpDate;
+  // Next vs Final are mutually exclusive: exactly one must be provided. Both
+  // fields stay enabled — picking one automatically clears the other, so the
+  // user can freely switch (e.g. replace a saved Next date with a Final date).
+  const handleNextChange = (val) => {
+    setNextFollowUpDate(val);
+    if (val) { setFinalMaterialDate(''); setDateError(false); }
+  };
+  const handleFinalChange = (val) => {
+    setFinalMaterialDate(val);
+    if (val) { setNextFollowUpDate(''); setDateError(false); }
+  };
 
   const handleSubmit = async () => {
     if (!actualAt) { enqueueSnackbar('Actual Date is required', { variant: 'warning' }); return; }
+    // Exactly one of next / final is required.
+    if (!nextFollowUpDate && !finalMaterialDate) {
+      setDateError(true);
+      enqueueSnackbar(DATE_ERROR_MSG, { variant: 'warning' });
+      return;
+    }
     try {
       await markDone({
         id: followUp._id, actualAt, followUpType,
         remarks: remarks.trim(),
-        // Mutually exclusive: keep at most one of next / final.
-        nextFollowUpDate: hasNext ? nextFollowUpDate : null,
-        finalMaterialDate: hasNext ? null : (finalMaterialDate || null),
+        // Mutually exclusive: exactly one of next / final is submitted.
+        nextFollowUpDate: nextFollowUpDate || null,
+        finalMaterialDate: finalMaterialDate || null,
         message: message.trim(),
       }).unwrap();
-      enqueueSnackbar('Follow-up marked done', { variant: 'success' });
+      enqueueSnackbar(
+        finalMaterialDate ? 'Final material date confirmed — ready for GRN' : 'Follow-up continued — next date saved',
+        { variant: 'success' },
+      );
       onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to mark done', { variant: 'error' });
@@ -57,15 +84,36 @@ const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontWeight: 800 }}>
-        Mark Follow-up Done
+        {followUp?.followUpStatus === 'RESCHEDULED' ? 'Follow-up Again' : 'Update Follow-up'}
         {followUp?.followUpNumber && <Typography component="span" sx={{ ml: 1, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{followUp.followUpNumber}</Typography>}
       </DialogTitle>
       <DialogContent dividers>
         <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9', display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
           <Typography variant="body2" fontWeight={700}>{followUp?.poNumber}</Typography>
           <Typography variant="caption" color="text.secondary">{followUp?.vendorName}</Typography>
-          <Chip size="small" label="Status Done = Yes" color="success" sx={{ fontWeight: 700 }} />
+          <Chip size="small" label="Next date = continue · Final date = ready for GRN" sx={{ fontWeight: 600 }} />
         </Box>
+
+        {/* Previous communication history (preserved across every follow-up cycle). */}
+        {followUp?.communicationLog?.length > 0 && (
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>
+              Previous Communication ({followUp.communicationLog.length})
+            </Typography>
+            <Box sx={{ mt: 0.75, maxHeight: 140, overflowY: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: '8px', p: 1, bgcolor: '#fafafa' }}>
+              {[...followUp.communicationLog].reverse().map((c, i) => (
+                <Box key={i} sx={{ py: 0.5, borderBottom: i < followUp.communicationLog.length - 1 ? '1px dashed' : 'none', borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Chip size="small" label={c.type || 'CALL'} sx={{ height: 18, fontSize: '0.6rem' }} />
+                    <Typography variant="caption" color="text.secondary">{fmtLogDate(c.timestamp)}{c.byName ? ` · ${c.byName}` : ''}</Typography>
+                  </Box>
+                  {c.message && <Typography variant="body2" sx={{ mt: 0.25 }}>{c.message}</Typography>}
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )}
+
         <Grid container spacing={2}>
           <Grid item xs={6}>
             <DateInputDDMMYYYY label="Actual Date *" fullWidth value={actualAt} onChange={setActualAt}
@@ -77,15 +125,20 @@ const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
               {FOLLOWUP_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
             </TextField>
           </Grid>
+          {/* Next vs Final material date are mutually exclusive — exactly one is required. */}
           <Grid item xs={6}>
-            <DateInputDDMMYYYY label="Next Date to Follow-up" fullWidth value={nextFollowUpDate} onChange={setNextFollowUpDate}
-              helperText="Optional — set to continue follow-up later" />
+            <DateInputDDMMYYYY label="Next Date to Follow-up" fullWidth openOnClick
+              value={nextFollowUpDate} onChange={handleNextChange} error={dateError}
+              helperText="Use when vendor has not yet confirmed material delivery." />
           </Grid>
-          {/* Final material date only applies when there is no further follow-up. */}
-          {!hasNext && (
-            <Grid item xs={6}>
-              <DateInputDDMMYYYY label="Final Date of Material" fullWidth value={finalMaterialDate} onChange={setFinalMaterialDate}
-                helperText="Optional — leave blank if not known" />
+          <Grid item xs={6}>
+            <DateInputDDMMYYYY label="Final Date of Material" fullWidth openOnClick
+              value={finalMaterialDate} onChange={handleFinalChange} error={dateError}
+              helperText="Use when vendor has confirmed the material delivery date." />
+          </Grid>
+          {dateError && (
+            <Grid item xs={12}>
+              <Typography variant="caption" color="error" sx={{ fontWeight: 600 }}>{DATE_ERROR_MSG}</Typography>
             </Grid>
           )}
           <Grid item xs={12}>
@@ -102,7 +155,7 @@ const FollowUpDoneDialog = ({ open, onClose, followUp }) => {
         <Button variant="contained" color="success"
           startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <CheckCircle2 size={16} />}
           onClick={handleSubmit} disabled={isLoading}>
-          Mark Done
+          {finalMaterialDate ? 'Confirm & Ready for GRN' : 'Save Follow-up'}
         </Button>
       </DialogActions>
     </Dialog>

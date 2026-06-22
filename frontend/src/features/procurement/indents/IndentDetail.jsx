@@ -18,6 +18,7 @@ import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
+import ServiceCompletionDialog from '../service-completions/ServiceCompletionDialog';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
@@ -104,6 +105,7 @@ const IndentDetail = () => {
   const [comparativeOpen, setComparativeOpen] = useState(false);
   const [quotationOpen, setQuotationOpen] = useState(false);
   const [poDrawerOpen, setPoDrawerOpen] = useState(false);
+  const [serviceOpen, setServiceOpen] = useState(false);
 
   if (isLoading) {
     return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
@@ -161,6 +163,9 @@ const IndentDetail = () => {
           {isPending && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
           {isApproved && !quoteDone && <Button variant="contained" startIcon={<FileText size={16} />} onClick={() => setComparativeOpen(true)}>Receive Quote / Comparative</Button>}
           {step12Done && !quotationDone && <Button variant="contained" color="success" startIcon={<FileCheck2 size={16} />} onClick={() => setQuotationOpen(true)}>Approved Quotation 1.03</Button>}
+          {indent.requestType === 'INTERNAL_SERVICE' && indent.overallStatus === 'SERVICE_PENDING' && (
+            <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setServiceOpen(true)}>Mark Service Completed</Button>
+          )}
         </Box>
       </Box>
 
@@ -194,18 +199,29 @@ const IndentDetail = () => {
         <Grid item xs={12} md={6}>
           <SectionCard icon={<FileText size={18} />} title="Quote Step">
             <StepBlock step={indent.quoteStep} />
-            {indent.quoteComparativeStep?.quotationUploaded?.fileUrl ? (
-              <Box sx={{ mt: 2 }}>
-                <Field label="Quotation Uploaded" value={
-                  <Tooltip title={indent.quoteComparativeStep.quotationUploaded.fileName || 'View file'}>
-                    <IconButton size="small" color="primary" component="a"
-                      href={fileHref(indent.quoteComparativeStep.quotationUploaded.fileUrl)} target="_blank" rel="noopener">
-                      <FileText size={18} />
-                    </IconButton>
-                  </Tooltip>
-                } />
-              </Box>
-            ) : null}
+            {(() => {
+              const step = indent.quoteComparativeStep;
+              const docs = step?.quotationDocuments?.length
+                ? step.quotationDocuments
+                : (step?.quotationUploaded?.fileUrl ? [step.quotationUploaded] : []);
+              if (!docs.length) return null;
+              return (
+                <Box sx={{ mt: 2 }}>
+                  <Field label={`Quotation Uploaded (${docs.length})`} value={
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                      {docs.map((d, i) => (
+                        <Tooltip key={i} title={d.fileName || 'View file'}>
+                          <Button size="small" variant="outlined" startIcon={<FileText size={14} />}
+                            href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
+                            {d.fileName ? (d.fileName.length > 18 ? `${d.fileName.slice(0, 16)}…` : d.fileName) : `File ${i + 1}`}
+                          </Button>
+                        </Tooltip>
+                      ))}
+                    </Box>
+                  } />
+                </Box>
+              );
+            })()}
           </SectionCard>
         </Grid>
 
@@ -231,18 +247,28 @@ const IndentDetail = () => {
               </Grid>
               <Grid item xs={6} sm={4}><Field label="Actual Date" value={fmtDate(indent.quotationApprovalStep?.actualAt)} /></Grid>
               <Grid item xs={12} sm={4}>
-                <Field label="Approved Quotation File" value={
-                  indent.quotationApprovalStep?.approvedQuotation?.fileUrl
-                    ? (
-                      <Tooltip title={indent.quotationApprovalStep.approvedQuotation.fileName || 'View file'}>
-                        <IconButton size="small" color="primary" component="a"
-                          href={fileHref(indent.quotationApprovalStep.approvedQuotation.fileUrl)} target="_blank" rel="noopener">
-                          <FileText size={18} />
-                        </IconButton>
-                      </Tooltip>
-                    )
-                    : '—'
-                } />
+                {(() => {
+                  const step = indent.quotationApprovalStep;
+                  const docs = step?.approvedQuotationDocuments?.length
+                    ? step.approvedQuotationDocuments
+                    : (step?.approvedQuotation?.fileUrl ? [step.approvedQuotation] : []);
+                  return (
+                    <Field label={`Approved Quotation File${docs.length ? ` (${docs.length})` : ''}`} value={
+                      docs.length ? (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {docs.map((d, i) => (
+                            <Tooltip key={i} title={d.fileName || 'View file'}>
+                              <Button size="small" variant="outlined" startIcon={<FileText size={14} />}
+                                href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
+                                {d.fileName ? (d.fileName.length > 18 ? `${d.fileName.slice(0, 16)}…` : d.fileName) : `File ${i + 1}`}
+                              </Button>
+                            </Tooltip>
+                          ))}
+                        </Box>
+                      ) : '—'
+                    } />
+                  );
+                })()}
               </Grid>
               {indent.quotationApprovalStep?.remarks ? (
                 <Grid item xs={12}><Field label="Remarks" value={indent.quotationApprovalStep.remarks} /></Grid>
@@ -275,6 +301,7 @@ const IndentDetail = () => {
       <IndentApprovalDialog open={approvalOpen} indent={indent} onClose={() => setApprovalOpen(false)} />
       <QuoteComparativeDialog open={comparativeOpen} indent={indent} onClose={() => setComparativeOpen(false)} />
       <QuotationApprovalDialog open={quotationOpen} indent={indent} onClose={() => setQuotationOpen(false)} />
+      <ServiceCompletionDialog open={serviceOpen} indent={indent} onClose={() => setServiceOpen(false)} />
       <PurchaseOrderFormDrawer open={poDrawerOpen} presetIndent={indent} onClose={() => setPoDrawerOpen(false)} />
     </Box>
   );

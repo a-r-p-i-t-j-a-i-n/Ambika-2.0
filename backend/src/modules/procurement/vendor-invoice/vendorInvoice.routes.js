@@ -26,6 +26,7 @@ router.route('/')
   .post(validate(createInvoiceSchema), c.create);
 
 router.get('/stats', c.getStats);
+router.get('/invoiceable-qcs', c.getInvoiceableQcs);
 router.get('/by-qc/:qcId', validate(qcIdParamSchema, 'params'), c.getByQc);
 
 router.route('/:id')

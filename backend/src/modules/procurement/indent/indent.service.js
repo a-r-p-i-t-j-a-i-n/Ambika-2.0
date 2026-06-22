@@ -1,8 +1,10 @@
 import PurchaseIndent, {
   INDENT_APPROVAL_STATUS,
   INDENT_OVERALL_STATUS,
+  INDENT_REQUEST_TYPE,
   QUOTE_STEP_STATUS,
   QUOTATION_APPROVAL_STATUS,
+  VENDOR_QUOTE_STATUS,
 } from './indent.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
@@ -25,6 +27,76 @@ const findOrThrow = async (id) => {
 };
 
 const num = (n) => Number(n) || 0;
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+const cleanFile = (f = {}) => (f && f.fileUrl
+  ? { fileName: f.fileName || '', fileUrl: f.fileUrl, fileType: f.fileType || '', uploadedAt: f.uploadedAt ? new Date(f.uploadedAt) : new Date() }
+  : { fileName: '', fileUrl: '', fileType: '', uploadedAt: null });
+
+// Step 1.2 — normalise incoming vendor quotes, computing item + vendor totals
+// server-side so the comparative figures are authoritative.
+const buildVendorQuotes = (vendors = []) => vendors.map((v) => {
+  const items = (v.items || []).map((it) => {
+    const requestedQty = num(it.requestedQty);
+    const quotedRate = num(it.quotedRate);
+    const gstRate = num(it.gstRate);
+    const taxable = round2(requestedQty * quotedRate);
+    return {
+      skuId: it.skuId || undefined,
+      skuCode: (it.skuCode || '').trim().toUpperCase(),
+      itemName: (it.itemName || '').trim(),
+      unit: (it.unit || '').trim() || 'Pcs',
+      requestedQty,
+      quotedRate,
+      gstRate,
+      deliveryDays: num(it.deliveryDays),
+      paymentTerms: (it.paymentTerms || '').trim(),
+      remarks: (it.remarks || '').trim(),
+      totalAmount: round2(taxable + (taxable * gstRate) / 100),
+    };
+  });
+  return {
+    vendorId: v.vendorId,
+    vendorName: (v.vendorName || '').trim(),
+    vendorEmail: (v.vendorEmail || '').trim().toLowerCase(),
+    vendorPhone: (v.vendorPhone || '').trim(),
+    quotationStatus: v.quotationStatus || VENDOR_QUOTE_STATUS.PENDING,
+    quotationDocument: cleanFile(v.quotationDocument),
+    items,
+    totalQuotationValue: round2(items.reduce((s, it) => s + it.totalAmount, 0)),
+    remarks: (v.remarks || '').trim(),
+  };
+});
+
+// Step 1.3 — normalise approved-vendor selection (one vendor for all items or
+// item-wise splits), computing line + roll-up totals.
+const buildApprovedVendors = (vendors = []) => vendors.map((v) => {
+  const items = (v.items || []).map((it) => {
+    const approvedQty = num(it.approvedQty);
+    const approvedRate = num(it.approvedRate);
+    const gstRate = num(it.gstRate);
+    const taxable = round2(approvedQty * approvedRate);
+    return {
+      skuId: it.skuId || undefined,
+      skuCode: (it.skuCode || '').trim().toUpperCase(),
+      itemName: (it.itemName || '').trim(),
+      unit: (it.unit || '').trim() || 'Pcs',
+      approvedQty,
+      approvedRate,
+      gstRate,
+      totalAmount: round2(taxable + (taxable * gstRate) / 100),
+    };
+  });
+  return {
+    vendorId: v.vendorId,
+    vendorName: (v.vendorName || '').trim(),
+    items,
+    approvedQuotationDocument: cleanFile(v.approvedQuotationDocument),
+    approvalRemarks: (v.approvalRemarks || '').trim(),
+    poId: null,
+    poNumber: '',
+  };
+});
 
 // Normalise an incoming payload into the canonical items[] shape. Falls back to
 // the legacy single-product fields so older clients keep working.
@@ -77,6 +149,9 @@ export const indentService = {
     const indent = new PurchaseIndent({
       indentNumber,
       timestamp: data.timestamp || new Date(),
+      requestType: data.requestType === INDENT_REQUEST_TYPE.INTERNAL_SERVICE
+        ? INDENT_REQUEST_TYPE.INTERNAL_SERVICE
+        : INDENT_REQUEST_TYPE.MATERIAL_PURCHASE,
       items,
       raisedBy: data.raisedBy || user?.name || '',
       raisedById: user?._id,
@@ -147,6 +222,7 @@ export const indentService = {
     // Header fields.
     if (data.raisedBy !== undefined) indent.raisedBy = data.raisedBy;
     if (data.department !== undefined) indent.department = data.department;
+    if (data.requestType !== undefined) indent.requestType = data.requestType;
     if (data.remarks !== undefined) indent.remarks = data.remarks;
     if (data.timestamp) indent.timestamp = data.timestamp;
 
@@ -225,6 +301,109 @@ export const indentService = {
     return indent.save();
   },
 
+  // Bulk approve multiple pending indents (item-wise quantities). Each indent is
+  // processed independently so one bad indent doesn't fail the whole batch.
+  async bulkApprove(data, user) {
+    const result = { approvedCount: 0, approved: [], failed: [] };
+    for (const row of data.indents || []) {
+      try {
+        const indent = await PurchaseIndent.findOne({ _id: row.indentId, isDeleted: { $ne: true } });
+        if (!indent) throw new AppError('Indent not found', 404);
+        // Mirror the single-approve flow: DRAFT or PENDING_APPROVAL are approvable.
+        if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
+          throw new AppError('Only indents awaiting approval can be approved', 400);
+        }
+
+        // Apply per-item approved/revised quantities (match by item _id, else index).
+        if (Array.isArray(row.items) && row.items.length) {
+          row.items.forEach((r, i) => {
+            const key = r.itemId || r._id;
+            const target = (key && indent.items.id?.(key)) || indent.items[i];
+            if (target) {
+              target.revisedQuantity = num(r.revisedQuantity);
+              target.approvedQuantity = num(r.approvedQuantity);
+            }
+          });
+        }
+        mirrorLegacy(indent); // refresh aggregate approved/revised quantities
+
+        // Rule: total approved quantity must be greater than 0.
+        if (num(indent.approvedQuantity) <= 0) {
+          throw new AppError('Approved quantity must be greater than 0', 400);
+        }
+
+        indent.approvalStatus = INDENT_APPROVAL_STATUS.APPROVED;
+        indent.approval = {
+          approvedBy: row.approvedBy || user?.name || '',
+          approvedById: user?._id,
+          approvedAt: new Date(),
+          remarks: row.remarks || '',
+        };
+        indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_PENDING;
+        indent.quoteStep = {
+          ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
+          status: QUOTE_STEP_STATUS.PENDING,
+          plannedAt: indent.quoteStep?.plannedAt || new Date(),
+        };
+        indent.updatedBy = user?._id;
+        indent.activityTimeline.push({ action: 'APPROVE', description: 'Approved via bulk approval', actorId: user?._id });
+        await indent.save();
+
+        const items = indent.items || [];
+        const productsSummary = items.length
+          ? (items.length > 1 ? `${items[0].itemName} +${items.length - 1} more` : items[0].itemName)
+          : (indent.productNameRevised || '—');
+
+        result.approvedCount += 1;
+        result.approved.push({
+          _id: indent._id,
+          indentNumber: indent.indentNumber,
+          productsSummary,
+          itemsCount: items.length || (indent.productNameRevised ? 1 : 0),
+          department: indent.department || '',
+          approvedQty: num(indent.approvedQuantity),
+          approvalStatus: indent.approvalStatus,
+          overallStatus: indent.overallStatus,
+        });
+      } catch (err) {
+        result.failed.push({ indentId: row.indentId, message: err.message });
+      }
+    }
+    return result;
+  },
+
+  // Bulk reject multiple pending indents.
+  async bulkReject(data, user) {
+    const result = { rejectedCount: 0, rejected: [], failed: [] };
+    for (const id of data.indentIds || []) {
+      try {
+        const indent = await PurchaseIndent.findOne({ _id: id, isDeleted: { $ne: true } });
+        if (!indent) throw new AppError('Indent not found', 404);
+        // Mirror the single-reject flow: DRAFT or PENDING_APPROVAL are rejectable.
+        if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
+          throw new AppError('Only indents awaiting approval can be rejected', 400);
+        }
+        indent.approvalStatus = INDENT_APPROVAL_STATUS.REJECTED;
+        indent.overallStatus = INDENT_OVERALL_STATUS.CLOSED;
+        indent.approval = {
+          approvedBy: data.approvedBy || user?.name || '',
+          approvedById: user?._id,
+          approvedAt: new Date(),
+          remarks: data.remarks || '',
+        };
+        indent.updatedBy = user?._id;
+        indent.activityTimeline.push({ action: 'REJECT', description: 'Rejected via bulk reject', actorId: user?._id });
+        await indent.save();
+
+        result.rejectedCount += 1;
+        result.rejected.push({ indentId: indent._id, indentNumber: indent.indentNumber });
+      } catch (err) {
+        result.failed.push({ indentId: id, message: err.message });
+      }
+    }
+    return result;
+  },
+
   async receiveQuote(id, data, user) {
     const indent = await findOrThrow(id);
     if (indent.approvalStatus !== INDENT_APPROVAL_STATUS.APPROVED) {
@@ -255,25 +434,54 @@ export const indentService = {
     return indent.save();
   },
 
-  // Step 1.2 — Receive Quote & Make Comparative (with quotation upload).
+  // Step 1.2 — Receive Quote & Make Comparative (multi-vendor + legacy upload).
   async quoteComparative(id, data, user) {
     const indent = await findOrThrow(id);
     if (indent.approvalStatus !== INDENT_APPROVAL_STATUS.APPROVED) {
       throw new AppError('Quote can only be recorded for an approved indent', 400);
     }
+
+    const vendors = Array.isArray(data.vendors) && data.vendors.length
+      ? buildVendorQuotes(data.vendors)
+      : [];
+    const multiVendor = vendors.length > 0;
     const upload = data.quotationUploaded || {};
-    if (data.statusDone === 'YES' && !upload.fileUrl) {
-      throw new AppError('Quotation upload is required when status is Yes', 400);
+
+    // Simple multi-file upload: collect all valid documents (fall back to the
+    // single legacy upload if only that was sent).
+    const documents = (Array.isArray(data.quotationDocuments) ? data.quotationDocuments : [])
+      .filter((d) => d?.fileUrl)
+      .map(cleanFile);
+    if (!documents.length && upload.fileUrl) documents.push(cleanFile(upload));
+
+    // Step 1.2 is complete when statusDone = YES with proof of a received quote,
+    // or QUOTE_NOT_REQUIRED. Proof = ≥1 uploaded document OR ≥1 vendor RECEIVED.
+    const hasReceivedVendor = vendors.some((v) => v.quotationStatus === VENDOR_QUOTE_STATUS.RECEIVED);
+    if (data.statusDone === 'YES') {
+      if (multiVendor) {
+        if (!hasReceivedVendor) {
+          throw new AppError('At least one vendor quotation must be marked RECEIVED when status is Yes', 400);
+        }
+      } else if (!documents.length) {
+        throw new AppError('At least one quotation document is required when status is Yes', 400);
+      }
     }
     const actualAt = data.actualAt ? new Date(data.actualAt) : new Date();
+
+    // Mirror the first document into the legacy single-upload field so older
+    // views keep rendering a quotation. In multi-vendor mode, mirror the first
+    // received vendor's document instead.
+    const mirrorDoc = multiVendor
+      ? (vendors.find((v) => v.quotationStatus === VENDOR_QUOTE_STATUS.RECEIVED && v.quotationDocument?.fileUrl)?.quotationDocument || cleanFile())
+      : (documents[0] || cleanFile());
 
     indent.quoteComparativeStep = {
       stepNo: 'Step 1.2',
       stepName: 'Receive Quote & Make Comparative 1.02',
       statusDone: data.statusDone,
-      quotationUploaded: upload.fileUrl
-        ? { fileName: upload.fileName || '', fileUrl: upload.fileUrl, fileType: upload.fileType || '', uploadedAt: new Date() }
-        : { fileName: '', fileUrl: '', fileType: '', uploadedAt: null },
+      quotationUploaded: mirrorDoc,
+      quotationDocuments: multiVendor ? [] : documents,
+      vendors,
       actualAt,
       updatedBy: user?._id,
       remarks: data.remarks || '',
@@ -286,8 +494,8 @@ export const indentService = {
       ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
       status: quoteStatus,
       actualAt,
-      quotationUploaded: !!upload.fileUrl,
-      formLink: upload.fileUrl || indent.quoteStep?.formLink || '',
+      quotationUploaded: !!mirrorDoc.fileUrl,
+      formLink: mirrorDoc.fileUrl || indent.quoteStep?.formLink || '',
       timeDelay: computeDelay(indent.quoteStep?.plannedAt, actualAt),
       remarks: data.remarks || indent.quoteStep?.remarks || '',
     };
@@ -296,7 +504,11 @@ export const indentService = {
       ? INDENT_OVERALL_STATUS.QUOTE_RECEIVED
       : INDENT_OVERALL_STATUS.QUOTE_NOT_REQUIRED;
     indent.updatedBy = user?._id;
-    indent.activityTimeline.push({ action: 'QUOTE_COMPARATIVE', description: `Step 1.2 — ${data.statusDone}`, actorId: user?._id });
+    indent.activityTimeline.push({
+      action: 'QUOTE_COMPARATIVE',
+      description: `Step 1.2 — ${data.statusDone}${multiVendor ? ` (${vendors.length} vendor quote(s))` : ''}`,
+      actorId: user?._id,
+    });
     return indent.save();
   },
 
@@ -312,24 +524,51 @@ export const indentService = {
     }
 
     const upload = data.approvedQuotation || {};
-    if (data.statusDone === QUOTATION_APPROVAL_STATUS.YES && !upload.fileUrl) {
-      throw new AppError('Approved quotation upload is required when status is Yes', 400);
+    const approvedVendors = Array.isArray(data.approvedVendors) && data.approvedVendors.length
+      ? buildApprovedVendors(data.approvedVendors)
+      : [];
+    const multiVendor = approvedVendors.length > 0;
+
+    // Simple multi-file upload: collect all valid documents (fall back to the
+    // single legacy upload if only that was sent).
+    const documents = (Array.isArray(data.approvedQuotationDocuments) ? data.approvedQuotationDocuments : [])
+      .filter((d) => d?.fileUrl)
+      .map(cleanFile);
+    if (!documents.length && upload.fileUrl) documents.push(cleanFile(upload));
+
+    if (data.statusDone === QUOTATION_APPROVAL_STATUS.YES) {
+      if (multiVendor) {
+        if (approvedVendors.some((v) => !v.items.length)) {
+          throw new AppError('Each approved vendor must have at least one item', 400);
+        }
+      } else if (!documents.length) {
+        throw new AppError('At least one approved quotation document is required when status is Yes', 400);
+      }
     }
     const actualAt = data.actualAt ? new Date(data.actualAt) : new Date();
+
+    // Mirror the first document into the legacy single field so older PO/views
+    // keep working. In multi-vendor mode, mirror the first vendor's document.
+    const mirrorDoc = multiVendor
+      ? (approvedVendors.find((v) => v.approvedQuotationDocument?.fileUrl)?.approvedQuotationDocument || cleanFile())
+      : (documents[0] || cleanFile());
 
     const quotationApprovalStep = {
       stepNo: 'Step 1.3',
       stepName: 'Approved Quotation 1.03',
       statusDone: data.statusDone,
-      approvedQuotation: upload.fileUrl
-        ? { fileName: upload.fileName || '', fileUrl: upload.fileUrl, fileType: upload.fileType || '', uploadedAt: new Date() }
-        : { fileName: '', fileUrl: '', fileType: '', uploadedAt: null },
+      approvedQuotation: mirrorDoc,
+      approvedQuotationDocuments: multiVendor ? [] : documents,
+      approvedVendors,
       actualAt,
       updatedBy: user?._id,
       remarks: data.remarks || '',
     };
+    // Internal-service indents skip the PO/PI/GRN chain — an approved quotation
+    // goes straight to SERVICE_PENDING (awaiting Step 1.8A Service Completion).
+    const isService = indent.requestType === INDENT_REQUEST_TYPE.INTERNAL_SERVICE;
     const overallStatus = data.statusDone === QUOTATION_APPROVAL_STATUS.YES
-      ? INDENT_OVERALL_STATUS.QUOTATION_APPROVED
+      ? (isService ? INDENT_OVERALL_STATUS.SERVICE_PENDING : INDENT_OVERALL_STATUS.QUOTATION_APPROVED)
       : INDENT_OVERALL_STATUS.QUOTATION_NOT_APPROVED;
 
     // Use $set so the whole sub-document is replaced at the DB level. This
@@ -342,7 +581,7 @@ export const indentService = {
         $push: {
           activityTimeline: {
             action: 'APPROVE_QUOTATION',
-            description: `Step 1.3 — ${data.statusDone}`,
+            description: `Step 1.3 — ${data.statusDone}${multiVendor ? ` (${approvedVendors.length} approved vendor(s))` : ''}`,
             actorId: user?._id,
             timestamp: new Date(),
           },

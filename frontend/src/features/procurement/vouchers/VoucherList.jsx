@@ -16,7 +16,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
-import { VoucherStatusChip, VOUCHER_STATUSES, fmtINR, fmtDate } from './voucherMeta';
+import { VoucherStatusChip, VoucherTypeChip, VOUCHER_STATUSES, VOUCHER_TYPES, EXPENSE_CATEGORIES, fmtINR, fmtDate } from './voucherMeta';
 import VoucherFormDialog from './VoucherFormDialog';
 
 const KpiCard = ({ icon, label, value, color, money }) => (
@@ -35,6 +35,8 @@ const VoucherList = () => {
   const [search, setSearch] = useState('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
   const [from, setFrom] = useState(''); const [to, setTo] = useState('');
 
   const [formOpen, setFormOpen] = useState(false);
@@ -45,6 +47,7 @@ const VoucherList = () => {
   const queryArgs = {
     page: paginationModel.page + 1, limit: paginationModel.pageSize, sort: '-createdAt',
     search: search || undefined, vendorId: vendorFilter?._id || undefined, voucherStatus: statusFilter || undefined,
+    voucherType: typeFilter || undefined, expenseCategory: categoryFilter || undefined,
     ...(from ? { 'voucherDate[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'voucherDate[lte]': `${to}T23:59:59` } : {}),
   };
   const { data, isLoading, isFetching } = useGetVouchersQuery(queryArgs);
@@ -68,11 +71,13 @@ const VoucherList = () => {
   };
 
   const columns = [
-    { field: 'voucherNumber', headerName: 'VOUCHER NO', width: 135, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
+    { field: 'voucherNumber', headerName: 'VOUCHER NO', width: 145, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
+    { field: 'voucherType', headerName: 'TYPE', width: 80, sortable: false, renderCell: (p) => <VoucherTypeChip type={p.value} /> },
     { field: 'voucherDate', headerName: 'DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
-    { field: 'invoiceNumber', headerName: 'INVOICE', width: 140, renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
-    { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 150, renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
-    { field: 'paymentMode', headerName: 'MODE', width: 90, renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
+    { field: 'invoiceNumber', headerName: 'INVOICE / CATEGORY', width: 160, sortable: false,
+      valueGetter: (_v, row) => (row.voucherType === 'EXPENSE' ? (row.expenseCategory || '—') : (row.invoiceNumber || '—')),
+      renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value}</Typography> },
+    { field: 'vendorName', headerName: 'VENDOR / PARTY', flex: 1, minWidth: 150, renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
     { field: 'netPayableAmount', headerName: 'NET PAYABLE', width: 120, align: 'right', headerAlign: 'right', renderCell: (p) => fmtINR(p.value) },
     { field: 'paidAmount', headerName: 'PAID', width: 110, align: 'right', headerAlign: 'right', renderCell: (p) => <Typography variant="body2" fontWeight={700} sx={{ color: '#16a34a' }}>{fmtINR(p.value)}</Typography> },
     { field: 'balanceAmount', headerName: 'BALANCE', width: 110, align: 'right', headerAlign: 'right', renderCell: (p) => <Typography variant="body2" sx={{ color: p.value > 0 ? '#b45309' : '#16a34a', fontWeight: 600 }}>{fmtINR(p.value)}</Typography> },
@@ -103,7 +108,17 @@ const VoucherList = () => {
           sx={{ width: { xs: '100%', sm: 240 } }} InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }} />
         <Autocomplete size="small" sx={{ minWidth: 190 }} options={partiesRes?.data || []} value={vendorFilter}
           getOptionLabel={(o) => o?.name || ''} isOptionEqualToValue={(o, v) => o._id === v._id} onChange={(_e, v) => setVendorFilter(v)} renderInput={(params) => <TextField {...params} label="Vendor" />} />
-        <TextField size="small" select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 170 }}>
+        <TextField size="small" select label="Type" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); if (e.target.value !== 'EXPENSE') setCategoryFilter(''); }} sx={{ minWidth: 150 }}>
+          <MenuItem value="">All</MenuItem>
+          {VOUCHER_TYPES.map((t) => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}
+        </TextField>
+        {typeFilter === 'EXPENSE' && (
+          <TextField size="small" select label="Category" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} sx={{ minWidth: 170 }}>
+            <MenuItem value="">All</MenuItem>
+            {EXPENSE_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+          </TextField>
+        )}
+        <TextField size="small" select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 160 }}>
           <MenuItem value="">All</MenuItem>
           {VOUCHER_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
         </TextField>

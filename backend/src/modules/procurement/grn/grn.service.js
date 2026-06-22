@@ -3,6 +3,7 @@ import path from 'path';
 import PDFDocument from 'pdfkit';
 import GoodsReceiptNote, { GRN_STATUS, GRN_QC_STATUS, HOW_ITEM_RECEIVED } from './grn.model.js';
 import VendorPurchaseOrder, { PO_STATUS, PO_FOLLOWUP_STATUS, PO_PI_STATUS } from '../purchase-order/purchaseOrder.model.js';
+import PurchaseFollowUp from '../follow-up/followUp.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
 import SKU from '../../skus/sku.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
@@ -221,6 +222,24 @@ export const grnService = {
     if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || !piSettled) {
       throw new AppError('GRN can only be created when the PO is READY_FOR_GRN and its PI is completed or marked Not Required', 400);
     }
+
+    // Rule 1b: material delivery must be confirmed — the PO must have reached the
+    // ready-for-GRN gate AND carry a Final Material Date (on the PO, or on the
+    // latest completed follow-up for back-compat). A PO already partially received
+    // is exempt so in-flight receiving is never blocked.
+    if (po.poStatus !== PO_STATUS.PARTIAL_RECEIVED) {
+      let hasFinalMaterialDate = !!(po.readyForGrnAt && po.finalMaterialDate);
+      if (po.readyForGrnAt && !po.finalMaterialDate) {
+        const fu = await PurchaseFollowUp.findOne({
+          poId: po._id, isDeleted: { $ne: true }, finalMaterialDate: { $ne: null },
+        }).sort('-updatedAt').select('finalMaterialDate').lean();
+        hasFinalMaterialDate = !!fu?.finalMaterialDate;
+      }
+      if (!hasFinalMaterialDate) {
+        throw new AppError('Final Material Date is required before creating a GRN.', 400);
+      }
+    }
+
     if (po.poStatus === PO_STATUS.FULLY_RECEIVED) {
       throw new AppError('This PO is already fully received', 400);
     }

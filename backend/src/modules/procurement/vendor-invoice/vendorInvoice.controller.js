@@ -23,6 +23,11 @@ export const vendorInvoiceController = {
     res.json(ApiResponse.ok('Invoices for QC', rows));
   }),
 
+  getInvoiceableQcs: asyncHandler(async (req, res) => {
+    const rows = await vendorInvoiceService.getInvoiceableQcs(req.query);
+    res.json(ApiResponse.ok('Invoiceable QCs', rows));
+  }),
+
   getById: asyncHandler(async (req, res) => {
     const inv = await vendorInvoiceService.getById(req.params.id);
     res.json(ApiResponse.ok('Vendor invoice retrieved', inv));

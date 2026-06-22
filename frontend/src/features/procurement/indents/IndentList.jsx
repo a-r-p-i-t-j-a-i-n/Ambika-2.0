@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Card, Tooltip,
+  IconButton, Menu, ListItemIcon, ListItemText, Grid, Card, Tooltip, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, Send, CheckCircle2,
+  Search, Plus, MoreVertical, Eye, Pencil, Send, CheckCircle2, CheckCheck,
   FileText, FileCheck2, ClipboardList, Hourglass, BadgeCheck, Quote, ExternalLink,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
@@ -24,6 +24,8 @@ import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
+import BulkIndentApprovalDialog from './BulkIndentApprovalDialog';
+import ServiceCompletionDialog from '../service-completions/ServiceCompletionDialog';
 
 // Map the Step-1.2 statusDone (or legacy quoteStep) to a chip state.
 const quoteStateOf = (row) => {
@@ -72,6 +74,8 @@ const IndentList = () => {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [comparativeOpen, setComparativeOpen] = useState(false);
   const [quotationOpen, setQuotationOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [serviceOpen, setServiceOpen] = useState(false);
   const [activeIndent, setActiveIndent] = useState(null);
 
   // Row action menu
@@ -130,6 +134,10 @@ const IndentList = () => {
     if (['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus)) {
       a.push({ key: 'approveQuote', label: 'Approved Quotation 1.03', icon: <FileCheck2 size={16} />, fn: () => onApproveQuotation(r) });
     }
+    // Internal-service indents: mark the service done (Step 1.8A) once approved.
+    if (r.requestType === 'INTERNAL_SERVICE' && r.overallStatus === 'SERVICE_PENDING') {
+      a.push({ key: 'service', label: 'Mark Service Completed', icon: <CheckCircle2 size={16} />, fn: () => { setActiveIndent(r); setServiceOpen(true); closeMenu(); } });
+    }
     return a;
   };
 
@@ -138,6 +146,10 @@ const IndentList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'indentNumber', headerName: 'INDENT NO', width: 130,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
+    { field: 'requestType', headerName: 'TYPE', width: 130, sortable: false,
+      renderCell: (p) => (p.value === 'INTERNAL_SERVICE'
+        ? <Chip size="small" label="Service" sx={{ bgcolor: alpha('#7c3aed', 0.12), color: '#6d28d9', fontWeight: 700 }} />
+        : <Chip size="small" label="Material" sx={{ bgcolor: alpha('#2563eb', 0.1), color: '#1d4ed8', fontWeight: 700 }} />) },
     { field: 'products', headerName: 'PRODUCTS', flex: 1, minWidth: 220, sortable: false,
       valueGetter: (_v, row) => itemsSummary(row),
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value}</Typography> },
@@ -156,11 +168,22 @@ const IndentList = () => {
     { field: 'quoteStatus', headerName: 'QUOTE STATUS', width: 130, sortable: false,
       valueGetter: (_v, row) => quoteStateOf(row),
       renderCell: (p) => <QuoteChip status={p.value} /> },
-    { field: 'quotationUploaded', headerName: 'QUOTATION UPLOADED', width: 170, sortable: false,
-      valueGetter: (_v, row) => row.quoteComparativeStep?.quotationUploaded?.fileUrl || '',
-      renderCell: (p) => (p.value
-        ? <Button size="small" startIcon={<ExternalLink size={14} />} href={fileHref(p.value)} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}>View</Button>
-        : <Typography variant="caption" color="text.disabled">—</Typography>) },
+    { field: 'quotationUploaded', headerName: 'QUOTATION UPLOADED', width: 180, sortable: false,
+      renderCell: (p) => {
+        const step = p.row.quoteComparativeStep;
+        const docs = step?.quotationDocuments?.length
+          ? step.quotationDocuments
+          : (step?.quotationUploaded?.fileUrl ? [step.quotationUploaded] : []);
+        if (!docs.length) return <Typography variant="caption" color="text.disabled">—</Typography>;
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Button size="small" startIcon={<ExternalLink size={14} />} href={fileHref(docs[0].fileUrl)} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}>
+              {docs.length > 1 ? `${docs.length} files` : 'View'}
+            </Button>
+            {docs.length > 1 && <Typography variant="caption" color="text.secondary">+{docs.length - 1} more</Typography>}
+          </Box>
+        );
+      } },
     { field: 'quoteActualDate', headerName: 'QUOTE ACTUAL DATE', width: 150, sortable: false,
       valueGetter: (_v, row) => row.quoteComparativeStep?.actualAt || row.quoteStep?.actualAt || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value ? fmtDate(p.value) : '—'}</Typography> },
@@ -168,10 +191,21 @@ const IndentList = () => {
       valueGetter: (_v, row) => row.quotationApprovalStep?.statusDone || 'PENDING',
       renderCell: (p) => <QuotationChip status={p.value} /> },
     { field: 'approvedQuotationFile', headerName: 'APPROVED QUOTATION FILE', width: 190, sortable: false,
-      valueGetter: (_v, row) => row.quotationApprovalStep?.approvedQuotation?.fileUrl || '',
-      renderCell: (p) => (p.value
-        ? <Button size="small" startIcon={<ExternalLink size={14} />} href={fileHref(p.value)} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}>View</Button>
-        : <Typography variant="caption" color="text.disabled">—</Typography>) },
+      renderCell: (p) => {
+        const step = p.row.quotationApprovalStep;
+        const docs = step?.approvedQuotationDocuments?.length
+          ? step.approvedQuotationDocuments
+          : (step?.approvedQuotation?.fileUrl ? [step.approvedQuotation] : []);
+        if (!docs.length) return <Typography variant="caption" color="text.disabled">—</Typography>;
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Button size="small" startIcon={<ExternalLink size={14} />} href={fileHref(docs[0].fileUrl)} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}>
+              {docs.length > 1 ? `${docs.length} files` : 'View'}
+            </Button>
+            {docs.length > 1 && <Typography variant="caption" color="text.secondary">+{docs.length - 1} more</Typography>}
+          </Box>
+        );
+      } },
     { field: 'approvedQuotationDate', headerName: 'APPROVED QUOTATION DATE', width: 190, sortable: false,
       valueGetter: (_v, row) => row.quotationApprovalStep?.actualAt || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value ? fmtDate(p.value) : '—'}</Typography> },
@@ -191,7 +225,12 @@ const IndentList = () => {
           <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Purchase Indents</Typography>
           <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>Raise, approve and track purchase requirements</Typography>
         </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={onCreate}>Create Indent</Button>
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button variant="outlined" color="success" startIcon={<CheckCheck size={16} />} onClick={() => setBulkOpen(true)}>
+            Bulk Approve
+          </Button>
+          <Button variant="contained" startIcon={<Plus size={16} />} onClick={onCreate}>Create Indent</Button>
+        </Box>
       </Box>
 
       {/* KPI cards */}
@@ -255,6 +294,9 @@ const IndentList = () => {
       <IndentApprovalDialog open={approvalOpen} indent={activeIndent} onClose={() => { setApprovalOpen(false); setActiveIndent(null); }} />
       <QuoteComparativeDialog open={comparativeOpen} indent={activeIndent} onClose={() => { setComparativeOpen(false); setActiveIndent(null); }} />
       <QuotationApprovalDialog open={quotationOpen} indent={activeIndent} onClose={() => { setQuotationOpen(false); setActiveIndent(null); }} />
+      <BulkIndentApprovalDialog open={bulkOpen} onClose={() => setBulkOpen(false)}
+        onReceiveQuote={(ind) => { setBulkOpen(false); setActiveIndent(ind); setComparativeOpen(true); }} />
+      <ServiceCompletionDialog open={serviceOpen} indent={activeIndent} onClose={() => { setServiceOpen(false); setActiveIndent(null); }} />
     </Box>
   );
 };

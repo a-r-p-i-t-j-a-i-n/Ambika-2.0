@@ -32,5 +32,6 @@ router.route('/:id')
 
 router.post('/:id/post',   validate(mongoIdParamSchema, 'params'), validate(postVoucherSchema), c.post);
 router.post('/:id/cancel', validate(mongoIdParamSchema, 'params'), validate(cancelVoucherSchema), c.cancel);
+router.post('/:id/pdf',    validate(mongoIdParamSchema, 'params'), c.generatePdf);
 
 export default router;

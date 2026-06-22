@@ -7,44 +7,78 @@ import { AppError } from '../../../utils/apiResponse.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
+const sameSku = (a, b) => a && b && String(a).toUpperCase() === String(b).toUpperCase();
+const itemKey = (qcId, skuCode, itemName) => `${String(qcId)}|${String(skuCode || itemName || '').toUpperCase()}`;
+
 /**
- * Build authoritative invoice items from the QC (received/accepted/rejected) and
- * PO (rate/GST), merging the user-editable fields (invoiceQty/rate/gstRate/remarks)
- * from the submitted rows. invoiceQty is hard-capped at the accepted qty.
- * Returns the items plus the recomputed financial totals.
+ * Sum already-invoiced qty per (qcId, sku) across existing non-rejected invoices.
+ * Considers both the per-item source qcId (multi-GRN) and the legacy header qcId.
+ * Optionally excludes one invoice (when recomputing during an edit).
  */
-const computeInvoiceItems = (qcItems = [], poItems = [], submitted = []) => {
-  const sameSku = (a, b) => a && b && String(a).toUpperCase() === String(b).toUpperCase();
-  const matchSub = (qi, idx) => submitted.find((s) =>
-    sameSku(s.skuCode, qi.skuCode) || (s.itemName && qi.itemName && s.itemName === qi.itemName)) || submitted[idx] || {};
+const invoicedQtyMap = async (qcIds, excludeInvoiceId) => {
+  const filter = {
+    isDeleted: { $ne: true },
+    invoiceStatus: { $ne: INVOICE_STATUS.REJECTED },
+    $or: [{ qcId: { $in: qcIds } }, { qcIds: { $in: qcIds } }, { 'items.qcId': { $in: qcIds } }],
+  };
+  if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
+  const invoices = await VendorInvoice.find(filter).select('qcId items').lean();
+  const map = {};
+  for (const inv of invoices) {
+    for (const it of inv.items || []) {
+      const qid = it.qcId || inv.qcId; // per-item source, else legacy header
+      if (!qid) continue;
+      const k = itemKey(qid, it.skuCode, it.itemName);
+      map[k] = round2((map[k] || 0) + (Number(it.invoiceQty) || 0));
+    }
+  }
+  return map;
+};
+
+/**
+ * Build authoritative invoice items across one or more QCs (received/accepted from
+ * the QC, rate/GST from the PO), merging user-editable fields from submitted rows
+ * (matched by source qcId + sku). Tracks already-invoiced and pending per line.
+ */
+const buildInvoiceItems = (qcs = [], poItems = [], submitted = [], invoicedMap = {}) => {
   const matchPo = (qi) => poItems.find((p) =>
     sameSku(p.skuCode, qi.skuCode) || (p.itemName && qi.itemName && p.itemName === qi.itemName)) || {};
+  const matchSub = (qcId, qi) => submitted.find((s) =>
+    String(s.qcId || s.sourceQcId || '') === String(qcId)
+    && (sameSku(s.skuCode, qi.skuCode) || (s.itemName && qi.itemName && s.itemName === qi.itemName))) || {};
 
-  const items = qcItems.map((qi, idx) => {
-    const s = matchSub(qi, idx);
-    const po = matchPo(qi);
-    const acceptedQty = round2(qi.acceptedQty);
-    // No upper cap here — excess is governed by the remarks / override check below.
-    let invoiceQty = s.invoiceQty != null ? round2(s.invoiceQty) : acceptedQty;
-    invoiceQty = Math.max(0, invoiceQty);
-    const rate = round2(s.rate != null ? s.rate : po.rate);
-    const gstRate = round2(s.gstRate != null ? s.gstRate : po.gstRate);
-    const taxableAmount = round2(invoiceQty * rate);
-    const gstAmount = round2(taxableAmount * gstRate / 100);
-    const varianceQty = round2(invoiceQty - acceptedQty);
-    const varianceStatus = varianceQty === 0
-      ? INVOICE_VARIANCE_STATUS.MATCHED
-      : (varianceQty < 0 ? INVOICE_VARIANCE_STATUS.SHORT : INVOICE_VARIANCE_STATUS.EXCESS);
-    return {
-      skuId: qi.skuId || undefined, skuCode: qi.skuCode || '', itemName: qi.itemName || '', unit: qi.unit || 'Pcs',
-      orderedQty: round2(po.quantity), grnReceivedQty: round2(qi.receivedQty),
-      receivedQty: round2(qi.receivedQty), acceptedQty, rejectedQty: round2(qi.rejectedQty),
-      invoiceQty, varianceQty, varianceStatus,
-      rate, gstRate, taxableAmount, gstAmount,
-      totalAmount: round2(taxableAmount + gstAmount),
-      remarks: (s.remarks || '').trim(),
-    };
-  });
+  const items = [];
+  for (const qc of qcs) {
+    for (const qi of qc.items || []) {
+      const s = matchSub(qc._id, qi);
+      const po = matchPo(qi);
+      const acceptedQty = round2(qi.acceptedQty);
+      const alreadyInvoicedQty = round2(invoicedMap[itemKey(qc._id, qi.skuCode, qi.itemName)] || 0);
+      const pendingInvoiceQty = Math.max(0, round2(acceptedQty - alreadyInvoicedQty));
+      let invoiceQty = s.invoiceQty != null ? round2(s.invoiceQty) : pendingInvoiceQty;
+      invoiceQty = Math.max(0, invoiceQty);
+      const rate = round2(s.rate != null ? s.rate : po.rate);
+      const gstRate = round2(s.gstRate != null ? s.gstRate : po.gstRate);
+      const taxableAmount = round2(invoiceQty * rate);
+      const gstAmount = round2(taxableAmount * gstRate / 100);
+      const varianceQty = round2(invoiceQty - acceptedQty);
+      const varianceStatus = varianceQty === 0
+        ? INVOICE_VARIANCE_STATUS.MATCHED
+        : (varianceQty < 0 ? INVOICE_VARIANCE_STATUS.SHORT : INVOICE_VARIANCE_STATUS.EXCESS);
+      items.push({
+        grnId: qc.grnId || undefined, grnNumber: qc.grnNumber || '',
+        qcId: qc._id, qcNumber: qc.qcNumber || '',
+        skuId: qi.skuId || undefined, skuCode: qi.skuCode || '', itemName: qi.itemName || '', unit: qi.unit || 'Pcs',
+        orderedQty: round2(po.quantity), grnReceivedQty: round2(qi.receivedQty),
+        receivedQty: round2(qi.receivedQty), acceptedQty, rejectedQty: round2(qi.rejectedQty),
+        alreadyInvoicedQty, pendingInvoiceQty,
+        invoiceQty, varianceQty, varianceStatus,
+        rate, gstRate, taxableAmount, gstAmount,
+        totalAmount: round2(taxableAmount + gstAmount),
+        remarks: (s.remarks || '').trim(),
+      });
+    }
+  }
   return {
     items,
     totals: {
@@ -53,6 +87,19 @@ const computeInvoiceItems = (qcItems = [], poItems = [], submitted = []) => {
       invoiceAmount: round2(items.reduce((a, i) => a + i.totalAmount, 0)),
     },
   };
+};
+
+// Block invoicing more than the remaining (pending) accepted qty unless overridden
+// or each excess line is justified with remarks.
+const assertWithinPending = (items, allowExcess) => {
+  if (allowExcess) return;
+  const offenders = items.filter((i) => round2(i.invoiceQty) > round2(i.pendingInvoiceQty) && !i.remarks);
+  if (offenders.length) {
+    throw new AppError(
+      `Invoice qty exceeds remaining accepted (pending) qty for: ${offenders.map((o) => o.itemName).join(', ')}. Reduce the qty, add remarks, or use override permission.`,
+      400,
+    );
+  }
 };
 
 // Invoice can only be raised once QC has passed (fully or partially).
@@ -65,17 +112,22 @@ const normalizeDoc = (d) => (d?.fileUrl
 const computeNetPayable = (inv) =>
   round2((inv.invoiceAmount || 0) - (inv.debitNoteAmount || 0) - (inv.advancePaid || 0));
 
-// Block invoicing more than the QC-accepted qty unless the caller has override
-// rights or has justified each excess line with remarks.
-const assertExcessAllowed = (items, allowExcess) => {
-  if (allowExcess) return;
-  const offenders = items.filter((i) => i.varianceStatus === INVOICE_VARIANCE_STATUS.EXCESS && !i.remarks);
-  if (offenders.length) {
-    throw new AppError(
-      `Invoice qty exceeds QC-accepted qty for: ${offenders.map((o) => o.itemName).join(', ')}. Add remarks for each excess item, or use override permission.`,
-      400,
-    );
+const uniq = (arr) => [...new Set(arr.filter(Boolean).map(String))];
+
+// Validate a set of QCs can be invoiced together (same vendor, same PO, QC passed).
+const loadAndValidateQcs = async (qcIdList) => {
+  const qcs = await IncomingQC.find({ _id: { $in: qcIdList }, isDeleted: { $ne: true } }).lean();
+  if (qcs.length !== qcIdList.length) throw new AppError('One or more selected QCs were not found', 404);
+  for (const qc of qcs) {
+    if (!QC_INVOICEABLE.includes(qc.qcStatus)) {
+      throw new AppError(`QC ${qc.qcNumber} is not invoiceable — Incoming QC must be PASSED or PARTIAL`, 400);
+    }
   }
+  const vendorIds = uniq(qcs.map((q) => q.vendorId));
+  if (vendorIds.length > 1) throw new AppError('All selected GRNs/QCs must belong to the same vendor', 400);
+  const poIds = uniq(qcs.map((q) => q.poId));
+  if (poIds.length > 1) throw new AppError('All selected GRNs/QCs must belong to the same PO', 400);
+  return qcs;
 };
 
 const findOrThrow = async (id) => {
@@ -86,41 +138,35 @@ const findOrThrow = async (id) => {
 
 export const vendorInvoiceService = {
   async create(data, user, opts = {}) {
-    const qc = await IncomingQC.findOne({ _id: data.qcId, isDeleted: { $ne: true } });
-    if (!qc) throw new AppError('Incoming QC not found', 404);
-
-    // Rule 1: QC must be PASSED or PARTIAL (never PENDING/FAILED).
-    if (!QC_INVOICEABLE.includes(qc.qcStatus)) {
-      throw new AppError('Invoice can only be created after Incoming QC is PASSED or PARTIAL', 400);
-    }
-    const existing = await VendorInvoice.findOne({ qcId: qc._id, isDeleted: { $ne: true }, invoiceStatus: { $ne: INVOICE_STATUS.REJECTED } }).lean();
-    if (existing) throw new AppError(`An invoice (${existing.invoiceNumber}) already exists for this QC`, 400);
+    // Accept one QC (legacy) or many (multi-GRN). All must share vendor + PO.
+    const qcIdList = uniq(data.qcIds?.length ? data.qcIds : (data.qcId ? [data.qcId] : []));
+    if (!qcIdList.length) throw new AppError('Select at least one QC / GRN', 400);
+    const qcs = await loadAndValidateQcs(qcIdList);
+    const first = qcs[0];
 
     // Rule 2 & 6: pull advance paid from the PI for net-payable adjustment.
     let advancePaid = 0;
-    if (qc.piId) {
-      const pi = await ProformaInvoice.findById(qc.piId).select('paidAmount').lean();
+    if (first.piId) {
+      const pi = await ProformaInvoice.findById(first.piId).select('paidAmount').lean();
       advancePaid = round2(pi?.paidAmount || 0);
     }
 
-    // Recompute items + totals authoritatively from the QC quantities + PO rates.
-    let items = [];
-    let itemTotals = null;
-    if (qc.items?.length) {
-      const po = qc.poId ? await VendorPurchaseOrder.findById(qc.poId).select('items').lean() : null;
-      const r = computeInvoiceItems(qc.items, po?.items || [], data.items || []);
-      items = r.items;
-      itemTotals = r.totals;
-      if (!items.some((it) => it.invoiceQty > 0)) {
-        throw new AppError('Enter an invoice quantity on at least one item', 400);
-      }
-      assertExcessAllowed(items, opts.allowExcess);
-    }
+    // Recompute items + totals authoritatively from QC quantities + PO rates,
+    // accounting for what's already been invoiced on prior invoices.
+    const po = first.poId ? await VendorPurchaseOrder.findById(first.poId).select('items').lean() : null;
+    const invoicedMap = await invoicedQtyMap(qcs.map((q) => q._id));
+    const { items, totals: itemTotals } = buildInvoiceItems(qcs, po?.items || [], data.items || [], invoicedMap);
+    if (!items.length) throw new AppError('Selected QCs have no items to invoice', 400);
+    if (!items.some((it) => it.invoiceQty > 0)) throw new AppError('Enter an invoice quantity on at least one item', 400);
+    assertWithinPending(items, opts.allowExcess);
+
+    const grnIds = uniq(qcs.map((q) => q.grnId));
+    const grnNumbers = uniq(qcs.map((q) => q.grnNumber));
 
     const doc = normalizeDoc(data.invoiceDocument);
     const debitDoc = normalizeDoc(data.debitNoteDocument);
     const base = {
-      invoiceAmount: itemTotals ? itemTotals.invoiceAmount : round2(data.invoiceAmount),
+      invoiceAmount: itemTotals.invoiceAmount,
       debitNoteAmount: data.debitNoteRequired ? round2(data.debitNoteAmount) : 0,
       advancePaid,
     };
@@ -130,15 +176,19 @@ export const vendorInvoiceService = {
       invoiceNumber: data.invoiceNumber,
       invoiceDate: data.invoiceDate || null,
       invoiceReceivedDate: data.invoiceReceivedDate || new Date(),
-      qcId: qc._id, qcNumber: qc.qcNumber,
-      grnId: qc.grnId, grnNumber: qc.grnNumber,
-      poId: qc.poId, poNumber: qc.poNumber,
-      piId: qc.piId, piNumber: qc.piNumber,
-      vendorId: qc.vendorId, vendorName: qc.vendorName,
+      // Legacy single refs = first selected QC/GRN (back-compat).
+      qcId: first._id, qcNumber: first.qcNumber,
+      grnId: first.grnId, grnNumber: first.grnNumber,
+      // Multi-GRN arrays.
+      qcIds: qcs.map((q) => q._id), qcNumbers: uniq(qcs.map((q) => q.qcNumber)),
+      grnIds, grnNumbers,
+      poId: first.poId, poNumber: first.poNumber,
+      piId: first.piId, piNumber: first.piNumber,
+      vendorId: first.vendorId, vendorName: first.vendorName,
       items,
       invoiceAmount: base.invoiceAmount,
-      taxableAmount: itemTotals ? itemTotals.taxableAmount : round2(data.taxableAmount),
-      gstAmount: itemTotals ? itemTotals.gstAmount : round2(data.gstAmount),
+      taxableAmount: itemTotals.taxableAmount,
+      gstAmount: itemTotals.gstAmount,
       tdsAmount: round2(data.tdsAmount),
       otherCharges: round2(data.otherCharges),
       advancePaid,
@@ -152,7 +202,7 @@ export const vendorInvoiceService = {
       invoiceStatus: doc.fileUrl ? INVOICE_STATUS.RECEIVED : INVOICE_STATUS.DRAFT,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `Invoice created from ${qc.qcNumber}`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `Invoice created from ${uniq(qcs.map((q) => q.qcNumber)).join(', ')}`, actorId: user?._id }],
     });
     return inv;
   },
@@ -171,7 +221,57 @@ export const vendorInvoiceService = {
   },
 
   async getByQc(qcId) {
-    return VendorInvoice.find({ qcId, isDeleted: { $ne: true } }).sort('-createdAt').lean();
+    return VendorInvoice.find({ $or: [{ qcId }, { qcIds: qcId }], isDeleted: { $ne: true } }).sort('-createdAt').lean();
+  },
+
+  /**
+   * QCs that can still be invoiced — PASSED/PARTIAL material QCs with remaining
+   * (uninvoiced) accepted qty. Optional vendorId/poId filters for multi-GRN
+   * selection (one invoice = same vendor + same PO).
+   */
+  async getInvoiceableQcs(query = {}) {
+    const filter = {
+      isDeleted: { $ne: true },
+      qcStatus: { $in: QC_INVOICEABLE },
+      grnId: { $ne: null }, // material QCs only (service QCs have no GRN/PO)
+    };
+    if (query.vendorId) filter.vendorId = query.vendorId;
+    if (query.poId) filter.poId = query.poId;
+    const qcs = await IncomingQC.find(filter).sort('-createdAt').limit(300).lean();
+    const invoicedMap = await invoicedQtyMap(qcs.map((q) => q._id));
+
+    // Batch-load PO items (rate/GST/ordered qty) for the distinct POs.
+    const poIds = uniq(qcs.map((q) => q.poId));
+    const pos = poIds.length ? await VendorPurchaseOrder.find({ _id: { $in: poIds } }).select('items').lean() : [];
+    const poItemsById = Object.fromEntries(pos.map((p) => [String(p._id), p.items || []]));
+    const matchPo = (poItems, qi) => poItems.find((p) =>
+      sameSku(p.skuCode, qi.skuCode) || (p.itemName && qi.itemName && p.itemName === qi.itemName)) || {};
+
+    return qcs.map((qc) => {
+      const poItems = poItemsById[String(qc.poId)] || [];
+      let totalAccepted = 0; let totalPending = 0;
+      const items = (qc.items || []).map((it) => {
+        const po = matchPo(poItems, it);
+        const accepted = round2(it.acceptedQty);
+        const already = round2(invoicedMap[itemKey(qc._id, it.skuCode, it.itemName)] || 0);
+        const pending = Math.max(0, round2(accepted - already));
+        totalAccepted += accepted; totalPending += pending;
+        return {
+          skuId: it.skuId, skuCode: it.skuCode || '', itemName: it.itemName || '', unit: it.unit || 'Pcs',
+          orderedQty: round2(po.quantity), grnReceivedQty: round2(it.receivedQty), receivedQty: round2(it.receivedQty),
+          acceptedQty: accepted, rejectedQty: round2(it.rejectedQty),
+          alreadyInvoicedQty: already, pendingInvoiceQty: pending,
+          rate: round2(po.rate), gstRate: round2(po.gstRate),
+        };
+      });
+      return {
+        _id: qc._id, qcNumber: qc.qcNumber, grnId: qc.grnId, grnNumber: qc.grnNumber,
+        poId: qc.poId, poNumber: qc.poNumber, piId: qc.piId, piNumber: qc.piNumber,
+        vendorId: qc.vendorId, vendorName: qc.vendorName, qcStatus: qc.qcStatus, overallResult: qc.overallResult,
+        totalAccepted: round2(totalAccepted), totalPendingInvoiceQty: round2(totalPending),
+        items,
+      };
+    }).filter((q) => q.totalPendingInvoiceQty > 0); // hide fully-invoiced
   },
 
   async getStats() {
@@ -200,13 +300,16 @@ export const vendorInvoiceService = {
     const { invoiceDocument, debitNoteDocument, items: submittedItems, ...rest } = data;
     Object.assign(inv, rest);
 
-    // When items are supplied, re-derive items + amounts from QC + PO (authoritative).
+    // When items are supplied, re-derive items + amounts from the invoice's QCs +
+    // PO (authoritative), excluding THIS invoice from the already-invoiced tally.
     if (Array.isArray(submittedItems)) {
-      const qc = await IncomingQC.findById(inv.qcId).select('items poId').lean();
-      if (qc?.items?.length) {
+      const qcIdList = uniq(inv.qcIds?.length ? inv.qcIds : (inv.qcId ? [inv.qcId] : []));
+      const qcs = await IncomingQC.find({ _id: { $in: qcIdList }, isDeleted: { $ne: true } }).lean();
+      if (qcs.some((q) => q.items?.length)) {
         const po = inv.poId ? await VendorPurchaseOrder.findById(inv.poId).select('items').lean() : null;
-        const r = computeInvoiceItems(qc.items, po?.items || [], submittedItems);
-        assertExcessAllowed(r.items, opts.allowExcess);
+        const invoicedMap = await invoicedQtyMap(qcIdList, inv._id);
+        const r = buildInvoiceItems(qcs, po?.items || [], submittedItems, invoicedMap);
+        assertWithinPending(r.items, opts.allowExcess);
         inv.items = r.items;
         inv.invoiceAmount = r.totals.invoiceAmount;
         inv.taxableAmount = r.totals.taxableAmount;

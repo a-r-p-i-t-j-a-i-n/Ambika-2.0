@@ -37,15 +37,42 @@ export const parseLeadDays = (leadTime) => {
   return m ? parseInt(m[0], 10) : 0;
 };
 
-/** Server-authoritative line + total computation. */
-const computeLines = (items = []) => {
-  const lines = items.map((it) => {
+const JSL_GST_RATE = 18; // JSL POs are GST @ 18%
+
+/** Server-authoritative line + total computation, branched by PO format. */
+const computeLines = (items = [], format = 'OTHER') => {
+  const lines = (items || []).map((it) => {
     const quantity = Number(it.quantity) || 0;
+    const receivedQty = Number(it.receivedQty) || 0;
+
+    if (format === 'JSL') {
+      // JSL pricing: finalPrice = baseRate − upfront − bonanza; value = qty × finalPrice.
+      const baseRate = Number(it.baseRate) || 0;
+      const upfrontDiscount = Number(it.upfrontDiscount) || 0;
+      const bonanzaDiscount = Number(it.bonanzaDiscount) || 0;
+      const finalPrice = round2(baseRate - upfrontDiscount - bonanzaDiscount);
+      const value = round2(quantity * finalPrice);
+      const taxAmount = round2(value * JSL_GST_RATE / 100);
+      const grade = (it.grade || '').trim();
+      const width = (it.width || '').trim();
+      const finish = (it.finish || '').trim();
+      const description = [grade, width, finish].filter(Boolean).join(' ') || (it.itemName || 'JSL Item');
+      return {
+        // canonical fields (keep GRN/inventory working: rate=finalPrice, taxable=value)
+        itemName: description,
+        skuCode: it.skuCode || '', skuId: it.skuId || undefined,
+        quantity, unit: it.unit || 'Kgs', rate: finalPrice, gstRate: JSL_GST_RATE,
+        taxableAmount: value, taxAmount, totalAmount: round2(value + taxAmount),
+        // JSL-specific
+        grade, width, finish, baseRate, upfrontDiscount, bonanzaDiscount, finalPrice, value,
+        receivedQty, pendingQty: Math.max(0, round2(quantity - receivedQty)),
+      };
+    }
+
     const rate = Number(it.rate) || 0;
     const gstRate = Number(it.gstRate) || 0;
     const taxableAmount = round2(quantity * rate);
     const taxAmount = round2(taxableAmount * gstRate / 100);
-    const receivedQty = Number(it.receivedQty) || 0;
     return {
       itemName: it.itemName,
       skuCode: it.skuCode || '',
@@ -86,7 +113,7 @@ const PAGE = { w: 595.28, h: 841.89, m: 40 };
 const INR = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
-export const buildPoPdfBuffer = (po, company = {}) => new Promise((resolve, reject) => {
+export const buildOtherPoPdfBuffer = (po, company = {}) => new Promise((resolve, reject) => {
   try {
     const doc = new PDFDocument({ size: 'A4', margin: PAGE.m });
     const chunks = [];
@@ -257,9 +284,8 @@ export const buildPoPdfBuffer = (po, company = {}) => new Promise((resolve, reje
     doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('TERMS & CONDITIONS', PAGE.m, y); y += 12;
     doc.font('Helvetica').fontSize(7.5).fill(navy).text(
       po.remarks ||
-      '1. Please mention PO number on all invoices, challans and correspondence.\n' +
-      '2. Material must conform to approved quotation/specifications; rejections will be returned at supplier cost.\n' +
-      '3. Delivery within the agreed lead time; delays must be communicated in advance.',
+      '1. Kindly sign and fax back to mark a token of your confirmation.\n' +
+      '2. Kindly mention the purchase order number on the tax invoice. Extra qty other than PO will not be accepted.',
       PAGE.m, y, { width: W - 200 },
     );
 
@@ -273,6 +299,181 @@ export const buildPoPdfBuffer = (po, company = {}) => new Promise((resolve, reje
 });
 
 // ─────────────────────────────────────────────────────────────
+// PDF — JSL format (grade/width/finish + discount pricing)
+// ─────────────────────────────────────────────────────────────
+export const buildJslPoPdfBuffer = (po, company = {}) => new Promise((resolve, reject) => {
+  try {
+    const doc = new PDFDocument({ size: 'A4', margin: PAGE.m });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+
+    const W = PAGE.w - PAGE.m * 2;
+    const navy = '#0b2545';
+    const blue = '#1d4ed8';
+    const line = '#dbe4f3';
+
+    // ── Header band ──
+    doc.rect(0, 0, PAGE.w, 86).fill(navy);
+    doc.fill('#ffffff').font('Helvetica-Bold').fontSize(18).text(company.name || env.COMPANY_NAME, PAGE.m, 18);
+    doc.font('Helvetica').fontSize(8.5).fill('#cdd9f0');
+    const headerBits = [company.address || env.COMPANY_ADDRESS, company.gstin ? `GSTIN: ${company.gstin}` : '', company.email || env.COMPANY_EMAIL, company.phone || env.COMPANY_PHONE]
+      .filter(Boolean).join('   •   ');
+    doc.text(headerBits || ' ', PAGE.m, 44, { width: W - 150 });
+    doc.font('Helvetica-Bold').fontSize(15).fill('#ffffff').text('PURCHASE ORDER', PAGE.m, 40, { width: W, align: 'right' });
+
+    let y = 104;
+
+    // ── PO info + supplier blocks ──
+    const half = W / 2 - 8;
+    const boxTop = y;
+    const leftX = PAGE.m;
+    const rightBoxX = PAGE.m + half + 16;
+    const leftInnerX = leftX + 10;
+    const rightInnerX = rightBoxX + 10;
+    const innerW = half - 20;
+
+    let ly = boxTop + 10;
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('PO DETAILS', leftInnerX, ly); ly += 14;
+    doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(po.poNumber || '', leftInnerX, ly, { width: innerW }); ly += 17;
+    doc.font('Helvetica').fontSize(8.5).fill(navy);
+    [
+      `PO Date: ${fmtDate(po.poDate)}`,
+      `Indent No: ${po.indentNumber || '—'}`,
+      `GSTIN: ${po.vendorGST || '—'}`,
+      `Delivery Terms: ${po.deliveryTerms || '—'}`,
+      `Payment Terms: ${po.paymentTerms || '—'}`,
+    ].forEach((t) => { doc.text(t, leftInnerX, ly, { width: innerW }); ly += 13; });
+    const leftBottom = ly;
+
+    const vLabelW = 52;
+    const vValX = rightInnerX + vLabelW + 8;
+    const vValW = innerW - vLabelW - 8;
+    let ry = boxTop + 10;
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('SUPPLIER', rightInnerX, ry); ry += 14;
+    doc.font('Helvetica-Bold').fontSize(10.5).fill(navy);
+    const vNameH = doc.heightOfString(po.vendorName || '—', { width: innerW });
+    doc.text(po.vendorName || '—', rightInnerX, ry, { width: innerW }); ry += vNameH + 6;
+    const vRow = (label, value) => {
+      doc.font('Helvetica').fontSize(8.5);
+      doc.fill('#475a8a').text(label, rightInnerX, ry, { width: vLabelW, lineBreak: false });
+      doc.fill('#475a8a').text(':', rightInnerX + vLabelW, ry);
+      const vh = doc.fill(navy).heightOfString(value || '—', { width: vValW });
+      doc.text(value || '—', vValX, ry, { width: vValW });
+      ry += Math.max(11, vh) + 2;
+    };
+    vRow('GST No.', po.vendorGST || '—');
+    vRow('PAN No.', po.vendorPAN || '—');
+    ry += 4;
+    vRow('Address', po.vendorAddress || '—');
+    vRow('Phone No.', po.vendorPhone || '—');
+    vRow('Email', po.vendorEmail || '—');
+    const rightBottom = ry;
+
+    const boxH = Math.max(leftBottom, rightBottom) - boxTop + 10;
+    doc.roundedRect(leftX, boxTop, half, boxH, 6).stroke(line);
+    doc.roundedRect(rightBoxX, boxTop, half, boxH, 6).stroke(line);
+    y = boxTop + boxH + 16;
+
+    // ── Items table (JSL columns) ──
+    const cols = [
+      { key: 'sr',       label: 'SR',       w: 22, align: 'center' },
+      { key: 'grade',    label: 'GRADE',    w: 58, align: 'left' },
+      { key: 'width',    label: 'WIDTH',    w: 42, align: 'center' },
+      { key: 'finish',   label: 'FINISH',   w: 50, align: 'left' },
+      { key: 'qty',      label: 'QTY',      w: 44, align: 'right' },
+      { key: 'unit',     label: 'UNITS',    w: 32, align: 'center' },
+      { key: 'base',     label: 'BASE RATE', w: 50, align: 'right' },
+      { key: 'upfront',  label: 'UPFRONT DISC.', w: 52, align: 'right' },
+      { key: 'bonanza',  label: 'BONANZA DISC.', w: 52, align: 'right' },
+      { key: 'final',    label: 'FINAL PRICE', w: 50, align: 'right' },
+      { key: 'value',    label: 'VALUE',    w: 62, align: 'right' },
+    ];
+    const HHT = 26; // header height (two-line labels)
+    const drawHeaderRow = () => {
+      doc.rect(PAGE.m, y, W, HHT).fill(navy);
+      let x = PAGE.m;
+      doc.font('Helvetica-Bold').fontSize(6.5).fill('#ffffff');
+      cols.forEach((c) => { doc.text(c.label, x + 2, y + 6, { width: c.w - 4, align: c.align }); x += c.w; });
+      y += HHT;
+    };
+    drawHeaderRow();
+
+    const PADY = 5;
+    (po.items || []).forEach((it, i) => {
+      const gradeStr = it.grade || it.itemName || '';
+      doc.font('Helvetica').fontSize(8);
+      const gradeH = doc.heightOfString(gradeStr, { width: cols[1].w - 4 });
+      const rowH = Math.max(18, gradeH + PADY * 2 - 2);
+      if (y + rowH > PAGE.h - 150) { doc.addPage(); y = PAGE.m; drawHeaderRow(); }
+      if (i % 2 === 1) doc.rect(PAGE.m, y, W, rowH).fill('#f8fafc');
+
+      const cells = {
+        sr: String(i + 1),
+        grade: gradeStr,
+        width: it.width || '—',
+        finish: it.finish || '—',
+        qty: String(it.quantity ?? 0),
+        unit: it.unit || 'Kgs',
+        base: Number(it.baseRate || 0).toFixed(2),
+        upfront: Number(it.upfrontDiscount || 0).toFixed(2),
+        bonanza: Number(it.bonanzaDiscount || 0).toFixed(2),
+        final: Number(it.finalPrice || 0).toFixed(2),
+        value: Number(it.value || 0).toFixed(2),
+      };
+      let x = PAGE.m;
+      cols.forEach((c) => {
+        doc.font('Helvetica').fontSize(8).fill(navy).text(cells[c.key], x + 2, y + PADY, { width: c.w - 4, align: c.align, ellipsis: true });
+        x += c.w;
+      });
+      doc.moveTo(PAGE.m, y + rowH).lineTo(PAGE.m + W, y + rowH).strokeColor(line).lineWidth(0.5).stroke();
+      y += rowH;
+    });
+
+    // ── Totals ──
+    y += 10;
+    const totX = PAGE.m + W - 220;
+    const totRow = (label, value, bold = false) => {
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 10 : 8.5).fill(navy);
+      doc.text(label, totX, y, { width: 120, align: 'right' });
+      doc.text(value, totX + 124, y, { width: 96, align: 'right' });
+      y += bold ? 18 : 14;
+    };
+    totRow('Total Taxable Value:', INR(po.totalTaxableValue));
+    totRow('GST @ 18%:', INR(po.totalGSTAmount));
+    doc.moveTo(totX, y).lineTo(PAGE.m + W, y).strokeColor(navy).lineWidth(1).stroke(); y += 5;
+    totRow('Total Amount:', INR(po.grandTotal), true);
+
+    // ── Terms & signature footer ──
+    y += 12;
+    if (y > PAGE.h - 150) { doc.addPage(); y = PAGE.m; }
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('TERMS & CONDITIONS', PAGE.m, y); y += 12;
+    doc.font('Helvetica').fontSize(7.5).fill(navy).text(
+      po.remarks || 'This order is under Price Protection Policy till 30th June 2026.',
+      PAGE.m, y, { width: W - 200 },
+    );
+
+    doc.font('Helvetica-Bold').fontSize(9).fill(navy)
+      .text(`For ${company.name || env.COMPANY_NAME}`, PAGE.m + W - 180, y + 6, { width: 180, align: 'center' });
+    doc.font('Helvetica').fontSize(8)
+      .text('Authorized Signatory', PAGE.m + W - 180, y + 58, { width: 180, align: 'center' });
+
+    // ── Jurisdiction / computer-generated note ──
+    doc.font('Helvetica-Bold').fontSize(8).fill(navy)
+      .text('SUBJECT TO MUMBAI JURISDICTION', PAGE.m, PAGE.h - 60, { width: W, align: 'center' });
+    doc.font('Helvetica').fontSize(7.5).fill('#475a8a')
+      .text('This is a computer Generated Purchase Order, no signature required.', PAGE.m, PAGE.h - 48, { width: W, align: 'center' });
+
+    doc.end();
+  } catch (err) { reject(err); }
+});
+
+// Dispatch to the right layout based on the PO's format.
+const buildPoPdfBuffer = (po, company = {}) => (
+  po?.poFormatType === 'JSL' ? buildJslPoPdfBuffer(po, company) : buildOtherPoPdfBuffer(po, company)
+);
+
+// ─────────────────────────────────────────────────────────────
 // Service
 // ─────────────────────────────────────────────────────────────
 export const purchaseOrderService = {
@@ -284,15 +485,21 @@ export const purchaseOrderService = {
       throw new AppError('Purchase Order can only be created after the quotation is approved (Step 1.3)', 400);
     }
 
-    // Rule: one active PO per indent — only a CANCELLED PO frees the indent to
-    // create another. Draft/approved/released/received POs all block re-creation.
+    // Rule: one active PO per vendor on an indent. When the indent approved
+    // multiple vendors (Step 1.3), each approved vendor may have its own PO, so
+    // the guard is scoped to (indent + vendor). For legacy single-vendor indents
+    // the scope collapses to one active PO per indent. Only a CANCELLED PO frees
+    // the slot — draft/approved/released/received POs all block re-creation.
+    const isMultiVendor = (indent.quotationApprovalStep?.approvedVendors?.length || 0) > 0;
     const activePo = await VendorPurchaseOrder.findOne({
       indentId: indent._id,
+      ...(isMultiVendor ? { vendorId: data.vendorId } : {}),
       isDeleted: { $ne: true },
       poStatus: { $ne: PO_STATUS.CANCELLED },
-    }).select('poNumber poStatus').lean();
+    }).select('poNumber poStatus vendorName').lean();
     if (activePo) {
-      throw new AppError(`Indent ${indent.indentNumber} already has an active PO (${activePo.poNumber}). Cancel it before creating a new one.`, 400);
+      const scope = isMultiVendor ? `vendor ${activePo.vendorName || ''}`.trim() : `Indent ${indent.indentNumber}`;
+      throw new AppError(`${scope} already has an active PO (${activePo.poNumber}). Cancel it before creating a new one.`, 400);
     }
 
     const party = await Party.findOne({ _id: data.vendorId, isDeleted: { $ne: true } }).lean();
@@ -301,11 +508,13 @@ export const purchaseOrderService = {
     // Finished Goods are sell-side only — never purchasable.
     await assertPurchasable(data.items);
 
-    const { lines, totals } = computeLines(data.items);
+    const poFormatType = data.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
+    const { lines, totals } = computeLines(data.items, poFormatType);
     const poNumber = await generateVendorPoNumber(data.poDate || new Date());
 
     const po = await VendorPurchaseOrder.create({
       poNumber,
+      poFormatType,
       poDate: data.poDate || new Date(),
       indentId: indent._id,
       indentNumber: indent.indentNumber,
@@ -326,9 +535,20 @@ export const purchaseOrderService = {
 
     // Move the indent forward (linkage for future Follow-up / GRN). Non-fatal.
     try {
+      const update = {
+        $set: { overallStatus: INDENT_OVERALL_STATUS.PO_READY },
+        $push: { activityTimeline: { action: 'PO_CREATED', description: `PO ${poNumber} created`, actorId: user?._id, timestamp: new Date() } },
+      };
+      // Multi-vendor: stamp the PO linkage onto the matching approved vendor so
+      // the indent reflects which vendor still needs a PO.
+      if (isMultiVendor) {
+        update.$set['quotationApprovalStep.approvedVendors.$[v].poId'] = po._id;
+        update.$set['quotationApprovalStep.approvedVendors.$[v].poNumber'] = poNumber;
+      }
       await PurchaseIndent.updateOne(
         { _id: indent._id },
-        { $set: { overallStatus: INDENT_OVERALL_STATUS.PO_READY }, $push: { activityTimeline: { action: 'PO_CREATED', description: `PO ${poNumber} created`, actorId: user?._id, timestamp: new Date() } } },
+        update,
+        isMultiVendor ? { arrayFilters: [{ 'v.vendorId': party._id }] } : {},
       );
     } catch (err) { logger.error(`[po] indent status update failed: ${err.message}`); }
 
@@ -387,10 +607,10 @@ export const purchaseOrderService = {
       Object.assign(po, { vendorId: party._id }, vendorSnapshot(party, data));
     }
     const { vendorId: _v, items, ...rest } = data;
-    Object.assign(po, rest);
+    Object.assign(po, rest); // applies poFormatType (if sent) before recompute
     if (items) {
       await assertPurchasable(items);
-      const { lines, totals } = computeLines(items);
+      const { lines, totals } = computeLines(items, po.poFormatType);
       po.items = lines;
       Object.assign(po, totals);
     }

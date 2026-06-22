@@ -1,11 +1,24 @@
-import VendorVoucher, { VOUCHER_STATUS } from './voucher.model.js';
+import fs from 'fs';
+import path from 'path';
+import VendorVoucher, { VOUCHER_STATUS, VOUCHER_TYPE } from './voucher.model.js';
 import VendorInvoice, { INVOICE_STATUS } from '../vendor-invoice/vendorInvoice.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
-import { generateVoucherNumber } from '../../../utils/docNumberGenerator.js';
+import { generatePurchaseVoucherNumber, generateExpenseVoucherNumber } from '../../../utils/docNumberGenerator.js';
+import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
+import { buildVoucherPdfBuffer } from './voucher.pdf.js';
 import { logger } from '../../../utils/logger.js';
 
+const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
+
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+// Expense total: basic + freight + packing + other + tax + TCS − TDS − advance.
+const computeExpenseTotal = (d = {}) => round2(
+  round2(d.basicValue) + round2(d.freightCharges) + round2(d.packingForwardingCharges)
+  + round2(d.otherCharges) + round2(d.taxAmount) + round2(d.tcsAmount)
+  - round2(d.tdsAmount) - round2(d.advanceAmount),
+);
 
 const findOrThrow = async (id) => {
   const v = await VendorVoucher.findOne({ _id: id, isDeleted: { $ne: true } });
@@ -14,8 +27,10 @@ const findOrThrow = async (id) => {
 };
 
 export const voucherService = {
-  // Rule 1 & 2: voucher only from an approved (payment-pending) invoice.
   async create(data, user) {
+    if (data.voucherType === VOUCHER_TYPE.EXPENSE) return this.createExpense(data, user);
+
+    // ── PURCHASE — voucher only from an approved (payment-pending) invoice. ──
     const inv = await VendorInvoice.findOne({ _id: data.invoiceId, isDeleted: { $ne: true } });
     if (!inv) throw new AppError('Vendor invoice not found', 404);
     if (inv.invoiceStatus !== INVOICE_STATUS.PAYMENT_PENDING) {
@@ -25,13 +40,12 @@ export const voucherService = {
     if (existing) throw new AppError(`A voucher (${existing.voucherNumber}) already exists for this invoice`, 400);
 
     const netPayableAmount = round2(inv.netPayableAmount);
-    const voucherNumber = await generateVoucherNumber(data.voucherDate || new Date());
+    const voucherNumber = await generatePurchaseVoucherNumber(data.voucherDate || new Date());
 
     // Step 1.11 is voucher passing / approval only — NO payment is recorded here.
-    // paidAmount stays 0 and balance = net payable; the actual payment is recorded
-    // in Step 1.13 Final Payment.
     const voucher = await VendorVoucher.create({
       voucherNumber,
+      voucherType: VOUCHER_TYPE.PURCHASE,
       voucherDate: data.voucherDate || new Date(),
       invoiceId: inv._id, invoiceNumber: inv.invoiceNumber,
       vendorId: inv.vendorId, vendorName: inv.vendorName,
@@ -45,7 +59,50 @@ export const voucherService = {
       voucherStatus: VOUCHER_STATUS.DRAFT,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `Voucher created for ${inv.invoiceNumber}`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `Purchase voucher created for ${inv.invoiceNumber}`, actorId: user?._id }],
+    });
+    return voucher;
+  },
+
+  // ── EXPENSE — direct company expense (no invoice/PO/GRN/QC). ──
+  async createExpense(data, user) {
+    if (!data.expenseCategory) throw new AppError('Expense category is required', 400);
+    const total = computeExpenseTotal(data);
+    const voucherNumber = await generateExpenseVoucherNumber(data.voucherDate || new Date());
+
+    const voucher = await VendorVoucher.create({
+      voucherNumber,
+      voucherType: VOUCHER_TYPE.EXPENSE,
+      voucherDate: data.voucherDate || new Date(),
+      vendorName: data.partyName || '', // mirror so list search/display works
+      partyName: data.partyName || '',
+      expenseCategory: data.expenseCategory,
+      expenseInvoiceNo: data.expenseInvoiceNo || '',
+      expenseInvoiceDate: data.expenseInvoiceDate || null,
+      invoiceDocument: data.invoiceDocument?.fileUrl
+        ? { fileUrl: data.invoiceDocument.fileUrl, fileName: data.invoiceDocument.fileName || '' }
+        : { fileUrl: '', fileName: '' },
+      basicValue: round2(data.basicValue),
+      freightCharges: round2(data.freightCharges),
+      packingForwardingCharges: round2(data.packingForwardingCharges),
+      otherCharges: round2(data.otherCharges),
+      taxAmount: round2(data.taxAmount),
+      tcsAmount: round2(data.tcsAmount),
+      tdsAmount: round2(data.tdsAmount),
+      advanceAmount: round2(data.advanceAmount),
+      otherReason: data.otherReason || '',
+      paymentTerms: data.paymentTerms || '',
+      dueDate: data.dueDate || null,
+      preparedBy: data.preparedBy || '',
+      totalAmountPayable: total,
+      // Downstream (Tally 1.12 + Final Payment 1.13) read net/balance.
+      netPayableAmount: total,
+      paidAmount: 0,
+      balanceAmount: total,
+      voucherStatus: VOUCHER_STATUS.DRAFT,
+      remarks: data.remarks || '',
+      createdBy: user?._id,
+      activityTimeline: [{ action: 'CREATE', description: `Expense voucher created (${data.expenseCategory})`, actorId: user?._id }],
     });
     return voucher;
   },
@@ -63,7 +120,7 @@ export const voucherService = {
       if (list.length) base.voucherStatus = { $nin: list };
     }
     const features = new ApiFeatures(VendorVoucher.find(base), rest)
-      .filter().search(['voucherNumber', 'invoiceNumber', 'vendorName', 'referenceNumber'])
+      .filter().search(['voucherNumber', 'invoiceNumber', 'vendorName', 'partyName', 'expenseCategory', 'referenceNumber'])
       .sort().select().paginate();
     return features.exec();
   },
@@ -102,6 +159,11 @@ export const voucherService = {
     // Never accept payment/status mutations here — those belong to Step 1.13.
     const { paidAmount, balanceAmount, voucherStatus, ...rest } = data;
     Object.assign(v, rest);
+    // Expense vouchers: recompute the total from the (possibly edited) amounts.
+    if (v.voucherType === VOUCHER_TYPE.EXPENSE) {
+      v.totalAmountPayable = computeExpenseTotal(v);
+      v.netPayableAmount = v.totalAmountPayable;
+    }
     v.paidAmount = 0;
     v.balanceAmount = round2(v.netPayableAmount);
     v.updatedBy = user?._id;
@@ -128,15 +190,48 @@ export const voucherService = {
     v.activityTimeline.push({ action: 'POST', description: 'Voucher passed / approved — pending final payment', actorId: user?._id });
     await v.save();
 
-    // Link the voucher onto the invoice (do NOT mark it paid — that's Step 1.13).
-    try {
-      await VendorInvoice.updateOne(
-        { _id: v.invoiceId },
-        { $set: { voucherId: v._id, voucherNumber: v.voucherNumber } },
-      );
-    } catch (err) { logger.error(`[voucher] invoice link failed for ${v.invoiceId}: ${err.message}`); }
+    // Link the voucher onto the invoice (purchase only; expense has no invoice).
+    if (v.invoiceId) {
+      try {
+        await VendorInvoice.updateOne(
+          { _id: v.invoiceId },
+          { $set: { voucherId: v._id, voucherNumber: v.voucherNumber } },
+        );
+      } catch (err) { logger.error(`[voucher] invoice link failed for ${v.invoiceId}: ${err.message}`); }
+    }
 
     return v;
+  },
+
+  /** Generate the voucher PDF (purchase vs expense layout), store it, persist the URL. */
+  async generatePdf(id) {
+    const v = await VendorVoucher.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
+    if (!v) throw new AppError('Voucher not found', 404);
+
+    let company = {};
+    try {
+      const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
+      const s = await CompanySettings.findOne().lean();
+      if (s) company = { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, phone: s.companyPhone, email: s.companyEmail };
+    } catch { /* fall back to env */ }
+
+    const buffer = await buildVoucherPdfBuffer(v, company);
+    const fileName = `${String(v.voucherNumber || 'VOUCHER').replace(/[^\w.-]/g, '_')}.pdf`;
+
+    let voucherPdfUrl;
+    if (s3Enabled) {
+      const key = buildKey('vouchers', fileName);
+      await uploadBuffer({ buffer, key, contentType: 'application/pdf' });
+      voucherPdfUrl = `${SERVER_BASE}/api/v1/uploads/file?key=${encodeURIComponent(key)}`;
+    } else {
+      const dir = path.resolve(process.cwd(), 'uploads', 'vouchers');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const fp = path.join(dir, `${Date.now()}-${fileName}`);
+      fs.writeFileSync(fp, buffer);
+      voucherPdfUrl = `${SERVER_BASE}/uploads/vouchers/${path.basename(fp)}`;
+    }
+    await VendorVoucher.updateOne({ _id: id }, { $set: { voucherPdfUrl, voucherPdfFileName: fileName } });
+    return { voucherPdfUrl, voucherPdfFileName: fileName };
   },
 
   async cancel(id, data, user) {

@@ -51,8 +51,13 @@ const FollowUpDetail = () => {
     );
   }
 
-  const isPending = ['PENDING', 'RESCHEDULED'].includes(fu.followUpStatus);
+  const isPending = fu.followUpStatus === 'PENDING';
+  const isRescheduled = fu.followUpStatus === 'RESCHEDULED';
   const isDone = fu.followUpStatus === 'DONE';
+  const isActive = isPending || isRescheduled; // still chasing — can record a cycle
+  // Ready For GRN requires a confirmed Final Material Date. A follow-up with only
+  // a Next Follow-up Date stays active (RESCHEDULED) and cannot move to GRN.
+  const canReadyForGrn = isDone && !!fu.finalMaterialDate; // legacy DONE records
 
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
@@ -82,9 +87,13 @@ const FollowUpDetail = () => {
               View PO
             </Button>
           )}
-          {isPending && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setDoneOpen(true)}>Mark Done</Button>}
-          {isPending && <Button variant="outlined" startIcon={<CalendarClock size={16} />} onClick={() => setRescheduleOpen(true)}>Reschedule</Button>}
-          {isDone && <Button variant="contained" startIcon={<PackageCheck size={16} />} onClick={() => setReadyOpen(true)}>Mark Ready For GRN</Button>}
+          {isActive && (
+            <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setDoneOpen(true)}>
+              {isRescheduled ? 'Follow-up Again' : 'Mark Done'}
+            </Button>
+          )}
+          {isActive && <Button variant="outlined" startIcon={<CalendarClock size={16} />} onClick={() => setRescheduleOpen(true)}>Reschedule</Button>}
+          {canReadyForGrn && <Button variant="contained" startIcon={<PackageCheck size={16} />} onClick={() => setReadyOpen(true)}>Mark Ready For GRN</Button>}
         </Box>
       </Box>
 
