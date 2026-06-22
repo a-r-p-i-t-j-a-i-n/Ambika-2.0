@@ -11,6 +11,8 @@ import {
   updateIndentSchema,
   approveIndentSchema,
   rejectIndentSchema,
+  bulkApproveSchema,
+  bulkRejectSchema,
   receiveQuoteSchema,
   quoteComparativeSchema,
   approveQuotationSchema,
@@ -26,6 +28,10 @@ router.route('/')
   .post(validate(createIndentSchema), c.create);
 
 router.get('/stats', c.getStats);
+
+// Bulk actions — declared before '/:id' routes so they aren't shadowed.
+router.post('/bulk-approve', validate(bulkApproveSchema), c.bulkApprove);
+router.post('/bulk-reject',  validate(bulkRejectSchema),  c.bulkReject);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)

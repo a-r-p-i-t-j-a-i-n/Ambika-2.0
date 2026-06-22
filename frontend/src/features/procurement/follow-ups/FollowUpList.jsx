@@ -84,13 +84,16 @@ const FollowUpList = () => {
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
-    const isPending = ['PENDING', 'RESCHEDULED'].includes(r.followUpStatus);
-    if (isPending) {
+    const isRescheduled = r.followUpStatus === 'RESCHEDULED';
+    const isActive = ['PENDING', 'RESCHEDULED'].includes(r.followUpStatus);
+    if (isActive) {
       a.push({ key: 'edit', label: 'Edit Pending', icon: <Pencil size={16} />, fn: () => onEdit(r) });
-      a.push({ key: 'done', label: 'Mark Done', icon: <CheckCircle2 size={16} />, fn: () => onDone(r) });
+      // RESCHEDULED follow-ups stay active — "Follow-up Again" reopens the cycle.
+      a.push({ key: 'done', label: isRescheduled ? 'Follow-up Again' : 'Mark Done', icon: <CheckCircle2 size={16} />, fn: () => onDone(r) });
       a.push({ key: 'reschedule', label: 'Reschedule', icon: <CalendarClock size={16} />, fn: () => onReschedule(r) });
     }
-    if (r.followUpStatus === 'DONE') {
+    // Ready For GRN only once delivery is confirmed via a Final Material Date.
+    if (r.followUpStatus === 'DONE' && r.finalMaterialDate) {
       a.push({ key: 'ready', label: 'Mark Ready For GRN', icon: <PackageCheck size={16} />, fn: () => onReady(r) });
     }
     return a;

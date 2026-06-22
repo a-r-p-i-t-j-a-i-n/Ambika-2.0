@@ -39,6 +39,14 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/indents/${id}/reject`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['Indent', 'IndentStats', { type: 'Indent', id }],
     }),
+    bulkApproveIndents: builder.mutation({
+      query: (body) => ({ url: '/procurement/indents/bulk-approve', method: 'POST', body }),
+      invalidatesTags: ['Indent', 'IndentStats'],
+    }),
+    bulkRejectIndents: builder.mutation({
+      query: (body) => ({ url: '/procurement/indents/bulk-reject', method: 'POST', body }),
+      invalidatesTags: ['Indent', 'IndentStats'],
+    }),
     receiveQuote: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/indents/${id}/receive-quote`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['Indent', 'IndentStats', { type: 'Indent', id }],
@@ -230,6 +238,36 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', { type: 'Grn', id }],
     }),
 
+    // ── Service Completions (Step 1.8A — internal-service indents) ──
+    getServiceCompletions: builder.query({
+      query: (params = {}) => ({ url: '/procurement/service-completions', params }),
+      providesTags: ['ServiceCompletion'],
+    }),
+    getServiceCompletionStats: builder.query({
+      query: () => '/procurement/service-completions/stats',
+      providesTags: ['ServiceCompletionStats'],
+    }),
+    getServiceCompletionById: builder.query({
+      query: (id) => `/procurement/service-completions/${id}`,
+      providesTags: (_r, _e, id) => [{ type: 'ServiceCompletion', id }],
+    }),
+    createServiceCompletion: builder.mutation({
+      query: (body) => ({ url: '/procurement/service-completions', method: 'POST', body }),
+      invalidatesTags: ['ServiceCompletion', 'ServiceCompletionStats', 'Indent', 'IndentStats'],
+    }),
+    updateServiceCompletion: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/service-completions/${id}`, method: 'PATCH', body }),
+      invalidatesTags: (_r, _e, { id }) => ['ServiceCompletion', 'ServiceCompletionStats', { type: 'ServiceCompletion', id }],
+    }),
+    completeServiceCompletion: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/service-completions/${id}/complete`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { id }) => ['ServiceCompletion', 'ServiceCompletionStats', 'Indent', 'IndentStats', { type: 'ServiceCompletion', id }],
+    }),
+    cancelServiceCompletion: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/service-completions/${id}/cancel`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { id }) => ['ServiceCompletion', 'ServiceCompletionStats', { type: 'ServiceCompletion', id }],
+    }),
+
     // ── Incoming QC (Step 1.9) ───────────────────────────────
     getIncomingQcs: builder.query({
       query: (params = {}) => ({ url: '/procurement/incoming-qc', params }),
@@ -249,7 +287,7 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     createIncomingQc: builder.mutation({
       query: (body) => ({ url: '/procurement/incoming-qc', method: 'POST', body }),
-      invalidatesTags: ['IncomingQc', 'IncomingQcStats', 'Grn'],
+      invalidatesTags: ['IncomingQc', 'IncomingQcStats', 'Grn', 'ServiceCompletion', 'ServiceCompletionStats'],
     }),
     updateIncomingQc: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/incoming-qc/${id}`, method: 'PATCH', body }),
@@ -257,7 +295,7 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     completeIncomingQc: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/incoming-qc/${id}/complete`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['IncomingQc', 'IncomingQcStats', 'Grn', 'GrnStats', 'InventoryStock', 'InventoryMovement', { type: 'IncomingQc', id }],
+      invalidatesTags: (_r, _e, { id }) => ['IncomingQc', 'IncomingQcStats', 'Grn', 'GrnStats', 'InventoryStock', 'InventoryMovement', 'ServiceCompletion', 'ServiceCompletionStats', 'Indent', 'IndentStats', { type: 'IncomingQc', id }],
     }),
     cancelIncomingQc: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/incoming-qc/${id}/cancel`, method: 'POST', body }),
@@ -280,6 +318,10 @@ export const procurementApi = baseApi.injectEndpoints({
     getVendorInvoicesByQc: builder.query({
       query: (qcId) => `/procurement/vendor-invoices/by-qc/${qcId}`,
       providesTags: (_r, _e, qcId) => [{ type: 'VendorInvoice', id: `qc-${qcId}` }, 'VendorInvoice'],
+    }),
+    getInvoiceableQcs: builder.query({
+      query: (params = {}) => ({ url: '/procurement/vendor-invoices/invoiceable-qcs', params }),
+      providesTags: ['VendorInvoice', 'IncomingQc'],
     }),
     createVendorInvoice: builder.mutation({
       query: (body) => ({ url: '/procurement/vendor-invoices', method: 'POST', body }),
@@ -318,6 +360,10 @@ export const procurementApi = baseApi.injectEndpoints({
     createVoucher: builder.mutation({
       query: (body) => ({ url: '/procurement/vouchers', method: 'POST', body }),
       invalidatesTags: ['Voucher', 'VoucherStats', 'VendorInvoice'],
+    }),
+    generateVoucherPdf: builder.mutation({
+      query: ({ id }) => ({ url: `/procurement/vouchers/${id}/pdf`, method: 'POST' }),
+      invalidatesTags: (_r, _e, { id }) => ['Voucher', { type: 'Voucher', id }],
     }),
     updateVoucher: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vouchers/${id}`, method: 'PATCH', body }),
@@ -417,6 +463,8 @@ export const {
   useSubmitIndentMutation,
   useApproveIndentMutation,
   useRejectIndentMutation,
+  useBulkApproveIndentsMutation,
+  useBulkRejectIndentsMutation,
   useReceiveQuoteMutation,
   useQuoteComparativeMutation,
   useApproveQuotationMutation,
@@ -452,6 +500,13 @@ export const {
   useGetAdvancePaymentsByPiQuery,
   useCreateAdvancePaymentMutation,
 
+  useGetServiceCompletionsQuery,
+  useGetServiceCompletionStatsQuery,
+  useGetServiceCompletionByIdQuery,
+  useCreateServiceCompletionMutation,
+  useUpdateServiceCompletionMutation,
+  useCompleteServiceCompletionMutation,
+  useCancelServiceCompletionMutation,
   useGetGrnsQuery,
   useGetGrnStatsQuery,
   useGetGrnByIdQuery,
@@ -474,6 +529,7 @@ export const {
   useGetVendorInvoiceStatsQuery,
   useGetVendorInvoiceByIdQuery,
   useGetVendorInvoicesByQcQuery,
+  useGetInvoiceableQcsQuery,
   useCreateVendorInvoiceMutation,
   useUpdateVendorInvoiceMutation,
   useApproveVendorInvoiceMutation,
@@ -483,6 +539,7 @@ export const {
   useGetVoucherByIdQuery,
   useGetVouchersByInvoiceQuery,
   useCreateVoucherMutation,
+  useGenerateVoucherPdfMutation,
   useUpdateVoucherMutation,
   usePostVoucherMutation,
   useCancelVoucherMutation,

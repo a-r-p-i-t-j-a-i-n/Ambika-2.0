@@ -19,6 +19,8 @@ dayjs.extend(customParseFormat);
  *  - onChange   : called with an ISO 'YYYY-MM-DD' string, or '' when cleared
  *  - label, fullWidth, required, disabled, size, sx
  *  - error, helperText → merged with the picker's own invalid-date validation
+ *  - openOnClick → also open the calendar when the input field itself is clicked
+ *                  (not only the calendar icon)
  *  - ...rest    → forwarded to the underlying TextField via slotProps
  */
 
@@ -55,9 +57,11 @@ const DateInputDDMMYYYY = ({
   sx,
   error: errorProp = false,
   helperText = '',
+  openOnClick = false,
   ...rest
 }) => {
   const [invalid, setInvalid] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
 
   const handleChange = (val, context) => {
     // val is a dayjs object (or null). context.validationError flags bad input.
@@ -78,6 +82,7 @@ const DateInputDDMMYYYY = ({
         onChange={handleChange}
         format={DISPLAY}
         disabled={disabled}
+        {...(openOnClick ? { open, onOpen: () => setOpen(true), onClose: () => setOpen(false) } : {})}
         slotProps={{
           textField: {
             size,
@@ -87,6 +92,8 @@ const DateInputDDMMYYYY = ({
             error: showError,
             helperText: helper,
             placeholder: 'dd/mm/yyyy',
+            // Open the calendar when the input field is clicked (not just the icon).
+            ...(openOnClick && !disabled ? { onClick: () => setOpen(true) } : {}),
             ...rest,
           },
           field: { clearable: !required },

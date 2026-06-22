@@ -77,6 +77,7 @@ const navSections = [
           { text: 'PI Forms',            icon: <FileText size={19} />,        path: '/procurement/proforma-invoices' },
           { text: 'Advance Payments',    icon: <IndianRupee size={19} />,     path: '/procurement/advance-payments' },
           { text: 'Goods Receipt (GRN)', icon: <Package size={19} />,         path: '/procurement/grns' },
+          { text: 'Service Completion',  icon: <FileSignature size={19} />,   path: '/procurement/service-completions' },
           { text: 'Incoming QC',         icon: <ClipboardCheck size={19} />,  path: '/procurement/incoming-qc' },
           { text: 'Vendor Invoices',     icon: <ReceiptText size={19} />,     path: '/procurement/vendor-invoices' },
           { text: 'Payment Vouchers',    icon: <Banknote size={19} />,        path: '/procurement/vouchers' },
@@ -120,6 +121,7 @@ const PAGE_TITLES = {
   '/procurement/advance-payments': 'Advance Payments',
 
   '/procurement/grns': 'Goods Receipt Notes',
+  '/procurement/service-completions': 'Service Completions',
   '/procurement/incoming-qc': 'Incoming QC',
   '/procurement/vendor-invoices': 'Vendor Invoices',
   '/procurement/vouchers':   'Payment Vouchers',

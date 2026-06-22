@@ -16,19 +16,25 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
  */
 const FollowUpReadyForGrnDialog = ({ open, onClose, followUp }) => {
   const { enqueueSnackbar } = useSnackbar();
-  const [finalMaterialDate, setFinalMaterialDate] = useState(todayStr());
+  const [finalMaterialDate, setFinalMaterialDate] = useState('');
   const [remarks, setRemarks] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [markReady, { isLoading }] = useMarkReadyForGrnMutation();
 
   useEffect(() => {
     if (!open) return;
-    setFinalMaterialDate(followUp?.finalMaterialDate ? followUp.finalMaterialDate.slice(0, 10) : todayStr());
+    // Pre-fill only when a Final Material Date was already confirmed (Step 1.5).
+    // A follow-up with only a Next Follow-up Date stays blank → must be filled.
+    setFinalMaterialDate(followUp?.finalMaterialDate ? followUp.finalMaterialDate.slice(0, 10) : '');
     setRemarks('');
     setConfirmed(false);
   }, [open, followUp]);
 
+  // Material delivery must be confirmed via a Final Material Date before GRN.
+  const missingFinalDate = !finalMaterialDate;
+
   const handleSubmit = async () => {
+    if (missingFinalDate) { enqueueSnackbar('Final Material Date is required before GRN.', { variant: 'warning' }); return; }
     if (!confirmed) { enqueueSnackbar('Tick the confirmation checkbox first', { variant: 'warning' }); return; }
     try {
       await markReady({ id: followUp._id, finalMaterialDate, remarks: remarks.trim() }).unwrap();
@@ -50,10 +56,16 @@ const FollowUpReadyForGrnDialog = ({ open, onClose, followUp }) => {
           This marks the PO <b>{followUp?.poNumber}</b> as <b>Ready For GRN</b>. Stock is NOT received here —
           the GRN module will handle receiving later.
         </Alert>
+        {missingFinalDate && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Final Material Date is required before GRN. Material delivery is not yet confirmed.
+          </Alert>
+        )}
         <Grid container spacing={2}>
           <Grid item xs={12}>
-            <DateInputDDMMYYYY label="Final Material Date" fullWidth value={finalMaterialDate}
-              onChange={setFinalMaterialDate} />
+            <DateInputDDMMYYYY label="Final Material Date *" fullWidth required openOnClick value={finalMaterialDate}
+              onChange={setFinalMaterialDate} error={missingFinalDate}
+              helperText={missingFinalDate ? 'Final Material Date is required before GRN.' : ''} />
           </Grid>
           <Grid item xs={12}>
             <TextField label="Remarks" fullWidth multiline minRows={2} value={remarks}
@@ -71,7 +83,7 @@ const FollowUpReadyForGrnDialog = ({ open, onClose, followUp }) => {
         <Button onClick={() => onClose?.(false)} disabled={isLoading}>Cancel</Button>
         <Button variant="contained" color="success"
           startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <PackageCheck size={16} />}
-          onClick={handleSubmit} disabled={isLoading || !confirmed}>
+          onClick={handleSubmit} disabled={isLoading || !confirmed || missingFinalDate}>
           Mark Ready For GRN
         </Button>
       </DialogActions>

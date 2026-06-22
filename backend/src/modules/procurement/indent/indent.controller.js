@@ -43,6 +43,16 @@ export const indentController = {
     res.json(ApiResponse.ok('Indent rejected', indent));
   }),
 
+  bulkApprove: asyncHandler(async (req, res) => {
+    const result = await indentService.bulkApprove(req.body, req.user);
+    res.json(ApiResponse.ok(`${result.approvedCount} indent(s) approved`, result));
+  }),
+
+  bulkReject: asyncHandler(async (req, res) => {
+    const result = await indentService.bulkReject(req.body, req.user);
+    res.json(ApiResponse.ok(`${result.rejectedCount} indent(s) rejected`, result));
+  }),
+
   receiveQuote: asyncHandler(async (req, res) => {
     const indent = await indentService.receiveQuote(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Quote recorded', indent));

@@ -76,6 +76,9 @@ const PurchaseOrderDetail = () => {
   const followUps = fuRes?.data || [];
   const lastFollowUp = followUps[0] || null; // sorted -createdAt by the API
   const lastDoneFollowUp = followUps.find((f) => f.followUpStatus === 'DONE') || null;
+  // Ready For GRN is only offered once a DONE follow-up has a confirmed Final
+  // Material Date — a pending Next Follow-up Date keeps the follow-up active.
+  const readyFollowUp = followUps.find((f) => f.followUpStatus === 'DONE' && f.finalMaterialDate) || null;
   const nextFollowUpDate = followUps
     .map((f) => f.nextFollowUpDate)
     .filter(Boolean)
@@ -99,7 +102,13 @@ const PurchaseOrderDetail = () => {
     ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(data.data.poStatus);
   const { data: grnRes } = useGetGrnsByPoQuery(id, { skip: !grnRelevant });
   const grns = grnRes?.data || [];
-  const canCreateGrn = ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED'].includes(data?.data?.poStatus);
+  // GRN gate: material confirmed (READY_FOR_GRN + Final Material Date) and PI settled.
+  const grnGateMet = data?.data?.followUpStatus === 'READY_FOR_GRN'
+    && Boolean(data?.data?.finalMaterialDate)
+    && ['PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'].includes(data?.data?.piStatus);
+  // A new PO needs the full gate; one already partially received keeps receiving (back-compat).
+  const canCreateGrn = data?.data?.poStatus === 'PARTIAL_RECEIVED'
+    || (data?.data?.poStatus === 'RELEASED_TO_VENDOR' && grnGateMet);
   const totalReceived = (po?.items || []).reduce((s, it) => s + (it.receivedQty || 0), 0);
   const totalOrdered = (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0);
 
@@ -212,7 +221,7 @@ const PurchaseOrderDetail = () => {
                     onClick={() => navigate('/procurement/follow-ups')}>
                     View Follow-ups
                   </Button>
-                  {lastDoneFollowUp && po.followUpStatus !== 'READY_FOR_GRN' && (
+                  {readyFollowUp && po.followUpStatus !== 'READY_FOR_GRN' && (
                     <Button size="small" variant="outlined" color="success" startIcon={<PackageCheck size={14} />}
                       onClick={() => setFuReadyOpen(true)}>
                       Mark Ready For GRN
@@ -435,7 +444,7 @@ const PurchaseOrderDetail = () => {
       <PurchaseOrderReleaseDialog open={releaseOpen} po={po} onClose={() => setReleaseOpen(false)} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={po} onClose={() => setPdfOpen(false)} />
       <FollowUpFormDrawer open={fuFormOpen} presetPo={po} onClose={() => setFuFormOpen(false)} />
-      <FollowUpReadyForGrnDialog open={fuReadyOpen} followUp={lastDoneFollowUp} onClose={() => setFuReadyOpen(false)} />
+      <FollowUpReadyForGrnDialog open={fuReadyOpen} followUp={readyFollowUp || lastDoneFollowUp} onClose={() => setFuReadyOpen(false)} />
       <ProformaInvoiceFormDrawer open={piFormOpen} presetPo={po} onClose={() => setPiFormOpen(false)} />
       <ProformaInvoiceApprovalDialog open={piApprovalOpen} pi={livePi} onClose={() => setPiApprovalOpen(false)} />
       <PurchaseOrderPiNotRequiredDialog open={piNotReqOpen} po={po} onClose={() => setPiNotReqOpen(false)} />

@@ -28,7 +28,7 @@ const ITEM_TYPES = [
  * Editing is only allowed while the indent is a DRAFT (backend enforces this).
  */
 const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', unit: 'Pcs', quantity: '', remarks: '' });
-const blankHeader = () => ({ raisedBy: '', department: 'Stores', remarks: '' });
+const blankHeader = () => ({ raisedBy: '', department: 'Stores', requestType: 'MATERIAL_PURCHASE', remarks: '' });
 
 // Map an existing indent (new items[] or legacy single-product) → editable rows.
 const rowsFromIndent = (indent) => {
@@ -116,7 +116,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
   useEffect(() => {
     if (!open) return;
     if (indent) {
-      setHeader({ raisedBy: indent.raisedBy || '', department: indent.department || 'Stores', remarks: indent.remarks || '' });
+      setHeader({ raisedBy: indent.raisedBy || '', department: indent.department || 'Stores', requestType: indent.requestType || 'MATERIAL_PURCHASE', remarks: indent.remarks || '' });
       setItems(rowsFromIndent(indent));
     } else {
       setHeader(blankHeader());
@@ -156,6 +156,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
         })),
       raisedBy: header.raisedBy.trim(),
       department: header.department.trim(),
+      requestType: header.requestType || 'MATERIAL_PURCHASE',
       remarks: header.remarks.trim(),
     };
     try {
@@ -219,6 +220,14 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
               </TextField>
             </Grid>
             <Grid item xs={12} sm={4}>
+              <TextField label="Request Type *" select fullWidth value={header.requestType}
+                onChange={(e) => setHead('requestType', e.target.value)}
+                helperText={header.requestType === 'INTERNAL_SERVICE' ? 'No PO / PI / GRN — service flow' : 'Standard material purchase flow'}>
+                <MenuItem value="MATERIAL_PURCHASE">Material Purchase</MenuItem>
+                <MenuItem value="INTERNAL_SERVICE">Internal Service</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12}>
               <TextField label="Remarks" fullWidth value={header.remarks}
                 onChange={(e) => setHead('remarks', e.target.value)} placeholder="Optional" />
             </Grid>

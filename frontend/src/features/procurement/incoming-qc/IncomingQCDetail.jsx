@@ -46,7 +46,8 @@ const IncomingQCDetail = () => {
   const [cancelQc] = useCancelIncomingQcMutation();
 
   const isCompleted = qc && ['PASSED', 'FAILED', 'PARTIAL'].includes(qc.qcStatus);
-  const { data: movRes } = useGetInventoryMovementsByRefQuery({ refType: 'INCOMING_QC', refId: id }, { skip: !isCompleted });
+  const isService = qc?.sourceType === 'SERVICE';
+  const { data: movRes } = useGetInventoryMovementsByRefQuery({ refType: 'INCOMING_QC', refId: id }, { skip: !isCompleted || isService });
   const movements = movRes?.data || [];
 
   const [formOpen, setFormOpen] = useState(false);
@@ -108,27 +109,40 @@ const IncomingQCDetail = () => {
               <Grid item xs={6} sm={4}><Field label="Completed At" value={fmtDate(qc.completedAt)} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Checked By" value={qc.checkedByName || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Prepared By" value={qc.preparedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Warehouse" value={qc.warehouse || 'MAIN'} /></Grid>
+              {isService
+                ? <Grid item xs={6} sm={4}><Field label="Source" value="Service" /></Grid>
+                : <Grid item xs={6} sm={4}><Field label="Warehouse" value={qc.warehouse || 'MAIN'} /></Grid>}
               {qc.remarks ? <Grid item xs={12}><Field label="Remarks" value={qc.remarks} /></Grid> : null}
             </Grid>
           </SectionCard>
         </Grid>
 
         <Grid item xs={12} md={6}>
-          <SectionCard icon={<Building2 size={18} />} title="GRN · PO · PI · Vendor">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Vendor" value={qc.vendorName || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="GRN" value={qc.grnNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="PO" value={qc.poNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}>
-                <Field label="PI" value={qc.piId
-                  ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${qc.piId}`)}>{qc.piNumber || 'View'}</Box>
-                  : (qc.piNumber || '—')} />
+          {isService ? (
+            <SectionCard icon={<Building2 size={18} />} title="Service · Indent · Vendor">
+              <Grid container spacing={2}>
+                <Grid item xs={6} sm={4}><Field label="Vendor / Provider" value={qc.vendorName || '—'} /></Grid>
+                <Grid item xs={6} sm={4}><Field label="Service Completion" value={qc.serviceCompletionNumber || '—'} /></Grid>
+                <Grid item xs={6} sm={4}><Field label="Indent" value={qc.indentNumber || '—'} /></Grid>
+                <Grid item xs={6} sm={4}><Field label="Requested / Accepted / Rejected" value={`${qc.totalReceived} / ${qc.totalAccepted} / ${qc.totalRejected}`} /></Grid>
               </Grid>
-              <Grid item xs={6} sm={4}><Field label="Indent" value={qc.indentNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Received / Accepted / Rejected" value={`${qc.totalReceived} / ${qc.totalAccepted} / ${qc.totalRejected}`} /></Grid>
-            </Grid>
-          </SectionCard>
+            </SectionCard>
+          ) : (
+            <SectionCard icon={<Building2 size={18} />} title="GRN · PO · PI · Vendor">
+              <Grid container spacing={2}>
+                <Grid item xs={6} sm={4}><Field label="Vendor" value={qc.vendorName || '—'} /></Grid>
+                <Grid item xs={6} sm={4}><Field label="GRN" value={qc.grnNumber || '—'} /></Grid>
+                <Grid item xs={6} sm={4}><Field label="PO" value={qc.poNumber || '—'} /></Grid>
+                <Grid item xs={6} sm={4}>
+                  <Field label="PI" value={qc.piId
+                    ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${qc.piId}`)}>{qc.piNumber || 'View'}</Box>
+                    : (qc.piNumber || '—')} />
+                </Grid>
+                <Grid item xs={6} sm={4}><Field label="Indent" value={qc.indentNumber || '—'} /></Grid>
+                <Grid item xs={6} sm={4}><Field label="Received / Accepted / Rejected" value={`${qc.totalReceived} / ${qc.totalAccepted} / ${qc.totalRejected}`} /></Grid>
+              </Grid>
+            </SectionCard>
+          )}
         </Grid>
 
         {/* QC item table */}
@@ -141,28 +155,40 @@ const IncomingQCDetail = () => {
                     <TableCell>#</TableCell>
                     <TableCell>Item</TableCell>
                     <TableCell>SKU</TableCell>
-                    <TableCell align="right">Received</TableCell>
+                    <TableCell align="right">{isService ? 'Requested' : 'Received'}</TableCell>
                     <TableCell align="right">Accepted</TableCell>
                     <TableCell align="right">Rejected</TableCell>
                     <TableCell align="right">Rework</TableCell>
-                    <TableCell>Defect</TableCell>
-                    <TableCell>Severity</TableCell>
-                    <TableCell>Reject Movement</TableCell>
+                    {isService ? (
+                      <TableCell>Remarks</TableCell>
+                    ) : (
+                      <>
+                        <TableCell>Defect</TableCell>
+                        <TableCell>Severity</TableCell>
+                        <TableCell>Reject Movement</TableCell>
+                      </>
+                    )}
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {(qc.items || []).map((it, i) => (
                     <TableRow key={it._id || i} hover>
                       <TableCell>{i + 1}</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>{it.itemName}{it.batchNo ? <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Batch {it.batchNo}</Typography> : null}</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>{it.itemName}{!isService && it.batchNo ? <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Batch {it.batchNo}</Typography> : null}</TableCell>
                       <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
                       <TableCell align="right">{it.receivedQty}</TableCell>
                       <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.acceptedQty}</TableCell>
                       <TableCell align="right" sx={{ color: it.rejectedQty > 0 ? '#be123c' : 'text.secondary', fontWeight: it.rejectedQty > 0 ? 700 : 400 }}>{it.rejectedQty}</TableCell>
                       <TableCell align="right" sx={{ color: it.reworkQty > 0 ? '#b45309' : 'text.secondary' }}>{it.reworkQty}</TableCell>
-                      <TableCell>{it.defectType || '—'}</TableCell>
-                      <TableCell>{it.defectSeverity ? <Chip size="small" variant="outlined" label={it.defectSeverity} /> : '—'}</TableCell>
-                      <TableCell><Typography variant="body2" color="text.secondary">{it.inventoryMovementNumber || '—'}</Typography></TableCell>
+                      {isService ? (
+                        <TableCell><Typography variant="body2" color="text.secondary">{it.qcRemarks || '—'}</Typography></TableCell>
+                      ) : (
+                        <>
+                          <TableCell>{it.defectType || '—'}</TableCell>
+                          <TableCell>{it.defectSeverity ? <Chip size="small" variant="outlined" label={it.defectSeverity} /> : '—'}</TableCell>
+                          <TableCell><Typography variant="body2" color="text.secondary">{it.inventoryMovementNumber || '—'}</Typography></TableCell>
+                        </>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>

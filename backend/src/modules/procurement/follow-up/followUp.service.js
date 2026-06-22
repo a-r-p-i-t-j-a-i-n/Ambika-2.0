@@ -134,25 +134,63 @@ export const followUpService = {
     return fu.save();
   },
 
-  // Rule 4: mark the follow-up as done.
+  // Rule 4: record a follow-up cycle.
+  //
+  // Outcome is driven by which date the user provides (mutually exclusive):
+  //  • Final Material Date  → delivery confirmed → READY_FOR_GRN (statusDone=YES),
+  //    mirror the PO so the GRN flow unlocks.
+  //  • Next Follow-up Date  → still chasing the vendor → RESCHEDULED (statusDone=NO);
+  //    the follow-up stays active so the user can "Follow-up Again" later and only
+  //    then enter the Final Material Date. (Eliminates the old dead-end.)
+  // The communication log + activity timeline accumulate across every cycle.
   async markDone(id, data, user) {
     const fu = await findOrThrow(id);
     if (![FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus)) {
-      throw new AppError('Only pending/rescheduled follow-ups can be marked done', 400);
+      throw new AppError('Only pending/rescheduled follow-ups can be updated', 400);
     }
     const actualAt = data.actualAt ? new Date(data.actualAt) : new Date();
-    fu.statusDone = 'YES';
-    fu.followUpStatus = FOLLOWUP_STATUS.DONE;
+    const hasFinal = !!data.finalMaterialDate;
+    const hasNext = !hasFinal && !!data.nextFollowUpDate;
+
     fu.actualAt = actualAt;
     fu.timeDelayMinutes = computeDelayMinutes(fu.plannedAt, actualAt);
     if (data.followUpType) fu.followUpType = data.followUpType;
     if (data.remarks) fu.remarks = data.remarks;
-    if (data.nextFollowUpDate) fu.nextFollowUpDate = new Date(data.nextFollowUpDate);
-    if (data.finalMaterialDate) fu.finalMaterialDate = new Date(data.finalMaterialDate);
     fu.performedBy = user?._id;
     fu.performedByName = user?.name || fu.performedByName;
     if (data.message) fu.communicationLog.push(logEntry(data.followUpType || fu.followUpType, data.message, user));
     fu.updatedBy = user?._id;
+
+    if (hasFinal) {
+      // Delivery date confirmed → ready for GRN.
+      fu.statusDone = 'YES';
+      fu.followUpStatus = FOLLOWUP_STATUS.READY_FOR_GRN;
+      fu.finalMaterialDate = new Date(data.finalMaterialDate);
+      fu.nextFollowUpDate = null;
+      fu.activityTimeline.push({ action: 'READY_FOR_GRN', description: 'Final Material Date confirmed — ready for GRN', actorId: user?._id });
+      await fu.save();
+      // PO mirror — unlocks the GRN gate.
+      await setPoFollowUpStatus(fu.poId, {
+        followUpStatus: PO_FOLLOWUP_STATUS.READY_FOR_GRN,
+        readyForGrnAt: new Date(),
+        finalMaterialDate: fu.finalMaterialDate,
+      });
+      return fu;
+    }
+
+    if (hasNext) {
+      // Vendor not yet confirmed → keep the follow-up active for the next cycle.
+      fu.statusDone = 'NO';
+      fu.followUpStatus = FOLLOWUP_STATUS.RESCHEDULED;
+      fu.nextFollowUpDate = new Date(data.nextFollowUpDate);
+      fu.plannedAt = fu.nextFollowUpDate; // the next planned contact
+      fu.activityTimeline.push({ action: 'RESCHEDULED', description: `Follow-up continued — next on ${fu.nextFollowUpDate.toDateString()}`, actorId: user?._id });
+      return fu.save();
+    }
+
+    // Neither date (legacy / unexpected) → close the cycle as done.
+    fu.statusDone = 'YES';
+    fu.followUpStatus = FOLLOWUP_STATUS.DONE;
     fu.activityTimeline.push({ action: 'DONE', description: 'Follow-up marked done', actorId: user?._id });
     return fu.save();
   },
@@ -184,17 +222,26 @@ export const followUpService = {
       throw new AppError('Mark at least one follow-up as DONE before declaring material ready for GRN', 400);
     }
 
+    // Rule: material delivery must be CONFIRMED — a Final Material Date is
+    // required (from the payload or already captured on the follow-up). A pending
+    // Next Follow-up Date does not confirm delivery and cannot unlock GRN.
+    const finalMaterialDate = data.finalMaterialDate || fu.finalMaterialDate;
+    if (!finalMaterialDate) {
+      throw new AppError('Final Material Date is required before marking Ready for GRN.', 400);
+    }
+
     fu.followUpStatus = FOLLOWUP_STATUS.READY_FOR_GRN;
-    if (data.finalMaterialDate) fu.finalMaterialDate = new Date(data.finalMaterialDate);
+    fu.finalMaterialDate = new Date(finalMaterialDate);
     if (data.remarks) fu.remarks = data.remarks;
     fu.updatedBy = user?._id;
     fu.activityTimeline.push({ action: 'READY_FOR_GRN', description: 'Material declared ready for GRN', actorId: user?._id });
     await fu.save();
 
-    // PO mirror — the GRN module (later) keys off this.
+    // PO mirror — the GRN module keys off these.
     await setPoFollowUpStatus(fu.poId, {
       followUpStatus: PO_FOLLOWUP_STATUS.READY_FOR_GRN,
       readyForGrnAt: new Date(),
+      finalMaterialDate: fu.finalMaterialDate,
     });
 
     return fu;

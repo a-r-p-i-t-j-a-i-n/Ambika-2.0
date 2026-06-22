@@ -15,6 +15,10 @@ const docSchema = Joi.object({
 // re-derived server-side from the QC + PO, so the rest is accepted loosely.
 const invoiceItem = Joi.object({
   _id:         Joi.string().optional(),
+  // Source GRN/QC for this line (multi-GRN invoices).
+  grnId:       objectId.allow('', null),
+  qcId:        objectId.allow('', null),
+  sourceQcId:  objectId.allow('', null), // alias accepted from older clients
   skuId:       objectId.allow('', null),
   skuCode:     Joi.string().trim().max(60).allow('', null),
   itemName:    Joi.string().trim().max(300).allow('', null),
@@ -33,7 +37,9 @@ const invoiceItem = Joi.object({
 }).unknown(true);
 
 export const createInvoiceSchema = Joi.object({
-  qcId:                objectId.required(),
+  // One QC (legacy) OR many QCs (multi-GRN). At least one is required.
+  qcId:                objectId,
+  qcIds:               Joi.array().items(objectId).min(1),
   invoiceNumber:       Joi.string().trim().min(1).max(120).required(),
   invoiceDate:         Joi.date().allow('', null),
   invoiceReceivedDate: Joi.date().optional(),
@@ -50,7 +56,7 @@ export const createInvoiceSchema = Joi.object({
   debitNoteReason:     Joi.string().trim().max(500).allow('', null),
   debitNoteDocument:   docSchema.default(null),
   remarks:             Joi.string().trim().max(1000).allow('', null),
-});
+}).or('qcId', 'qcIds');
 
 export const updateInvoiceSchema = Joi.object({
   invoiceNumber:       Joi.string().trim().min(1).max(120),

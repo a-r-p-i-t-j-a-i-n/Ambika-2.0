@@ -1,8 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import PDFDocument from 'pdfkit';
-import IncomingQC, { QC_STATUS, QC_RESULT } from './incomingQc.model.js';
+import IncomingQC, { QC_STATUS, QC_RESULT, QC_SOURCE_TYPE } from './incomingQc.model.js';
 import GoodsReceiptNote, { GRN_STATUS, GRN_QC_STATUS } from '../grn/grn.model.js';
+import ServiceCompletion, { SERVICE_COMPLETION_STATUS, SERVICE_QC_STATUS } from '../service-completion/serviceCompletion.model.js';
+import PurchaseIndent, { INDENT_OVERALL_STATUS } from '../indent/indent.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
@@ -121,7 +123,68 @@ export const buildQcPdfBuffer = (qc, company = {}) => new Promise((resolve, reje
 });
 
 export const incomingQcService = {
+  // QC from a completed internal service — no goods, no inventory, quality only.
+  async createFromService(data, user) {
+    const sc = await ServiceCompletion.findOne({ _id: data.serviceCompletionId, isDeleted: { $ne: true } });
+    if (!sc) throw new AppError('Service completion not found', 404);
+    if (sc.status !== SERVICE_COMPLETION_STATUS.COMPLETED) {
+      throw new AppError('Incoming QC can only be created for a completed service', 400);
+    }
+    if (sc.qcStatus !== SERVICE_QC_STATUS.PENDING) {
+      throw new AppError('This service has already been QC-checked', 400);
+    }
+    const existing = await IncomingQC.findOne({ serviceCompletionId: sc._id, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } }).lean();
+    if (existing) throw new AppError(`A QC (${existing.qcNumber}) already exists for this service`, 400);
+
+    // Load the indent's items so the inspection table is populated (no goods, no
+    // inventory — these are the requested service line items, all accepted by default).
+    const indent = await PurchaseIndent.findOne({ _id: sc.indentId, isDeleted: { $ne: true } }).lean();
+    const indentItems = indent?.items?.length
+      ? indent.items
+      : (indent?.productNameRevised
+        ? [{ itemName: indent.productNameRevised, skuCode: indent.skuCode, skuId: indent.skuId, unit: indent.unit, quantity: indent.quantity, approvedQuantity: indent.approvedQuantity }]
+        : []);
+    const sourceItems = indentItems.map((it) => {
+      const qty = round2(it.approvedQuantity || it.revisedQuantity || it.quantity || 0);
+      return {
+        skuId: it.skuId || undefined,
+        skuCode: it.skuCode || '',
+        itemName: it.itemName || 'Service',
+        unit: it.unit || 'Pcs',
+        receivedQty: qty,        // requested qty (label "Requested" in the UI for service)
+        acceptedQty: qty,        // default all accepted
+        rejectedQty: 0, reworkQty: 0,
+        defectType: '', defectSeverity: '', qcRemarks: '',
+      };
+    });
+    const { lines, totals } = computeTotals(sourceItems);
+
+    const qcNumber = await generateQcNumber(data.qcDate || new Date());
+    const qc = await IncomingQC.create({
+      qcNumber,
+      qcDate: data.qcDate || new Date(),
+      sourceType: QC_SOURCE_TYPE.SERVICE,
+      serviceCompletionId: sc._id, serviceCompletionNumber: sc.scNumber,
+      indentId: sc.indentId, indentNumber: sc.indentNumber,
+      vendorId: sc.vendorId, vendorName: sc.vendorName,
+      checkedBy: user?._id, checkedByName: data.checkedByName || user?.name || '',
+      preparedBy: data.preparedBy || user?.name || '',
+      qcStatus: QC_STATUS.DRAFT,
+      qcReportDocument: data.qcReportDocument?.fileUrl ? { ...data.qcReportDocument, uploadedAt: new Date() } : undefined,
+      photos: data.photos || [],
+      items: lines,
+      ...totals,
+      remarks: data.remarks || '',
+      createdBy: user?._id,
+      activityTimeline: [{ action: 'CREATE', description: `Service QC created for ${sc.scNumber}`, actorId: user?._id }],
+    });
+    return qc;
+  },
+
   async create(data, user) {
+    // Route to the service-source path when a service completion is referenced.
+    if (data.serviceCompletionId) return this.createFromService(data, user);
+
     const grn = await GoodsReceiptNote.findOne({ _id: data.grnId, isDeleted: { $ne: true } });
     if (!grn) throw new AppError('GRN not found', 404);
 
@@ -233,6 +296,52 @@ export const incomingQcService = {
       throw new AppError('QC is already completed', 400);
     }
     if (qc.qcStatus === QC_STATUS.CANCELLED) throw new AppError('Cannot complete a cancelled QC', 400);
+
+    // Service QC — quality validation only. No goods, no inventory movement, no
+    // item-balance. The result MUST be chosen by the user (no silent default).
+    if (qc.sourceType === QC_SOURCE_TYPE.SERVICE) {
+      const result = data.overallResult;
+      if (!result) throw new AppError('Service QC result (Pass / Fail / Partial) is required', 400);
+
+      const completedAt = new Date();
+      qc.qcStatus = result === QC_RESULT.PASS ? QC_STATUS.PASSED
+        : result === QC_RESULT.FAIL ? QC_STATUS.FAILED
+        : QC_STATUS.PARTIAL;
+      qc.overallResult = result;
+      qc.stockPosted = true; // terminal marker — nothing to post for a service
+      qc.completedAt = completedAt;
+      if (data.remarks) qc.remarks = data.remarks;
+      qc.updatedBy = user?._id;
+      qc.activityTimeline.push({ action: 'COMPLETE', description: `Service QC completed — ${result}`, actorId: user?._id });
+      await qc.save();
+
+      // Mirror onto the service completion.
+      const scQc = result === QC_RESULT.PASS ? SERVICE_QC_STATUS.PASSED
+        : result === QC_RESULT.FAIL ? SERVICE_QC_STATUS.FAILED
+        : SERVICE_QC_STATUS.PARTIAL;
+      try {
+        await ServiceCompletion.updateOne({ _id: qc.serviceCompletionId }, { $set: { qcStatus: scQc, qcId: qc._id, qcNumber: qc.qcNumber, qcCompletedAt: completedAt } });
+      } catch (err) { logger.error(`[qc] service-completion update failed: ${err.message}`); }
+
+      // Reflect the QC verdict on the indent.
+      const indentStatus = result === QC_RESULT.PASS ? INDENT_OVERALL_STATUS.SERVICE_QC_PASSED
+        : result === QC_RESULT.FAIL ? INDENT_OVERALL_STATUS.SERVICE_QC_FAILED
+        : INDENT_OVERALL_STATUS.SERVICE_QC_PARTIAL;
+      try {
+        await PurchaseIndent.updateOne(
+          { _id: qc.indentId },
+          { $set: { overallStatus: indentStatus }, $push: { activityTimeline: { action: 'SERVICE_QC', description: `Service QC ${result}`, actorId: user?._id, timestamp: new Date() } } },
+        );
+      } catch (err) { logger.error(`[qc] indent status update failed: ${err.message}`); }
+
+      try {
+        const { qcPdfUrl, qcPdfFileName } = await this.generatePdf(id);
+        qc.qcPdfUrl = qcPdfUrl;
+        qc.qcPdfFileName = qcPdfFileName;
+      } catch (err) { logger.error(`[qc] PDF generation failed for ${qc.qcNumber}: ${err.message}`); }
+
+      return qc;
+    }
 
     // Rule 4: accepted + rejected + rework must equal receivedQty per item.
     for (const it of qc.items) {

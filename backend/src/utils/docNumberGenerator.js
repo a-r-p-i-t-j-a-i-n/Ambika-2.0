@@ -146,6 +146,34 @@ export async function generateVoucherNumber(date = new Date()) {
 }
 
 /**
+ * Generate next Purchase Voucher number (Step 1.11 — voucherType PURCHASE).
+ * @returns {string} e.g. "AGL/PUR-001/26-27"
+ */
+export async function generatePurchaseVoucherNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `PUR_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `AGL/PUR-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Expense Voucher number (Step 1.11 — voucherType EXPENSE).
+ * @returns {string} e.g. "AGL/EXP-001/26-27"
+ */
+export async function generateExpenseVoucherNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `EXP_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `AGL/EXP-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
  * Generate next Purchase Tally Entry number (Purchase FMS — Step 1.12).
  * Zero-padded sequence, reset per fiscal year.
  * @param {Date} date — date to determine fiscal year
@@ -191,6 +219,22 @@ export async function generateQcNumber(date = new Date()) {
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
   return `AGL/QC-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
+ * Generate next Service Completion number (Purchase FMS — Step 1.8A).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "AGL/SC-001/26-27"
+ */
+export async function generateServiceCompletionNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `SC_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `AGL/SC-${String(counter.seq).padStart(3, '0')}/${fy}`;
 }
 
 /**

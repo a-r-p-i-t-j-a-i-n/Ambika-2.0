@@ -43,6 +43,7 @@ import advancePaymentRoutes from './modules/procurement/advance-payment/advanceP
 // Shared inventory stock-movement foundation (reused by GRN etc.)
 import inventoryRoutes from './modules/inventory/inventory.routes.js';
 import grnRoutes from './modules/procurement/grn/grn.routes.js';
+import serviceCompletionRoutes from './modules/procurement/service-completion/serviceCompletion.routes.js';
 import incomingQcRoutes from './modules/procurement/incoming-qc/incomingQc.routes.js';
 import vendorInvoiceRoutes from './modules/procurement/vendor-invoice/vendorInvoice.routes.js';
 import voucherRoutes from './modules/procurement/voucher/voucher.routes.js';
@@ -139,6 +140,7 @@ app.use('/api/v1/procurement/advance-payments', advancePaymentRoutes); // Purcha
 
 app.use('/api/v1/inventory', inventoryRoutes); // Shared inventory stock-movement foundation
 app.use('/api/v1/procurement/grns', grnRoutes); // Purchase FMS — Goods Receipt Notes (Step 1.8)
+app.use('/api/v1/procurement/service-completions', serviceCompletionRoutes); // Purchase FMS — Service Completion (Step 1.8A)
 app.use('/api/v1/procurement/incoming-qc', incomingQcRoutes); // Purchase FMS — Incoming QC (Step 1.9)
 app.use('/api/v1/procurement/vendor-invoices', vendorInvoiceRoutes); // Purchase FMS — Vendor Invoices (Step 1.10)
 app.use('/api/v1/procurement/vouchers', voucherRoutes); // Purchase FMS — Vouchers (Step 1.11)

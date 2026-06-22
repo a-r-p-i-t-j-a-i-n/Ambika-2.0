@@ -70,7 +70,11 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
     { limit: 200, sort: '-releasedAt', followUpStatus: 'READY_FOR_GRN', piStatus: 'PAYMENT_COMPLETED,PI_NOT_REQUIRED' },
     { skip: !open || isEdit },
   );
-  const poOptions = (posRes?.data || []).filter((p) => p.poStatus !== 'FULLY_RECEIVED' && p.poStatus !== 'CANCELLED');
+  // Material delivery must be confirmed (Final Material Date present). A PO that
+  // already started receiving (PARTIAL_RECEIVED) keeps showing for back-compat.
+  const poOptions = (posRes?.data || []).filter((p) =>
+    p.poStatus !== 'FULLY_RECEIVED' && p.poStatus !== 'CANCELLED'
+    && (Boolean(p.finalMaterialDate) || p.poStatus === 'PARTIAL_RECEIVED'));
 
   const linesFromPo = (p) => (p?.items || [])
     .map((it) => {

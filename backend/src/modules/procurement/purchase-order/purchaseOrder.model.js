@@ -63,8 +63,16 @@ export const PO_STATUS = {
   CLOSED:             'CLOSED',
 };
 
+// PO format — JSL (steel grade/width/finish + discount pricing) vs OTHER (normal).
+export const PO_FORMAT_TYPE = {
+  JSL:   'JSL',
+  OTHER: 'OTHER',
+};
+
 const poItemSchema = new Schema({
-  itemName:      { type: String, required: [true, 'Item name is required'], trim: true },
+  // OTHER-format fields (also used as the canonical description/rate for JSL so
+  // downstream GRN/inventory keep working).
+  itemName:      { type: String, trim: true, default: '' }, // not required — JSL items use grade/width/finish
   skuCode:       { type: String, trim: true, uppercase: true, default: '' },
   skuId:         { type: Schema.Types.ObjectId, ref: 'SKU' },
   quantity:      { type: Number, required: true, min: 0 },
@@ -74,6 +82,17 @@ const poItemSchema = new Schema({
   taxableAmount: { type: Number, default: 0, min: 0 }, // qty × rate (server-computed)
   taxAmount:     { type: Number, default: 0, min: 0 }, // taxable × gst% (server-computed)
   totalAmount:   { type: Number, default: 0, min: 0 },
+
+  // JSL-format fields (additive — empty/zero for OTHER items).
+  grade:           { type: String, trim: true, default: '' },
+  width:           { type: String, trim: true, default: '' },
+  finish:          { type: String, trim: true, default: '' },
+  baseRate:        { type: Number, default: 0, min: 0 },
+  upfrontDiscount: { type: Number, default: 0, min: 0 },
+  bonanzaDiscount: { type: Number, default: 0, min: 0 },
+  finalPrice:      { type: Number, default: 0 }, // baseRate − upfront − bonanza (server-computed)
+  value:           { type: Number, default: 0 }, // quantity × finalPrice (server-computed)
+
   // Future GRN linkage
   receivedQty:   { type: Number, default: 0, min: 0 },
   pendingQty:    { type: Number, default: 0, min: 0 },
@@ -85,6 +104,9 @@ const vendorPurchaseOrderSchema = new Schema({
   // ── Header ──
   poNumber: { type: String, unique: true, trim: true, index: true }, // auto: AGL/PO-001/26-27
   poDate:   { type: Date, default: Date.now },
+
+  // PO format / layout. Existing records default to OTHER.
+  poFormatType: { type: String, enum: Object.values(PO_FORMAT_TYPE), default: PO_FORMAT_TYPE.OTHER },
 
   // Indent linkage (mandatory — POs are never standalone)
   indentId:     { type: Schema.Types.ObjectId, ref: 'PurchaseIndent', required: true, index: true },
@@ -137,6 +159,7 @@ const vendorPurchaseOrderSchema = new Schema({
   // ── Step 1.5 — material follow-up linkage (additive) ──
   followUpStatus:       { type: String, enum: Object.values(PO_FOLLOWUP_STATUS), default: PO_FOLLOWUP_STATUS.NOT_STARTED, index: true },
   readyForGrnAt:        { type: Date, default: null },
+  finalMaterialDate:    { type: Date, default: null }, // confirmed delivery date — gates GRN
   expectedDeliveryDate: { type: Date, default: null }, // releasedAt + leadTime days
 
   // ── Step 1.6 — proforma invoice linkage (additive) ──

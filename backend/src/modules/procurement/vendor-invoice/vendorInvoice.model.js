@@ -37,17 +37,25 @@ export const INVOICE_VARIANCE_STATUS = {
 };
 
 const invoiceItemSchema = new Schema({
+  // ── Source GRN / QC (multi-GRN invoices — which GRN/QC this line came from) ──
+  grnId:     { type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' },
+  grnNumber: { type: String, trim: true, default: '' },
+  qcId:      { type: Schema.Types.ObjectId, ref: 'IncomingQC' },
+  qcNumber:  { type: String, trim: true, default: '' },
+
   skuId:    { type: Schema.Types.ObjectId, ref: 'SKU' },
   skuCode:  { type: String, trim: true, uppercase: true, default: '' },
   itemName: { type: String, trim: true, default: '' },
   unit:     { type: String, trim: true, default: 'Pcs' },
   // ── Order-vs-received comparison (server-computed) ──
-  orderedQty:     { type: Number, default: 0, min: 0 }, // PO ordered qty
-  grnReceivedQty: { type: Number, default: 0, min: 0 }, // GRN received qty
-  receivedQty:    { type: Number, default: 0, min: 0 }, // QC received (= GRN received)
-  acceptedQty:    { type: Number, default: 0, min: 0 }, // QC accepted
-  rejectedQty:    { type: Number, default: 0, min: 0 }, // QC rejected
-  invoiceQty:     { type: Number, default: 0, min: 0 }, // ≤ acceptedQty unless overridden
+  orderedQty:        { type: Number, default: 0, min: 0 }, // PO ordered qty
+  grnReceivedQty:    { type: Number, default: 0, min: 0 }, // GRN received qty
+  receivedQty:       { type: Number, default: 0, min: 0 }, // QC received (= GRN received)
+  acceptedQty:       { type: Number, default: 0, min: 0 }, // QC accepted
+  rejectedQty:       { type: Number, default: 0, min: 0 }, // QC rejected
+  alreadyInvoicedQty:{ type: Number, default: 0, min: 0 }, // invoiced on prior invoices
+  pendingInvoiceQty: { type: Number, default: 0, min: 0 }, // accepted − alreadyInvoiced
+  invoiceQty:     { type: Number, default: 0, min: 0 }, // ≤ pendingInvoiceQty unless overridden
   varianceQty:    { type: Number, default: 0 },         // invoiceQty − acceptedQty
   varianceStatus: { type: String, enum: Object.values(INVOICE_VARIANCE_STATUS), default: INVOICE_VARIANCE_STATUS.MATCHED },
   rate:        { type: Number, default: 0, min: 0 },
@@ -67,10 +75,16 @@ const vendorInvoiceSchema = new Schema({
   invoiceReceivedDate: { type: Date, default: Date.now },
 
   // ── Linkage (QC → GRN → PO → PI → Vendor) ──
+  // Legacy single refs (kept in sync = first selected QC/GRN for back-compat).
   qcId:       { type: Schema.Types.ObjectId, ref: 'IncomingQC', required: true, index: true },
   qcNumber:   { type: String, trim: true, default: '' },
   grnId:      { type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' },
   grnNumber:  { type: String, trim: true, default: '' },
+  // Multi-GRN: all selected QCs / GRNs on this invoice (same vendor + same PO).
+  qcIds:      { type: [{ type: Schema.Types.ObjectId, ref: 'IncomingQC' }], default: [] },
+  qcNumbers:  { type: [String], default: [] },
+  grnIds:     { type: [{ type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' }], default: [] },
+  grnNumbers: { type: [String], default: [] },
   poId:       { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder' },
   poNumber:   { type: String, trim: true, default: '' },
   piId:       { type: Schema.Types.ObjectId, ref: 'ProformaInvoice' },

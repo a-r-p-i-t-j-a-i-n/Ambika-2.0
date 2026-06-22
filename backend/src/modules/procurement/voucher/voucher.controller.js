@@ -42,4 +42,9 @@ export const voucherController = {
     const v = await voucherService.cancel(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Voucher cancelled', v));
   }),
+
+  generatePdf: asyncHandler(async (req, res) => {
+    const out = await voucherService.generatePdf(req.params.id);
+    res.json(ApiResponse.ok('Voucher PDF generated', out));
+  }),
 };

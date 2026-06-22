@@ -43,6 +43,7 @@ export const baseApi = createApi({
     'AdvancePayment', 'AdvancePaymentStats',
 
     'Grn', 'GrnStats', 'InventoryStock', 'InventoryMovement',
+    'ServiceCompletion', 'ServiceCompletionStats',
     'IncomingQc', 'IncomingQcStats',
     'VendorInvoice', 'VendorInvoiceStats', 'Voucher', 'VoucherStats',
     'TallyEntry', 'TallyEntryStats', 'FinalPayment', 'FinalPaymentStats',

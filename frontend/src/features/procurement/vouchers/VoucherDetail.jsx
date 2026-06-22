@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, Send, Ban, Banknote, Building2, FileText, ReceiptText,
-  FileSpreadsheet, Wallet, Info,
+  FileSpreadsheet, Wallet, Info, Download,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -14,10 +14,12 @@ import {
   useGetVoucherByIdQuery,
   usePostVoucherMutation,
   useCancelVoucherMutation,
+  useGenerateVoucherPdfMutation,
   useGetTallyEntriesByVoucherQuery,
   useGetFinalPaymentsByVoucherQuery,
 } from '../../../store/api/procurementApi';
-import { VoucherStatusChip, fmtINR, fmtDate } from './voucherMeta';
+import { VoucherStatusChip, VoucherTypeChip, fmtINR, fmtDate } from './voucherMeta';
+import { fileHref } from '../indents/indentMeta';
 import StatusChip from '../components/StatusChip';
 import VoucherFormDialog from './VoucherFormDialog';
 import TallyEntryFormDialog from '../tally-entry/TallyEntryFormDialog';
@@ -50,6 +52,7 @@ const VoucherDetail = () => {
 
   const [postVoucher, { isLoading: posting }] = usePostVoucherMutation();
   const [cancelVoucher, { isLoading: cancelling }] = useCancelVoucherMutation();
+  const [generatePdf, { isLoading: pdfLoading }] = useGenerateVoucherPdfMutation();
 
   const [cancelRemarks, setCancelRemarks] = useState('');
 
@@ -76,6 +79,15 @@ const VoucherDetail = () => {
   }
 
   const isDraft = v.voucherStatus === 'DRAFT';
+  const isExpense = v.voucherType === 'EXPENSE';
+
+  const doDownloadPdf = async () => {
+    try {
+      const url = (await generatePdf({ id: v._id }).unwrap())?.data?.voucherPdfUrl;
+      if (url) window.open(fileHref(url), '_blank', 'noopener');
+      else enqueueSnackbar('PDF not available', { variant: 'warning' });
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to generate PDF', { variant: 'error' }); }
+  };
 
   // Step 1.11 = passing / approval only (no payment). Moves DRAFT → POSTED so the
   // Tally Entry can be raised; payment is recorded later in Step 1.13.
@@ -102,12 +114,18 @@ const VoucherDetail = () => {
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
             <Typography variant="h5" fontWeight={800}>{v.voucherNumber}</Typography>
+            <VoucherTypeChip type={v.voucherType} />
             <VoucherStatusChip status={v.voucherStatus} />
           </Box>
-          <Typography variant="body2" color="text.secondary">{v.vendorName} · Invoice {v.invoiceNumber || '—'} · {fmtDate(v.voucherDate)}</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {isExpense
+              ? `${v.expenseCategory || 'Expense'} · ${v.partyName || v.vendorName || '—'} · ${fmtDate(v.voucherDate)}`
+              : `${v.vendorName} · Invoice ${v.invoiceNumber || '—'} · ${fmtDate(v.voucherDate)}`}
+          </Typography>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button variant="outlined" startIcon={pdfLoading ? <CircularProgress size={16} /> : <Download size={16} />} onClick={doDownloadPdf} disabled={pdfLoading}>PDF</Button>
           {v.invoiceId && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${v.invoiceId}`)}>View Invoice</Button>}
           {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {isDraft && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={() => setCancelOpen(true)}>Cancel</Button>}
@@ -135,26 +153,57 @@ const VoucherDetail = () => {
         </Grid>
 
         <Grid item xs={12} md={5}>
-          <SectionCard icon={<Building2 size={18} />} title="Vendor & Linkage">
+          <SectionCard icon={<Building2 size={18} />} title={isExpense ? 'Expense & Party' : 'Vendor & Linkage'}>
             <Grid container spacing={2}>
-              <Grid item xs={6}><Field label="Vendor" value={v.vendorName || '—'} /></Grid>
-              <Grid item xs={6}><Field label="Invoice" value={v.invoiceNumber || '—'} /></Grid>
-              <Grid item xs={6}><Field label="PO" value={v.poNumber || '—'} /></Grid>
-              <Grid item xs={6}><Field label="Status" value={<VoucherStatusChip status={v.voucherStatus} />} /></Grid>
+              {isExpense ? (
+                <>
+                  <Grid item xs={6}><Field label="Party" value={v.partyName || v.vendorName || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="Category" value={v.expenseCategory || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="Invoice No" value={v.expenseInvoiceNo || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="Invoice Date" value={fmtDate(v.expenseInvoiceDate)} /></Grid>
+                  <Grid item xs={6}><Field label="Payment Terms" value={v.paymentTerms || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="Due Date" value={fmtDate(v.dueDate)} /></Grid>
+                  {v.invoiceDocument?.fileUrl && (
+                    <Grid item xs={12}>
+                      <Button size="small" variant="outlined" startIcon={<FileText size={15} />} href={fileHref(v.invoiceDocument.fileUrl)} target="_blank" rel="noopener">View Invoice File</Button>
+                    </Grid>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Grid item xs={6}><Field label="Vendor" value={v.vendorName || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="Invoice" value={v.invoiceNumber || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="PO" value={v.poNumber || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="Status" value={<VoucherStatusChip status={v.voucherStatus} />} /></Grid>
+                </>
+              )}
             </Grid>
           </SectionCard>
         </Grid>
 
         <Grid item xs={12}>
           <SectionCard icon={<ReceiptText size={18} />} title="Financials">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={2}><Field label="Invoice Amount" value={fmtINR(v.invoiceAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Advance" value={fmtINR(v.advancePaid)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Debit Note" value={fmtINR(v.debitNoteAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Net Payable" value={fmtINR(v.netPayableAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Paid" value={fmtINR(v.paidAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Balance" value={fmtINR(v.balanceAmount)} /></Grid>
-            </Grid>
+            {isExpense ? (
+              <Grid container spacing={2}>
+                <Grid item xs={6} sm={3}><Field label="Basic Value" value={fmtINR(v.basicValue)} /></Grid>
+                <Grid item xs={6} sm={3}><Field label="Freight" value={fmtINR(v.freightCharges)} /></Grid>
+                <Grid item xs={6} sm={3}><Field label="Packing & Fwd" value={fmtINR(v.packingForwardingCharges)} /></Grid>
+                <Grid item xs={6} sm={3}><Field label="Other Charges" value={fmtINR(v.otherCharges)} /></Grid>
+                <Grid item xs={6} sm={3}><Field label="Tax Amount" value={fmtINR(v.taxAmount)} /></Grid>
+                <Grid item xs={6} sm={3}><Field label="TCS (+)" value={fmtINR(v.tcsAmount)} /></Grid>
+                <Grid item xs={6} sm={3}><Field label="TDS (−)" value={fmtINR(v.tdsAmount)} /></Grid>
+                <Grid item xs={6} sm={3}><Field label="Advance (−)" value={fmtINR(v.advanceAmount)} /></Grid>
+              </Grid>
+            ) : (
+              <Grid container spacing={2}>
+                <Grid item xs={6} sm={2}><Field label="Invoice Amount" value={fmtINR(v.invoiceAmount)} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Advance" value={fmtINR(v.advancePaid)} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Debit Note" value={fmtINR(v.debitNoteAmount)} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Net Payable" value={fmtINR(v.netPayableAmount)} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Paid" value={fmtINR(v.paidAmount)} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Balance" value={fmtINR(v.balanceAmount)} /></Grid>
+              </Grid>
+            )}
             <Box sx={{ mt: 2, p: 2, borderRadius: '12px', bgcolor: alpha('#16a34a', 0.05), display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
               <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>PAID</Typography><Typography variant="h6" fontWeight={800} sx={{ color: '#16a34a' }}>{fmtINR(v.paidAmount)}</Typography></Box>
               <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>BALANCE</Typography><Typography variant="h6" fontWeight={800} sx={{ color: v.balanceAmount > 0 ? '#b45309' : '#16a34a' }}>{fmtINR(v.balanceAmount)}</Typography></Box>

@@ -96,8 +96,20 @@ const VendorInvoiceDetail = () => {
               <Grid item xs={6} sm={4}><Field label="Invoice No" value={inv.invoiceNumber} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Invoice Date" value={fmtDate(inv.invoiceDate)} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Received" value={fmtDate(inv.invoiceReceivedDate)} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="QC" value={inv.qcNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="GRN" value={inv.grnNumber || '—'} /></Grid>
+              <Grid item xs={12} sm={4}>
+                <Field label={`GRNs (${(inv.grnNumbers?.length || (inv.grnNumber ? 1 : 0))})`} value={
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {(inv.grnNumbers?.length ? inv.grnNumbers : [inv.grnNumber]).filter(Boolean).map((g, i) => <Chip key={i} size="small" label={g} />)}
+                  </Box>
+                } />
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Field label={`QCs (${(inv.qcNumbers?.length || (inv.qcNumber ? 1 : 0))})`} value={
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {(inv.qcNumbers?.length ? inv.qcNumbers : [inv.qcNumber]).filter(Boolean).map((q, i) => <Chip key={i} size="small" variant="outlined" label={q} />)}
+                  </Box>
+                } />
+              </Grid>
               <Grid item xs={6} sm={4}><Field label="PO" value={inv.poNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="PI" value={inv.piNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}>
@@ -141,7 +153,10 @@ const VendorInvoiceDetail = () => {
                     const status = it.varianceStatus || (variance === 0 ? 'MATCHED' : (variance < 0 ? 'SHORT' : 'EXCESS'));
                     return (
                       <Box key={it._id || i} sx={{ display: 'grid', gridTemplateColumns: CMP_COLS, gap: 1, alignItems: 'center', px: 1.25, py: 0.85, borderTop: '1px solid', borderColor: 'divider', bgcolor: varianceRowBg(status) }}>
-                        <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+                          {it.grnNumber ? <Typography variant="caption" color="text.secondary">GRN {it.grnNumber}</Typography> : null}
+                        </Box>
                         <Typography variant="body2" color="primary.main" fontWeight={700} noWrap>{it.skuCode || '—'}</Typography>
                         <Typography variant="body2" color="text.secondary">{it.unit}</Typography>
                         <Typography variant="body2" sx={{ textAlign: 'right' }}>{it.orderedQty ?? '—'}</Typography>

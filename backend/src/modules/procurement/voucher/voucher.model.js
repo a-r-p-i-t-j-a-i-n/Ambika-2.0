@@ -30,14 +30,30 @@ export const PAYMENT_MODE = {
   OTHER:  'OTHER',
 };
 
+// Purchase voucher (from a vendor invoice) vs direct expense voucher.
+export const VOUCHER_TYPE = {
+  PURCHASE: 'PURCHASE',
+  EXPENSE:  'EXPENSE',
+};
+
+// Expense voucher categories (master list).
+export const EXPENSE_CATEGORY = [
+  'Computer Repair', 'Printer Repair', 'Stationery', 'Travel', 'Electricity',
+  'Internet', 'AMC', 'Office Maintenance', 'Consultancy', 'Courier', 'Fuel',
+  'Software Subscription', 'Rent', 'Housekeeping', 'Security Services', 'Other',
+];
+
 const voucherSchema = new Schema({
   ...baseSchemaFields,
 
-  voucherNumber: { type: String, unique: true, trim: true, index: true }, // PV-001/26-27
+  voucherNumber: { type: String, unique: true, trim: true, index: true }, // AGL/PUR-001 or AGL/EXP-001
   voucherDate:   { type: Date, default: Date.now },
 
-  // ── Linkage (Invoice → QC/GRN/PO → Vendor) ──
-  invoiceId:     { type: Schema.Types.ObjectId, ref: 'VendorInvoice', required: true, index: true },
+  // Purchase (from invoice) vs Expense (direct). Existing records default PURCHASE.
+  voucherType: { type: String, enum: Object.values(VOUCHER_TYPE), default: VOUCHER_TYPE.PURCHASE, index: true },
+
+  // ── Linkage (Invoice → QC/GRN/PO → Vendor). invoiceId only for PURCHASE. ──
+  invoiceId:     { type: Schema.Types.ObjectId, ref: 'VendorInvoice', index: true },
   invoiceNumber: { type: String, trim: true, index: true },
   vendorId:      { type: Schema.Types.ObjectId, ref: 'Party', index: true },
   vendorName:    { type: String, trim: true, default: '' },
@@ -53,6 +69,30 @@ const voucherSchema = new Schema({
   netPayableAmount: { type: Number, default: 0 },
   paidAmount:       { type: Number, default: 0, min: 0 },
   balanceAmount:    { type: Number, default: 0 }, // netPayable − paidAmount
+
+  // ── Expense voucher (voucherType = EXPENSE) ──
+  expenseCategory:   { type: String, trim: true, default: '' },
+  partyName:         { type: String, trim: true, default: '' },
+  expenseInvoiceNo:  { type: String, trim: true, default: '' }, // optional
+  expenseInvoiceDate:{ type: Date, default: null },             // optional
+  invoiceDocument:   { fileUrl: { type: String, default: '' }, fileName: { type: String, default: '' } },
+  basicValue:                 { type: Number, default: 0 },
+  freightCharges:             { type: Number, default: 0 },
+  packingForwardingCharges:   { type: Number, default: 0 },
+  otherCharges:               { type: Number, default: 0 },
+  taxAmount:                  { type: Number, default: 0 },
+  tcsAmount:                  { type: Number, default: 0 },
+  tdsAmount:                  { type: Number, default: 0 },
+  advanceAmount:              { type: Number, default: 0 }, // advance payment deduction
+  otherReason:                { type: String, trim: true, default: '' },
+  totalAmountPayable:         { type: Number, default: 0 }, // = netPayableAmount for downstream
+  paymentTerms: { type: String, trim: true, default: '' },
+  dueDate:      { type: Date, default: null },
+  preparedBy:   { type: String, trim: true, default: '' },
+
+  // ── Generated voucher PDF ──
+  voucherPdfUrl:      { type: String, trim: true, default: '' },
+  voucherPdfFileName: { type: String, trim: true, default: '' },
 
   // ── Payment ──
   paymentMode:     { type: String, enum: Object.values(PAYMENT_MODE), default: PAYMENT_MODE.NEFT },
