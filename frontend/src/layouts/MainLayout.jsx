@@ -6,10 +6,10 @@ import {
 } from '@mui/material';
 import {
   Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
-  Users, UserCog, LogOut, CalendarPlus, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
+  Users, UserCog, LogOut, CalendarPlus, CalendarDays, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
   IndianRupee, Calculator, FileSignature, FilePen, ClipboardCheck, FolderOpen, BarChart3, Tag,
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
-  ReceiptText, Banknote, FileSpreadsheet, Wallet,
+  ReceiptText, Banknote, FileSpreadsheet, Wallet, Store,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -44,6 +44,7 @@ const navSections = [
           { text: 'Order Intake',      icon: <PhoneCall size={19} />,    path: '/order-intake' },
           { text: 'Sales Orders',      icon: <ShoppingCart size={19} />, path: '/orders' },
           { text: 'Dispatch Planning', icon: <CalendarPlus size={19} />, path: '/dispatch-planning' },
+          { text: 'Dispatch Calendar', icon: <CalendarDays size={19} />, path: '/dispatch-planning/calendar' },
           { text: 'Generate Dispatch Plan PDF', icon: <FileText size={19} />, path: '/dispatch-planning/generate-pdf' },
           { text: 'Actual Dispatch',   icon: <Truck size={19} />,        path: '/challans' },
           { text: 'Generate Challan PDF', icon: <FileText size={19} />,  path: '/challans/generate-pdf' },
@@ -69,6 +70,7 @@ const navSections = [
         path: '/procurement',
         children: [
           { text: 'Master Data',         icon: <FileSpreadsheet size={19} />, path: '/procurement/master-data' },
+          { text: 'Vendor Details',      icon: <Store size={19} />,           path: '/procurement/vendors' },
           { text: 'Purchase Indents',    icon: <ClipboardList size={19} />,   path: '/procurement/indents' },
           { text: 'Purchase Orders',     icon: <ShoppingCart size={19} />,    path: '/procurement/purchase-orders' },
           { text: 'Material Follow-ups', icon: <PhoneCall size={19} />,       path: '/procurement/follow-ups' },
@@ -98,6 +100,7 @@ const PAGE_TITLES = {
   '/dispatch-control-tower': 'Control Tower',
   '/orders':                 'Sales Orders',
   '/dispatch-planning':      'Dispatch Planning',
+  '/dispatch-planning/calendar': 'Dispatch Calendar',
   '/dispatch-planning/generate-pdf': 'Generate Dispatch Plan PDF',
   '/ppc-planning':           'PPC Planning',
   '/challans':               'Actual Dispatch',
@@ -123,6 +126,7 @@ const PAGE_TITLES = {
   '/procurement/tally-entries': 'Tally Entries',
   '/procurement/final-payments': 'Final Payments',
   '/procurement/master-data': 'Purchase Master Data',
+  '/procurement/vendors': 'Master Vendor',
 
   '/employees':              'Employees',
   '/access-control':         'Access Control',

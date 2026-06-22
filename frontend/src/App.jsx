@@ -23,6 +23,7 @@ const OrdersList           = lazyWithRetry(() => import('./features/orders/Order
 const OrderDetails         = lazyWithRetry(() => import('./features/orders/OrderDetails'));
 const PlanWorkspace        = lazyWithRetry(() => import('./features/planning/PlanWorkspace'));
 const GenerateDispatchPlanPdf = lazyWithRetry(() => import('./features/planning/GenerateDispatchPlanPdf'));
+const DispatchCalendar     = lazyWithRetry(() => import('./features/planning/DispatchCalendar'));
 const PPCPlanning          = lazyWithRetry(() => import('./features/ppc/PPCPlanning'));
 const ChallansList         = lazyWithRetry(() => import('./features/execution/ChallansList'));
 const GenerateChallanPdf   = lazyWithRetry(() => import('./features/execution/GenerateChallanPdf'));
@@ -76,6 +77,8 @@ const TallyEntryDetail     = lazyWithRetry(() => import('./features/procurement/
 const FinalPaymentList     = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentList'));
 const FinalPaymentDetail   = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentDetail'));
 const PurchaseMasterData   = lazyWithRetry(() => import('./features/procurement/PurchaseMasterData'));
+const VendorMaster         = lazyWithRetry(() => import('./features/procurement/vendors/VendorMaster'));
+const VendorDetail         = lazyWithRetry(() => import('./features/procurement/vendors/VendorDetail'));
 
 const FmsTaskPage          = lazyWithRetry(() => import('./features/o2d-fms/TaskPage'));
 const FmsAllTasks          = lazyWithRetry(() => import('./features/o2d-fms/AllTasks'));
@@ -104,6 +107,7 @@ function App() {
             <Route path="/orders/:id" element={<OrderDetails />} />
             <Route path="/orders/:id/phase/:phaseNo" element={<PhaseDetail />} />
             <Route path="/dispatch-planning" element={<PlanWorkspace />} />
+            <Route path="/dispatch-planning/calendar" element={<DispatchCalendar />} />
             <Route path="/dispatch-planning/generate-pdf" element={<GenerateDispatchPlanPdf />} />
             <Route path="/ppc-planning" element={<PPCPlanning />} />
             <Route path="/challans" element={<ChallansList />} />
@@ -230,6 +234,8 @@ function App() {
             <Route path="/procurement/final-payments" element={<FinalPaymentList />} />
             <Route path="/procurement/final-payments/:id" element={<FinalPaymentDetail />} />
             <Route path="/procurement/master-data" element={<PurchaseMasterData />} />
+            <Route path="/procurement/vendors" element={<VendorMaster />} />
+            <Route path="/procurement/vendors/:id" element={<VendorDetail />} />
 
           </Route>
         </Route>

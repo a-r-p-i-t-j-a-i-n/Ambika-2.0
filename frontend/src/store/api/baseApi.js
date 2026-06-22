@@ -29,7 +29,7 @@ export const baseApi = createApi({
   reducerPath: 'api',
   baseQuery: baseQueryWithAuthGuard,
   tagTypes: [
-    'Party', 'SKU', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison',
+    'Party', 'Vendor', 'SKU', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison',
     'Schedule', 'Challan', 'Invoice', 'SalesInvoice', 'Auth', 'PPC', 'Shipment', 'Payment',
     'TransportBill', 'Employees',
     'AccessUsers', 'AccessRoles', 'AccessAudit',

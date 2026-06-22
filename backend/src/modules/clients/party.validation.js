@@ -5,20 +5,23 @@ export const createPartySchema = Joi.object({
   code:              Joi.string().uppercase().trim().max(20),
   name:              Joi.string().required().trim().min(2).max(200),
   location:          Joi.string().trim().max(100).allow('', null),
+  address:           Joi.string().trim().max(500).allow('', null),
   state:             Joi.string().trim().max(50).allow('', null),
   gstNo:             Joi.string().trim().max(20).allow('', null),
   contactPerson:     Joi.string().trim().max(100).allow('', null),
-  email:             Joi.string().email().trim().allow('', null),
-  phone:             Joi.string().trim().max(20).allow('', null),
+  email:             Joi.string().email({ tlds: false }).trim().allow('', null),
+  phone:             Joi.string().trim().max(30).allow('', null),
 
   // Tax & financial (vendor)
   panNo:             Joi.string().trim().max(20).allow('', null),
   gstRate:           Joi.number().min(0).max(100).default(0),
   tdsRate:           Joi.number().min(0).max(100).default(0),
+  approxDays:        Joi.number().min(0).max(365).allow(null),
 
-  toEmails:          Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
-  ccEmails:          Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
-  bccEmails:         Joi.array().items(Joi.string().email().lowercase().trim()).default([]),
+  toEmails:          Joi.array().items(Joi.string().trim().lowercase()).default([]),
+  ccEmails:          Joi.array().items(Joi.string().trim().lowercase()).default([]),
+  bccEmails:         Joi.array().items(Joi.string().trim().lowercase()).default([]),
+  accountsEmails:    Joi.array().items(Joi.string().trim().lowercase()).default([]),
 
   creditPeriodDays:  Joi.number().integer().min(0).max(365).default(30),
   leadTimeDays:      Joi.number().integer().min(0).max(90).default(7),

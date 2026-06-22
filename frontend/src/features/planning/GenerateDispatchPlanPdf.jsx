@@ -1,11 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Chip,
   Table, TableBody, TableCell, TableHead, TableRow, alpha, useTheme, Skeleton,
 } from '@mui/material';
-import { FileText, Download, CalendarRange, PackageSearch } from 'lucide-react';
+import { FileText, Download, CalendarRange, PackageSearch, Zap, CheckCircle2, ArrowRight } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
 import { printDispatchPlan } from '../../utils/printDispatchPlan';
@@ -26,9 +27,34 @@ const STATUS_COLOR = {
  */
 const GenerateDispatchPlanPdf = () => {
   const theme = useTheme();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+
+  // FMS task context — set when the doer arrived here via "Do it now" on the
+  // dispatch-plan step.
+  const fromTask = params.get('fromTask');
+  const fromStep = params.get('fromStep');
+  const soFromTask = params.get('so') || '';
+  const cameFromTask = !!(fromTask && fromStep);
+
   const [order, setOrder] = useState(null);
   const { data: ordersRes, isFetching: loadingOrders } = useGetOrdersQuery({ limit: 500, sort: '-orderDate' });
   const orders = useMemo(() => ordersRes?.data || [], [ordersRes]);
+
+  // Came from a task → auto-select the order it was raised for, once orders load.
+  useEffect(() => {
+    if (!cameFromTask || order || !soFromTask || !orders.length) return;
+    const match = orders.find((o) => o.soNumber === soFromTask);
+    if (match) setOrder(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameFromTask, soFromTask, orders]);
+
+  // Return to the FMS step that sent us here. ?entryDone=1 auto-ticks its checklist
+  // so the doer only reviews & submits — that's what records it in the FMS Tracker.
+  const backToTask = () => {
+    if (!cameFromTask) return;
+    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?entryDone=1`);
+  };
 
   const soNumber = order?.soNumber || null;
   const { data: schedRes, isFetching: loadingSched, isError } = useGetScheduleQuery(soNumber, { skip: !soNumber });
@@ -67,7 +93,17 @@ const GenerateDispatchPlanPdf = () => {
     };
     const ok = printDispatchPlan(ctx);
     if (ok) enqueueSnackbar('Dispatch plan opened — print or Save as PDF from the new tab.', { variant: 'success' });
+    return ok;
   };
+
+  // Auto-open the plan PDF once the schedule for the task's order has loaded.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!cameFromTask || autoOpenedRef.current || !hasPlan || loadingSched) return;
+    autoOpenedRef.current = true;
+    handleDownload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameFromTask, hasPlan, loadingSched]);
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
@@ -93,6 +129,34 @@ const GenerateDispatchPlanPdf = () => {
       </Box>
 
       <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6 }}>
+        {/* Came from an FMS step — the plan PDF opens automatically; this banner
+            brings the doer straight back to the step to submit. */}
+        {cameFromTask && (
+          <Paper sx={{
+            p: { xs: 1.5, md: 2 }, borderRadius: 3, mb: 2, display: 'flex', alignItems: 'center',
+            gap: 1.5, flexWrap: 'wrap',
+            bgcolor: alpha(theme.palette.primary.main, 0.06),
+            border: `1px solid ${alpha(theme.palette.primary.main, 0.35)}`,
+          }}>
+            <Box sx={{ p: 1, borderRadius: 2, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', display: 'flex' }}>
+              <Zap size={18} />
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 200 }}>
+              <Typography variant="body2" sx={{ fontWeight: 800, color: 'primary.dark' }}>
+                Generate Dispatch Plan{soFromTask ? ` — ${soFromTask}` : ''}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                The plan PDF opens in a new tab. When you’ve reviewed it, click “Back to task” to
+                mark the step done — it then shows in the FMS Tracker &amp; Master FMS.
+              </Typography>
+            </Box>
+            <Button variant="contained" endIcon={<ArrowRight size={15} />} startIcon={<CheckCircle2 size={15} />}
+              onClick={backToTask} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+              Back to task
+            </Button>
+          </Paper>
+        )}
+
         {/* Order picker */}
         <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>

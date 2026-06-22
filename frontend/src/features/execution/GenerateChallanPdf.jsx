@@ -1,11 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, Button, Chip, InputAdornment,
   Table, TableBody, TableCell, TableHead, TableRow, alpha, useTheme, Skeleton, CircularProgress,
 } from '@mui/material';
-import { Truck, Eye, Search, FileText } from 'lucide-react';
+import { Truck, Eye, Search, FileText, Zap, CheckCircle2, ArrowRight } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
@@ -26,7 +27,17 @@ const STATUS_COLOR = {
  */
 const GenerateChallanPdf = () => {
   const theme = useTheme();
-  const [search, setSearch] = useState('');
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+
+  // FMS task context — set when the doer arrived here via "Do it now" on step 2.06.
+  const fromTask = params.get('fromTask');
+  const fromStep = params.get('fromStep');
+  const soFromTask = params.get('so') || '';
+  const cameFromTask = !!(fromTask && fromStep);
+
+  // When opened from a task, scope the list to that order's challan(s) up front.
+  const [search, setSearch] = useState(soFromTask);
   const { data, isFetching } = useGetChallansQuery({ limit: 200, sort: '-dcDate', search: search || undefined });
   const [busyId, setBusyId] = useState(null);
 
@@ -46,15 +57,37 @@ const GenerateChallanPdf = () => {
       const blob = await res.blob();
       blobUrl = URL.createObjectURL(blob);
       const w = window.open(blobUrl, '_blank', 'noopener');
-      if (!w) enqueueSnackbar('Allow pop-ups to preview the challan PDF.', { variant: 'warning' });
+      if (!w) enqueueSnackbar('Allow pop-ups to view the challan PDF, then use “Back to task”.', { variant: 'warning' });
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      return !!w;
     } catch (e) {
       if (blobUrl) URL.revokeObjectURL(blobUrl);
       enqueueSnackbar(e.message || 'Could not preview the challan PDF.', { variant: 'error' });
+      return false;
     } finally {
       setBusyId(null);
     }
   };
+
+  // Return to the FMS step that sent us here. Landing with ?entryDone=1 auto-ticks
+  // the step's checklist so the doer only reviews & submits — that's what makes the
+  // challan show up "done by X" in the FMS Tracker and Master FMS.
+  const backToTask = () => {
+    if (!cameFromTask) return;
+    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?entryDone=1`);
+  };
+
+  // Auto-open the challan PDF once, for the order we came from. The latest DC for
+  // that SO is rows[0] (list is sorted -dcDate and already filtered to the SO).
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!cameFromTask || autoOpenedRef.current || isFetching) return;
+    const target = rows[0];
+    if (!target) return;
+    autoOpenedRef.current = true;
+    previewPdf(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameFromTask, isFetching, rows]);
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
@@ -80,6 +113,34 @@ const GenerateChallanPdf = () => {
       </Box>
 
       <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6 }}>
+        {/* Came from FMS step 2.06 — the challan PDF opens automatically; this banner
+            brings the doer straight back to the step to submit. */}
+        {cameFromTask && (
+          <Paper sx={{
+            p: { xs: 1.5, md: 2 }, borderRadius: 3, mb: 2, display: 'flex', alignItems: 'center',
+            gap: 1.5, flexWrap: 'wrap',
+            bgcolor: alpha(theme.palette.primary.main, 0.06),
+            border: `1px solid ${alpha(theme.palette.primary.main, 0.35)}`,
+          }}>
+            <Box sx={{ p: 1, borderRadius: 2, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', display: 'flex' }}>
+              <Zap size={18} />
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 200 }}>
+              <Typography variant="body2" sx={{ fontWeight: 800, color: 'primary.dark' }}>
+                Create Delivery Challan{soFromTask ? ` — ${soFromTask}` : ''}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                The challan PDF opens in a new tab. When you’ve reviewed it, click “Back to task” to
+                mark the step done — it then shows in the FMS Tracker &amp; Master FMS.
+              </Typography>
+            </Box>
+            <Button variant="contained" endIcon={<ArrowRight size={15} />} startIcon={<CheckCircle2 size={15} />}
+              onClick={backToTask} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+              Back to task
+            </Button>
+          </Paper>
+        )}
+
         <Paper sx={{ p: 1.5, borderRadius: 3, mb: 2 }}>
           <TextField
             fullWidth size="small" value={search} onChange={(e) => setSearch(e.target.value)}

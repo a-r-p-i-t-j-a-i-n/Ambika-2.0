@@ -5,8 +5,9 @@ import {
   alpha, useTheme, CircularProgress, Skeleton, Chip,
   ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
-import { Plus, CalendarPlus, Search, LayoutList, CalendarRange, ListChecks } from 'lucide-react';
+import { Plus, CalendarPlus, Search, LayoutList, CalendarRange, ListChecks, CalendarDays } from 'lucide-react';
 import { useSnackbar } from 'notistack';
+import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
 import { useGetOrdersQuery } from '../../store/api/orderApi';
@@ -91,6 +92,7 @@ const EmptyState = () => {
 
 const PlanWorkspace = () => {
   const theme = useTheme();
+  const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -223,6 +225,13 @@ const PlanWorkspace = () => {
           </Typography>
         </Box>
         <Stack direction="row" spacing={1.25} sx={{ width: { xs: '100%', md: 'auto' } }}>
+          <Button
+            variant="outlined"
+            startIcon={<CalendarDays size={14} />}
+            onClick={() => navigate('/dispatch-planning/calendar')}
+          >
+            Calendar
+          </Button>
           <Autocomplete
             options={orders}
             loading={ordersLoading}

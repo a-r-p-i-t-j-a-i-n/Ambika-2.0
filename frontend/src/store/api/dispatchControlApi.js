@@ -42,6 +42,7 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_r, _e, { soNumber }) => [
         { type: 'Schedule', id: soNumber },
+        'Schedule', // general list tag → refreshes the Dispatch Calendar
         { type: 'Comparison', id: soNumber },
         'Order', 'PPC', 'DispatchDashboard',
       ],
@@ -54,6 +55,7 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_r, _e, { soNumber }) => [
         { type: 'Schedule', id: soNumber },
+        'Schedule', // general list tag → refreshes the Dispatch Calendar
         { type: 'Comparison', id: soNumber },
         'DispatchDashboard',
       ],
@@ -65,6 +67,7 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_r, _e, { soNumber }) => [
         { type: 'Schedule', id: soNumber },
+        'Schedule', // general list tag → refreshes the Dispatch Calendar
         { type: 'Comparison', id: soNumber },
         'DispatchDashboard',
       ],
