@@ -40,6 +40,10 @@ const mergeSteps = (defs, tplSteps = []) => {
         approverIds: (t.approval?.approverIds || []).map((x) => String(x._id || x)),
       },
       actionLink: t.actionLink || '',
+      // Link-required toggle: explicit template value wins; otherwise show the
+      // step definition's default so saving never silently changes behaviour.
+      requiresLink: t.requiresLink != null ? !!t.requiresLink : !!d.requiresLink,
+      _defRequiresLink: !!d.requiresLink, // baseline, to detect an explicit override on save
       leadTime: { value: t.leadTime?.value ?? '', unit: t.leadTime?.unit || 'HOURS' },
       assigneeUserIds: (t.assigneeUserIds?.length ? t.assigneeUserIds : (t.assigneeUserId ? [t.assigneeUserId] : [])).map((x) => String(x._id || x)),
       buddyUserIds: (t.buddyUserIds?.length ? t.buddyUserIds : (t.buddyUserId ? [t.buddyUserId] : [])).map((x) => String(x._id || x)),
@@ -58,6 +62,8 @@ const mergeStepsFromProcess = (defs, procSteps = []) => {
       taskTitle: s.taskTitle || '',
       instructions: s.instructions || '',
       checklist: (s.checklist || []).map((c) => c.text),
+      // The process step is enriched with a resolved requiresLink; fall back to def.
+      requiresLink: s.requiresLink != null ? !!s.requiresLink : !!d.requiresLink,
       leadTime: { value: '', unit: 'HOURS' },
       assigneeUserIds: (s.assignees?.length ? s.assignees : (s.assignedTo ? [s.assignedTo] : [])).map((x) => String(x._id || x)),
       buddyUserIds: (s.buddies?.length ? s.buddies : (s.buddyUserId ? [s.buddyUserId] : [])).map((x) => String(x._id || x)),
@@ -113,6 +119,40 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
               {UNITS.map((u) => <MenuItem key={u} value={u}>{u.toLowerCase()}</MenuItem>)}
             </TextField>
           </Stack>
+
+          {/* ── Require a link to complete this step? ── */}
+          <Paper
+            variant="outlined"
+            onClick={() => set('requiresLink', !row.requiresLink)}
+            sx={{
+              p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, cursor: 'pointer',
+              bgcolor: alpha(row.requiresLink ? '#1d4ed8' : '#64748b', row.requiresLink ? 0.07 : 0.04),
+              borderColor: alpha(row.requiresLink ? '#1d4ed8' : '#64748b', row.requiresLink ? 0.45 : 0.25),
+              transition: 'all .15s',
+            }}
+          >
+            <Box sx={{ color: row.requiresLink ? '#1d4ed8' : 'text.disabled', display: 'flex' }}><Link2 size={18} /></Box>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>Require a link to mark this step done</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {row.requiresLink
+                  ? 'The doer must paste a link before “Mark Done”.'
+                  : 'Optional — the doer can complete this step without a link.'}
+              </Typography>
+            </Box>
+            <Chip
+              size="small"
+              label={row.requiresLink ? 'Required' : 'Optional'}
+              sx={{ fontWeight: 700, height: 22,
+                bgcolor: alpha(row.requiresLink ? '#1d4ed8' : '#64748b', 0.12),
+                color: row.requiresLink ? '#1d4ed8' : '#475569' }}
+            />
+            <Switch
+              checked={!!row.requiresLink}
+              onChange={(e) => set('requiresLink', e.target.checked)}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </Paper>
 
           {/* ── Connect to the real system action (Do-it-now deep link) ── */}
           {advanced && (
@@ -376,6 +416,7 @@ const TaskTemplates = () => {
           buddies: s.buddyUserIds || [],
           leadTime: s.leadTime.value ? { value: Number(s.leadTime.value), unit: s.leadTime.unit } : undefined,
           checklist: s.checklist.filter(Boolean).map((text) => ({ text })),
+          requiresLink: !!s.requiresLink,
         })) }).unwrap();
         setEditing(null);
       } catch (e) { setError(e?.data?.message || 'Could not save the order plan.'); }
@@ -387,7 +428,8 @@ const TaskTemplates = () => {
       steps: editing.steps
         .filter((s) => s.taskTitle || s.checklist.length || s.assigneeUserIds?.length || s.leadTime.value
           || s.verifications?.some(Boolean) || s.formFields?.some((f) => f.label)
-          || s.proof?.required || s.approval?.required || s.actionLink)
+          || s.proof?.required || s.approval?.required || s.actionLink
+          || s.requiresLink !== s._defRequiresLink) // persist an explicit link-required override
         .map((s) => ({
           stepCode: s.stepCode,
           taskTitle: s.taskTitle || undefined,
@@ -400,6 +442,7 @@ const TaskTemplates = () => {
           approval: s.approval?.required && s.approval.approverIds?.length
             ? { required: true, approverIds: s.approval.approverIds } : null,
           actionLink: s.actionLink || null,
+          requiresLink: !!s.requiresLink,
           leadTime: s.leadTime.value ? { value: Number(s.leadTime.value), unit: s.leadTime.unit } : undefined,
           assigneeUserIds: s.assigneeUserIds || [],
           buddyUserIds: s.buddyUserIds || [],

@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Drawer, Box, Paper, Typography, Stack, Autocomplete, TextField, MenuItem,
   Button, IconButton, Chip, Tooltip, Divider, alpha, useTheme, CircularProgress,
-  LinearProgress, InputAdornment,
+  LinearProgress, InputAdornment, Dialog, DialogTitle, DialogContent, DialogActions,
+  createFilterOptions,
 } from '@mui/material';
 import {
   X, Save, Hash, Calendar, Truck, Building2, Layers,
@@ -18,9 +19,13 @@ import {
 } from '../../store/api/dispatchControlApi';
 import PhasePicker from './components/PhasePicker';
 import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
+import { useGetTransportersQuery, useCreateTransporterMutation } from '../../store/api/transporterApi';
 
 const TRANSPORT_MODES = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
 const DC_THROUGH = ['Freight Paid', 'To Pay', 'Party Vehicle'];
+
+// Lets the Transporter picker offer "Add «typed name»" when no master match exists.
+const transporterFilter = createFilterOptions();
 
 const SectionLabel = ({ icon: Icon, children, hint }) => {
   const theme = useTheme();
@@ -87,6 +92,13 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
 
   const [createActualDispatch, { isLoading: isSaving }] = useCreateActualDispatchMutation();
   const openFmsTask = useOpenFmsTask();
+
+  // Transporter master — pick an existing transporter or add a new one inline.
+  const { data: transRes, isFetching: transLoading } = useGetTransportersQuery({ limit: 500, sort: 'name', isActive: true }, { skip: !open });
+  const transporters = useMemo(() => transRes?.data || [], [transRes]);
+  const [createTransporter, { isLoading: creatingTransporter }] = useCreateTransporterMutation();
+  // Inline "add transporter" dialog state (null = closed).
+  const [newTransporter, setNewTransporter] = useState(null);
 
   // Reset whenever the drawer opens.
   useEffect(() => {
@@ -198,6 +210,28 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
       if (step1Order?.soNumber) await openFmsTask({ soNumber: step1Order.soNumber });
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Could not record dispatch', { variant: 'error' });
+    }
+  };
+
+  // Create the typed transporter in the master, then select it on the challan.
+  const saveNewTransporter = async () => {
+    const name = (newTransporter?.name || '').trim();
+    if (!name) { enqueueSnackbar('Transporter name is required.', { variant: 'warning' }); return; }
+    try {
+      const res = await createTransporter({
+        name,
+        contactPerson: newTransporter.contactPerson?.trim() || undefined,
+        phone: newTransporter.phone?.trim() || undefined,
+        email: newTransporter.email?.trim() || undefined,
+        city: newTransporter.city?.trim() || undefined,
+        gstNo: newTransporter.gstNo?.trim() || undefined,
+      }).unwrap();
+      const created = res?.data || res;
+      setHeader((p) => ({ ...p, transporterName: created?.name || name }));
+      setNewTransporter(null);
+      enqueueSnackbar(`Transporter "${created?.name || name}" added to master.`, { variant: 'success' });
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Could not add transporter.', { variant: 'error' });
     }
   };
 
@@ -317,10 +351,69 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
             <TextField select label="Transport mode" value={header.transportMode} onChange={(e) => setHeader((p) => ({ ...p, transportMode: e.target.value }))}>
               {TRANSPORT_MODES.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
             </TextField>
-            <TextField
-              label="Transporter"
+            <Autocomplete
+              freeSolo
+              selectOnFocus
+              handleHomeEndKeys
+              loading={transLoading}
+              options={transporters}
               value={header.transporterName}
-              onChange={(e) => setHeader((p) => ({ ...p, transporterName: e.target.value }))}
+              getOptionLabel={(o) => (typeof o === 'string' ? o : (o.addLabel || o.name || ''))}
+              isOptionEqualToValue={(o, v) => (o?.name || o) === (v?.name || v)}
+              filterOptions={(opts, params) => {
+                const filtered = transporterFilter(opts, params);
+                const typed = params.inputValue.trim();
+                const exists = opts.some((o) => (o.name || '').toLowerCase() === typed.toLowerCase());
+                // Always offer a "create" row so a missing transporter can be added on the spot.
+                if (typed && !exists) {
+                  filtered.push({ addNew: true, name: typed, addLabel: `+ Add "${typed}" as a new transporter` });
+                } else if (!typed) {
+                  filtered.push({ addNew: true, name: '', addLabel: '+ Add a new transporter' });
+                }
+                return filtered;
+              }}
+              onChange={(_, val) => {
+                if (val && typeof val === 'object' && val.addNew) {
+                  setNewTransporter({ name: val.name, contactPerson: '', phone: '', email: '', city: '', gstNo: '' });
+                  return;
+                }
+                const t = typeof val === 'string' ? null : val;
+                setHeader((p) => ({
+                  ...p,
+                  transporterName: typeof val === 'string' ? val : (val?.name || ''),
+                  // Convenience: adopt the transporter's primary mode when known.
+                  transportMode: t?.modes?.[0] || p.transportMode,
+                }));
+              }}
+              onInputChange={(_, v, reason) => { if (reason === 'input') setHeader((p) => ({ ...p, transporterName: v })); }}
+              renderOption={(props, option) => (
+                <li {...props} key={option._id || option.addLabel || option.name}>
+                  {option.addNew ? (
+                    <Typography sx={{ fontWeight: 700, color: 'primary.main' }}>{option.addLabel}</Typography>
+                  ) : (
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{option.name}</Typography>
+                      {(option.city || option.phone) && (
+                        <Typography variant="caption" color="text.secondary">
+                          {[option.city, option.phone].filter(Boolean).join(' · ')}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+                </li>
+              )}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Transporter"
+                  placeholder="Select or add…"
+                  helperText="Not listed? Type the name or pick “+ Add a new transporter”."
+                  InputProps={{
+                    ...params.InputProps,
+                    startAdornment: <InputAdornment position="start"><Truck size={13} /></InputAdornment>,
+                  }}
+                />
+              )}
             />
             <TextField
               label="Invoice / LR"
@@ -497,6 +590,46 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
           Submit Dispatch
         </Button>
       </Box>
+
+      {/* Inline "Add transporter" — saves straight into the Transporter master. */}
+      <Dialog open={!!newTransporter} onClose={() => !creatingTransporter && setNewTransporter(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Add transporter to master</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.75} sx={{ mt: 0.5 }}>
+            <TextField
+              label="Transporter name *" size="small" autoFocus
+              value={newTransporter?.name || ''}
+              onChange={(e) => setNewTransporter((p) => ({ ...p, name: e.target.value }))}
+            />
+            <Stack direction="row" spacing={1.5}>
+              <TextField label="Contact person" size="small" fullWidth
+                value={newTransporter?.contactPerson || ''}
+                onChange={(e) => setNewTransporter((p) => ({ ...p, contactPerson: e.target.value }))} />
+              <TextField label="Phone" size="small" fullWidth
+                value={newTransporter?.phone || ''}
+                onChange={(e) => setNewTransporter((p) => ({ ...p, phone: e.target.value }))} />
+            </Stack>
+            <TextField label="Email" size="small" fullWidth
+              value={newTransporter?.email || ''}
+              onChange={(e) => setNewTransporter((p) => ({ ...p, email: e.target.value }))} />
+            <Stack direction="row" spacing={1.5}>
+              <TextField label="City" size="small" fullWidth
+                value={newTransporter?.city || ''}
+                onChange={(e) => setNewTransporter((p) => ({ ...p, city: e.target.value }))} />
+              <TextField label="GST No." size="small" fullWidth
+                value={newTransporter?.gstNo || ''}
+                onChange={(e) => setNewTransporter((p) => ({ ...p, gstNo: e.target.value.toUpperCase() }))} />
+            </Stack>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNewTransporter(null)} disabled={creatingTransporter}>Cancel</Button>
+          <Button variant="contained" onClick={saveNewTransporter} disabled={creatingTransporter || !newTransporter?.name?.trim()}
+            startIcon={creatingTransporter ? <CircularProgress size={14} color="inherit" /> : <Save size={14} />}>
+            {creatingTransporter ? 'Saving…' : 'Save & select'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Drawer>
   );
 };

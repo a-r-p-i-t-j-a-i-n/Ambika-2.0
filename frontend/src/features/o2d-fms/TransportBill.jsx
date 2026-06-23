@@ -4,6 +4,7 @@ import {
 } from '@mui/material';
 import { FileSpreadsheet, Save, Upload, Paperclip, X } from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
+import { useSearchParams } from 'react-router-dom';
 import O2dStepShell from './components/O2dStepShell';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useTransportBillReceiveMutation, useTransportBillPaymentMutation } from '../../store/api/o2dFulfillmentApi';
@@ -13,6 +14,18 @@ import { useReturnToTask } from './useReturnToTask';
 /** Steps 2.12 (Receive transport bill) + 2.13 (Transport bill payment status). */
 const TransportBill = () => {
   const theme = useTheme();
+  // 2.12 and 2.13 are separate FMS steps. The opening step passes ?part=receive
+  // or ?part=status so we show only that step. No part (menu) shows both.
+  const [params] = useSearchParams();
+  const part = params.get('part');
+  const showReceive = !part || part === 'receive';
+  const showStatus = !part || part === 'status';
+  const shell = part === 'receive'
+    ? { step: 'Step 2.12', title: 'Receive Transportation Bill', subtitle: "Record the transporter's bill and attach the invoice." }
+    : part === 'status'
+      ? { step: 'Step 2.13', title: 'Transport Bill Payment Status', subtitle: 'Record whether the transporter has been paid.' }
+      : { step: 'Steps 2.12 – 2.13', title: 'Transport Bill', subtitle: "Record the transporter's bill and its payment status." };
+
   const { data: challansRes } = useGetChallansQuery({ limit: 300, sort: '-dcDate' });
   const challans = useMemo(() => challansRes?.data || [], [challansRes]);
   const [receive, { isLoading: savingRcv }] = useTransportBillReceiveMutation();
@@ -52,7 +65,7 @@ const TransportBill = () => {
   };
 
   return (
-    <O2dStepShell icon={FileSpreadsheet} step="Steps 2.12 – 2.13" title="Transport Bill" subtitle="Record the transporter's bill and its payment status.">
+    <O2dStepShell icon={FileSpreadsheet} step={shell.step} title={shell.title} subtitle={shell.subtitle}>
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
           options={challans}
@@ -74,6 +87,7 @@ const TransportBill = () => {
       {dc && (
         <Stack spacing={2}>
           {/* 2.12 */}
+          {showReceive && (
           <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.warning.main}` }}>
             <Typography sx={{ fontWeight: 800, mb: 1.5 }}>2.12 · Receive Transportation Bill</Typography>
             <Stack spacing={2}>
@@ -103,8 +117,10 @@ const TransportBill = () => {
               </Stack>
             </Stack>
           </Paper>
+          )}
 
           {/* 2.13 */}
+          {showStatus && (
           <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.success.main}` }}>
             <Typography sx={{ fontWeight: 800, mb: 1.5 }}>2.13 · Transport Bill Payment Status</Typography>
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -116,6 +132,7 @@ const TransportBill = () => {
               </Button>
             </Stack>
           </Paper>
+          )}
         </Stack>
       )}
     </O2dStepShell>

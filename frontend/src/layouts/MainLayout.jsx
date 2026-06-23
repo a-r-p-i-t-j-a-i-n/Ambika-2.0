@@ -51,8 +51,10 @@ const navSections = [
           { text: 'Invoice & Eway Bill',  icon: <ReceiptText size={19} />, path: '/o2d/invoice-entry' },
           { text: 'Email Invoice & Eway', icon: <FileText size={19} />,    path: '/o2d/invoice-email' },
           { text: 'Track Delivery',       icon: <Truck size={19} />,       path: '/o2d/track-delivery' },
-          { text: 'Payments (Follow-up & Receipt)', icon: <IndianRupee size={19} />, path: '/o2d/payments' },
-          { text: 'Transport Bill',       icon: <FileSpreadsheet size={19} />, path: '/o2d/transport-bill' },
+          { text: 'Payment Follow-up (2.10)',        icon: <IndianRupee size={19} />,     path: '/o2d/payments?part=followup', part: 'followup' },
+          { text: 'Receive Payment & Tally (2.11)',  icon: <IndianRupee size={19} />,     path: '/o2d/payments?part=receipt',  part: 'receipt' },
+          { text: 'Receive Transport Bill (2.12)',   icon: <FileSpreadsheet size={19} />, path: '/o2d/transport-bill?part=receive', part: 'receive' },
+          { text: 'Transport Bill Payment Status (2.13)', icon: <FileSpreadsheet size={19} />, path: '/o2d/transport-bill?part=status', part: 'status' },
         ],
       },
       { text: 'PPC Planning',   icon: <Package size={19} />,  path: '/ppc-planning' },
@@ -110,7 +112,11 @@ const PAGE_TITLES = {
   '/o2d/invoice-email':      'Email Invoice & Eway Bill',
   '/o2d/track-delivery':     'Track Delivery',
   '/o2d/payments':           'Payment Follow-up & Receipt',
+  '/o2d/payments?part=followup': 'Payment Follow-up (2.10)',
+  '/o2d/payments?part=receipt':  'Receive Payment & Tally Entry (2.11)',
   '/o2d/transport-bill':     'Transport Bill',
+  '/o2d/transport-bill?part=receive': 'Receive Transportation Bill (2.12)',
+  '/o2d/transport-bill?part=status':  'Transport Bill Payment Status (2.13)',
   '/invoices':               'Invoices & FMS',
   '/skus':                   'SKU Master',
   '/parties':                'Party Master',
@@ -280,9 +286,13 @@ const MainLayout = () => {
     .toUpperCase();
 
   const pageTitle = useMemo(() => {
+    // Step screens that share a pathname carry a ?part — title them per step.
+    const part = new URLSearchParams(location.search).get('part');
+    const byPart = PAGE_TITLES[`${location.pathname}?part=${part}`];
+    if (part && byPart) return byPart;
     const key = Object.keys(PAGE_TITLES).find((p) => location.pathname.startsWith(p));
     return key ? PAGE_TITLES[key] : 'AGL ERP';
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   // A group is open if the user toggled it; otherwise it auto-opens whenever
   // the active route lives under one of its children.
@@ -482,10 +492,15 @@ const MainLayout = () => {
                             // Pricing children share /pricing and disambiguate via the
                             // `stream` query param; all other children match by path.
                             const childPath = child.path.split('?')[0];
+                            // Children that share a pathname (payments / transport-bill steps)
+                            // disambiguate via the `part` query param, like pricing's `stream`.
+                            const childPart = new URLSearchParams(location.search).get('part');
                             const childSelected = child.stream
                               ? (location.pathname === item.path &&
                                  (child.stream === 'RM_COST' ? stream === 'RM_COST' : stream !== 'RM_COST'))
-                              : location.pathname === childPath;
+                              : child.part
+                                ? (location.pathname === childPath && childPart === child.part)
+                                : location.pathname === childPath;
                             return (
                               <ListItem key={child.text} disablePadding sx={{ mb: 0.25 }}>
                                 {leafButton(child, childSelected, { indent: true })}

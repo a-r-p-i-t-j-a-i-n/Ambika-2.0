@@ -205,6 +205,10 @@ const ProcessStepSchema = new Schema({
   actionLink:   { type: String, default: null },
   comments:     [StepCommentSchema],
 
+  // Per-step "a link is required to complete" override. null = inherit the
+  // Step Definition's default; true/false = explicit choice set on the template.
+  requiresLink: { type: Boolean, default: null },
+
   link:    { type: String, default: null },
   remarks: { type: String, default: null },
   attachments: [StepAttachmentSchema],
@@ -276,6 +280,9 @@ const TemplateStepSchema = new Schema({
   proof:        { type: ProofConfigSchema, default: null },
   approval:     { type: ApprovalSchema, default: null }, // runtime fields stay null on templates
   actionLink:   { type: String, default: null }, // frontend action-registry key
+  // Per-step "a link is required to complete" choice. null = inherit the Step
+  // Definition's default; true/false = explicit override for this template.
+  requiresLink: { type: Boolean, default: null },
   leadTime:     {
     value: { type: Number, default: null },
     unit:  { type: String, enum: Object.values(LEAD_TIME_UNIT), default: LEAD_TIME_UNIT.HOURS },

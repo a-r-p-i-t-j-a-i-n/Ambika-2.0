@@ -75,6 +75,7 @@ const templateStepJoi = Joi.object({
     approverIds: Joi.array().items(objectId).default([]),
   }).allow(null),
   actionLink: Joi.string().trim().allow('', null),
+  requiresLink: Joi.boolean().allow(null), // null = inherit the step definition's default
   leadTime:     leadTimeJoi.default({ unit: 'HOURS' }),
   assigneeRole:   Joi.string().trim().allow('', null),
   assigneeUserIds: Joi.array().items(objectId).default([]),
@@ -134,6 +135,7 @@ export const planOrderSchema = Joi.object({
     leadTime:     leadTimeJoi,
     checklist:    Joi.array().items(Joi.object({ text: Joi.string().trim().required() })),
     actionLink:   Joi.string().trim().allow('', null),
+    requiresLink: Joi.boolean().allow(null), // null = inherit the step definition's default
   })).min(1).required(),
 });
 

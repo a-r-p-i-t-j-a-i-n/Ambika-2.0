@@ -5,6 +5,7 @@ import {
 import { IndianRupee, Save, PhoneCall, BadgeCheck } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
+import { useSearchParams } from 'react-router-dom';
 import O2dStepShell from './components/O2dStepShell';
 import { useGetSalesInvoicesQuery } from '../../store/api/salesInvoiceApi';
 import { usePaymentFollowUpMutation, usePaymentReceiptMutation } from '../../store/api/o2dFulfillmentApi';
@@ -15,6 +16,19 @@ const YNC = ['Yes', 'No', 'Cancelled'];
 /** Steps 2.10 (Follow up for payment) + 2.11 (Receive payment & Tally entry). */
 const PaymentSteps = () => {
   const theme = useTheme();
+  // 2.10 and 2.11 are separate FMS steps. The step that opened this screen passes
+  // ?part=followup or ?part=receipt so we show only that step. No part (e.g. opened
+  // from the menu) shows both.
+  const [params] = useSearchParams();
+  const part = params.get('part');
+  const showFollowUp = !part || part === 'followup';
+  const showReceipt = !part || part === 'receipt';
+  const shell = part === 'followup'
+    ? { step: 'Step 2.10', title: 'Follow up for Payment', subtitle: 'Chase the payment from the client.' }
+    : part === 'receipt'
+      ? { step: 'Step 2.11', title: 'Receive Payment & Tally Entry', subtitle: 'Record the payment received and the Tally entry.' }
+      : { step: 'Steps 2.10 – 2.11', title: 'Payment Follow-up & Receipt', subtitle: 'Chase the payment, then record what was received.' };
+
   const { data: invRes } = useGetSalesInvoicesQuery({ limit: 300, sort: '-invoiceDate' });
   const invoices = useMemo(() => invRes?.data || [], [invRes]);
   const [followUp, { isLoading: savingFU }] = usePaymentFollowUpMutation();
@@ -46,7 +60,7 @@ const PaymentSteps = () => {
   };
 
   return (
-    <O2dStepShell icon={IndianRupee} step="Steps 2.10 – 2.11" title="Payment Follow-up & Receipt" subtitle="Chase the payment, then record what was received.">
+    <O2dStepShell icon={IndianRupee} step={shell.step} title={shell.title} subtitle={shell.subtitle}>
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
           options={invoices}
@@ -69,6 +83,7 @@ const PaymentSteps = () => {
       {inv && (
         <Stack spacing={2}>
           {/* 2.10 */}
+          {showFollowUp && (
           <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.info.main}` }}>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
               <PhoneCall size={18} color={theme.palette.info.main} />
@@ -83,8 +98,10 @@ const PaymentSteps = () => {
               </Button>
             </Stack>
           </Paper>
+          )}
 
           {/* 2.11 */}
+          {showReceipt && (
           <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.success.main}` }}>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
               <BadgeCheck size={18} color={theme.palette.success.main} />
@@ -109,6 +126,7 @@ const PaymentSteps = () => {
               </Stack>
             </Stack>
           </Paper>
+          )}
         </Stack>
       )}
     </O2dStepShell>

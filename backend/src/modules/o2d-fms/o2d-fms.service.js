@@ -68,7 +68,10 @@ const assertCanAct = (step, user, privileged) => {
  */
 const unmetRequirements = (step, def, payload = {}) => {
   const unmet = [];
-  if (def?.requiresLink && !payload.link && !step.link) unmet.push('a link is required');
+  // Link requirement: the step's own setting wins (template/per-order override);
+  // null means inherit the Step Definition's default.
+  const linkRequired = step.requiresLink != null ? step.requiresLink : !!def?.requiresLink;
+  if (linkRequired && !payload.link && !step.link) unmet.push('a link is required');
 
   const attachCount = (step.attachments?.length || 0) + (payload.attachments?.length || 0);
   if (def?.requiresAttachment && attachCount === 0) unmet.push('an attachment is required');
@@ -120,7 +123,7 @@ const enrichSteps = (process, defMap) => {
       slaMinutes:  def?.slaMinutes ?? null,
       phase:       def?.phase || null,
       sequence:    def?.sequence ?? 0,
-      requiresLink:       !!def?.requiresLink,
+      requiresLink:       s.requiresLink != null ? !!s.requiresLink : !!def?.requiresLink,
       requiresAttachment: !!def?.requiresAttachment,
       allowIncompleteChecklist: !!def?.allowIncompleteChecklist,
       defaultOwnerRole:   def?.defaultOwnerRole || null,
@@ -211,6 +214,8 @@ export const o2dFmsService = {
           ? { required: true, approverIds: (tpl.approval.approverIds || []).map(String) }
           : null,
         actionLink: tpl?.actionLink || null,
+        // Explicit template override (true/false) or null to inherit the def at runtime.
+        requiresLink: (tpl && tpl.requiresLink != null) ? tpl.requiresLink : null,
         startedAt: i === 0 ? received : null,
       });
     }
@@ -529,7 +534,7 @@ export const o2dFmsService = {
           description: s.instructions || def?.description || '',
           asBuddy: isBuddy && !isOwner,
           status: s.status,
-          requiresLink: !!def?.requiresLink,
+          requiresLink: s.requiresLink != null ? !!s.requiresLink : !!def?.requiresLink,
           requiresAttachment: !!def?.requiresAttachment,
           checklistTotal: checklist.length,
           checklistDone: checklist.filter((c) => c.done).length,
@@ -791,6 +796,7 @@ export const o2dFmsService = {
         });
       }
       if (sp.actionLink !== undefined) step.actionLink = sp.actionLink || null;
+      if (sp.requiresLink !== undefined) step.requiresLink = sp.requiresLink; // true/false, or null to inherit
       process.activityTimeline.push({
         action: 'STEP_PLAN_UPDATED',
         description: `${sp.stepCode} · task/plan updated`,

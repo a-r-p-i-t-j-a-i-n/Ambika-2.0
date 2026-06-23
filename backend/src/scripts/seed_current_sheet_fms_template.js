@@ -38,10 +38,10 @@ const STEP_CONFIG = {
   '2.07': { actionLink: 'INVOICE_ENTRY',      checklist: ['Create the tax invoice in Tally', 'Generate the e-way bill', 'Attach invoice, e-way & PDIR'] },
   '2.08': { actionLink: 'INVOICE_EMAIL',      checklist: ['Email invoice & e-way bill to the client'] },
   '2.09': { actionLink: 'TRACK_DELIVERY',     checklist: ['Confirm delivery / POD', 'Record the delivery date'] },
-  '2.10': { actionLink: 'PAYMENTS',           checklist: ['Follow up with the client for payment'] },
-  '2.11': { actionLink: 'PAYMENTS',           checklist: ['Confirm payment received', 'Enter the receipt in Tally'] },
-  '2.12': { actionLink: 'TRANSPORT_BILL',     checklist: ['Receive the transporter bill', 'Attach the transport invoice'] },
-  '2.13': { actionLink: 'TRANSPORT_BILL',     checklist: ['Confirm the transporter payment status'] },
+  '2.10': { actionLink: 'PAYMENT_FOLLOWUP',        checklist: ['Follow up with the client for payment'] },
+  '2.11': { actionLink: 'PAYMENT_RECEIPT',         checklist: ['Confirm payment received', 'Enter the receipt in Tally'] },
+  '2.12': { actionLink: 'TRANSPORT_BILL_RECEIVE',  checklist: ['Receive the transporter bill', 'Attach the transport invoice'] },
+  '2.13': { actionLink: 'TRANSPORT_BILL_STATUS',   checklist: ['Confirm the transporter payment status'] },
 };
 
 const run = async () => {
