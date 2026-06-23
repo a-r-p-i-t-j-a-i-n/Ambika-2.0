@@ -14,6 +14,7 @@ import {
   useSubmitIndentMutation,
 } from '../../../store/api/procurementApi';
 import { ApprovalChip, OverallChip, QuoteChip, QuotationChip, fileHref } from './indentMeta';
+import StatusChip from '../components/StatusChip';
 import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
@@ -135,6 +136,9 @@ const IndentDetail = () => {
   const step12Done = ['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(indent.overallStatus);
   const quotationDone = !!indent.quotationApprovalStep?.statusDone;
   const isQuotationApproved = indent.overallStatus === 'QUOTATION_APPROVED';
+  // Step 1.3 was skipped because Step 1.2 was marked "Quote Not Required".
+  const quoteSkipped = !!indent.quotationApprovalStep?.skipped;
+  const isService = indent.requestType === 'INTERNAL_SERVICE';
   const detailItems = itemsOf(indent);
 
   return (
@@ -151,7 +155,14 @@ const IndentDetail = () => {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
             <Typography variant="h5" fontWeight={800}>{indent.indentNumber}</Typography>
             <ApprovalChip status={indent.approvalStatus} />
-            <OverallChip status={indent.overallStatus} />
+            {quoteSkipped ? (
+              <>
+                <StatusChip label="Quote Not Required" tone="neutral" />
+                <StatusChip status={isService ? indent.overallStatus : 'PO_READY'} />
+              </>
+            ) : (
+              <OverallChip status={indent.overallStatus} />
+            )}
           </Box>
           <Typography variant="body2" color="text.secondary">{indent.productNameRevised}</Typography>
         </Box>
@@ -243,7 +254,7 @@ const IndentDetail = () => {
           >
             <Grid container spacing={2}>
               <Grid item xs={6} sm={4}>
-                <Field label="Status" value={<QuotationChip status={indent.quotationApprovalStep?.statusDone || 'PENDING'} />} />
+                <Field label="Status" value={<QuotationChip status={indent.quotationApprovalStep?.statusDone || (quoteSkipped ? 'NOT_REQUIRED' : 'PENDING')} />} />
               </Grid>
               <Grid item xs={6} sm={4}><Field label="Actual Date" value={fmtDate(indent.quotationApprovalStep?.actualAt)} /></Grid>
               <Grid item xs={12} sm={4}>

@@ -7,6 +7,7 @@ import {
 import {
   ArrowLeft, Pencil, CheckCircle2, Send, FileDown, Ban, ShoppingBag,
   Building2, FileText, Truck, Mail, PhoneCall, PackageCheck, Eye, CircleSlash,
+  MapPin, Wallet, Clock, CalendarClock, User,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -45,12 +46,49 @@ const Field = ({ label, value }) => (
 );
 
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px' }}>
-    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
-      {icon} {title}
+  <Paper sx={{ p: 3, borderRadius: '18px', height: '100%', border: '1px solid', borderColor: 'divider' }}>
+    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, fontWeight: 700, color: 'primary.main' }}>
+      <Box component="span" sx={{ display: 'grid', placeItems: 'center', width: 30, height: 30, borderRadius: '9px', bgcolor: (t) => alpha(t.palette.primary.main, 0.08) }}>{icon}</Box>
+      {title}
     </Typography>
     {children}
   </Paper>
+);
+
+// Monospace badge for tax identifiers (GST / PAN).
+const TaxBadge = ({ label, value }) => (
+  <Box sx={{
+    display: 'inline-flex', alignItems: 'center', gap: 0.75, px: 1.25, py: 0.6, borderRadius: '9px',
+    bgcolor: (t) => alpha(t.palette.primary.main, 0.06), border: '1px solid', borderColor: (t) => alpha(t.palette.primary.main, 0.16),
+  }}>
+    <Typography component="span" sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '.05em', color: 'primary.main' }}>{label}</Typography>
+    <Typography component="span" sx={{ fontSize: '0.8rem', fontWeight: 700, fontFamily: 'ui-monospace, monospace', letterSpacing: '.02em', color: value ? 'text.primary' : 'text.disabled' }}>
+      {value || '—'}
+    </Typography>
+  </Box>
+);
+
+// Icon-led contact row; becomes a tel:/mailto: link when href is provided.
+const ContactRow = ({ icon, text, href }) => (
+  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25 }}>
+    <Box sx={{ flexShrink: 0, mt: 0.25, display: 'grid', placeItems: 'center', width: 30, height: 30, borderRadius: '9px', bgcolor: (t) => alpha(t.palette.primary.main, 0.06), color: 'primary.main' }}>{icon}</Box>
+    {href && text ? (
+      <Typography component="a" href={href} sx={{ fontWeight: 600, color: 'text.primary', textDecoration: 'none', overflowWrap: 'anywhere', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}>{text}</Typography>
+    ) : (
+      <Typography sx={{ fontWeight: 600, color: text ? 'text.primary' : 'text.disabled', overflowWrap: 'anywhere' }}>{text || '—'}</Typography>
+    )}
+  </Box>
+);
+
+// Icon-led label/value pair for terms & release fields.
+const TermItem = ({ icon, label, value, accent }) => (
+  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+    <Box sx={{ flexShrink: 0, display: 'grid', placeItems: 'center', width: 34, height: 34, borderRadius: '10px', bgcolor: (t) => alpha(t.palette.primary.main, 0.06), color: 'primary.main' }}>{icon}</Box>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography sx={{ fontSize: '0.64rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'text.secondary' }}>{label}</Typography>
+      <Typography sx={{ fontWeight: 700, color: value ? (accent ? 'primary.main' : 'text.primary') : 'text.disabled', overflowWrap: 'anywhere' }}>{value || '—'}</Typography>
+    </Box>
+  </Box>
 );
 
 const PurchaseOrderDetail = () => {
@@ -171,28 +209,39 @@ const PurchaseOrderDetail = () => {
       <Grid container spacing={3}>
         {/* Vendor */}
         <Grid item xs={12} md={6}>
-          <SectionCard icon={<Building2 size={18} />} title="Vendor / Supplier">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Vendor" value={po.vendorName} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="GST" value={po.vendorGST || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="PAN" value={po.vendorPAN || '—'} /></Grid>
-              <Grid item xs={12} sm={4}><Field label="Address" value={po.vendorAddress || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Phone" value={po.vendorPhone || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Email" value={po.vendorEmail || '—'} /></Grid>
-            </Grid>
+          <SectionCard icon={<Building2 size={17} />} title="Vendor / Supplier">
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {/* Name + tax identifiers */}
+              <Box>
+                <Typography sx={{ fontSize: '1.2rem', fontWeight: 800, lineHeight: 1.25, color: 'text.primary' }}>
+                  {po.vendorName || '—'}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1.25 }}>
+                  <TaxBadge label="GST" value={po.vendorGST} />
+                  <TaxBadge label="PAN" value={po.vendorPAN} />
+                </Box>
+              </Box>
+              <Divider sx={{ borderStyle: 'dashed' }} />
+              {/* Contact details */}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                <ContactRow icon={<MapPin size={15} />} text={po.vendorAddress} />
+                <ContactRow icon={<PhoneCall size={15} />} text={po.vendorPhone} href={po.vendorPhone ? `tel:${po.vendorPhone}` : undefined} />
+                <ContactRow icon={<Mail size={15} />} text={po.vendorEmail} href={po.vendorEmail ? `mailto:${po.vendorEmail}` : undefined} />
+              </Box>
+            </Box>
           </SectionCard>
         </Grid>
 
         {/* Terms + release */}
         <Grid item xs={12} md={6}>
-          <SectionCard icon={<Truck size={18} />} title="Terms & Release">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Delivery Terms" value={po.deliveryTerms || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Payment Terms" value={po.paymentTerms || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Lead Time" value={po.leadTime || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Credit Period" value={po.creditPeriod ? `${po.creditPeriod} days` : '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Released By" value={po.releasedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Released At" value={fmtDate(po.releasedAt)} /></Grid>
+          <SectionCard icon={<Truck size={17} />} title="Terms & Release">
+            <Grid container spacing={2.5}>
+              <Grid item xs={12} sm={6}><TermItem icon={<Truck size={15} />} label="Delivery Terms" value={po.deliveryTerms} /></Grid>
+              <Grid item xs={12} sm={6}><TermItem icon={<Wallet size={15} />} label="Payment Terms" value={po.paymentTerms} accent /></Grid>
+              <Grid item xs={12} sm={6}><TermItem icon={<Clock size={15} />} label="Lead Time" value={po.leadTime} /></Grid>
+              <Grid item xs={12} sm={6}><TermItem icon={<CalendarClock size={15} />} label="Credit Period" value={po.creditPeriod ? `${po.creditPeriod} days` : ''} accent /></Grid>
+              <Grid item xs={12} sm={6}><TermItem icon={<User size={15} />} label="Released By" value={po.releasedBy} /></Grid>
+              <Grid item xs={12} sm={6}><TermItem icon={<CheckCircle2 size={15} />} label="Released At" value={po.releasedAt ? fmtDate(po.releasedAt) : ''} /></Grid>
               {po.supplierEmailSent ? (
                 <Grid item xs={12}>
                   <Chip size="small" icon={<Mail size={13} />} color="info"

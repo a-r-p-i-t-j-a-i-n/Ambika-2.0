@@ -78,6 +78,20 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (body) => ({ url: '/procurement/purchase-orders', method: 'POST', body }),
       invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
+    createMultiIndentPurchaseOrder: builder.mutation({
+      query: (body) => ({ url: '/procurement/purchase-orders/multi', method: 'POST', body }),
+      invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
+    }),
+    // Returns a PDF Blob (no DB write). On error the backend sends JSON, so branch
+    // the responseHandler on response.ok to surface a readable error message.
+    previewPurchaseOrderPdf: builder.mutation({
+      query: (body) => ({
+        url: '/procurement/purchase-orders/preview-pdf',
+        method: 'POST',
+        body,
+        responseHandler: async (response) => (response.ok ? response.blob() : response.json()),
+      }),
+    }),
     updatePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}`, method: 'PATCH', body }),
       invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
@@ -472,6 +486,8 @@ export const {
   useGetPurchaseOrderStatsQuery,
   useGetPurchaseOrderQuery,
   useCreatePurchaseOrderMutation,
+  useCreateMultiIndentPurchaseOrderMutation,
+  usePreviewPurchaseOrderPdfMutation,
   useUpdatePurchaseOrderMutation,
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,

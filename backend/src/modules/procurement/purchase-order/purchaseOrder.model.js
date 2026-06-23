@@ -70,6 +70,12 @@ export const PO_FORMAT_TYPE = {
 };
 
 const poItemSchema = new Schema({
+  // Source-indent linkage per line — a multi-indent PO carries items from several
+  // indents, so each row records where it came from. Single-indent POs simply
+  // repeat the PO's own indent here.
+  indentId:      { type: Schema.Types.ObjectId, ref: 'PurchaseIndent' },
+  indentNumber:  { type: String, trim: true, default: '' },
+
   // OTHER-format fields (also used as the canonical description/rate for JSL so
   // downstream GRN/inventory keep working).
   itemName:      { type: String, trim: true, default: '' }, // not required — JSL items use grade/width/finish
@@ -108,12 +114,20 @@ const vendorPurchaseOrderSchema = new Schema({
   // PO format / layout. Existing records default to OTHER.
   poFormatType: { type: String, enum: Object.values(PO_FORMAT_TYPE), default: PO_FORMAT_TYPE.OTHER },
 
-  // Indent linkage (mandatory — POs are never standalone)
+  // Indent linkage (mandatory — POs are never standalone).
+  // indentId / indentNumber hold the PRIMARY (first) indent for backward
+  // compatibility; indentIds / indentNumbers hold every indent a multi-indent PO
+  // draws items from (a single-indent PO has one entry each).
   indentId:     { type: Schema.Types.ObjectId, ref: 'PurchaseIndent', required: true, index: true },
   indentNumber: { type: String, trim: true, index: true },
+  indentIds:    { type: [{ type: Schema.Types.ObjectId, ref: 'PurchaseIndent' }], default: [], index: true },
+  indentNumbers:{ type: [{ type: String, trim: true }], default: [] },
 
-  // Vendor (Party = Vendor) — snapshot at PO time so the PO is immutable history
-  vendorId:      { type: Schema.Types.ObjectId, ref: 'Party', required: true, index: true },
+  // Vendor reference — polymorphic by design: NEW POs store a Vendor-master id,
+  // legacy POs store a Party id. Resolved via resolveVendor() in the service, so
+  // this is intentionally never populated (no static `ref`). The vendor* fields
+  // below are snapshotted at PO time so the PO stays immutable history either way.
+  vendorId:      { type: Schema.Types.ObjectId, required: true, index: true },
   vendorName:    { type: String, trim: true, default: '' },
   vendorGST:     { type: String, trim: true, uppercase: true, default: '' },
   vendorPAN:     { type: String, trim: true, uppercase: true, default: '' },

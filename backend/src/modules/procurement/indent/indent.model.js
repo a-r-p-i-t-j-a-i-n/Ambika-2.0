@@ -19,6 +19,7 @@ export const INDENT_OVERALL_STATUS = {
   QUOTE_NOT_REQUIRED:     'QUOTE_NOT_REQUIRED',
   QUOTATION_APPROVED:     'QUOTATION_APPROVED',
   QUOTATION_NOT_APPROVED: 'QUOTATION_NOT_APPROVED',
+  PARTIAL_PO_CREATED:     'PARTIAL_PO_CREATED', // some (not all) approved vendors POed
   PO_READY:               'PO_READY',
   // Internal-service flow (no PO/PI/GRN): quotation approved → service pending →
   // service completed (QC-eligible) → service QC result → closed.
@@ -154,6 +155,9 @@ const quotationApprovalStepSchema = new Schema({
   stepNo:     { type: String, default: 'Step 1.3' },
   stepName:   { type: String, default: 'Approved Quotation 1.03' },
   statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED'], default: null },
+  // Set when Step 1.2 was marked QUOTE_NOT_REQUIRED — Step 1.3 is skipped and the
+  // indent goes straight to PO/service eligibility without an approval upload.
+  skipped:    { type: Boolean, default: false },
   // Legacy single approved-quotation upload (back-compat — mirrors the first
   // entry of approvedQuotationDocuments).
   approvedQuotation: {

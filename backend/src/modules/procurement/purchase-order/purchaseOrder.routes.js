@@ -9,6 +9,8 @@ import validate from '../../../middleware/validate.js';
 import { purchaseOrderController as c } from './purchaseOrder.controller.js';
 import {
   createPoSchema,
+  createMultiPoSchema,
+  previewPoSchema,
   updatePoSchema,
   approvePoSchema,
   releasePoSchema,
@@ -24,6 +26,12 @@ router.use(protect);
 router.route('/')
   .get(validate(poQuerySchema, 'query'), c.getAll)
   .post(validate(createPoSchema), c.create);
+
+// Multi-indent PO (one vendor, items grouped from several approved indents).
+router.post('/multi', validate(createMultiPoSchema), c.createMulti);
+
+// Preview a PO PDF from draft form data — no DB save.
+router.post('/preview-pdf', validate(previewPoSchema), c.previewPdf);
 
 router.get('/stats', c.getStats);
 
