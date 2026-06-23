@@ -4,15 +4,20 @@ import {
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
 
-/** In-app preview of the generated PO PDF (iframe) with download/open actions. */
-const PurchaseOrderPdfPreview = ({ open, onClose, po }) => {
-  const url = po?.poPdfUrl || '';
+/**
+ * In-app preview of a PO PDF (iframe) with download/open actions.
+ * `previewUrl` (a blob: URL) takes precedence — used for the unsaved draft preview;
+ * otherwise falls back to a saved PO's `poPdfUrl` (generated on release).
+ */
+const PurchaseOrderPdfPreview = ({ open, onClose, po, previewUrl }) => {
+  const url = previewUrl || po?.poPdfUrl || '';
+  const isDraft = Boolean(previewUrl);
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth
       PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>
         <span>
-          PO PDF
+          {isDraft ? 'PO PDF — Draft Preview' : 'PO PDF'}
           {po?.poNumber && <Typography component="span" sx={{ ml: 1, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{po.poNumber}</Typography>}
         </span>
         <IconButton onClick={onClose} size="small"><X size={18} /></IconButton>

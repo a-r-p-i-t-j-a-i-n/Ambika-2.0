@@ -6,7 +6,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, Send, CheckCircle2, CheckCheck,
-  FileText, FileCheck2, ClipboardList, Hourglass, BadgeCheck, Quote, ExternalLink,
+  FileText, FileCheck2, ClipboardList, Hourglass, BadgeCheck, Quote, ExternalLink, ShoppingBag,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
@@ -26,6 +26,7 @@ import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
 import BulkIndentApprovalDialog from './BulkIndentApprovalDialog';
 import ServiceCompletionDialog from '../service-completions/ServiceCompletionDialog';
+import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
 
 // Map the Step-1.2 statusDone (or legacy quoteStep) to a chip state.
 const quoteStateOf = (row) => {
@@ -76,6 +77,8 @@ const IndentList = () => {
   const [quotationOpen, setQuotationOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [serviceOpen, setServiceOpen] = useState(false);
+  const [poDrawerOpen, setPoDrawerOpen] = useState(false);
+  const [poPresetIndent, setPoPresetIndent] = useState(null);
   const [activeIndent, setActiveIndent] = useState(null);
 
   // Row action menu
@@ -131,8 +134,15 @@ const IndentList = () => {
     if (r.approvalStatus === 'APPROVED' && r.quoteStep?.status === 'PENDING') {
       a.push({ key: 'quote', label: 'Receive Quote / Comparative', icon: <FileText size={16} />, fn: () => onReceiveQuote(r) });
     }
-    if (['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus)) {
+    // Approved Quotation (Step 1.3) — hidden once the step was skipped via
+    // "Quote Not Required" (which moves the indent straight to QUOTATION_APPROVED).
+    if (['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus) && !r.quotationApprovalStep?.skipped) {
       a.push({ key: 'approveQuote', label: 'Approved Quotation 1.03', icon: <FileCheck2 size={16} />, fn: () => onApproveQuotation(r) });
+    }
+    // PO-ready material indents can raise a Vendor PO directly (covers both the
+    // normal approved-quotation flow and the Quote-Not-Required skip path).
+    if (r.overallStatus === 'QUOTATION_APPROVED' && r.requestType !== 'INTERNAL_SERVICE') {
+      a.push({ key: 'createPo', label: 'Create Vendor PO', icon: <ShoppingBag size={16} />, fn: () => { setPoPresetIndent(r); setPoDrawerOpen(true); closeMenu(); } });
     }
     // Internal-service indents: mark the service done (Step 1.8A) once approved.
     if (r.requestType === 'INTERNAL_SERVICE' && r.overallStatus === 'SERVICE_PENDING') {
@@ -188,7 +198,8 @@ const IndentList = () => {
       valueGetter: (_v, row) => row.quoteComparativeStep?.actualAt || row.quoteStep?.actualAt || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value ? fmtDate(p.value) : '—'}</Typography> },
     { field: 'approvedQuotationStatus', headerName: 'APPROVED QUOTATION STATUS', width: 200, sortable: false,
-      valueGetter: (_v, row) => row.quotationApprovalStep?.statusDone || 'PENDING',
+      valueGetter: (_v, row) => row.quotationApprovalStep?.statusDone
+        || (row.quotationApprovalStep?.skipped ? 'NOT_REQUIRED' : 'PENDING'),
       renderCell: (p) => <QuotationChip status={p.value} /> },
     { field: 'approvedQuotationFile', headerName: 'APPROVED QUOTATION FILE', width: 190, sortable: false,
       renderCell: (p) => {
@@ -297,6 +308,7 @@ const IndentList = () => {
       <BulkIndentApprovalDialog open={bulkOpen} onClose={() => setBulkOpen(false)}
         onReceiveQuote={(ind) => { setBulkOpen(false); setActiveIndent(ind); setComparativeOpen(true); }} />
       <ServiceCompletionDialog open={serviceOpen} indent={activeIndent} onClose={() => { setServiceOpen(false); setActiveIndent(null); }} />
+      <PurchaseOrderFormDrawer open={poDrawerOpen} presetIndent={poPresetIndent} onClose={() => { setPoDrawerOpen(false); setPoPresetIndent(null); }} />
     </Box>
   );
 };

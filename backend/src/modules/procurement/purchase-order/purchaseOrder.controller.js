@@ -23,6 +23,20 @@ export const purchaseOrderController = {
     res.status(201).json(ApiResponse.created('Purchase order created', po));
   }),
 
+  createMulti: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.createMulti(req.body, req.user);
+    res.status(201).json(ApiResponse.created('Purchase order created', po));
+  }),
+
+  // Render a temporary PO PDF from form data — no DB save. Returns a raw PDF buffer.
+  previewPdf: asyncHandler(async (req, res) => {
+    const buffer = await purchaseOrderService.previewPdf(req.body);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="po-preview.pdf"');
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  }),
+
   update: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.update(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Purchase order updated', po));

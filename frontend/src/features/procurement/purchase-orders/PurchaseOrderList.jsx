@@ -6,7 +6,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, Send, FileDown,
-  Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck,
+  Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, Layers,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
@@ -21,6 +21,7 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PoStatusChip, PoReleaseChip, PO_STATUSES, fmtINR, fmtDate } from './poMeta';
 import { PoPiChip } from '../proforma-invoices/piMeta';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
+import MultiIndentPoDrawer from './MultiIndentPoDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
@@ -49,6 +50,7 @@ const PurchaseOrderList = () => {
   const [to, setTo] = useState('');
 
   const [formOpen, setFormOpen] = useState(false);
+  const [multiOpen, setMultiOpen] = useState(false);
   const [editPo, setEditPo] = useState(null);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
@@ -145,9 +147,14 @@ const PurchaseOrderList = () => {
             Step 1.4 · Create PO &amp; release to supplier — only from approved quotations
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditPo(null); setFormOpen(true); }}>
-          Create Purchase Order
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button variant="outlined" startIcon={<Layers size={16} />} onClick={() => setMultiOpen(true)}>
+            Multi-Indent PO
+          </Button>
+          <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditPo(null); setFormOpen(true); }}>
+            Create Purchase Order
+          </Button>
+        </Box>
       </Box>
 
       {/* KPIs */}
@@ -213,6 +220,7 @@ const PurchaseOrderList = () => {
 
       {/* Drawer + dialogs */}
       <PurchaseOrderFormDrawer open={formOpen} po={editPo} onClose={() => { setFormOpen(false); setEditPo(null); }} />
+      <MultiIndentPoDrawer open={multiOpen} onClose={() => setMultiOpen(false)} />
       <PurchaseOrderApprovalDialog open={approvalOpen} po={activePo} onClose={() => { setApprovalOpen(false); setActivePo(null); }} />
       <PurchaseOrderReleaseDialog open={releaseOpen} po={activePo} onClose={() => { setReleaseOpen(false); setActivePo(null); }} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={activePo} onClose={() => { setPdfOpen(false); setActivePo(null); }} />

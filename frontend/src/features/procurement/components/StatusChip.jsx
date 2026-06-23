@@ -89,6 +89,9 @@ const STATUS = {
   READY_FOR_GRN:         ['Ready For GRN', 'cyan'],
   PO_READY:              ['PO Ready', 'cyan'],
 
+  // ── Orange-adjacent (partial PO) ──
+  PARTIAL_PO_CREATED:    ['Partial PO', 'orange'],
+
   // ── Red (failed / rejected / cancelled) ──
   FAILED:                  ['Failed', 'red'],
   FAIL:                    ['Fail', 'red'],

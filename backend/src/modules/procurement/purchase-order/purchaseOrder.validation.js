@@ -6,6 +6,9 @@ const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
 const poItemSchema = Joi.object({
   _id:      Joi.string().optional(),
+  // Per-line source indent (multi-indent PO). Optional for single-indent POs.
+  indentId:     objectId.allow('', null),
+  indentNumber: Joi.string().trim().max(60).allow('', null),
   // itemName optional — JSL items are described by grade/width/finish instead.
   itemName: Joi.string().trim().max(300).allow('', null),
   skuCode:  Joi.string().trim().max(60).allow('', null),
@@ -50,6 +53,49 @@ export const createPoSchema = Joi.object({
   remarks:       Joi.string().trim().max(1000).allow('', null),
   items:         Joi.array().items(poItemSchema).min(1).required(),
 });
+
+// ── Create multi-indent (one vendor, items from one or more approved indents) ──
+export const createMultiPoSchema = Joi.object({
+  indentIds:     Joi.array().items(objectId).min(1).required(),
+  vendorId:      objectId.required(),
+  poFormatType:  poFormatType,
+  poDate:        Joi.date().optional(),
+  vendorName:    Joi.string().trim().max(200).allow('', null),
+  vendorGST:     Joi.string().trim().max(20).allow('', null),
+  vendorPAN:     Joi.string().trim().max(20).allow('', null),
+  vendorAddress: Joi.string().trim().max(500).allow('', null),
+  vendorEmail:   Joi.string().email().trim().allow('', null),
+  vendorPhone:   Joi.string().trim().max(20).allow('', null),
+  deliveryTerms: Joi.string().trim().max(300).allow('', null),
+  paymentTerms:  Joi.string().trim().max(300).allow('', null),
+  leadTime:      Joi.string().trim().max(60).allow('', null),
+  creditPeriod:  Joi.number().integer().min(0).max(365).default(0),
+  remarks:       Joi.string().trim().max(1000).allow('', null),
+  // Each item must carry its source indentId so the server can link it back.
+  items:         Joi.array().items(poItemSchema.keys({ indentId: objectId.required() })).min(1).required(),
+});
+
+// ── Preview PDF (no save) — lenient: render whatever the draft form has so far ──
+export const previewPoSchema = Joi.object({
+  indentId:      objectId.allow('', null),
+  indentIds:     Joi.array().items(objectId).optional(),
+  vendorId:      objectId.allow('', null),
+  poFormatType:  poFormatType,
+  poNumber:      Joi.string().trim().max(60).allow('', null),
+  poDate:        Joi.date().optional(),
+  vendorName:    Joi.string().trim().max(200).allow('', null),
+  vendorGST:     Joi.string().trim().max(20).allow('', null),
+  vendorPAN:     Joi.string().trim().max(20).allow('', null),
+  vendorAddress: Joi.string().trim().max(500).allow('', null),
+  vendorEmail:   Joi.string().trim().allow('', null),
+  vendorPhone:   Joi.string().trim().max(20).allow('', null),
+  deliveryTerms: Joi.string().trim().max(300).allow('', null),
+  paymentTerms:  Joi.string().trim().max(300).allow('', null),
+  leadTime:      Joi.string().trim().max(60).allow('', null),
+  creditPeriod:  Joi.number().integer().min(0).max(365).default(0),
+  remarks:       Joi.string().trim().max(1000).allow('', null),
+  items:         Joi.array().items(poItemSchema).min(1).required(),
+}).unknown(true);
 
 // ── Update (DRAFT only — service guards) ──
 export const updatePoSchema = Joi.object({

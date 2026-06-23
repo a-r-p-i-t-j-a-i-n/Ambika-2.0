@@ -500,15 +500,38 @@ export const indentService = {
       remarks: data.remarks || indent.quoteStep?.remarks || '',
     };
 
-    indent.overallStatus = data.statusDone === 'YES'
-      ? INDENT_OVERALL_STATUS.QUOTE_RECEIVED
-      : INDENT_OVERALL_STATUS.QUOTE_NOT_REQUIRED;
     indent.updatedBy = user?._id;
     indent.activityTimeline.push({
       action: 'QUOTE_COMPARATIVE',
       description: `Step 1.2 — ${data.statusDone}${multiVendor ? ` (${vendors.length} vendor quote(s))` : ''}`,
       actorId: user?._id,
     });
+
+    if (data.statusDone === 'YES') {
+      indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_RECEIVED;
+    } else {
+      // QUOTE_NOT_REQUIRED — skip Step 1.3 (Approved Quotation) entirely and move
+      // straight to PO eligibility (or service-pending for internal-service indents).
+      // No approveQuotation call is needed for this flow.
+      const isService = indent.requestType === INDENT_REQUEST_TYPE.INTERNAL_SERVICE;
+      indent.quotationApprovalStep = {
+        stepNo: 'Step 1.3',
+        stepName: 'Approved Quotation 1.03',
+        statusDone: null,
+        skipped: true,
+        actualAt,
+        updatedBy: user?._id,
+        remarks: 'Quotation not required — Approved Quotation step skipped',
+      };
+      indent.overallStatus = isService
+        ? INDENT_OVERALL_STATUS.SERVICE_PENDING
+        : INDENT_OVERALL_STATUS.QUOTATION_APPROVED;
+      indent.activityTimeline.push({
+        action: 'APPROVE_QUOTATION',
+        description: 'Quotation not required — Approved Quotation step skipped',
+        actorId: user?._id,
+      });
+    }
     return indent.save();
   },
 
