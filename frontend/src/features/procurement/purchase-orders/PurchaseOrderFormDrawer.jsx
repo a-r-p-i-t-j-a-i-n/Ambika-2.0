@@ -104,7 +104,7 @@ const jslLineCalc = (it) => {
 
 const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' };
 const OTHER_GRID = '1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px';
-const JSL_GRID = '1.1fr 0.8fr 0.95fr 0.7fr 0.9fr 0.9fr 0.95fr 0.95fr 0.85fr 0.9fr 36px';
+const JSL_GRID = '1.1fr 0.7fr 0.9fr 0.8fr 0.6fr 0.85fr 0.85fr 0.9fr 0.9fr 0.8fr 0.85fr 36px';
 
 const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null }) => {
   const { enqueueSnackbar } = useSnackbar();
@@ -180,6 +180,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       setPoFormatType(fmt);
       setItems(po.items?.length ? po.items.map((it) => (fmt === 'JSL' ? {
         grade: it.grade || '', width: it.width || '', finish: it.finish || '',
+        skuCode: it.skuCode || '', skuId: it.skuId || '', itemName: it.itemName || '',
         quantity: it.quantity, unit: it.unit || 'Kgs',
         baseRate: it.baseRate ?? '', upfrontDiscount: it.upfrontDiscount ?? '', bonanzaDiscount: it.bonanzaDiscount ?? '',
       } : {
@@ -245,9 +246,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         quantity: it.approvedQuantity || it.revisedQuantity || it.quantity || '',
         unit: it.unit || match?.unit || 'Kgs',
         baseRate: match ? (match.rate ?? 0) : 0,
-        // tracking fields (not sent in the payload)
+        // tracking fields — itemName/skuCode/skuId carry through to the PO payload
+        // so the JSL PO keeps the indent's SKU (the JSL row UI doesn't show them).
         itemName: it.itemName || '',
-        skuCode: it.skuCode || '',
+        skuCode: it.skuCode || match?.skuCode || '',
+        skuId: it.skuId?._id || it.skuId || match?.skuId || '',
         rateMatched: !!match,
         manual: false,
       };
@@ -434,6 +437,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     remarks: header.remarks.trim(),
     items: validItems.map((it) => (isJsl ? {
       grade: it.grade?.trim() || '', width: it.width?.trim() || '', finish: it.finish?.trim() || '',
+      skuCode: it.skuCode?.trim() || '', skuId: it.skuId || undefined,
       quantity: Number(it.quantity), unit: it.unit || 'Kgs',
       baseRate: Number(it.baseRate) || 0,
       upfrontDiscount: Number(it.upfrontDiscount) || 0,
@@ -679,7 +683,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
             <>
               {/* JSL header row */}
               <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: JSL_GRID, gap: 1, px: 1, mb: 0.5 }}>
-                {['Grade', 'Width', 'Finish', 'Qty', 'Unit', 'Base Rate', 'Upfront Disc.', 'Bonanza Disc.', 'Final Price', 'Value', ''].map((h, i) => (
+                {['Grade', 'Width', 'Finish', 'SKU', 'Qty', 'Unit', 'Base Rate', 'Upfront Disc.', 'Bonanza Disc.', 'Final Price', 'Value', ''].map((h, i) => (
                   <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.6rem' }}>{h}</Typography>
                 ))}
               </Box>
@@ -706,6 +710,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                           onChange={(e) => setItem(idx, { width: e.target.value })} />
                         <TextField size="small" placeholder="Finish" value={it.finish}
                           onChange={(e) => setItem(idx, { finish: e.target.value })} />
+                        <TextField size="small" placeholder="SKU" value={it.skuCode || ''}
+                          onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
                         <TextField size="small" type="number" placeholder="0" value={it.quantity}
                           onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                         <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
