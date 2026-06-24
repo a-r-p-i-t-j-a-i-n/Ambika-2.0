@@ -27,21 +27,24 @@ const OWNER_USERS = {
   'accounts@msambikaglobal.in': { name: 'Accounts Team', mobile: '9000000013', roles: ['FINANCE'],             role: 'Accountant' },
 };
 
-// Per-step task config: action link (registry key in actionLinks.js) + checklist.
+// Per-step task config: connected system-action link(s) (registry keys in
+// actionLinks.js) + checklist. A step may carry SEVERAL links — each renders its
+// own "Do it now" on the task and is tracked done independently (none mandatory).
 const STEP_CONFIG = {
-  '1.01': { actionLink: 'ORDER_ENTRY',        checklist: ['Confirm PO number & party', 'Verify ordered quantities', 'Save the order form / link'] },
-  '2.02': { actionLink: 'ORDER_ENTRY',        checklist: ['Enter the PO in Tally', 'Reconcile dispatch vs PO'] },
-  '2.03': { actionLink: 'PPC',                checklist: ['Check finished-goods stock', 'Confirm availability or flag shortfall'] },
-  '2.04': { actionLink: 'DISPATCH_PLAN_PDF',  checklist: ['Create the dispatch schedule', 'Generate the dispatch plan PDF'] },
-  '2.05': { actionLink: '',                   checklist: ['Email the dispatch schedule to the client'] },
-  '2.06': { actionLink: 'CHALLAN_PDF',        checklist: ['Confirm final dispatch quantity', 'Create the delivery challan', 'Generate the challan PDF'] },
-  '2.07': { actionLink: 'INVOICE_ENTRY',      checklist: ['Create the tax invoice in Tally', 'Generate the e-way bill', 'Attach invoice, e-way & PDIR'] },
-  '2.08': { actionLink: 'INVOICE_EMAIL',      checklist: ['Email invoice & e-way bill to the client'] },
-  '2.09': { actionLink: 'TRACK_DELIVERY',     checklist: ['Confirm delivery / POD', 'Record the delivery date'] },
-  '2.10': { actionLink: 'PAYMENT_FOLLOWUP',        checklist: ['Follow up with the client for payment'] },
-  '2.11': { actionLink: 'PAYMENT_RECEIPT',         checklist: ['Confirm payment received', 'Enter the receipt in Tally'] },
-  '2.12': { actionLink: 'TRANSPORT_BILL_RECEIVE',  checklist: ['Receive the transporter bill', 'Attach the transport invoice'] },
-  '2.13': { actionLink: 'TRANSPORT_BILL_STATUS',   checklist: ['Confirm the transporter payment status'] },
+  '1.01': { actionLinks: ['ORDER_ENTRY'],     checklist: ['Confirm PO number & party', 'Verify ordered quantities', 'Save the order form / link'] },
+  '2.02': { actionLinks: ['ORDER_ENTRY'],     checklist: ['Enter the PO in Tally', 'Reconcile dispatch vs PO'] },
+  '2.03': { actionLinks: ['PPC'],             checklist: ['Check finished-goods stock', 'Confirm availability or flag shortfall'] },
+  // Two connected screens: plan it in Dispatch Planning, then generate the PDF.
+  '2.04': { actionLinks: ['DISPATCH_PLAN', 'DISPATCH_PLAN_PDF'], checklist: ['Create the dispatch schedule', 'Generate the dispatch plan PDF'] },
+  '2.05': { actionLinks: ['EMAIL_DISPATCH_SCHEDULE'], checklist: ['Email the dispatch schedule to the client'] },
+  '2.06': { actionLinks: ['CHALLAN_PDF'],     checklist: ['Confirm final dispatch quantity', 'Create the delivery challan', 'Generate the challan PDF'] },
+  '2.07': { actionLinks: ['INVOICE_ENTRY'],   checklist: ['Create the tax invoice in Tally', 'Generate the e-way bill', 'Attach invoice, e-way & PDIR'] },
+  '2.08': { actionLinks: ['INVOICE_EMAIL'],   checklist: ['Email invoice & e-way bill to the client'] },
+  '2.09': { actionLinks: ['TRACK_DELIVERY'],  checklist: ['Confirm delivery / POD', 'Record the delivery date'] },
+  '2.10': { actionLinks: ['PAYMENT_FOLLOWUP'],       checklist: ['Follow up with the client for payment'] },
+  '2.11': { actionLinks: ['PAYMENT_RECEIPT'],        checklist: ['Confirm payment received', 'Enter the receipt in Tally'] },
+  '2.12': { actionLinks: ['TRANSPORT_BILL_RECEIVE'], checklist: ['Receive the transporter bill', 'Attach the transport invoice'] },
+  '2.13': { actionLinks: ['TRANSPORT_BILL_STATUS'],  checklist: ['Confirm the transporter payment status'] },
 };
 
 const run = async () => {
@@ -72,7 +75,7 @@ const run = async () => {
   let unresolved = [];
   const steps = [];
   for (const def of defs) {
-    const cfg = STEP_CONFIG[def.stepCode] || { actionLink: '', checklist: [] };
+    const cfg = STEP_CONFIG[def.stepCode] || { actionLinks: [], checklist: [] };
     let assigneeUserIds = [];
     if (def.ownerEmail) {
       const u = await User.findOne({ email: new RegExp(`^${def.ownerEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }).select('_id').lean();
@@ -84,7 +87,8 @@ const run = async () => {
       taskTitle: def.name,
       instructions: `${def.name}${def.tool ? ` — via ${def.tool}` : ''}. Owner: ${def.ownerName || def.ownerEmail || '—'}.`,
       checklist: cfg.checklist.map((text) => ({ text })),
-      actionLink: cfg.actionLink || null,
+      actionLinks: cfg.actionLinks || [],
+      actionLink: (cfg.actionLinks || [])[0] || null, // legacy single mirror
       assigneeUserIds,
       buddyUserIds: [],
     });

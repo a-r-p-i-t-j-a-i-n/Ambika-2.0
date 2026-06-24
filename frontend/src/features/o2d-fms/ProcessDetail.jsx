@@ -5,7 +5,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableRow, ToggleButtonGroup, ToggleButton,
   Accordion, AccordionSummary, AccordionDetails,
 } from '@mui/material';
-import { ArrowLeft, CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useGetProcessByIdQuery, usePlanOrderMutation } from '../../store/api/o2dFmsApi';
 import { useListAccessUsersQuery } from '../../store/api/accessControlApi';
@@ -316,7 +316,18 @@ const ProcessDetail = () => {
                         <TableCell><Typography variant="caption">{fmt(s.planned)}</Typography></TableCell>
                         <TableCell><Typography variant="caption">{fmt(s.actual)}</Typography></TableCell>
                         <TableCell align="right">{s.delayMins > 0 ? <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 700 }}>+{s.delayMins}m</Typography> : <Typography variant="caption" color="text.secondary">—</Typography>}</TableCell>
-                        <TableCell align="center">{s.checklistTotal > 0 ? <Chip size="small" variant="outlined" color={s.checklistDone === s.checklistTotal ? 'success' : 'default'} label={`${s.checklistDone}/${s.checklistTotal}`} /> : <Typography variant="caption" color="text.secondary">—</Typography>}</TableCell>
+                        <TableCell align="center">
+                          <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center" flexWrap="wrap" useFlexGap>
+                            {s.checklistTotal > 0
+                              ? <Chip size="small" variant="outlined" color={s.checklistDone === s.checklistTotal ? 'success' : 'default'} label={`${s.checklistDone}/${s.checklistTotal}`} />
+                              : (!(s.actionLinksTotal > 0) && <Typography variant="caption" color="text.secondary">—</Typography>)}
+                            {s.actionLinksTotal > 0 && (
+                              <Chip size="small" variant="outlined" icon={<Link2 size={11} />}
+                                color={s.actionLinksDone >= s.actionLinksTotal ? 'success' : 'default'}
+                                label={`${s.actionLinksDone}/${s.actionLinksTotal}`} />
+                            )}
+                          </Stack>
+                        </TableCell>
                         <TableCell><Typography variant="caption">{s.completedBy?.name || '—'}</Typography></TableCell>
                       </TableRow>
                     );

@@ -28,6 +28,11 @@ export const dispatchControlController = {
     res.status(201).json(ApiResponse.created('Actual dispatch and challan saved successfully', result));
   }),
 
+  emailSchedule: asyncHandler(async (req, res) => {
+    const result = await dispatchControlService.emailSchedule(req.body);
+    res.json(ApiResponse.ok('Dispatch schedule email processed', result));
+  }),
+
   getComparison: asyncHandler(async (req, res) => {
     const comparison = await dispatchControlService.getComparison(req.params.soNumber);
     res.json(ApiResponse.ok('Plan vs actual comparison retrieved', comparison));

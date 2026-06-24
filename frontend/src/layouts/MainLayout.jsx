@@ -5,11 +5,12 @@ import {
   alpha, Avatar, Tooltip, Collapse,
 } from '@mui/material';
 import {
-  Menu as MenuIcon, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
+  Menu as MenuIcon, Mail, LayoutDashboard, ShoppingCart, Truck, FileText, Package,
   Users, UserCog, LogOut, CalendarPlus, CalendarDays, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
   IndianRupee, Calculator, FileSignature, FilePen, ClipboardCheck, FolderOpen, BarChart3, Tag,
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
   ReceiptText, Banknote, FileSpreadsheet, Wallet, Store,
+  Boxes, PackagePlus, PackageMinus, History,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -46,6 +47,7 @@ const navSections = [
           { text: 'Dispatch Planning', icon: <CalendarPlus size={19} />, path: '/dispatch-planning' },
           { text: 'Dispatch Calendar', icon: <CalendarDays size={19} />, path: '/dispatch-planning/calendar' },
           { text: 'Generate Dispatch Plan PDF', icon: <FileText size={19} />, path: '/dispatch-planning/generate-pdf' },
+          { text: 'Email Dispatch Schedule', icon: <Mail size={19} />, path: '/o2d/dispatch-schedule-email' },
           { text: 'Actual Dispatch',   icon: <Truck size={19} />,        path: '/challans' },
           { text: 'Generate Challan PDF', icon: <FileText size={19} />,  path: '/challans/generate-pdf' },
           { text: 'Invoice & Eway Bill',  icon: <ReceiptText size={19} />, path: '/o2d/invoice-entry' },
@@ -59,6 +61,26 @@ const navSections = [
       },
       { text: 'PPC Planning',   icon: <Package size={19} />,  path: '/ppc-planning' },
       { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
+    ],
+  },
+  {
+    // IMS — Inventory. One group per inventory type; Packaging & Consumables is
+    // live now, RM IMS and FG IMS will slot in here later.
+    title: 'IMS',
+    items: [
+      {
+        text: 'Packaging & Consumables IMS',
+        icon: <Boxes size={19} />,
+        path: '/ims',
+        children: [
+          { text: 'Dashboard',            icon: <LayoutDashboard size={19} />, path: '/ims' },
+          { text: 'Stock & Master Data',  icon: <Package size={19} />,         path: '/ims/stock' },
+          { text: 'Stock In',             icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
+          { text: 'Stock Out (Issue)',    icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
+          { text: 'Reorder & Buying List',icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
+          { text: 'Movement History',     icon: <History size={19} />,         path: '/ims/movements' },
+        ],
+      },
     ],
   },
   {
@@ -110,6 +132,7 @@ const PAGE_TITLES = {
   '/challans/generate-pdf':  'Generate Challan PDF',
   '/o2d/invoice-entry':      'Create Invoice & Eway Bill',
   '/o2d/invoice-email':      'Email Invoice & Eway Bill',
+  '/o2d/dispatch-schedule-email': 'Email Dispatch Schedule',
   '/o2d/track-delivery':     'Track Delivery',
   '/o2d/payments':           'Payment Follow-up & Receipt',
   '/o2d/payments?part=followup': 'Payment Follow-up (2.10)',

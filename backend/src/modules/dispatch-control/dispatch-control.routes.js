@@ -5,6 +5,7 @@ import {
   actualDispatchSchema,
   createPhaseSchema,
   dashboardQuerySchema,
+  emailScheduleSchema,
   normalizeRowsSchema,
   orderEntrySchema,
   phaseParamSchema,
@@ -27,6 +28,7 @@ router.get('/orders/:soNumber/dispatchable-phases',     validate(soNumberParamSc
 router.post('/order-entry',                             validate(orderEntrySchema),    dispatchControlController.createOrderEntry);
 router.post('/dispatch-plans',                          validate(planDispatchSchema),  dispatchControlController.planDispatch);
 router.post('/actual-dispatches',                       validate(actualDispatchSchema),dispatchControlController.createActualDispatch);
+router.post('/email-schedule',                          validate(emailScheduleSchema), dispatchControlController.emailSchedule);
 
 // Phase-level CRUD (the planner manages individual phases here).
 router.post('/orders/:soNumber/phases',                 validate(soNumberParamSchema, 'params'), validate(createPhaseSchema), dispatchControlController.createPhase);

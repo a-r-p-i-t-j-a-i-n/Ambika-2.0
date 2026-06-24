@@ -39,7 +39,9 @@ const mergeSteps = (defs, tplSteps = []) => {
         required: !!t.approval?.required,
         approverIds: (t.approval?.approverIds || []).map((x) => String(x._id || x)),
       },
-      actionLink: t.actionLink || '',
+      // Multiple connected screens (each shows its own "Do it now"). Fall back to
+      // the legacy single key so older templates load correctly.
+      actionLinks: (t.actionLinks?.length ? t.actionLinks : (t.actionLink ? [t.actionLink] : [])),
       // Link-required toggle: explicit template value wins; otherwise show the
       // step definition's default so saving never silently changes behaviour.
       requiresLink: t.requiresLink != null ? !!t.requiresLink : !!d.requiresLink,
@@ -91,7 +93,8 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
     if (key === 'approval') set('approval', { required: true, approverIds: row.approval?.approverIds || [] });
   };
 
-  const suggestedLink = !row.actionLink && TRIGGER_TO_ACTION[row.triggerKey];
+  const linkCount = (row.actionLinks || []).length;
+  const suggestedLink = !linkCount && TRIGGER_TO_ACTION[row.triggerKey];
   const reqCount = (row.verifications?.length || 0) + (row.formFields?.length || 0)
     + (row.proof?.required ? 1 : 0) + (row.approval?.required ? 1 : 0);
 
@@ -106,7 +109,7 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
           {row.taskTitle && <Typography variant="caption" color="text.secondary">· task: {row.taskTitle}</Typography>}
           {row.checklist.length > 0 && <Chip size="small" icon={<ListChecks size={12} />} label={row.checklist.length} />}
           {reqCount > 0 && <Chip size="small" color="secondary" variant="outlined" label={`+${reqCount} req`} />}
-          {row.actionLink && <Chip size="small" icon={<Link2 size={12} />} label="linked" sx={{ bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} />}
+          {linkCount > 0 && <Chip size="small" icon={<Link2 size={12} />} label={linkCount > 1 ? `${linkCount} links` : 'linked'} sx={{ bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} />}
         </Stack>
       </AccordionSummary>
       <AccordionDetails>
@@ -154,16 +157,25 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
             />
           </Paper>
 
-          {/* ── Connect to the real system action (Do-it-now deep link) ── */}
+          {/* ── Connect to the real system action(s) (Do-it-now deep links) ── */}
           {advanced && (
             <Box>
-              <TextField select size="small" fullWidth label="Connect to system action — shows a 'Do it now' link on the task"
-                value={row.actionLink || ''} onChange={(e) => set('actionLink', e.target.value)}>
-                <MenuItem value=""><em>None</em></MenuItem>
-                {ACTION_LINKS.map((a) => <MenuItem key={a.key} value={a.key}>{a.label}</MenuItem>)}
-              </TextField>
+              {/* Multiple screens can be attached — each renders its own "Do it now"
+                  on the task, and the doer can complete them in any order. */}
+              <Autocomplete
+                multiple size="small"
+                options={ACTION_LINKS}
+                getOptionLabel={(a) => a.label}
+                isOptionEqualToValue={(o, v) => o.key === v.key}
+                value={ACTION_LINKS.filter((a) => (row.actionLinks || []).includes(a.key))}
+                onChange={(_, v) => set('actionLinks', v.map((a) => a.key))}
+                disableCloseOnSelect
+                ChipProps={{ size: 'small' }}
+                renderInput={(p) => <TextField {...p} label="Connect to system action(s) — each shows a 'Do it now' link" placeholder="Add one or more screens…" />}
+              />
               {suggestedLink && (
-                <Chip size="small" icon={<Link2 size={12} />} clickable onClick={() => set('actionLink', suggestedLink)}
+                <Chip size="small" icon={<Link2 size={12} />} clickable
+                  onClick={() => set('actionLinks', [...(row.actionLinks || []), suggestedLink])}
                   label={`Suggestion: connect to "${actionLinkMeta(suggestedLink)?.label}" (matches this step's trigger)`}
                   sx={{ mt: 0.75, bgcolor: alpha('#1d4ed8', 0.08), color: '#1d4ed8' }} />
               )}
@@ -428,7 +440,7 @@ const TaskTemplates = () => {
       steps: editing.steps
         .filter((s) => s.taskTitle || s.checklist.length || s.assigneeUserIds?.length || s.leadTime.value
           || s.verifications?.some(Boolean) || s.formFields?.some((f) => f.label)
-          || s.proof?.required || s.approval?.required || s.actionLink
+          || s.proof?.required || s.approval?.required || s.actionLinks?.length
           || s.requiresLink !== s._defRequiresLink) // persist an explicit link-required override
         .map((s) => ({
           stepCode: s.stepCode,
@@ -441,7 +453,8 @@ const TaskTemplates = () => {
           proof: s.proof?.required ? { required: true, minCount: s.proof.minCount || 1 } : null,
           approval: s.approval?.required && s.approval.approverIds?.length
             ? { required: true, approverIds: s.approval.approverIds } : null,
-          actionLink: s.actionLink || null,
+          actionLinks: s.actionLinks || [],
+          actionLink: s.actionLinks?.[0] || null, // legacy single mirror (back-compat)
           requiresLink: !!s.requiresLink,
           leadTime: s.leadTime.value ? { value: Number(s.leadTime.value), unit: s.leadTime.unit } : undefined,
           assigneeUserIds: s.assigneeUserIds || [],

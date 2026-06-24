@@ -49,6 +49,12 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok(`Step '${req.params.stepCode}' completed`, process));
   }),
 
+  markActionDone: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.markActionDone(
+      req.params.id, req.params.stepCode, { actionKey: req.body.actionKey, link: req.body.link }, req.user, isPriv(req));
+    res.json(ApiResponse.ok('Action marked done', process));
+  }),
+
   assignStep: asyncHandler(async (req, res) => {
     const { assignees, buddies, userId } = req.body;
     const payload = {

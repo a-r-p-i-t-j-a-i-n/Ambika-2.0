@@ -63,6 +63,13 @@ const phaseRefSchema = Joi.object({
   phaseNo:    optionalString,
 });
 
+// Multi-phase: a DC may fulfil several plan phases. Each ref needs at least a
+// phaseNo (the cross-SKU group) — phaseId is optional since matching is by phaseNo.
+const phaseRefMultiSchema = Joi.object({
+  phaseId: objectIdString,
+  phaseNo: Joi.string().trim().required(),
+});
+
 export const orderEntrySchema = Joi.object({
   soNumber: optionalString,
   poNumber: Joi.string().trim().required(),
@@ -128,14 +135,29 @@ export const actualDispatchSchema = Joi.object({
   remark: optionalString,
   remarks: optionalString,
   status: optionalString,
-  // The dispatcher MUST pick a phase OR explicitly flag the DC as unplanned.
+  // The dispatcher MUST pick a phase (single phaseRef OR multiple phaseRefs) OR
+  // explicitly flag the DC as unplanned.
   phaseRef: phaseRefSchema,
+  phaseRefs: Joi.array().items(phaseRefMultiSchema),
   isUnplanned: Joi.boolean().default(false),
   items: Joi.array().items(dispatchItemSchema).min(1).required(),
-}).or('phaseRef', 'isUnplanned');
+}).or('phaseRef', 'phaseRefs', 'isUnplanned');
 
 export const soNumberParamSchema = Joi.object({
   soNumber: Joi.string().trim().required(),
+});
+
+// Email the dispatch schedule to the client (Step 2.5).
+export const emailScheduleSchema = Joi.object({
+  soNumber: optionalString,
+  to:       Joi.string().trim().required(),
+  subject:  optionalString,
+  message:  Joi.string().allow('', null),
+  attachments: Joi.array().items(Joi.object({
+    fileName: optionalString,
+    fileUrl:  optionalString,
+    fileKey:  optionalString,
+  }).unknown(true)).default([]),
 });
 
 export const dashboardQuerySchema = Joi.object({

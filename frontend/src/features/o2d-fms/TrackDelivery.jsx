@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, MenuItem, Chip, CircularProgress, Divider,
 } from '@mui/material';
 import { Truck, Save } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
+import { useSearchParams } from 'react-router-dom';
 import O2dStepShell from './components/O2dStepShell';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useTrackDeliveryMutation } from '../../store/api/o2dFulfillmentApi';
@@ -16,8 +17,18 @@ const TrackDelivery = () => {
   const challans = useMemo(() => challansRes?.data || [], [challansRes]);
   const [track, { isLoading }] = useTrackDeliveryMutation();
   const { finishToTask } = useReturnToTask();
+  const [searchParams] = useSearchParams();
+  const soParam = searchParams.get('so') || '';
 
   const [dc, setDc] = useState(null);
+
+  // Came from an FMS "Do it now" with ?so=… → auto-select that order's challan.
+  useEffect(() => {
+    if (dc || !soParam || !challans.length) return;
+    const match = challans.find((c) => c.soNumber === soParam);
+    if (match) setDc(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soParam, challans]);
   const [status, setStatus] = useState('Delivered');
   const [deliveryDate, setDeliveryDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [newTrackDate, setNewTrackDate] = useState('');

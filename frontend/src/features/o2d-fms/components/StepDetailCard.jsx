@@ -7,15 +7,17 @@ import {
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
+  ExternalLink,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useCompleteStepMutation, useAssignStepMutation, useToggleChecklistItemMutation,
   useAddStepCommentMutation, useGetProcessByIdQuery,
   useUploadFileMutation, useAddStepAttachmentsMutation, useRemoveStepAttachmentMutation,
   useAnswerVerificationMutation, useFillFormFieldMutation, useApproveStepMutation,
+  useMarkActionDoneMutation,
 } from '../../../store/api/o2dFmsApi';
-import { resolveActionLink, actionLinkMeta } from '../actionLinks';
+import { resolveActionLink, actionLinkMeta, resolveEntityLink } from '../actionLinks';
 import { useListAccessUsersQuery } from '../../../store/api/accessControlApi';
 import { useSelector } from 'react-redux';
 import AttachmentList from '../../../components/AttachmentList';
@@ -28,6 +30,32 @@ const STATUS_TONE = {
   DELAYED: { color: '#b45309', label: 'Completed (late)' },
   PENDING: { color: '#475569', label: 'Pending' },
   SKIPPED: { color: '#94a3b8', label: 'Skipped' },
+};
+
+// The connected-action keys on a step (multiple allowed; legacy single → [single]).
+const stepActionKeys = (step) => (step?.actionLinks?.length
+  ? step.actionLinks
+  : (step?.actionLink ? [step.actionLink] : []));
+
+// Work out the business records this task is mapped to, so a watcher can jump
+// straight to them to verify: the order it belongs to (universal) plus the
+// specific record(s) this step produces/touches (challan, dispatch plan, invoice…).
+const deriveLinks = (proc, step) => {
+  const ctx = {
+    soNumber: proc?.soNumber,
+    orderId: proc?.salesOrderId?._id || proc?.salesOrderId,
+    processId: proc?._id,
+    intakeId: proc?.intakeId?._id || proc?.intakeId,
+  };
+  const orderLink = ctx.orderId
+    ? { label: `Sales Order${proc?.soNumber ? ` · ${proc.soNumber}` : ''}`, to: `/orders/${encodeURIComponent(String(ctx.orderId))}` }
+    : (ctx.intakeId ? { label: 'Order Intake', to: `/order-intake?convert=${encodeURIComponent(String(ctx.intakeId))}` } : null);
+  // One record link per attached action, de-duped and minus the order itself.
+  const recordLinks = stepActionKeys(step)
+    .map((key) => { const r = resolveEntityLink(key, ctx); return r ? { key, ...r } : null; })
+    .filter(Boolean)
+    .filter((r) => r.to !== orderLink?.to);
+  return { ctx, orderLink, recordLinks };
 };
 
 const MetaRow = ({ icon: Icon, label, value }) => (
@@ -120,6 +148,8 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const fileInputRef = React.useRef(null);
 
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [markActionDone] = useMarkActionDoneMutation();
   const [completeStep, { isLoading: completing }] = useCompleteStepMutation();
   const [assignStep, { isLoading: assigning }] = useAssignStepMutation();
   const [toggleItem] = useToggleChecklistItemMutation();
@@ -168,6 +198,39 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoComplete, processId, step?.stepCode, procRes?.data]);
 
+  // Pre-fill the completion "Link" once with the produced record's deep-link, so
+  // a finished step automatically carries a one-click pointer to the related
+  // record (order / challan / dispatch plan / invoice). The doer can still edit.
+  const seededFor = React.useRef(null);
+  React.useEffect(() => {
+    const ls = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
+    if (!ls || ['DONE', 'DELAYED'].includes(ls.status)) return;
+    if (seededFor.current === ls.stepCode) return;
+    const { recordLinks } = deriveLinks(procRes?.data, ls);
+    const seed = recordLinks[0]?.to;
+    if (seed) { seededFor.current = ls.stepCode; setLink((cur) => cur || seed); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [procRes?.data, step?.stepCode]);
+
+  // Returning from a connected screen's "Do it now" (?doneAction=<key>) → record
+  // that exact action as done on the step, capturing its record deep-link. The
+  // step itself is NOT auto-completed (several actions may be attached).
+  const actionDoneRef = React.useRef(null);
+  React.useEffect(() => {
+    const key = searchParams.get('doneAction');
+    if (!key) return;
+    const ls = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
+    if (!ls) return;
+    const marker = `${ls.stepCode}:${key}`;
+    if (actionDoneRef.current === marker) return;
+    if ((ls.actionProgress || []).some((a) => a.key === key)) { actionDoneRef.current = marker; return; }
+    const { recordLinks } = deriveLinks(procRes?.data, ls);
+    const recLink = recordLinks.find((r) => r.key === key)?.to || null;
+    actionDoneRef.current = marker;
+    markActionDone({ id: processId, stepCode: ls.stepCode, actionKey: key, link: recLink || undefined }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, processId, step?.stepCode, procRes?.data]);
+
   if (!step) return null;
   // All doers + buddies on the step (arrays, with legacy single fallback).
   const doerList = (liveStep.assignees?.length ? liveStep.assignees : [liveStep.assignedTo]).filter(Boolean);
@@ -203,14 +266,34 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   if (approvalPending) blockers.push('approval');
   const checklistBlocks = blockers.length > 0;
 
-  // Action link → the real screen for THIS order.
-  const actionMeta = liveStep.actionLink ? actionLinkMeta(liveStep.actionLink) : null;
-  const actionTo = actionMeta ? resolveActionLink(liveStep.actionLink, {
+  // Connected screens → the real "Do it now" target(s) for THIS order. A step can
+  // carry several; each gets its own button and its own done-status.
+  const ctxIds = {
     soNumber: proc?.soNumber,
     orderId: proc?.salesOrderId?._id || proc?.salesOrderId,
     processId,
     intakeId: proc?.intakeId?._id || proc?.intakeId,
-  }) : null;
+  };
+  const actionProgress = liveStep.actionProgress || [];
+  const actions = stepActionKeys(liveStep)
+    .map((key) => {
+      const meta = actionLinkMeta(key);
+      if (!meta) return null;
+      const prog = actionProgress.find((a) => a.key === key) || null;
+      return { key, meta, to: resolveActionLink(key, ctxIds), prog };
+    })
+    .filter(Boolean);
+  const actionsDone = actions.filter((a) => a.prog).length;
+
+  // Linked business records this task maps to — for anyone reviewing the step.
+  const { orderLink, recordLinks } = deriveLinks(proc, liveStep);
+  // Open an internal app route via the router; an external URL in a new tab.
+  const openLink = (to) => { if (!to) return; to.startsWith('/') ? navigate(to) : window.open(to, '_blank', 'noopener,noreferrer'); };
+  const goAction = (a) => {
+    if (!a?.to) return;
+    const sep = a.to.includes('?') ? '&' : '?';
+    navigate(`${a.to}${sep}fromTask=${processId}&fromStep=${encodeURIComponent(liveStep.stepCode)}&fromAction=${encodeURIComponent(a.key)}`);
+  };
 
   const handleVerify = async (item, answer, vRemark) => {
     setError('');
@@ -321,29 +404,81 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <Alert icon={<AlertTriangle size={18} />} severity="warning" sx={{ py: 0.5 }}>This step is past its planned time.</Alert>
           )}
 
-          {/* ── Do the real work → deep link to the connected screen for THIS order ── */}
-          {actionMeta && actionTo && !done && (
+          {/* ── Do the real work → one "Do it now" per connected screen. Each tracks
+                its own done-status; none are mandatory to finish the step. ── */}
+          {actions.length > 0 && (
             <Paper variant="outlined" sx={{
-              p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
-              bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.35),
+              p: 1.5, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.35),
             }}>
-              <Box sx={{ p: 0.9, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}><Zap size={18} /></Box>
-              <Box sx={{ flex: 1, minWidth: 180 }}>
-                <Typography variant="body2" sx={{ fontWeight: 700, color: '#1e3a8a' }}>
-                  This task is connected to: {actionMeta.label}
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: actions.length ? 1 : 0 }}>
+                <Box sx={{ p: 0.7, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}><Zap size={16} /></Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1e3a8a' }}>
+                  Connected actions{actions.length > 1 ? ` — ${actionsDone}/${actions.length} done` : ''}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {proc?.soNumber ? `Opens directly for ${proc.soNumber}. ` : ''}Do the real work there — this step advances automatically.
-                </Typography>
-              </Box>
-              <Button variant="contained" endIcon={<ArrowRight size={15} />} sx={{ whiteSpace: 'nowrap' }}
-                onClick={() => {
-                  // Carry the task context so the form can bring the doer back here.
-                  const sep = actionTo.includes('?') ? '&' : '?';
-                  navigate(`${actionTo}${sep}fromTask=${processId}&fromStep=${encodeURIComponent(liveStep.stepCode)}`);
-                }}>
-                Do it now
-              </Button>
+                {proc?.soNumber && <Typography variant="caption" color="text.secondary">· opens for {proc.soNumber}</Typography>}
+              </Stack>
+              <Stack spacing={1}>
+                {actions.map((a) => {
+                  const aDone = !!a.prog;
+                  return (
+                    <Stack key={a.key} direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap
+                      sx={{ p: 1, borderRadius: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: aDone ? alpha('#0f766e', 0.35) : 'divider' }}>
+                      {aDone
+                        ? <CheckCircle2 size={16} color="#0f766e" style={{ flexShrink: 0 }} />
+                        : <ArrowRight size={16} color="#1d4ed8" style={{ flexShrink: 0 }} />}
+                      <Box sx={{ flex: 1, minWidth: 160 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{a.meta.label}</Typography>
+                        {aDone ? (
+                          <Typography variant="caption" sx={{ color: '#0f766e' }}>
+                            Done{a.prog.doneByName ? ` by ${a.prog.doneByName}` : ''}{a.prog.doneAt ? ` · ${fmt(a.prog.doneAt)}` : ''}
+                          </Typography>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">Not done yet — do the work there; this gets recorded for you.</Typography>
+                        )}
+                      </Box>
+                      {aDone && a.prog.link && (
+                        <Button size="small" variant="text" color="success" endIcon={<ExternalLink size={13} />}
+                          onClick={() => openLink(a.prog.link)} sx={{ textTransform: 'none' }}>
+                          View
+                        </Button>
+                      )}
+                      {a.to && !done && (
+                        <Button size="small" variant={aDone ? 'outlined' : 'contained'} endIcon={<ArrowRight size={14} />}
+                          onClick={() => goAction(a)} sx={{ whiteSpace: 'nowrap', boxShadow: 'none' }}>
+                          {aDone ? 'Do again' : 'Do it now'}
+                        </Button>
+                      )}
+                    </Stack>
+                  );
+                })}
+              </Stack>
+            </Paper>
+          )}
+
+          {/* ── Linked records → jump to the related entry to verify this task ── */}
+          {(orderLink || recordLinks.length > 0) && (
+            <Paper variant="outlined" sx={{
+              p: 1.5, borderRadius: 2, bgcolor: alpha('#0f766e', 0.05), borderColor: alpha('#0f766e', 0.35),
+            }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Link2 size={16} color="#0f766e" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#115e59' }}>Linked records</Typography>
+                <Typography variant="caption" color="text.secondary">— open to check this task’s entry</Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {recordLinks.map((r) => (
+                  <Button key={r.key} size="small" variant="contained" color="success" endIcon={<ExternalLink size={14} />}
+                    onClick={() => openLink(r.to)} sx={{ textTransform: 'none', boxShadow: 'none' }}>
+                    {r.label}
+                  </Button>
+                ))}
+                {orderLink && (
+                  <Button size="small" variant="outlined" color="success" endIcon={<ExternalLink size={14} />}
+                    onClick={() => openLink(orderLink.to)} sx={{ textTransform: 'none' }}>
+                    {orderLink.label}
+                  </Button>
+                )}
+              </Stack>
             </Paper>
           )}
 
@@ -470,7 +605,17 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
 
           {liveStep.link && (
             <Stack direction="row" spacing={1} alignItems="center">
-              <Link2 size={16} /><a href={liveStep.link} target="_blank" rel="noreferrer">{liveStep.link}</a>
+              <Link2 size={16} />
+              {liveStep.link.startsWith('/') ? (
+                <Box component="span" role="link" tabIndex={0}
+                  onClick={() => openLink(liveStep.link)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLink(liveStep.link); }}
+                  sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline', wordBreak: 'break-all' }}>
+                  {liveStep.link}
+                </Box>
+              ) : (
+                <a href={liveStep.link} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>{liveStep.link}</a>
+              )}
             </Stack>
           )}
           {liveStep.completedBy?.name && (

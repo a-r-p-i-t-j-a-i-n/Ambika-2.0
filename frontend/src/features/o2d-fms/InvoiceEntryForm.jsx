@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Chip, MenuItem,
   alpha, useTheme, CircularProgress, IconButton, Divider, Link, Tooltip,
@@ -81,6 +82,8 @@ const InvoiceEntryForm = () => {
   const challans = useMemo(() => challansRes?.data || [], [challansRes]);
   const [createInvoice, { isLoading: saving }] = useCreateSalesInvoiceMutation();
   const { finishToTask } = useReturnToTask();
+  const [searchParams] = useSearchParams();
+  const soParam = searchParams.get('so') || '';
 
   const [dc, setDc] = useState(null);
   const [form, setForm] = useState({
@@ -123,6 +126,17 @@ const InvoiceEntryForm = () => {
     if (c) onPickDc(c);
     else setForm((f) => ({ ...f, invoiceNo: inv }));
   };
+
+  // Came from an FMS "Do it now" with ?so=… → auto-select that order's latest
+  // delivery challan so its party/SO/PO/transporter pre-fill (challans are
+  // already sorted -dcDate, so the first match is the newest).
+  const presetRef = useRef(false);
+  useEffect(() => {
+    if (presetRef.current || !soParam || dc || !challans.length) return;
+    const match = challans.find((c) => c.soNumber === soParam);
+    if (match) { presetRef.current = true; onPickDc(match); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soParam, challans, dc]);
 
   const reset = () => {
     setDc(null);

@@ -130,6 +130,11 @@ const enrichSteps = (process, defMap) => {
       triggerKey:         def?.triggerKey || 'MANUAL',
       checklistTotal: (s.checklist || []).length,
       checklistDone:  (s.checklist || []).filter((c) => c.done).length,
+      // Normalise connected screens to an array (legacy single → [single]) and
+      // count how many have been completed, for the "x/y actions done" summary.
+      actionLinks: (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : [])),
+      actionLinksTotal: (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : [])).length,
+      actionLinksDone: (s.actionProgress || []).length,
       isOverdue: s.status === O2D_STEP_STATUS.PENDING && s.planned && new Date(s.planned) < new Date(),
     };
   }).sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
@@ -214,6 +219,10 @@ export const o2dFmsService = {
           ? { required: true, approverIds: (tpl.approval.approverIds || []).map(String) }
           : null,
         actionLink: tpl?.actionLink || null,
+        // Multiple connected screens (each becomes a "Do it now"). Fall back to the
+        // legacy single key so older templates keep working.
+        actionLinks: (tpl?.actionLinks?.length ? tpl.actionLinks : (tpl?.actionLink ? [tpl.actionLink] : [])),
+        actionProgress: [],
         // Explicit template override (true/false) or null to inherit the def at runtime.
         requiresLink: (tpl && tpl.requiresLink != null) ? tpl.requiresLink : null,
         startedAt: i === 0 ? received : null,
@@ -398,6 +407,43 @@ export const o2dFmsService = {
     });
 
     await process.save();
+    return enrichSteps(process, defMap);
+  },
+
+  /** Mark ONE of a step's connected action-links as done (e.g. the doer finished
+   *  that screen's entry and came back). Does NOT complete the step — a step can
+   *  have several linked actions and none are mandatory. Idempotent per key. */
+  async markActionDone(processId, stepCode, { actionKey, link }, user, privileged = false) {
+    if (!actionKey) throw new AppError('actionKey is required', 400);
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    const step = process.steps.find((s) => s.stepCode === stepCode);
+    if (!step) throw new AppError(`Step '${stepCode}' not found on this process`, 404);
+    assertCanAct(step, user, privileged);
+
+    if (!Array.isArray(step.actionProgress)) step.actionProgress = [];
+    const existing = step.actionProgress.find((a) => a.key === actionKey);
+    if (existing) {
+      existing.doneAt = new Date();
+      if (link) existing.link = link;
+      existing.doneBy = user?._id || existing.doneBy || null;
+      existing.doneByName = user?.name || existing.doneByName || null;
+    } else {
+      step.actionProgress.push({
+        key: actionKey,
+        link: link || null,
+        doneAt: new Date(),
+        doneBy: user?._id || null,
+        doneByName: user?.name || null,
+      });
+    }
+    process.activityTimeline.push({
+      action: 'STEP_ACTION_DONE',
+      description: `${stepCode} · action "${actionKey}" completed`,
+      actorId: user?._id || null,
+    });
+    await process.save();
+    const defMap = await loadDefMap();
     return enrichSteps(process, defMap);
   },
 
@@ -796,6 +842,7 @@ export const o2dFmsService = {
         });
       }
       if (sp.actionLink !== undefined) step.actionLink = sp.actionLink || null;
+      if (sp.actionLinks !== undefined) step.actionLinks = sp.actionLinks || [];
       if (sp.requiresLink !== undefined) step.requiresLink = sp.requiresLink; // true/false, or null to inherit
       process.activityTimeline.push({
         action: 'STEP_PLAN_UPDATED',

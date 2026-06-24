@@ -66,6 +66,14 @@ const deliveryChallanSchema = new mongoose.Schema({
     phaseId:    { type: mongoose.Schema.Types.ObjectId }, // phase._id
     phaseNo:    { type: String },                          // denormalized label
   },
+  // A single DC can fulfil SEVERAL plan phases at once (the qty is allocated
+  // across them, earliest-first). `phaseRef` mirrors the first for back-compat.
+  phaseRefs: [{
+    scheduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'DispatchSchedule' },
+    itemId:     { type: mongoose.Schema.Types.ObjectId },
+    phaseId:    { type: mongoose.Schema.Types.ObjectId },
+    phaseNo:    { type: String },
+  }],
   isUnplanned: { type: Boolean, default: false },
 
   // Who recorded this dispatch (shown on the Challan 360 page).

@@ -18,11 +18,14 @@ export const ACTION_LINKS = [
   { key: 'FMS_PROCESS',     label: "This order's FMS flow",             route: '/o2d-fms/process/{processId}' },
 
   // ── Current-Sheet FMS step forms (do-the-entry → return to task) ──
-  { key: 'DISPATCH_PLAN_PDF', label: 'Generate Dispatch Plan PDF',      route: '/dispatch-planning/generate-pdf?so={soNumber}' },
-  { key: 'CHALLAN_PDF',       label: 'Generate Challan PDF',            route: '/challans/generate-pdf?so={soNumber}' },
-  { key: 'INVOICE_ENTRY',     label: 'Create Invoice & Eway Bill (2.7)', route: '/o2d/invoice-entry' },
-  { key: 'INVOICE_EMAIL',     label: 'Email Invoice & Eway (2.8)',      route: '/o2d/invoice-email' },
-  { key: 'TRACK_DELIVERY',    label: 'Track Delivery (2.9)',            route: '/o2d/track-delivery' },
+  // `viewRoute`/`viewLabel`: where to OPEN the produced record to check it
+  // (differs from the "do the work" form route used by "Do it now").
+  { key: 'DISPATCH_PLAN_PDF', label: 'Generate Dispatch Plan PDF',      route: '/dispatch-planning/generate-pdf?so={soNumber}', viewRoute: '/dispatch-planning?so={soNumber}', viewLabel: 'Dispatch Plan' },
+  { key: 'EMAIL_DISPATCH_SCHEDULE', label: 'Email Dispatch Schedule',   route: '/o2d/dispatch-schedule-email?so={soNumber}', viewLabel: 'Dispatch Schedule Email' },
+  { key: 'CHALLAN_PDF',       label: 'Generate Challan PDF',            route: '/challans/generate-pdf?so={soNumber}', viewRoute: '/challans?so={soNumber}', viewLabel: 'Delivery Challan' },
+  { key: 'INVOICE_ENTRY',     label: 'Create Invoice & Eway Bill (2.7)', route: '/o2d/invoice-entry?so={soNumber}', viewRoute: '/invoices?so={soNumber}', viewLabel: 'Invoice' },
+  { key: 'INVOICE_EMAIL',     label: 'Email Invoice & Eway (2.8)',      route: '/o2d/invoice-email?so={soNumber}' },
+  { key: 'TRACK_DELIVERY',    label: 'Track Delivery (2.9)',            route: '/o2d/track-delivery?so={soNumber}' },
   // Payment is two distinct steps — each opens its own focused screen.
   { key: 'PAYMENT_FOLLOWUP',  label: 'Payment Follow-up (2.10)',        route: '/o2d/payments?part=followup' },
   { key: 'PAYMENT_RECEIPT',   label: 'Receive Payment & Tally Entry (2.11)', route: '/o2d/payments?part=receipt' },
@@ -46,33 +49,18 @@ export const TRIGGER_TO_ACTION = {
   INVOICE: 'INVOICE',
 };
 
-/**
- * Resolve a registry key + process context to a concrete path.
- * Missing placeholder values: a missing query-param value drops that param;
- * a missing path segment ({orderId}/{processId}) makes the link unresolvable → null.
- */
-export const resolveActionLink = (key, ctx = {}) => {
-  const meta = actionLinkMeta(key);
-  if (!meta) return null;
+// Fill a route template's {placeholders} from the context values.
+// A missing path segment ({orderId}/{processId}) makes the link unresolvable → null;
+// a missing query-param value just drops that param.
+const ctxValues = (ctx = {}) => ({
+  soNumber: ctx.soNumber || '',
+  orderId: ctx.orderId ? String(ctx.orderId) : '',
+  processId: ctx.processId ? String(ctx.processId) : '',
+  intakeId: ctx.intakeId ? String(ctx.intakeId) : '',
+});
 
-  // Sales Order Entry on an intake-based, not-yet-converted process → open the
-  // intake's conversion form directly (it links to the SAME FMS process), rather
-  // than dumping the doer on the orders list to hunt for a "New Order" button.
-  if (key === 'ORDER_ENTRY' && ctx.intakeId && !ctx.orderId) {
-    return `/order-intake?convert=${encodeURIComponent(String(ctx.intakeId))}`;
-  }
-  // SO already exists → open its detail page (not the bare list).
-  if (key === 'ORDER_ENTRY' && ctx.orderId) {
-    return `/orders/${encodeURIComponent(String(ctx.orderId))}`;
-  }
-  const values = {
-    soNumber: ctx.soNumber || '',
-    orderId: ctx.orderId ? String(ctx.orderId) : '',
-    processId: ctx.processId ? String(ctx.processId) : '',
-    intakeId: ctx.intakeId ? String(ctx.intakeId) : '',
-  };
-
-  const [pathPart, queryPart] = meta.route.split('?');
+const fillRoute = (route, values) => {
+  const [pathPart, queryPart] = route.split('?');
   // Path placeholders are mandatory.
   let path = pathPart;
   for (const [k, v] of Object.entries(values)) {
@@ -93,6 +81,48 @@ export const resolveActionLink = (key, ctx = {}) => {
   }
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
+};
+
+/**
+ * Resolve a registry key + process context to a concrete path — the screen
+ * where the doer DOES the work ("Do it now").
+ */
+export const resolveActionLink = (key, ctx = {}) => {
+  const meta = actionLinkMeta(key);
+  if (!meta) return null;
+
+  // Sales Order Entry on an intake-based, not-yet-converted process → open the
+  // intake's conversion form directly (it links to the SAME FMS process), rather
+  // than dumping the doer on the orders list to hunt for a "New Order" button.
+  if (key === 'ORDER_ENTRY' && ctx.intakeId && !ctx.orderId) {
+    return `/order-intake?convert=${encodeURIComponent(String(ctx.intakeId))}`;
+  }
+  // SO already exists → open its detail page (not the bare list).
+  if (key === 'ORDER_ENTRY' && ctx.orderId) {
+    return `/orders/${encodeURIComponent(String(ctx.orderId))}`;
+  }
+  return fillRoute(meta.route, ctxValues(ctx));
+};
+
+/**
+ * Resolve the RECORD a watcher/tracker would open to verify this step — the
+ * produced entity's detail/listing page (Sales Order, Dispatch Plan, Challan,
+ * Invoice…). Uses the action's `viewRoute` when the "check it" page differs from
+ * the "do it" form, else the action route. Returns { label, to } or null.
+ */
+export const resolveEntityLink = (key, ctx = {}) => {
+  const meta = actionLinkMeta(key);
+  if (!meta) return null;
+
+  // Order-centric steps → the Sales Order itself (or its intake pre-conversion).
+  if (key === 'ORDER_ENTRY' || key === 'ORDER_DETAILS') {
+    if (ctx.orderId) return { label: 'Sales Order', to: `/orders/${encodeURIComponent(String(ctx.orderId))}` };
+    if (ctx.intakeId) return { label: 'Order Intake', to: `/order-intake?convert=${encodeURIComponent(String(ctx.intakeId))}` };
+    return null;
+  }
+
+  const to = fillRoute(meta.viewRoute || meta.route, ctxValues(ctx));
+  return to ? { label: meta.viewLabel || meta.label, to } : null;
 };
 
 export default ACTION_LINKS;

@@ -44,9 +44,18 @@ const QuoteDetail          = lazyWithRetry(() => import('./features/quotes/Quote
 const FmsMyTasks           = lazyWithRetry(() => import('./features/o2d-fms/MyTasksWorkspace'));
 const InvoiceEntryForm     = lazyWithRetry(() => import('./features/o2d-fms/InvoiceEntryForm'));
 const InvoiceEmail         = lazyWithRetry(() => import('./features/o2d-fms/InvoiceEmail'));
+const DispatchScheduleEmail = lazyWithRetry(() => import('./features/o2d-fms/DispatchScheduleEmail'));
 const TrackDelivery        = lazyWithRetry(() => import('./features/o2d-fms/TrackDelivery'));
 const PaymentSteps         = lazyWithRetry(() => import('./features/o2d-fms/PaymentSteps'));
 const TransportBill        = lazyWithRetry(() => import('./features/o2d-fms/TransportBill'));
+// IMS — Packaging & Consumables inventory
+const ImsDashboard         = lazyWithRetry(() => import('./features/ims/ImsDashboard'));
+const ImsStockList         = lazyWithRetry(() => import('./features/ims/ImsStockList'));
+const ImsItemDetail        = lazyWithRetry(() => import('./features/ims/ImsItemDetail'));
+const ImsStockIn           = lazyWithRetry(() => import('./features/ims/ImsStockIn'));
+const ImsStockOut          = lazyWithRetry(() => import('./features/ims/ImsStockOut'));
+const ImsReorder           = lazyWithRetry(() => import('./features/ims/ImsReorder'));
+const ImsMovements         = lazyWithRetry(() => import('./features/ims/ImsMovements'));
 const FmsProcessList       = lazyWithRetry(() => import('./features/o2d-fms/ProcessList'));
 const FmsProcessDetail     = lazyWithRetry(() => import('./features/o2d-fms/ProcessDetail'));
 const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsDashboard'));
@@ -116,9 +125,20 @@ function App() {
             <Route path="/challans/generate-pdf" element={<GenerateChallanPdf />} />
             <Route path="/o2d/invoice-entry" element={<RequirePermission slug="o2dfms.view" fallback="inline"><InvoiceEntryForm /></RequirePermission>} />
             <Route path="/o2d/invoice-email" element={<RequirePermission slug="o2dfms.view" fallback="inline"><InvoiceEmail /></RequirePermission>} />
+            <Route path="/o2d/dispatch-schedule-email" element={<RequirePermission slug="o2dfms.view" fallback="inline"><DispatchScheduleEmail /></RequirePermission>} />
             <Route path="/o2d/track-delivery" element={<RequirePermission slug="o2dfms.view" fallback="inline"><TrackDelivery /></RequirePermission>} />
             <Route path="/o2d/payments" element={<RequirePermission slug="o2dfms.view" fallback="inline"><PaymentSteps /></RequirePermission>} />
             <Route path="/o2d/transport-bill" element={<RequirePermission slug="o2dfms.view" fallback="inline"><TransportBill /></RequirePermission>} />
+
+            {/* IMS — Packaging & Consumables inventory */}
+            <Route path="/ims" element={<ImsDashboard />} />
+            <Route path="/ims/stock" element={<ImsStockList />} />
+            <Route path="/ims/item/:skuId" element={<ImsItemDetail />} />
+            <Route path="/ims/stock-in" element={<ImsStockIn />} />
+            <Route path="/ims/stock-out" element={<ImsStockOut />} />
+            <Route path="/ims/reorder" element={<ImsReorder />} />
+            <Route path="/ims/movements" element={<ImsMovements />} />
+
             <Route path="/challans/:id" element={<ChallanDetail />} />
             <Route path="/invoices" element={<InvoicesList />} />
             <Route path="/skus" element={<SkusList />} />

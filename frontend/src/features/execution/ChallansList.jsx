@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, Button, TextField, InputAdornment, IconButton,
@@ -38,8 +38,16 @@ const ChallansList = () => {
   const [searchParams] = useSearchParams();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   // Deep-link support: ?so=AGL/SO-… (from an FMS task) pre-filters to that order.
-  const [searchTerm, setSearchTerm] = useState(searchParams.get('so') || '');
+  const soParam = searchParams.get('so') || '';
+  // Came from an FMS "Do it now" (ACTUAL_DISPATCH) → auto-open the dispatch entry
+  // pre-selected to that SO, so the doer only fills the loadout.
+  const cameFromTask = !!(searchParams.get('fromTask') && searchParams.get('fromStep'));
+  const [searchTerm, setSearchTerm] = useState(soParam);
   const [entryOpen, setEntryOpen] = useState(false);
+
+  useEffect(() => {
+    if (cameFromTask && soParam) setEntryOpen(true);
+  }, [cameFromTask, soParam]);
 
   const { data: challansRes, isLoading } = useGetChallansQuery({
     page: paginationModel.page + 1,
@@ -147,7 +155,7 @@ const ChallansList = () => {
         />
       </Paper>
 
-      <DispatchEntry open={entryOpen} onClose={() => setEntryOpen(false)} />
+      <DispatchEntry open={entryOpen} onClose={() => setEntryOpen(false)} presetSoNumber={cameFromTask ? soParam : null} />
     </Box>
   );
 };

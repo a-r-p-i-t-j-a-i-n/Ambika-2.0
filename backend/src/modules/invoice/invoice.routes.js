@@ -105,7 +105,10 @@ export const invoiceService = {
       ...(inv.ewayBillUrls || []).map((u, i) => ({ url: u, name: `EwayBill-${i + 1}`, label: 'E-way Bill' })),
       ...(inv.pdirUrls || []).map((u, i) => ({ url: u, name: `PDIR-${i + 1}`, label: 'PDIR' })),
     ].filter((a) => a.url);
-    const attachments = tagged.map((a) => ({ filename: a.name, path: a.url }));
+    // Resolve stored URLs → fetchable signed URLs so the files actually attach.
+    const attachments = await emailService.resolveStoredAttachments(
+      tagged.map((a) => ({ filename: a.name, url: a.url })),
+    );
     let emailStatus = 'SENT';
     try {
       await emailService.sendEmail({

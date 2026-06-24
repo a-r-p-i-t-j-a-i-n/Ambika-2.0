@@ -12,6 +12,7 @@ import { getFiscalYear } from '../../utils/fiscalYear.js';
 import { logger } from '../../utils/logger.js';
 import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 import { challanService } from '../challan/challan.routes.js';
+import { emailService } from '../../services/email.service.js';
 
 const PLAN_LABEL_PREFIX = 'Dispatch Plan';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -348,14 +349,20 @@ const refreshPhaseLifecycle = (phase, today = startOfDay(new Date())) => {
   }
 };
 
-// Apply DC items against an explicit plan phase (phaseRef-driven).
-// If isUnplanned=true, the DC contributes to actuals on the matching SKU but
-// is NOT bound to a phase; the schedule items still get their totals recalculated.
-const applyActualToSchedule = async ({ order, challan, phaseRef, isUnplanned, session }) => {
+// Apply DC items against one or more plan phases (selected by phaseNo). For each
+// SKU we allocate the dispatched qty across the selected phases of that SKU,
+// EARLIEST-FIRST: each phase soaks up its pending (effective − actual), and any
+// remainder lands on the last selected phase (over-dispatch). Matching is by
+// phaseNo (the cross-SKU group), so every SKU's own phase subdoc updates — not
+// just the first SKU's. If isUnplanned=true the DC contributes to SKU actuals
+// but is NOT bound to any phase.
+const applyActualToSchedule = async ({ order, challan, phaseNos = [], isUnplanned, session }) => {
   const findQuery = DispatchSchedule.findOne({ soNumber: order.soNumber }).sort({ createdAt: -1 });
   if (session) findQuery.session(session);
   const schedule = await findQuery;
   if (!schedule) return null;
+
+  const selected = (phaseNos || []).filter(Boolean);
 
   for (const dcItem of challan.items) {
     const scheduleItem = findScheduleItem(schedule, {
@@ -364,19 +371,35 @@ const applyActualToSchedule = async ({ order, challan, phaseRef, isUnplanned, se
     });
     if (!scheduleItem) continue;
 
-    if (!isUnplanned && phaseRef?.phaseId) {
-      const phase = scheduleItem.phases.id(phaseRef.phaseId);
-      if (phase) {
+    if (!isUnplanned && selected.length) {
+      // This SKU's selected phases in chronological order, with current pending.
+      const { enrichedPhases } = enrichPhasesWithCarryForward(scheduleItem);
+      const targets = enrichedPhases
+        .filter((p) => selected.includes(p.phaseNo))
+        .map((p) => ({
+          phaseNo: p.phaseNo,
+          pending: Math.max(0, Number(p.effectivePlannedQty || 0) - Number(p.totalActualQty || 0)),
+        }));
+
+      let remaining = Number(dcItem.quantityPcs || 0);
+      targets.forEach((t, i) => {
+        const isLast = i === targets.length - 1;
+        // Earlier phases take their pending; the last selected phase takes the rest.
+        const give = isLast ? remaining : Math.max(0, Math.min(remaining, t.pending));
+        if (give <= 0) return;
+        const phase = scheduleItem.phases.find((p) => p.phaseNo === t.phaseNo);
+        if (!phase) return;
         phase.actualDispatches = [...(phase.actualDispatches || []), {
           date: challan.dcDate,
-          qty: Number(dcItem.quantityPcs || 0),
+          qty: give,
           invoiceNo: challan.invoiceNo,
           invoiceDate: challan.dcDate,
           invoiceDoc: challan.pdfUrl,
         }];
-        phase.totalActualQty = Number(phase.totalActualQty || 0) + Number(dcItem.quantityPcs || 0);
+        phase.totalActualQty = Number(phase.totalActualQty || 0) + give;
         refreshPhaseLifecycle(phase);
-      }
+        remaining -= give;
+      });
     }
 
     const orderItem = order.items.find((it) => (
@@ -689,8 +712,9 @@ export const dispatchControlService = {
     // to a specific plan phase) OR explicitly flag isUnplanned. The Joi schema
     // enforces this at the API edge; we re-check here for service-layer callers.
     const isUnplanned = Boolean(data.isUnplanned);
-    if (!isUnplanned && !data.phaseRef?.phaseId) {
-      throw new AppError('phaseRef.phaseId is required unless isUnplanned is true', 422);
+    const multiPhase = Array.isArray(data.phaseRefs) && data.phaseRefs.length > 0;
+    if (!isUnplanned && !multiPhase && !data.phaseRef?.phaseId) {
+      throw new AppError('phaseRef.phaseId or phaseRefs is required unless isUnplanned is true', 422);
     }
 
     const result = await withMaybeTransaction(async (session) => {
@@ -699,24 +723,42 @@ export const dispatchControlService = {
       const order = await orderQ;
       if (!order) throw new AppError(`Sales Order ${data.soNumber} not found`, 404);
 
-      // Resolve and validate the phase the operator picked.
-      let resolvedPhaseRef = null;
+      // Resolve and validate the phase(s) the operator picked.
+      let resolvedPhaseRef = null;        // single, denormalised mirror (back-compat)
+      let resolvedPhaseRefs = [];         // all selected phases
+      let selectedPhaseNos = [];          // phaseNo list driving the allocation
       if (!isUnplanned) {
         const schedQ = DispatchSchedule.findOne({ soNumber: order.soNumber }).sort({ createdAt: -1 });
         if (session) schedQ.session(session);
         const schedule = await schedQ;
         if (!schedule) throw new AppError(`No dispatch plan found for ${order.soNumber}`, 404);
 
-        const { item: schedItem, phase } = findPhaseById(schedule, data.phaseRef.phaseId);
-        if (!phase) throw new AppError(`Plan phase ${data.phaseRef.phaseId} not found on this order's schedule`, 404);
-        if (phase.status === 'CANCELLED') throw new AppError(`Phase ${phase.phaseNo} is cancelled — cannot dispatch against it`, 409);
+        if (multiPhase) {
+          // Match by phaseNo (the cross-SKU group). Validate each exists & isn't cancelled.
+          const wanted = [...new Set(data.phaseRefs.map((r) => r.phaseNo).filter(Boolean))];
+          if (!wanted.length) throw new AppError('phaseRefs must include phaseNo', 422);
+          for (const pn of wanted) {
+            const repItem = schedule.items.find((it) => (it.phases || []).some((p) => p.phaseNo === pn && p.status !== 'CANCELLED'));
+            if (!repItem) throw new AppError(`Plan phase ${pn} not found (or cancelled) on this order's schedule`, 404);
+            const repPhase = repItem.phases.find((p) => p.phaseNo === pn && p.status !== 'CANCELLED');
+            resolvedPhaseRefs.push({ scheduleId: schedule._id, itemId: repItem._id, phaseId: repPhase._id, phaseNo: pn });
+            selectedPhaseNos.push(pn);
+          }
+          resolvedPhaseRef = resolvedPhaseRefs[0];
+        } else {
+          const { item: schedItem, phase } = findPhaseById(schedule, data.phaseRef.phaseId);
+          if (!phase) throw new AppError(`Plan phase ${data.phaseRef.phaseId} not found on this order's schedule`, 404);
+          if (phase.status === 'CANCELLED') throw new AppError(`Phase ${phase.phaseNo} is cancelled — cannot dispatch against it`, 409);
 
-        resolvedPhaseRef = {
-          scheduleId: schedule._id,
-          itemId:     schedItem._id,
-          phaseId:    phase._id,
-          phaseNo:    phase.phaseNo,
-        };
+          resolvedPhaseRef = {
+            scheduleId: schedule._id,
+            itemId:     schedItem._id,
+            phaseId:    phase._id,
+            phaseNo:    phase.phaseNo,
+          };
+          resolvedPhaseRefs = [resolvedPhaseRef];
+          selectedPhaseNos = [phase.phaseNo];
+        }
       }
 
       const dcDate = data.dcDate || data.challanDate || new Date();
@@ -769,6 +811,7 @@ export const dispatchControlService = {
         remark: data.remark || data.remarks,
         status: data.status || 'DISPATCHED',
         phaseRef: resolvedPhaseRef,
+        phaseRefs: resolvedPhaseRefs,
         isUnplanned,
       };
 
@@ -780,7 +823,7 @@ export const dispatchControlService = {
       const updatedSchedule = await applyActualToSchedule({
         order,
         challan,
-        phaseRef: resolvedPhaseRef,
+        phaseNos: selectedPhaseNos,
         isUnplanned,
         session,
       });
@@ -1026,6 +1069,35 @@ export const dispatchControlService = {
     const grouped = [...groupedMap.values()].sort((a, b) => new Date(a.plannedDate || 0) - new Date(b.plannedDate || 0));
 
     return { order: sched.order, grouped, phases };
+  },
+
+  /**
+   * Email the dispatch schedule to the client (O2D Step 2.5). Sends via the
+   * configured SMTP relay with whatever files the doer attached (e.g. the saved
+   * dispatch-plan PDF). Returns { emailStatus, recipient } — never throws on a
+   * send failure so the caller can still record the attempt.
+   */
+  async emailSchedule({ soNumber, to, subject, message, attachments = [] }) {
+    const recipient = (to || '').trim();
+    if (!recipient) throw new AppError('Recipient email is required.', 400);
+
+    const atts = await emailService.resolveStoredAttachments(
+      (attachments || []).map((a) => ({ filename: a.fileName, url: a.fileUrl, key: a.fileKey })),
+    );
+
+    let emailStatus = 'SENT';
+    try {
+      await emailService.sendEmail({
+        to: recipient,
+        subject: subject || `Dispatch Schedule${soNumber ? ` — ${soNumber}` : ''}`,
+        html: (message || '').replace(/\n/g, '<br/>'),
+        attachments: atts,
+      });
+    } catch (err) {
+      logger.error(`[dispatch] schedule email failed${soNumber ? ` for ${soNumber}` : ''}: ${err.message}`);
+      emailStatus = `FAILED: ${err.message}`;
+    }
+    return { emailStatus, recipient, attachmentCount: atts.length };
   },
 
   /**

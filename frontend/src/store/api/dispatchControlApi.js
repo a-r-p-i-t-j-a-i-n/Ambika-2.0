@@ -18,6 +18,10 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (body) => ({ url: '/dispatch-control/actual-dispatches', method: 'POST', body }),
       invalidatesTags: ['Order', 'Challan', 'PPC', 'Comparison', 'DispatchDashboard', 'Schedule'],
     }),
+    // Step 2.5 — email the dispatch schedule to the client via SMTP.
+    emailDispatchSchedule: builder.mutation({
+      query: (body) => ({ url: '/dispatch-control/email-schedule', method: 'POST', body }),
+    }),
     getOrderComparison: builder.query({
       query: (soNumber) => `/dispatch-control/orders/${encodeURIComponent(soNumber)}/comparison`,
       providesTags: (_r, _e, soNumber) => [{ type: 'Comparison', id: soNumber }],
@@ -118,6 +122,7 @@ export const {
   useCreateOrderEntryMutation,
   useCreateDispatchPlanMutation,
   useCreateActualDispatchMutation,
+  useEmailDispatchScheduleMutation,
   useGetOrderComparisonQuery,
   useGetOrderSummaryQuery,
   useGetScheduleQuery,

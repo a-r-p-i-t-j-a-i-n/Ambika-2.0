@@ -1,5 +1,5 @@
 import React from 'react';
-import { Autocomplete, Box, Chip, Stack, TextField, Typography, alpha, useTheme } from '@mui/material';
+import { Autocomplete, Box, Checkbox, Chip, Stack, TextField, Typography, alpha, useTheme } from '@mui/material';
 import { CalendarClock, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import dayjs from 'dayjs';
 
@@ -28,16 +28,30 @@ const buildOptions = (data) => {
   return opts;
 };
 
-const PhasePicker = ({ data, value, onChange, isLoading }) => {
+// Multi-select. `value` is an ARRAY of phase options. Picking phases is additive;
+// "Unplanned" is exclusive — choosing it clears phases and vice-versa.
+const PhasePicker = ({ data, value = [], onChange, isLoading }) => {
   const theme = useTheme();
   const options = buildOptions(data);
+  const selected = Array.isArray(value) ? value : (value ? [value] : []);
+
+  const handleChange = (_, opts) => {
+    const list = opts || [];
+    const justAddedUnplanned = list.find((o) => o.kind === 'unplanned') && !selected.find((o) => o?.kind === 'unplanned');
+    if (justAddedUnplanned) { onChange?.([list.find((o) => o.kind === 'unplanned')]); return; }
+    // If any real phase is present, drop the Unplanned option (mutually exclusive).
+    const phases = list.filter((o) => o.kind !== 'unplanned');
+    onChange?.(phases.length ? phases : list);
+  };
 
   return (
     <Autocomplete
+      multiple
+      disableCloseOnSelect
       options={options}
-      value={value}
+      value={selected}
       loading={isLoading}
-      onChange={(_, opt) => onChange?.(opt)}
+      onChange={handleChange}
       getOptionLabel={(opt) => {
         if (!opt) return '';
         if (opt.kind === 'unplanned') return 'Unplanned (no plan link)';
@@ -47,23 +61,38 @@ const PhasePicker = ({ data, value, onChange, isLoading }) => {
         (a?.kind === 'unplanned' && b?.kind === 'unplanned')
         || (a?.phaseNo && a.phaseNo === b?.phaseNo)
       )}
+      renderTags={(tags, getTagProps) => tags.map((opt, index) => (
+        <Chip
+          {...getTagProps({ index })}
+          key={opt.kind === 'unplanned' ? '__unplanned' : opt.phaseNo}
+          size="small"
+          label={opt.kind === 'unplanned' ? 'Unplanned' : opt.phaseNo}
+          color={opt.kind === 'unplanned' ? 'warning' : 'primary'}
+          variant="outlined"
+        />
+      ))}
       renderInput={(params) => (
         <TextField
           {...params}
-          label="Which plan phase? *"
-          placeholder="Select the phase this dispatch fulfils"
+          label="Which plan phase(s)? *"
+          placeholder={selected.length ? '' : 'Select one or more phases this dispatch fulfils'}
           InputProps={{
             ...params.InputProps,
             startAdornment: (
-              <Box sx={{ display: 'flex', alignItems: 'center', mr: 1, color: 'primary.main' }}>
-                <CalendarClock size={14} />
-              </Box>
+              <>
+                <Box sx={{ display: 'flex', alignItems: 'center', mr: 1, color: 'primary.main' }}>
+                  <CalendarClock size={14} />
+                </Box>
+                {params.InputProps.startAdornment}
+              </>
             ),
           }}
         />
       )}
-      renderOption={(props, opt) => (
-        <li {...props} key={opt.kind === 'unplanned' ? '__unplanned' : opt.phaseNo}>
+      renderOption={(props, opt, { selected: isSel }) => (
+        <li {...props} key={opt.kind === 'unplanned' ? '__unplanned' : opt.phaseNo}
+          style={{ ...(props.style || {}), display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Checkbox checked={isSel} size="small" sx={{ p: 0.5 }} />
           {opt.kind === 'unplanned' ? (
             <Box sx={{
               width: '100%',

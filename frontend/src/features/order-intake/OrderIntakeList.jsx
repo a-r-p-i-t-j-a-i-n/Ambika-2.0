@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import {
   Plus, Phone, Mail, MessageCircle, Users, FileText, Trash2, ArrowRightCircle, X, PhoneCall, Ban,
+  ExternalLink, Link2, Package, StickyNote, User as UserIcon, Clock,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -16,6 +17,7 @@ import { usePermissions } from '../../hooks/usePermission';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import AttachmentList from '../../components/AttachmentList';
+import { resolveFileUrl } from '../../utils/fileUrl';
 import VoiceRecorder from '../../components/VoiceRecorder';
 import OrderEntryDrawer from '../orders/OrderEntryDrawer';
 import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
@@ -49,6 +51,7 @@ const OrderIntakeList = () => {
 
   const [form, setForm] = useState(null);     // null = closed; object = logging
   const [convert, setConvert] = useState(null); // intake being converted
+  const [detail, setDetail] = useState(null);   // intake whose full details are open
   const [searchParams, setSearchParams] = useSearchParams();
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [deleteTarget, setDeleteTarget] = useState(null); // intake pending MD delete
@@ -180,14 +183,14 @@ const OrderIntakeList = () => {
               ) : intakes.map((it) => {
                 const cm = channelMeta(it.channel); const CIcon = cm.icon;
                 return (
-                  <TableRow key={it._id} hover>
+                  <TableRow key={it._id} hover onClick={() => setDetail(it)} sx={{ cursor: 'pointer' }}>
                     <TableCell><Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{it.intakeNo}</Typography></TableCell>
                     <TableCell sx={{ maxWidth: 240 }}><Typography variant="body2" noWrap title={it.partyName || it.partyId?.name}>{it.partyName || it.partyId?.name}</Typography></TableCell>
                     <TableCell><Chip size="small" icon={<CIcon size={13} />} label={cm.label} variant="outlined" /></TableCell>
                     <TableCell>{it.items?.length || 0}</TableCell>
                     <TableCell><Typography variant="caption" noWrap>{fmt(it.createdAt)}</Typography></TableCell>
                     <TableCell><Chip size="small" label={it.intakeStatus} sx={{ bgcolor: alpha(STATUS_TONE[it.intakeStatus] || '#64748b', 0.12), color: STATUS_TONE[it.intakeStatus] || '#64748b', fontWeight: 700 }} /></TableCell>
-                    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
                       <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
                         {it.intakeStatus === 'NEW' && (
                           <>
@@ -284,6 +287,129 @@ const OrderIntakeList = () => {
           <Button onClick={() => setForm(null)}>Cancel</Button>
           <Button variant="contained" onClick={saveIntake} disabled={creating || uploading}>Log order & start FMS</Button>
         </DialogActions>
+      </Dialog>
+
+      {/* ── Intake details (opens on row click) ── */}
+      <Dialog open={!!detail} onClose={() => setDetail(null)} maxWidth="sm" fullWidth>
+        {detail && (() => {
+          const cm = channelMeta(detail.channel); const CIcon = cm.icon;
+          const atts = detail.attachments || [];
+          return (
+            <>
+              <DialogTitle sx={{ pr: 6 }}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Typography component="span" sx={{ fontWeight: 800 }}>{detail.intakeNo}</Typography>
+                  <Chip size="small" label={detail.intakeStatus}
+                    sx={{ bgcolor: alpha(STATUS_TONE[detail.intakeStatus] || '#64748b', 0.12), color: STATUS_TONE[detail.intakeStatus] || '#64748b', fontWeight: 700 }} />
+                </Stack>
+                <Typography variant="caption" color="text.secondary" display="block">{detail.partyName || detail.partyId?.name}</Typography>
+                <IconButton onClick={() => setDetail(null)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
+              </DialogTitle>
+              <DialogContent dividers>
+                <Stack spacing={2}>
+                  {/* Key facts */}
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1.5} alignItems="center">
+                      <CIcon size={16} color="#64748b" />
+                      <Typography variant="body2"><b>Channel:</b> {cm.label}</Typography>
+                    </Stack>
+                    {detail.contactName && (
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        <UserIcon size={16} color="#64748b" />
+                        <Typography variant="body2"><b>Contact:</b> {detail.contactName}</Typography>
+                      </Stack>
+                    )}
+                    <Stack direction="row" spacing={1.5} alignItems="center">
+                      <Clock size={16} color="#64748b" />
+                      <Typography variant="body2"><b>Logged:</b> {fmt(detail.createdAt)}</Typography>
+                    </Stack>
+                    {detail.receivedAt && (
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        <Clock size={16} color="#64748b" />
+                        <Typography variant="body2"><b>Received:</b> {fmt(detail.receivedAt)}</Typography>
+                      </Stack>
+                    )}
+                  </Stack>
+
+                  {/* Items */}
+                  <Box>
+                    <Stack direction="row" spacing={1} alignItems="center" mb={0.5}>
+                      <Package size={16} color="#64748b" />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Items ({detail.items?.length || 0})</Typography>
+                    </Stack>
+                    {detail.items?.length ? (
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow><TableCell>Item / SKU</TableCell><TableCell align="right" sx={{ width: 80 }}>Qty</TableCell></TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {detail.items.map((it, i) => (
+                            <TableRow key={i}>
+                              <TableCell>{it.skuName}{it.skuCode ? ` (${it.skuCode})` : ''}</TableCell>
+                              <TableCell align="right">{it.qty ?? '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    ) : <Typography variant="body2" color="text.secondary">No items listed.</Typography>}
+                  </Box>
+
+                  {/* Notes */}
+                  <Box>
+                    <Stack direction="row" spacing={1} alignItems="center" mb={0.5}>
+                      <StickyNote size={16} color="#64748b" />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Notes</Typography>
+                    </Stack>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', color: detail.notes ? 'text.primary' : 'text.secondary' }}>
+                      {detail.notes || 'No notes.'}
+                    </Typography>
+                  </Box>
+
+                  <Divider />
+
+                  {/* Attachments — preview chips + the complete URL for each file */}
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Attachments ({atts.length})</Typography>
+                    {atts.length ? (
+                      <Stack spacing={1.5}>
+                        <AttachmentList attachments={atts} dense />
+                        <Stack spacing={1}>
+                          {atts.map((att, i) => {
+                            const url = resolveFileUrl(att);
+                            return (
+                              <Box key={att._id || i} sx={{ p: 1, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.04), border: '1px solid', borderColor: alpha('#1d4ed8', 0.12) }}>
+                                <Stack direction="row" spacing={1} alignItems="center">
+                                  <Link2 size={14} color="#1d4ed8" style={{ flexShrink: 0 }} />
+                                  <Typography variant="caption" sx={{ fontWeight: 600 }} noWrap title={att.fileName}>{att.fileName || 'file'}</Typography>
+                                </Stack>
+                                <Typography component="a" href={url} target="_blank" rel="noreferrer"
+                                  variant="caption"
+                                  sx={{ display: 'block', mt: 0.25, ml: 2.75, color: '#1d4ed8', wordBreak: 'break-all', textDecoration: 'underline' }}>
+                                  {url}
+                                </Typography>
+                              </Box>
+                            );
+                          })}
+                        </Stack>
+                      </Stack>
+                    ) : <Typography variant="body2" color="text.secondary">No attachments.</Typography>}
+                  </Box>
+                </Stack>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setDetail(null)}>Close</Button>
+                {detail.intakeStatus === 'NEW' && (
+                  <Button variant="contained" startIcon={<ArrowRightCircle size={16} />}
+                    onClick={() => { openConvert(detail); setDetail(null); }}>Convert to SO</Button>
+                )}
+                {detail.intakeStatus === 'CONVERTED' && detail.linkedSalesOrderId && (
+                  <Button variant="contained" startIcon={<ExternalLink size={16} />}
+                    onClick={() => { navigate(`/orders/${detail.linkedSalesOrderId._id || detail.linkedSalesOrderId}`); setDetail(null); }}>View SO</Button>
+                )}
+              </DialogActions>
+            </>
+          );
+        })()}
       </Dialog>
 
       {/* ── Convert → full Sales Order punch-in form, pre-filled from the intake ── */}

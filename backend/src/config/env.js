@@ -19,6 +19,12 @@ const env = {
   SMTP_PORT: parseInt(process.env.SMTP_PORT, 10) || 587,
   SMTP_USER: process.env.SMTP_USER || '',
   SMTP_PASS: process.env.SMTP_PASS || '',
+  // The visible "From". With relays like Brevo, SMTP_USER is only the login —
+  // the From must be a verified sender, so default it to the company email.
+  MAIL_FROM:  process.env.MAIL_FROM || process.env.COMPANY_EMAIL || process.env.SMTP_USER || '',
+  // Brevo HTTP API key (starts with "xkeysib-"). When set, email is sent over
+  // HTTPS (port 443) instead of SMTP — works even when ISPs block SMTP ports.
+  BREVO_API_KEY: process.env.BREVO_API_KEY || '',
 
   RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000,
   RATE_LIMIT_MAX:       parseInt(process.env.RATE_LIMIT_MAX, 10)       || 200,

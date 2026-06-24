@@ -75,6 +75,16 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       },
       invalidatesTags: ['O2DMyTasks'],
     }),
+    // Mark one of a step's connected action-links as done (after the doer finishes
+    // that screen). Does not complete the step — several links can be attached.
+    markActionDone: builder.mutation({
+      query: ({ id, stepCode, actionKey, link }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/action-done`,
+        method: 'PATCH',
+        body: { actionKey, link },
+      }),
+      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }, 'O2DMyTasks'],
+    }),
     answerVerification: builder.mutation({
       query: ({ id, stepCode, itemId, answer, remark }) => ({
         url: `/o2d-fms/processes/${id}/steps/${stepCode}/verification/${itemId}`,
@@ -203,6 +213,7 @@ export const {
   useReorderStepDefinitionsMutation,
   useDeleteStepDefinitionMutation,
   useToggleChecklistItemMutation,
+  useMarkActionDoneMutation,
   useAnswerVerificationMutation,
   useFillFormFieldMutation,
   useApproveStepMutation,

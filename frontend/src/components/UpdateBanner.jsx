@@ -27,33 +27,49 @@ const UpdateBanner = () => {
     <Snackbar
       open
       anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      sx={{ zIndex: (t) => t.zIndex.snackbar + 10 }}
+      sx={{ zIndex: (t) => t.zIndex.snackbar + 10, bottom: { xs: 16, sm: 28 }, px: { xs: 1.5, sm: 0 } }}
     >
       <Box
         sx={{
-          display: 'flex', alignItems: 'center', gap: 1.5,
-          px: 2, py: 1.25, borderRadius: 2,
-          background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 100%)',
-          color: '#fff', boxShadow: '0 10px 30px rgba(15,23,42,0.35)',
-          maxWidth: 460,
+          display: 'flex', alignItems: 'center', gap: { xs: 1.5, sm: 2 },
+          px: { xs: 2, sm: 2.75 }, py: { xs: 1.5, sm: 1.75 }, borderRadius: 3.5,
+          background: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)',
+          color: '#ffffff',
+          border: '1px solid rgba(255,255,255,0.18)',
+          boxShadow: '0 18px 48px rgba(13,37,69,0.55)',
+          width: { xs: '100%', sm: 'auto' }, maxWidth: 540,
         }}
       >
-        <Sparkles size={18} style={{ flexShrink: 0 }} />
+        {/* Icon badge */}
+        <Box
+          sx={{
+            flexShrink: 0, width: 40, height: 40, borderRadius: '50%',
+            display: 'grid', placeItems: 'center',
+            bgcolor: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)',
+          }}
+        >
+          <Sparkles size={20} color="#ffffff" />
+        </Box>
+
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 800, fontSize: '0.9rem', lineHeight: 1.2 }}>
+          <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', lineHeight: 1.25, color: '#ffffff' }}>
             A new version is available
           </Typography>
-          <Typography sx={{ fontSize: '0.78rem', opacity: 0.85 }}>
-            Click update to get the latest features and fixes.
+          <Typography sx={{ fontSize: '0.8rem', lineHeight: 1.3, color: 'rgba(255,255,255,0.92)' }}>
+            Update now to get the latest features and fixes.
           </Typography>
         </Box>
+
         <Button
           onClick={reload}
           variant="contained"
-          startIcon={<RefreshCw size={15} />}
+          disableElevation
+          startIcon={<RefreshCw size={16} />}
           sx={{
-            flexShrink: 0, fontWeight: 800, textTransform: 'none',
-            bgcolor: '#fff', color: '#1d4ed8',
+            flexShrink: 0, fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap',
+            borderRadius: 2, px: 2.25, py: 1,
+            bgcolor: '#ffffff', color: '#1d4ed8',
+            boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
             '&:hover': { bgcolor: '#eef2ff' },
           }}
         >

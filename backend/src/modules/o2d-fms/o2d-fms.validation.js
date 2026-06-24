@@ -16,7 +16,9 @@ const attachmentJoi = Joi.object({
 });
 
 export const completeStepSchema = Joi.object({
-  link:        Joi.string().uri().allow('', null),
+  // Allow relative app paths (e.g. /orders/123) as well as absolute URLs — the
+  // link can be an in-app deep-link to the record this step produced.
+  link:        Joi.string().uri({ allowRelative: true }).allow('', null),
   remarks:     Joi.string().max(1000).allow('', null),
   attachments: Joi.array().items(attachmentJoi).default([]),
 });
@@ -75,6 +77,7 @@ const templateStepJoi = Joi.object({
     approverIds: Joi.array().items(objectId).default([]),
   }).allow(null),
   actionLink: Joi.string().trim().allow('', null),
+  actionLinks: Joi.array().items(Joi.string().trim()).default([]), // multiple connected screens
   requiresLink: Joi.boolean().allow(null), // null = inherit the step definition's default
   leadTime:     leadTimeJoi.default({ unit: 'HOURS' }),
   assigneeRole:   Joi.string().trim().allow('', null),
@@ -135,8 +138,16 @@ export const planOrderSchema = Joi.object({
     leadTime:     leadTimeJoi,
     checklist:    Joi.array().items(Joi.object({ text: Joi.string().trim().required() })),
     actionLink:   Joi.string().trim().allow('', null),
+    actionLinks:  Joi.array().items(Joi.string().trim()),
     requiresLink: Joi.boolean().allow(null), // null = inherit the step definition's default
   })).min(1).required(),
+});
+
+// Mark one of a step's connected action-links as done (e.g. after the doer
+// finishes that screen's entry). Captures the record's deep-link for review.
+export const markActionDoneSchema = Joi.object({
+  actionKey: Joi.string().trim().required(),
+  link:      Joi.string().trim().allow('', null),
 });
 
 export const checklistParamSchema = Joi.object({

@@ -214,70 +214,114 @@ const PlanWorkspace = () => {
 
   return (
     <Box sx={{ p: { xs: 2, sm: 3 }, display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {/* Page header */}
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'flex-end' }}>
-        <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 800, color: 'text.primary', letterSpacing: '-0.015em', lineHeight: 1.2 }}>
-            Dispatch Planning
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Break a sales order into phased dispatches. Each phase carries its own date and per-SKU plan.
-          </Typography>
-        </Box>
-        <Stack direction="row" spacing={1.25} sx={{ width: { xs: '100%', md: 'auto' } }}>
-          <Button
-            variant="outlined"
-            startIcon={<CalendarDays size={14} />}
-            onClick={() => navigate('/dispatch-planning/calendar')}
+      {/* Page header — branded toolbar card */}
+      <Paper
+        elevation={0}
+        sx={{
+          p: { xs: 2, md: 2.5 },
+          borderRadius: '16px',
+          border: '1px solid',
+          borderColor: alpha(theme.palette.primary.main, 0.18),
+          background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.06)} 0%, ${alpha(theme.palette.primary.light, 0.04)} 100%)`,
+        }}
+      >
+        <Stack
+          direction={{ xs: 'column', lg: 'row' }}
+          spacing={2}
+          justifyContent="space-between"
+          alignItems={{ xs: 'flex-start', lg: 'center' }}
+        >
+          {/* Title with icon badge */}
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: 0 }}>
+            <Box sx={{
+              width: 46, height: 46, borderRadius: '14px', flexShrink: 0,
+              display: 'grid', placeItems: 'center', color: '#fff',
+              background: `linear-gradient(135deg, ${theme.palette.primary.main}, ${theme.palette.primary.dark})`,
+              boxShadow: `0 6px 16px ${alpha(theme.palette.primary.main, 0.35)}`,
+            }}>
+              <CalendarPlus size={22} />
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'text.primary', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+                Dispatch Planning
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                Break a sales order into phased dispatches — each phase carries its own date &amp; per-SKU plan.
+              </Typography>
+            </Box>
+          </Stack>
+
+          {/* Controls: search + actions */}
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={1.25}
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            sx={{ width: { xs: '100%', lg: 'auto' }, flexShrink: 0 }}
           >
-            Calendar
-          </Button>
-          <Autocomplete
-            options={orders}
-            loading={ordersLoading}
-            value={selectedOrder}
-            onChange={(_, val) => onSelectOrder(val)}
-            getOptionLabel={(o) => o ? `${o.soNumber} — ${o.partyName || ''}` : ''}
-            isOptionEqualToValue={(a, b) => a._id === b?._id}
-            sx={{ width: { xs: '100%', md: 380 } }}
-            size="small"
-            renderInput={(p) => (
-              <TextField
-                {...p}
-                placeholder="Search sales order..."
-                InputProps={{ ...p.InputProps, startAdornment: <Search size={14} style={{ marginLeft: 4, marginRight: 6 }} /> }}
-              />
-            )}
-            renderOption={(props, opt) => (
-              <li {...props} key={opt._id}>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="body2" fontWeight={700}>{opt.soNumber}</Typography>
-                  <Typography variant="caption" color="text.secondary" noWrap>
-                    {opt.partyName} · {dayjs(opt.orderDate).format('DD MMM YYYY')} · Bal {Number(opt.totalBalanceQty || 0).toLocaleString('en-IN')}
-                  </Typography>
-                </Box>
-              </li>
-            )}
-          />
-          <Button
-            variant="contained"
-            startIcon={<Plus size={14} />}
-            onClick={() => setAddDialogOpen(true)}
-            disabled={!soNumber || scheduleLoading}
-          >
-            Add Phase
-          </Button>
-          {/* Once planning is done, jump to this order's FMS task (checklist auto-marked). */}
-          <Button
-            variant="outlined"
-            startIcon={<ListChecks size={14} />}
-            onClick={() => finishToTask({ soNumber })}
-            disabled={!soNumber}
-          >
-            Done → FMS Task
-          </Button>
+            <Autocomplete
+              options={orders}
+              loading={ordersLoading}
+              value={selectedOrder}
+              onChange={(_, val) => onSelectOrder(val)}
+              getOptionLabel={(o) => o ? `${o.soNumber} — ${o.partyName || ''}` : ''}
+              isOptionEqualToValue={(a, b) => a._id === b?._id}
+              sx={{ width: { xs: '100%', sm: 300, lg: 320 } }}
+              size="small"
+              renderInput={(p) => (
+                <TextField
+                  {...p}
+                  placeholder="Search sales order…"
+                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px', bgcolor: 'background.paper' } }}
+                  InputProps={{ ...p.InputProps, startAdornment: <Search size={15} style={{ marginLeft: 4, marginRight: 6, opacity: 0.6 }} /> }}
+                />
+              )}
+              renderOption={(props, opt) => (
+                <li {...props} key={opt._id}>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={700}>{opt.soNumber}</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                      {opt.partyName} · {dayjs(opt.orderDate).format('DD MMM YYYY')} · Bal {Number(opt.totalBalanceQty || 0).toLocaleString('en-IN')}
+                    </Typography>
+                  </Box>
+                </li>
+              )}
+            />
+            <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+              <Button
+                variant="outlined"
+                disableElevation
+                startIcon={<CalendarDays size={16} />}
+                onClick={() => navigate('/dispatch-planning/calendar')}
+                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2 }}
+              >
+                Calendar
+              </Button>
+              <Button
+                variant="contained"
+                disableElevation
+                startIcon={<Plus size={16} />}
+                onClick={() => setAddDialogOpen(true)}
+                disabled={!soNumber || scheduleLoading}
+                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2 }}
+              >
+                Add Phase
+              </Button>
+              {/* Once planning is done, jump to this order's FMS task (checklist auto-marked). */}
+              <Button
+                variant="outlined"
+                color="success"
+                disableElevation
+                startIcon={<ListChecks size={16} />}
+                onClick={() => finishToTask({ soNumber })}
+                disabled={!soNumber}
+                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2 }}
+              >
+                Done → FMS Task
+              </Button>
+            </Stack>
+          </Stack>
         </Stack>
-      </Stack>
+      </Paper>
 
       {!soNumber && <EmptyState />}
 

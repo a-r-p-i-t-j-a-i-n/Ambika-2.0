@@ -18,7 +18,7 @@ import {
   useGetDispatchablePhasesQuery,
 } from '../../store/api/dispatchControlApi';
 import PhasePicker from './components/PhasePicker';
-import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
+import { useReturnToTask } from '../o2d-fms/useReturnToTask';
 import { useGetTransportersQuery, useCreateTransporterMutation } from '../../store/api/transporterApi';
 
 const TRANSPORT_MODES = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
@@ -60,7 +60,7 @@ const VarianceChip = ({ effective, dispatching }) => {
   return <Chip size="small" sx={{ height: 20, fontSize: '0.65rem', bgcolor: alpha(theme.palette.error.main, 0.10), color: 'error.main' }} icon={<AlertTriangle size={11} />} label={`${Math.abs(diff).toLocaleString('en-IN')} short → next phase`} />;
 };
 
-const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
+const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = null }) => {
   const theme = useTheme();
   const { enqueueSnackbar } = useSnackbar();
 
@@ -71,7 +71,10 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
   const orders = useMemo(() => ordersRes?.data || [], [ordersRes]);
 
   const [step1Order, setStep1Order] = useState(presetOrder || null);
-  const [phaseSel, setPhaseSel] = useState(null);
+  // Multiple plan phases can be fulfilled by one DC; the entered qty per SKU is
+  // allocated across them (earliest-first) on the server.
+  const [phaseSels, setPhaseSels] = useState([]);
+  const isUnplanned = phaseSels.some((p) => p?.kind === 'unplanned');
   const [header, setHeader] = useState({
     dcDate: dayjs().format('YYYY-MM-DD'),
     vehicleNo: '',
@@ -91,7 +94,10 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
   const phasesData = dispatchablePhasesRes?.data;
 
   const [createActualDispatch, { isLoading: isSaving }] = useCreateActualDispatchMutation();
-  const openFmsTask = useOpenFmsTask();
+  // Returns to the FMS task (entryDone + the connected action marked done) when
+  // this drawer was opened via a task's "Do it now"; falls back to the order's
+  // active task otherwise.
+  const { finishToTask } = useReturnToTask();
 
   // Transporter master — pick an existing transporter or add a new one inline.
   const { data: transRes, isFetching: transLoading } = useGetTransportersQuery({ limit: 500, sort: 'name', isActive: true }, { skip: !open });
@@ -104,7 +110,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
   useEffect(() => {
     if (!open) return;
     setStep1Order(presetOrder || null);
-    setPhaseSel(null);
+    setPhaseSels([]);
     setHeader({
       dcDate: dayjs().format('YYYY-MM-DD'),
       vehicleNo: '',
@@ -119,18 +125,31 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
     setLines([]);
   }, [open, presetOrder]);
 
-  // When a phase is picked, prefill the SKU lines with pending qtys.
+  // Came from an FMS "Do it now" with ?so=… → auto-select that order once the
+  // (status-filtered) order list has loaded, so the doer starts at Step 2.
   useEffect(() => {
-    if (!phaseSel) { setLines([]); return; }
-    if (phaseSel.kind === 'unplanned') {
-      // Show every order SKU with pending = orderQty − already dispatched (server doesn't compute this
-      // standalone, but step1Order.items has dispatchedQty + balanceQty).
+    if (!open || !presetSoNumber || step1Order || !orders.length) return;
+    const match = orders.find((o) => o.soNumber === presetSoNumber);
+    if (match) setStep1Order(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, presetSoNumber, orders]);
+
+  // When phase(s) are picked, prefill the SKU lines. With several phases selected
+  // we AGGREGATE each SKU across them (sum plan / effective / carry / pending), so
+  // one row per SKU shows the combined target; the server allocates the entered
+  // qty back to each phase (earliest-first).
+  useEffect(() => {
+    if (!phaseSels.length) { setLines([]); return; }
+    if (isUnplanned) {
+      // Show every order SKU; pending unknown at phase level → operator types qty.
       const newLines = (step1Order?.items || []).map((it) => ({
         orderItemId: it._id,
         skuId: it.skuId,
         skuCode: it.skuCode,
         skuName: it.skuName,
         plannedQty: 0,
+        carryInQty: 0,
+        effectivePlannedQty: 0,
         alreadyDispatchedQty: Number(it.dispatchedQty || 0),
         pendingFromPhase: 0,
         quantityPcs: 0,
@@ -139,34 +158,46 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
         weightKg: '',
       }));
       setLines(newLines);
-    } else {
-      const newLines = (phaseSel.skus || []).map((sku) => ({
-        orderItemId: sku.scheduleItemId,    // server matches by skuCode anyway
-        skuId: sku.skuId,
-        skuCode: sku.skuCode,
-        skuName: sku.skuName,
-        phaseId: sku.phaseId,
-        plannedQty: Number(sku.plannedQty || 0),
-        carryInQty: Number(sku.carryInQty || 0),
-        // Effective plan = what really must ship (planner qty + carry-in from prior shorts).
-        effectivePlannedQty: Number(sku.effectivePlannedQty || 0),
-        alreadyDispatchedQty: Number(sku.actualQty || 0),
-        // Pending = effective − already; this is what we pre-fill into the input.
-        pendingFromPhase: Number(sku.pendingQty || 0),
-        quantityPcs: Number(sku.pendingQty || 0),
-        pcsPerBox: '',
-        noOfBoxes: '',
-        weightKg: '',
-      }));
-      setLines(newLines);
+      return;
     }
-  }, [phaseSel, step1Order]);
+    const map = new Map();
+    phaseSels.filter((p) => p?.kind !== 'unplanned').forEach((ph) => {
+      (ph.skus || []).forEach((sku) => {
+        const key = sku.skuCode || sku.skuName;
+        const cur = map.get(key) || {
+          orderItemId: sku.scheduleItemId,   // server matches by skuCode anyway
+          skuId: sku.skuId,
+          skuCode: sku.skuCode,
+          skuName: sku.skuName,
+          phaseId: sku.phaseId,
+          plannedQty: 0,
+          carryInQty: 0,
+          effectivePlannedQty: 0,
+          alreadyDispatchedQty: 0,
+          pendingFromPhase: 0,
+          phaseCount: 0,
+          pcsPerBox: '',
+          noOfBoxes: '',
+          weightKg: '',
+        };
+        cur.plannedQty += Number(sku.plannedQty || 0);
+        cur.effectivePlannedQty += Number(sku.effectivePlannedQty || 0);
+        cur.carryInQty += Number(sku.carryInQty || 0);
+        cur.alreadyDispatchedQty += Number(sku.actualQty || 0);
+        cur.pendingFromPhase += Number(sku.pendingQty || 0);
+        cur.phaseCount += 1;
+        map.set(key, cur);
+      });
+    });
+    // Pre-fill the "Now" qty with the combined pending across the selected phases.
+    setLines([...map.values()].map((l) => ({ ...l, quantityPcs: l.pendingFromPhase })));
+  }, [phaseSels, step1Order, isUnplanned]);
 
   const updateLine = (idx, patch) => setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
 
   const totalDispatching = useMemo(() => lines.reduce((s, l) => s + Number(l.quantityPcs || 0), 0), [lines]);
   const isStep1Valid = Boolean(step1Order);
-  const isStep2Valid = Boolean(phaseSel);
+  const isStep2Valid = phaseSels.length > 0;
   const hasAnyQty   = lines.some((l) => Number(l.quantityPcs || 0) > 0);
   const canSubmit   = isStep1Valid && isStep2Valid && hasAnyQty && !isSaving;
   const progress    = (isStep1Valid ? 33 : 0) + (isStep2Valid ? 33 : 0) + (hasAnyQty ? 34 : 0);
@@ -190,13 +221,13 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
       dcDate: new Date(header.dcDate),
       ...header,
       items,
-      ...(phaseSel.kind === 'unplanned'
+      ...(isUnplanned
         ? { isUnplanned: true }
         : {
-            phaseRef: {
-              phaseId: phaseSel.phaseId,
-              phaseNo: phaseSel.phaseNo,
-            },
+            // Server allocates the per-SKU qty across these phases (earliest-first).
+            phaseRefs: phaseSels
+              .filter((p) => p?.kind !== 'unplanned')
+              .map((p) => ({ phaseNo: p.phaseNo, phaseId: p.phaseId })),
           }
       ),
     };
@@ -206,8 +237,10 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
       const dcNumber = res?.data?.challan?.dcNumber || 'DC';
       enqueueSnackbar(`${dcNumber} created — plan vs actual updated`, { variant: 'success' });
       onClose?.();
-      // Jump to the FMS task for this order (Create Delivery Challan step).
-      if (step1Order?.soNumber) await openFmsTask({ soNumber: step1Order.soNumber });
+      // Back to the FMS task: if we came from "Do it now" this returns to that
+      // exact step (checklist auto-ticks, the action is marked done); otherwise
+      // it opens the order's active task.
+      if (step1Order?.soNumber) await finishToTask({ soNumber: step1Order.soNumber });
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Could not record dispatch', { variant: 'error' });
     }
@@ -322,8 +355,13 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
               <AlertTriangle size={14} /> No plan phases exist yet for this order. Choose <strong>Unplanned</strong> to proceed.
             </Box>
           )}
-          <PhasePicker data={phasesData} value={phaseSel} onChange={setPhaseSel} isLoading={phasesFetching} />
-          {phaseSel?.kind === 'unplanned' && (
+          <PhasePicker data={phasesData} value={phaseSels} onChange={setPhaseSels} isLoading={phasesFetching} />
+          {phaseSels.length > 1 && !isUnplanned && (
+            <Typography variant="caption" color="primary.main" sx={{ display: 'block', mt: 1, fontWeight: 600 }}>
+              {phaseSels.length} phases selected — quantities below are combined; the entered qty is allocated across them earliest-first.
+            </Typography>
+          )}
+          {isUnplanned && (
             <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>
               ⚠ This dispatch will be flagged as <strong>unplanned</strong> on the risk panel.
             </Typography>
@@ -471,7 +509,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
               const effective = Number(l.effectivePlannedQty || l.plannedQty || 0);
               const carry = Number(l.carryInQty || 0);
               const pending = Number(l.pendingFromPhase ?? 0);
-              const over = Number(l.quantityPcs || 0) > pending && phaseSel?.kind !== 'unplanned';
+              const over = Number(l.quantityPcs || 0) > pending && !isUnplanned;
               return (
                 <Box key={l.skuCode + idx} sx={{
                   display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.8fr 0.7fr 0.7fr 0.85fr 0.85fr 1fr 0.7fr 0.85fr' },
@@ -565,7 +603,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null }) => {
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Phase</Typography>
             <Typography variant="body2" fontWeight={800}>
-              {phaseSel?.kind === 'unplanned' ? 'Unplanned' : (phaseSel?.phaseNo || '—')}
+              {isUnplanned ? 'Unplanned' : (phaseSels.map((p) => p.phaseNo).filter(Boolean).join(', ') || '—')}
             </Typography>
           </Box>
           <Box>

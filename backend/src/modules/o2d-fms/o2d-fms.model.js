@@ -202,7 +202,18 @@ const ProcessStepSchema = new Schema({
   approval:     { type: ApprovalSchema, default: null },
   // Key into the frontend action-link registry — renders a "Do it now →" deep
   // link to the real screen (dispatch planning, order entry…) for THIS order.
+  // `actionLink` is the legacy single key; `actionLinks` allows several connected
+  // screens on one step (each gets its own "Do it now"). actionProgress records
+  // which of them have been completed — none are mandatory to finish the step.
   actionLink:   { type: String, default: null },
+  actionLinks:  [{ type: String }],
+  actionProgress: [new Schema({
+    key:        { type: String, required: true }, // matches an entry in actionLinks
+    link:       { type: String, default: null },  // the record's deep-link captured when done
+    doneAt:     { type: Date, default: Date.now },
+    doneBy:     { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    doneByName: { type: String, default: null },
+  }, { _id: false })],
   comments:     [StepCommentSchema],
 
   // Per-step "a link is required to complete" override. null = inherit the
@@ -279,7 +290,8 @@ const TemplateStepSchema = new Schema({
   }],
   proof:        { type: ProofConfigSchema, default: null },
   approval:     { type: ApprovalSchema, default: null }, // runtime fields stay null on templates
-  actionLink:   { type: String, default: null }, // frontend action-registry key
+  actionLink:   { type: String, default: null }, // legacy single frontend action-registry key
+  actionLinks:  [{ type: String }],              // multiple connected screens (each a "Do it now")
   // Per-step "a link is required to complete" choice. null = inherit the Step
   // Definition's default; true/false = explicit override for this template.
   requiresLink: { type: Boolean, default: null },

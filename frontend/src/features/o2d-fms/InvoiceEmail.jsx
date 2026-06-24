@@ -6,6 +6,7 @@ import {
 import { Mail, Send, Paperclip, FileText, ShieldCheck, ClipboardList, CheckCircle2 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
+import { useSearchParams } from 'react-router-dom';
 import O2dStepShell from './components/O2dStepShell';
 import { useGetSalesInvoicesQuery, useSendSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
 import { useReturnToTask } from './useReturnToTask';
@@ -51,6 +52,8 @@ const InvoiceEmail = () => {
   const invoices = useMemo(() => invRes?.data || [], [invRes]);
   const [send, { isLoading }] = useSendSalesInvoiceMutation();
   const { finishToTask } = useReturnToTask();
+  const [searchParams] = useSearchParams();
+  const soParam = searchParams.get('so') || '';
 
   const [inv, setInv] = useState(null);
   const [to, setTo] = useState('');
@@ -62,6 +65,14 @@ const InvoiceEmail = () => {
     () => [...(inv?.invoiceUrls || []), ...(inv?.ewayBillUrls || []), ...(inv?.pdirUrls || [])].filter(Boolean),
     [inv],
   );
+
+  // Came from an FMS "Do it now" with ?so=… → auto-select that order's invoice.
+  useEffect(() => {
+    if (inv || !soParam || !invoices.length) return;
+    const match = invoices.find((i) => i.soNumber === soParam);
+    if (match) setInv(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soParam, invoices]);
 
   useEffect(() => {
     if (!inv) return;
@@ -164,7 +175,7 @@ const InvoiceEmail = () => {
               </Typography>
               <Divider />
               <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1.5}>
-                <Chip size="small" variant="outlined" label="Delivery needs SMTP configured on the server" sx={{ fontSize: '0.62rem' }} />
+                <Chip size="small" variant="outlined" label="Sends to the “To” address via the configured SMTP relay" sx={{ fontSize: '0.62rem' }} />
                 <Button variant="contained" startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
                   disabled={isLoading} onClick={handleSend} sx={{ fontWeight: 700, px: 3 }}>
                   {isLoading ? 'Sending…' : 'Send Email'}

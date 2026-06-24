@@ -16,6 +16,7 @@ import {
   taskTemplateUpdateSchema,
   checklistToggleSchema,
   checklistParamSchema,
+  markActionDoneSchema,
   commentSchema,
   verificationAnswerSchema,
   formFieldValueSchema,
@@ -85,6 +86,11 @@ router.patch('/processes/:id/steps/:stepCode/assign',
 router.patch('/processes/:id/steps/:stepCode/checklist/:itemId',
   requirePermission('o2dfms.view'),
   validate(checklistParamSchema, 'params'), validate(checklistToggleSchema), c.toggleChecklist);
+
+// Mark one of a step's connected action-links as done (after finishing that screen).
+router.patch('/processes/:id/steps/:stepCode/action-done',
+  requirePermission('o2dfms.view'),
+  validate(processStepParamSchema, 'params'), validate(markActionDoneSchema), c.markActionDone);
 
 // Yes/No verification answers (itemId = verification subdoc id).
 router.patch('/processes/:id/steps/:stepCode/verification/:itemId',

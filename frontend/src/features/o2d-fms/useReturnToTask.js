@@ -25,10 +25,16 @@ export function useReturnToTask() {
   const openFmsTask = useOpenFmsTask();
   const fromTask = sp.get('fromTask');
   const fromStep = sp.get('fromStep');
+  // Which connected action-link this entry was for (a step can have several).
+  // Carried back so the task marks exactly that link done.
+  const fromAction = sp.get('fromAction');
   const active = !!(fromTask && fromStep);
 
   const returnToTask = () => {
-    if (active) navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?entryDone=1`);
+    if (!active) return;
+    const q = new URLSearchParams({ entryDone: '1' });
+    if (fromAction) q.set('doneAction', fromAction);
+    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`);
   };
 
   const finishToTask = async (ctx = {}) => {
