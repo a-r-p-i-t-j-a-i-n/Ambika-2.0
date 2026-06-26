@@ -6,7 +6,9 @@ export const createVendorSchema = Joi.object({
   name:             Joi.string().required().trim().min(2).max(200),
   contactPerson:    Joi.string().trim().max(100).allow('', null),
   phone:            Joi.string().trim().max(30).allow('', null),
-  email:            Joi.string().email({ tlds: false }).trim().allow('', null),
+  // Plain string (not strict .email()) — vendors legitimately store multiple
+  // comma-separated contact emails (e.g. "a@x.com,b@x.com").
+  email:            Joi.string().trim().max(200).allow('', null),
   address:          Joi.string().trim().max(500).allow('', null),
   location:         Joi.string().trim().max(150).allow('', null),
   state:            Joi.string().trim().max(50).allow('', null),
@@ -52,3 +54,16 @@ export const vendorQuerySchema = Joi.object({
 export const mongoIdParamSchema = Joi.object({
   id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });
+
+// Manual Vendor-Master rate change (POST /vendors/:id/pricing-history).
+export const addPricingHistorySchema = Joi.object({
+  skuId:    Joi.string().regex(/^[0-9a-fA-F]{24}$/).allow('', null),
+  skuCode:  Joi.string().trim().max(50).allow('', null),
+  itemName: Joi.string().trim().max(200).allow('', null),
+  rate:     Joi.number().min(0),
+  gstRate:  Joi.number().min(0).max(100),
+  hsn:      Joi.string().trim().max(20).allow('', null),
+  unit:     Joi.string().trim().max(20).allow('', null),
+  effectiveDate: Joi.date().optional(),
+  remarks:  Joi.string().trim().max(300).allow('', null),
+}).or('rate', 'gstRate').or('skuCode', 'skuId');

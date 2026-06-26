@@ -19,12 +19,22 @@ export const vendorController = {
   }),
 
   update: asyncHandler(async (req, res) => {
-    const vendor = await vendorService.update(req.params.id, req.body, req.user?._id);
+    const vendor = await vendorService.update(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Vendor updated', vendor));
   }),
 
   remove: asyncHandler(async (req, res) => {
     await vendorService.remove(req.params.id, req.user?._id);
     res.json(ApiResponse.ok('Vendor deleted'));
+  }),
+
+  getPricingHistory: asyncHandler(async (req, res) => {
+    const history = await vendorService.getPricingHistory(req.params.id, req.query);
+    res.json(ApiResponse.ok('Pricing history retrieved', history));
+  }),
+
+  addPricingHistory: asyncHandler(async (req, res) => {
+    const entry = await vendorService.addPricingHistory(req.params.id, req.body, req.user);
+    res.status(201).json(ApiResponse.created('Pricing history recorded', entry));
   }),
 };

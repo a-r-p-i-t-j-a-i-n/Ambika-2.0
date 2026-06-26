@@ -18,11 +18,20 @@ export const vendorApi = baseApi.injectEndpoints({
     }),
     updateVendor: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/vendors/${id}`, method: 'PUT', body }),
-      invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }],
+      invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
     }),
     deleteVendor: builder.mutation({
       query: (id) => ({ url: `/vendors/${id}`, method: 'DELETE' }),
       invalidatesTags: ['Vendor'],
+    }),
+    // Vendor pricing history — audit of every SKU rate / GST change.
+    getVendorPricingHistory: builder.query({
+      query: ({ id, ...params }) => ({ url: `/vendors/${id}/pricing-history`, params }),
+      providesTags: (r, e, { id }) => [{ type: 'Vendor', id: `pricing-${id}` }],
+    }),
+    addVendorPricingHistory: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/vendors/${id}/pricing-history`, method: 'POST', body }),
+      invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
     }),
   }),
 });
@@ -33,4 +42,6 @@ export const {
   useCreateVendorMutation,
   useUpdateVendorMutation,
   useDeleteVendorMutation,
+  useGetVendorPricingHistoryQuery,
+  useAddVendorPricingHistoryMutation,
 } = vendorApi;

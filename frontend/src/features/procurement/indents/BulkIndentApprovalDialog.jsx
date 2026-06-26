@@ -212,6 +212,7 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
 
   const handleReject = async () => {
     if (!selectedRows.length) { enqueueSnackbar('Select at least one indent', { variant: 'warning' }); return; }
+    if (!rejectReason.trim()) { enqueueSnackbar('Rejection remarks are required', { variant: 'warning' }); return; }
     try {
       const res = await bulkReject({ indentIds: selectedRows.map((r) => r._id), remarks: rejectReason.trim() }).unwrap();
       const r = res?.data || {};
@@ -224,7 +225,7 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
   };
 
   const loading = isLoading || isFetching;
-  const COLS = 10;
+  const COLS = 11;
 
   return (
     <>
@@ -312,6 +313,7 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
                     <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Items</TableCell>
                     <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Products</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Total Qty</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Status</TableCell>
                     <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc', minWidth: 200 }}>Approval Remarks</TableCell>
                   </TableRow>
                 </TableHead>
@@ -338,10 +340,7 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
                             </IconButton>
                           </TableCell>
                           <TableCell>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                              <Typography variant="body2" fontWeight={700} color="primary.main">{r.indentNumber}</Typography>
-                              {r.approvalStatus === 'DRAFT' && <Chip size="small" label="Draft" sx={{ height: 18, fontSize: '0.6rem' }} />}
-                            </Box>
+                            <Typography variant="body2" fontWeight={700} color="primary.main">{r.indentNumber}</Typography>
                           </TableCell>
                           <TableCell><Typography variant="body2" color="text.secondary">{fmtDate(r.createdAt)}</Typography></TableCell>
                           <TableCell>{r.raisedBy || '—'}</TableCell>
@@ -349,6 +348,12 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
                           <TableCell align="right">{r.items.length}</TableCell>
                           <TableCell><Typography variant="body2" noWrap title={productsSummary(r.items)}>{productsSummary(r.items)}</Typography></TableCell>
                           <TableCell align="right">{totalQty}</TableCell>
+                          <TableCell>
+                            <Chip size="small"
+                              color={r.approvalStatus === 'PENDING_APPROVAL' ? 'warning' : 'default'}
+                              label={r.approvalStatus === 'PENDING_APPROVAL' ? 'Pending' : 'Draft'}
+                              sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700 }} />
+                          </TableCell>
                           <TableCell>
                             <TextField size="small" fullWidth placeholder="Approval remarks" value={r.remarks}
                               onChange={(e) => setRowRemarks(r._id, e.target.value)} onClick={(e) => e.stopPropagation()} />
@@ -439,15 +444,17 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
         <DialogTitle sx={{ fontWeight: 800 }}>Reject {selected.size} Indent(s)</DialogTitle>
         <DialogContent dividers>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            This will reject the selected pending indents. Add an optional reason.
+            This will reject the selected pending indents. A rejection reason is required.
           </Typography>
-          <TextField label="Reject reason" fullWidth multiline minRows={2} value={rejectReason}
-            onChange={(e) => setRejectReason(e.target.value)} placeholder="Rejected due to…" />
+          <TextField label="Reject reason" required fullWidth multiline minRows={2} value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)} placeholder="Rejected due to…"
+            error={rejectReason.length > 0 && !rejectReason.trim()}
+            helperText="Required — recorded on each rejected indent's timeline." />
         </DialogContent>
         <DialogActions sx={{ p: 2, gap: 1 }}>
           <Button onClick={() => setRejectOpen(false)} disabled={rejecting}>Cancel</Button>
           <Button color="error" variant="contained" startIcon={rejecting ? <CircularProgress size={16} color="inherit" /> : <XCircle size={16} />}
-            onClick={handleReject} disabled={rejecting}>
+            onClick={handleReject} disabled={rejecting || !rejectReason.trim()}>
             Confirm Reject
           </Button>
         </DialogActions>

@@ -74,12 +74,19 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (id) => `/procurement/purchase-orders/${id}`,
       providesTags: (_r, _e, id) => [{ type: 'PurchaseOrder', id }],
     }),
+    // Global approved-item picker for the New PO form — all PO-creatable indents,
+    // one row per approved, not-yet-PO'd item (item-level references).
+    getAllApprovedItems: builder.query({
+      query: (params = {}) => ({ url: '/procurement/purchase-orders/approved-items', params }),
+      providesTags: ['Indent', 'PurchaseOrder'],
+    }),
     createPurchaseOrder: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders', method: 'POST', body }),
       invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
-    createMultiIndentPurchaseOrder: builder.mutation({
-      query: (body) => ({ url: '/procurement/purchase-orders/multi', method: 'POST', body }),
+    // New PO form item-picker → one vendor, hand-picked approved items.
+    createPurchaseOrderFromItems: builder.mutation({
+      query: (body) => ({ url: '/procurement/purchase-orders/create-from-items', method: 'POST', body }),
       invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
     // Returns a PDF Blob (no DB write). On error the backend sends JSON, so branch
@@ -106,7 +113,12 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     cancelPurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/cancel`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
+    }),
+    // Revise a cancelled PO → new draft PO (copied data, new number, linked back).
+    revisePurchaseOrder: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/revise`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
     }),
     markPoPiNotRequired: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/pi-not-required`, method: 'POST', body }),
@@ -485,13 +497,15 @@ export const {
   useGetPurchaseOrdersQuery,
   useGetPurchaseOrderStatsQuery,
   useGetPurchaseOrderQuery,
+  useGetAllApprovedItemsQuery,
   useCreatePurchaseOrderMutation,
-  useCreateMultiIndentPurchaseOrderMutation,
+  useCreatePurchaseOrderFromItemsMutation,
   usePreviewPurchaseOrderPdfMutation,
   useUpdatePurchaseOrderMutation,
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,
   useCancelPurchaseOrderMutation,
+  useRevisePurchaseOrderMutation,
   useMarkPoPiNotRequiredMutation,
   useGetFollowUpsQuery,
   useGetFollowUpStatsQuery,

@@ -7,7 +7,7 @@ import {
 import {
   ArrowLeft, Pencil, CheckCircle2, Send, FileDown, Ban, ShoppingBag,
   Building2, FileText, Truck, Mail, PhoneCall, PackageCheck, Eye, CircleSlash,
-  MapPin, Wallet, Clock, CalendarClock, User,
+  MapPin, Wallet, Clock, CalendarClock, User, RotateCcw, GitBranch,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -101,6 +101,7 @@ const PurchaseOrderDetail = () => {
   const [cancelPo] = useCancelPurchaseOrderMutation();
 
   const [formOpen, setFormOpen] = useState(false);
+  const [reviseOpen, setReviseOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
@@ -203,8 +204,29 @@ const PurchaseOrderDetail = () => {
           {canRelease && <Button variant="contained" startIcon={<Send size={16} />} onClick={() => setReleaseOpen(true)}>Release to Supplier</Button>}
           {po.poPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>PO PDF</Button>}
           {canCancel && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
+          {po.poStatus === 'CANCELLED' && (
+            <Button variant="contained" startIcon={<RotateCcw size={16} />} onClick={() => setReviseOpen(true)}>Revise PO</Button>
+          )}
         </Box>
       </Box>
+
+      {/* Revision linkage badges */}
+      {(po.revisedFromPoId || po.revisedToPoNumber) && (
+        <Box sx={{ mb: 3, display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          {po.revisedFromPoId && (
+            <Chip icon={<GitBranch size={14} />} variant="outlined" color="primary"
+              label={`Revised from ${po.revisedFromPoNumber || 'previous PO'}${po.revisionNo ? ` · revision ${po.revisionNo}` : ''}`}
+              onClick={po.revisedFromPoId ? () => navigate(`/procurement/purchase-orders/${po.revisedFromPoId}`) : undefined}
+              sx={{ fontWeight: 700 }} />
+          )}
+          {po.revisedToPoNumber && (
+            <Chip icon={<RotateCcw size={14} />} variant="outlined" color="success"
+              label={`Revised as ${po.revisedToPoNumber}`}
+              onClick={po.revisedToPoId ? () => navigate(`/procurement/purchase-orders/${po.revisedToPoId}`) : undefined}
+              sx={{ fontWeight: 700 }} />
+          )}
+        </Box>
+      )}
 
       <Grid container spacing={3}>
         {/* Vendor */}
@@ -397,6 +419,7 @@ const PurchaseOrderDetail = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>#</TableCell>
+                    <TableCell>Item Ref</TableCell>
                     <TableCell>Item</TableCell>
                     <TableCell>SKU</TableCell>
                     <TableCell align="right">Qty</TableCell>
@@ -414,6 +437,11 @@ const PurchaseOrderDetail = () => {
                   {(po.items || []).map((it, i) => (
                     <TableRow key={it._id || i} hover>
                       <TableCell>{i + 1}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2" color="primary.main" fontWeight={700}>
+                          {it.indentItemDisplayNumber || it.indentNumber || '—'}
+                        </Typography>
+                      </TableCell>
                       <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
                       <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
                       <TableCell align="right">{it.quantity}</TableCell>
@@ -489,6 +517,8 @@ const PurchaseOrderDetail = () => {
 
       {/* Drawer + dialogs */}
       <PurchaseOrderFormDrawer open={formOpen} po={po} onClose={() => setFormOpen(false)} />
+      <PurchaseOrderFormDrawer open={reviseOpen} reviseFrom={po}
+        onClose={(created) => { setReviseOpen(false); if (created) navigate('/procurement/purchase-orders'); }} />
       <PurchaseOrderApprovalDialog open={approvalOpen} po={po} onClose={() => setApprovalOpen(false)} />
       <PurchaseOrderReleaseDialog open={releaseOpen} po={po} onClose={() => setReleaseOpen(false)} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={po} onClose={() => setPdfOpen(false)} />

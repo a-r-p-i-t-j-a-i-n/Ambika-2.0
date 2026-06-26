@@ -5,7 +5,7 @@ import {
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
 } from '@mui/material';
 import {
-  ArrowLeft, Pencil, ClipboardCheck, Ban, Boxes, Building2, FileText, PackageCheck, FileDown,
+  ArrowLeft, Pencil, ClipboardCheck, Ban, Boxes, Building2, FileText, PackageCheck, FileDown, ArrowRight,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -75,6 +75,42 @@ const IncomingQCDetail = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // ── "What's next?" — single, obvious call-to-action for the current stage. ──
+  const goGrn = () => qc.grnId && navigate(`/procurement/grns/${qc.grnId}`);
+  const nextStep = (() => {
+    if (editable) {
+      return { tone: 'info', title: 'Next: complete the QC inspection (Step 1.9)',
+        desc: 'Record accepted / rejected quantities and the overall result, then complete the QC.',
+        primary: { label: 'Complete QC', icon: <ClipboardCheck size={16} />, onClick: () => setCompleteOpen(true) },
+        secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
+    }
+    if (qc.qcStatus === 'CANCELLED') return null;
+    if (qcPassed && !existingInvoice) {
+      return { tone: 'success', title: 'QC passed — next: record the Vendor Invoice (Step 1.10)',
+        desc: 'Capture the vendor’s tax invoice for the accepted material to proceed to payment.',
+        primary: { label: 'Create Invoice', icon: <ReceiptText size={16} />, onClick: () => setInvoiceOpen(true) },
+        secondary: qc.grnId ? { label: 'View GRN', onClick: goGrn } : null };
+    }
+    if (qcPassed && existingInvoice) {
+      return { tone: 'success', title: 'Vendor Invoice recorded — track payment & accounting',
+        desc: 'The invoice exists. Follow it through advance/payment and voucher in Vendor Invoices.',
+        primary: { label: 'View Invoice', icon: <ReceiptText size={16} />, onClick: () => navigate(`/procurement/vendor-invoices/${existingInvoice._id}`) },
+        secondary: { label: 'All Vendor Invoices', onClick: () => navigate('/procurement/vendor-invoices') } };
+    }
+    if (qc.qcStatus === 'FAILED') {
+      return { tone: 'warn', title: 'QC failed — rejected quantity returned to stock',
+        desc: 'No vendor invoice is needed for rejected material. Review the GRN if a replacement is required.',
+        primary: qc.grnId ? { label: 'View GRN', icon: <PackageCheck size={16} />, onClick: goGrn } : null };
+    }
+    return null;
+  })();
+
+  const NEXT_TONE = {
+    info:    { bg: alpha('#2563eb', 0.07), border: alpha('#2563eb', 0.35), fg: '#1d4ed8' },
+    success: { bg: alpha('#16a34a', 0.08), border: alpha('#16a34a', 0.35), fg: '#15803d' },
+    warn:    { bg: alpha('#f59e0b', 0.1),  border: alpha('#f59e0b', 0.45), fg: '#b45309' },
+  };
+
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
@@ -99,6 +135,36 @@ const IncomingQCDetail = () => {
           {editable && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
         </Box>
       </Box>
+
+      {/* What's next — adaptive, prominent call-to-action for the current stage */}
+      {nextStep && (() => {
+        const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
+        return (
+          <Paper elevation={0} sx={{
+            mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
+            display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+          }}>
+            <Box sx={{ width: 42, height: 42, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: '#fff', color: t.fg, flexShrink: 0 }}>
+              <ArrowRight size={22} />
+            </Box>
+            <Box sx={{ minWidth: 220, flexGrow: 1 }}>
+              <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
+              <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{nextStep.title}</Typography>
+              <Typography variant="body2" color="text.secondary">{nextStep.desc}</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+              {nextStep.secondary && (
+                <Button variant="outlined" onClick={nextStep.secondary.onClick}>{nextStep.secondary.label}</Button>
+              )}
+              {nextStep.primary && (
+                <Button variant="contained" startIcon={nextStep.primary.icon} onClick={nextStep.primary.onClick}>
+                  {nextStep.primary.label}
+                </Button>
+              )}
+            </Box>
+          </Paper>
+        );
+      })()}
 
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>

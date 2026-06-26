@@ -13,6 +13,11 @@ const poItemSchema = Joi.object({
   itemName: Joi.string().trim().max(300).allow('', null),
   skuCode:  Joi.string().trim().max(60).allow('', null),
   skuId:    objectId.allow('', null),
+  // Source indent line-item id (item-level PO traceability). Optional/back-compat.
+  indentItemId: objectId.allow('', null),
+  // Display-only item reference (e.g. Ind-50.1/26-27). Accepted but re-stamped server-side.
+  indentItemDisplayNumber: Joi.string().trim().max(80).allow('', null),
+  hsn:      Joi.string().trim().max(40).allow('', null),
   quantity: Joi.number().min(0.0001).required(),
   unit:     Joi.string().trim().max(30).allow('', null).default('Pcs'),
   rate:     Joi.number().min(0).default(0),
@@ -44,7 +49,7 @@ export const createPoSchema = Joi.object({
   vendorGST:     Joi.string().trim().max(20).allow('', null),
   vendorPAN:     Joi.string().trim().max(20).allow('', null),
   vendorAddress: Joi.string().trim().max(500).allow('', null),
-  vendorEmail:   Joi.string().email().trim().allow('', null),
+  vendorEmail:   Joi.string().trim().max(200).allow('', null),
   vendorPhone:   Joi.string().trim().max(20).allow('', null),
   deliveryTerms: Joi.string().trim().max(300).allow('', null),
   paymentTerms:  Joi.string().trim().max(300).allow('', null),
@@ -64,7 +69,7 @@ export const createMultiPoSchema = Joi.object({
   vendorGST:     Joi.string().trim().max(20).allow('', null),
   vendorPAN:     Joi.string().trim().max(20).allow('', null),
   vendorAddress: Joi.string().trim().max(500).allow('', null),
-  vendorEmail:   Joi.string().email().trim().allow('', null),
+  vendorEmail:   Joi.string().trim().max(200).allow('', null),
   vendorPhone:   Joi.string().trim().max(20).allow('', null),
   deliveryTerms: Joi.string().trim().max(300).allow('', null),
   paymentTerms:  Joi.string().trim().max(300).allow('', null),
@@ -74,6 +79,21 @@ export const createMultiPoSchema = Joi.object({
   // Each item must carry its source indentId so the server can link it back.
   items:         Joi.array().items(poItemSchema.keys({ indentId: objectId.required() })).min(1).required(),
 });
+
+// ── Create from approved items (New PO form item-picker) ──
+// Same shape as multi-indent but indentIds is derived server-side from the items,
+// so the client only sends the hand-picked approved items (each with its indentId).
+export const createFromItemsSchema = createMultiPoSchema.fork(
+  ['indentIds'],
+  (s) => s.optional(),
+);
+
+// ── Revise a cancelled PO into a new draft (item indentId optional — defaults to
+// the source PO's indent server-side, so manually-added lines are tolerated). ──
+export const revisePoSchema = createFromItemsSchema.fork(
+  ['items'],
+  () => Joi.array().items(poItemSchema).min(1).required(),
+);
 
 // ── Preview PDF (no save) — lenient: render whatever the draft form has so far ──
 export const previewPoSchema = Joi.object({
@@ -106,7 +126,7 @@ export const updatePoSchema = Joi.object({
   vendorGST:     Joi.string().trim().max(20).allow('', null),
   vendorPAN:     Joi.string().trim().max(20).allow('', null),
   vendorAddress: Joi.string().trim().max(500).allow('', null),
-  vendorEmail:   Joi.string().email().trim().allow('', null),
+  vendorEmail:   Joi.string().trim().max(200).allow('', null),
   vendorPhone:   Joi.string().trim().max(20).allow('', null),
   deliveryTerms: Joi.string().trim().max(300).allow('', null),
   paymentTerms:  Joi.string().trim().max(300).allow('', null),

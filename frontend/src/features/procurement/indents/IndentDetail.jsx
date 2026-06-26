@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, Send, CheckCircle2, FileText, FileCheck2,
-  ClipboardList, User, Building2, Hash, ExternalLink, ShoppingBag,
+  ClipboardList, User, Building2, Hash, ExternalLink, ShoppingBag, ArrowRight,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -13,7 +13,7 @@ import {
   useGetIndentQuery,
   useSubmitIndentMutation,
 } from '../../../store/api/procurementApi';
-import { ApprovalChip, OverallChip, QuoteChip, QuotationChip, fileHref } from './indentMeta';
+import { ApprovalChip, OverallChip, QuoteChip, QuotationChip, fileHref, itemRef } from './indentMeta';
 import StatusChip from '../components/StatusChip';
 import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
@@ -56,7 +56,7 @@ const itemsOf = (indent) => {
 };
 
 const ITEM_COLS = '2fr 1fr 0.8fr 0.7fr 0.9fr 0.9fr 1.3fr';
-const ItemsTable = ({ items }) => (
+const ItemsTable = ({ items, indentNumber }) => (
   <Box>
     <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: ITEM_COLS, gap: 1, px: 1, mb: 0.5 }}>
       {['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Remarks'].map((h, i) => (
@@ -69,7 +69,10 @@ const ItemsTable = ({ items }) => (
           display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: ITEM_COLS }, gap: 1, alignItems: 'center',
           p: 1, borderRadius: '10px', border: '1px solid', borderColor: 'divider',
         }}>
-          <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+            <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700 }}>{itemRef(indentNumber, it, idx)}</Typography>
+          </Box>
           <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
           <Typography variant="body2" sx={{ textAlign: { md: 'right' } }}>{it.quantity ?? '—'}</Typography>
           <Typography variant="body2" color="text.secondary">{it.unit || '—'}</Typography>
@@ -81,6 +84,58 @@ const ItemsTable = ({ items }) => (
     </Box>
   </Box>
 );
+
+// Human-readable per-item status label for the detail display.
+const STATUS_LABEL = {
+  YES: 'Yes',
+  QUOTE_NOT_REQUIRED: 'Quote Not Required',
+  QUOTATION_NOT_APPROVED: 'Quotation Not Approved',
+};
+
+// Item-wise uploaded-files table for Step 1.2 / 1.3 detail display.
+const FILE_COLS = '1.6fr 0.9fr 1.2fr 2.4fr 1.1fr 1.4fr';
+const ItemFilesTable = ({ rows, fileKey }) => {
+  if (!rows?.length) return null;
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: FILE_COLS, gap: 1, px: 1, mb: 0.5 }}>
+        {['Item', 'SKU', 'Status', 'Files', 'Actual Date', 'Remarks'].map((h, i) => (
+          <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.6rem' }}>{h}</Typography>
+        ))}
+      </Box>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+        {rows.map((row, idx) => {
+          const files = (row[fileKey] || []).filter((d) => d?.fileUrl);
+          return (
+            <Box key={row.itemId || idx} sx={{
+              display: 'grid', gridTemplateColumns: { xs: '1fr', md: FILE_COLS }, gap: 1, alignItems: 'center',
+              p: 1, borderRadius: '10px', border: '1px solid', borderColor: 'divider',
+            }}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>{row.itemName || '—'}</Typography>
+                {row.itemDisplayNumber ? <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700 }}>{row.itemDisplayNumber}</Typography> : null}
+              </Box>
+              <Typography variant="body2" color="primary.main" fontWeight={700}>{row.skuCode || '—'}</Typography>
+              <Typography variant="body2" color="text.secondary">{STATUS_LABEL[row.statusDone] || row.statusDone || '—'}</Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {files.length ? files.map((d, i) => (
+                  <Tooltip key={i} title={d.fileName || 'View file'}>
+                    <Button size="small" variant="outlined" startIcon={<FileText size={13} />}
+                      href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
+                      {d.fileName ? (d.fileName.length > 16 ? `${d.fileName.slice(0, 14)}…` : d.fileName) : `File ${i + 1}`}
+                    </Button>
+                  </Tooltip>
+                )) : <Typography variant="body2" color="text.secondary">—</Typography>}
+              </Box>
+              <Typography variant="body2" color="text.secondary">{fmtDate(row.actualAt)}</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{row.remarks || '—'}</Typography>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+};
 
 const StepBlock = ({ step }) => (
   <Grid container spacing={2}>
@@ -139,7 +194,64 @@ const IndentDetail = () => {
   // Step 1.3 was skipped because Step 1.2 was marked "Quote Not Required".
   const quoteSkipped = !!indent.quotationApprovalStep?.skipped;
   const isService = indent.requestType === 'INTERNAL_SERVICE';
+  const isRejected = indent.approvalStatus === 'REJECTED';
   const detailItems = itemsOf(indent);
+
+  // ── "What's next?" — single, obvious call-to-action for the current stage. ──
+  const goToPOs = () => navigate('/procurement/purchase-orders');
+  const nextStep = (() => {
+    if (isDraft) {
+      return { tone: 'info', title: 'Submit this indent for approval',
+        desc: 'Review the items, then send it to the approver.',
+        primary: { label: 'Submit for Approval', icon: <Send size={16} />, onClick: onSubmit },
+        secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
+    }
+    if (isPending) {
+      return { tone: 'warn', title: 'Waiting for approval',
+        desc: 'This indent needs to be approved before quotations can be raised.',
+        primary: { label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, onClick: () => setApprovalOpen(true) } };
+    }
+    if (isRejected) return null;
+    if (isApproved && !quoteDone) {
+      return { tone: 'info', title: 'Next: Receive Quote & Make Comparative (Step 1.2)',
+        desc: 'Upload vendor quotations for the approved items.',
+        primary: { label: 'Receive Quote / Comparative', icon: <FileText size={16} />, onClick: () => setComparativeOpen(true) } };
+    }
+    if (step12Done && !quotationDone && !quoteSkipped) {
+      return { tone: 'info', title: 'Next: Approve the Quotation (Step 1.3)',
+        desc: 'Mark the approved quotation for each item.',
+        primary: { label: 'Approved Quotation 1.03', icon: <FileCheck2 size={16} />, onClick: () => setQuotationOpen(true) } };
+    }
+    if (isService && indent.overallStatus === 'SERVICE_PENDING') {
+      return { tone: 'info', title: 'Next: Mark Service Completed (Step 1.8A)',
+        desc: 'This is an internal-service indent — record completion to continue.',
+        primary: { label: 'Mark Service Completed', icon: <CheckCircle2 size={16} />, onClick: () => setServiceOpen(true) } };
+    }
+    if (!isService && indent.overallStatus === 'QUOTATION_APPROVED') {
+      return { tone: 'success', title: 'Quotation approved — create a Purchase Order',
+        desc: 'Pick the approved items and raise a vendor PO (Step 1.4). The same indent can feed multiple POs.',
+        primary: { label: 'Create Vendor PO', icon: <ShoppingBag size={16} />, onClick: () => setPoDrawerOpen(true) },
+        secondary: { label: 'Go to Purchase Orders', onClick: goToPOs } };
+    }
+    if (!isService && indent.overallStatus === 'PARTIAL_PO_CREATED') {
+      return { tone: 'warn', title: 'Some approved items still need a Purchase Order',
+        desc: 'Part of this indent is already on a PO. Create POs for the remaining approved items.',
+        primary: { label: 'Create Vendor PO', icon: <ShoppingBag size={16} />, onClick: () => setPoDrawerOpen(true) },
+        secondary: { label: 'View Purchase Orders', onClick: goToPOs } };
+    }
+    if (!isService && indent.overallStatus === 'PO_READY') {
+      return { tone: 'success', title: 'All approved items are on purchase orders',
+        desc: 'Track approval, release, follow-up and GRN from the Purchase Orders screen.',
+        primary: { label: 'Go to Purchase Orders', icon: <ShoppingBag size={16} />, onClick: goToPOs } };
+    }
+    return null;
+  })();
+
+  const NEXT_TONE = {
+    info:    { bg: alpha('#2563eb', 0.07), border: alpha('#2563eb', 0.35), fg: '#1d4ed8' },
+    success: { bg: alpha('#16a34a', 0.08), border: alpha('#16a34a', 0.35), fg: '#15803d' },
+    warn:    { bg: alpha('#f59e0b', 0.1),  border: alpha('#f59e0b', 0.45), fg: '#b45309' },
+  };
 
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
@@ -180,6 +292,36 @@ const IndentDetail = () => {
         </Box>
       </Box>
 
+      {/* What's next — adaptive, prominent call-to-action for the current stage */}
+      {nextStep && (() => {
+        const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
+        return (
+          <Paper elevation={0} sx={{
+            mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
+            display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+          }}>
+            <Box sx={{ width: 42, height: 42, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: '#fff', color: t.fg, flexShrink: 0 }}>
+              <ArrowRight size={22} />
+            </Box>
+            <Box sx={{ minWidth: 220, flexGrow: 1 }}>
+              <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
+              <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{nextStep.title}</Typography>
+              <Typography variant="body2" color="text.secondary">{nextStep.desc}</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+              {nextStep.secondary && (
+                <Button variant="outlined" onClick={nextStep.secondary.onClick}>{nextStep.secondary.label}</Button>
+              )}
+              {nextStep.primary && (
+                <Button variant="contained" startIcon={nextStep.primary.icon} onClick={nextStep.primary.onClick}>
+                  {nextStep.primary.label}
+                </Button>
+              )}
+            </Box>
+          </Paper>
+        );
+      })()}
+
       <Grid container spacing={3}>
         {/* Header + items */}
         <Grid item xs={12}>
@@ -190,7 +332,7 @@ const IndentDetail = () => {
               <Grid item xs={6} sm={3}><Field label={<><Building2 size={12} /> Department</>} value={indent.department || '—'} /></Grid>
               <Grid item xs={6} sm={3}><Field label="Remarks" value={indent.remarks || '—'} /></Grid>
             </Grid>
-            <ItemsTable items={detailItems} />
+            <ItemsTable items={detailItems} indentNumber={indent.indentNumber} />
           </SectionCard>
         </Grid>
 
@@ -212,6 +354,15 @@ const IndentDetail = () => {
             <StepBlock step={indent.quoteStep} />
             {(() => {
               const step = indent.quoteComparativeStep;
+              // Prefer item-wise quotation files; fall back to legacy flat docs.
+              if (step?.itemQuotations?.length) {
+                return (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>Item-wise Quotation Files</Typography>
+                    <ItemFilesTable rows={step.itemQuotations} fileKey="quotationDocuments" />
+                  </Box>
+                );
+              }
               const docs = step?.quotationDocuments?.length
                 ? step.quotationDocuments
                 : (step?.quotationUploaded?.fileUrl ? [step.quotationUploaded] : []);
@@ -283,6 +434,12 @@ const IndentDetail = () => {
               </Grid>
               {indent.quotationApprovalStep?.remarks ? (
                 <Grid item xs={12}><Field label="Remarks" value={indent.quotationApprovalStep.remarks} /></Grid>
+              ) : null}
+              {indent.quotationApprovalStep?.itemApprovedQuotations?.length ? (
+                <Grid item xs={12}>
+                  <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>Item-wise Approved Quotation Files</Typography>
+                  <ItemFilesTable rows={indent.quotationApprovalStep.itemApprovedQuotations} fileKey="approvedQuotationDocuments" />
+                </Grid>
               ) : null}
             </Grid>
           </SectionCard>

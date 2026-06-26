@@ -7,10 +7,13 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Store, Plus, Pencil, Trash2, Mail, Phone, MapPin, Package, X,
-  Building2, Percent, CalendarClock, IndianRupee,
+  Building2, Percent, CalendarClock, IndianRupee, History, ArrowRight,
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { useGetVendorByIdQuery, useUpdateVendorMutation } from '../../../store/api/vendorApi';
+import { useGetVendorByIdQuery, useUpdateVendorMutation, useGetVendorPricingHistoryQuery } from '../../../store/api/vendorApi';
+
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+const SOURCE_LABEL = { VENDOR_MASTER: 'Vendor Master', PURCHASE_ORDER: 'Purchase Order' };
 
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
@@ -65,6 +68,10 @@ const VendorDetail = () => {
 
   const [prodDialog, setProdDialog] = useState(null);
   const [editVendor, setEditVendor] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  const { data: historyRes, isFetching: historyLoading } = useGetVendorPricingHistoryQuery({ id }, { skip: !historyOpen });
+  const history = historyRes?.data || [];
 
   const products = vendor?.products || [];
 
@@ -137,14 +144,19 @@ const VendorDetail = () => {
               </Stack>
             </Box>
           </Stack>
-          <Button variant="outlined" startIcon={<Pencil size={14} />} onClick={() => setEditVendor({
-            contactPerson: vendor.contactPerson || '', phone: vendor.phone || '', email: vendor.email || '',
-            address: vendor.address || '', gstNo: vendor.gstNo || '', panNo: vendor.panNo || '',
-            gstRate: vendor.gstRate || 0, tdsRate: vendor.tdsRate || 0, creditPeriodDays: vendor.creditPeriodDays || 0,
-            toEmails: (vendor.toEmails || []).join(', '), ccEmails: (vendor.ccEmails || []).join(', '), bccEmails: (vendor.bccEmails || []).join(', '),
-          })}>
-            Edit details
-          </Button>
+          <Stack direction="row" spacing={1}>
+            <Button variant="outlined" startIcon={<History size={14} />} onClick={() => setHistoryOpen(true)}>
+              Pricing History
+            </Button>
+            <Button variant="outlined" startIcon={<Pencil size={14} />} onClick={() => setEditVendor({
+              contactPerson: vendor.contactPerson || '', phone: vendor.phone || '', email: vendor.email || '',
+              address: vendor.address || '', gstNo: vendor.gstNo || '', panNo: vendor.panNo || '',
+              gstRate: vendor.gstRate || 0, tdsRate: vendor.tdsRate || 0, creditPeriodDays: vendor.creditPeriodDays || 0,
+              toEmails: (vendor.toEmails || []).join(', '), ccEmails: (vendor.ccEmails || []).join(', '), bccEmails: (vendor.bccEmails || []).join(', '),
+            })}>
+              Edit details
+            </Button>
+          </Stack>
         </Stack>
 
         <Grid container spacing={2}>
@@ -263,6 +275,66 @@ const VendorDetail = () => {
         <DialogActions>
           <Button onClick={() => setEditVendor(null)}>Cancel</Button>
           <Button variant="contained" onClick={saveVendor} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Pricing history dialog */}
+      <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} fullWidth maxWidth="lg">
+        <DialogTitle>
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Stack direction="row" spacing={1} alignItems="center">
+              <History size={18} />
+              <Typography sx={{ fontWeight: 800 }}>Pricing History — {vendor.name}</Typography>
+            </Stack>
+            <IconButton size="small" onClick={() => setHistoryOpen(false)}><X size={18} /></IconButton>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 860, '& td, & th': { fontSize: '0.8rem' } }}>
+              <TableHead>
+                <TableRow sx={{ bgcolor: alpha(BRAND, 0.05) }}>
+                  {['Date', 'SKU', 'Item', 'Old Rate', 'New Rate', 'GST %', 'Source', 'Reference', 'Updated By', 'Remarks'].map((h) => (
+                    <TableCell key={h} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }} align={['Old Rate', 'New Rate', 'GST %'].includes(h) ? 'right' : 'left'}>{h}</TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {history.map((h) => (
+                  <TableRow key={h._id} hover>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{fmtDate(h.effectiveDate || h.createdAt)}</TableCell>
+                    <TableCell sx={{ fontWeight: 700, color: BRAND_DK }}>{h.skuCode || '—'}</TableCell>
+                    <TableCell>{h.itemName || '—'}</TableCell>
+                    <TableCell align="right" sx={{ color: 'text.secondary' }}>{num(h.oldRate)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 800, color: '#15803d' }}>
+                      <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end">
+                        <ArrowRight size={12} color="#94a3b8" /><span>{num(h.newRate)}</span>
+                      </Stack>
+                    </TableCell>
+                    <TableCell align="right">{h.oldGstRate !== h.newGstRate ? `${h.oldGstRate}→${h.newGstRate}` : `${h.newGstRate}`}%</TableCell>
+                    <TableCell>
+                      <Chip size="small" label={SOURCE_LABEL[h.source] || h.source}
+                        sx={{ fontWeight: 700, height: 20, bgcolor: h.source === 'PURCHASE_ORDER' ? alpha('#7c3aed', 0.12) : alpha(BRAND, 0.1), color: h.source === 'PURCHASE_ORDER' ? '#6d28d9' : BRAND_DK }} />
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>{h.referenceNumber || (h.source === 'VENDOR_MASTER' ? 'Vendor Master' : '—')}</TableCell>
+                    <TableCell sx={{ color: 'text.secondary' }}>{h.updatedBy?.name || h.updatedByName || '—'}</TableCell>
+                    <TableCell sx={{ color: 'text.secondary', maxWidth: 200, whiteSpace: 'normal' }}>{h.remarks || '—'}</TableCell>
+                  </TableRow>
+                ))}
+                {!historyLoading && history.length === 0 && (
+                  <TableRow><TableCell colSpan={10} sx={{ textAlign: 'center', color: 'text.disabled', py: 4 }}>
+                    No pricing changes recorded yet. Updating a rate in the Vendor Master or a Purchase Order will appear here.
+                  </TableCell></TableRow>
+                )}
+                {historyLoading && (
+                  <TableRow><TableCell colSpan={10} sx={{ textAlign: 'center', py: 4 }}>Loading…</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setHistoryOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

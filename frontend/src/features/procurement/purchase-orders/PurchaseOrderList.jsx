@@ -6,7 +6,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, Send, FileDown,
-  Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, Layers,
+  Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, RotateCcw,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
@@ -21,7 +21,6 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PoStatusChip, PoReleaseChip, PO_STATUSES, fmtINR, fmtDate } from './poMeta';
 import { PoPiChip } from '../proforma-invoices/piMeta';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
-import MultiIndentPoDrawer from './MultiIndentPoDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
@@ -50,8 +49,8 @@ const PurchaseOrderList = () => {
   const [to, setTo] = useState('');
 
   const [formOpen, setFormOpen] = useState(false);
-  const [multiOpen, setMultiOpen] = useState(false);
   const [editPo, setEditPo] = useState(null);
+  const [reviseFromPo, setReviseFromPo] = useState(null);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
@@ -79,7 +78,8 @@ const PurchaseOrderList = () => {
   const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
 
   const onView = (r) => { navigate(`/procurement/purchase-orders/${r._id}`); closeMenu(); };
-  const onEdit = (r) => { setEditPo(r); setFormOpen(true); closeMenu(); };
+  const onEdit = (r) => { setReviseFromPo(null); setEditPo(r); setFormOpen(true); closeMenu(); };
+  const onRevise = (r) => { setEditPo(null); setReviseFromPo(r); setFormOpen(true); closeMenu(); };
   const onApprove = (r) => { setActivePo(r); setApprovalOpen(true); closeMenu(); };
   const onRelease = (r) => { setActivePo(r); setReleaseOpen(true); closeMenu(); };
   const onPdf = (r) => { setActivePo(r); setPdfOpen(true); closeMenu(); };
@@ -104,6 +104,9 @@ const PurchaseOrderList = () => {
     if (!['FULLY_RECEIVED', 'CLOSED', 'CANCELLED'].includes(r.poStatus)) {
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
     }
+    if (r.poStatus === 'CANCELLED') {
+      a.push({ key: 'revise', label: 'Revise PO', icon: <RotateCcw size={16} />, fn: () => onRevise(r) });
+    }
     return a;
   };
 
@@ -112,8 +115,19 @@ const PurchaseOrderList = () => {
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'poDate', headerName: 'PO DATE', width: 100,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
-    { field: 'indentNumber', headerName: 'INDENT NO', width: 115,
-      renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
+    { field: 'indentNumber', headerName: 'INDENT / ITEM REF', width: 165, sortable: false,
+      renderCell: (p) => {
+        // Prefer item-level references stamped on the PO lines; fall back to the
+        // header indent number for legacy POs without per-line refs.
+        const refs = [...new Set((p.row.items || []).map((it) => it.indentItemDisplayNumber).filter(Boolean))];
+        if (!refs.length) return <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography>;
+        const extra = refs.length > 1 ? ` +${refs.length - 1} more` : '';
+        return (
+          <Tooltip title={refs.join(', ')}>
+            <Typography variant="body2" fontWeight={600} color="primary.main" noWrap>{refs[0]}{extra}</Typography>
+          </Tooltip>
+        );
+      } },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 170,
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
     { field: 'leadTime', headerName: 'LEAD TIME', width: 100,
@@ -148,9 +162,6 @@ const PurchaseOrderList = () => {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-          <Button variant="outlined" startIcon={<Layers size={16} />} onClick={() => setMultiOpen(true)}>
-            Multi-Indent PO
-          </Button>
           <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditPo(null); setFormOpen(true); }}>
             Create Purchase Order
           </Button>
@@ -219,8 +230,8 @@ const PurchaseOrderList = () => {
       </Menu>
 
       {/* Drawer + dialogs */}
-      <PurchaseOrderFormDrawer open={formOpen} po={editPo} onClose={() => { setFormOpen(false); setEditPo(null); }} />
-      <MultiIndentPoDrawer open={multiOpen} onClose={() => setMultiOpen(false)} />
+      <PurchaseOrderFormDrawer open={formOpen} po={editPo} reviseFrom={reviseFromPo}
+        onClose={() => { setFormOpen(false); setEditPo(null); setReviseFromPo(null); }} />
       <PurchaseOrderApprovalDialog open={approvalOpen} po={activePo} onClose={() => { setApprovalOpen(false); setActivePo(null); }} />
       <PurchaseOrderReleaseDialog open={releaseOpen} po={activePo} onClose={() => { setReleaseOpen(false); setActivePo(null); }} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={activePo} onClose={() => { setPdfOpen(false); setActivePo(null); }} />

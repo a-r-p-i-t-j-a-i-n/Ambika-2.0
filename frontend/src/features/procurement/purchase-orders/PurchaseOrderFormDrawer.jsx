@@ -1,21 +1,26 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog, Box, Typography, TextField, Button, IconButton, Divider,
-  Grid, MenuItem, Autocomplete, CircularProgress, Paper, Tooltip,
+  Grid, MenuItem, Autocomplete, CircularProgress, Paper, Tooltip, Chip,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { X, Save, ShoppingBag, Plus, Trash2, Building2, FileText, AlertTriangle, Eye } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useGetIndentsQuery,
+  useGetAllApprovedItemsQuery,
   useCreatePurchaseOrderMutation,
+  useCreatePurchaseOrderFromItemsMutation,
   useUpdatePurchaseOrderMutation,
+  useRevisePurchaseOrderMutation,
   usePreviewPurchaseOrderPdfMutation,
 } from '../../../store/api/procurementApi';
-import { useGetVendorsQuery } from '../../../store/api/vendorApi';
+import { useGetVendorsQuery, useGetVendorByIdQuery } from '../../../store/api/vendorApi';
 import { fmtINR } from './poMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
+import { norm, matchVendorProduct, fillOtherRates } from './vendorRateMatch';
+import { itemRef } from '../indents/indentMeta';
 
 /**
  * Create / edit a Vendor Purchase Order (Step 1.4).
@@ -40,7 +45,7 @@ const NO_SPIN = {
 const GST_PRESETS = [0, 5, 12, 18, 28];
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18 });
+const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18, hsn: '', indentId: '', indentNumber: '', indentItemId: '', indentItemDisplayNumber: '', approvedQuantity: 0, fromApprovedItem: false, rateMatched: undefined, manual: false });
 const emptyJslItem = () => ({ grade: '', width: '', finish: '', quantity: '', unit: 'Kgs', baseRate: '', upfrontDiscount: '', bonanzaDiscount: '' });
 const emptyItemFor = (fmt) => (fmt === 'JSL' ? emptyJslItem() : emptyItem());
 
@@ -48,30 +53,11 @@ const emptyItemFor = (fmt) => (fmt === 'JSL' ? emptyJslItem() : emptyItem());
 // JSL POs are always raised on Jindal Stainless Ltd; rates/specs are pulled from
 // that vendor's catalog in the Vendor Master.
 const JSL_VENDOR_NAME = 'Jindal Stainless Ltd';
-const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 // Locate the Jindal vendor in the Vendor-Master list (tolerant of naming variants).
 const findJslVendor = (vendors = []) =>
   vendors.find((v) => norm(v.name) === norm(JSL_VENDOR_NAME)) ||
   vendors.find((v) => norm(v.name).includes('jindal'));
-
-// Match an indent line to a vendor catalog product: SKU code first, then a
-// normalized product-name match, then a loose contains match.
-const matchVendorProduct = (products = [], { skuCode, itemName } = {}) => {
-  if (!products.length) return null;
-  if (skuCode) {
-    const bySku = products.find((p) => p.skuCode && p.skuCode.toUpperCase() === String(skuCode).toUpperCase());
-    if (bySku) return bySku;
-  }
-  if (itemName) {
-    const n = norm(itemName);
-    const exact = products.find((p) => p.productName && norm(p.productName) === n);
-    if (exact) return exact;
-    const loose = products.find((p) => p.productName && (norm(p.productName).includes(n) || n.includes(norm(p.productName))));
-    if (loose) return loose;
-  }
-  return null;
-};
 
 // Best-effort parse of grade / width / finish out of an item name + vendor notes.
 const JSL_FINISHES = ['No.1', 'No.4', 'No.8', '2B', '2D', '1D', 'BA', 'HR', 'CR', 'Mirror', 'Matt'];
@@ -106,15 +92,19 @@ const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor
 const OTHER_GRID = '1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px';
 const JSL_GRID = '1.1fr 0.7fr 0.9fr 0.8fr 0.6fr 0.85fr 0.85fr 0.9fr 0.9fr 0.8fr 0.85fr 36px';
 
-const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null }) => {
+const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null, reviseFrom = null }) => {
   const { enqueueSnackbar } = useSnackbar();
   const isEdit = Boolean(po?._id);
+  const isRevise = Boolean(reviseFrom?._id);
+  // The PO whose data prefills the form (edit target or the cancelled PO to revise).
+  const sourcePo = po || reviseFrom;
 
   // Tracks which indent the JSL rows were last auto-built for, so a late-loading
   // vendor catalog re-matches rates without wiping manual edits or rebuilding.
   const builtJslIndentRef = useRef('__none__');
 
   const [indent, setIndent] = useState(null);
+  const [selectedApprovedItems, setSelectedApprovedItems] = useState([]); // New PO item-picker (OTHER create)
   const [vendor, setVendor] = useState(null);
   const [poFormatType, setPoFormatType] = useState('OTHER'); // 'JSL' | 'OTHER'
   const [approvedVendors, setApprovedVendors] = useState([]); // from Step 1.3 (multi-vendor)
@@ -129,9 +119,20 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const [previewUrl, setPreviewUrl] = useState('');
 
   const [createPo, { isLoading: creating }] = useCreatePurchaseOrderMutation();
+  const [createFromItems, { isLoading: creatingItems }] = useCreatePurchaseOrderFromItemsMutation();
   const [updatePo, { isLoading: updating }] = useUpdatePurchaseOrderMutation();
+  const [revisePo, { isLoading: revising }] = useRevisePurchaseOrderMutation();
   const [previewPdf, { isLoading: previewing }] = usePreviewPurchaseOrderPdfMutation();
-  const saving = creating || updating;
+  const saving = creating || creatingItems || updating || revising;
+
+  // Edit + revise prefill from an existing PO and keep their copied rates (no
+  // catalog auto-fill clobbering). Revise still produces a NEW record on save.
+  const lockRates = isEdit || isRevise;
+
+  // New PO (create) selects approved ITEMS individually (item-wise PO across
+  // indents), not a whole indent — for BOTH OTHER and JSL formats. Edit/revise keep
+  // the prefilled-item flow; multi-vendor (Step 1.3) preset indents keep the vendor flow.
+  const approvedItemMode = !isEdit && !isRevise && approvedVendors.length === 0;
 
   // PO-eligible indents: QUOTATION_APPROVED (not yet PO'd) plus PO_READY indents
   // that still have an approved vendor awaiting a PO (multi-vendor — one PO per vendor).
@@ -143,6 +144,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     { limit: 200, sort: '-createdAt', overallStatus: 'PO_READY' },
     { skip: !open || isEdit },
   );
+  // Global approved-item options for the New PO item-picker (OTHER create only).
+  const { data: approvedItemsRes, isLoading: approvedItemsLoading } = useGetAllApprovedItemsQuery(
+    undefined,
+    { skip: !open || !approvedItemMode },
+  );
+  const approvedItemOptions = approvedItemsRes?.data?.items || [];
+
   const indentsLoading = approvedLoading || poReadyLoading;
   const indentOptions = useMemo(() => {
     const approved = approvedRes?.data || [];
@@ -159,65 +167,79 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   );
   const vendorOptions = vendorsRes?.data || [];
 
-  // Vendor's catalog for item autocomplete + rate auto-fill (Vendor Master).
-  const vendorProducts = vendor?.products || [];
+  // Authoritative catalog: fetch the selected vendor by id (GET /api/v1/vendors/:id)
+  // so rate/GST/HSN come straight from the Vendor Master, not a possibly-trimmed
+  // list payload. Falls back to the list record while the detail request loads.
+  const { data: vendorByIdRes } = useGetVendorByIdQuery(vendor?._id, { skip: !open || !vendor?._id });
+  const vendorFull = vendorByIdRes?.data;
+  const vendorProducts = useMemo(
+    () => vendorFull?.products || vendor?.products || [],
+    [vendorFull, vendor],
+  );
 
   // Hydrate on open.
   useEffect(() => {
     if (!open) return;
     builtJslIndentRef.current = '__none__';
-    if (po) {
-      setIndent({ _id: po.indentId, indentNumber: po.indentNumber });
-      const v = vendorOptions.find((p) => p._id === (po.vendorId?._id || po.vendorId));
-      setVendor(v || { _id: po.vendorId?._id || po.vendorId, name: po.vendorName });
+    if (sourcePo) {
+      // Prefill from the edit target OR the cancelled PO being revised.
+      setIndent({ _id: sourcePo.indentId, indentNumber: sourcePo.indentNumber });
+      const v = vendorOptions.find((p) => p._id === (sourcePo.vendorId?._id || sourcePo.vendorId));
+      setVendor(v || { _id: sourcePo.vendorId?._id || sourcePo.vendorId, name: sourcePo.vendorName });
       setHeader({
-        poDate: po.poDate ? po.poDate.slice(0, 10) : todayStr(),
-        leadTime: po.leadTime || '', deliveryTerms: po.deliveryTerms || '',
-        paymentTerms: po.paymentTerms || '', creditPeriod: po.creditPeriod || 0,
-        remarks: po.remarks || '',
+        poDate: isRevise ? todayStr() : (sourcePo.poDate ? sourcePo.poDate.slice(0, 10) : todayStr()),
+        leadTime: sourcePo.leadTime || '', deliveryTerms: sourcePo.deliveryTerms || '',
+        paymentTerms: sourcePo.paymentTerms || '', creditPeriod: sourcePo.creditPeriod || 0,
+        remarks: sourcePo.remarks || '',
       });
-      const fmt = po.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
+      const fmt = sourcePo.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
       setPoFormatType(fmt);
-      setItems(po.items?.length ? po.items.map((it) => (fmt === 'JSL' ? {
+      setItems(sourcePo.items?.length ? sourcePo.items.map((it) => (fmt === 'JSL' ? {
         grade: it.grade || '', width: it.width || '', finish: it.finish || '',
         skuCode: it.skuCode || '', skuId: it.skuId || '', itemName: it.itemName || '',
         quantity: it.quantity, unit: it.unit || 'Kgs',
         baseRate: it.baseRate ?? '', upfrontDiscount: it.upfrontDiscount ?? '', bonanzaDiscount: it.bonanzaDiscount ?? '',
+        indentId: it.indentId || '', indentNumber: it.indentNumber || '',
+        indentItemId: it.indentItemId || '', indentItemDisplayNumber: it.indentItemDisplayNumber || '',
+        manual: true, rateMatched: true,
       } : {
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         quantity: it.quantity, unit: it.unit || 'Pcs', rate: it.rate, gstRate: it.gstRate,
+        hsn: it.hsn || '',
+        indentId: it.indentId || '', indentNumber: it.indentNumber || '',
+        indentItemId: it.indentItemId || '', indentItemDisplayNumber: it.indentItemDisplayNumber || '',
+        manual: true, rateMatched: true,
       })) : [emptyItemFor(fmt)]);
     } else {
       setIndent(null); setVendor(null); setApprovedVendors([]); setApprovedVendorId('');
+      setSelectedApprovedItems([]);
       setPoFormatType('OTHER');
       setHeader({ poDate: todayStr(), leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '' });
       setItems([emptyItem()]);
-      if (presetIndent) applyIndent(presetIndent);
+      // Preset multi-vendor (Step 1.3) indents keep the legacy approved-vendor path;
+      // simple/item-level preset indents are pre-selected in the item-picker once the
+      // global approved-items list loads (handled by the preset effect below).
+      if (presetIndent && (presetIndent?.quotationApprovalStep?.approvedVendors?.length || 0) > 0) {
+        applyIndent(presetIndent);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, po, presetIndent]);
+  }, [open, po, presetIndent, reviseFrom]);
 
-  // JSL auto-flow: whenever JSL is active (create mode), force Jindal Stainless Ltd
-  // as the vendor and (re)build item rows from the selected indent, auto-filling
-  // rates from Jindal's catalog. Re-runs when the vendor catalog finishes loading
-  // (re-match) or when the indent changes (full rebuild). Never runs in edit mode
-  // so saved POs are left untouched.
+  // JSL auto-flow (create): force Jindal Stainless Ltd as the vendor and fill any
+  // missing base rates from its catalog as the catalog (or selection) loads. Rows
+  // themselves come from the shared Approved Item(s) picker — JSL no longer builds
+  // from a whole indent. Never runs in edit/revise mode so copied POs are left as-is.
   useEffect(() => {
-    if (!open || isEdit || poFormatType !== 'JSL') return;
+    if (!open || lockRates || poFormatType !== 'JSL') return;
     const jindal = findJslVendor(vendorOptions);
-    if (!jindal) return; // catalog not loaded yet — effect re-runs when it arrives
+    if (!jindal) return; // catalog list not loaded yet — effect re-runs when it arrives
     if (vendor?._id !== jindal._id) applyJslVendorTerms(jindal);
-
-    const indentKey = indent?._id || '__none__';
-    if (builtJslIndentRef.current !== indentKey) {
-      builtJslIndentRef.current = indentKey;
-      setItems(buildJslItems(indent, jindal));
-    } else {
-      // Same indent, catalog (re)loaded — fill missing rates, keep manual edits.
-      setItems((cur) => fillJslRates(cur, jindal));
-    }
+    // Fill missing rates from the (possibly late-loaded) catalog, keeping manual edits.
+    const products = vendorProducts.length ? vendorProducts : (jindal.products || []);
+    setItems((cur) => fillJslRates(cur, { products }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isEdit, poFormatType, vendorOptions, indent]);
+  }, [open, lockRates, poFormatType, vendorOptions, vendorProducts, selectedApprovedItems]);
 
   // The indent's source line items (multi-item, with a legacy single-product fallback).
   const indentSourceItems = (ind) => {
@@ -229,32 +251,64 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         : []);
   };
 
-  // Build JSL rows from an indent, auto-filling base rate / unit / spec from the
-  // Jindal catalog. Unmatched rows keep rate 0 and are flagged for a warning.
-  const buildJslItems = (ind, vendorObj) => {
-    const products = vendorObj?.products || [];
-    const src = indentSourceItems(ind);
-    if (!src.length) return [emptyJslItem()];
-    return src.map((it) => {
-      const match = matchVendorProduct(products, { skuCode: it.skuCode, itemName: it.itemName });
-      const spec = parseJslSpec(it.itemName, match?.notes);
-      return {
-        ...emptyJslItem(),
-        grade:  spec.grade || it.itemName || '',
-        width:  spec.width || '',
-        finish: spec.finish || '',
-        quantity: it.approvedQuantity || it.revisedQuantity || it.quantity || '',
-        unit: it.unit || match?.unit || 'Kgs',
-        baseRate: match ? (match.rate ?? 0) : 0,
-        // tracking fields — itemName/skuCode/skuId carry through to the PO payload
-        // so the JSL PO keeps the indent's SKU (the JSL row UI doesn't show them).
-        itemName: it.itemName || '',
-        skuCode: it.skuCode || match?.skuCode || '',
-        skuId: it.skuId?._id || it.skuId || match?.skuId || '',
-        rateMatched: !!match,
-        manual: false,
-      };
-    });
+  // The Jindal catalog used for JSL rate matching — prefer the full fetched catalog
+  // (when Jindal is the selected vendor), else the list record's products.
+  const jslProducts = () => {
+    const jindal = findJslVendor(vendorOptions);
+    if (vendor?._id && jindal && String(vendor._id) === String(jindal._id) && vendorProducts.length) return vendorProducts;
+    return jindal?.products || [];
+  };
+
+  // Map one approved-item option → an OTHER PO row (name/SKU read-only downstream).
+  const buildOtherRowFromApproved = (o) => ({
+    ...emptyItem(),
+    itemName: o.itemName || '',
+    skuCode: o.skuCode || '',
+    skuId: o.skuId || '',
+    quantity: o.approvedQuantity || '',
+    unit: o.unit || 'Pcs',
+    indentId: o.indentId || '',
+    indentNumber: o.indentNumber || '',
+    indentItemId: o.indentItemId || '',
+    indentItemDisplayNumber: o.indentItemDisplayNumber || o.itemDisplayNumber || '',
+    approvedQuantity: o.approvedQuantity || 0,
+    fromApprovedItem: true,
+  });
+
+  // Map one approved-item option → a JSL PO row: parse grade/width/finish from the
+  // item name + vendor notes, auto-fill base rate/unit from the Jindal catalog.
+  const buildJslRowFromApproved = (o, products = []) => {
+    const match = matchVendorProduct(products, { skuCode: o.skuCode, itemName: o.itemName });
+    const spec = parseJslSpec(o.itemName, match?.notes);
+    return {
+      ...emptyJslItem(),
+      grade:  spec.grade || o.itemName || '',
+      width:  spec.width || '',
+      finish: spec.finish || '',
+      quantity: o.approvedQuantity || '',
+      unit: o.unit || match?.unit || 'Kgs',
+      baseRate: match ? (match.rate ?? 0) : 0,
+      gstRate: JSL_GST,
+      itemName: o.itemName || '',
+      skuCode: o.skuCode || match?.skuCode || '',
+      skuId: o.skuId || match?.skuId || '',
+      indentId: o.indentId || '',
+      indentNumber: o.indentNumber || '',
+      indentItemId: o.indentItemId || '',
+      indentItemDisplayNumber: o.indentItemDisplayNumber || o.itemDisplayNumber || '',
+      approvedQuantity: o.approvedQuantity || 0,
+      fromApprovedItem: true,
+      rateMatched: !!match,
+      manual: false,
+    };
+  };
+
+  // Build PO rows from the selected approved items in the current format's shape.
+  const buildRowsFromApproved = (vals, fmt) => {
+    if (!vals.length) return [emptyItemFor(fmt)];
+    return fmt === 'JSL'
+      ? vals.map((o) => buildJslRowFromApproved(o, jslProducts()))
+      : vals.map(buildOtherRowFromApproved);
   };
 
   // Re-fill rates from the (possibly late-loaded) catalog WITHOUT touching rows
@@ -275,7 +329,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     });
   };
 
-  // JSL vendor terms (no OTHER-style per-item rate matching — JSL uses buildJslItems).
+  // JSL vendor terms — snapshot Jindal's credit/lead/payment defaults.
   const applyJslVendorTerms = (v) => {
     setVendor(v);
     setHeader((h) => ({
@@ -309,13 +363,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     setItems((cur) => {
       const hasContent = cur.some((it) => it.itemName);
       if (hasContent) return cur;
-      const lines = indentSourceItems(ind).map((it) => ({
+      const lines = indentSourceItems(ind).map((it, idx) => ({
         ...emptyItem(),
         itemName: it.itemName || '',
         skuCode: it.skuCode || '',
         skuId: it.skuId || '',
         quantity: it.approvedQuantity || it.revisedQuantity || it.quantity || '',
         unit: it.unit || 'Pcs',
+        indentItemId: it._id || '',
+        indentItemDisplayNumber: itemRef(ind.indentNumber, it, idx),
       }));
       return lines.length ? lines : cur;
     });
@@ -347,11 +403,16 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       unit: it.unit || 'Pcs',
       rate: it.approvedRate ?? '',
       gstRate: it.gstRate ?? 18,
+      // Approved-quotation rates are negotiated — keep them; don't overwrite from
+      // the Vendor Master catalog.
+      manual: true,
     }));
     setItems(lines.length ? lines : [emptyItem()]);
   };
 
-  // Vendor auto-fill: terms + rates from the Vendor Master's product catalog.
+  // Vendor select: snapshot terms only. Item rate/GST/HSN auto-fill is handled
+  // reactively by the OTHER auto-fill effect below (re-runs on vendor / item /
+  // SKU change), so the catalog match logic lives in one place.
   const applyVendor = (v) => {
     setVendor(v);
     if (!v) return;
@@ -361,43 +422,84 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       leadTime: h.leadTime || (v.leadTimeDays ? `${v.leadTimeDays} days` : ''),
       paymentTerms: h.paymentTerms || (v.creditPeriodDays ? `${v.creditPeriodDays} days credit` : ''),
     }));
-    const products = v.products || [];
-    if (products.length) {
-      setItems((cur) => cur.map((it) => {
-        if (it.rate) return it;
-        const match = products.find((p) =>
-          (it.skuCode && p.skuCode && p.skuCode.toUpperCase() === it.skuCode.toUpperCase()) ||
-          (it.itemName && p.productName && p.productName.toLowerCase() === it.itemName.toLowerCase()));
-        return match
-          ? { ...it, rate: match.rate ?? it.rate, unit: it.unit || match.unit || 'Pcs', gstRate: match.gstRate ?? it.gstRate }
-          : it;
-      }));
-    }
   };
+
+  // New PO item-picker (OTHER + JSL create): selecting approved items builds the PO
+  // item table directly — one read-only row per selected item, qty preset to the
+  // approved quantity, rows shaped to the current format. Rates auto-fill from the
+  // Vendor Master (OTHER) / Jindal catalog (JSL). The same indent's other items stay
+  // available for separate POs.
+  const applyApprovedItems = (vals) => {
+    setSelectedApprovedItems(vals);
+    setItems(buildRowsFromApproved(vals, poFormatType));
+  };
+
+  // Preset indent (opened from Indent Detail / list): pre-select that indent's
+  // approved items in the picker once the global list loads. Runs once per open.
+  const presetAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!open) { presetAppliedRef.current = false; return; }
+    if (!approvedItemMode || !presetIndent?._id || presetAppliedRef.current) return;
+    if (!approvedItemOptions.length) return;
+    const mine = approvedItemOptions.filter((o) => String(o.indentId) === String(presetIndent._id));
+    if (mine.length) { applyApprovedItems(mine); presetAppliedRef.current = true; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, approvedItemMode, presetIndent, approvedItemOptions]);
+
+  // Log exactly why a rate couldn't be auto-fetched — pinpoints whether it's a
+  // wrong vendor, a missing SKU, a SKU/case mismatch, or a product absent from
+  // the Vendor Master.
+  const logNoRate = (line, reason) => {
+    // eslint-disable-next-line no-console
+    console.warn('[PO rate auto-fill] Rate not fetched from Vendor Master', {
+      vendorId: vendor?._id || '(none)',
+      vendorName: vendor?.name || '(none)',
+      itemSku: line.skuCode || '(none)',
+      itemName: line.itemName || '(none)',
+      matchedVendorProduct: null,
+      reason,
+    });
+  };
+
+  // Signature of the matchable fields — drives re-matching when items / SKUs change.
+  const otherMatchKey = useMemo(
+    () => (poFormatType === 'JSL' ? '' : items.map((it) => `${it.skuCode || ''}|${it.skuId || ''}|${norm(it.itemName)}`).join('§')),
+    [items, poFormatType],
+  );
+
+  // OTHER auto-fill: re-run vendor-catalog matching whenever the vendor, its
+  // catalog, the indent, the items, or a SKU changes. Skipped in edit/revise mode
+  // so copied PO rates are never clobbered. No page refresh — pure state update.
+  useEffect(() => {
+    if (!open || lockRates || poFormatType === 'JSL') return;
+    if (!vendorProducts.length) return;
+    setItems((cur) => fillOtherRates(cur, vendorProducts, logNoRate));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, lockRates, poFormatType, vendorProducts, otherMatchKey]);
 
   const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
   const addItem = () => setItems((cur) => [...cur, emptyItemFor(poFormatType)]);
   const removeItem = (idx) => setItems((cur) => (cur.length > 1 ? cur.filter((_, i) => i !== idx) : [emptyItemFor(poFormatType)]));
+  // Approved-item rows: drop the row AND its picker selection (preserve other edits).
+  const removeApprovedRow = (idx) => {
+    const target = items[idx];
+    setSelectedApprovedItems((cur) => cur.filter((o) => String(o.indentItemId) !== String(target?.indentItemId)));
+    setItems((cur) => cur.filter((_, i) => i !== idx));
+  };
 
-  // Switching format resets item fields. JSL auto-builds from the indent + Jindal
-  // (handled by the auto-vendor effect) so no confirm/reset is needed; switching
-  // to OTHER still warns before discarding any entered data. No page reload either way.
+  // Switching format keeps the selected approved items and just remaps the rows to
+  // the new shape (OTHER ⇄ JSL) — no reset, no page reload. JSL also drops any
+  // multi-vendor approved selection (JSL always uses Jindal, auto-selected by the
+  // JSL effect). In edit mode this control isn't shown.
   const handleFormatChange = (next) => {
     if (next === poFormatType) return;
-    if (next === 'JSL') {
-      builtJslIndentRef.current = '__none__'; // force a fresh JSL build
-      // JSL always uses Jindal — drop any multi-vendor approved selection so the
-      // Jindal vendor picker shows instead of the approved-vendor dropdown.
-      setApprovedVendors([]); setApprovedVendorId('');
-      setPoFormatType('JSL');
-      setItems([emptyJslItem()]); // placeholder until the effect builds from indent + Jindal
-      return;
-    }
-    const hasData = items.some((it) => it.itemName?.trim() || it.grade?.trim() || Number(it.quantity) > 0 || it.rate || it.baseRate);
-    if (hasData && !window.confirm('Changing PO format may reset item fields. Continue?')) return;
     builtJslIndentRef.current = '__none__';
-    setPoFormatType('OTHER');
-    setItems([emptyItemFor('OTHER')]);
+    setIndent(null);
+    if (next === 'JSL') {
+      setApprovedVendors([]); setApprovedVendorId('');
+    }
+    setPoFormatType(next);
+    setItems(buildRowsFromApproved(selectedApprovedItems, next));
   };
 
   const isJsl = poFormatType === 'JSL';
@@ -438,13 +540,19 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     items: validItems.map((it) => (isJsl ? {
       grade: it.grade?.trim() || '', width: it.width?.trim() || '', finish: it.finish?.trim() || '',
       skuCode: it.skuCode?.trim() || '', skuId: it.skuId || undefined,
+      indentId: it.indentId || undefined, indentNumber: it.indentNumber || '',
+      indentItemId: it.indentItemId || undefined,
+      indentItemDisplayNumber: it.indentItemDisplayNumber || '',
       quantity: Number(it.quantity), unit: it.unit || 'Kgs',
       baseRate: Number(it.baseRate) || 0,
       upfrontDiscount: Number(it.upfrontDiscount) || 0,
       bonanzaDiscount: Number(it.bonanzaDiscount) || 0,
     } : {
       itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
-      skuId: it.skuId || undefined,
+      skuId: it.skuId || undefined, hsn: it.hsn?.trim() || '',
+      indentId: it.indentId || undefined, indentNumber: it.indentNumber || '',
+      indentItemId: it.indentItemId || undefined,
+      indentItemDisplayNumber: it.indentItemDisplayNumber || '',
       quantity: Number(it.quantity), unit: it.unit || 'Pcs',
       rate: Number(it.rate) || 0, gstRate: Number(it.gstRate) || 0,
     })),
@@ -477,19 +585,39 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   };
 
   const handleSubmit = async () => {
-    if (!isEdit && !indent?._id) { enqueueSnackbar('Select an approved indent first', { variant: 'warning' }); return; }
     if (!vendor?._id) { enqueueSnackbar('Vendor is mandatory', { variant: 'warning' }); return; }
+    if (approvedItemMode) {
+      if (!selectedApprovedItems.length) { enqueueSnackbar('Select at least one approved item', { variant: 'warning' }); return; }
+    } else if (!isEdit && !isRevise && !indent?._id) {
+      enqueueSnackbar('Select an approved indent first', { variant: 'warning' }); return;
+    }
     if (validItems.length === 0) {
       enqueueSnackbar(isJsl ? 'Add at least one item with grade and quantity' : 'Add at least one item with quantity', { variant: 'warning' });
       return;
+    }
+    // Item-picker qty must stay within the approved quantity.
+    if (approvedItemMode) {
+      const badQty = validItems.find((it) => Number(it.quantity) > Number(it.approvedQuantity || 0));
+      if (badQty) {
+        enqueueSnackbar(`Qty for "${badQty.itemName}" cannot exceed approved ${badQty.approvedQuantity}`, { variant: 'warning' });
+        return;
+      }
     }
 
     const payload = buildPayload();
 
     try {
-      if (isEdit) {
+      if (isRevise) {
+        // New draft PO from the cancelled one — source indents derived server-side.
+        const res = await revisePo({ id: reviseFrom._id, ...payload }).unwrap();
+        enqueueSnackbar(`Revised PO ${res?.data?.poNumber || ''} saved as draft`, { variant: 'success' });
+      } else if (isEdit) {
         await updatePo({ id: po._id, ...payload }).unwrap();
         enqueueSnackbar('Purchase order updated', { variant: 'success' });
+      } else if (approvedItemMode) {
+        // Item-wise: one vendor, hand-picked approved items (source indents derived).
+        const res = await createFromItems(payload).unwrap();
+        enqueueSnackbar(`PO ${res?.data?.poNumber || ''} saved as draft`, { variant: 'success' });
       } else {
         const res = await createPo({ ...payload, indentId: indent._id }).unwrap();
         enqueueSnackbar(`PO ${res?.data?.poNumber || ''} saved as draft`, { variant: 'success' });
@@ -510,10 +638,10 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           <ShoppingBag size={22} />
           <Box>
             <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: '#fff' }}>
-              {isEdit ? `Edit ${po.poNumber}` : 'New Purchase Order'}
+              {isEdit ? `Edit ${po.poNumber}` : isRevise ? `Revise ${reviseFrom.poNumber}` : 'New Purchase Order'}
             </Typography>
             <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.8)' }}>
-              Step 1.4 · Create PO &amp; Release to Supplier
+              {isRevise ? 'Create a new PO from the cancelled one — edit, then Save as Draft' : 'Step 1.4 · Create PO & Release to Supplier'}
             </Typography>
           </Box>
         </Box>
@@ -525,12 +653,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         {/* Source + vendor */}
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
-            <FileText size={18} /> Source Indent &amp; Vendor
+            <FileText size={18} /> {approvedItemMode ? 'Approved Item(s) & Vendor' : isRevise ? 'Revised Items & Vendor' : 'Source Indent & Vendor'}
           </Typography>
           <Grid container spacing={2}>
             <Grid item xs={12} sm={4}>
               <TextField select fullWidth required label="PO Format Type" value={poFormatType}
-                onChange={(e) => handleFormatChange(e.target.value)}
+                onChange={(e) => handleFormatChange(e.target.value)} disabled={isEdit || isRevise}
                 helperText={isJsl ? 'JSL — grade/width/finish + discount pricing' : 'Other — standard item / rate'}>
                 <MenuItem value="OTHER">Other</MenuItem>
                 <MenuItem value="JSL">JSL</MenuItem>
@@ -540,20 +668,42 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
             <Grid item xs={12} sm={6}>
               {isEdit ? (
                 <TextField label="Indent Number" fullWidth value={indent?.indentNumber || ''} disabled />
-              ) : (
+              ) : isRevise ? (
+                <TextField label="Revised From" fullWidth value={reviseFrom.poNumber || ''} disabled
+                  helperText="A new PO will be created — the cancelled PO is left unchanged" />
+              ) : approvedItemMode ? (
                 <Autocomplete
-                  options={indentOptions}
-                  loading={indentsLoading}
-                  value={indent}
-                  getOptionLabel={(o) => (o ? `${o.indentNumber} — ${o.productNameRevised}` : '')}
-                  isOptionEqualToValue={(o, v) => o._id === v._id}
-                  onChange={(_e, v) => applyIndent(v)}
+                  multiple
+                  disableCloseOnSelect
+                  options={approvedItemOptions}
+                  loading={approvedItemsLoading}
+                  value={selectedApprovedItems}
+                  getOptionLabel={(o) => (o ? `${o.indentItemDisplayNumber || o.itemDisplayNumber || o.indentNumber} — ${o.itemName}` : '')}
+                  isOptionEqualToValue={(o, v) => String(o.indentItemId) === String(v.indentItemId)}
+                  onChange={(_e, vals) => applyApprovedItems(vals)}
+                  filterOptions={(opts, { inputValue }) => {
+                    const q = inputValue.trim().toLowerCase();
+                    if (!q) return opts;
+                    return opts.filter((o) => [o.indentItemDisplayNumber, o.itemDisplayNumber, o.itemName, o.skuCode, o.indentNumber]
+                      .some((f) => String(f || '').toLowerCase().includes(q)));
+                  }}
+                  renderOption={(props, o) => (
+                    <Box component="li" {...props} key={o.indentItemId} sx={{ display: 'block !important', py: 1 }}>
+                      <Typography variant="body2" fontWeight={700} color="primary.main">{o.indentItemDisplayNumber || o.itemDisplayNumber}</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {[o.itemName, o.skuCode && `SKU: ${o.skuCode}`, `Approved: ${o.approvedQuantity}`].filter(Boolean).join(' · ')}
+                      </Typography>
+                    </Box>
+                  )}
                   renderInput={(params) => (
-                    <TextField {...params} label="Approved Indent *" placeholder="Only QUOTATION_APPROVED indents"
-                      helperText={presetIndent ? '' : 'PO can only be created from an approved quotation'}
-                      InputProps={{ ...params.InputProps, endAdornment: (<>{indentsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
+                    <TextField {...params} label="Approved Item(s) *" placeholder="Select one or more approved items"
+                      helperText="Item-wise PO — only approved, not-yet-PO'd items are listed"
+                      InputProps={{ ...params.InputProps, endAdornment: (<>{approvedItemsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
                   )}
                 />
+              ) : (
+                <TextField label="Indent Number" fullWidth value={indent?.indentNumber || ''} disabled
+                  helperText="Multi-vendor approved indent (Step 1.3)" />
               )}
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -674,12 +824,19 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         <Paper elevation={0} sx={SECTION}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Typography sx={{ fontWeight: 700, color: '#b45309', display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Plus size={18} /> Items
+              <Plus size={18} /> Items{approvedItemMode ? ' (from selected approved items)' : ''}
             </Typography>
-            <Button size="small" startIcon={<Plus size={15} />} onClick={addItem} variant="outlined">Add Item</Button>
+            {/* In approved-item mode the rows are driven by the picker, so no manual add. */}
+            {!approvedItemMode && (
+              <Button size="small" startIcon={<Plus size={15} />} onClick={addItem} variant="outlined">Add Item</Button>
+            )}
           </Box>
 
-          {isJsl ? (
+          {approvedItemMode && !selectedApprovedItems.length ? (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+              Select approved item(s) above to load them here.
+            </Typography>
+          ) : isJsl ? (
             <>
               {/* JSL header row */}
               <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: JSL_GRID, gap: 1, px: 1, mb: 0.5 }}>
@@ -694,6 +851,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   const rateMissing = it.rateMatched === false && Boolean(it.itemName) && !(Number(it.baseRate) > 0);
                   return (
                     <Box key={idx} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                      {/* Read-only item ref + name for rows from the approved-item picker. */}
+                      {it.fromApprovedItem && (it.indentItemDisplayNumber || it.itemName) ? (
+                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'baseline', flexWrap: 'wrap', pl: { md: 1 } }}>
+                          <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700 }}>{it.indentItemDisplayNumber}</Typography>
+                          <Typography variant="caption" color="text.secondary">— {it.itemName}{it.skuCode ? ` · SKU: ${it.skuCode}` : ''}</Typography>
+                        </Box>
+                      ) : null}
                       <Box sx={{
                         display: 'grid',
                         gridTemplateColumns: { xs: '1fr', md: JSL_GRID },
@@ -710,8 +874,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                           onChange={(e) => setItem(idx, { width: e.target.value })} />
                         <TextField size="small" placeholder="Finish" value={it.finish}
                           onChange={(e) => setItem(idx, { finish: e.target.value })} />
-                        <TextField size="small" placeholder="SKU" value={it.skuCode || ''}
-                          onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
+                        {it.fromApprovedItem ? (
+                          <Typography variant="body2" color="primary.main" fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>{it.skuCode || '—'}</Typography>
+                        ) : (
+                          <TextField size="small" placeholder="SKU" value={it.skuCode || ''}
+                            onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
+                        )}
                         <TextField size="small" type="number" placeholder="0" value={it.quantity}
                           onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                         <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
@@ -727,8 +895,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                         <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{value.toFixed(2)}</Typography>
                         <Tooltip title="Remove">
                           <span>
-                            <IconButton size="small" color="error" onClick={() => removeItem(idx)}
-                              disabled={items.length === 1 && !it.grade && !it.quantity}>
+                            <IconButton size="small" color="error" onClick={() => (it.fromApprovedItem ? removeApprovedRow(idx) : removeItem(idx))}
+                              disabled={!it.fromApprovedItem && items.length === 1 && !it.grade && !it.quantity}>
                               <Trash2 size={15} />
                             </IconButton>
                           </span>
@@ -759,47 +927,85 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {items.map((it, idx) => {
                   const { taxable, tax, total } = lineCalc(it);
+                  // Came from an indent / has an item, but no Vendor-Master rate matched and none entered yet.
+                  const rateMissing = it.rateMatched === false && Boolean(it.itemName) && !(Number(it.rate) > 0);
+                  // Item Name & SKU are read-only for any known item (approved-item / indent / edit / revise);
+                  // only a brand-new blank "Add Item" row lets you type a name.
+                  const nameLocked = Boolean(it.fromApprovedItem || it.itemName);
+                  // Flag a user override of the auto-filled Vendor-Master rate/GST.
+                  const rateModified = (it.autoRate != null && Number(it.rate) !== Number(it.autoRate))
+                    || (it.autoGst != null && Number(it.gstRate) !== Number(it.autoGst));
                   return (
-                    <Box key={idx} sx={{
+                    <Box key={idx} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                    <Box sx={{
                       display: 'grid',
                       gridTemplateColumns: { xs: '1fr', md: OTHER_GRID },
                       gap: 1, alignItems: 'center', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
-                      borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
-                      '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
+                      borderRadius: '10px',
+                      border: rateMissing ? '1px solid' : { xs: '1px solid', md: 'none' },
+                      borderColor: rateMissing ? 'warning.main' : 'divider',
+                      bgcolor: rateMissing ? alpha('#f59e0b', 0.06) : 'transparent',
+                      '&:hover': { bgcolor: rateMissing ? alpha('#f59e0b', 0.1) : alpha('#2563eb', 0.03) },
                     }}>
-                      <Autocomplete
-                        freeSolo
-                        options={vendorProducts}
-                        getOptionLabel={(o) => (typeof o === 'string' ? o : o.productName || '')}
-                        value={it.itemName}
-                        onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
-                        onChange={(_e, val) => {
-                          if (val && typeof val === 'object') {
-                            setItem(idx, {
-                              itemName: val.productName, skuCode: val.skuCode || '',
-                              skuId: val.skuId || '', rate: val.rate ?? it.rate, unit: val.unit || it.unit,
-                              gstRate: val.gstRate ?? it.gstRate,
-                            });
-                          }
-                        }}
-                        renderInput={(params) => <TextField {...params} size="small" placeholder="Item / vendor product" />}
-                      />
-                      <TextField size="small" placeholder="SKU" value={it.skuCode}
-                        onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
+                      <Box sx={{ minWidth: 0 }}>
+                        {nameLocked ? (
+                          // Known item — name is read-only (no dropdown).
+                          <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>{it.itemName || '—'}</Typography>
+                        ) : (
+                          <Autocomplete
+                            freeSolo
+                            options={vendorProducts}
+                            getOptionLabel={(o) => (typeof o === 'string' ? o : o.productName || '')}
+                            value={it.itemName}
+                            onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
+                            onChange={(_e, val) => {
+                              if (val && typeof val === 'object') {
+                                setItem(idx, {
+                                  itemName: val.productName, skuCode: val.skuCode || '',
+                                  skuId: val.skuId || '', rate: val.rate ?? it.rate, unit: val.unit || it.unit,
+                                  gstRate: val.gstRate ?? it.gstRate, hsn: val.hsn || '',
+                                  rateMatched: true, manual: false, autoRate: val.rate ?? undefined, autoGst: val.gstRate ?? undefined,
+                                });
+                              }
+                            }}
+                            renderInput={(params) => <TextField {...params} size="small" placeholder="Item / vendor product" />}
+                          />
+                        )}
+                        <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {it.indentItemDisplayNumber ? (
+                            <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, pl: 0.5 }}>{it.indentItemDisplayNumber}</Typography>
+                          ) : null}
+                          {rateModified && (
+                            <Chip size="small" label="Rate Modified" sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha('#f59e0b', 0.15), color: '#b45309' }} />
+                          )}
+                        </Box>
+                      </Box>
+                      {nameLocked ? (
+                        <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
+                      ) : (
+                        <TextField size="small" placeholder="SKU" value={it.skuCode}
+                          onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
+                      )}
                       <TextField size="small" type="number" placeholder="0" value={it.quantity}
                         onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                       <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
                         {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                       </TextField>
                       <TextField size="small" type="number" placeholder="0.00" value={it.rate}
-                        onChange={(e) => setItem(idx, { rate: e.target.value })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
+                        onChange={(e) => setItem(idx, { rate: e.target.value, manual: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                       <Autocomplete
                         freeSolo disableClearable size="small"
                         options={GST_PRESETS.map(String)}
                         value={it.gstRate === '' || it.gstRate == null ? '' : String(it.gstRate)}
-                        onInputChange={(_e, v) => {
+                        onInputChange={(_e, v, reason) => {
                           const cleaned = v.replace(/[^\d.]/g, '');
-                          setItem(idx, { gstRate: cleaned === '' ? '' : Number(cleaned) });
+                          // Only a genuine keystroke marks the row manual. MUI also fires
+                          // 'reset'/'clear' on mount and on programmatic value changes (e.g.
+                          // when the vendor-master auto-fill sets the GST); those must NOT
+                          // flag the row, or auto-fill would be permanently blocked.
+                          const patch = { gstRate: cleaned === '' ? '' : Number(cleaned) };
+                          if (reason === 'input') patch.manual = true;
+                          setItem(idx, patch);
                         }}
                         renderInput={(params) => (
                           <TextField {...params} size="small" placeholder="GST %" inputProps={{ ...params.inputProps, inputMode: 'decimal', style: { textAlign: 'right' } }}
@@ -811,12 +1017,21 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                       <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{total.toFixed(2)}</Typography>
                       <Tooltip title="Remove">
                         <span>
-                          <IconButton size="small" color="error" onClick={() => removeItem(idx)}
-                            disabled={items.length === 1 && !it.itemName}>
+                          <IconButton size="small" color="error" onClick={() => (it.fromApprovedItem ? removeApprovedRow(idx) : removeItem(idx))}
+                            disabled={!it.fromApprovedItem && items.length === 1 && !it.itemName}>
                             <Trash2 size={15} />
                           </IconButton>
                         </span>
                       </Tooltip>
+                    </Box>
+                      {rateMissing && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: { md: 1 } }}>
+                          <AlertTriangle size={13} color="#b45309" />
+                          <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 600 }}>
+                            Rate not found in Vendor Master for SKU: {it.skuCode || it.itemName || '—'} — enter rate manually
+                          </Typography>
+                        </Box>
+                      )}
                     </Box>
                   );
                 })}

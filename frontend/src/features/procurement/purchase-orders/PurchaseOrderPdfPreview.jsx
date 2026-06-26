@@ -3,6 +3,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, IconButton,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /**
  * In-app preview of a PO PDF (iframe) with download/open actions.
@@ -10,7 +11,10 @@ import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
  * otherwise falls back to a saved PO's `poPdfUrl` (generated on release).
  */
 const PurchaseOrderPdfPreview = ({ open, onClose, po, previewUrl }) => {
-  const url = previewUrl || po?.poPdfUrl || '';
+  // `previewUrl` is a fresh blob: URL (draft preview). A saved PO's `poPdfUrl` is
+  // an absolute URL baked at release time — if the backend lacked SERVER_URL it
+  // points at localhost, so repair it against the current API origin.
+  const url = previewUrl || resolveFileUrl(po?.poPdfUrl) || '';
   const isDraft = Boolean(previewUrl);
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth
