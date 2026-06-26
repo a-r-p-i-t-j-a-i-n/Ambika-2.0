@@ -64,40 +64,17 @@ const navSections = [
       { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
     ],
   },
-  {
-    // IMS — Inventory. One group per inventory type; Packaging & Consumables is
-    // live now, RM IMS and FG IMS will slot in here later.
-    title: 'IMS',
-    items: [
-      {
-        text: 'Packaging & Consumables IMS',
-        icon: <Boxes size={19} />,
-        path: '/ims',
-        children: [
-          { text: 'Dashboard',            icon: <LayoutDashboard size={19} />, path: '/ims' },
-          { text: 'Stock & Master Data',  icon: <Package size={19} />,         path: '/ims/stock' },
-          { text: 'Stock In',             icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
-          { text: 'Stock Out (Issue)',    icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
-          { text: 'Reorder & Buying List',icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
-          { text: 'Movement History',     icon: <History size={19} />,         path: '/ims/movements' },
-        ],
-      },
-      {
-        text: 'Raw Material IMS',
-        icon: <Layers size={19} />,
-        path: '/rm-ims',
-        children: [
-          { text: 'Dashboard',            icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
-          { text: 'Stock & Master Data',  icon: <Package size={19} />,         path: '/rm-ims/stock' },
-          { text: 'Stock In',             icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
-          { text: 'Stock Out (Issue)',    icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
-          { text: 'Coil → Circle',        icon: <Recycle size={19} />,         path: '/rm-ims/conversion' },
-          { text: 'Reorder & Buying List',icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
-          { text: 'Movement History',     icon: <History size={19} />,         path: '/rm-ims/movements' },
-        ],
-      },
-    ],
-  },
+  // ── IMS section HIDDEN until complete ──────────────────────────────────────
+  // "Packaging & Consumables IMS" and "Raw Material IMS" are not finished yet,
+  // so they are intentionally NOT shown in the sidebar. The routes still exist;
+  // to re-expose, restore the section object below with its two groups.
+  // {
+  //   title: 'IMS',
+  //   items: [
+  //     { text: 'Packaging & Consumables IMS', path: '/ims',    children: [...] },
+  //     { text: 'Raw Material IMS',             path: '/rm-ims', children: [...] },
+  //   ],
+  // },
   {
     // Title-less section: the single expandable row IS the label — click the
     // chevron to reveal all 11 procurement screens.
