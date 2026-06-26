@@ -73,6 +73,11 @@ export const dispatchControlController = {
     res.json(ApiResponse.ok('Dispatch dashboard retrieved', dashboard));
   }),
 
+  getPhaseMatrix: asyncHandler(async (_req, res) => {
+    const rows = await dispatchControlService.getPhaseMatrix();
+    res.json(ApiResponse.ok('Phase matrix retrieved', rows));
+  }),
+
   normalizeSheetRows: asyncHandler(async (req, res) => {
     const rows = await dispatchControlService.normalizeSheetRows(req.body);
     res.json(ApiResponse.ok('Sheet rows normalized', rows));

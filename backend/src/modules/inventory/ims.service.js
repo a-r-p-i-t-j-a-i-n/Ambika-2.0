@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import InventoryPolicy from './inventoryPolicy.model.js';
 import InventoryStock from './inventoryStock.model.js';
 import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.model.js';
@@ -18,6 +19,18 @@ export const IMS_ITEM_TYPES = ['CONSUMABLE', 'PACKING', 'PACKAGING'];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const rx = (s) => new RegExp(String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+
+// The client lives and reports in IST, so the day a movement "belongs to" (and
+// every dated column in their Excel) is bucketed on the India calendar, not UTC.
+const IST_TZ = 'Asia/Kolkata';
+const IST_OFFSET = '+05:30';
+/** 'YYYY-MM-DD' for a Date, on the IST calendar. */
+const istDayKey = (date) => new Date(date).toLocaleDateString('en-CA', { timeZone: IST_TZ });
+/** Shift a 'YYYY-MM-DD' calendar string by n days (pure calendar math, TZ-free). */
+const shiftDay = (ymd, n) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
 
 /** Stock status from on-hand + in-transit vs the policy thresholds. */
 const deriveMetrics = (policy = {}, stock = {}) => {
@@ -157,6 +170,107 @@ export const imsService = {
     return {
       sku: { skuId: sku._id, skuCode: sku.code, skuName: sku.name, unit: sku.unit, category: sku.category },
       metrics: m, reorderDay, stockoutDay, series,
+    };
+  },
+
+  /**
+   * Day-by-day stock card (the sheet's dated closing-stock columns) reconstructed
+   * from the ledger. Returns a CONTINUOUS calendar series in IST so flat days carry
+   * the previous closing forward — exactly how the client reads their Excel history.
+   * Closing(day) = opening-before-window + Σ signed movements up to end of that day,
+   * which always reconciles with on-hand (on-hand = Σ of all ledger deltas).
+   */
+  async getStockHistory(skuId, query = {}) {
+    const [sku, stock, policy] = await Promise.all([
+      SKU.findById(skuId).lean(),
+      InventoryStock.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
+      InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
+    ]);
+    if (!sku) throw new AppError('Item not found', 404);
+    const m = deriveMetrics(policy || {}, stock || {});
+
+    // Resolve the [from, to] window as IST calendar days. Default: last 30 days.
+    const todayKey = istDayKey(new Date());
+    let toKey = query.to ? istDayKey(new Date(`${query.to}T12:00:00${IST_OFFSET}`)) : todayKey;
+    let fromKey = query.from ? istDayKey(new Date(`${query.from}T12:00:00${IST_OFFSET}`)) : shiftDay(toKey, -29);
+    if (fromKey > toKey) [fromKey, toKey] = [toKey, fromKey];
+    // Clamp the window (~13 months) so we never build a runaway series.
+    if (shiftDay(fromKey, 400) < toKey) fromKey = shiftDay(toKey, -400);
+
+    const fromStart = new Date(`${fromKey}T00:00:00.000${IST_OFFSET}`);
+    const toEnd = new Date(`${toKey}T23:59:59.999${IST_OFFSET}`);
+    const oid = new mongoose.Types.ObjectId(String(skuId));
+
+    // Signed magnitude straight off movementType — never relies on qtyDelta being set.
+    const signedQty = {
+      $cond: [{ $eq: ['$movementType', MOVEMENT_TYPE.IN] }, '$quantity', { $multiply: ['$quantity', -1] }],
+    };
+
+    const [openingAgg, dailyAgg] = await Promise.all([
+      InventoryMovement.aggregate([
+        { $match: { skuId: oid, isDeleted: { $ne: true }, movementDate: { $lt: fromStart } } },
+        { $group: { _id: null, net: { $sum: signedQty } } },
+      ]),
+      InventoryMovement.aggregate([
+        { $match: { skuId: oid, isDeleted: { $ne: true }, movementDate: { $gte: fromStart, $lte: toEnd } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$movementDate', timezone: IST_TZ } },
+            inQty:  { $sum: { $cond: [{ $eq: ['$movementType', MOVEMENT_TYPE.IN] }, '$quantity', 0] } },
+            outQty: { $sum: { $cond: [{ $eq: ['$movementType', MOVEMENT_TYPE.OUT] }, '$quantity', 0] } },
+            count:  { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
+
+    const openingBalance = round2(openingAgg[0]?.net || 0);
+    const aggBy = new Map(dailyAgg.map((d) => [d._id, d]));
+
+    const days = [];
+    let running = openingBalance;
+    let peak = openingBalance;
+    let low = openingBalance;
+    let totalIn = 0;
+    let totalOut = 0;
+    let daysWithMovement = 0;
+    for (let key = fromKey; key <= toKey; key = shiftDay(key, 1)) {
+      const a = aggBy.get(key) || { inQty: 0, outQty: 0, count: 0 };
+      const opening = round2(running);
+      const inQty = round2(a.inQty);
+      const outQty = round2(a.outQty);
+      const net = round2(inQty - outQty);
+      const closing = round2(opening + net);
+      running = closing;
+      totalIn = round2(totalIn + inQty);
+      totalOut = round2(totalOut + outQty);
+      if (a.count > 0) daysWithMovement += 1;
+      peak = Math.max(peak, closing);
+      low = Math.min(low, closing);
+      days.push({
+        date: key,
+        opening, inQty, outQty, net, closing,
+        movementCount: a.count,
+        belowReorder: m.reorderPoint > 0 && closing <= m.reorderPoint,
+        stockOut: closing <= 0,
+      });
+    }
+
+    return {
+      sku: { skuId: sku._id, skuCode: sku.code, skuName: sku.name, unit: sku.unit, category: sku.category },
+      range: { from: fromKey, to: toKey, dayCount: days.length },
+      metrics: {
+        reorderPoint: m.reorderPoint, maxLevel: m.maxLevel,
+        adc: m.adc, leadDays: m.leadDays, onHand: m.onHand, inTransit: m.inTransit,
+      },
+      summary: {
+        openingBalance,
+        closingBalance: round2(running),
+        totalIn, totalOut, net: round2(totalIn - totalOut),
+        peak: round2(peak), low: round2(low),
+        daysWithMovement,
+      },
+      days,
     };
   },
 

@@ -28,16 +28,28 @@ const inventoryPolicySchema = new Schema({
   category: { type: String, trim: true, default: '' },
   unit:     { type: String, trim: true, default: 'PCS' },
 
-  averageDailyConsumption: { type: Number, default: 0, min: 0 }, // ADC
+  averageDailyConsumption: { type: Number, default: 0, min: 0 }, // ADC (resolved/legacy)
+  // RM IMS keeps three consumption rates (the sheet's Low/Normal/Peak columns) and a
+  // chosen mode; the active ADC = the column the mode points at (falls back to ADC above).
+  adcLow:    { type: Number, default: 0, min: 0 },
+  adcNormal: { type: Number, default: 0, min: 0 },
+  adcPeak:   { type: Number, default: 0, min: 0 },
+  consumptionMode: { type: String, enum: ['LOW', 'NORMAL', 'PEAK'], default: 'LOW' },
+
   leadDays:        { type: Number, default: 16, min: 0 },        // indent → receipt
   safetyFactor:    { type: Number, default: 1.5, min: 0 },       // buffer multiplier
   moq:             { type: Number, default: 0, min: 0 },         // min order qty
   // Order-up-to / max level. If left 0 we derive ADC×lead×safetyFactor at read time.
   maxLevel:        { type: Number, default: 0, min: 0 },
   materialInTransit: { type: Number, default: 0, min: 0 },       // ordered, not yet received
+  bookedQty:       { type: Number, default: 0, min: 0 },         // committed to production/orders
 
   openingStock:    { type: Number, default: 0, min: 0 },         // the seeded opening balance
   convertedItemName: { type: String, trim: true, default: '' },  // resale alias
+
+  // Buying context (the sheet's vendor/rate columns).
+  vendorName: { type: String, trim: true, default: '' },
+  rate:       { type: Number, default: 0, min: 0 },              // ₹ per unit (for value/buy cost)
 
   remarks: { type: String, trim: true, default: '' },
 }, baseSchemaOptions);

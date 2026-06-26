@@ -8,6 +8,7 @@ export const DOC_PREFIX = {
   DELIVERY_CHALLAN: 'AGL/DC',
   TAX_INVOICE:      'AGL/TI',
   O2D_TRACKER:      'AGL-O2D',
+  RM_CONVERSION:    'AGL/RMC',   // Raw-material coil→circle conversion
 };
 
 // ── Sales Order Statuses ────────────────────────────────────

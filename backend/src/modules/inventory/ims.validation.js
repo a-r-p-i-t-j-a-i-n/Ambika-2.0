@@ -14,6 +14,15 @@ export const forecastQuerySchema = Joi.object({
   days: Joi.number().integer().min(7).max(120),
 }).unknown(true);
 
+// Kept as plain YYYY-MM-DD strings (no Joi date coercion) so the service can bucket
+// them on the IST calendar itself.
+const ymd = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+export const historyQuerySchema = Joi.object({
+  from:      ymd,
+  to:        ymd,
+  warehouse: Joi.string().trim().max(40).allow('', null),
+}).unknown(true);
+
 export const skuParamSchema = Joi.object({
   skuId: objectId.required(),
 });

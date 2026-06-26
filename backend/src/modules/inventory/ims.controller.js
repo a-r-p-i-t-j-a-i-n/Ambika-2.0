@@ -16,6 +16,10 @@ export const imsController = {
     res.json(ApiResponse.ok('Stock forecast', await imsService.getForecast(req.params.skuId, req.query.days)));
   }),
 
+  getStockHistory: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Stock history', await imsService.getStockHistory(req.params.skuId, req.query)));
+  }),
+
   getReorderList: asyncHandler(async (req, res) => {
     res.json(ApiResponse.ok('Reorder list', await imsService.getReorderList(req.query)));
   }),

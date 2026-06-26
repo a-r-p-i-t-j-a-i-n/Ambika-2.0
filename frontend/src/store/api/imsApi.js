@@ -23,6 +23,10 @@ export const imsApi = baseApi.injectEndpoints({
       query: ({ skuId, days = 30 }) => ({ url: `/ims/forecast/${skuId}`, params: { days } }),
       providesTags: (_r, _e, { skuId }) => [{ type: 'ImsOverview', id: skuId }],
     }),
+    getImsHistory: builder.query({
+      query: ({ skuId, ...params }) => ({ url: `/ims/history/${skuId}`, params }),
+      providesTags: (_r, _e, { skuId }) => ['ImsMovement', { type: 'ImsOverview', id: skuId }],
+    }),
     getImsPolicy: builder.query({
       query: (skuId) => `/ims/policy/${skuId}`,
       providesTags: (_r, _e, skuId) => [{ type: 'ImsPolicy', id: skuId }],
@@ -51,6 +55,7 @@ export const {
   useGetImsDashboardQuery,
   useGetImsReorderQuery,
   useGetImsForecastQuery,
+  useGetImsHistoryQuery,
   useGetImsPolicyQuery,
   useGetImsMovementsQuery,
   useUpsertImsPolicyMutation,

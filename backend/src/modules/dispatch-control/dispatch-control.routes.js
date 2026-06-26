@@ -18,6 +18,7 @@ const router = Router();
 
 // ── Reads ────────────────────────────────────────────────────
 router.get('/dashboard', validate(dashboardQuerySchema, 'query'), dispatchControlController.getDashboard);
+router.get('/phase-matrix', dispatchControlController.getPhaseMatrix);
 
 router.get('/orders/:soNumber/summary',                 validate(soNumberParamSchema, 'params'), dispatchControlController.getOrderControlTower);
 router.get('/orders/:soNumber/comparison',              validate(soNumberParamSchema, 'params'), dispatchControlController.getComparison);

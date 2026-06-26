@@ -26,6 +26,8 @@ export const TXN_TYPE = {
   QC_REJECT_OUT: 'QC_REJECT_OUT',  // QC rejection (future)
   DISPATCH_OUT:  'DISPATCH_OUT',   // sales dispatch (future)
   CONSUME_OUT:   'CONSUME_OUT',    // production consumption (future)
+  CONVERT_OUT:   'CONVERT_OUT',    // RM coil consumed in a coil→circle conversion
+  CONVERT_IN:    'CONVERT_IN',     // circles produced from a coil→circle conversion
 };
 
 const inventoryMovementSchema = new Schema({

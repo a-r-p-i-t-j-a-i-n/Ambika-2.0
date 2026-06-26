@@ -228,11 +228,14 @@ const PlanWorkspace = () => {
         <Stack
           direction={{ xs: 'column', lg: 'row' }}
           spacing={2}
+          useFlexGap
+          flexWrap="wrap"
           justifyContent="space-between"
           alignItems={{ xs: 'flex-start', lg: 'center' }}
         >
-          {/* Title with icon badge */}
-          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: 0 }}>
+          {/* Title with icon badge — grows to fill free space so the subtitle wraps
+              as a normal line instead of collapsing into a word-per-line column. */}
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: { xs: 0, lg: 300 }, flex: { lg: '1 1 300px' } }}>
             <Box sx={{
               width: 46, height: 46, borderRadius: '14px', flexShrink: 0,
               display: 'grid', placeItems: 'center', color: '#fff',
@@ -242,10 +245,10 @@ const PlanWorkspace = () => {
               <CalendarPlus size={22} />
             </Box>
             <Box sx={{ minWidth: 0 }}>
-              <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'text.primary', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+              <Typography noWrap sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'text.primary', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
                 Dispatch Planning
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25, maxWidth: 560 }}>
                 Break a sales order into phased dispatches — each phase carries its own date &amp; per-SKU plan.
               </Typography>
             </Box>
@@ -255,7 +258,10 @@ const PlanWorkspace = () => {
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
             spacing={1.25}
+            useFlexGap
+            flexWrap="wrap"
             alignItems={{ xs: 'stretch', sm: 'center' }}
+            justifyContent={{ lg: 'flex-end' }}
             sx={{ width: { xs: '100%', lg: 'auto' }, flexShrink: 0 }}
           >
             <Autocomplete

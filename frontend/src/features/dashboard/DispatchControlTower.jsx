@@ -3,7 +3,7 @@ import {
   Box, Typography, Paper, Grid, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, IconButton,
   Button, TextField, InputAdornment, Tooltip, Chip, Collapse,
-  LinearProgress, Badge, Stack, Popover, MenuItem,
+  LinearProgress, Badge, Stack, Popover, MenuItem, ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
 import {
   Search, Filter, ChevronDown, ChevronUp, ExternalLink,
@@ -13,8 +13,17 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { alpha } from '@mui/material/styles';
 import { useGetOrdersQuery, useGetOrderScheduleQuery } from '../../store/api/orderApi';
-import { useGetDispatchDashboardQuery } from '../../store/api/dispatchControlApi';
+import { useGetDispatchDashboardQuery, useGetPhaseMatrixQuery } from '../../store/api/dispatchControlApi';
 import dayjs from 'dayjs';
+
+// Phase lifecycle → colour for the All-Phases matrix.
+const PHASE_STATUS = {
+  PLANNED:     { color: '#2563eb', label: 'Planned' },
+  IN_PROGRESS: { color: '#d97706', label: 'In Progress' },
+  DISPATCHED:  { color: '#059669', label: 'Dispatched' },
+  DELAYED:     { color: '#dc2626', label: 'Delayed' },
+  CANCELLED:   { color: '#64748b', label: 'Cancelled' },
+};
 
 const BRAND = {
   primary: '#2563eb',
@@ -338,15 +347,29 @@ const Row = ({ order }) => {
 };
 
 const DispatchControlTower = () => {
+  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterAnchor, setFilterAnchor] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [healthFilter, setHealthFilter] = useState('');
+  const [view, setView] = useState('orders'); // 'orders' | 'phases'
   const { data: ordersRes, isLoading } = useGetOrdersQuery({ limit: 100, sort: '-orderDate' });
   const { data: dashRes } = useGetDispatchDashboardQuery();
+  const { data: matrixRes, isLoading: matrixLoading } = useGetPhaseMatrixQuery(undefined, { skip: view !== 'phases' });
   const orders = ordersRes?.data || [];
   const summary = dashRes?.data?.summary || {};
   const planHealth = dashRes?.data?.planHealth || {};
+
+  // Flat phase matrix — search + order-status filters reused from above.
+  const matrixRows = useMemo(() => {
+    const all = matrixRes?.data || [];
+    const q = searchTerm.trim().toLowerCase();
+    return all.filter((r) => {
+      if (q && !(`${r.soNumber} ${r.partyName} ${r.skuName} ${r.skuCode} ${r.phaseNo}`.toLowerCase().includes(q))) return false;
+      if (statusFilter && r.orderStatus !== statusFilter) return false;
+      return true;
+    });
+  }, [matrixRes, searchTerm, statusFilter]);
 
   // Search + status + dispatch-health filters all drive the visible table.
   const filtered = useMemo(() => {
@@ -399,7 +422,12 @@ const DispatchControlTower = () => {
           </Box>
           <Typography variant="body1" color="text.secondary">Centralized Planned vs Actual Monitoring Hub</Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+          <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, v) => v && setView(v)}
+            sx={{ bgcolor: '#fff', borderRadius: '10px', '& .MuiToggleButton-root': { px: 1.75, py: 0.75, textTransform: 'none', fontWeight: 800, border: '1px solid #e2e8f0' } }}>
+            <ToggleButton value="orders">By Order</ToggleButton>
+            <ToggleButton value="phases">All Phases</ToggleButton>
+          </ToggleButtonGroup>
           <TextField
             size="small"
             placeholder="Quick search orders..."
@@ -453,7 +481,8 @@ const DispatchControlTower = () => {
         ))}
       </Grid>
 
-      {/* ── Main Comparison Table ──────────────────────────── */}
+      {/* ── Main Comparison Table (By Order) ───────────────── */}
+      {view === 'orders' && (
       <TableContainer component={Paper} sx={{ borderRadius: '20px', border: '1px solid #e2e8f0', boxShadow: 'none', overflow: 'hidden' }}>
         <Table stickyHeader>
           <TableHead>
@@ -484,6 +513,63 @@ const DispatchControlTower = () => {
           </TableBody>
         </Table>
       </TableContainer>
+      )}
+
+      {/* ── Plan vs Actual — All Phases matrix ─────────────── */}
+      {view === 'phases' && (
+        <TableContainer component={Paper} sx={{ borderRadius: '20px', border: '1px solid #e2e8f0', boxShadow: 'none', overflow: 'hidden' }}>
+          <Table stickyHeader size="small">
+            <TableHead>
+              <TableRow>
+                {['ORDER', 'CLIENT', 'SKU', 'PHASE', 'PLAN DATE', 'PLANNED', 'EFFECTIVE', 'ACTUAL', 'PENDING', 'DELAY', 'STATUS'].map((h, i) => (
+                  <TableCell key={h} align={i >= 5 && i <= 9 ? 'right' : 'left'}
+                    sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                    {h}
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {matrixRows.map((r) => {
+                const ps = PHASE_STATUS[r.status] || PHASE_STATUS.PLANNED;
+                return (
+                  <TableRow key={r.id} hover sx={{ cursor: 'pointer' }}
+                    onClick={() => navigate(`/orders?so=${encodeURIComponent(r.soNumber)}`)}>
+                    <TableCell sx={{ fontWeight: 800, color: BRAND.primary, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{r.soNumber}</TableCell>
+                    <TableCell sx={{ fontSize: '0.78rem', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.partyName}</TableCell>
+                    <TableCell sx={{ fontSize: '0.78rem', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.skuName}<br /><span style={{ color: BRAND.slate, fontSize: '0.68rem' }}>{r.skuCode}</span>
+                    </TableCell>
+                    <TableCell><Chip size="small" label={r.phaseNo} sx={{ height: 20, fontWeight: 800, bgcolor: alpha(BRAND.primary, 0.08), color: BRAND.primary }} /></TableCell>
+                    <TableCell sx={{ fontSize: '0.76rem', whiteSpace: 'nowrap' }}>{r.plannedDate ? dayjs(r.plannedDate).format('DD MMM YY') : '—'}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmt(r.plannedQty)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: r.carryInQty ? BRAND.warning : 'inherit' }}>{fmt(r.effectivePlannedQty)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: BRAND.success }}>{fmt(r.actualQty)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: r.pendingQty > 0 ? BRAND.warning : BRAND.slate }}>{fmt(r.pendingQty)}</TableCell>
+                    <TableCell align="right">
+                      {r.delayDays > 0
+                        ? <Chip size="small" icon={<Clock size={11} />} label={`${r.delayDays}d`} sx={{ height: 20, fontWeight: 800, fontSize: '0.66rem', bgcolor: alpha(BRAND.error, 0.10), color: BRAND.error, '& .MuiChip-icon': { color: BRAND.error } }} />
+                        : <Typography sx={{ fontSize: '0.76rem', color: BRAND.slate }}>—</Typography>}
+                    </TableCell>
+                    <TableCell>
+                      <Chip size="small" label={ps.label} sx={{ height: 20, fontWeight: 800, fontSize: '0.64rem', bgcolor: alpha(ps.color, 0.10), color: ps.color }} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {matrixRows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={11} align="center" sx={{ py: 8 }}>
+                    <Typography variant="body1" color="text.secondary">
+                      {matrixLoading ? 'Loading phases…' : 'No planned phases found.'}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
 
       {/* ── Filter popover ─────────────────────────────────── */}
       <Popover

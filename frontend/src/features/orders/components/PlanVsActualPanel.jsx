@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Box, Paper, Stack, Typography, Chip, Tooltip, alpha, useTheme, LinearProgress } from '@mui/material';
-import { Activity, CheckCircle2, AlertCircle, ArrowRightCircle, ArrowDownRight } from 'lucide-react';
+import { Activity, CheckCircle2, AlertCircle, ArrowRightCircle, ArrowDownRight, Clock } from 'lucide-react';
 import dayjs from 'dayjs';
 
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
@@ -39,6 +39,8 @@ const PhaseBlock = ({ phase, theme }) => {
   const effective = Number(phase.effectivePlannedQty || (planned + carryIn));
   const actual    = Number(phase.actualQty || 0);
   const carryOut  = Number(phase.carryOutQty || 0);
+  const delayDays = Number(phase.delayDays || 0);
+  const shipments = phase.actualDispatches || [];
   const pct = effective > 0 ? Math.min(100, Math.round((actual / effective) * 100)) : 0;
   const tone = pct >= 100 ? theme.palette.success.main
              : actual > 0 ? theme.palette.warning.main
@@ -48,16 +50,22 @@ const PhaseBlock = ({ phase, theme }) => {
       arrow
       title={(
         <Box>
-          <Typography variant="caption" fontWeight={800}>{phase.phaseNo} · {dayjs(phase.plannedDate).format('DD MMM YYYY')}</Typography><br/>
+          <Typography variant="caption" fontWeight={800}>{phase.phaseNo} · {dayjs(phase.plannedDate).format('DD MMM YYYY')}{delayDays > 0 && ` · ${delayDays}d late`}</Typography><br/>
           <Typography variant="caption">Plan {fmt(planned)}{carryIn !== 0 && ` (carry-in ${carryIn > 0 ? '+' : '−'}${fmt(Math.abs(carryIn))})`} → Effective {fmt(effective)}</Typography><br/>
           <Typography variant="caption">Actual {fmt(actual)} → Carry-out {carryOut > 0 ? '+' : carryOut < 0 ? '−' : ''}{fmt(Math.abs(carryOut))}</Typography>
+          {shipments.length > 0 && <><br/><Typography variant="caption" fontWeight={700}>Shipped:</Typography></>}
+          {shipments.map((d, i) => (
+            <React.Fragment key={i}>
+              <br/><Typography variant="caption">· {fmt(d.qty)} on {dayjs(d.date).format('DD MMM')}{d.invoiceNo ? ` (Inv ${d.invoiceNo})` : ''}</Typography>
+            </React.Fragment>
+          ))}
         </Box>
       )}
     >
       <Box sx={{
         flex: '0 0 auto', minWidth: 130, p: 1, mr: 0.75, mb: 0.75,
         borderRadius: '10px',
-        border: '1px solid', borderColor: alpha(tone, 0.3),
+        border: '1px solid', borderColor: alpha(delayDays > 0 ? theme.palette.error.main : tone, 0.3),
         bgcolor: alpha(tone, 0.05),
       }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.25 }}>
@@ -70,9 +78,15 @@ const PhaseBlock = ({ phase, theme }) => {
           {fmt(actual)} <Typography component="span" variant="caption" color="text.secondary"> / {fmt(effective)}</Typography>
         </Typography>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.25 }}>
-          <Typography variant="caption" color="text.secondary">
-            {phase.plannedDate ? dayjs(phase.plannedDate).format('DD MMM') : ''}
-          </Typography>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Typography variant="caption" color="text.secondary">
+              {phase.plannedDate ? dayjs(phase.plannedDate).format('DD MMM') : ''}
+            </Typography>
+            {delayDays > 0 && (
+              <Chip size="small" icon={<Clock size={9} />} label={`${delayDays}d late`}
+                sx={{ height: 16, fontSize: '0.55rem', fontWeight: 800, bgcolor: alpha(theme.palette.error.main, 0.10), color: 'error.main', '& .MuiChip-icon': { color: theme.palette.error.main, ml: '3px' } }} />
+            )}
+          </Stack>
           {carryOut !== 0 && <CarryChip value={carryOut} theme={theme} />}
         </Stack>
       </Box>

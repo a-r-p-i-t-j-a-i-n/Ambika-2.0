@@ -60,6 +60,76 @@ const VarianceChip = ({ effective, dispatching }) => {
   return <Chip size="small" sx={{ height: 20, fontSize: '0.65rem', bgcolor: alpha(theme.palette.error.main, 0.10), color: 'error.main' }} icon={<AlertTriangle size={11} />} label={`${Math.abs(diff).toLocaleString('en-IN')} short → next phase`} />;
 };
 
+// Mirror the SERVER's earliest-first allocation so the operator SEES, before
+// submitting, exactly how the qty they typed will land on each plan phase —
+// how much fills it, how much carries forward, and whether it's late.
+const computeAllocation = (line, phaseSels, dcDate) => {
+  const sku = line.skuCode || line.skuName;
+  const targets = (phaseSels || [])
+    .filter((p) => p?.kind !== 'unplanned')
+    .map((ph) => {
+      const s = (ph.skus || []).find((x) => (x.skuCode || x.skuName) === sku);
+      return s ? { phaseNo: ph.phaseNo, plannedDate: ph.plannedDate, pending: Math.max(0, Number(s.pendingQty || 0)) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(a.plannedDate || 0) - new Date(b.plannedDate || 0));
+  if (!targets.length) return [];
+
+  const dc = dcDate ? dayjs(dcDate).startOf('day') : dayjs().startOf('day');
+  let remaining = Number(line.quantityPcs || 0);
+  return targets.map((t, i) => {
+    const isLast = i === targets.length - 1;
+    const give = remaining <= 0 ? 0 : (isLast ? remaining : Math.max(0, Math.min(remaining, t.pending)));
+    remaining -= give;
+    const shortfall = Math.max(0, t.pending - give);        // carries to the next phase
+    const over = isLast ? Math.max(0, give - t.pending) : 0; // surplus on the last phase
+    const late = Boolean(t.plannedDate) && dc.isAfter(dayjs(t.plannedDate).startOf('day'));
+    const lateDays = late ? dc.diff(dayjs(t.plannedDate).startOf('day'), 'day') : 0;
+    return { ...t, give, shortfall, over, late, lateDays };
+  });
+};
+
+// Plain-words preview row shown directly under a SKU line.
+const AllocationPreview = ({ alloc }) => {
+  const theme = useTheme();
+  if (!alloc.length) return null;
+  return (
+    <Box sx={{ px: 1.25, pb: 1, pt: 0.25, display: 'flex', flexWrap: 'wrap', gap: 0.75, alignItems: 'center' }}>
+      <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'text.disabled', textTransform: 'uppercase', letterSpacing: '0.05em', mr: 0.25 }}>
+        Lands on →
+      </Typography>
+      {alloc.map((a) => (
+        <Box key={a.phaseNo} sx={{
+          display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 0.85, py: 0.3, borderRadius: '8px',
+          border: '1px solid', borderColor: a.give > 0 ? alpha(theme.palette.primary.main, 0.25) : 'divider',
+          bgcolor: a.give > 0 ? alpha(theme.palette.primary.main, 0.05) : 'transparent',
+        }}>
+          <Typography sx={{ fontSize: '0.66rem', fontWeight: 800, color: 'primary.main' }}>{a.phaseNo}</Typography>
+          {a.plannedDate && (
+            <Typography sx={{ fontSize: '0.62rem', color: 'text.secondary' }}>{dayjs(a.plannedDate).format('DD MMM')}</Typography>
+          )}
+          <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+            {Number(a.give).toLocaleString('en-IN')}/{Number(a.pending).toLocaleString('en-IN')}
+          </Typography>
+          {a.shortfall > 0 && (
+            <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: 'error.main' }}>
+              · {Number(a.shortfall).toLocaleString('en-IN')} carries →
+            </Typography>
+          )}
+          {a.over > 0 && (
+            <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: 'warning.main' }}>
+              · +{Number(a.over).toLocaleString('en-IN')} over
+            </Typography>
+          )}
+          {a.late && (
+            <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: 'error.main' }}>· {a.lateDays}d late</Typography>
+          )}
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
 const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = null }) => {
   const theme = useTheme();
   const { enqueueSnackbar } = useSnackbar();
@@ -510,11 +580,14 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
               const carry = Number(l.carryInQty || 0);
               const pending = Number(l.pendingFromPhase ?? 0);
               const over = Number(l.quantityPcs || 0) > pending && !isUnplanned;
+              const alloc = isUnplanned ? [] : computeAllocation(l, phaseSels, header.dcDate);
               return (
                 <Box key={l.skuCode + idx} sx={{
+                  borderBottom: idx === lines.length - 1 ? 0 : '1px solid', borderColor: 'divider',
+                }}>
+                <Box sx={{
                   display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.8fr 0.7fr 0.7fr 0.85fr 0.85fr 1fr 0.7fr 0.85fr' },
                   px: 1.25, py: 1, alignItems: 'center', gap: 1,
-                  borderBottom: idx === lines.length - 1 ? 0 : '1px solid', borderColor: 'divider',
                 }}>
                   <Box sx={{ minWidth: 0 }}>
                     <Typography variant="body2" fontWeight={700} noWrap>{l.skuName}</Typography>
@@ -562,6 +635,8 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
                     inputProps={{ style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }, min: 0 }}
                   />
                   <VarianceChip effective={pending} dispatching={l.quantityPcs} />
+                </Box>
+                {Number(l.quantityPcs || 0) > 0 && alloc.length > 0 && <AllocationPreview alloc={alloc} />}
                 </Box>
               );
             })}

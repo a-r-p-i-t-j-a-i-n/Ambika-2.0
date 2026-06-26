@@ -6,6 +6,11 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (params) => ({ url: '/dispatch-control/dashboard', params }),
       providesTags: ['DispatchDashboard'],
     }),
+    // Flat plan-vs-actual matrix: one row per phase across all live orders.
+    getPhaseMatrix: builder.query({
+      query: () => ({ url: '/dispatch-control/phase-matrix' }),
+      providesTags: ['DispatchDashboard', 'Schedule'],
+    }),
     createOrderEntry: builder.mutation({
       query: (body) => ({ url: '/dispatch-control/order-entry', method: 'POST', body }),
       invalidatesTags: ['Order', 'DispatchDashboard', 'Party', 'OrderIntake', 'O2DProcess', 'O2DMyTasks'],
@@ -119,6 +124,7 @@ export const dispatchControlApi = baseApi.injectEndpoints({
 
 export const {
   useGetDispatchDashboardQuery,
+  useGetPhaseMatrixQuery,
   useCreateOrderEntryMutation,
   useCreateDispatchPlanMutation,
   useCreateActualDispatchMutation,

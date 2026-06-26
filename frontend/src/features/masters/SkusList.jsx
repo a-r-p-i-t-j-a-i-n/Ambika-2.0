@@ -7,7 +7,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   AlertTriangle, Edit3, PackagePlus, Plus, Save, Search, Trash2, Upload, X,
-  PackageCheck, Layers, Wrench, Boxes, LayoutGrid,
+  PackageCheck, Layers, Wrench, Boxes, LayoutGrid, Disc,
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
@@ -36,6 +36,7 @@ const SKU_KINDS = [
   { key: 'RAW_MATERIAL',  label: 'Raw Material',   icon: Layers },
   { key: 'CONSUMABLE',    label: 'Consumables',    icon: Wrench },
   { key: 'PACKING',       label: 'Packing',        icon: Boxes },
+  { key: 'CIRCLE',        label: 'Circles',        icon: Disc },
 ];
 
 const TYPE_OPTIONS = ['FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE'];

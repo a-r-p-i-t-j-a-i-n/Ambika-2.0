@@ -24,6 +24,7 @@ const OrderDetails         = lazyWithRetry(() => import('./features/orders/Order
 const PlanWorkspace        = lazyWithRetry(() => import('./features/planning/PlanWorkspace'));
 const GenerateDispatchPlanPdf = lazyWithRetry(() => import('./features/planning/GenerateDispatchPlanPdf'));
 const DispatchCalendar     = lazyWithRetry(() => import('./features/planning/DispatchCalendar'));
+const PlanVsActualMaster   = lazyWithRetry(() => import('./features/planning/PlanVsActualMaster'));
 const PPCPlanning          = lazyWithRetry(() => import('./features/ppc/PPCPlanning'));
 const ChallansList         = lazyWithRetry(() => import('./features/execution/ChallansList'));
 const GenerateChallanPdf   = lazyWithRetry(() => import('./features/execution/GenerateChallanPdf'));
@@ -56,6 +57,14 @@ const ImsStockIn           = lazyWithRetry(() => import('./features/ims/ImsStock
 const ImsStockOut          = lazyWithRetry(() => import('./features/ims/ImsStockOut'));
 const ImsReorder           = lazyWithRetry(() => import('./features/ims/ImsReorder'));
 const ImsMovements         = lazyWithRetry(() => import('./features/ims/ImsMovements'));
+// RM IMS — Raw Material (Coil + Circle) inventory
+const RmImsDashboard       = lazyWithRetry(() => import('./features/rm-ims/RmImsDashboard'));
+const RmImsStockList       = lazyWithRetry(() => import('./features/rm-ims/RmImsStockList'));
+const RmImsStockIn         = lazyWithRetry(() => import('./features/rm-ims/RmImsStockIn'));
+const RmImsStockOut        = lazyWithRetry(() => import('./features/rm-ims/RmImsStockOut'));
+const RmImsConversion      = lazyWithRetry(() => import('./features/rm-ims/RmImsConversion'));
+const RmImsReorder         = lazyWithRetry(() => import('./features/rm-ims/RmImsReorder'));
+const RmImsMovements       = lazyWithRetry(() => import('./features/rm-ims/RmImsMovements'));
 const FmsProcessList       = lazyWithRetry(() => import('./features/o2d-fms/ProcessList'));
 const FmsProcessDetail     = lazyWithRetry(() => import('./features/o2d-fms/ProcessDetail'));
 const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsDashboard'));
@@ -119,6 +128,7 @@ function App() {
             <Route path="/orders/:id/phase/:phaseNo" element={<PhaseDetail />} />
             <Route path="/dispatch-planning" element={<PlanWorkspace />} />
             <Route path="/dispatch-planning/calendar" element={<DispatchCalendar />} />
+            <Route path="/dispatch-planning/plan-vs-actual" element={<PlanVsActualMaster />} />
             <Route path="/dispatch-planning/generate-pdf" element={<GenerateDispatchPlanPdf />} />
             <Route path="/ppc-planning" element={<PPCPlanning />} />
             <Route path="/challans" element={<ChallansList />} />
@@ -138,6 +148,15 @@ function App() {
             <Route path="/ims/stock-out" element={<ImsStockOut />} />
             <Route path="/ims/reorder" element={<ImsReorder />} />
             <Route path="/ims/movements" element={<ImsMovements />} />
+
+            {/* RM IMS — Raw Material (Coil + Circle) inventory */}
+            <Route path="/rm-ims" element={<RmImsDashboard />} />
+            <Route path="/rm-ims/stock" element={<RmImsStockList />} />
+            <Route path="/rm-ims/stock-in" element={<RmImsStockIn />} />
+            <Route path="/rm-ims/stock-out" element={<RmImsStockOut />} />
+            <Route path="/rm-ims/conversion" element={<RmImsConversion />} />
+            <Route path="/rm-ims/reorder" element={<RmImsReorder />} />
+            <Route path="/rm-ims/movements" element={<RmImsMovements />} />
 
             <Route path="/challans/:id" element={<ChallanDetail />} />
             <Route path="/invoices" element={<InvoicesList />} />

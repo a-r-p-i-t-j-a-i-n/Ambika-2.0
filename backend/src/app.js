@@ -43,6 +43,7 @@ import advancePaymentRoutes from './modules/procurement/advance-payment/advanceP
 // Shared inventory stock-movement foundation (reused by GRN etc.)
 import inventoryRoutes from './modules/inventory/inventory.routes.js';
 import imsRoutes from './modules/inventory/ims.routes.js';
+import rmImsRoutes from './modules/inventory/rmIms.routes.js';
 import grnRoutes from './modules/procurement/grn/grn.routes.js';
 import serviceCompletionRoutes from './modules/procurement/service-completion/serviceCompletion.routes.js';
 import incomingQcRoutes from './modules/procurement/incoming-qc/incomingQc.routes.js';
@@ -141,6 +142,7 @@ app.use('/api/v1/procurement/advance-payments', advancePaymentRoutes); // Purcha
 
 app.use('/api/v1/inventory', inventoryRoutes); // Shared inventory stock-movement foundation
 app.use('/api/v1/ims', imsRoutes); // IMS — Packaging & Consumables inventory (built on the stock engine)
+app.use('/api/v1/rm-ims', rmImsRoutes); // RM IMS — Raw Material (Coil + Circle) inventory
 app.use('/api/v1/procurement/grns', grnRoutes); // Purchase FMS — Goods Receipt Notes (Step 1.8)
 app.use('/api/v1/procurement/service-completions', serviceCompletionRoutes); // Purchase FMS — Service Completion (Step 1.8A)
 app.use('/api/v1/procurement/incoming-qc', incomingQcRoutes); // Purchase FMS — Incoming QC (Step 1.9)

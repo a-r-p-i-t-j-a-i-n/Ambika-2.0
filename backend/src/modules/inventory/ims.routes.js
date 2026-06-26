@@ -8,7 +8,7 @@ import validate from '../../middleware/validate.js';
 import { imsController as c } from './ims.controller.js';
 import { movementQuerySchema } from './inventory.validation.js';
 import {
-  overviewQuerySchema, forecastQuerySchema, skuParamSchema,
+  overviewQuerySchema, forecastQuerySchema, historyQuerySchema, skuParamSchema,
   policySchema, receiveSchema, issueSchema,
 } from './ims.validation.js';
 
@@ -19,6 +19,7 @@ router.get('/overview', validate(overviewQuerySchema, 'query'), c.getOverview);
 router.get('/dashboard', c.getDashboard);
 router.get('/reorder', validate(overviewQuerySchema, 'query'), c.getReorderList);
 router.get('/forecast/:skuId', validate(skuParamSchema, 'params'), validate(forecastQuerySchema, 'query'), c.getForecast);
+router.get('/history/:skuId', validate(skuParamSchema, 'params'), validate(historyQuerySchema, 'query'), c.getStockHistory);
 router.get('/movements', validate(movementQuerySchema, 'query'), c.getMovements);
 
 router.get('/policy/:skuId', validate(skuParamSchema, 'params'), c.getPolicy);

@@ -10,7 +10,7 @@ import {
   IndianRupee, Calculator, FileSignature, FilePen, ClipboardCheck, FolderOpen, BarChart3, Tag,
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
   ReceiptText, Banknote, FileSpreadsheet, Wallet, Store,
-  Boxes, PackagePlus, PackageMinus, History,
+  Boxes, PackagePlus, PackageMinus, History, Layers, Recycle,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -46,6 +46,7 @@ const navSections = [
           { text: 'Sales Orders',      icon: <ShoppingCart size={19} />, path: '/orders' },
           { text: 'Dispatch Planning', icon: <CalendarPlus size={19} />, path: '/dispatch-planning' },
           { text: 'Dispatch Calendar', icon: <CalendarDays size={19} />, path: '/dispatch-planning/calendar' },
+          { text: 'Plan vs Actual',    icon: <Radar size={19} />,        path: '/dispatch-planning/plan-vs-actual' },
           { text: 'Generate Dispatch Plan PDF', icon: <FileText size={19} />, path: '/dispatch-planning/generate-pdf' },
           { text: 'Email Dispatch Schedule', icon: <Mail size={19} />, path: '/o2d/dispatch-schedule-email' },
           { text: 'Actual Dispatch',   icon: <Truck size={19} />,        path: '/challans' },
@@ -79,6 +80,20 @@ const navSections = [
           { text: 'Stock Out (Issue)',    icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
           { text: 'Reorder & Buying List',icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
           { text: 'Movement History',     icon: <History size={19} />,         path: '/ims/movements' },
+        ],
+      },
+      {
+        text: 'Raw Material IMS',
+        icon: <Layers size={19} />,
+        path: '/rm-ims',
+        children: [
+          { text: 'Dashboard',            icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
+          { text: 'Stock & Master Data',  icon: <Package size={19} />,         path: '/rm-ims/stock' },
+          { text: 'Stock In',             icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
+          { text: 'Stock Out (Issue)',    icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
+          { text: 'Coil → Circle',        icon: <Recycle size={19} />,         path: '/rm-ims/conversion' },
+          { text: 'Reorder & Buying List',icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
+          { text: 'Movement History',     icon: <History size={19} />,         path: '/rm-ims/movements' },
         ],
       },
     ],
@@ -126,6 +141,7 @@ const PAGE_TITLES = {
   '/orders':                 'Sales Orders',
   '/dispatch-planning':      'Dispatch Planning',
   '/dispatch-planning/calendar': 'Dispatch Calendar',
+  '/dispatch-planning/plan-vs-actual': 'Plan vs Actual',
   '/dispatch-planning/generate-pdf': 'Generate Dispatch Plan PDF',
   '/ppc-planning':           'PPC Planning',
   '/challans':               'Actual Dispatch',

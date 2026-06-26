@@ -304,9 +304,13 @@ const findPhaseById = (schedule, phaseId) => {
 // We DO NOT mutate plannedQty on the schedule. The plannedQty is the planner's
 // intent; the carry is a derived display.
 const enrichPhasesWithCarryForward = (item, today = startOfDay(new Date())) => {
-  const phases = [...(item?.phases || [])].sort((a, b) => (
-    new Date(a.plannedDate || 0) - new Date(b.plannedDate || 0)
-  ));
+  // Normalise Mongoose subdocuments to plain objects FIRST — otherwise the
+  // `{ ...p }` spread below silently drops every schema field (phaseNo,
+  // plannedQty …), which made the live allocation match no phases and never
+  // write actuals back to the schedule. Lean/plain inputs pass through.
+  const phases = [...(item?.phases || [])]
+    .map((p) => (p && typeof p.toObject === 'function' ? p.toObject() : p))
+    .sort((a, b) => (new Date(a.plannedDate || 0) - new Date(b.plannedDate || 0)));
   let carryIn = 0;
   const enriched = phases.map((p) => {
     const planned   = Number(p.plannedQty || 0);
@@ -347,6 +351,28 @@ const refreshPhaseLifecycle = (phase, today = startOfDay(new Date())) => {
   } else {
     phase.status = 'PLANNED';
   }
+};
+
+// Delay (in whole days) for a phase. If it shipped late → last actual date − planned date.
+// Else if it's overdue and still short (planned date passed, not fully shipped) → today − planned.
+// Returns 0 when on-time, not yet due, or fully shipped on/before the planned date.
+const computePhaseDelay = (phase, today = startOfDay(new Date())) => {
+  const planned = phase.plannedDate ? startOfDay(phase.plannedDate) : null;
+  if (!planned) return { delayDays: 0, lastActualDate: null };
+  const times = (phase.actualDispatches || [])
+    .map((d) => new Date(d.date).getTime())
+    .filter((t) => !Number.isNaN(t));
+  const lastActual = times.length ? new Date(Math.max(...times)) : null;
+  const effective = Number(phase.effectivePlannedQty != null ? phase.effectivePlannedQty : (phase.plannedQty || 0));
+  const actual = Number(phase.totalActualQty || 0);
+  const fulfilled = effective > 0 && actual >= effective;
+  let delayDays = 0;
+  if (lastActual && startOfDay(lastActual) > planned) {
+    delayDays = Math.round((startOfDay(lastActual) - planned) / MS_PER_DAY);
+  } else if (!fulfilled && planned < today) {
+    delayDays = Math.round((today - planned) / MS_PER_DAY);
+  }
+  return { delayDays, lastActualDate: lastActual };
 };
 
 // Apply DC items against one or more plan phases (selected by phaseNo). For each
@@ -500,20 +526,29 @@ const buildComparison = async (soNumber) => {
       fulfillmentPct: orderItem.orderQty > 0 ? Number(((actualQty / orderItem.orderQty) * 100).toFixed(2)) : 0,
       planAchievementPct: plannedQty > 0 ? Number(((actualQty / plannedQty) * 100).toFixed(2)) : 0,
       risks,
-      phases: phases.map((phase) => ({
-        phaseId: phase._id ? String(phase._id) : null,
-        phaseNo: phase.phaseNo,
-        planType: `${PLAN_LABEL_PREFIX} ${phaseNumberFromLabel(phase.phaseNo)}`,
-        plannedDate: phase.plannedDate,
-        plannedQty: Number(phase.plannedQty || 0),
-        carryInQty: Number(phase.carryInQty || 0),
-        effectivePlannedQty: Number(phase.effectivePlannedQty || 0),
-        actualQty: Number(phase.totalActualQty || 0),
-        varianceQty: Number(phase.varianceQty || 0),
-        carryOutQty: Number(phase.carryOutQty || 0),
-        isClosed: Boolean(phase.isClosed),
-        status: phase.status || 'PLANNED',
-      })),
+      phases: phases.map((phase) => {
+        const delay = computePhaseDelay(phase, today);
+        return {
+          phaseId: phase._id ? String(phase._id) : null,
+          phaseNo: phase.phaseNo,
+          planType: `${PLAN_LABEL_PREFIX} ${phaseNumberFromLabel(phase.phaseNo)}`,
+          plannedDate: phase.plannedDate,
+          plannedQty: Number(phase.plannedQty || 0),
+          carryInQty: Number(phase.carryInQty || 0),
+          effectivePlannedQty: Number(phase.effectivePlannedQty || 0),
+          actualQty: Number(phase.totalActualQty || 0),
+          varianceQty: Number(phase.varianceQty || 0),
+          carryOutQty: Number(phase.carryOutQty || 0),
+          isClosed: Boolean(phase.isClosed),
+          status: phase.status || 'PLANNED',
+          // Per-phase shipment trail + delay (read-only, derived).
+          delayDays: delay.delayDays,
+          lastActualDate: delay.lastActualDate,
+          actualDispatches: (phase.actualDispatches || []).map((d) => ({
+            date: d.date, qty: Number(d.qty || 0), invoiceNo: d.invoiceNo || null,
+          })),
+        };
+      }),
       challans: actual?.challans || [],
     };
   });
@@ -1523,6 +1558,133 @@ export const dispatchControlService = {
         .slice(0, 10),
       upcomingDispatches: upcomingDispatches.sort((a, b) => new Date(a.plannedDate) - new Date(b.plannedDate)).slice(0, 20),
     };
+  },
+
+  /**
+   * Flat plan-vs-actual matrix: one row per phase across all live orders, with
+   * carry-forward and delay enriched the same way the per-order comparison is —
+   * so the Control Tower can show every phase in one grid (no expanding).
+   */
+  async getPhaseMatrix() {
+    const today = startOfDay(new Date());
+    const [orders, schedules] = await Promise.all([
+      SalesOrder.find({}).lean(),
+      DispatchSchedule.find({}).lean(),
+    ]);
+    const orderBySo = new Map(orders.map((o) => [o.soNumber, o]));
+    const liveSos = new Set(orders.filter((o) => o.status !== 'CANCELLED').map((o) => o.soNumber));
+
+    const rows = [];
+    schedules.forEach((sched) => {
+      if (!liveSos.has(sched.soNumber)) return;
+      const order = orderBySo.get(sched.soNumber);
+      (sched.items || []).forEach((item) => {
+        const { enrichedPhases } = enrichPhasesWithCarryForward(item, today);
+        enrichedPhases.forEach((phase) => {
+          if (phase.status === 'CANCELLED') return;
+          const effective = Number(phase.effectivePlannedQty || 0);
+          const actual = Number(phase.totalActualQty || 0);
+          const { delayDays, lastActualDate } = computePhaseDelay(phase, today);
+          rows.push({
+            id: `${sched._id}_${item._id}_${phase._id || phase.phaseNo}`,
+            soNumber: sched.soNumber,
+            poNumber: sched.poNumber,
+            partyName: sched.partyName || order?.partyName || '',
+            orderStatus: order?.status || 'RECEIVED',
+            skuCode: item.skuCode,
+            skuName: item.skuName,
+            phaseNo: phase.phaseNo,
+            plannedDate: phase.plannedDate,
+            plannedQty: Number(phase.plannedQty || 0),
+            carryInQty: Number(phase.carryInQty || 0),
+            effectivePlannedQty: effective,
+            actualQty: actual,
+            pendingQty: Math.max(0, effective - actual),
+            varianceQty: Number(phase.varianceQty || 0),
+            carryOutQty: Number(phase.carryOutQty || 0),    // short(+)/surplus(−) → next phase
+            achievementPct: effective > 0 ? Math.round((actual / effective) * 100) : 0,
+            status: phase.status || 'PLANNED',
+            delayDays,
+            lastActualDate,
+            shipments: (phase.actualDispatches || []).map((d) => ({
+              date: d.date, qty: Number(d.qty || 0), invoiceNo: d.invoiceNo || null,
+            })),
+          });
+        });
+      });
+    });
+    rows.sort((a, b) => new Date(a.plannedDate || 0) - new Date(b.plannedDate || 0));
+    return rows;
+  },
+
+  /**
+   * Rebuild every schedule phase's actuals from the source-of-truth Delivery
+   * Challans. Use this to repair schedules whose phase `totalActualQty` drifted
+   * out of sync with the challans (e.g. seeded/imported dispatches that bypassed
+   * the live allocation, or legacy data). Replays each challan in dispatch-date
+   * order and allocates its qty across its phaseRefs earliest-first — exactly the
+   * same rule the live dispatch uses. Idempotent.
+   */
+  async reconcileScheduleActuals(soNumber = null) {
+    const orderFilter = soNumber ? { soNumber } : {};
+    const orders = await SalesOrder.find(orderFilter).lean();
+    let schedulesFixed = 0;
+    let challansApplied = 0;
+
+    for (const order of orders) {
+      const schedule = await DispatchSchedule.findOne({ soNumber: order.soNumber }).sort({ createdAt: -1 });
+      if (!schedule) continue;
+
+      // Reset phase actuals, then replay challans chronologically.
+      schedule.items.forEach((it) => it.phases.forEach((p) => { p.actualDispatches = []; p.totalActualQty = 0; }));
+
+      const challans = await DeliveryChallan.find({ soNumber: order.soNumber }).sort({ dcDate: 1, createdAt: 1 }).lean();
+      for (const challan of challans) {
+        const phaseNos = (challan.phaseRefs || []).map((r) => r.phaseNo).filter(Boolean);
+        // Unplanned (or phase-less) DCs contribute to SKU totals but bind to no phase.
+        if (challan.isUnplanned || !phaseNos.length) continue;
+
+        for (const dcItem of (challan.items || [])) {
+          const si = schedule.items.find((it) => (
+            normalizeKey(it.skuCode) === normalizeKey(dcItem.skuCode)
+            || normalizeKey(it.skuName) === normalizeKey(dcItem.skuName)
+          ));
+          if (!si) continue;
+
+          const { enrichedPhases } = enrichPhasesWithCarryForward(si);
+          const targets = enrichedPhases
+            .filter((p) => phaseNos.includes(p.phaseNo))
+            .map((p) => ({ phaseNo: p.phaseNo, pending: Math.max(0, Number(p.effectivePlannedQty || 0) - Number(p.totalActualQty || 0)) }));
+          if (!targets.length) continue;
+
+          let remaining = Number(dcItem.quantityPcs || 0);
+          targets.forEach((t, i) => {
+            const isLast = i === targets.length - 1;
+            const give = remaining <= 0 ? 0 : (isLast ? remaining : Math.max(0, Math.min(remaining, t.pending)));
+            if (give <= 0) return;
+            const phase = si.phases.find((p) => p.phaseNo === t.phaseNo);
+            if (!phase) return;
+            phase.actualDispatches.push({
+              date: challan.dcDate, qty: give, invoiceNo: challan.invoiceNo,
+              invoiceDate: challan.dcDate, invoiceDoc: challan.pdfUrl,
+            });
+            phase.totalActualQty = Number(phase.totalActualQty || 0) + give;
+            refreshPhaseLifecycle(phase);
+            remaining -= give;
+          });
+        }
+        challansApplied += 1;
+      }
+
+      schedule.items.forEach((si) => {
+        const oi = order.items.find((it) => normalizeKey(it.skuCode) === normalizeKey(si.skuCode) || normalizeKey(it.skuName) === normalizeKey(si.skuName));
+        recalculateScheduleItem(si, oi);
+      });
+      await schedule.save();
+      schedulesFixed += 1;
+    }
+
+    return { schedulesFixed, challansApplied };
   },
 
   async normalizeSheetRows(data) {
