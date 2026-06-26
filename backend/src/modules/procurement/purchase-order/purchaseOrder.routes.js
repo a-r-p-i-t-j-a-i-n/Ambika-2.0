@@ -9,7 +9,8 @@ import validate from '../../../middleware/validate.js';
 import { purchaseOrderController as c } from './purchaseOrder.controller.js';
 import {
   createPoSchema,
-  createMultiPoSchema,
+  createFromItemsSchema,
+  revisePoSchema,
   previewPoSchema,
   updatePoSchema,
   approvePoSchema,
@@ -27,13 +28,18 @@ router.route('/')
   .get(validate(poQuerySchema, 'query'), c.getAll)
   .post(validate(createPoSchema), c.create);
 
-// Multi-indent PO (one vendor, items grouped from several approved indents).
-router.post('/multi', validate(createMultiPoSchema), c.createMulti);
+// Item-wise PO from the New PO form's "Approved Item(s)" picker (one vendor,
+// hand-picked approved items; source indents derived server-side).
+router.post('/create-from-items', validate(createFromItemsSchema), c.createFromItems);
 
 // Preview a PO PDF from draft form data — no DB save.
 router.post('/preview-pdf', validate(previewPoSchema), c.previewPdf);
 
 router.get('/stats', c.getStats);
+
+// Global approved-item picker (all PO-creatable indents) for the New PO form's
+// Approved Item(s) dropdown. Declared before '/:id' so it isn't shadowed.
+router.get('/approved-items', c.getAllApprovedItems);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
@@ -42,6 +48,7 @@ router.route('/:id')
 router.post('/:id/approve', validate(mongoIdParamSchema, 'params'), validate(approvePoSchema), c.approve);
 router.post('/:id/release', validate(mongoIdParamSchema, 'params'), validate(releasePoSchema), c.release);
 router.post('/:id/cancel',  validate(mongoIdParamSchema, 'params'), validate(cancelPoSchema), c.cancel);
+router.post('/:id/revise',  validate(mongoIdParamSchema, 'params'), validate(revisePoSchema), c.revise);
 
 // PI is optional but never silently skipped — gated on procurement approval rights.
 router.post('/:id/pi-not-required',

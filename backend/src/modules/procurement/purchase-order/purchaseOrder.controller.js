@@ -18,13 +18,19 @@ export const purchaseOrderController = {
     res.json(ApiResponse.ok('Purchase order retrieved', po));
   }),
 
-  create: asyncHandler(async (req, res) => {
-    const po = await purchaseOrderService.create(req.body, req.user);
+  // Global approved-item picker for the New PO form (all PO-creatable indents).
+  getAllApprovedItems: asyncHandler(async (_req, res) => {
+    const data = await purchaseOrderService.getAllApprovedItems();
+    res.json(ApiResponse.ok('Approved items retrieved', data));
+  }),
+
+  createFromItems: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.createFromItems(req.body, req.user);
     res.status(201).json(ApiResponse.created('Purchase order created', po));
   }),
 
-  createMulti: asyncHandler(async (req, res) => {
-    const po = await purchaseOrderService.createMulti(req.body, req.user);
+  create: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.create(req.body, req.user);
     res.status(201).json(ApiResponse.created('Purchase order created', po));
   }),
 
@@ -60,5 +66,11 @@ export const purchaseOrderController = {
   cancel: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.cancel(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Purchase order cancelled', po));
+  }),
+
+  // Revise a cancelled PO → new draft PO (linked back via revisedFromPoId).
+  revise: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.revise(req.params.id, req.body, req.user);
+    res.status(201).json(ApiResponse.created('Revised purchase order created', po));
   }),
 };

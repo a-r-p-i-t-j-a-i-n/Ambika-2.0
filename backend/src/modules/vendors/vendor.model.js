@@ -10,10 +10,13 @@ const vendorProductSchema = new Schema({
   productName: { type: String, trim: true },
   skuCode:     { type: String, trim: true, uppercase: true },
   unit:        { type: String, trim: true, default: 'Pcs' },
-  rate:        { type: Number, min: 0, default: 0 },
+  rate:        { type: Number, min: 0, default: 0 }, // current/latest rate (mirrors newest pricing history)
   gstRate:     { type: Number, min: 0, max: 100, default: 0 },
   hsn:         { type: String, trim: true, default: '' },
   notes:       { type: String, trim: true, default: '' }, // grade / spec mapping
+  // Latest-rate audit (mirrors the most recent PricingHistory entry for this SKU).
+  lastUpdatedAt: { type: Date, default: null },
+  lastUpdatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
 }, { _id: true });
 
 // ── Vendor (Purchase FMS supplier) — entirely separate from Party (customers) ──

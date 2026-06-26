@@ -81,6 +81,15 @@ const poItemSchema = new Schema({
   itemName:      { type: String, trim: true, default: '' }, // not required — JSL items use grade/width/finish
   skuCode:       { type: String, trim: true, uppercase: true, default: '' },
   skuId:         { type: Schema.Types.ObjectId, ref: 'SKU' },
+  // Source indent line-item linkage (item-level PO traceability). A PO line traces
+  // back to the exact indent item it was raised for; older POs leave this null and
+  // fall back to skuCode matching.
+  indentItemId:  { type: Schema.Types.ObjectId, default: null },
+  // Display-only item reference snapshot (e.g. Ind-50.1/26-27) — server-stamped
+  // from the source indent item's line number so the PO, its PDF and downstream
+  // traces show exactly which indent item the line came from.
+  indentItemDisplayNumber: { type: String, trim: true, default: '' },
+  hsn:           { type: String, trim: true, default: '' }, // auto-filled from Vendor Master
   quantity:      { type: Number, required: true, min: 0 },
   unit:          { type: String, trim: true, default: 'Pcs' },
   rate:          { type: Number, default: 0, min: 0 },
@@ -184,6 +193,13 @@ const vendorPurchaseOrderSchema = new Schema({
 
   // ── Step 1.7 — advance payment lifecycle ──
   advancePaymentStatus: { type: String, enum: Object.values(PO_ADVANCE_PAYMENT_STATUS), default: PO_ADVANCE_PAYMENT_STATUS.NOT_STARTED, index: true },
+
+  // ── Revision linkage (created via "Revise PO" on a cancelled PO) ──
+  // The new PO points back to the cancelled one it was revised from; the cancelled
+  // PO itself is never mutated (the "revised as" link is resolved by query).
+  revisedFromPoId:     { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', default: null, index: true },
+  revisedFromPoNumber: { type: String, trim: true, default: '' },
+  revisionNo:          { type: Number, default: 0 }, // 0 = original, 1 = first revision, …
 
   // ── PI Not Required — full audit trail (kept forever) ──
   piNotRequiredReason:  { type: String, trim: true, default: '' },

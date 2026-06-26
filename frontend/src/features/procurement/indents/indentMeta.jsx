@@ -30,6 +30,29 @@ export const fileHref = (url) => {
   return `${origin}${url.startsWith('/') ? '' : '/'}${url}`;
 };
 
+/**
+ * Build the display-only item reference from an indent number + line number.
+ * Display-only — the original indent number is never changed.
+ *   Ind-50/26-27 + lineNo 2 → Ind-50.2/26-27
+ * Splits on the LAST "/" so the base and fiscal year stay intact.
+ */
+export const buildItemDisplayNumber = (indentNumber, lineNo) => {
+  const n = Number(lineNo);
+  if (!indentNumber || !n) return indentNumber || '';
+  const slash = indentNumber.lastIndexOf('/');
+  if (slash === -1) return `${indentNumber}.${n}`;
+  return `${indentNumber.slice(0, slash)}.${n}/${indentNumber.slice(slash + 1)}`;
+};
+
+/**
+ * Resolve an item's display reference: prefer a server-stamped value, else derive
+ * it from the indent number + the item's stable line number (falling back to its
+ * position in the items array).
+ */
+export const itemRef = (indentNumber, item, index = 0) =>
+  item?.itemDisplayNumber
+  || buildItemDisplayNumber(indentNumber, Number(item?.itemLineNo) || (index + 1));
+
 export const ApprovalChip = ({ status }) => <StatusChip status={status} />;
 export const OverallChip = ({ status }) => <StatusChip status={status} />;
 export const QuoteChip = ({ status }) => <StatusChip status={status} />;

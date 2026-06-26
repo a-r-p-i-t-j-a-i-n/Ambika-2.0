@@ -104,7 +104,11 @@ export const bulkApproveSchema = Joi.object({
 // ── Bulk reject (multiple indents) ───────────────────────────
 export const bulkRejectSchema = Joi.object({
   indentIds:  Joi.array().min(1).items(objectId.required()).required(),
-  remarks:    Joi.string().trim().max(1000).allow('', null),
+  // Rejection remarks are mandatory for the audit trail.
+  remarks:    Joi.string().trim().min(1).max(1000).required().messages({
+    'string.empty': 'Rejection remarks are required',
+    'any.required': 'Rejection remarks are required',
+  }),
   approvedBy: Joi.string().trim().max(120).allow('', null),
 });
 
@@ -149,14 +153,28 @@ const vendorQuote = Joi.object({
   remarks:             Joi.string().trim().max(1000).allow('', null),
 });
 
+// ── Step 1.2 — per-indent-item quotation upload ──────────────
+const itemQuotation = Joi.object({
+  itemId:    objectId.allow('', null),
+  skuId:     objectId.allow('', null),
+  skuCode:   Joi.string().trim().max(60).allow('', null),
+  itemName:  Joi.string().trim().max(300).allow('', null),
+  statusDone: Joi.string().valid('YES', 'QUOTE_NOT_REQUIRED').default('YES'),
+  quotationDocuments: Joi.array().items(uploadedFile).default([]),
+  actualAt:  Joi.date().allow('', null),
+  remarks:   Joi.string().trim().max(1000).allow('', null),
+});
+
 // ── Step 1.2 — Receive Quote & Make Comparative ──────────────
-// `vendors[]` is the multi-vendor comparative; `quotationUploaded` is the
-// legacy single-quote path. Either may be supplied (back-compat).
+// `itemQuotations[]` is the item-wise upload; `vendors[]` is the multi-vendor
+// comparative; `quotationUploaded` is the legacy single-quote path. Any may be
+// supplied (back-compat).
 export const quoteComparativeSchema = Joi.object({
   stepNo:     Joi.string().trim().max(20).allow('', null),
   statusDone: Joi.string().valid('YES', 'QUOTE_NOT_REQUIRED').required(),
   quotationUploaded:  uploadedFile.default(null),
   quotationDocuments: Joi.array().items(uploadedFile).default([]),
+  itemQuotations: Joi.array().items(itemQuotation).default([]),
   vendors:    Joi.array().items(vendorQuote).default([]),
   actualAt:   Joi.date().allow('', null),
   remarks:    Joi.string().trim().max(1000).allow('', null),
@@ -184,14 +202,28 @@ const approvedVendor = Joi.object({
   approvalRemarks: Joi.string().trim().max(1000).allow('', null),
 });
 
+// ── Step 1.3 — per-indent-item approved quotation upload ─────
+const itemApprovedQuotation = Joi.object({
+  itemId:    objectId.allow('', null),
+  skuId:     objectId.allow('', null),
+  skuCode:   Joi.string().trim().max(60).allow('', null),
+  itemName:  Joi.string().trim().max(300).allow('', null),
+  statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED').default('YES'),
+  approvedQuotationDocuments: Joi.array().items(uploadedFile).default([]),
+  actualAt:  Joi.date().allow('', null),
+  remarks:   Joi.string().trim().max(1000).allow('', null),
+});
+
 // ── Step 1.3 — Approved Quotation ────────────────────────────
-// `approvedVendors[]` is the multi-vendor approval; `approvedQuotation` is the
-// legacy single-quote path. Either may be supplied (back-compat).
+// `itemApprovedQuotations[]` is the item-wise upload; `approvedVendors[]` is the
+// multi-vendor approval; `approvedQuotation` is the legacy single-quote path.
+// Any may be supplied (back-compat).
 export const approveQuotationSchema = Joi.object({
   stepNo:     Joi.string().trim().max(20).allow('', null),
   statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED').required(),
   approvedQuotation:          uploadedFile.default(null),
   approvedQuotationDocuments: Joi.array().items(uploadedFile).default([]),
+  itemApprovedQuotations: Joi.array().items(itemApprovedQuotation).default([]),
   approvedVendors: Joi.array().items(approvedVendor).default([]),
   actualAt:   Joi.date().allow('', null),
   remarks:    Joi.string().trim().max(1000).allow('', null),

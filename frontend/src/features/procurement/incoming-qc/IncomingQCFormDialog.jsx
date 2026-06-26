@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Dialog, Box, Typography, TextField, Button, IconButton, Divider,
   Grid, Autocomplete, CircularProgress, Paper, Chip, MenuItem,
@@ -29,6 +30,7 @@ const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor
 
 const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) => {
   const { enqueueSnackbar } = useSnackbar();
+  const navigate = useNavigate();
   const isEdit = Boolean(qc?._id);
 
   const [grn, setGrn] = useState(null);
@@ -127,11 +129,16 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
       if (isEdit) {
         await updateQc({ id: qc._id, ...payload }).unwrap();
         enqueueSnackbar('QC updated', { variant: 'success' });
+        onClose?.(true);
       } else {
         const res = await createQc({ ...payload, grnId: grn._id }).unwrap();
-        enqueueSnackbar(`QC ${res?.data?.qcNumber || ''} created`, { variant: 'success' });
+        const newId = res?.data?._id;
+        enqueueSnackbar(`QC ${res?.data?.qcNumber || ''} created — complete the inspection to continue`, { variant: 'success' });
+        onClose?.(true);
+        // Take the user straight to the new QC, where "Complete QC" + the Next Step
+        // banner are shown — no hunting for where to go next.
+        if (newId) navigate(`/procurement/incoming-qc/${newId}`);
       }
-      onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save QC', { variant: 'error' });
     }

@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, CheckCircle2, CalendarClock, PackageCheck, PhoneCall,
-  Building2, FileText, MessageSquare, ExternalLink, ShoppingBag,
+  Building2, FileText, MessageSquare, ExternalLink, ShoppingBag, ArrowRight,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useGetFollowUpByIdQuery } from '../../../store/api/procurementApi';
@@ -59,6 +59,39 @@ const FollowUpDetail = () => {
   // a Next Follow-up Date stays active (RESCHEDULED) and cannot move to GRN.
   const canReadyForGrn = isDone && !!fu.finalMaterialDate; // legacy DONE records
 
+  // ── "What's next?" — single, obvious call-to-action for the current stage. ──
+  const goPO = () => fu.poId && navigate(`/procurement/purchase-orders/${fu.poId}`);
+  const nextStep = (() => {
+    if (fu.followUpStatus === 'READY_FOR_GRN') {
+      return { tone: 'success', title: 'Material ready — next: receive goods (GRN)',
+        desc: 'Open the Purchase Order to create the Goods Receipt Note. If a PI/advance is required, settle it first; then receive the goods.',
+        primary: fu.poId ? { label: 'Open Purchase Order', icon: <ShoppingBag size={16} />, onClick: goPO } : null,
+        secondary: { label: 'Go to GRNs', onClick: () => navigate('/procurement/grns') } };
+    }
+    if (isActive) {
+      return { tone: 'info', title: 'Next: record the follow-up & confirm material',
+        desc: 'Call/email the vendor, mark this follow-up done, and set the final material date to move toward GRN.',
+        primary: { label: isRescheduled ? 'Follow-up Again' : 'Mark Done', icon: <CheckCircle2 size={16} />, onClick: () => setDoneOpen(true) },
+        secondary: { label: 'Reschedule', onClick: () => setRescheduleOpen(true) } };
+    }
+    if (canReadyForGrn) {
+      return { tone: 'success', title: 'Material confirmed — mark Ready For GRN',
+        desc: 'The final material date is set. Mark this follow-up Ready For GRN to enable goods receipt.',
+        primary: { label: 'Mark Ready For GRN', icon: <PackageCheck size={16} />, onClick: () => setReadyOpen(true) } };
+    }
+    if (isDone) {
+      return { tone: 'info', title: 'Confirm the final material date',
+        desc: 'Record the final material delivery date so this follow-up can proceed to GRN.',
+        primary: { label: 'Update Follow-up', icon: <CheckCircle2 size={16} />, onClick: () => setDoneOpen(true) } };
+    }
+    return null;
+  })();
+
+  const NEXT_TONE = {
+    info:    { bg: alpha('#2563eb', 0.07), border: alpha('#2563eb', 0.35), fg: '#1d4ed8' },
+    success: { bg: alpha('#16a34a', 0.08), border: alpha('#16a34a', 0.35), fg: '#15803d' },
+  };
+
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       {/* Hero */}
@@ -96,6 +129,36 @@ const FollowUpDetail = () => {
           {canReadyForGrn && <Button variant="contained" startIcon={<PackageCheck size={16} />} onClick={() => setReadyOpen(true)}>Mark Ready For GRN</Button>}
         </Box>
       </Box>
+
+      {/* What's next — adaptive, prominent call-to-action for the current stage */}
+      {nextStep && (() => {
+        const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
+        return (
+          <Paper elevation={0} sx={{
+            mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
+            display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+          }}>
+            <Box sx={{ width: 42, height: 42, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: '#fff', color: t.fg, flexShrink: 0 }}>
+              <ArrowRight size={22} />
+            </Box>
+            <Box sx={{ minWidth: 220, flexGrow: 1 }}>
+              <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
+              <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{nextStep.title}</Typography>
+              <Typography variant="body2" color="text.secondary">{nextStep.desc}</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+              {nextStep.secondary && (
+                <Button variant="outlined" onClick={nextStep.secondary.onClick}>{nextStep.secondary.label}</Button>
+              )}
+              {nextStep.primary && (
+                <Button variant="contained" startIcon={nextStep.primary.icon} onClick={nextStep.primary.onClick}>
+                  {nextStep.primary.label}
+                </Button>
+              )}
+            </Box>
+          </Paper>
+        );
+      })()}
 
       <Grid container spacing={3}>
         {/* Plan vs actual */}

@@ -17,7 +17,7 @@ import {
   useSubmitIndentMutation,
 } from '../../../store/api/procurementApi';
 import {
-  ApprovalChip, QuoteChip, QuotationChip, APPROVAL_STATUSES, DEPARTMENTS, fileHref,
+  ApprovalChip, QuoteChip, QuotationChip, APPROVAL_STATUSES, DEPARTMENTS, fileHref, itemRef,
 } from './indentMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import IndentFormDrawer from './IndentFormDrawer';
@@ -160,9 +160,26 @@ const IndentList = () => {
       renderCell: (p) => (p.value === 'INTERNAL_SERVICE'
         ? <Chip size="small" label="Service" sx={{ bgcolor: alpha('#7c3aed', 0.12), color: '#6d28d9', fontWeight: 700 }} />
         : <Chip size="small" label="Material" sx={{ bgcolor: alpha('#2563eb', 0.1), color: '#1d4ed8', fontWeight: 700 }} />) },
-    { field: 'products', headerName: 'PRODUCTS', flex: 1, minWidth: 220, sortable: false,
+    { field: 'products', headerName: 'PRODUCTS', flex: 1, minWidth: 260, sortable: false,
       valueGetter: (_v, row) => itemsSummary(row),
-      renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value}</Typography> },
+      renderCell: (p) => {
+        const items = p.row.items || [];
+        if (!items.length) {
+          return <Typography variant="body2" fontWeight={600}>{p.row.productNameRevised || '—'}</Typography>;
+        }
+        return (
+          <Box sx={{ py: 0.75, display: 'flex', flexDirection: 'column', gap: 0.25, width: '100%' }}>
+            {items.map((it, i) => (
+              <Box key={it._id || i} sx={{ display: 'flex', gap: 0.5, alignItems: 'baseline', flexWrap: 'wrap', lineHeight: 1.25 }}>
+                <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  {itemRef(p.row.indentNumber, it, i)}
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>— {it.itemName || '—'}</Typography>
+              </Box>
+            ))}
+          </Box>
+        );
+      } },
     { field: 'itemsCount', headerName: 'ITEMS', width: 80, align: 'right', headerAlign: 'right', sortable: false,
       valueGetter: (_v, row) => (row.items?.length || (row.productNameRevised ? 1 : 0)) },
     { field: 'raisedBy', headerName: 'RAISED BY', width: 130,
@@ -284,9 +301,15 @@ const IndentList = () => {
           onRowClick={(p) => navigate(`/procurement/indents/${p.id}`)}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
-          rowHeight={50}
+          getRowHeight={() => 'auto'}
           columnHeaderHeight={44}
-          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
+          sx={{
+            border: 0,
+            '& .MuiDataGrid-row': { cursor: 'pointer' },
+            // Auto row height: keep cells vertically centred with a little padding
+            // so multi-item Product lists aren't cramped.
+            '& .MuiDataGrid-cell': { display: 'flex', alignItems: 'center', py: 0.5 },
+          }}
         />
       </Paper>
 

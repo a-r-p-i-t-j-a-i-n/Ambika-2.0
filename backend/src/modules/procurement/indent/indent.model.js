@@ -104,6 +104,21 @@ const vendorQuoteSchema = new Schema({
   remarks:             { type: String, trim: true, default: '' },
 }, { _id: true });
 
+// Step 1.2 — per-indent-item quotation upload (one entry per indent line item).
+const itemQuotationSchema = new Schema({
+  itemId:    { type: Schema.Types.ObjectId }, // indent item subdocument _id
+  skuId:     { type: Schema.Types.ObjectId, ref: 'SKU' },
+  skuCode:   { type: String, trim: true, uppercase: true, default: '' },
+  itemName:  { type: String, trim: true, default: '' },
+  // Per-item status — YES (quote received) requires ≥1 file; QUOTE_NOT_REQUIRED
+  // makes the upload optional for this item.
+  statusDone: { type: String, enum: ['YES', 'QUOTE_NOT_REQUIRED'], default: 'YES' },
+  // One or more quotation documents for this specific item.
+  quotationDocuments: { type: [fileSchema], default: [] },
+  actualAt:  { type: Date, default: null },
+  remarks:   { type: String, trim: true, default: '' },
+}, { _id: false });
+
 // Step 1.2 — Receive Quote & Make Comparative (with file upload)
 const quoteComparativeStepSchema = new Schema({
   stepNo:     { type: String, default: 'Step 1.2' },
@@ -117,8 +132,11 @@ const quoteComparativeStepSchema = new Schema({
     fileType:   { type: String, default: '' },
     uploadedAt: { type: Date, default: null },
   },
-  // Simple multi-file upload — one or more quotation documents.
+  // Simple multi-file upload — one or more quotation documents (aggregate of all
+  // item-wise files; kept in sync for legacy screens).
   quotationDocuments: { type: [fileSchema], default: [] },
+  // Item-wise quotation uploads — one entry per indent line item.
+  itemQuotations: { type: [itemQuotationSchema], default: [] },
   // Multi-vendor comparative — one entry per selected vendor.
   vendors:    { type: [vendorQuoteSchema], default: [] },
   actualAt:   { type: Date, default: null },
@@ -150,6 +168,21 @@ const approvedVendorSchema = new Schema({
   poNumber:    { type: String, trim: true, default: '' },
 }, { _id: true });
 
+// Step 1.3 — per-indent-item approved quotation upload (one entry per line item).
+const itemApprovedQuotationSchema = new Schema({
+  itemId:    { type: Schema.Types.ObjectId }, // indent item subdocument _id
+  skuId:     { type: Schema.Types.ObjectId, ref: 'SKU' },
+  skuCode:   { type: String, trim: true, uppercase: true, default: '' },
+  itemName:  { type: String, trim: true, default: '' },
+  // Per-item status — YES (approved) requires ≥1 file; QUOTATION_NOT_APPROVED
+  // makes the upload optional for this item.
+  statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED'], default: 'YES' },
+  // One or more approved quotation documents for this specific item.
+  approvedQuotationDocuments: { type: [fileSchema], default: [] },
+  actualAt:  { type: Date, default: null },
+  remarks:   { type: String, trim: true, default: '' },
+}, { _id: false });
+
 // Step 1.3 — Approved Quotation 1.03 (with approved-quotation file upload)
 const quotationApprovalStepSchema = new Schema({
   stepNo:     { type: String, default: 'Step 1.3' },
@@ -166,14 +199,45 @@ const quotationApprovalStepSchema = new Schema({
     fileType:   { type: String, default: '' },
     uploadedAt: { type: Date, default: null },
   },
-  // Simple multi-file upload — one or more approved-quotation documents.
+  // Simple multi-file upload — one or more approved-quotation documents (aggregate
+  // of all item-wise files; kept in sync for legacy screens).
   approvedQuotationDocuments: { type: [fileSchema], default: [] },
+  // Item-wise approved quotation uploads — one entry per indent line item.
+  itemApprovedQuotations: { type: [itemApprovedQuotationSchema], default: [] },
   // Multi-vendor approval — one or more approved vendors / item-wise splits.
   approvedVendors: { type: [approvedVendorSchema], default: [] },
   actualAt:   { type: Date, default: null },
   updatedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
   remarks:    { type: String, trim: true, default: '' },
 }, { _id: false });
+
+// Per-indent-item procurement status (item-level PO creation). PENDING until the
+// item is placed on a (non-cancelled) PO; PO_CREATED once linked. Never-approved
+// items also read PENDING — "approved" is decided from itemApprovedQuotations.
+export const ITEM_PROCUREMENT_STATUS = {
+  PENDING:    'PENDING',
+  PO_CREATED: 'PO_CREATED',
+};
+
+/**
+ * Build an item-level display reference from an indent number + line number.
+ * Display-only — the original indentNumber is never changed and no separate
+ * indent record is created.
+ *
+ *   Ind-50/26-27  + lineNo 2  →  Ind-50.2/26-27
+ *
+ * Splits on the LAST "/" so the base (Ind-50) and fiscal year (26-27) are kept
+ * intact; falls back to "{indentNumber}.{lineNo}" when there is no "/".
+ */
+export const buildItemDisplayNumber = (indentNumber, lineNo) => {
+  const n = Number(lineNo);
+  if (!indentNumber || !n) return indentNumber || '';
+  const slash = indentNumber.lastIndexOf('/');
+  if (slash === -1) return `${indentNumber}.${n}`;
+  const base = indentNumber.slice(0, slash);
+  const fy = indentNumber.slice(slash + 1);
+  return `${base}.${n}/${fy}`;
+};
 
 // ── Indent line item (multi-item indent) ───────────────────────
 const indentItemSchema = new Schema({
@@ -186,6 +250,14 @@ const indentItemSchema = new Schema({
   revisedQuantity:  { type: Number, default: 0, min: 0 },
   approvedQuantity: { type: Number, default: 0, min: 0 },
   remarks:  { type: String, trim: true, default: '' },
+  // Stable per-item line number (1-based), assigned when the indent is created so
+  // the item-level display reference (e.g. Ind-50.1/26-27) stays consistent even
+  // if the items array is later re-ordered. Display-only; never the source of truth.
+  itemLineNo: { type: Number, default: 0 },
+  // Per-item procurement linkage (set when this item is placed on a PO).
+  procurementStatus: { type: String, enum: Object.values(ITEM_PROCUREMENT_STATUS), default: ITEM_PROCUREMENT_STATUS.PENDING },
+  poId:     { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', default: null },
+  poNumber: { type: String, trim: true, default: '' },
 }, { _id: true });
 
 const indentSchema = new Schema({

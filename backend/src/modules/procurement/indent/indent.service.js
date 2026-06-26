@@ -5,6 +5,7 @@ import PurchaseIndent, {
   QUOTE_STEP_STATUS,
   QUOTATION_APPROVAL_STATUS,
   VENDOR_QUOTE_STATUS,
+  buildItemDisplayNumber,
 } from './indent.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
@@ -98,6 +99,36 @@ const buildApprovedVendors = (vendors = []) => vendors.map((v) => {
   };
 });
 
+// Step 1.2 — normalise item-wise quotation uploads (one entry per indent line
+// item, each with its own document list).
+const buildItemQuotations = (items = []) => items.map((it) => ({
+  itemId: it.itemId || undefined,
+  skuId: it.skuId || undefined,
+  skuCode: (it.skuCode || '').trim().toUpperCase(),
+  itemName: (it.itemName || '').trim(),
+  statusDone: it.statusDone === 'QUOTE_NOT_REQUIRED' ? 'QUOTE_NOT_REQUIRED' : 'YES',
+  quotationDocuments: (Array.isArray(it.quotationDocuments) ? it.quotationDocuments : [])
+    .filter((d) => d?.fileUrl)
+    .map(cleanFile),
+  actualAt: it.actualAt ? new Date(it.actualAt) : null,
+  remarks: (it.remarks || '').trim(),
+}));
+
+// Step 1.3 — normalise item-wise approved quotation uploads (one entry per
+// indent line item, each with its own approved-document list).
+const buildItemApprovedQuotations = (items = []) => items.map((it) => ({
+  itemId: it.itemId || undefined,
+  skuId: it.skuId || undefined,
+  skuCode: (it.skuCode || '').trim().toUpperCase(),
+  itemName: (it.itemName || '').trim(),
+  statusDone: it.statusDone === 'QUOTATION_NOT_APPROVED' ? 'QUOTATION_NOT_APPROVED' : 'YES',
+  approvedQuotationDocuments: (Array.isArray(it.approvedQuotationDocuments) ? it.approvedQuotationDocuments : [])
+    .filter((d) => d?.fileUrl)
+    .map(cleanFile),
+  actualAt: it.actualAt ? new Date(it.actualAt) : null,
+  remarks: (it.remarks || '').trim(),
+}));
+
 // Normalise an incoming payload into the canonical items[] shape. Falls back to
 // the legacy single-product fields so older clients keep working.
 const buildItems = (data = {}) => {
@@ -109,7 +140,7 @@ const buildItems = (data = {}) => {
         quantity: data.quantity, unit: data.unit, remarks: data.remarks,
       }]
       : []);
-  return src.map((it) => ({
+  return src.map((it, i) => ({
     skuId: it.skuId || undefined,
     skuCode: (it.skuCode || '').trim().toUpperCase(),
     itemName: (it.itemName || '').trim(),
@@ -118,7 +149,33 @@ const buildItems = (data = {}) => {
     revisedQuantity: num(it.revisedQuantity),
     approvedQuantity: num(it.approvedQuantity),
     remarks: (it.remarks || '').trim(),
+    // Stable 1-based line number — preserve a provided value, else use order.
+    itemLineNo: num(it.itemLineNo) || (i + 1),
   }));
+};
+
+// Decorate a lean indent with display-only item references (itemDisplayNumber),
+// derived from the indentNumber + each item's stable itemLineNo (falling back to
+// position for older records). Also stamps the matching reference onto the Step
+// 1.2 / 1.3 item-wise quotation rows so every item-level view shares one number.
+const decorateItemDisplayNumbers = (indent) => {
+  if (!indent) return indent;
+  const items = indent.items || [];
+  // itemId(string) → display reference, for the step quotation rows.
+  const refById = new Map();
+  items.forEach((it, i) => {
+    const lineNo = num(it.itemLineNo) || (i + 1);
+    it.itemDisplayNumber = buildItemDisplayNumber(indent.indentNumber, lineNo);
+    if (it._id) refById.set(String(it._id), it.itemDisplayNumber);
+  });
+  const stampRows = (rows = []) => rows.forEach((r) => {
+    if (r && r.itemId && refById.has(String(r.itemId))) {
+      r.itemDisplayNumber = refById.get(String(r.itemId));
+    }
+  });
+  stampRows(indent.quoteComparativeStep?.itemQuotations);
+  stampRows(indent.quotationApprovalStep?.itemApprovedQuotations);
+  return indent;
 };
 
 // Keep the legacy single-product fields + aggregates in sync with items[] so
@@ -176,13 +233,17 @@ export const indentService = {
       .sort()
       .select()
       .paginate();
-    return features.exec();
+    const result = await features.exec();
+    // Decorate list rows too (not just detail) so the Products/Items column can
+    // render item-level references (Ind-52.1/26-27) without a per-row fetch.
+    (result.docs || []).forEach(decorateItemDisplayNumbers);
+    return result;
   },
 
   async getById(id) {
     const indent = await PurchaseIndent.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
     if (!indent) throw new AppError('Indent not found', 404);
-    return indent;
+    return decorateItemDisplayNumbers(indent);
   },
 
   // Stats for the KPI cards.
@@ -447,6 +508,15 @@ export const indentService = {
     const multiVendor = vendors.length > 0;
     const upload = data.quotationUploaded || {};
 
+    // Item-wise quotation uploads — one entry per indent line item.
+    const itemQuotations = Array.isArray(data.itemQuotations) && data.itemQuotations.length
+      ? buildItemQuotations(data.itemQuotations)
+      : [];
+    const hasItemQuotations = itemQuotations.length > 0;
+    // Aggregate all item-wise files so the legacy quotationDocuments[] field
+    // stays populated for older screens.
+    const itemDocs = itemQuotations.flatMap((iq) => iq.quotationDocuments);
+
     // Simple multi-file upload: collect all valid documents (fall back to the
     // single legacy upload if only that was sent).
     const documents = (Array.isArray(data.quotationDocuments) ? data.quotationDocuments : [])
@@ -454,13 +524,24 @@ export const indentService = {
       .map(cleanFile);
     if (!documents.length && upload.fileUrl) documents.push(cleanFile(upload));
 
+    // The document set mirrored into legacy fields: item-wise files take
+    // precedence, else the flat multi-file upload.
+    const legacyDocuments = hasItemQuotations ? itemDocs : documents;
+
     // Step 1.2 is complete when statusDone = YES with proof of a received quote,
-    // or QUOTE_NOT_REQUIRED. Proof = ≥1 uploaded document OR ≥1 vendor RECEIVED.
+    // or QUOTE_NOT_REQUIRED. Proof = ≥1 file per item (item-wise) OR ≥1 uploaded
+    // document (flat) OR ≥1 vendor RECEIVED (multi-vendor).
     const hasReceivedVendor = vendors.some((v) => v.quotationStatus === VENDOR_QUOTE_STATUS.RECEIVED);
     if (data.statusDone === 'YES') {
       if (multiVendor) {
         if (!hasReceivedVendor) {
           throw new AppError('At least one vendor quotation must be marked RECEIVED when status is Yes', 400);
+        }
+      } else if (hasItemQuotations) {
+        // Only items marked YES need a file; QUOTE_NOT_REQUIRED items are optional.
+        const missing = itemQuotations.find((iq) => iq.statusDone === 'YES' && !iq.quotationDocuments.length);
+        if (missing) {
+          throw new AppError(`At least one quotation file is required for each item marked Yes (missing for "${missing.itemName || 'item'}")`, 400);
         }
       } else if (!documents.length) {
         throw new AppError('At least one quotation document is required when status is Yes', 400);
@@ -473,14 +554,15 @@ export const indentService = {
     // received vendor's document instead.
     const mirrorDoc = multiVendor
       ? (vendors.find((v) => v.quotationStatus === VENDOR_QUOTE_STATUS.RECEIVED && v.quotationDocument?.fileUrl)?.quotationDocument || cleanFile())
-      : (documents[0] || cleanFile());
+      : (legacyDocuments[0] || cleanFile());
 
     indent.quoteComparativeStep = {
       stepNo: 'Step 1.2',
       stepName: 'Receive Quote & Make Comparative 1.02',
       statusDone: data.statusDone,
       quotationUploaded: mirrorDoc,
-      quotationDocuments: multiVendor ? [] : documents,
+      quotationDocuments: multiVendor ? [] : legacyDocuments,
+      itemQuotations,
       vendors,
       actualAt,
       updatedBy: user?._id,
@@ -552,6 +634,15 @@ export const indentService = {
       : [];
     const multiVendor = approvedVendors.length > 0;
 
+    // Item-wise approved quotation uploads — one entry per indent line item.
+    const itemApprovedQuotations = Array.isArray(data.itemApprovedQuotations) && data.itemApprovedQuotations.length
+      ? buildItemApprovedQuotations(data.itemApprovedQuotations)
+      : [];
+    const hasItemQuotations = itemApprovedQuotations.length > 0;
+    // Aggregate all item-wise files so the legacy approvedQuotationDocuments[]
+    // field stays populated for older screens / the PO flow.
+    const itemDocs = itemApprovedQuotations.flatMap((iq) => iq.approvedQuotationDocuments);
+
     // Simple multi-file upload: collect all valid documents (fall back to the
     // single legacy upload if only that was sent).
     const documents = (Array.isArray(data.approvedQuotationDocuments) ? data.approvedQuotationDocuments : [])
@@ -559,10 +650,20 @@ export const indentService = {
       .map(cleanFile);
     if (!documents.length && upload.fileUrl) documents.push(cleanFile(upload));
 
+    // The document set mirrored into legacy fields: item-wise files take
+    // precedence, else the flat multi-file upload.
+    const legacyDocuments = hasItemQuotations ? itemDocs : documents;
+
     if (data.statusDone === QUOTATION_APPROVAL_STATUS.YES) {
       if (multiVendor) {
         if (approvedVendors.some((v) => !v.items.length)) {
           throw new AppError('Each approved vendor must have at least one item', 400);
+        }
+      } else if (hasItemQuotations) {
+        // Only items marked YES need a file; QUOTATION_NOT_APPROVED items optional.
+        const missing = itemApprovedQuotations.find((iq) => iq.statusDone === 'YES' && !iq.approvedQuotationDocuments.length);
+        if (missing) {
+          throw new AppError(`At least one approved quotation file is required for each item marked Yes (missing for "${missing.itemName || 'item'}")`, 400);
         }
       } else if (!documents.length) {
         throw new AppError('At least one approved quotation document is required when status is Yes', 400);
@@ -574,14 +675,15 @@ export const indentService = {
     // keep working. In multi-vendor mode, mirror the first vendor's document.
     const mirrorDoc = multiVendor
       ? (approvedVendors.find((v) => v.approvedQuotationDocument?.fileUrl)?.approvedQuotationDocument || cleanFile())
-      : (documents[0] || cleanFile());
+      : (legacyDocuments[0] || cleanFile());
 
     const quotationApprovalStep = {
       stepNo: 'Step 1.3',
       stepName: 'Approved Quotation 1.03',
       statusDone: data.statusDone,
       approvedQuotation: mirrorDoc,
-      approvedQuotationDocuments: multiVendor ? [] : documents,
+      approvedQuotationDocuments: multiVendor ? [] : legacyDocuments,
+      itemApprovedQuotations,
       approvedVendors,
       actualAt,
       updatedBy: user?._id,
