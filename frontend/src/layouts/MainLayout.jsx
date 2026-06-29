@@ -61,7 +61,8 @@ const navSections = [
         ],
       },
       { text: 'PPC Planning',   icon: <Package size={19} />,  path: '/ppc-planning' },
-      { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
+      // Hidden until complete — restore to re-expose:
+      // { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
     ],
   },
   // ── IMS section HIDDEN until complete ──────────────────────────────────────
