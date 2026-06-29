@@ -3,7 +3,7 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AppLoader
-//
+//  new 
 // Default fallback for React.Suspense while a route chunk is downloading.
 // Renders inside the existing layout (full-height column) so navigation does
 // not jump.
