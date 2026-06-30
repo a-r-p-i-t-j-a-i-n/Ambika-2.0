@@ -31,6 +31,11 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('Active task', await o2dFmsService.getActiveTask(req.query)));
   }),
 
+  // Sequential gate — may the caller perform `action` on this order yet?
+  actionGate: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Action gate', await o2dFmsService.getActionGate(req.query)));
+  }),
+
   allTasks: asyncHandler(async (_req, res) => {
     res.json(ApiResponse.ok('All tasks retrieved', await o2dFmsService.getAllTasks()));
   }),

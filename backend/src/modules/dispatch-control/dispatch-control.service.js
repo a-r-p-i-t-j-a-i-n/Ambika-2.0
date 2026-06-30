@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import SalesOrder from '../order/order.model.js';
 import Party from '../clients/party.model.js';
+import { partyService } from '../clients/party.service.js';
 import SKU from '../skus/sku.model.js';
 import DispatchSchedule from '../schedule/schedule.model.js';
 import DeliveryChallan from '../challan/challan.model.js';
@@ -191,6 +192,7 @@ const orderLinePayload = async (line) => {
     skuCode,
     orderQty: Number(line.orderQty || line.quantity || 0),
     dispatchedQty: Number(line.dispatchedQty || line.totalDispatchQty || 0),
+    rate: Number(line.rate ?? line.sellingPrice ?? line.price ?? 0) || 0,
     asnCode: line.asnCode || line.fciCode || line.asnFciCode,
     remark: line.remark || line.remarks,
   };
@@ -608,6 +610,14 @@ export const dispatchControlService = {
       items,
     });
 
+    // Learn this order's SKUs + prices into the party's saved catalog (new items
+    // added, changed prices appended to history). Non-fatal — never block the order.
+    try {
+      await partyService.syncOrderedSkus(party._id, items, { soNumber: order.soNumber, source: 'ORDER' });
+    } catch (err) {
+      logger.error(`[catalog-sync] SO ${order.soNumber}: ${err.message}`);
+    }
+
     // Start / advance the O2D FMS. Non-fatal: order entry must never fail.
     try {
       if (data.intakeId) {
@@ -628,6 +638,8 @@ export const dispatchControlService = {
   },
 
   async planDispatch(data, actor = null) {
+    // FMS sequential gate: can't plan a dispatch until the prior steps are done.
+    await o2dFmsService.assertActionAllowed({ soNumber: data.soNumber, action: 'DISPATCH_PLAN' });
     const result = await withMaybeTransaction(async (session) => {
       const orderQ = SalesOrder.findOne({ soNumber: data.soNumber });
       if (session) orderQ.session(session);
@@ -751,6 +763,8 @@ export const dispatchControlService = {
     if (!isUnplanned && !multiPhase && !data.phaseRef?.phaseId) {
       throw new AppError('phaseRef.phaseId or phaseRefs is required unless isUnplanned is true', 422);
     }
+    // FMS sequential gate: can't record a dispatch until the prior steps are done.
+    await o2dFmsService.assertActionAllowed({ soNumber: data.soNumber, action: 'ACTUAL_DISPATCH' });
 
     const result = await withMaybeTransaction(async (session) => {
       const orderQ = SalesOrder.findOne({ soNumber: data.soNumber });
@@ -1141,6 +1155,8 @@ export const dispatchControlService = {
    * fills line qtys, or asks the server to auto-fill from balance.
    */
   async createPhase(soNumber, data, actor = null) {
+    // FMS sequential gate: can't plan a dispatch until the prior steps are done.
+    await o2dFmsService.assertActionAllowed({ soNumber, action: 'DISPATCH_PLAN' });
     return withMaybeTransaction(async (session) => {
       const orderQ = SalesOrder.findOne({ soNumber });
       if (session) orderQ.session(session);

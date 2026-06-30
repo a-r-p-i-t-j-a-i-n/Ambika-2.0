@@ -7,6 +7,7 @@ const orderItemJoi = Joi.object({
   skuCode:       Joi.string().required().max(30),
   orderQty:      Joi.number().integer().min(1).required(),
   dispatchedQty: Joi.number().integer().min(0).default(0),
+  rate:          Joi.number().min(0).allow(null),
   asnCode:       Joi.string().max(50).allow('', null),
   remark:        Joi.string().max(200).allow('', null),
 });

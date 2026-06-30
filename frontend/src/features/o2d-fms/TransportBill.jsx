@@ -10,6 +10,7 @@ import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useTransportBillReceiveMutation, useTransportBillPaymentMutation } from '../../store/api/o2dFulfillmentApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { useReturnToTask } from './useReturnToTask';
+import { useFmsGate } from './FmsGate';
 
 /** Steps 2.12 (Receive transport bill) + 2.13 (Transport bill payment status). */
 const TransportBill = () => {
@@ -34,6 +35,7 @@ const TransportBill = () => {
   const { finishToTask } = useReturnToTask();
 
   const [dc, setDc] = useState(null);
+  const gate = useFmsGate({ soNumber: dc?.soNumber, action: part === 'status' ? 'TRANSPORT_BILL_STATUS' : 'TRANSPORT_BILL_RECEIVE' });
   const [rcvStatus, setRcvStatus] = useState('Done');
   const [attachment, setAttachment] = useState(null); // { fileName, url }
   const [payState, setPayState] = useState('Yes');
@@ -65,7 +67,7 @@ const TransportBill = () => {
   };
 
   return (
-    <O2dStepShell icon={FileSpreadsheet} step={shell.step} title={shell.title} subtitle={shell.subtitle}>
+    <O2dStepShell icon={FileSpreadsheet} step={shell.step} title={shell.title} subtitle={shell.subtitle} gate={gate}>
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
           options={challans}
@@ -111,7 +113,7 @@ const TransportBill = () => {
               </Box>
               <Divider />
               <Stack direction="row" justifyContent="flex-end">
-                <Button variant="contained" startIcon={savingRcv ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingRcv} onClick={saveReceive} sx={{ fontWeight: 700 }}>
+                <Button variant="contained" startIcon={savingRcv ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingRcv || gate.blocked} onClick={saveReceive} sx={{ fontWeight: 700 }}>
                   Save Receipt
                 </Button>
               </Stack>
@@ -127,7 +129,7 @@ const TransportBill = () => {
               <TextField select label="Status" value={payState} onChange={(e) => setPayState(e.target.value)} size="small" sx={{ minWidth: 200 }} helperText="“Yes” = transporter paid.">
                 {['Yes', 'No', 'Cancelled'].map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
               </TextField>
-              <Button variant="contained" startIcon={savingPay ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingPay} onClick={savePayment} sx={{ fontWeight: 700 }}>
+              <Button variant="contained" startIcon={savingPay ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingPay || gate.blocked} onClick={savePayment} sx={{ fontWeight: 700 }}>
                 Save Payment Status
               </Button>
             </Stack>

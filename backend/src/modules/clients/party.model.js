@@ -24,18 +24,30 @@ const suppliedProductSchema = new Schema({
   unit:        { type: String, trim: true, default: 'Pcs' },
 }, { _id: true });
 
+// ── Price history: one entry per price the client was quoted for a SKU ──
+// Append-only — we NEVER overwrite a past price, so the full timeline survives.
+const priceHistorySchema = new Schema({
+  price:    { type: Number, required: true, min: 0 },
+  at:       { type: Date, default: Date.now },
+  soNumber: { type: String, trim: true, default: '' }, // the order that set this price
+  source:   { type: String, trim: true, default: 'ORDER' }, // ORDER | MANUAL | IMPORT | OPENING
+}, { _id: false });
+
 // ── Customer: a SKU this client (party) regularly ORDERS from us ──
-// Built from the Party Details sheet (one row per SKU). When the party is
-// chosen on a Sales Order, these auto-fill the line items. skuId links to the
-// SKU master when a name/code match is found.
+// Built from the Party Details sheet (one row per SKU) and then kept up to date
+// from every Sales Order: a new SKU is learned into the list, and a changed price
+// appends to `priceHistory` while `sellingPrice` tracks the latest. When the party
+// is chosen on a Sales Order these auto-fill the line items (with price).
 const orderedSkuSchema = new Schema({
-  skuId:        { type: Schema.Types.ObjectId, ref: 'SKU', default: null },
-  skuName:      { type: String, trim: true },
-  skuCode:      { type: String, trim: true, uppercase: true },
-  unit:         { type: String, trim: true, default: 'Pcs' },
-  pcsPerBox:    { type: Number, default: 0 },
-  weightPerBox: { type: Number, default: 0 },
-  sellingPrice: { type: Number, default: 0 }, // "SP" from the sheet
+  skuId:         { type: Schema.Types.ObjectId, ref: 'SKU', default: null },
+  skuName:       { type: String, trim: true },
+  skuCode:       { type: String, trim: true, uppercase: true },
+  unit:          { type: String, trim: true, default: 'Pcs' },
+  pcsPerBox:     { type: Number, default: 0 },
+  weightPerBox:  { type: Number, default: 0 },
+  sellingPrice:  { type: Number, default: 0 }, // latest price ("SP" from the sheet)
+  priceHistory:  { type: [priceHistorySchema], default: [] },
+  lastOrderedAt: { type: Date, default: null },
 }, { _id: true });
 
 const partySchema = new Schema({

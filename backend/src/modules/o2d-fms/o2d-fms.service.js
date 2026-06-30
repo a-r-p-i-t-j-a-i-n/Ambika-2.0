@@ -545,6 +545,75 @@ export const o2dFmsService = {
     return stepCode ? { processId: String(p._id), stepCode } : null;
   },
 
+  /**
+   * Sequential gate: can the doer perform `action` on this order yet?
+   *
+   * Maps the action (an action-link key like DISPATCH_PLAN, or a trigger key like
+   * ACTUAL_DISPATCH) to its FMS step, then blocks if ANY earlier step is still
+   * pending. Returns the earliest blocking step + a deep-link to its task so the
+   * UI can say "finish step X.XX first" and send the doer straight there.
+   *
+   * Fail-open: no process / un-wired action ⇒ allowed (never blocks non-FMS work).
+   */
+  async getActionGate({ soNumber, salesOrderId, intakeId, action } = {}) {
+    if (!action) return { allowed: true, ungated: true };
+    let q = null;
+    if (salesOrderId) q = { salesOrderId };
+    else if (intakeId) q = { intakeId };
+    else if (soNumber) q = { soNumber };
+    if (!q) return { allowed: true, ungated: true };
+
+    const process = await O2DProcess.findOne({ ...q, isDeleted: { $ne: true } });
+    if (!process) return { allowed: true, ungated: true, reason: 'No FMS process for this order yet.' };
+
+    const defMap = await loadDefMap();
+    const enriched = enrichSteps(process, defMap); // sorted by sequence; has name/sequence/triggerKey/actionLinks
+    const steps = enriched.steps || [];
+    const keysOf = (s) => (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : []));
+    // The step this action belongs to — by its connected action-link OR its trigger key.
+    const target = steps.find((s) => keysOf(s).includes(action) || s.triggerKey === action);
+    if (!target) return { allowed: true, ungated: true, reason: 'This action is not gated by the FMS.' };
+
+    const DONE = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED];
+    const blocking = steps
+      .filter((s) => (s.sequence || 0) < (target.sequence || 0))
+      .find((s) => !DONE.includes(s.status));
+
+    const targetStep = { stepCode: target.stepCode, name: target.name || target.taskTitle || target.stepCode };
+    if (!blocking) {
+      return { allowed: true, processId: String(process._id), soNumber: process.soNumber, targetStep };
+    }
+    const name = blocking.name || blocking.taskTitle || blocking.stepCode;
+    return {
+      allowed: false,
+      processId: String(process._id),
+      soNumber: process.soNumber,
+      action,
+      targetStep,
+      blockingStep: {
+        stepCode: blocking.stepCode,
+        name,
+        status: blocking.status,
+        taskUrl: `/o2d-fms/task/${String(process._id)}/${encodeURIComponent(blocking.stepCode)}`,
+      },
+      reason: `Step ${blocking.stepCode} — “${name}” — must be completed first.`,
+    };
+  },
+
+  /** Throwing wrapper for server-side enforcement on the connected mutations. */
+  async assertActionAllowed(ctx = {}) {
+    const gate = await this.getActionGate(ctx);
+    if (gate && gate.allowed === false) {
+      const err = new AppError(
+        `Can’t do this yet — ${gate.reason} Open the task to complete it first.`,
+        409,
+      );
+      err.gate = gate; // structured payload for clients that surface it
+      throw err;
+    }
+    return gate;
+  },
+
   /** The doer's "My Tasks" — every step where I'm the owner OR buddy, with its
    *  status, so the UI can show actionable (pending) vs completed. */
   async getMyTasks(user, query = {}) {

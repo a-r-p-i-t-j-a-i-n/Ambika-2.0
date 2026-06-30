@@ -10,6 +10,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
 import { printDispatchPlan } from '../../utils/printDispatchPlan';
+import { useFmsGate, FmsGateBanner, FmsGateDialog } from '../o2d-fms/FmsGate';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const fmtDate = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -57,6 +58,8 @@ const GenerateDispatchPlanPdf = () => {
   };
 
   const soNumber = order?.soNumber || null;
+  const gate = useFmsGate({ soNumber, action: 'DISPATCH_PLAN_PDF' });
+  const [gateOpen, setGateOpen] = useState(false);
   const { data: schedRes, isFetching: loadingSched, isError } = useGetScheduleQuery(soNumber, { skip: !soNumber });
   const schedule = schedRes?.data || null;
 
@@ -78,6 +81,7 @@ const GenerateDispatchPlanPdf = () => {
   const hasPlan = schedule && (schedule.items || []).length > 0;
 
   const handleDownload = () => {
+    if (gate.blocked) { setGateOpen(true); return; }
     if (!hasPlan) {
       enqueueSnackbar('No dispatch plan to export for this order yet.', { variant: 'warning' });
       return;
@@ -99,7 +103,7 @@ const GenerateDispatchPlanPdf = () => {
   // Auto-open the plan PDF once the schedule for the task's order has loaded.
   const autoOpenedRef = useRef(false);
   useEffect(() => {
-    if (!cameFromTask || autoOpenedRef.current || !hasPlan || loadingSched) return;
+    if (!cameFromTask || autoOpenedRef.current || !hasPlan || loadingSched || gate.blocked) return;
     autoOpenedRef.current = true;
     handleDownload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,6 +133,7 @@ const GenerateDispatchPlanPdf = () => {
       </Box>
 
       <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6 }}>
+        {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Came from an FMS step — the plan PDF opens automatically; this banner
             brings the doer straight back to the step to submit. */}
         {cameFromTask && (
@@ -172,7 +177,7 @@ const GenerateDispatchPlanPdf = () => {
             />
             <Button
               variant="contained" startIcon={<Download size={16} />}
-              onClick={handleDownload} disabled={!hasPlan}
+              onClick={handleDownload} disabled={!hasPlan || gate.blocked}
               sx={{ fontWeight: 700, px: 3, whiteSpace: 'nowrap' }}
             >
               Open / Download PDF
@@ -248,6 +253,7 @@ const GenerateDispatchPlanPdf = () => {
           </Paper>
         )}
       </Box>
+      <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />
     </Box>
   );
 };

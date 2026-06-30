@@ -150,6 +150,14 @@ export const markActionDoneSchema = Joi.object({
   link:      Joi.string().trim().allow('', null),
 });
 
+// Sequential-gate query — is `action` allowed on this order yet?
+export const gateQuerySchema = Joi.object({
+  action:       Joi.string().trim().required(),
+  soNumber:     Joi.string().trim().allow('', null),
+  salesOrderId: objectId.allow('', null),
+  intakeId:     objectId.allow('', null),
+}).unknown(true);
+
 export const checklistParamSchema = Joi.object({
   id: objectId.required(),
   stepCode: Joi.string().trim().required(),

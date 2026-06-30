@@ -5,7 +5,7 @@ import {
   alpha, useTheme, CircularProgress, Skeleton, Chip,
   ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
-import { Plus, CalendarPlus, Search, LayoutList, CalendarRange, ListChecks, CalendarDays } from 'lucide-react';
+import { Plus, CalendarPlus, Search, LayoutList, CalendarRange, ListChecks, CalendarDays, Lock } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -25,6 +25,7 @@ import PhaseCard from './components/PhaseCard';
 import RiskRail from './components/RiskRail';
 import AddPhaseDialog from './components/AddPhaseDialog';
 import { useReturnToTask } from '../o2d-fms/useReturnToTask';
+import { useFmsGate, FmsGateDialog, FmsGateBanner } from '../o2d-fms/FmsGate';
 
 // Group an item's phases by phaseNo so the UI shows one card per phase.
 const buildPhaseGroups = (schedule) => {
@@ -97,6 +98,7 @@ const PlanWorkspace = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [gateOpen, setGateOpen] = useState(false);
   const [carryForwardPrefill, setCarryForwardPrefill] = useState(null);
   const [viewMode, setViewMode] = useState('phases'); // 'phases' | 'monthly'
 
@@ -126,6 +128,9 @@ const PlanWorkspace = () => {
   const comparison = comparisonRes?.data;
 
   const { finishToTask } = useReturnToTask();
+  // Sequential gate — block planning until the prior FMS steps are done.
+  const gate = useFmsGate({ soNumber, action: 'DISPATCH_PLAN' });
+  const tryAddPhase = () => { if (gate.blocked) setGateOpen(true); else setAddDialogOpen(true); };
   const [createPhase, { isLoading: isCreating }] = useCreatePhaseMutation();
   const [updatePhase, { isLoading: isUpdating }] = useUpdatePhaseMutation();
   const [deletePhase, { isLoading: isDeleting }] = useDeletePhaseMutation();
@@ -305,10 +310,10 @@ const PlanWorkspace = () => {
               <Button
                 variant="contained"
                 disableElevation
-                startIcon={<Plus size={16} />}
-                onClick={() => setAddDialogOpen(true)}
+                startIcon={gate.blocked ? <Lock size={15} /> : <Plus size={16} />}
+                onClick={tryAddPhase}
                 disabled={!soNumber || scheduleLoading}
-                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2 }}
+                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2, ...(gate.blocked ? { bgcolor: '#b45309', '&:hover': { bgcolor: '#92400e' } } : {}) }}
               >
                 Add Phase
               </Button>
@@ -328,6 +333,8 @@ const PlanWorkspace = () => {
           </Stack>
         </Stack>
       </Paper>
+
+      {soNumber && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
 
       {!soNumber && <EmptyState />}
 
@@ -362,7 +369,7 @@ const PlanWorkspace = () => {
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
                   Click <strong>Add Phase</strong> to start planning dispatches for this order.
                 </Typography>
-                <Button variant="contained" startIcon={<Plus size={14} />} onClick={() => setAddDialogOpen(true)}>
+                <Button variant="contained" startIcon={gate.blocked ? <Lock size={14} /> : <Plus size={14} />} onClick={tryAddPhase}>
                   Add Phase
                 </Button>
               </Paper>
@@ -435,6 +442,8 @@ const PlanWorkspace = () => {
         isSaving={isCreating}
         prefillFor={carryForwardPrefill}
       />
+
+      <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />
     </Box>
   );
 };

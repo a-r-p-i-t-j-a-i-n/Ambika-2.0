@@ -11,6 +11,7 @@ import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useCreateSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { useReturnToTask } from './useReturnToTask';
+import { useFmsGate, FmsGateBanner, FmsGateDialog } from './FmsGate';
 
 const TRANSPORT_TYPES = ['Freight Paid', 'To Pay', 'Party Vehicle'];
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.xlsx,.xls,.doc,.docx';
@@ -84,8 +85,10 @@ const InvoiceEntryForm = () => {
   const { finishToTask } = useReturnToTask();
   const [searchParams] = useSearchParams();
   const soParam = searchParams.get('so') || '';
+  const [gateOpen, setGateOpen] = useState(false);
 
   const [dc, setDc] = useState(null);
+  const gate = useFmsGate({ soNumber: dc?.soNumber || soParam, action: 'INVOICE_ENTRY' });
   const [form, setForm] = useState({
     status: 'Done', invoiceNo: '', invoiceDate: dayjs().format('YYYY-MM-DD'),
     invoiceAmount: '', transportType: 'Freight Paid', transporterName: '', lrNo: '', remarks: '',
@@ -187,6 +190,7 @@ const InvoiceEntryForm = () => {
       </Box>
 
       <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6, maxWidth: 980, mx: 'auto' }}>
+        {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Challan picker + auto-filled context */}
         <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
           <Autocomplete
@@ -259,11 +263,12 @@ const InvoiceEntryForm = () => {
         <Divider sx={{ mb: 2 }} />
         <Stack direction="row" spacing={1.5} justifyContent="flex-end">
           <Button onClick={reset} sx={{ fontWeight: 700, color: 'text.secondary' }}>Clear</Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={saving} onClick={save} sx={{ fontWeight: 700, px: 3 }}>
+          <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={saving || gate.blocked} onClick={save} sx={{ fontWeight: 700, px: 3 }}>
             {saving ? 'Saving…' : 'Save Invoice'}
           </Button>
         </Stack>
       </Box>
+      <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />
     </Box>
   );
 };

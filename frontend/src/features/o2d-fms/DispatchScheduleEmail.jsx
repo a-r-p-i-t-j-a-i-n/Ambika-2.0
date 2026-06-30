@@ -14,6 +14,7 @@ import { useGetScheduleQuery, useEmailDispatchScheduleMutation } from '../../sto
 import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { useUploadFileMutation, useAddStepAttachmentsMutation } from '../../store/api/o2dFmsApi';
 import { useReturnToTask } from './useReturnToTask';
+import { useFmsGate } from './FmsGate';
 import { printDispatchPlan } from '../../utils/printDispatchPlan';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
@@ -54,6 +55,7 @@ const DispatchScheduleEmail = () => {
   const [emailSchedule] = useEmailDispatchScheduleMutation();
 
   const [order, setOrder] = useState(null);
+  const gate = useFmsGate({ soNumber: order?.soNumber || soFromTask, action: 'EMAIL_DISPATCH_SCHEDULE' });
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
@@ -175,7 +177,7 @@ const DispatchScheduleEmail = () => {
 
   return (
     <O2dStepShell icon={Mail} step="Step 2.5" title="Email Dispatch Schedule"
-      subtitle="Pick the order — the plan loads, the recipient auto-fills from the party master. Review, attach the plan PDF and send.">
+      subtitle="Pick the order — the plan loads, the recipient auto-fills from the party master. Review, attach the plan PDF and send." gate={gate}>
       {/* Order picker */}
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
@@ -290,7 +292,7 @@ const DispatchScheduleEmail = () => {
             <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1.5}>
               <Chip size="small" variant="outlined" label="Sends via the configured SMTP relay" sx={{ fontSize: '0.62rem' }} />
               <Button variant="contained" startIcon={sending ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
-                disabled={sending || uploading} onClick={handleSend} sx={{ fontWeight: 700, px: 3 }}>
+                disabled={sending || uploading || gate.blocked} onClick={handleSend} sx={{ fontWeight: 700, px: 3 }}>
                 {sending ? 'Sending…' : 'Send now'}
               </Button>
             </Stack>

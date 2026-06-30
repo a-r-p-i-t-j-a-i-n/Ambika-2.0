@@ -13,6 +13,12 @@ export const o2dFmsApi = baseApi.injectEndpoints({
     getActiveTask: builder.query({
       query: (params) => ({ url: '/o2d-fms/active-task', params }),
     }),
+    // Sequential gate — may the doer do `action` on this order yet?
+    // → { allowed, blockingStep?: { stepCode, name, taskUrl }, reason }.
+    getFmsGate: builder.query({
+      query: (params) => ({ url: '/o2d-fms/gate', params }),
+      providesTags: ['O2DProcess'],
+    }),
     getAllTasks: builder.query({
       query: () => '/o2d-fms/all-tasks',
       providesTags: ['O2DMyTasks', 'O2DProcess'],
@@ -199,6 +205,7 @@ export const o2dFmsApi = baseApi.injectEndpoints({
 export const {
   useGetMyTasksQuery,
   useLazyGetActiveTaskQuery,
+  useGetFmsGateQuery,
   useGetAllTasksQuery,
   useGetFmsDashboardQuery,
   useGetFmsScoresQuery,

@@ -17,6 +17,7 @@ import {
   checklistToggleSchema,
   checklistParamSchema,
   markActionDoneSchema,
+  gateQuerySchema,
   commentSchema,
   verificationAnswerSchema,
   formFieldValueSchema,
@@ -53,6 +54,10 @@ router.get('/my-tasks',
 // Resolve the active task for an order (used to jump to it after a module entry).
 router.get('/active-task',
   requirePermission('o2dfms.view'), c.activeTask);
+
+// Sequential gate — is the doer allowed to do `action` on this order yet?
+router.get('/gate',
+  requirePermission('o2dfms.view'), validate(gateQuerySchema, 'query'), c.actionGate);
 
 // All doers' tasks — managers/MD oversight.
 router.get('/all-tasks',

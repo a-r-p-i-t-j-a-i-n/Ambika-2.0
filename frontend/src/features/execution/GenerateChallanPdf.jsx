@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
+import { useFmsGate, FmsGateBanner, FmsGateDialog } from '../o2d-fms/FmsGate';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
@@ -40,12 +41,16 @@ const GenerateChallanPdf = () => {
   const [search, setSearch] = useState(soFromTask);
   const { data, isFetching } = useGetChallansQuery({ limit: 200, sort: '-dcDate', search: search || undefined });
   const [busyId, setBusyId] = useState(null);
+  // Gate (when arriving from the FMS step for a specific order).
+  const gate = useFmsGate({ soNumber: soFromTask, action: 'CHALLAN_PDF' });
+  const [gateOpen, setGateOpen] = useState(false);
 
   const rows = useMemo(() => data?.data || [], [data]);
 
   // Always-fresh preview: stream the PDF bytes (nothing saved) and open them in a
   // new tab — the browser's PDF viewer shows it and offers download.
   const previewPdf = async (dc) => {
+    if (gate.blocked) { setGateOpen(true); return false; }
     setBusyId(dc._id);
     let blobUrl;
     try {
@@ -81,7 +86,7 @@ const GenerateChallanPdf = () => {
   // that SO is rows[0] (list is sorted -dcDate and already filtered to the SO).
   const autoOpenedRef = useRef(false);
   useEffect(() => {
-    if (!cameFromTask || autoOpenedRef.current || isFetching) return;
+    if (!cameFromTask || autoOpenedRef.current || isFetching || gate.blocked) return;
     const target = rows[0];
     if (!target) return;
     autoOpenedRef.current = true;
@@ -113,6 +118,7 @@ const GenerateChallanPdf = () => {
       </Box>
 
       <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6 }}>
+        {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Came from FMS step 2.06 — the challan PDF opens automatically; this banner
             brings the doer straight back to the step to submit. */}
         {cameFromTask && (
@@ -200,6 +206,7 @@ const GenerateChallanPdf = () => {
           )}
         </Paper>
       </Box>
+      <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />
     </Box>
   );
 };

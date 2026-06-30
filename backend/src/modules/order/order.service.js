@@ -4,6 +4,7 @@ import { AppError } from '../../utils/apiResponse.js';
 import { generateDocNumber, generateO2DId } from '../../utils/docNumberGenerator.js';
 import { getFiscalYear } from '../../utils/fiscalYear.js';
 import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
+import { partyService } from '../clients/party.service.js';
 import { logger } from '../../utils/logger.js';
 
 export const orderService = {
@@ -122,6 +123,17 @@ export const orderService = {
     });
 
     await order.save(); // triggers pre-save hooks
+
+    // Keep the party's saved catalog in step with any edited items/prices
+    // (learn new SKUs, append changed prices). Non-fatal.
+    if (data.items && order.partyId) {
+      try {
+        await partyService.syncOrderedSkus(order.partyId, order.items, { soNumber: order.soNumber, source: 'ORDER' });
+      } catch (err) {
+        logger.error(`[catalog-sync] SO ${order.soNumber}: ${err.message}`);
+      }
+    }
+
     return order.toObject();
   },
 

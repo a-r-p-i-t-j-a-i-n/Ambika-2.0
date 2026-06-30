@@ -10,6 +10,7 @@ import O2dStepShell from './components/O2dStepShell';
 import { useGetSalesInvoicesQuery } from '../../store/api/salesInvoiceApi';
 import { usePaymentFollowUpMutation, usePaymentReceiptMutation } from '../../store/api/o2dFulfillmentApi';
 import { useReturnToTask } from './useReturnToTask';
+import { useFmsGate } from './FmsGate';
 
 const YNC = ['Yes', 'No', 'Cancelled'];
 
@@ -36,6 +37,7 @@ const PaymentSteps = () => {
   const { finishToTask } = useReturnToTask();
 
   const [inv, setInv] = useState(null);
+  const gate = useFmsGate({ soNumber: inv?.soNumber, action: part === 'receipt' ? 'PAYMENT_RECEIPT' : 'PAYMENT_FOLLOWUP' });
   const [fuStatus, setFuStatus] = useState('Yes');
   const [rcStatus, setRcStatus] = useState('Yes');
   const [rcDate, setRcDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -60,7 +62,7 @@ const PaymentSteps = () => {
   };
 
   return (
-    <O2dStepShell icon={IndianRupee} step={shell.step} title={shell.title} subtitle={shell.subtitle}>
+    <O2dStepShell icon={IndianRupee} step={shell.step} title={shell.title} subtitle={shell.subtitle} gate={gate}>
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
           options={invoices}
@@ -93,7 +95,7 @@ const PaymentSteps = () => {
               <TextField select label="Status" value={fuStatus} onChange={(e) => setFuStatus(e.target.value)} size="small" sx={{ minWidth: 200 }} helperText="“Yes” means payment received / done.">
                 {YNC.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
               </TextField>
-              <Button variant="contained" startIcon={savingFU ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingFU} onClick={saveFollowUp} sx={{ fontWeight: 700 }}>
+              <Button variant="contained" startIcon={savingFU ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingFU || gate.blocked} onClick={saveFollowUp} sx={{ fontWeight: 700 }}>
                 Save Follow-up
               </Button>
             </Stack>
@@ -120,7 +122,7 @@ const PaymentSteps = () => {
               </Stack>
               <Divider />
               <Stack direction="row" justifyContent="flex-end">
-                <Button variant="contained" startIcon={savingRC ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingRC} onClick={saveReceipt} sx={{ fontWeight: 700, px: 3 }}>
+                <Button variant="contained" startIcon={savingRC ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={savingRC || gate.blocked} onClick={saveReceipt} sx={{ fontWeight: 700, px: 3 }}>
                   {savingRC ? 'Saving…' : 'Save Receipt'}
                 </Button>
               </Stack>

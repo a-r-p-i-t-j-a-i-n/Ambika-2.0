@@ -19,6 +19,7 @@ import {
 } from '../../store/api/dispatchControlApi';
 import PhasePicker from './components/PhasePicker';
 import { useReturnToTask } from '../o2d-fms/useReturnToTask';
+import { useFmsGate, FmsGateDialog, FmsGateBanner } from '../o2d-fms/FmsGate';
 import { useGetTransportersQuery, useCreateTransporterMutation } from '../../store/api/transporterApi';
 
 const TRANSPORT_MODES = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
@@ -160,6 +161,9 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
   const [lines, setLines] = useState([]);
 
   const soNumber = step1Order?.soNumber;
+  // Sequential gate — block recording a dispatch until the prior FMS steps are done.
+  const gate = useFmsGate({ soNumber, action: 'ACTUAL_DISPATCH' });
+  const [gateOpen, setGateOpen] = useState(false);
   const { data: dispatchablePhasesRes, isFetching: phasesFetching } = useGetDispatchablePhasesQuery(soNumber, { skip: !soNumber });
   const phasesData = dispatchablePhasesRes?.data;
 
@@ -269,10 +273,11 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
   const isStep1Valid = Boolean(step1Order);
   const isStep2Valid = phaseSels.length > 0;
   const hasAnyQty   = lines.some((l) => Number(l.quantityPcs || 0) > 0);
-  const canSubmit   = isStep1Valid && isStep2Valid && hasAnyQty && !isSaving;
+  const canSubmit   = isStep1Valid && isStep2Valid && hasAnyQty && !isSaving && !gate.blocked;
   const progress    = (isStep1Valid ? 33 : 0) + (isStep2Valid ? 33 : 0) + (hasAnyQty ? 34 : 0);
 
   const handleSubmit = async () => {
+    if (gate.blocked) { setGateOpen(true); return; }
     if (!canSubmit) return;
     const items = lines
       .filter((l) => Number(l.quantityPcs || 0) > 0)
@@ -384,6 +389,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
       <LinearProgress variant="determinate" value={progress} sx={{ height: 3 }} />
 
       <Box sx={{ flex: 1, overflowY: 'auto', px: 3, py: 2.5 }}>
+        {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Step 1 — Order */}
         <Paper sx={{ p: 2.5, borderRadius: '14px', mb: 2 }}>
           <SectionLabel icon={Building2} hint="Only orders with open plans are listed">Step 1 · Sales Order</SectionLabel>
@@ -743,6 +749,8 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
           </Button>
         </DialogActions>
       </Dialog>
+
+      <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />
     </Drawer>
   );
 };

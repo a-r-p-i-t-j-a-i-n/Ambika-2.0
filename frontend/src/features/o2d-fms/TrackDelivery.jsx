@@ -10,6 +10,7 @@ import O2dStepShell from './components/O2dStepShell';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useTrackDeliveryMutation } from '../../store/api/o2dFulfillmentApi';
 import { useReturnToTask } from './useReturnToTask';
+import { useFmsGate } from './FmsGate';
 
 /** Step 2.9 — Track delivery: pick a challan, update delivery status & dates. */
 const TrackDelivery = () => {
@@ -21,6 +22,7 @@ const TrackDelivery = () => {
   const soParam = searchParams.get('so') || '';
 
   const [dc, setDc] = useState(null);
+  const gate = useFmsGate({ soNumber: dc?.soNumber || soParam, action: 'TRACK_DELIVERY' });
 
   // Came from an FMS "Do it now" with ?so=… → auto-select that order's challan.
   useEffect(() => {
@@ -50,7 +52,7 @@ const TrackDelivery = () => {
   };
 
   return (
-    <O2dStepShell icon={Truck} step="Step 2.9" title="Track Delivery" subtitle="Update the delivery status of a dispatch.">
+    <O2dStepShell icon={Truck} step="Step 2.9" title="Track Delivery" subtitle="Update the delivery status of a dispatch." gate={gate}>
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
           options={challans}
@@ -85,7 +87,7 @@ const TrackDelivery = () => {
             )}
             <Divider />
             <Stack direction="row" justifyContent="flex-end">
-              <Button variant="contained" startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={isLoading} onClick={save} sx={{ fontWeight: 700, px: 3 }}>
+              <Button variant="contained" startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={isLoading || gate.blocked} onClick={save} sx={{ fontWeight: 700, px: 3 }}>
                 {isLoading ? 'Saving…' : 'Update Delivery'}
               </Button>
             </Stack>

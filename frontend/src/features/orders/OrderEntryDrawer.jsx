@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  Drawer, Box, Typography, IconButton, Divider, Button, TextField,
+  Dialog, Box, Typography, IconButton, Divider, Button, TextField,
   MenuItem, Autocomplete, CircularProgress, InputAdornment, Chip,
-  Tooltip, alpha, useTheme, LinearProgress, Stack, Paper,
+  Tooltip, alpha, useTheme, useMediaQuery, LinearProgress, Stack, Paper,
 } from '@mui/material';
 import {
   X, Plus, Trash2, Save, FileText, Package, Building2,
   Calendar, Truck, MapPin, FileUp, CheckCircle2, AlertCircle, Hash,
-  Layers, Receipt, Sparkles,
+  Layers, Receipt, Sparkles, ListPlus, RotateCw, History, IndianRupee,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useSnackbar } from 'notistack';
@@ -15,7 +15,7 @@ import {
   useCreateOrderEntryMutation,
   useUploadOrderDocumentMutation,
 } from '../../store/api/dispatchControlApi';
-import { useGetPartiesQuery } from '../../store/api/partyApi';
+import { useGetPartiesQuery, useGetPartyByIdQuery } from '../../store/api/partyApi';
 import { useGetOrdersByPartyQuery, useUpdateOrderMutation } from '../../store/api/orderApi';
 import { useGetSkuLookupQuery } from '../../store/api/skuApi';
 import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
@@ -25,7 +25,7 @@ const PARTY_GROUPS = ['Domestic', 'Export', 'OEM', 'Distributor', 'Direct'];
 
 const emptyItem = () => ({
   _tempId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  skuId: '', skuName: '', skuCode: '', orderQty: '', asnCode: '', remark: '',
+  skuId: '', skuName: '', skuCode: '', orderQty: '', rate: '', asnCode: '', remark: '',
 });
 
 const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1').replace(/\/api\/v\d+\/?$/, '');
@@ -194,6 +194,7 @@ const orderItemsToForm = (order) => {
     skuName: it.skuName || it.skuId?.name || '',
     skuCode: it.skuCode || it.skuId?.code || '',
     orderQty: it.orderQty ?? '',
+    rate: it.rate ?? '',
     dispatchedQty: Number(it.dispatchedQty || 0),
     asnCode: it.asnCode || '',
     remark: it.remark || '',
@@ -203,6 +204,7 @@ const orderItemsToForm = (order) => {
 // ── Main component ──────────────────────────────────────────────────────
 const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const { enqueueSnackbar } = useSnackbar();
   const isEditMode = Boolean(order && order._id);
   const [createOrderEntry, { isLoading: isCreating }] = useCreateOrderEntryMutation();
@@ -232,6 +234,60 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   });
   const [items, setItems] = useState([emptyItem()]);
   const [fieldErrors, setFieldErrors] = useState({});
+  // Tracks which party the current line items were auto-filled from, so switching
+  // party refreshes the catalog but we never silently clobber typed quantities.
+  const [filledPartyId, setFilledPartyId] = useState(null);
+
+  // The selected party's saved catalog (SKUs they regularly order). Fetched fresh
+  // on selection so we always have the full `orderedSkus` list (the parties list
+  // query may be trimmed). This is the "grouping" maintained per party.
+  const selectedPartyId = form.party?._id || null;
+  const { data: partyDetailRes, isFetching: partyDetailLoading } = useGetPartyByIdQuery(
+    selectedPartyId, { skip: !selectedPartyId },
+  );
+  const partyDetail = partyDetailRes?.data || null;
+  const partyCatalog = useMemo(
+    () => (String(partyDetail?._id || '') === String(selectedPartyId || '') ? (partyDetail?.orderedSkus || []) : []),
+    [partyDetail, selectedPartyId],
+  );
+
+  // Turn a party's saved catalog into editable, blank-quantity line rows.
+  const catalogToItems = useCallback((catalog) => catalog.map((c, i) => ({
+    _tempId: `cat-${selectedPartyId}-${i}-${c.skuCode || c.skuName || 'row'}`,
+    skuId:   c.skuId || '',
+    skuName: c.skuName || '',
+    skuCode: c.skuCode || '',
+    orderQty: '',
+    rate: c.sellingPrice ? String(c.sellingPrice) : '',
+    asnCode: '',
+    remark: '',
+  })), [selectedPartyId]);
+
+  // Index the catalog by skuId / skuCode so each row can surface its price history.
+  const catalogIndex = useMemo(() => {
+    const m = new Map();
+    partyCatalog.forEach((c) => {
+      if (c.skuId) m.set(String(c.skuId), c);
+      if (c.skuCode) m.set(`code:${String(c.skuCode).toLowerCase()}`, c);
+    });
+    return m;
+  }, [partyCatalog]);
+  const rowCatalog = (it) => (
+    catalogIndex.get(String(it.skuId))
+    || catalogIndex.get(`code:${String(it.skuCode || '').toLowerCase()}`)
+    || null
+  );
+
+  // Replace the line items with the party's saved catalog (blank quantities).
+  const loadCatalog = useCallback(() => {
+    if (!partyCatalog.length) return;
+    setItems(catalogToItems(partyCatalog));
+    setFilledPartyId(selectedPartyId);
+    enqueueSnackbar(
+      `Loaded ${partyCatalog.length} item${partyCatalog.length > 1 ? 's' : ''} from ${form.party?.name || 'party'}'s catalog`,
+      { variant: 'success' },
+    );
+  }, [partyCatalog, catalogToItems, selectedPartyId, form.party, enqueueSnackbar]);
 
   // Reset on open — prefill from the order when editing, blank when creating.
   useEffect(() => {
@@ -254,6 +310,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
         leadTimeDays: order.leadTimeDays || 7,
       });
       setItems(orderItemsToForm(order));
+      setFilledPartyId(partyId); // editing: keep the saved order's items, never auto-fill
     } else if (intake) {
       // Punch-in form pre-filled from an Order Intake (client auto-selected, rough
       // items carried over). The user adds the PO number and confirms SKUs.
@@ -273,13 +330,16 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
         orderDocumentName: '',
         leadTimeDays: resolvedParty?.leadTimeDays || 7,
       });
-      setItems((intake.items || []).length
+      const hasIntakeItems = (intake.items || []).length > 0;
+      setItems(hasIntakeItems
         ? intake.items.map((it) => ({
             _tempId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             skuId: '', skuName: it.skuName || '', skuCode: it.skuCode || '',
-            orderQty: it.qty || '', asnCode: '', remark: '',
+            orderQty: it.qty || '', rate: '', asnCode: '', remark: '',
           }))
         : [emptyItem()]);
+      // Carried-over intake items win; if none, let the party's catalog auto-fill.
+      setFilledPartyId(hasIntakeItems ? (pid || 'intake') : null);
     } else {
       setForm({
         poNumber: '',
@@ -294,6 +354,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
         leadTimeDays: 7,
       });
       setItems([emptyItem()]);
+      setFilledPartyId(null);
     }
     setFieldErrors({});
   }, [open, order, intake, isEditMode, parties]);
@@ -306,6 +367,20 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
       leadTimeDays: party?.leadTimeDays || 7,
     }));
   };
+
+  // Auto-fill the line items from the newly selected party's catalog — but only
+  // while the rows are "pristine" (no quantity typed yet) so we never wipe work.
+  // Switching party reloads the new catalog; once the user types a qty we back off.
+  useEffect(() => {
+    if (!open || isEditMode) return;
+    const pid = selectedPartyId;
+    if (!pid || !partyCatalog.length) return;
+    if (filledPartyId === pid) return;                       // already filled for this party
+    const pristine = items.every((it) => !(Number(it.orderQty) > 0));
+    if (!pristine) return;                                   // user has started — don't clobber
+    setItems(catalogToItems(partyCatalog));
+    setFilledPartyId(pid);
+  }, [open, isEditMode, selectedPartyId, partyCatalog, items, filledPartyId, catalogToItems]);
 
   const handleSkuPick = (index, sku) => {
     setItems((prev) => prev.map((it, i) => (
@@ -321,6 +396,20 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
 
   const addItem = () => setItems((prev) => [...prev, emptyItem()]);
   const removeItem = (index) => setItems((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+  const clearItems = () => { setItems([emptyItem()]); setFilledPartyId(null); };
+
+  // SKU picker value/options for a row. A catalog row may reference a SKU that the
+  // FINISHED_GOOD lookup hasn't loaded — surface a fallback option so its name
+  // still shows (and the row stays selectable) instead of rendering blank.
+  const rowSkuValue = (it) => (
+    skus.find((s) => s._id === it.skuId)
+    || (it.skuId && (it.skuName || it.skuCode) ? { _id: it.skuId, name: it.skuName, code: it.skuCode } : null)
+  );
+  const rowSkuOptions = (it) => (
+    it.skuId && it.skuName && !skus.some((s) => s._id === it.skuId)
+      ? [{ _id: it.skuId, name: it.skuName, code: it.skuCode }, ...skus]
+      : skus
+  );
 
   // ── Paste from Excel: split on \n and \t. Header row is auto-detected. ──
   const handlePaste = useCallback((e) => {
@@ -348,6 +437,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
         skuName: sku?.name || skuRef || '',
         skuCode: sku?.code || '',
         orderQty: qty ? qty.replace(/,/g, '') : '',
+        rate: '',
         asnCode: '',
         remark: '',
       };
@@ -377,6 +467,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   // ── Live derived state ───────────────────────────────────────────
   const validItems = items.filter((i) => i.skuId && Number(i.orderQty) > 0);
   const totalQty   = validItems.reduce((s, i) => s + Number(i.orderQty || 0), 0);
+  const totalValue = validItems.reduce((s, i) => s + Number(i.orderQty || 0) * Number(i.rate || 0), 0);
   const isStep1Valid = Boolean(form.poNumber.trim() && form.party && form.orderDate);
   const isStep2Valid = validItems.length > 0;
   const canSubmit = isStep1Valid && isStep2Valid && !isSubmitting;
@@ -408,11 +499,12 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
       leadTimeDays: Number(form.leadTimeDays) || 7,
       // On edit, keep _id + dispatchedQty per line so dispatch progress survives;
       // the backend pre-save hook recomputes balance/extra/totals.
-      items: validItems.map(({ _tempId, _id, orderQty, dispatchedQty, ...rest }) => ({
+      items: validItems.map(({ _tempId, _id, orderQty, dispatchedQty, rate, ...rest }) => ({
         ...rest,
         ...(isEditMode && _id ? { _id } : {}),
         ...(isEditMode ? { dispatchedQty: Number(dispatchedQty || 0) } : {}),
         orderQty: Number(orderQty),
+        rate: Number(rate) || 0,
       })),
       // When punching in from an intake, link it so the FMS process is reused.
       ...(intake && !isEditMode ? { intakeId: intake._id } : {}),
@@ -439,17 +531,25 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   };
 
   return (
-    <Drawer
-      anchor="right"
+    <Dialog
       open={open}
       onClose={onClose}
       disableEnforceFocus
+      fullScreen={fullScreen}
+      maxWidth="lg"
+      fullWidth
+      scroll="paper"
       PaperProps={{
         sx: {
-          width: { xs: '100%', md: 820 },
+          width: '100%',
+          maxWidth: 1160,
+          height: fullScreen ? '100%' : '92vh',
+          m: fullScreen ? 0 : 2,
           p: 0,
+          borderRadius: fullScreen ? 0 : 3,
           display: 'flex',
           flexDirection: 'column',
+          overflow: 'hidden',
           bgcolor: 'background.default',
         },
       }}
@@ -614,9 +714,19 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
 
         {/* Step 2 — SKU lines */}
         <Paper sx={{ p: 2.5, borderRadius: '14px' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5, flexWrap: 'wrap', gap: 1 }}>
             <SectionLabel icon={Package}>Step 2 · Line Items {validItems.length > 0 && `(${validItems.length})`}</SectionLabel>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              {partyCatalog.length > 0 && (
+                <Button
+                  size="small"
+                  variant={filledPartyId === selectedPartyId ? 'text' : 'outlined'}
+                  startIcon={filledPartyId === selectedPartyId ? <RotateCw size={13} /> : <ListPlus size={14} />}
+                  onClick={loadCatalog}
+                >
+                  {filledPartyId === selectedPartyId ? 'Reload catalog' : `Load catalog (${partyCatalog.length})`}
+                </Button>
+              )}
               <Tooltip title="Paste rows from Excel — tab-separated [SKU code/name, qty, ASN, remark]" arrow>
                 <Chip
                   icon={<Layers size={11} />}
@@ -631,6 +741,40 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
               </Button>
             </Stack>
           </Box>
+
+          {/* Party catalog banner — auto-fill state & hints */}
+          {selectedPartyId && !isEditMode && (
+            partyDetailLoading ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, color: 'text.secondary', fontSize: '0.78rem' }}>
+                <CircularProgress size={13} /> Loading {form.party?.name}&apos;s saved items…
+              </Box>
+            ) : partyCatalog.length > 0 ? (
+              <Box sx={{
+                display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, px: 1.5, py: 1,
+                borderRadius: '10px',
+                bgcolor: alpha(theme.palette.primary.main, filledPartyId === selectedPartyId ? 0.06 : 0.03),
+                border: `1px dashed ${alpha(theme.palette.primary.main, 0.25)}`,
+              }}>
+                <Sparkles size={15} color={theme.palette.primary.main} />
+                <Typography variant="caption" color="text.primary" sx={{ flex: 1 }}>
+                  {filledPartyId === selectedPartyId ? (
+                    <><strong>{partyCatalog.length} items</strong> loaded from <strong>{form.party?.name}</strong>&apos;s catalog — just type each quantity. Add, edit or remove rows freely.</>
+                  ) : (
+                    <><strong>{form.party?.name}</strong> has <strong>{partyCatalog.length} saved items</strong>. Click <strong>Load catalog</strong> to fill the rows (keeps your typed quantities safe).</>
+                  )}
+                </Typography>
+                {filledPartyId === selectedPartyId && (
+                  <Button size="small" variant="text" color="inherit" startIcon={<Trash2 size={12} />} onClick={clearItems} sx={{ color: 'text.secondary' }}>
+                    Clear
+                  </Button>
+                )}
+              </Box>
+            ) : (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5, color: 'text.secondary', fontSize: '0.78rem' }}>
+                <AlertCircle size={13} /> No saved catalog for {form.party?.name} yet — add items manually below.
+              </Box>
+            )
+          )}
 
           {fieldErrors.items && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, color: 'error.main', mb: 1, fontSize: '0.75rem' }}>
@@ -648,7 +792,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
           >
             <Box sx={{
               display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: '2.4fr 1fr 1fr 1.6fr 40px' },
+              gridTemplateColumns: { xs: '1fr', md: '2fr 0.8fr 0.85fr 1.2fr 1.25fr 44px' },
               px: 1.5, py: 1, bgcolor: alpha(theme.palette.primary.main, 0.04),
               borderBottom: '1px solid', borderColor: 'divider',
               fontSize: '0.7rem', fontWeight: 700,
@@ -657,13 +801,17 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
               <Box>SKU</Box>
               <Box>Code</Box>
               <Box sx={{ textAlign: 'right' }}>Quantity *</Box>
+              <Box sx={{ textAlign: 'right' }}>Price ₹</Box>
               <Box>Remark</Box>
               <Box />
             </Box>
-            {items.map((it, idx) => (
+            {items.map((it, idx) => {
+              const cat = rowCatalog(it);
+              const history = (cat?.priceHistory || []).slice().sort((a, b) => new Date(b.at) - new Date(a.at));
+              return (
               <Box key={it._tempId} sx={{
                 display: 'grid',
-                gridTemplateColumns: { xs: '1fr', md: '2.4fr 1fr 1fr 1.6fr 40px' },
+                gridTemplateColumns: { xs: '1fr', md: '2fr 0.8fr 0.85fr 1.2fr 1.25fr 44px' },
                 gap: 1,
                 px: 1.5, py: 1, alignItems: 'center',
                 borderBottom: idx === items.length - 1 ? 0 : '1px solid',
@@ -671,8 +819,8 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                 '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.02) },
               }}>
                 <Autocomplete
-                  options={skus}
-                  value={skus.find((s) => s._id === it.skuId) || null}
+                  options={rowSkuOptions(it)}
+                  value={rowSkuValue(it)}
                   onChange={(_, sku) => handleSkuPick(idx, sku)}
                   getOptionLabel={(o) => o?.name || ''}
                   isOptionEqualToValue={(a, b) => a._id === b?._id}
@@ -699,6 +847,36 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                   placeholder="0"
                 />
                 <TextField
+                  type="number"
+                  size="small"
+                  value={it.rate}
+                  onChange={(e) => handleItemChange(idx, 'rate', e.target.value)}
+                  inputProps={{ style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }}
+                  placeholder="0"
+                  InputProps={{
+                    startAdornment: <InputAdornment position="start" sx={{ mr: 0.25 }}><IndianRupee size={12} /></InputAdornment>,
+                    endAdornment: history.length > 0 ? (
+                      <InputAdornment position="end">
+                        <Tooltip arrow placement="top" title={(
+                          <Box sx={{ py: 0.5 }}>
+                            <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', mb: 0.5 }}>Price history</Typography>
+                            {history.slice(0, 6).map((h, hi) => (
+                              <Typography key={hi} variant="caption" sx={{ display: 'block', opacity: hi === 0 ? 1 : 0.8 }}>
+                                ₹{Number(h.price).toLocaleString('en-IN')} · {dayjs(h.at).format('DD MMM YY')}{h.soNumber ? ` · ${h.soNumber}` : ''}{hi === 0 ? '  (latest)' : ''}
+                              </Typography>
+                            ))}
+                            {history.length > 6 && <Typography variant="caption" sx={{ opacity: 0.7 }}>+{history.length - 6} more…</Typography>}
+                          </Box>
+                        )}>
+                          <Box component="span" sx={{ display: 'inline-flex', cursor: 'help', color: 'primary.main' }}>
+                            <History size={13} />
+                          </Box>
+                        </Tooltip>
+                      </InputAdornment>
+                    ) : null,
+                  }}
+                />
+                <TextField
                   size="small"
                   value={it.remark}
                   onChange={(e) => handleItemChange(idx, 'remark', e.target.value)}
@@ -713,7 +891,8 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                   <Trash2 size={14} />
                 </IconButton>
               </Box>
-            ))}
+              );
+            })}
           </Box>
         </Paper>
       </Box>
@@ -737,6 +916,14 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
               {totalQty.toLocaleString('en-IN')}
             </Typography>
           </Box>
+          {totalValue > 0 && (
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Order Value</Typography>
+              <Typography variant="h6" fontWeight={800} color="text.primary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                ₹{totalValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </Typography>
+            </Box>
+          )}
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Document</Typography>
             <Typography variant="body2" fontWeight={700} color={form.orderDocument ? 'success.main' : 'text.secondary'}>
@@ -753,7 +940,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
           {isEditMode ? 'Save Changes' : 'Submit Order'}
         </Button>
       </Box>
-    </Drawer>
+    </Dialog>
   );
 };
 

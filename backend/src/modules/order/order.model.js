@@ -20,6 +20,8 @@ const orderItemSchema = new mongoose.Schema({
   dispatchedQty: { type: Number, default: 0, min: 0 },
   balanceQty:    { type: Number, default: 0, min: 0 },
   extraSentQty:   { type: Number, default: 0, min: 0 },
+  rate:          { type: Number, default: 0, min: 0 }, // agreed selling price / unit
+
   asnCode:       { type: String, trim: true, default: null }, // ASN Code / FCI Code
   remark:        { type: String, default: null }, // "Short Close", "Extra Sent"
 }, { _id: true });

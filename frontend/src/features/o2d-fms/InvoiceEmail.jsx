@@ -10,6 +10,7 @@ import { useSearchParams } from 'react-router-dom';
 import O2dStepShell from './components/O2dStepShell';
 import { useGetSalesInvoicesQuery, useSendSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
 import { useReturnToTask } from './useReturnToTask';
+import { useFmsGate } from './FmsGate';
 
 const inr = (n) => '₹ ' + (Number(n || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtD = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -56,6 +57,7 @@ const InvoiceEmail = () => {
   const soParam = searchParams.get('so') || '';
 
   const [inv, setInv] = useState(null);
+  const gate = useFmsGate({ soNumber: inv?.soNumber || soParam, action: 'INVOICE_EMAIL' });
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
@@ -107,7 +109,7 @@ const InvoiceEmail = () => {
   };
 
   return (
-    <O2dStepShell icon={Mail} step="Step 2.8" title="Email Invoice & Eway Bill" subtitle="Pick an invoice — its full details & attachments load for preview, then send to the client.">
+    <O2dStepShell icon={Mail} step="Step 2.8" title="Email Invoice & Eway Bill" subtitle="Pick an invoice — its full details & attachments load for preview, then send to the client." gate={gate}>
       {/* Invoice number picker */}
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
@@ -177,7 +179,7 @@ const InvoiceEmail = () => {
               <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1.5}>
                 <Chip size="small" variant="outlined" label="Sends to the “To” address via the configured SMTP relay" sx={{ fontSize: '0.62rem' }} />
                 <Button variant="contained" startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
-                  disabled={isLoading} onClick={handleSend} sx={{ fontWeight: 700, px: 3 }}>
+                  disabled={isLoading || gate.blocked} onClick={handleSend} sx={{ fontWeight: 700, px: 3 }}>
                   {isLoading ? 'Sending…' : 'Send Email'}
                 </Button>
               </Stack>
