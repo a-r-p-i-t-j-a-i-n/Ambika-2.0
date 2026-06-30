@@ -349,6 +349,10 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/procurement/vendor-invoices/invoiceable-qcs', params }),
       providesTags: ['VendorInvoice', 'IncomingQc'],
     }),
+    getInvoiceableGrns: builder.query({
+      query: (params = {}) => ({ url: '/procurement/vendor-invoices/invoiceable-grns', params }),
+      providesTags: ['VendorInvoice', 'IncomingQc'],
+    }),
     createVendorInvoice: builder.mutation({
       query: (body) => ({ url: '/procurement/vendor-invoices', method: 'POST', body }),
       invalidatesTags: ['VendorInvoice', 'VendorInvoiceStats'],
@@ -560,6 +564,7 @@ export const {
   useGetVendorInvoiceByIdQuery,
   useGetVendorInvoicesByQcQuery,
   useGetInvoiceableQcsQuery,
+  useGetInvoiceableGrnsQuery,
   useCreateVendorInvoiceMutation,
   useUpdateVendorInvoiceMutation,
   useApproveVendorInvoiceMutation,

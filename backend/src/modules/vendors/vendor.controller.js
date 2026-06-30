@@ -37,4 +37,9 @@ export const vendorController = {
     const entry = await vendorService.addPricingHistory(req.params.id, req.body, req.user);
     res.status(201).json(ApiResponse.created('Pricing history recorded', entry));
   }),
+
+  addProduct: asyncHandler(async (req, res) => {
+    const vendor = await vendorService.addProduct(req.params.id, req.body, req.user);
+    res.status(201).json(ApiResponse.created('Vendor product saved', vendor));
+  }),
 };

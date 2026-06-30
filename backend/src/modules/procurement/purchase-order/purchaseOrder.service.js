@@ -125,13 +125,26 @@ const resolveVendor = async (vendorId) => {
 /**
  * Set of indent line-item _ids (as strings) that are APPROVED for PO creation.
  * Caller must have already confirmed the indent is in a PO-creatable state.
- *  - Per-item approvals present (Step 1.3 itemApprovedQuotations) → only the YES rows.
- *  - No per-item rows (whole-indent approval / Quote-Not-Required / legacy) → all items.
+ *  - Per-item approvals present (Step 1.3 itemApprovedQuotations) → YES (approved)
+ *    and QUOTE_NOT_REQUIRED (carried from Step 1.2 — no quote to approve) rows.
+ *    QUOTATION_NOT_APPROVED (rejected) and unlisted (pending) items are excluded.
+ *  - No per-item rows (whole-indent approval / Quote-Not-Required skip / legacy) → all items.
  */
 const approvedItemIdSet = (indent) => {
   const iaq = indent.quotationApprovalStep?.itemApprovedQuotations || [];
+  // Items Step 1.2 marked "Quote Not Required" are PO-eligible without a Step 1.3
+  // approval (there is no quotation to approve).
+  const notRequiredIds = (indent.quoteComparativeStep?.itemQuotations || [])
+    .filter((q) => q.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId)
+    .map((q) => String(q.itemId));
   if (iaq.length) {
-    return new Set(iaq.filter((q) => q.statusDone === 'YES' && q.itemId).map((q) => String(q.itemId)));
+    const set = new Set(
+      iaq.filter((q) => ['YES', 'QUOTE_NOT_REQUIRED'].includes(q.statusDone) && q.itemId).map((q) => String(q.itemId)),
+    );
+    // Safety net for older records: include Step 1.2 not-required items even if
+    // they were never carried into the Step 1.3 rows.
+    notRequiredIds.forEach((id) => set.add(id));
+    return set;
   }
   return new Set((indent.items || []).map((it) => String(it._id)));
 };
@@ -644,6 +657,15 @@ export const purchaseOrderService = {
       if ((indent.quotationApprovalStep?.approvedVendors?.length || 0) > 0) continue;
       const approvedIds = approvedItemIdSet(indent);
       if (!approvedIds.size) continue;
+      // Items that came through the "Quote Not Required" path (whole-indent skip or
+      // per-item in Step 1.2) — surfaced so the PO picker can badge them.
+      const stepSkipped = !!indent.quotationApprovalStep?.skipped
+        || indent.quoteComparativeStep?.statusDone === 'QUOTE_NOT_REQUIRED';
+      const notRequiredItemIds = new Set(
+        (indent.quoteComparativeStep?.itemQuotations || [])
+          .filter((q) => q.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId)
+          .map((q) => String(q.itemId)),
+      );
       const { ids: poedIds, skus: poedSkus } = await activePoedItemIds(indent._id);
       (indent.items || []).forEach((it, i) => {
         if (!approvedIds.has(String(it._id))) return;
@@ -665,6 +687,7 @@ export const purchaseOrderService = {
           itemName: it.itemName || '',
           unit: it.unit || 'Pcs',
           approvedQuantity,
+          quoteNotRequired: stepSkipped || notRequiredItemIds.has(String(it._id)),
         });
       });
     }

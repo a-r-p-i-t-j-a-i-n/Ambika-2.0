@@ -123,6 +123,52 @@ export const vendorService = {
     return pricingHistoryService.getHistory(vendorId, query);
   },
 
+  /**
+   * Add / upsert a single product on a vendor's catalog (New PO "Add Vendor for
+   * this Item"). Ensures the SKU exists on the vendor (adds it if missing, updates
+   * rate/GST/HSN/unit if it exists), and records pricing history when the rate or
+   * GST is new or changed. Idempotent — re-saving the same values is a no-op (no
+   * error, no duplicate history). Returns the updated vendor.
+   */
+  async addProduct(vendorId, data, user) {
+    const vendor = await Vendor.findOne({ _id: vendorId, isDeleted: { $ne: true } });
+    if (!vendor) throw new AppError('Vendor not found', 404);
+
+    const ctx = {
+      source: PRICING_SOURCE.VENDOR_MASTER,
+      referenceId: vendor._id,
+      referenceNumber: '',
+      userId: user?._id,
+      userName: user?.name || '',
+      remarks: data.remarks || 'Vendor product added during PO creation',
+      effectiveDate: data.effectiveDate || new Date(),
+    };
+    // recordChange mutates vendor.products (adds when missing / updates when
+    // changed) and returns a history entry only when rate/GST actually changed.
+    const entry = pricingHistoryService.recordChange(vendor, {
+      skuId: data.skuId, skuCode: data.skuCode, itemName: data.productName,
+      newRate: data.rate, newGstRate: data.gstRate, hsn: data.hsn, unit: data.unit,
+    }, ctx);
+
+    // Persist HSN / notes / unit even when the rate didn't change (recordChange
+    // only stamps those on add or rate/GST change).
+    const target = findPrev(vendor.products, { skuCode: data.skuCode, skuId: data.skuId, productName: data.productName });
+    if (target) {
+      if (data.unit) target.unit = data.unit;
+      if (data.hsn != null) target.hsn = data.hsn;
+      if (data.notes != null) target.notes = data.notes;
+      if (!target.productName && data.productName) target.productName = data.productName;
+    }
+
+    vendor.updatedBy = user?._id;
+    await vendor.save();
+    if (entry) {
+      try { await pricingHistoryService.createHistory(entry); }
+      catch { /* audit insert is non-fatal */ }
+    }
+    return vendor.toObject();
+  },
+
   async addPricingHistory(vendorId, data, user) {
     const vendor = await Vendor.findOne({ _id: vendorId, isDeleted: { $ne: true } });
     if (!vendor) throw new AppError('Vendor not found', 404);

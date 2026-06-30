@@ -33,6 +33,11 @@ export const vendorApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/vendors/${id}/pricing-history`, method: 'POST', body }),
       invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
     }),
+    // Add / upsert a product on a vendor's catalog (New PO "Add Vendor for this Item").
+    addVendorProduct: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/vendors/${id}/products`, method: 'POST', body }),
+      invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
+    }),
   }),
 });
 
@@ -44,4 +49,5 @@ export const {
   useDeleteVendorMutation,
   useGetVendorPricingHistoryQuery,
   useAddVendorPricingHistoryMutation,
+  useAddVendorProductMutation,
 } = vendorApi;

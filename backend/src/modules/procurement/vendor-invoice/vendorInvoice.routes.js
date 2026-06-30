@@ -27,6 +27,7 @@ router.route('/')
 
 router.get('/stats', c.getStats);
 router.get('/invoiceable-qcs', c.getInvoiceableQcs);
+router.get('/invoiceable-grns', c.getInvoiceableGrns); // Step 1.10 — GRN-first invoice creation
 router.get('/by-qc/:qcId', validate(qcIdParamSchema, 'params'), c.getByQc);
 
 router.route('/:id')
