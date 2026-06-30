@@ -11,6 +11,21 @@ import { setCredentials } from '../../store/slices/authSlice';
 import { baseApi } from '../../store/api/baseApi';
 import AmbikaLogo from '../../assets/ambikalogo.jpeg';
 
+// A connection/server hiccup is NOT a bad password — auto-retry those, and only
+// show "check your credentials" for a real 400/401.
+const isTransientError = (err) => {
+  const s = err?.status;
+  return s === 'FETCH_ERROR' || s === 'TIMEOUT_ERROR' || s === 503 || (typeof s === 'number' && s >= 500);
+};
+const messageFor = (err) => {
+  if (!err) return null;
+  const s = err.status;
+  if (s === 400 || s === 401) return err.data?.message || 'Incorrect email or password.';
+  if (s === 'FETCH_ERROR' || s === 'TIMEOUT_ERROR') return 'Can’t reach the server right now. Check your connection and try again.';
+  if (isTransientError(err)) return err.data?.message || 'The server is reconnecting. Please try again in a moment.';
+  return err.data?.message || 'Sign in failed. Please try again.';
+};
+
 const Feature = ({ icon: Icon, title, desc }) => (
   <Box sx={{ display: 'flex', gap: 1.75, alignItems: 'flex-start' }}>
     <Box
@@ -37,12 +52,15 @@ const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [login, { isLoading, error }] = useLoginMutation();
   const dispatch = useDispatch();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  // Attempt the login, transparently retrying a transient connection/server blip
+  // a couple of times before showing an error — so the user no longer has to
+  // "click 2–3 times" while the database reconnects.
+  const attemptLogin = async (attempt = 1) => {
     try {
       const response = await login({ email, password }).unwrap();
       // Clear any cached data from a previous session before this user's queries run,
@@ -51,9 +69,23 @@ const Login = () => {
       dispatch(setCredentials({ user: response.data.user, token: response.data.token }));
       navigate('/dashboard');
     } catch (err) {
+      if (isTransientError(err) && attempt < 3) {
+        setRetrying(true);
+        await new Promise((r) => setTimeout(r, 700 * attempt));
+        return attemptLogin(attempt + 1);
+      }
+      setRetrying(false);
       console.error('Failed to log in:', err);
     }
   };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setRetrying(false);
+    attemptLogin(1);
+  };
+
+  const busy = isLoading || retrying;
 
   return (
     <Box
@@ -262,7 +294,24 @@ const Login = () => {
                 />
               </Box>
 
-              {error && (
+              {retrying && (
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 1.5, borderRadius: 2,
+                    bgcolor: 'rgba(29, 78, 216, 0.06)',
+                    border: '1px solid', borderColor: 'rgba(29, 78, 216, 0.22)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
+                  }}
+                >
+                  <CircularProgress size={14} />
+                  <Typography sx={{ color: 'primary.main', fontSize: '0.85rem', fontWeight: 600 }}>
+                    Connecting to the workspace…
+                  </Typography>
+                </Paper>
+              )}
+
+              {error && !busy && (
                 <Paper
                   elevation={0}
                   sx={{
@@ -274,7 +323,7 @@ const Login = () => {
                   }}
                 >
                   <Typography sx={{ color: 'error.main', fontSize: '0.85rem', fontWeight: 600, textAlign: 'center' }}>
-                    {error.data?.message || 'Sign in failed. Please verify your credentials.'}
+                    {messageFor(error)}
                   </Typography>
                 </Paper>
               )}
@@ -284,8 +333,8 @@ const Login = () => {
                 type="submit"
                 variant="contained"
                 size="large"
-                disabled={isLoading}
-                endIcon={!isLoading && <ArrowRight size={18} />}
+                disabled={busy}
+                endIcon={!busy && <ArrowRight size={18} />}
                 sx={{
                   py: 1.5,
                   fontSize: '0.95rem',
@@ -295,7 +344,9 @@ const Login = () => {
                   mt: 0.5,
                 }}
               >
-                {isLoading ? <CircularProgress size={22} sx={{ color: 'white' }} /> : 'Sign in to workspace'}
+                {busy
+                  ? <Stack direction="row" spacing={1} alignItems="center"><CircularProgress size={20} sx={{ color: 'white' }} /><span>{retrying ? 'Reconnecting…' : 'Signing in…'}</span></Stack>
+                  : 'Sign in to workspace'}
               </Button>
 
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mt: 1 }}>

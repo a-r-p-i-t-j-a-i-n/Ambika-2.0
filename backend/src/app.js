@@ -69,15 +69,18 @@ app.use(cors({ origin: '*', credentials: true }));
 app.use(mongoSanitize());
 app.use(hpp());
 
-// ── Rate Limiting if ───────────────────────────────────────────
-const limiter = rateLimit({
-  windowMs: env.RATE_LIMIT_WINDOW_MS,
-  max: env.RATE_LIMIT_MAX,
-  message: { success: false, message: 'Too many requests, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api', limiter);
+// ── Rate Limiting — DISABLED ────────────────────────────────────
+// The app polls / refetches several endpoints continuously, so a global /api
+// limiter tripped easily and returned 429 on normal use (including login).
+// Removed per request. To re-enable, uncomment the block below.
+// const limiter = rateLimit({
+//   windowMs: env.RATE_LIMIT_WINDOW_MS,
+//   max: env.RATE_LIMIT_MAX,
+//   message: { success: false, message: 'Too many requests, please try again later.' },
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
+// app.use('/api', limiter);
 
 // ── Body Parsing & Compression ──────────────────────────────
 app.use(express.json({ limit: '10mb' }));

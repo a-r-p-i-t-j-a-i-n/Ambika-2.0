@@ -3,7 +3,7 @@ import {
   Box, Paper, Stack, Typography, Chip, Button, Skeleton, alpha, Divider,
 } from '@mui/material';
 import {
-  ArrowLeft, History, CheckCircle2, ListChecks, RefreshCw, UserCog, Paperclip, MessageSquare, FileEdit,
+  ArrowLeft, History, CheckCircle2, ListChecks, RefreshCw, UserCog, Paperclip, MessageSquare, FileEdit, Truck,
 } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetProcessByIdQuery } from '../../store/api/o2dFmsApi';
@@ -16,6 +16,7 @@ const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium
 const ACTIVITY = {
   ORDER_ENTRY:        { icon: CheckCircle2, label: 'Order received',     color: '#0f766e' },
   STEP_COMPLETED:     { icon: CheckCircle2, label: 'Step completed',     color: '#0f766e' },
+  DISPATCH_PROGRESS:  { icon: Truck,        label: 'Dispatch recorded',  color: '#1d4ed8' },
   CHECKLIST_TICKED:   { icon: ListChecks,   label: 'Checklist ticked',   color: '#1d4ed8' },
   CHECKLIST_UNTICKED: { icon: ListChecks,   label: 'Checklist unticked', color: '#94a3b8' },
   STEP_PLAN_UPDATED:  { icon: FileEdit,     label: 'Plan updated',       color: '#b45309' },

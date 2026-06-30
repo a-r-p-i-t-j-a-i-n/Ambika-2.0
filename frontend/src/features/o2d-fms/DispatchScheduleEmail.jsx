@@ -3,16 +3,17 @@ import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, Chip, alpha, useTheme,
   CircularProgress, Divider, Box, Table, TableBody, TableCell, TableHead, TableRow, Skeleton,
 } from '@mui/material';
-import { Mail, Send, Paperclip, FileText, CheckCircle2, Download, CalendarRange } from 'lucide-react';
+import { Mail, Send, Paperclip, FileText, CheckCircle2, Download, CalendarRange, ArrowLeft } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import O2dStepShell from './components/O2dStepShell';
 import AttachmentList from '../../components/AttachmentList';
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useGetScheduleQuery, useEmailDispatchScheduleMutation } from '../../store/api/dispatchControlApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
-import { useUploadFileMutation, useAddStepAttachmentsMutation } from '../../store/api/o2dFmsApi';
+import { useUploadFileMutation, useAddStepAttachmentsMutation, useAddStepCommentMutation } from '../../store/api/o2dFmsApi';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
 import { printDispatchPlan } from '../../utils/printDispatchPlan';
@@ -38,13 +39,19 @@ const partyEmailOf = (p) => p?.email || (p?.toEmails || [])[0] || '';
  */
 const DispatchScheduleEmail = () => {
   const theme = useTheme();
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const { finishToTask } = useReturnToTask();
+  const me = useSelector((s) => s.auth.user);
+  const [addStepComment] = useAddStepCommentMutation();
 
   // FMS task context (set when arriving via "Do it now").
   const fromTask = params.get('fromTask');
   const fromStep = params.get('fromStep');
   const soFromTask = params.get('so') || '';
+  const cameFromTask = !!(fromTask && fromStep);
+  // Return to the task WITHOUT marking it done (just go review it).
+  const backToTask = () => cameFromTask && navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}`);
 
   const { data: ordersRes, isFetching: loadingOrders } = useGetOrdersQuery({ limit: 500, sort: '-orderDate' });
   const orders = useMemo(() => ordersRes?.data || [], [ordersRes]);
@@ -161,8 +168,21 @@ const DispatchScheduleEmail = () => {
       if (st && st !== 'SENT') {
         enqueueSnackbar(`Email could not be sent (${st}). Check SMTP settings.`, { variant: 'warning' });
       } else {
-        setSentInfo({ to: to.trim(), at: new Date() });
+        const at = new Date();
+        const by = me?.name || me?.email || 'You';
+        setSentInfo({ to: to.trim(), at, by });
         enqueueSnackbar(`Dispatch schedule emailed to ${to.trim()}.`, { variant: 'success' });
+        // Record who/when/to in the FMS step so it shows in the Tracker's activity.
+        if (fromTask && fromStep) {
+          try {
+            await addStepComment({
+              id: fromTask,
+              stepCode: fromStep,
+              text: `📧 Dispatch schedule emailed to ${to.trim()} by ${by} on ${dayjs(at).format('DD MMM YYYY · hh:mm A')}`
+                + (attachments.length ? ` · ${attachments.length} attachment(s)` : ''),
+            }).unwrap();
+          } catch { /* non-fatal */ }
+        }
       }
       // If we came from an FMS task, attach the prepared files to the step so the
       // proof shows in the tracker; the checklist auto-ticks on return.
@@ -178,6 +198,32 @@ const DispatchScheduleEmail = () => {
   return (
     <O2dStepShell icon={Mail} step="Step 2.5" title="Email Dispatch Schedule"
       subtitle="Pick the order — the plan loads, the recipient auto-fills from the party master. Review, attach the plan PDF and send." gate={gate}>
+      {/* Came from an FMS task — quick way back to the step. */}
+      {cameFromTask && (
+        <Paper elevation={0} sx={{
+          p: { xs: 1.25, md: 1.5 }, borderRadius: 2.5, mb: 2, display: 'flex', alignItems: 'center',
+          gap: 1.25, flexWrap: 'wrap',
+          bgcolor: 'background.paper',
+          border: `1px solid ${alpha(theme.palette.primary.main, 0.3)}`,
+          boxShadow: '0 6px 20px rgba(30,58,138,0.08)',
+        }}>
+          <Box sx={{ p: 0.85, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', display: 'flex', flexShrink: 0 }}>
+            <Mail size={16} />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 200 }}>
+            <Typography sx={{ fontWeight: 800, color: 'primary.dark', fontSize: '0.86rem', lineHeight: 1.2 }}>
+              Email Dispatch Schedule{soFromTask ? ` — ${soFromTask}` : ''}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
+              Send the email below — it returns to the task automatically. Or go back any time.
+            </Typography>
+          </Box>
+          <Button size="small" variant="outlined" startIcon={<ArrowLeft size={14} />} onClick={backToTask} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+            Back to task
+          </Button>
+        </Paper>
+      )}
+
       {/* Order picker */}
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Autocomplete
@@ -257,10 +303,10 @@ const DispatchScheduleEmail = () => {
             <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: 'text.secondary' }}>EMAIL PREVIEW — sends the dispatch schedule to the client</Typography>
           </Stack>
           {sentInfo && (
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2.5, py: 1, bgcolor: alpha(theme.palette.success.main, 0.08), borderBottom: `1px solid ${theme.palette.divider}` }}>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2.5, py: 1, bgcolor: alpha(theme.palette.success.main, 0.08), borderBottom: `1px solid ${theme.palette.divider}`, flexWrap: 'wrap' }}>
               <CheckCircle2 size={15} color={theme.palette.success.dark} />
               <Typography variant="caption" sx={{ fontWeight: 700, color: theme.palette.success.dark }}>
-                Emailed to {sentInfo.to} on {dayjs(sentInfo.at).format('DD MMM YYYY · hh:mm A')}
+                Emailed to {sentInfo.to}{sentInfo.by ? ` by ${sentInfo.by}` : ''} on {dayjs(sentInfo.at).format('DD MMM YYYY · hh:mm A')}
               </Typography>
             </Stack>
           )}

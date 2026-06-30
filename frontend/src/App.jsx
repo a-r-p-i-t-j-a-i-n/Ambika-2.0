@@ -71,6 +71,8 @@ const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsD
 const FmsStepConfig        = lazyWithRetry(() => import('./features/o2d-fms/StepDefinitionsConfig'));
 const FmsTaskTemplates     = lazyWithRetry(() => import('./features/o2d-fms/TaskTemplates'));
 const FmsScoreboard        = lazyWithRetry(() => import('./features/o2d-fms/Scoreboard'));
+const MisScoring           = lazyWithRetry(() => import('./features/o2d-fms/MisScoring'));
+const DoerProfile          = lazyWithRetry(() => import('./features/o2d-fms/DoerProfile'));
 // Purchase FMS
 const IndentList           = lazyWithRetry(() => import('./features/procurement/indents/IndentList'));
 const IndentDetail         = lazyWithRetry(() => import('./features/procurement/indents/IndentDetail'));
@@ -250,7 +252,8 @@ function App() {
             <Route path="/o2d-fms/dashboard" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsDashboard /></RequirePermission>} />
             <Route path="/o2d-fms/config" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsStepConfig /></RequirePermission>} />
             <Route path="/o2d-fms/templates" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsTaskTemplates /></RequirePermission>} />
-            <Route path="/o2d-fms/scores" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsScoreboard /></RequirePermission>} />
+            <Route path="/o2d-fms/scores" element={<RequirePermission slug="o2dfms.view" fallback="inline"><MisScoring /></RequirePermission>} />
+            <Route path="/o2d-fms/scores/:userId" element={<RequirePermission slug="o2dfms.view" fallback="inline"><DoerProfile /></RequirePermission>} />
 
             {/* Purchase FMS — Purchase Indents */}
             <Route path="/procurement/indents" element={<IndentList />} />

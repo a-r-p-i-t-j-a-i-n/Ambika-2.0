@@ -31,6 +31,14 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       query: () => '/o2d-fms/scores',
       providesTags: ['O2DDashboard'],
     }),
+    getMisScores: builder.query({
+      query: () => '/o2d-fms/mis-scores',
+      providesTags: ['O2DDashboard'],
+    }),
+    getDoerProfile: builder.query({
+      query: (userId) => `/o2d-fms/mis-scores/${userId}`,
+      providesTags: ['O2DDashboard'],
+    }),
     getProcesses: builder.query({
       query: (params) => ({ url: '/o2d-fms/processes', params }),
       providesTags: ['O2DProcess'],
@@ -209,6 +217,8 @@ export const {
   useGetAllTasksQuery,
   useGetFmsDashboardQuery,
   useGetFmsScoresQuery,
+  useGetMisScoresQuery,
+  useGetDoerProfileQuery,
   useGetProcessesQuery,
   useGetProcessByIdQuery,
   useGetProcessByOrderQuery,

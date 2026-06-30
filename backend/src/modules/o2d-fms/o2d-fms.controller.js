@@ -49,6 +49,14 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('Doer scores', await o2dFmsService.getDoerScores()));
   }),
 
+  misScores: asyncHandler(async (_req, res) => {
+    res.json(ApiResponse.ok('MIS scores', await o2dFmsService.getMisScores()));
+  }),
+
+  doerProfile: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Doer profile', await o2dFmsService.getDoerProfile(req.params.userId)));
+  }),
+
   completeStep: asyncHandler(async (req, res) => {
     const process = await o2dFmsService.completeStep(req.params.id, req.params.stepCode, req.body, req.user, { privileged: isPriv(req) });
     res.json(ApiResponse.ok(`Step '${req.params.stepCode}' completed`, process));

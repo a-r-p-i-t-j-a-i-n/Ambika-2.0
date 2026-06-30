@@ -28,6 +28,10 @@ const baseQueryWithAuthGuard = async (args, api, extraOptions) => {
 export const baseApi = createApi({
   reducerPath: 'api',
   baseQuery: baseQueryWithAuthGuard,
+  // Refetch active queries when the user refocuses the tab or the network
+  // reconnects — keeps live views (My Tasks, task page, trackers) current.
+  refetchOnFocus: true,
+  refetchOnReconnect: true,
   tagTypes: [
     'Party', 'Vendor', 'Transporter', 'SKU', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison',
     'Schedule', 'Challan', 'Invoice', 'SalesInvoice', 'Auth', 'PPC', 'Shipment', 'Payment',

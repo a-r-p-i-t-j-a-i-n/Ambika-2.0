@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useGetMyTasksQuery } from '../../store/api/o2dFmsApi';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+const num = (n) => Number(n || 0).toLocaleString('en-IN');
 const isDueSoon = (d) => d && (new Date(d) - Date.now()) > 0 && (new Date(d) - Date.now()) < 24 * 3600 * 1000;
 
 // Status chip shown in the dedicated Status column.
@@ -16,6 +17,11 @@ const statusChip = (t) => {
   if (t.isOverdue) return <Chip size="small" color="error" label="Overdue" />;
   if (t.status === 'DELAYED') return <Chip size="small" color="warning" label="Done late" />;
   if (t.status === 'DONE') return <Chip size="small" color="success" label="Done" />;
+  // Quantity-gated dispatch part-way through its phases — still the doer's task.
+  if (t.status === 'IN_PROGRESS') {
+    return <Chip size="small" color="primary"
+      label={t.dispatchProgress ? `In progress · ${num(t.dispatchProgress.balanceQty)} left` : 'In progress'} />;
+  }
   if (isDueSoon(t.planned)) return <Chip size="small" color="warning" variant="outlined" label="Due soon" />;
   return <Chip size="small" variant="outlined" label="Pending" />;
 };
@@ -32,15 +38,17 @@ const MyTasksWorkspace = () => {
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
   const tasks = data?.data || [];
-  const isPending = (t) => t.status === 'PENDING';
+  // "Actionable" = still on the doer's plate: PENDING or IN_PROGRESS (the phased
+  // dispatch task stays IN_PROGRESS and recurs until every phase ships).
+  const isActionable = (t) => t.status === 'PENDING' || t.status === 'IN_PROGRESS';
   const isDone = (t) => t.status === 'DONE' || t.status === 'DELAYED';
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = tasks.filter((t) => {
-      if (filter === 'actionable' && !isPending(t)) return false;
-      if (filter === 'overdue' && !(isPending(t) && t.isOverdue)) return false;
-      if (filter === 'dueSoon' && !(isPending(t) && isDueSoon(t.planned))) return false;
+      if (filter === 'actionable' && !isActionable(t)) return false;
+      if (filter === 'overdue' && !(isActionable(t) && t.isOverdue)) return false;
+      if (filter === 'dueSoon' && !(isActionable(t) && isDueSoon(t.planned))) return false;
       if (filter === 'done' && !isDone(t)) return false;
       if (filter === 'buddy' && !t.asBuddy) return false;
       if (q && !`${t.soNumber} ${t.partyName} ${t.name} ${t.stepCode} ${t.tool || ''}`.toLowerCase().includes(q)) return false;
@@ -59,9 +67,9 @@ const MyTasksWorkspace = () => {
   const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
   const counts = {
-    actionable: tasks.filter(isPending).length,
-    overdue: tasks.filter((t) => isPending(t) && t.isOverdue).length,
-    dueSoon: tasks.filter((t) => isPending(t) && isDueSoon(t.planned)).length,
+    actionable: tasks.filter(isActionable).length,
+    overdue: tasks.filter((t) => isActionable(t) && t.isOverdue).length,
+    dueSoon: tasks.filter((t) => isActionable(t) && isDueSoon(t.planned)).length,
     done: tasks.filter(isDone).length,
     buddy: tasks.filter((t) => t.asBuddy).length,
   };
@@ -160,6 +168,10 @@ const MyTasksWorkspace = () => {
                       <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap title={t.name}>{t.name}</Typography>
                       <Chip size="small" variant="outlined" label={t.stepCode} sx={{ flexShrink: 0 }} />
                       {t.tool && <Chip size="small" label={t.tool} sx={{ bgcolor: alpha('#1d4ed8', 0.08), flexShrink: 0 }} />}
+                      {t.dispatchProgress && (
+                        <Chip size="small" color="primary" variant="outlined" sx={{ flexShrink: 0, fontWeight: 700 }}
+                          label={`${num(t.dispatchProgress.dispatchedQty)}/${num(t.dispatchProgress.orderedQty)}${t.dispatchProgress.phasesTotal > 0 ? ` · ${t.dispatchProgress.phasesDone}/${t.dispatchProgress.phasesTotal} ph` : ''}`} />
+                      )}
                     </Stack>
                   </TableCell>
                   <TableCell sx={{ maxWidth: 220 }}>

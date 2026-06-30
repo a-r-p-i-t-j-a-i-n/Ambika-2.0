@@ -3,15 +3,19 @@ import {
   Box, Paper, Stack, Typography, Chip, LinearProgress, Skeleton, alpha, Button, Avatar, Tooltip,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, IconButton,
   Table, TableBody, TableCell, TableHead, TableRow, ToggleButtonGroup, ToggleButton,
-  Accordion, AccordionSummary, AccordionDetails,
+  Accordion, AccordionSummary, AccordionDetails, Checkbox,
 } from '@mui/material';
-import { ArrowLeft, CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2, Truck } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useGetProcessByIdQuery, usePlanOrderMutation } from '../../store/api/o2dFmsApi';
+import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
 import { useListAccessUsersQuery } from '../../store/api/accessControlApi';
 import { usePermissions } from '../../hooks/usePermission';
 import StepDetailCard from './components/StepDetailCard';
+import PhaseTimeline from '../planning/components/PhaseTimeline';
 import { ACTION_LINKS, actionLinkMeta } from './actionLinks';
+
+const num = (n) => Number(n || 0).toLocaleString('en-IN');
 
 const UNITS = ['MINUTES', 'HOURS', 'DAYS', 'WEEKS', 'MONTHS'];
 
@@ -46,7 +50,9 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
           assignees: (s.assignees?.length ? s.assignees : (s.assignedTo ? [s.assignedTo] : [])).map((x) => String(x._id || x)),
           buddies: (s.buddies?.length ? s.buddies : (s.buddyUserId ? [s.buddyUserId] : [])).map((x) => String(x._id || x)),
           leadValue: lt.value, leadUnit: lt.unit,
-          actionLink: s.actionLink || '',
+          // Multiple connected "Do it now" screens. Seed from the array, falling
+          // back to the legacy single key.
+          actionLinks: (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : [])),
           // Read-only gates carried from the template (shown so the full plan is visible).
           verifications: (s.verifications || []).map((v) => v.question),
           formFields: (s.formFields || []).map((f) => f.label),
@@ -74,7 +80,10 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
         buddies: r.buddies || [],
         leadTime: r.leadValue ? { value: Number(r.leadValue), unit: r.leadUnit } : undefined,
         checklist: r.checklist.filter(Boolean).map((text) => ({ text })),
-        actionLink: r.actionLink || null,
+        // Send the full set; mirror the first into the legacy single key so removing
+        // a link actually clears it everywhere (the task reads actionLinks first).
+        actionLinks: r.actionLinks || [],
+        actionLink: (r.actionLinks && r.actionLinks[0]) || null,
       })) }).unwrap();
       onSaved?.();
       onClose();
@@ -99,7 +108,9 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
                 {r.assignees.length > 0 && <Chip size="small" sx={{ bgcolor: alpha('#1d4ed8', 0.1) }} label={r.assignees.map((id) => nameOf(id)).filter(Boolean).join(', ') || `${r.assignees.length} doer(s)`} />}
                 {r.checklist.length > 0 && <Chip size="small" variant="outlined" label={`✓ ${r.checklist.length}`} />}
                 {r.leadValue && <Chip size="small" variant="outlined" label={`${r.leadValue} ${r.leadUnit.toLowerCase()}`} />}
-                {r.actionLink && <Chip size="small" sx={{ bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} label={`🔗 ${actionLinkMeta(r.actionLink)?.label || r.actionLink}`} />}
+                {(r.actionLinks || []).map((k) => (
+                  <Chip key={k} size="small" sx={{ bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} label={`🔗 ${actionLinkMeta(k)?.label || k}`} />
+                ))}
                 {r.verifications.length > 0 && <Chip size="small" variant="outlined" color="secondary" label={`${r.verifications.length} Q`} />}
                 {r.formFields.length > 0 && <Chip size="small" variant="outlined" color="info" label={`${r.formFields.length} field`} />}
                 {r.proofRequired && <Chip size="small" variant="outlined" color="warning" label="proof" />}
@@ -110,11 +121,26 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
               <Stack spacing={1.5}>
                 <TextField size="small" label="Task title" value={r.taskTitle} onChange={(e) => upd(i, { taskTitle: e.target.value })} fullWidth placeholder={r.stepName} />
                 <TextField size="small" label="Instructions" value={r.instructions} onChange={(e) => upd(i, { instructions: e.target.value })} fullWidth multiline minRows={2} />
-                {/* The connected system action ("Do it now" link) for this step. */}
-                <TextField select size="small" fullWidth label="Connect to system action — shows a 'Do it now' link on the task"
-                  value={r.actionLink || ''} onChange={(e) => upd(i, { actionLink: e.target.value })}>
-                  <MenuItem value=""><em>None</em></MenuItem>
-                  {ACTION_LINKS.map((a) => <MenuItem key={a.key} value={a.key}>{a.label}</MenuItem>)}
+                {/* Connected system actions — pick ANY number; each renders its own
+                    "Do it now" link on the doer's task. Deselecting one removes it. */}
+                <TextField select size="small" fullWidth
+                  label="Connect to system actions — each shows a 'Do it now' link on the task"
+                  value={r.actionLinks || []}
+                  onChange={(e) => upd(i, { actionLinks: typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value })}
+                  SelectProps={{
+                    multiple: true,
+                    displayEmpty: true,
+                    renderValue: (sel) => (sel && sel.length
+                      ? ACTION_LINKS.filter((a) => sel.includes(a.key)).map((a) => a.label).join(', ')
+                      : 'None'),
+                  }}
+                >
+                  {ACTION_LINKS.map((a) => (
+                    <MenuItem key={a.key} value={a.key}>
+                      <Checkbox size="small" checked={(r.actionLinks || []).includes(a.key)} sx={{ py: 0.25, mr: 0.5 }} />
+                      {a.label}
+                    </MenuItem>
+                  ))}
                 </TextField>
                 {(r.verifications.length > 0 || r.formFields.length > 0 || r.proofRequired || r.approvalRequired) && (
                   <Box sx={{ p: 1, borderRadius: 1, bgcolor: alpha('#475569', 0.05), border: '1px dashed', borderColor: 'divider' }}>
@@ -169,10 +195,11 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
 const STATUS = {
-  DONE:    { color: '#0f766e', label: 'Done' },
-  DELAYED: { color: '#b45309', label: 'Late' },
-  PENDING: { color: '#475569', label: 'Pending' },
-  SKIPPED: { color: '#94a3b8', label: 'Skipped' },
+  DONE:        { color: '#0f766e', label: 'Done' },
+  DELAYED:     { color: '#b45309', label: 'Late' },
+  IN_PROGRESS: { color: '#1d4ed8', label: 'In progress' },
+  PENDING:     { color: '#475569', label: 'Pending' },
+  SKIPPED:     { color: '#94a3b8', label: 'Skipped' },
 };
 
 const PHASE_LABEL = {
@@ -196,10 +223,60 @@ const SheetRow = ({ label, value }) => (
 // Board-view columns (group steps by where they stand).
 const BOARD_COLS = [
   { key: 'overdue', label: 'Overdue',        color: '#be123c', match: (s) => s.isOverdue },
-  { key: 'pending', label: 'Pending',        color: '#475569', match: (s) => s.status === 'PENDING' && !s.isOverdue },
+  { key: 'pending', label: 'Pending',        color: '#475569', match: (s) => (s.status === 'PENDING' || s.status === 'IN_PROGRESS') && !s.isOverdue },
   { key: 'done',    label: 'Done (on time)', color: '#0f766e', match: (s) => s.status === 'DONE' },
   { key: 'late',    label: 'Completed late', color: '#b45309', match: (s) => s.status === 'DELAYED' },
 ];
+
+// Phased/split dispatch panel — pulls the live schedule and shows the per-phase
+// timeline + an overall qty progress bar. Visible whenever the order has the
+// quantity-gated dispatch step, so the tracker reflects "done for phase 1, pending
+// for the rest" instead of one all-or-nothing tick.
+const DispatchPhasesPanel = ({ soNumber, dispatchStep, onPhaseClick }) => {
+  const { data, isFetching } = useGetScheduleQuery(soNumber, { skip: !soNumber });
+  const sched = data?.data;
+  const phaseChips = sched?.phaseChips || [];
+  const totals = sched?.totals || {};
+  const prog = dispatchStep?.dispatchProgress || {};
+
+  const ordered    = prog.orderedQty ?? totals.orderQty ?? 0;
+  const dispatched = prog.dispatchedQty ?? totals.actualQty ?? 0;
+  const balance    = prog.balanceQty ?? Math.max(0, ordered - dispatched);
+  const pct        = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
+  const phasesTotal = prog.phasesTotal ?? new Set(phaseChips.map((p) => p.phaseNo)).size;
+  const done = ['DONE', 'DELAYED'].includes(dispatchStep?.status);
+  const accent = done ? '#0f766e' : '#1d4ed8';
+
+  return (
+    <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
+      <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+        <Truck size={18} color={accent} />
+        <Typography sx={{ fontWeight: 800 }}>Dispatch — phased</Typography>
+        <Chip size="small" label={done ? 'Fully dispatched' : 'In progress'}
+          sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
+        <Box sx={{ flex: 1 }} />
+        <Typography variant="caption" color="text.secondary">
+          {num(prog.phasesDone ?? 0)} / {num(phasesTotal)} phase{phasesTotal === 1 ? '' : 's'} done
+        </Typography>
+      </Stack>
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          <strong style={{ color: accent }}>{num(dispatched)}</strong> / {num(ordered)} pcs dispatched · {num(balance)} pending
+        </Typography>
+        <Typography variant="caption" sx={{ fontWeight: 700 }}>{pct}%</Typography>
+      </Stack>
+      <LinearProgress variant="determinate" value={pct}
+        sx={{ height: 8, borderRadius: 4, mb: 1.5, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
+      {isFetching && !phaseChips.length ? (
+        <Skeleton variant="rounded" height={130} />
+      ) : phaseChips.length ? (
+        <PhaseTimeline phaseChips={phaseChips} onPhaseClick={onPhaseClick} />
+      ) : (
+        <Typography variant="caption" color="text.secondary">No dispatch plan / phases created yet.</Typography>
+      )}
+    </Paper>
+  );
+};
 
 const ProcessDetail = () => {
   const { id } = useParams();
@@ -216,6 +293,9 @@ const ProcessDetail = () => {
   const steps = process?.steps || [];
   const completed = steps.filter((s) => ['DONE', 'DELAYED'].includes(s.status)).length;
   const pct = steps.length ? Math.round((completed / steps.length) * 100) : 0;
+  // The quantity-gated dispatch step (if any) drives the phased-dispatch panel.
+  const dispatchStep = steps.find((s) => s.quantityGated || s.dispatchProgress);
+  const openPlanForPhase = (p) => navigate(`/dispatch-planning?so=${encodeURIComponent(process.soNumber)}${p?.phaseNo ? `&phase=${encodeURIComponent(p.phaseNo)}` : ''}`);
 
   // Group steps by phase for visual sectioning.
   const phases = steps.reduce((acc, s) => {
@@ -263,6 +343,12 @@ const ProcessDetail = () => {
               <LinearProgress variant="determinate" value={pct} sx={{ height: 8, borderRadius: 4 }} />
             </Box>
           </Paper>
+
+          {/* Phased/split dispatch — per-phase progress so the dispatch step isn't
+              shown "done" after only phase 1. */}
+          {dispatchStep && process.soNumber && (
+            <DispatchPhasesPanel soNumber={process.soNumber} dispatchStep={dispatchStep} onPhaseClick={openPlanForPhase} />
+          )}
 
           {/* Four ways to read the same flow — MD picks whatever's clearest. */}
           <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1 }}>
@@ -312,7 +398,16 @@ const ProcessDetail = () => {
                             ? <Typography variant="body2">{doerNames(s)}</Typography>
                             : <Typography variant="caption" color="text.secondary">{s.defaultOwnerRole || 'Unassigned'}</Typography>}
                         </TableCell>
-                        <TableCell><Chip size="small" label={s.isOverdue ? 'Overdue' : tn.label} sx={{ bgcolor: alpha(s.isOverdue ? '#be123c' : tn.color, 0.12), color: s.isOverdue ? '#be123c' : tn.color, fontWeight: 600 }} /></TableCell>
+                        <TableCell>
+                          <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                            <Chip size="small" label={s.isOverdue ? 'Overdue' : tn.label} sx={{ bgcolor: alpha(s.isOverdue ? '#be123c' : tn.color, 0.12), color: s.isOverdue ? '#be123c' : tn.color, fontWeight: 600 }} />
+                            {s.dispatchProgress && (
+                              <Tooltip title={`${num(s.dispatchProgress.dispatchedQty)} of ${num(s.dispatchProgress.orderedQty)} pcs dispatched`}>
+                                <Chip size="small" variant="outlined" icon={<Truck size={11} />} label={`${num(s.dispatchProgress.dispatchedQty)}/${num(s.dispatchProgress.orderedQty)}`} sx={{ fontWeight: 700 }} />
+                              </Tooltip>
+                            )}
+                          </Stack>
+                        </TableCell>
                         <TableCell><Typography variant="caption">{fmt(s.planned)}</Typography></TableCell>
                         <TableCell><Typography variant="caption">{fmt(s.actual)}</Typography></TableCell>
                         <TableCell align="right">{s.delayMins > 0 ? <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 700 }}>+{s.delayMins}m</Typography> : <Typography variant="caption" color="text.secondary">—</Typography>}</TableCell>

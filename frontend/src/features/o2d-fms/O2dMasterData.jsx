@@ -55,6 +55,11 @@ const COLUMNS = {
     col('dcDate', 'Date', { minWidth: 120, valueGetter: (v, r) => dd(r.dcDate) }),
     col('partyName', 'Party', { minWidth: 160 }),
     col('soNumber', 'SO / PO', { minWidth: 150, valueGetter: (v, r) => `${r.soNumber || '—'}${r.poNumber ? ` / ${r.poNumber}` : ''}` }),
+    col('phase', 'Phase', { minWidth: 100, valueGetter: (v, r) => (
+      r.isUnplanned
+        ? 'Unplanned'
+        : ([...new Set((r.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || r.phaseRef?.phaseNo || '—')
+    ) }),
     col('totalQuantityPcs', 'Qty (pcs)', { minWidth: 100, type: 'number', valueGetter: (v, r) => Number(r.totalQuantityPcs || 0) }),
     col('totalBoxes', 'Boxes', { minWidth: 80, type: 'number', valueGetter: (v, r) => Number(r.totalBoxes || 0) }),
     col('transporterName', 'Transporter', { minWidth: 140, valueGetter: (v, r) => r.transporterName || '—' }),

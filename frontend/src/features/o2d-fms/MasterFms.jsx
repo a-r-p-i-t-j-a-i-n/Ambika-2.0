@@ -14,11 +14,22 @@ import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
 const fmtD = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
 // Step → display tone. Current = the step the order is waiting on right now.
+// IN_PROGRESS (quantity-gated dispatch part-way through its phases) shows blue
+// even when the "current" pointer has moved on to the next step.
 const stepTone = (s, currentStepCode) => {
   if (['DONE', 'DELAYED'].includes(s.status)) return { bg: '#0f766e', label: 'Done' };
+  if (s.status === 'IN_PROGRESS') return { bg: '#1d4ed8', label: 'In progress' };
   if (s.isOverdue) return { bg: '#be123c', label: 'Overdue' };
   if (s.stepCode === currentStepCode) return { bg: '#1d4ed8', label: 'In progress' };
   return { bg: '#cbd5e1', label: 'Waiting' };
+};
+
+// Short "1/5" phase tag for the dispatch step while it's mid-flight.
+const dispatchTag = (s) => {
+  const dp = s.dispatchProgress;
+  if (!dp || s.status !== 'IN_PROGRESS') return '';
+  if (dp.phasesTotal > 0) return `${dp.phasesDone}/${dp.phasesTotal}`;
+  return dp.orderedQty > 0 ? `${dp.pct || 0}%` : '';
 };
 
 const progressPct = (steps = []) => {
@@ -27,10 +38,22 @@ const progressPct = (steps = []) => {
 };
 const overdueCount = (steps = []) => steps.filter((s) => s.isOverdue).length;
 
+const stepStatusLabel = (s) => {
+  if (['DONE', 'DELAYED'].includes(s.status)) return s.status === 'DELAYED' ? 'Done (late)' : 'Done';
+  if (s.status === 'IN_PROGRESS') return 'In progress';
+  return s.isOverdue ? 'Overdue' : 'Pending';
+};
+
 const stepTip = (s) => (
   <Box>
     <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>{s.stepCode} · {s.name}</Typography>
-    <Typography variant="caption" display="block">Status: {['DONE', 'DELAYED'].includes(s.status) ? (s.status === 'DELAYED' ? 'Done (late)' : 'Done') : (s.isOverdue ? 'Overdue' : 'Pending')}</Typography>
+    <Typography variant="caption" display="block">Status: {stepStatusLabel(s)}</Typography>
+    {s.dispatchProgress && (
+      <Typography variant="caption" display="block">
+        Dispatched: {Number(s.dispatchProgress.dispatchedQty || 0).toLocaleString('en-IN')} / {Number(s.dispatchProgress.orderedQty || 0).toLocaleString('en-IN')} pcs
+        {s.dispatchProgress.phasesTotal > 0 ? ` · ${s.dispatchProgress.phasesDone}/${s.dispatchProgress.phasesTotal} phases` : ''}
+      </Typography>
+    )}
     <Typography variant="caption" display="block">Planned: {fmtD(s.planned)}</Typography>
     {s.actual && <Typography variant="caption" display="block">Actual: {fmtD(s.actual)}</Typography>}
     {s.checklistTotal > 0 && <Typography variant="caption" display="block">Checklist: {s.checklistDone}/{s.checklistTotal}</Typography>}
@@ -59,7 +82,8 @@ const PipelineRow = ({ p, navigate }) => {
       <Stack direction="row" spacing={0} alignItems="center" sx={{ overflowX: 'auto', pb: 0.5 }}>
         {(p.steps || []).map((s, i) => {
           const tone = stepTone(s, p.currentStepCode);
-          const isCurrent = s.stepCode === p.currentStepCode && !['DONE', 'DELAYED'].includes(s.status);
+          const isCurrent = (s.stepCode === p.currentStepCode || s.status === 'IN_PROGRESS') && !['DONE', 'DELAYED'].includes(s.status);
+          const tag = dispatchTag(s);
           return (
             <React.Fragment key={s.stepCode}>
               {i > 0 && <Box sx={{ width: 14, height: 2, flexShrink: 0, bgcolor: alpha('#94a3b8', 0.5) }} />}
@@ -77,7 +101,7 @@ const PipelineRow = ({ p, navigate }) => {
                     '&:hover': { borderColor: tone.bg },
                   }}
                 >
-                  {s.stepCode}
+                  {tag ? `${s.stepCode} · ${tag}` : s.stepCode}
                 </Box>
               </Tooltip>
             </React.Fragment>

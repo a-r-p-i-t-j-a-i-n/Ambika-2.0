@@ -23,10 +23,11 @@ const { Schema, model } = mongoose;
 
 // Step lifecycle. "Overdue" is NOT stored — it is derived (PENDING && planned < now).
 export const O2D_STEP_STATUS = Object.freeze({
-  PENDING: 'PENDING',  // not done yet
-  DONE:    'DONE',     // completed on/before planned
-  DELAYED: 'DELAYED',  // completed AFTER planned (late)
-  SKIPPED: 'SKIPPED',  // intentionally skipped
+  PENDING:     'PENDING',     // not done yet
+  IN_PROGRESS: 'IN_PROGRESS', // partially done — used by quantity-gated steps (e.g. phased dispatch)
+  DONE:        'DONE',        // completed on/before planned
+  DELAYED:     'DELAYED',     // completed AFTER planned (late)
+  SKIPPED:     'SKIPPED',     // intentionally skipped
 });
 
 export const O2D_PHASE = Object.freeze({
@@ -97,6 +98,12 @@ const StepDefinitionSchema = new Schema({
   requiresLink:       { type: Boolean, default: false },  // must paste a link to complete
   requiresAttachment: { type: Boolean, default: false },  // must attach a file to complete
   allowIncompleteChecklist: { type: Boolean, default: false }, // allow Mark Done with unticked items
+
+  // Quantity-gated step: completes only when the order is fully dispatched (balance 0),
+  // not on the first action. Drives the phased/split-dispatch behavior. The runtime also
+  // treats any step whose triggerKey is ACTUAL_DISPATCH as quantity-gated, so this flag is
+  // primarily documentation / forward-compat.
+  quantityGated: { type: Boolean, default: false },
 
   isActive: { type: Boolean, default: true },
 }, baseSchemaOptions);
@@ -233,6 +240,22 @@ const ProcessStepSchema = new Schema({
   assignedTo:  { type: Schema.Types.ObjectId, ref: 'User', default: null },
   buddyUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   completedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+
+  // Phased/split dispatch progress (only populated on the quantity-gated dispatch step).
+  // Denormalised summary so list/board/My-Tasks can show "1,000 / 5,000" without loading
+  // the schedule. The per-phase detail is read live from the DispatchSchedule on the UI.
+  dispatchProgress: {
+    type: new Schema({
+      orderedQty:    { type: Number, default: 0 },
+      dispatchedQty: { type: Number, default: 0 },
+      balanceQty:    { type: Number, default: 0 },
+      pct:           { type: Number, default: 0 },   // 0..100
+      phasesTotal:   { type: Number, default: 0 },
+      phasesDone:    { type: Number, default: 0 },
+      updatedAt:     { type: Date, default: null },
+    }, { _id: false }),
+    default: null,
+  },
 
   escalatedAt: { type: Date, default: null }, // set when an SLA-breach email was sent (dedup guard)
 }, { _id: true });

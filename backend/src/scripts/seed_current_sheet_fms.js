@@ -52,8 +52,10 @@ const STEPS = [
   { stepCode: '2.05', name: 'Email Dispatch Schedule', sequence: 5, phase: 'PLANNING',
     ownerName: 'Aarti', ownerEmail: 'imp@msambikaglobal.in', tool: 'Mail', slaMinutes: 60 },
 
+  // Quantity-gated: stays IN-PROGRESS across phases and completes only when the whole
+  // order is dispatched (balance 0). Drives the phased/split-dispatch tracker view.
   { stepCode: '2.06', name: 'Final Qty to be dispatched (Create Delivery Challan)', sequence: 6, phase: 'EXECUTION',
-    ownerName: 'Nidhi', ownerEmail: 'accounts@msambikaglobal.in', whenText: '10 days', slaMinutes: 14400 },
+    ownerName: 'Nidhi', ownerEmail: 'accounts@msambikaglobal.in', whenText: '10 days', slaMinutes: 14400, quantityGated: true },
 
   { stepCode: '2.07', name: 'Create Invoice & Eway Bill', sequence: 7, phase: 'EXECUTION',
     ownerName: 'Upasana', ownerEmail: 'pc@msambikaglobal.in', tool: 'Tally', slaMinutes: 60, requiresLink: true },

@@ -69,6 +69,12 @@ router.get('/dashboard',
 router.get('/scores',
   requirePermission('o2dfms.view'), c.scores);
 
+router.get('/mis-scores',
+  requirePermission('o2dfms.view'), c.misScores);
+
+router.get('/mis-scores/:userId',
+  requirePermission('o2dfms.view'), c.doerProfile);
+
 router.get('/processes',
   requirePermission('o2dfms.view'), validate(listQuerySchema, 'query'), c.listProcesses);
 

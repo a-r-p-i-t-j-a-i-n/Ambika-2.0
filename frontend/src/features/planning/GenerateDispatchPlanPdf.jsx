@@ -113,49 +113,50 @@ const GenerateDispatchPlanPdf = () => {
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       {/* Hero */}
       <Box sx={{
-        color: '#fff', px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 7 },
+        color: '#fff', px: { xs: 2.5, md: 3.5 }, pt: { xs: 2.75, md: 3.25 }, pb: { xs: 3.5, md: 4.25 },
         background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
       }}>
-        <Stack direction="row" spacing={2.5} alignItems="center">
-          <Box sx={{ width: 52, height: 52, borderRadius: 2.5, display: 'grid', placeItems: 'center',
+        <Stack direction="row" spacing={1.75} alignItems="center">
+          <Box sx={{ width: 42, height: 42, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0,
             background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <FileText size={26} color="#fff" />
+            <FileText size={20} color="#fff" />
           </Box>
-          <Box>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ color: '#fff', fontSize: { xs: '1rem', md: '1.15rem' }, fontWeight: 800, letterSpacing: '-0.01em', lineHeight: 1.15 }}>
               Generate Dispatch Plan PDF
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>
+            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.75rem', mt: 0.3 }}>
               Pick an order — its dispatch schedule auto-fills. Preview and download a professional plan PDF.
             </Typography>
           </Box>
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6 }}>
+      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -2.5, md: -3 }, position: 'relative', zIndex: 1, pb: 6, maxWidth: 1240, mx: 'auto' }}>
         {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Came from an FMS step — the plan PDF opens automatically; this banner
             brings the doer straight back to the step to submit. */}
         {cameFromTask && (
-          <Paper sx={{
-            p: { xs: 1.5, md: 2 }, borderRadius: 3, mb: 2, display: 'flex', alignItems: 'center',
-            gap: 1.5, flexWrap: 'wrap',
-            bgcolor: alpha(theme.palette.primary.main, 0.06),
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.35)}`,
+          <Paper elevation={0} sx={{
+            p: { xs: 1.25, md: 1.5 }, borderRadius: 2.5, mb: 2, display: 'flex', alignItems: 'center',
+            gap: 1.25, flexWrap: 'wrap',
+            // Solid card (NOT translucent) so the dark hero never bleeds through it.
+            bgcolor: 'background.paper',
+            border: `1px solid ${alpha(theme.palette.primary.main, 0.3)}`,
+            boxShadow: '0 6px 20px rgba(30,58,138,0.08)',
           }}>
-            <Box sx={{ p: 1, borderRadius: 2, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', display: 'flex' }}>
-              <Zap size={18} />
+            <Box sx={{ p: 0.85, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', display: 'flex', flexShrink: 0 }}>
+              <Zap size={16} />
             </Box>
             <Box sx={{ flex: 1, minWidth: 200 }}>
-              <Typography variant="body2" sx={{ fontWeight: 800, color: 'primary.dark' }}>
+              <Typography sx={{ fontWeight: 800, color: 'primary.dark', fontSize: '0.86rem', lineHeight: 1.2 }}>
                 Generate Dispatch Plan{soFromTask ? ` — ${soFromTask}` : ''}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
-                The plan PDF opens in a new tab. When you’ve reviewed it, click “Back to task” to
-                mark the step done — it then shows in the FMS Tracker &amp; Master FMS.
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
+                The plan PDF opens in a new tab — review it, then “Back to task” to mark the step done.
               </Typography>
             </Box>
-            <Button variant="contained" endIcon={<ArrowRight size={15} />} startIcon={<CheckCircle2 size={15} />}
+            <Button size="small" variant="contained" endIcon={<ArrowRight size={14} />} startIcon={<CheckCircle2 size={14} />}
               onClick={backToTask} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
               Back to task
             </Button>
@@ -208,45 +209,53 @@ const GenerateDispatchPlanPdf = () => {
 
         {/* Preview */}
         {hasPlan && (
-          <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-            <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>{schedule.partyName || order?.partyName || '—'}</Typography>
-                <Typography variant="caption" color="text.secondary">
+          <Paper sx={{ borderRadius: 3, overflow: 'hidden', border: `1px solid ${theme.palette.divider}` }}>
+            <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={{ fontWeight: 800, fontSize: '0.95rem' }} noWrap>{schedule.partyName || order?.partyName || '—'}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
                   {schedule.soNumber || order?.soNumber || '—'}{(schedule.poNumber || order?.poNumber) ? ` · PO ${schedule.poNumber || order?.poNumber}` : ''} · {(schedule.items || []).length} SKU(s)
                 </Typography>
               </Box>
-              <Chip label={`Total planned: ${num(totalPlanned)}`} sx={{ fontWeight: 800, bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} />
+              <Chip size="small" label={`Total planned: ${num(totalPlanned)}`} sx={{ fontWeight: 700, fontSize: '0.72rem', bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} />
             </Box>
             <Box sx={{ overflowX: 'auto' }}>
-              <Table size="small" sx={{ minWidth: 760 }}>
+              <Table size="small" sx={{
+                minWidth: 720,
+                '& td, & th': { fontSize: '0.76rem', py: 0.6, px: 1.25, borderColor: theme.palette.divider },
+              }}>
                 <TableHead>
                   <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
                     {['SKU', 'PO Qty', 'Dispatched', 'Balance', 'Phase', 'Planned Date', 'Planned Qty', 'Status'].map((h, i) => (
-                      <TableCell key={h} align={[1, 2, 3, 6].includes(i) ? 'right' : 'left'} sx={{ fontWeight: 800, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</TableCell>
+                      <TableCell key={h} align={[1, 2, 3, 6].includes(i) ? 'right' : 'left'}
+                        sx={{ fontWeight: 700, fontSize: '0.64rem !important', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'text.secondary', whiteSpace: 'nowrap' }}>{h}</TableCell>
                     ))}
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {phaseRows.map((r, i) => (
-                    <TableRow key={i} hover>
-                      {(r.first || !r.phase) ? (
-                        <>
-                          <TableCell rowSpan={r.phase ? (r.it.phases || []).length : 1}>
-                            <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: '0.78rem', color: theme.palette.primary.dark }}>{r.it.skuCode}</Typography>
-                            <Typography variant="caption" color="text.secondary">{r.it.skuName}</Typography>
-                          </TableCell>
-                          <TableCell align="right" rowSpan={r.phase ? (r.it.phases || []).length : 1}>{num(r.it.poQty)}</TableCell>
-                          <TableCell align="right" rowSpan={r.phase ? (r.it.phases || []).length : 1}>{num(r.it.dispatchedQty)}</TableCell>
-                          <TableCell align="right" rowSpan={r.phase ? (r.it.phases || []).length : 1} sx={{ fontWeight: 700 }}>{num(r.it.balanceQty)}</TableCell>
-                        </>
-                      ) : null}
-                      <TableCell>{r.phase ? <Chip size="small" label={r.phase.phaseNo} sx={{ fontWeight: 800, height: 20 }} /> : <Typography variant="caption" color="text.disabled">—</Typography>}</TableCell>
-                      <TableCell>{r.phase ? fmtDate(r.phase.plannedDate) : <Typography variant="caption" color="text.disabled">no plan</Typography>}</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 800 }}>{r.phase ? num(r.phase.plannedQty) : '—'}</TableCell>
-                      <TableCell>{r.phase ? <Chip size="small" color={STATUS_COLOR[r.phase.status] || 'default'} variant="outlined" label={r.phase.status} sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700 }} /> : null}</TableCell>
-                    </TableRow>
-                  ))}
+                  {phaseRows.map((r, i) => {
+                    const isNewSku = r.first || !r.phase;
+                    const span = r.phase ? (r.it.phases || []).length : 1;
+                    return (
+                      <TableRow key={i} hover sx={{ '& td': { borderTop: isNewSku && i > 0 ? `1px solid ${theme.palette.divider}` : 'none' } }}>
+                        {isNewSku ? (
+                          <>
+                            <TableCell rowSpan={span} sx={{ verticalAlign: 'top', borderRight: `1px solid ${alpha(theme.palette.divider, 0.7)}` }}>
+                              <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: '0.74rem', color: theme.palette.primary.dark, lineHeight: 1.3 }}>{r.it.skuCode}</Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.66rem' }}>{r.it.skuName}</Typography>
+                            </TableCell>
+                            <TableCell align="right" rowSpan={span} sx={{ verticalAlign: 'top', fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{num(r.it.poQty)}</TableCell>
+                            <TableCell align="right" rowSpan={span} sx={{ verticalAlign: 'top', fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{num(r.it.dispatchedQty)}</TableCell>
+                            <TableCell align="right" rowSpan={span} sx={{ verticalAlign: 'top', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: Number(r.it.balanceQty) > 0 ? theme.palette.warning.dark : 'text.primary' }}>{num(r.it.balanceQty)}</TableCell>
+                          </>
+                        ) : null}
+                        <TableCell>{r.phase ? <Chip size="small" label={r.phase.phaseNo} sx={{ fontWeight: 700, height: 18, fontSize: '0.6rem', bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} /> : <Typography variant="caption" color="text.disabled">—</Typography>}</TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>{r.phase ? fmtDate(r.phase.plannedDate) : <Typography variant="caption" color="text.disabled">no plan</Typography>}</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: theme.palette.primary.dark }}>{r.phase ? num(r.phase.plannedQty) : '—'}</TableCell>
+                        <TableCell>{r.phase ? <Chip size="small" color={STATUS_COLOR[r.phase.status] || 'default'} variant="outlined" label={r.phase.status} sx={{ height: 18, fontSize: '0.56rem', fontWeight: 700 }} /> : null}</TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </Box>

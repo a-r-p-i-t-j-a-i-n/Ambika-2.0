@@ -7,7 +7,7 @@ import {
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
-  ExternalLink,
+  ExternalLink, Truck,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -17,7 +17,11 @@ import {
   useAnswerVerificationMutation, useFillFormFieldMutation, useApproveStepMutation,
   useMarkActionDoneMutation,
 } from '../../../store/api/o2dFmsApi';
+import { useGetScheduleQuery } from '../../../store/api/dispatchControlApi';
+import PhaseTimeline from '../../planning/components/PhaseTimeline';
 import { resolveActionLink, actionLinkMeta, resolveEntityLink } from '../actionLinks';
+
+const num = (n) => Number(n || 0).toLocaleString('en-IN');
 import { useListAccessUsersQuery } from '../../../store/api/accessControlApi';
 import { useSelector } from 'react-redux';
 import AttachmentList from '../../../components/AttachmentList';
@@ -26,10 +30,11 @@ import VoiceRecorder from '../../../components/VoiceRecorder';
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
 const STATUS_TONE = {
-  DONE:    { color: '#0f766e', label: 'Completed' },
-  DELAYED: { color: '#b45309', label: 'Completed (late)' },
-  PENDING: { color: '#475569', label: 'Pending' },
-  SKIPPED: { color: '#94a3b8', label: 'Skipped' },
+  DONE:        { color: '#0f766e', label: 'Completed' },
+  DELAYED:     { color: '#b45309', label: 'Completed (late)' },
+  IN_PROGRESS: { color: '#1d4ed8', label: 'In progress' },
+  PENDING:     { color: '#475569', label: 'Pending' },
+  SKIPPED:     { color: '#94a3b8', label: 'Skipped' },
 };
 
 // The connected-action keys on a step (multiple allowed; legacy single → [single]).
@@ -169,6 +174,14 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const { data: procRes } = useGetProcessByIdQuery(processId, { skip: !open || !processId });
   const liveStep = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
 
+  // Phased / split dispatch: when this is the quantity-gated dispatch step, pull the
+  // live schedule so the card can show the per-phase breakdown + overall progress.
+  const isQtyGated = !!(liveStep?.quantityGated || liveStep?.dispatchProgress);
+  const { data: schedRes } = useGetScheduleQuery(
+    procRes?.data?.soNumber,
+    { skip: !open || !procRes?.data?.soNumber || !isQtyGated },
+  );
+
   // Seed reassign multi-selects from the step's current doers/buddies.
   React.useEffect(() => {
     const a = (liveStep?.assignees?.length ? liveStep.assignees : [liveStep?.assignedTo]).filter(Boolean);
@@ -249,6 +262,17 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const remaining = checklist.filter((c) => !c.done).length;
   const proc = procRes?.data;
 
+  // ── Next step in this order's flow ──
+  // The first step AFTER this one that still needs doing — so a doer who just
+  // finished can jump straight to it. (A quantity-gated dispatch step counts as
+  // "still to do" until fully shipped, so it stays the next step across phases.)
+  const procSteps = proc?.steps || [];
+  const myStepIdx = procSteps.findIndex((s) => s.stepCode === liveStep.stepCode);
+  const nextStep = myStepIdx >= 0
+    ? procSteps.slice(myStepIdx + 1).find((s) => !['DONE', 'SKIPPED'].includes(s.status))
+    : null;
+  const flowComplete = !nextStep && (proc?.isCompleted || (myStepIdx >= 0 && myStepIdx === procSteps.length - 1));
+
   // ── Completion blockers (mirror of the backend gate) ──
   const verifications = liveStep.verifications || [];
   const formFields = liveStep.formFields || [];
@@ -294,6 +318,8 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     const sep = a.to.includes('?') ? '&' : '?';
     navigate(`${a.to}${sep}fromTask=${processId}&fromStep=${encodeURIComponent(liveStep.stepCode)}&fromAction=${encodeURIComponent(a.key)}`);
   };
+  // Jump to another step's task page in this same order.
+  const goToStep = (code) => navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(code)}`);
 
   const handleVerify = async (item, answer, vRemark) => {
     setError('');
@@ -368,14 +394,62 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       <Chip size="small" label={tone.label} sx={{ bgcolor: alpha(tone.color, 0.12), color: tone.color, fontWeight: 600 }} />
     </Stack>
   );
+  // Quantity-gated dispatch step can't be ticked done until every phase ships —
+  // it auto-completes on the last dispatch (balance 0). Mirror the backend guard.
+  const qtyGatedBlocked = isQtyGated && !done
+    && !(liveStep.dispatchProgress && liveStep.dispatchProgress.orderedQty > 0 && liveStep.dispatchProgress.balanceQty <= 0);
   const markDoneBtn = (!done && canAct) ? (
-    <Button onClick={handleComplete} disabled={completing || checklistBlocks} variant="contained" startIcon={<CheckCircle2 size={16} />}>
-      Mark Done
-    </Button>
+    <Tooltip title={qtyGatedBlocked ? 'Completes automatically once all phases are dispatched (balance 0).' : ''}>
+      <span>
+        <Button onClick={handleComplete} disabled={completing || checklistBlocks || qtyGatedBlocked} variant="contained" startIcon={<CheckCircle2 size={16} />}>
+          Mark Done
+        </Button>
+      </span>
+    </Tooltip>
   ) : null;
 
   const body = (
         <Stack spacing={2}>
+          {/* ── Next step in the order's flow — always at the very top so the doer
+                can move straight on (Order Intake → Sales Order → Check Inventory →
+                Dispatch Planning → … → done). ── */}
+          {nextStep && (
+            <Paper variant="outlined" sx={{
+              p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+              bgcolor: alpha('#1d4ed8', 0.06), borderColor: alpha('#1d4ed8', 0.35),
+            }}>
+              <Box sx={{ p: 0.7, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}>
+                <ArrowRight size={16} />
+              </Box>
+              <Box sx={{ flex: 1, minWidth: 200 }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {done ? 'Next step' : 'Up next'}
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                  {nextStep.stepCode} · {nextStep.taskTitle || nextStep.name}
+                </Typography>
+              </Box>
+              <Button variant="contained" size="small" endIcon={<ArrowRight size={14} />}
+                onClick={() => goToStep(nextStep.stepCode)} sx={{ boxShadow: 'none', whiteSpace: 'nowrap' }}>
+                {done ? 'Go to next step' : 'Open next step'}
+              </Button>
+            </Paper>
+          )}
+          {flowComplete && done && (
+            <Paper variant="outlined" sx={{
+              p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+              bgcolor: alpha('#0f766e', 0.06), borderColor: alpha('#0f766e', 0.35),
+            }}>
+              <CheckCircle2 size={18} color="#0f766e" />
+              <Typography variant="body2" sx={{ fontWeight: 700, color: '#115e59', flex: 1, minWidth: 180 }}>
+                This was the last step — the order’s O2D flow is complete. 🎉
+              </Typography>
+              <Button variant="outlined" color="success" size="small"
+                onClick={() => proc?._id && navigate(`/o2d-fms/process/${proc._id}`)} sx={{ whiteSpace: 'nowrap' }}>
+                View whole order flow
+              </Button>
+            </Paper>
+          )}
           {/* Shared step already completed by someone — make it explicit. */}
           {done && (
             <Alert severity="success" icon={<CheckCircle2 size={18} />} sx={{ py: 0.5 }}>
@@ -403,6 +477,40 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           {liveStep.isOverdue && !done && (
             <Alert icon={<AlertTriangle size={18} />} severity="warning" sx={{ py: 0.5 }}>This step is past its planned time.</Alert>
           )}
+
+          {/* ── Phased / split dispatch: per-phase breakdown + overall qty progress.
+                Completes only when every phase is dispatched (balance 0). ── */}
+          {isQtyGated && (() => {
+            const sched = schedRes?.data;
+            const phaseChips = sched?.phaseChips || [];
+            const totals = sched?.totals || {};
+            const prog = liveStep.dispatchProgress || {};
+            const ordered = prog.orderedQty ?? totals.orderQty ?? 0;
+            const dispatched = prog.dispatchedQty ?? totals.actualQty ?? 0;
+            const balance = prog.balanceQty ?? Math.max(0, ordered - dispatched);
+            const pct = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
+            const accent = done ? '#0f766e' : '#1d4ed8';
+            return (
+              <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
+                <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
+                  <Truck size={16} color={accent} />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>Phased dispatch</Typography>
+                  <Chip size="small" label={done ? 'Fully dispatched' : 'In progress'} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
+                  <Box sx={{ flex: 1 }} />
+                  <Typography variant="caption" color="text.secondary">{num(dispatched)} / {num(ordered)} pcs · {num(balance)} pending</Typography>
+                </Stack>
+                <LinearProgress variant="determinate" value={pct} sx={{ height: 7, borderRadius: 4, mb: 1.25, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
+                {phaseChips.length
+                  ? <PhaseTimeline phaseChips={phaseChips} onPhaseClick={(p) => proc?.soNumber && navigate(`/dispatch-planning?so=${encodeURIComponent(proc.soNumber)}${p?.phaseNo ? `&phase=${encodeURIComponent(p.phaseNo)}` : ''}`)} />
+                  : <Typography variant="caption" color="text.secondary">No phases planned yet.</Typography>}
+                {!done && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                    Completes automatically once every phase is dispatched (balance 0).
+                  </Typography>
+                )}
+              </Paper>
+            );
+          })()}
 
           {/* ── Do the real work → one "Do it now" per connected screen. Each tracks
                 its own done-status; none are mandatory to finish the step. ── */}

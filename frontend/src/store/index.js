@@ -1,4 +1,5 @@
 import { configureStore } from '@reduxjs/toolkit';
+import { setupListeners } from '@reduxjs/toolkit/query';
 import { baseApi } from './api/baseApi.js';
 import authReducer from './slices/authSlice.js';
 
@@ -26,3 +27,8 @@ export const store = configureStore({
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware().concat(baseApi.middleware),
 });
+
+// Wire window focus / reconnect so live views (My Tasks, the task page, trackers)
+// refetch the moment a user returns to the tab — plan/checklist/assignment edits
+// then show up for the doer without waiting for the next poll.
+setupListeners(store.dispatch);

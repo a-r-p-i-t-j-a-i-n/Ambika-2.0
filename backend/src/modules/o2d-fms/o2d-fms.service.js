@@ -6,9 +6,33 @@
  *   delayMins = max(0, round((actual - planned) / 60000))
  */
 
+import mongoose from 'mongoose';
 import { StepDefinition, O2DProcess, TaskTemplate, O2D_STEP_STATUS, LEAD_TIME_UNIT_MINUTES, TRIGGER_KEY } from './o2d-fms.model.js';
 import User from '../auth/auth.model.js';
 import SalesOrder from '../order/order.model.js';
+
+// ── MIS scoring (Rahul-Jain style) ──────────────────────────────────────────
+// The MIS score is a PENALTY total — it can only be 0 (perfect) or negative.
+// Every lapse subtracts points, so the MD reads accountability at a glance.
+const MIS_W = { late: 2, overdue: 5, delayPerHour: 1, checklistMiss: 1 };
+const computeMis = (m) => {
+  const completed = m.completed || 0;
+  const punctuality   = completed > 0 ? Math.round((m.onTime / completed) * 100) : 100;
+  const accuracy      = m.checklistTotal > 0 ? Math.round((m.checklistDone / m.checklistTotal) * 100) : 100;
+  const avgDelayMins  = completed > 0 ? Math.round(m.totalDelay / completed) : 0;
+  const completionRate = m.assigned > 0 ? Math.round((completed / m.assigned) * 100) : 0;
+  const checklistMisses = Math.max(0, (m.checklistTotal || 0) - (m.checklistDone || 0));
+  const misScore = -(
+    (m.late || 0) * MIS_W.late
+    + (m.overdue || 0) * MIS_W.overdue
+    + Math.floor((m.totalDelay || 0) / 60) * MIS_W.delayPerHour
+    + checklistMisses * MIS_W.checklistMiss
+  );
+  // Grade band from the penalty (0 = A+, deeper minus = worse).
+  const grade = misScore >= 0 ? 'A+' : misScore >= -10 ? 'A' : misScore >= -25 ? 'B' : misScore >= -50 ? 'C' : 'D';
+  return { punctuality, accuracy, avgDelayMins, completionRate, misScore, grade };
+};
+import DispatchSchedule from '../schedule/schedule.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
@@ -128,6 +152,9 @@ const enrichSteps = (process, defMap) => {
       allowIncompleteChecklist: !!def?.allowIncompleteChecklist,
       defaultOwnerRole:   def?.defaultOwnerRole || null,
       triggerKey:         def?.triggerKey || 'MANUAL',
+      // Phased/split dispatch: flag + denormalised progress so the tracker can render
+      // the per-phase sub-steps and the "x / y dispatched" bar.
+      quantityGated:      !!def?.quantityGated || def?.triggerKey === 'ACTUAL_DISPATCH',
       checklistTotal: (s.checklist || []).length,
       checklistDone:  (s.checklist || []).filter((c) => c.done).length,
       // Normalise connected screens to an array (legacy single → [single]) and
@@ -148,6 +175,147 @@ const loadDefMap = async () => {
   // flow's names, trigger keys and requirements correct.
   defs.sort((a, b) => ((a.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0) - ((b.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0));
   return new Map(defs.map((d) => [d.stepCode, d]));
+};
+
+// Optimistic-concurrency retry. The O2DProcess is one big document that several of
+// a doer's actions can hit at the same instant (e.g. on returning from a connected
+// screen the UI fires "action-done" AND auto-ticks the checklist). When two saves
+// race, Mongoose throws a VersionError; we just re-run the load-modify-save against
+// a fresh copy so the write succeeds instead of failing with a 500.
+const withVersionRetry = async (fn, tries = 4) => {
+  for (let attempt = 1; attempt <= tries; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      const conflict = err?.name === 'VersionError' || err?.name === 'ParallelSaveError';
+      if (conflict && attempt < tries) {
+        await new Promise((r) => setTimeout(r, 40 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  return undefined;
+};
+
+// ── Phased / split dispatch ────────────────────────────────────────────────
+// A step is "quantity-gated" when it should complete only once the WHOLE order is
+// dispatched (balance 0) — i.e. the dispatch step. Detected by the explicit flag
+// OR by its ACTUAL_DISPATCH trigger (so no data migration is needed).
+const isQuantityGated = (def) => !!(def && (def.quantityGated || def.triggerKey === TRIGGER_KEY.ACTUAL_DISPATCH));
+
+// Order-level dispatch progress (qty from the SalesOrder totals — already kept fresh
+// by createActualDispatch before it fires the trigger) + a best-effort phase count
+// from the DispatchSchedule. Detailed per-phase rows are read live on the UI.
+const computeOrderDispatchSummary = async (process) => {
+  let order = null;
+  if (process.salesOrderId) {
+    order = await SalesOrder.findById(process.salesOrderId)
+      .select('soNumber totalOrderQty totalDispatchedQty totalBalanceQty').lean();
+  }
+  if (!order && process.soNumber) {
+    order = await SalesOrder.findOne({ soNumber: process.soNumber })
+      .select('soNumber totalOrderQty totalDispatchedQty totalBalanceQty').lean();
+  }
+  const orderedQty    = Number(order?.totalOrderQty || 0);
+  const dispatchedQty = Number(order?.totalDispatchedQty || 0);
+  const balanceQty    = order?.totalBalanceQty != null
+    ? Number(order.totalBalanceQty)
+    : Math.max(0, orderedQty - dispatchedQty);
+  const pct = orderedQty > 0 ? Math.min(100, Math.round((dispatchedQty / orderedQty) * 100)) : 0;
+  const fullyDispatched = orderedQty > 0 && balanceQty <= 0;
+
+  // Phase counts (best-effort) — a phaseNo group is "done" when every item's phase
+  // with that label is DISPATCHED.
+  let phasesTotal = 0;
+  let phasesDone = 0;
+  try {
+    const soNumber = order?.soNumber || process.soNumber;
+    if (soNumber) {
+      const schedule = await DispatchSchedule.findOne({ soNumber }).select('items.phases.phaseNo items.phases.status').lean();
+      if (schedule) {
+        const byPhase = new Map(); // phaseNo -> { total, dispatched }
+        for (const it of schedule.items || []) {
+          for (const ph of it.phases || []) {
+            const e = byPhase.get(ph.phaseNo) || { total: 0, dispatched: 0 };
+            e.total += 1;
+            if (ph.status === 'DISPATCHED') e.dispatched += 1;
+            byPhase.set(ph.phaseNo, e);
+          }
+        }
+        phasesTotal = byPhase.size;
+        phasesDone = [...byPhase.values()].filter((e) => e.total > 0 && e.dispatched === e.total).length;
+      }
+    }
+  } catch (err) {
+    logger.warn?.(`[phased-dispatch] phase count failed: ${err.message}`);
+  }
+
+  return { orderedQty, dispatchedQty, balanceQty, pct, fullyDispatched, phasesTotal, phasesDone };
+};
+
+const buildDispatchProgress = (summary) => ({
+  orderedQty: summary.orderedQty,
+  dispatchedQty: summary.dispatchedQty,
+  balanceQty: summary.balanceQty,
+  pct: summary.pct,
+  phasesTotal: summary.phasesTotal,
+  phasesDone: summary.phasesDone,
+  updatedAt: new Date(),
+});
+
+/**
+ * Quantity-gated advance for the phased/split-dispatch step (trigger ACTUAL_DISPATCH).
+ * Each recorded dispatch refreshes the step's progress. The step completes ONLY when
+ * the whole order is dispatched (balance 0); until then it stays IN_PROGRESS and the
+ * next step is activated so per-consignment invoice/POD/payment can still proceed.
+ * Re-targeting works because IN_PROGRESS is not a terminal status — phases 2..N keep
+ * hitting this same step.
+ */
+const applyPhasedDispatch = async (process, step, defMap, actor) => {
+  const summary = await computeOrderDispatchSummary(process);
+  const now = new Date();
+  if (!step.startedAt) step.startedAt = now;
+  step.dispatchProgress = buildDispatchProgress(summary);
+
+  const idx = process.steps.findIndex((s) => s.stepCode === step.stepCode);
+  const next = process.steps[idx + 1];
+  // Activate the next step so downstream can proceed per consignment — but only if
+  // it hasn't started yet, so we never drag the "current" pointer backwards.
+  const activateNext = async () => {
+    if (next && !next.startedAt) {
+      const nextDef = defMap.get(next.stepCode);
+      if (!next.planned) next.planned = addMinutes(now, next.leadTimeMins ?? nextDef?.slaMinutes ?? 60);
+      next.startedAt = now;
+      process.currentStepCode = next.stepCode;
+      await notifyStepOwners(process, next);
+    }
+  };
+
+  if (summary.fullyDispatched) {
+    step.actual = now;
+    step.completedBy = actor?._id || null;
+    step.delayMins = computeDelayMins(step.planned, now);
+    step.status = step.delayMins > 0 ? O2D_STEP_STATUS.DELAYED : O2D_STEP_STATUS.DONE;
+    if (next) await activateNext();
+    else { process.isCompleted = true; process.completedAt = now; process.currentStepCode = null; }
+    process.activityTimeline.push({
+      action: 'STEP_COMPLETED',
+      description: `${step.stepCode} completed — fully dispatched (${summary.dispatchedQty}/${summary.orderedQty})`,
+      actorId: actor?._id || null,
+    });
+  } else {
+    step.status = O2D_STEP_STATUS.IN_PROGRESS;
+    await activateNext();
+    process.activityTimeline.push({
+      action: 'DISPATCH_PROGRESS',
+      description: `${step.stepCode} dispatch ${summary.dispatchedQty}/${summary.orderedQty} — ${summary.balanceQty} pending`,
+      actorId: actor?._id || null,
+    });
+  }
+
+  await process.save();
+  return enrichSteps(process, defMap);
 };
 
 export const o2dFmsService = {
@@ -364,6 +532,18 @@ export const o2dFmsService = {
     const defMap = await loadDefMap();
     const def = defMap.get(stepCode);
     if (!opts.bypassRequirements) {
+      // Quantity-gated (phased dispatch): can't be ticked done while qty is pending —
+      // it completes automatically once every phase is dispatched (balance 0).
+      if (isQuantityGated(def)) {
+        const summary = await computeOrderDispatchSummary(process);
+        if (!summary.fullyDispatched) {
+          throw new AppError(
+            `Not fully dispatched yet — ${summary.dispatchedQty}/${summary.orderedQty} pcs (${summary.balanceQty} pending across phases). `
+            + 'This step completes automatically when all phases are dispatched.',
+            422,
+          );
+        }
+      }
       // One gate for every requirement type: checklist, yes/no verifications,
       // data fields, proof attachments, approval, link.
       const unmet = unmetRequirements(step, def, payload);
@@ -415,36 +595,38 @@ export const o2dFmsService = {
    *  have several linked actions and none are mandatory. Idempotent per key. */
   async markActionDone(processId, stepCode, { actionKey, link }, user, privileged = false) {
     if (!actionKey) throw new AppError('actionKey is required', 400);
-    const process = await O2DProcess.findById(processId);
-    if (!process) throw new AppError('O2D process not found', 404);
-    const step = process.steps.find((s) => s.stepCode === stepCode);
-    if (!step) throw new AppError(`Step '${stepCode}' not found on this process`, 404);
-    assertCanAct(step, user, privileged);
+    return withVersionRetry(async () => {
+      const process = await O2DProcess.findById(processId);
+      if (!process) throw new AppError('O2D process not found', 404);
+      const step = process.steps.find((s) => s.stepCode === stepCode);
+      if (!step) throw new AppError(`Step '${stepCode}' not found on this process`, 404);
+      assertCanAct(step, user, privileged);
 
-    if (!Array.isArray(step.actionProgress)) step.actionProgress = [];
-    const existing = step.actionProgress.find((a) => a.key === actionKey);
-    if (existing) {
-      existing.doneAt = new Date();
-      if (link) existing.link = link;
-      existing.doneBy = user?._id || existing.doneBy || null;
-      existing.doneByName = user?.name || existing.doneByName || null;
-    } else {
-      step.actionProgress.push({
-        key: actionKey,
-        link: link || null,
-        doneAt: new Date(),
-        doneBy: user?._id || null,
-        doneByName: user?.name || null,
+      if (!Array.isArray(step.actionProgress)) step.actionProgress = [];
+      const existing = step.actionProgress.find((a) => a.key === actionKey);
+      if (existing) {
+        existing.doneAt = new Date();
+        if (link) existing.link = link;
+        existing.doneBy = user?._id || existing.doneBy || null;
+        existing.doneByName = user?.name || existing.doneByName || null;
+      } else {
+        step.actionProgress.push({
+          key: actionKey,
+          link: link || null,
+          doneAt: new Date(),
+          doneBy: user?._id || null,
+          doneByName: user?.name || null,
+        });
+      }
+      process.activityTimeline.push({
+        action: 'STEP_ACTION_DONE',
+        description: `${stepCode} · action "${actionKey}" completed`,
+        actorId: user?._id || null,
       });
-    }
-    process.activityTimeline.push({
-      action: 'STEP_ACTION_DONE',
-      description: `${stepCode} · action "${actionKey}" completed`,
-      actorId: user?._id || null,
+      await process.save();
+      const defMap = await loadDefMap();
+      return enrichSteps(process, defMap);
     });
-    await process.save();
-    const defMap = await loadDefMap();
-    return enrichSteps(process, defMap);
   },
 
   /** Per-order reassignment — set multiple doers and/or buddies on a step. */
@@ -495,6 +677,13 @@ export const o2dFmsService = {
       ![O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED].includes(s.status)
       && defMap.get(s.stepCode)?.triggerKey === triggerKey);
     if (!target) return null;
+
+    // Phased / split dispatch: the dispatch step completes only when the whole order
+    // is dispatched. Each dispatch refreshes progress and keeps the step IN_PROGRESS
+    // (downstream still flows per consignment) until balance hits 0.
+    if (isQuantityGated(defMap.get(target.stepCode))) {
+      return applyPhasedDispatch(process, target, defMap, actor);
+    }
 
     // If the step still has unmet requirements (checklist, verifications, data
     // fields, proof, approval), the real action only makes it the ACTIVE task —
@@ -656,14 +845,16 @@ export const o2dFmsService = {
           planned: s.planned,
           completedAt: s.actual,
           delayMins: s.delayMins || 0,
+          dispatchProgress: s.dispatchProgress || null, // phased dispatch: "1,000 / 5,000"
           isOverdue: !isDone && !!(s.planned && new Date(s.planned) < new Date()),
         });
       }
     }
-    // Actionable first (pending, most overdue), completed after.
+    // Actionable first (pending / in-progress, most overdue), completed after.
+    const isActionable = (st) => ![O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED].includes(st);
     tasks.sort((a, b) => {
-      const ap = a.status === O2D_STEP_STATUS.PENDING ? 0 : 1;
-      const bp = b.status === O2D_STEP_STATUS.PENDING ? 0 : 1;
+      const ap = isActionable(a.status) ? 0 : 1;
+      const bp = isActionable(b.status) ? 0 : 1;
       if (ap !== bp) return ap - bp;
       return new Date(a.planned || 0) - new Date(b.planned || 0);
     });
@@ -707,74 +898,80 @@ export const o2dFmsService = {
 
   /** Tick / untick a checklist item on a step. */
   async toggleChecklistItem(processId, stepCode, itemId, done, user, privileged = false) {
-    const process = await O2DProcess.findById(processId);
-    if (!process) throw new AppError('O2D process not found', 404);
-    const step = process.steps.find((s) => s.stepCode === stepCode);
-    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
-    assertCanAct(step, user, privileged);
-    const item = step.checklist.id(itemId);
-    if (!item) throw new AppError('Checklist item not found', 404);
-    item.done = !!done;
-    item.doneBy = done ? user?._id || null : null;
-    item.doneByName = done ? user?.name || null : null;
-    item.doneAt = done ? new Date() : null;
-    process.activityTimeline.push({
-      action: done ? 'CHECKLIST_TICKED' : 'CHECKLIST_UNTICKED',
-      description: `${stepCode} · ${item.text}`,
-      actorId: user?._id || null,
+    return withVersionRetry(async () => {
+      const process = await O2DProcess.findById(processId);
+      if (!process) throw new AppError('O2D process not found', 404);
+      const step = process.steps.find((s) => s.stepCode === stepCode);
+      if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+      assertCanAct(step, user, privileged);
+      const item = step.checklist.id(itemId);
+      if (!item) throw new AppError('Checklist item not found', 404);
+      item.done = !!done;
+      item.doneBy = done ? user?._id || null : null;
+      item.doneByName = done ? user?.name || null : null;
+      item.doneAt = done ? new Date() : null;
+      process.activityTimeline.push({
+        action: done ? 'CHECKLIST_TICKED' : 'CHECKLIST_UNTICKED',
+        description: `${stepCode} · ${item.text}`,
+        actorId: user?._id || null,
+      });
+      await process.save();
+      const defMap = await loadDefMap();
+      return enrichSteps(process, defMap);
     });
-    await process.save();
-    const defMap = await loadDefMap();
-    return enrichSteps(process, defMap);
   },
 
   /** Answer a Yes/No verification question. A "NO" must carry a remark. */
   async answerVerification(processId, stepCode, itemId, answer, remark, user, privileged = false) {
-    const process = await O2DProcess.findById(processId);
-    if (!process) throw new AppError('O2D process not found', 404);
-    const step = process.steps.find((s) => s.stepCode === stepCode);
-    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
-    assertCanAct(step, user, privileged);
-    const item = step.verifications.id(itemId);
-    if (!item) throw new AppError('Verification question not found', 404);
-    if (answer === 'NO' && !remark?.trim()) {
-      throw new AppError('Answering "No" needs a short remark explaining why', 422);
-    }
-    item.answer = answer || null; // null = cleared
-    item.remark = answer === 'NO' ? remark.trim() : null;
-    item.answeredBy = answer ? user?._id || null : null;
-    item.answeredByName = answer ? user?.name || null : null;
-    item.answeredAt = answer ? new Date() : null;
-    process.activityTimeline.push({
-      action: 'VERIFICATION_ANSWERED',
-      description: `${stepCode} · ${item.question} → ${answer || 'cleared'}`,
-      actorId: user?._id || null,
+    return withVersionRetry(async () => {
+      const process = await O2DProcess.findById(processId);
+      if (!process) throw new AppError('O2D process not found', 404);
+      const step = process.steps.find((s) => s.stepCode === stepCode);
+      if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+      assertCanAct(step, user, privileged);
+      const item = step.verifications.id(itemId);
+      if (!item) throw new AppError('Verification question not found', 404);
+      if (answer === 'NO' && !remark?.trim()) {
+        throw new AppError('Answering "No" needs a short remark explaining why', 422);
+      }
+      item.answer = answer || null; // null = cleared
+      item.remark = answer === 'NO' ? remark.trim() : null;
+      item.answeredBy = answer ? user?._id || null : null;
+      item.answeredByName = answer ? user?.name || null : null;
+      item.answeredAt = answer ? new Date() : null;
+      process.activityTimeline.push({
+        action: 'VERIFICATION_ANSWERED',
+        description: `${stepCode} · ${item.question} → ${answer || 'cleared'}`,
+        actorId: user?._id || null,
+      });
+      await process.save();
+      return enrichSteps(process, await loadDefMap());
     });
-    await process.save();
-    return enrichSteps(process, await loadDefMap());
   },
 
   /** Fill (or clear) a data-capture field on a step. */
   async fillFormField(processId, stepCode, itemId, value, user, privileged = false) {
-    const process = await O2DProcess.findById(processId);
-    if (!process) throw new AppError('O2D process not found', 404);
-    const step = process.steps.find((s) => s.stepCode === stepCode);
-    if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
-    assertCanAct(step, user, privileged);
-    const item = step.formFields.id(itemId);
-    if (!item) throw new AppError('Field not found', 404);
-    const has = !(value === null || value === undefined || value === '');
-    item.value = has ? value : null;
-    item.filledBy = has ? user?._id || null : null;
-    item.filledByName = has ? user?.name || null : null;
-    item.filledAt = has ? new Date() : null;
-    process.activityTimeline.push({
-      action: 'FIELD_FILLED',
-      description: `${stepCode} · ${item.label}${has ? ` = ${String(value).slice(0, 80)}` : ' cleared'}`,
-      actorId: user?._id || null,
+    return withVersionRetry(async () => {
+      const process = await O2DProcess.findById(processId);
+      if (!process) throw new AppError('O2D process not found', 404);
+      const step = process.steps.find((s) => s.stepCode === stepCode);
+      if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+      assertCanAct(step, user, privileged);
+      const item = step.formFields.id(itemId);
+      if (!item) throw new AppError('Field not found', 404);
+      const has = !(value === null || value === undefined || value === '');
+      item.value = has ? value : null;
+      item.filledBy = has ? user?._id || null : null;
+      item.filledByName = has ? user?.name || null : null;
+      item.filledAt = has ? new Date() : null;
+      process.activityTimeline.push({
+        action: 'FIELD_FILLED',
+        description: `${stepCode} · ${item.label}${has ? ` = ${String(value).slice(0, 80)}` : ' cleared'}`,
+        actorId: user?._id || null,
+      });
+      await process.save();
+      return enrichSteps(process, await loadDefMap());
     });
-    await process.save();
-    return enrichSteps(process, await loadDefMap());
   },
 
   /** Approve a step's approval gate. Only a named approver (or root) may approve. */
@@ -1107,6 +1304,120 @@ export const o2dFmsService = {
       { $sort: { punctuality: -1, throughput: -1 } },
     ]);
     return rows;
+  },
+
+  /**
+   * MIS Scoring — comprehensive per-doer KRA/KPI across ALL their assigned steps
+   * (not just completed). Returns assigned/completed/pending/overdue/on-time/late,
+   * delay, checklist accuracy and the penalty-based MIS score (≤ 0).
+   */
+  async getMisScores() {
+    const now = new Date();
+    const DONE = ['DONE', 'DELAYED'];
+    const rows = await O2DProcess.aggregate([
+      { $match: { isDeleted: { $ne: true } } },
+      { $unwind: '$steps' },
+      { $match: { 'steps.assignedTo': { $ne: null } } },
+      { $group: {
+        _id: '$steps.assignedTo',
+        assigned:  { $sum: 1 },
+        completed: { $sum: { $cond: [{ $in: ['$steps.status', DONE] }, 1, 0] } },
+        pending:   { $sum: { $cond: [{ $eq: ['$steps.status', 'PENDING'] }, 1, 0] } },
+        overdue:   { $sum: { $cond: [{ $and: [{ $eq: ['$steps.status', 'PENDING'] }, { $ne: ['$steps.planned', null] }, { $lt: ['$steps.planned', now] }] }, 1, 0] } },
+        onTime:    { $sum: { $cond: [{ $and: [{ $in: ['$steps.status', DONE] }, { $eq: ['$steps.delayMins', 0] }] }, 1, 0] } },
+        late:      { $sum: { $cond: [{ $and: [{ $in: ['$steps.status', DONE] }, { $gt: ['$steps.delayMins', 0] }] }, 1, 0] } },
+        totalDelay:{ $sum: '$steps.delayMins' },
+        checklistTotal: { $sum: { $size: { $ifNull: ['$steps.checklist', []] } } },
+        checklistDone:  { $sum: { $size: { $filter: { input: { $ifNull: ['$steps.checklist', []] }, as: 'c', cond: '$$c.done' } } } },
+      } },
+      { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+    ]);
+
+    const doers = rows.map((r) => ({
+      userId: String(r._id),
+      name: r.user?.name || 'Unassigned',
+      email: r.user?.email || '',
+      role: r.user?.role || (r.user?.roles || [])[0] || '',
+      assigned: r.assigned, completed: r.completed, pending: r.pending, overdue: r.overdue,
+      onTime: r.onTime, late: r.late, totalDelayMins: r.totalDelay,
+      ...computeMis(r),
+    })).sort((a, b) => b.misScore - a.misScore); // best (least-negative) first
+
+    const totals = doers.reduce((a, d) => {
+      a.doers += 1; a.assigned += d.assigned; a.completed += d.completed;
+      a.pending += d.pending; a.overdue += d.overdue; a.misScore += d.misScore;
+      return a;
+    }, { doers: 0, assigned: 0, completed: 0, pending: 0, overdue: 0, misScore: 0 });
+    totals.avgPunctuality = doers.length ? Math.round(doers.reduce((s, d) => s + d.punctuality, 0) / doers.length) : 0;
+
+    return { doers, totals };
+  },
+
+  /** Per-doer deep profile for the MIS profile page. */
+  async getDoerProfile(userId) {
+    const uid = new mongoose.Types.ObjectId(String(userId));
+    const now = new Date();
+    const DONE = ['DONE', 'DELAYED'];
+    const baseMatch = [
+      { $match: { isDeleted: { $ne: true } } },
+      { $unwind: '$steps' },
+      { $match: { 'steps.assignedTo': uid } },
+    ];
+
+    const [summaryRows, byStepRows, monthlyRows, recentRows, user] = await Promise.all([
+      O2DProcess.aggregate([...baseMatch, { $group: {
+        _id: null,
+        assigned:  { $sum: 1 },
+        completed: { $sum: { $cond: [{ $in: ['$steps.status', DONE] }, 1, 0] } },
+        pending:   { $sum: { $cond: [{ $eq: ['$steps.status', 'PENDING'] }, 1, 0] } },
+        overdue:   { $sum: { $cond: [{ $and: [{ $eq: ['$steps.status', 'PENDING'] }, { $ne: ['$steps.planned', null] }, { $lt: ['$steps.planned', now] }] }, 1, 0] } },
+        onTime:    { $sum: { $cond: [{ $and: [{ $in: ['$steps.status', DONE] }, { $eq: ['$steps.delayMins', 0] }] }, 1, 0] } },
+        late:      { $sum: { $cond: [{ $and: [{ $in: ['$steps.status', DONE] }, { $gt: ['$steps.delayMins', 0] }] }, 1, 0] } },
+        totalDelay:{ $sum: '$steps.delayMins' },
+        checklistTotal: { $sum: { $size: { $ifNull: ['$steps.checklist', []] } } },
+        checklistDone:  { $sum: { $size: { $filter: { input: { $ifNull: ['$steps.checklist', []] }, as: 'c', cond: '$$c.done' } } } },
+      } }]),
+      O2DProcess.aggregate([...baseMatch, { $group: {
+        _id: '$steps.stepCode',
+        assigned:  { $sum: 1 },
+        completed: { $sum: { $cond: [{ $in: ['$steps.status', DONE] }, 1, 0] } },
+        late:      { $sum: { $cond: [{ $and: [{ $in: ['$steps.status', DONE] }, { $gt: ['$steps.delayMins', 0] }] }, 1, 0] } },
+        overdue:   { $sum: { $cond: [{ $and: [{ $eq: ['$steps.status', 'PENDING'] }, { $ne: ['$steps.planned', null] }, { $lt: ['$steps.planned', now] }] }, 1, 0] } },
+        totalDelay:{ $sum: '$steps.delayMins' },
+      } }, { $sort: { assigned: -1 } }]),
+      O2DProcess.aggregate([...baseMatch,
+        { $match: { 'steps.status': { $in: DONE }, 'steps.actual': { $ne: null } } },
+        { $group: {
+          _id: { $dateToString: { format: '%Y-%m', date: '$steps.actual' } },
+          completed: { $sum: 1 },
+          late:      { $sum: { $cond: [{ $gt: ['$steps.delayMins', 0] }, 1, 0] } },
+          totalDelay:{ $sum: '$steps.delayMins' },
+        } }, { $sort: { _id: 1 } }]),
+      O2DProcess.aggregate([...baseMatch,
+        { $project: {
+          soNumber: 1, partyName: 1,
+          stepCode: '$steps.stepCode', status: '$steps.status',
+          planned: '$steps.planned', actual: '$steps.actual', delayMins: '$steps.delayMins',
+          sortAt: { $ifNull: ['$steps.actual', '$steps.planned'] },
+        } },
+        { $sort: { sortAt: -1 } }, { $limit: 20 }]),
+      User.findById(uid).select('name email role roles').lean(),
+    ]);
+
+    const defMap = await loadDefMap();
+    const s = summaryRows[0] || {};
+    return {
+      doer: { userId: String(userId), name: user?.name || 'Unknown', email: user?.email || '', role: user?.role || (user?.roles || [])[0] || '' },
+      summary: {
+        assigned: s.assigned || 0, completed: s.completed || 0, pending: s.pending || 0, overdue: s.overdue || 0,
+        onTime: s.onTime || 0, late: s.late || 0, totalDelayMins: s.totalDelay || 0,
+        ...computeMis(s),
+      },
+      byStep: byStepRows.map((r) => ({ stepCode: r._id, name: defMap.get(r._id)?.name || r._id, assigned: r.assigned, completed: r.completed, late: r.late, overdue: r.overdue, avgDelayMins: r.completed ? Math.round(r.totalDelay / r.completed) : 0 })),
+      monthly: monthlyRows.map((r) => ({ month: r._id, completed: r.completed, late: r.late, avgDelayMins: r.completed ? Math.round(r.totalDelay / r.completed) : 0 })),
+      recent: recentRows.map((r) => ({ soNumber: r.soNumber, partyName: r.partyName, stepCode: r.stepCode, name: defMap.get(r.stepCode)?.name || r.stepCode, status: r.status, planned: r.planned, actual: r.actual, delayMins: r.delayMins || 0 })),
+    };
   },
 
   /** Pending steps past their SLA that have not yet been escalated. For the email job. */

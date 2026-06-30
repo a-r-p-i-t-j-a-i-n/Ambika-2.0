@@ -65,17 +65,39 @@ const navSections = [
       // { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
     ],
   },
-  // ── IMS section HIDDEN until complete ──────────────────────────────────────
-  // "Packaging & Consumables IMS" and "Raw Material IMS" are not finished yet,
-  // so they are intentionally NOT shown in the sidebar. The routes still exist;
-  // to re-expose, restore the section object below with its two groups.
-  // {
-  //   title: 'IMS',
-  //   items: [
-  //     { text: 'Packaging & Consumables IMS', path: '/ims',    children: [...] },
-  //     { text: 'Raw Material IMS',             path: '/rm-ims', children: [...] },
-  //   ],
-  // },
+  {
+    // IMS — Inventory. One group per inventory type.
+    title: 'IMS',
+    items: [
+      {
+        text: 'Packaging & Consumables IMS',
+        icon: <Boxes size={19} />,
+        path: '/ims',
+        children: [
+          { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/ims' },
+          { text: 'Stock & Master Data',   icon: <Package size={19} />,         path: '/ims/stock' },
+          { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
+          { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
+          { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
+          { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
+        ],
+      },
+      {
+        text: 'Raw Material IMS',
+        icon: <Layers size={19} />,
+        path: '/rm-ims',
+        children: [
+          { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
+          { text: 'Stock & Master Data',   icon: <Package size={19} />,         path: '/rm-ims/stock' },
+          { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
+          { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
+          { text: 'Coil → Circle Conversion', icon: <Recycle size={19} />,      path: '/rm-ims/conversion' },
+          { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
+          { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
+        ],
+      },
+    ],
+  },
   {
     // Title-less section: the single expandable row IS the label — click the
     // chevron to reveal all 11 procurement screens.
@@ -167,6 +189,7 @@ const PAGE_TITLES = {
   '/o2d-fms/transporters':   'Transporter Master',
   '/o2d-fms/processes':      'O2D FMS — Processes',
   '/o2d-fms/dashboard':      'O2D FMS — Management View',
+  '/o2d-fms/scores':         'MIS Scoring',
   '/o2d-fms/config':         'O2D FMS — Step Catalog',
   '/profile':                'My Profile',
 };
@@ -217,7 +240,7 @@ const MainLayout = () => {
       fmsChildren.push({ text: 'Transporter Master', icon: <Truck size={19} />,        path: '/o2d-fms/transporters' });
       fmsChildren.push({ text: 'FMS Tracker',  icon: <Workflow size={19} />,          path: '/o2d-fms/processes' });
       fmsChildren.push({ text: 'Dashboard',    icon: <Gauge size={19} />,             path: '/o2d-fms/dashboard' });
-      fmsChildren.push({ text: 'Scoreboard',   icon: <Trophy size={19} />,            path: '/o2d-fms/scores' });
+      fmsChildren.push({ text: 'MIS Scoring',  icon: <Gauge size={19} />,             path: '/o2d-fms/scores' });
     }
     if (can('o2dfms.config') || isRoot) {
       fmsChildren.push({ text: 'Step Builder',   icon: <SlidersHorizontal size={19} />, path: '/o2d-fms/config' });
