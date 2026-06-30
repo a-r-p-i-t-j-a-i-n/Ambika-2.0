@@ -208,7 +208,7 @@ const itemApprovedQuotation = Joi.object({
   skuId:     objectId.allow('', null),
   skuCode:   Joi.string().trim().max(60).allow('', null),
   itemName:  Joi.string().trim().max(300).allow('', null),
-  statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED').default('YES'),
+  statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED').default('YES'),
   approvedQuotationDocuments: Joi.array().items(uploadedFile).default([]),
   actualAt:  Joi.date().allow('', null),
   remarks:   Joi.string().trim().max(1000).allow('', null),
@@ -220,7 +220,9 @@ const itemApprovedQuotation = Joi.object({
 // Any may be supplied (back-compat).
 export const approveQuotationSchema = Joi.object({
   stepNo:     Joi.string().trim().max(20).allow('', null),
-  statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED').required(),
+  // Optional — Step 1.3 carries its status from Step 1.2 (the service derives it).
+  // Kept for back-compat with older clients that still send it.
+  statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED').allow('', null),
   approvedQuotation:          uploadedFile.default(null),
   approvedQuotationDocuments: Joi.array().items(uploadedFile).default([]),
   itemApprovedQuotations: Joi.array().items(itemApprovedQuotation).default([]),

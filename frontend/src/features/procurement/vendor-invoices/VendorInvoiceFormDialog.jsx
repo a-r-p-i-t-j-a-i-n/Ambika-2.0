@@ -7,7 +7,7 @@ import { alpha } from '@mui/material/styles';
 import { X, Save, ReceiptText, Building2, FileText, Upload, ExternalLink, ListChecks, Package } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
-  useGetInvoiceableQcsQuery,
+  useGetInvoiceableGrnsQuery,
   useCreateVendorInvoiceMutation,
   useUpdateVendorInvoiceMutation,
   useGetProformaInvoiceByIdQuery,
@@ -18,12 +18,17 @@ import { fmtINR } from './invoiceMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 /**
- * Create / edit a Vendor Invoice (Step 1.10). Supports ONE invoice against
- * MULTIPLE GRNs/QCs (same vendor + same PO). Selecting QC/GRNs combines their
- * items; Invoice Qty defaults to the pending (uninvoiced) accepted qty. All
- * amounts are recomputed server-side.
+ * Create / edit a Vendor Invoice (Step 1.10). The user selects GRN No(s) — the
+ * system auto-links each GRN's QC behind the scenes (only PASSED/PARTIAL,
+ * not-fully-invoiced GRNs are listed). Supports ONE invoice against MULTIPLE GRNs
+ * (same vendor + same PO). Selecting GRNs combines their items; Invoice Qty
+ * defaults to the pending (uninvoiced) accepted qty. All amounts recomputed
+ * server-side. Each option's `_id` is its linked qcId, so the create payload still
+ * sends qcIds[] — derived from the selected GRNs.
  */
 const todayStr = () => new Date().toISOString().slice(0, 10);
+// PASSED → "Passed", PARTIAL → "Partial" for the GRN option label.
+const qcStatusLabel = (s) => (s ? String(s).charAt(0).toUpperCase() + String(s).slice(1).toLowerCase() : '—');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const num = (n) => Number(n) || 0;
 const ACCEPT = '.pdf,image/*';
@@ -58,7 +63,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
   const dnFileRef = useRef(null);
   const isEdit = Boolean(invoice?._id);
 
-  const [selectedQcs, setSelectedQcs] = useState([]); // QC summaries (create mode)
+  const [selectedQcs, setSelectedQcs] = useState([]); // selected GRN summaries (create mode); each _id = its linked qcId
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({
     invoiceNumber: '', invoiceDate: todayStr(), invoiceReceivedDate: todayStr(),
@@ -73,8 +78,8 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
   const saving = creating || updating;
 
-  const { data: qcRes, isLoading: qcLoading } = useGetInvoiceableQcsQuery({}, { skip: !open || isEdit });
-  const qcOptions = qcRes?.data || [];
+  const { data: qcRes, isLoading: qcLoading } = useGetInvoiceableGrnsQuery({}, { skip: !open || isEdit });
+  const qcOptions = qcRes?.data || []; // invoiceable GRNs (each carries its linked QC)
   const anchor = selectedQcs[0] || null; // first pick fixes the vendor + PO
 
   const piId = anchor?.piId || invoice?.piId;
@@ -152,7 +157,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
   };
 
   const handleSubmit = async () => {
-    if (!isEdit && selectedQcs.length === 0) { enqueueSnackbar('Select at least one QC / GRN', { variant: 'warning' }); return; }
+    if (!isEdit && selectedQcs.length === 0) { enqueueSnackbar('Select at least one GRN', { variant: 'warning' }); return; }
     if (!form.invoiceNumber.trim()) { enqueueSnackbar('Enter the vendor invoice number', { variant: 'warning' }); return; }
     if (!items.some((it) => num(it.invoiceQty) > 0)) { enqueueSnackbar('Enter an invoice quantity on at least one item', { variant: 'warning' }); return; }
     const overNoRemark = items.find((it) => round2(it.invoiceQty) > round2(it.pendingInvoiceQty) && !it.remarks?.trim());
@@ -247,13 +252,13 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
               ) : (
                 <Autocomplete
                   multiple options={qcOptions} loading={qcLoading} value={selectedQcs}
-                  getOptionLabel={(o) => `${o.qcNumber} — ${o.grnNumber || '—'} — ${o.vendorName} — Acc ${o.totalAccepted} — Pend ${o.totalPendingInvoiceQty}`}
+                  getOptionLabel={(o) => `${o.grnNumber || '—'} — PO ${o.poNumber || '—'} — ${o.vendorName || '—'} — QC ${qcStatusLabel(o.qcStatus)} — Pend ${o.pendingInvoiceQty ?? o.totalPendingInvoiceQty ?? '—'}`}
                   isOptionEqualToValue={(o, v) => o._id === v._id}
                   getOptionDisabled={(o) => !!anchor && (String(o.vendorId) !== String(anchor.vendorId) || String(o.poId) !== String(anchor.poId))}
                   onChange={(_e, v) => setSelectedQcs(v)}
-                  noOptionsText="No QC/GRN pending invoice"
-                  renderInput={(params) => <TextField {...params} label="Select QC / GRN *" placeholder="QC No — GRN No — Vendor — Accepted — Pending"
-                    helperText={anchor ? `Same vendor (${anchor.vendorName}) & PO (${anchor.poNumber || '—'}) only` : 'Pick one or more GRNs of the same vendor & PO'}
+                  noOptionsText="No GRN pending invoice"
+                  renderInput={(params) => <TextField {...params} label="GRN No *" placeholder="GRN No — PO No — Vendor — QC Status — Pending Qty"
+                    helperText={anchor ? `Same vendor (${anchor.vendorName}) & PO (${anchor.poNumber || '—'}) only · QC auto-linked` : 'Pick one or more GRNs of the same vendor & PO — QC is linked automatically'}
                     InputProps={{ ...params.InputProps, endAdornment: (<>{qcLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />} />
               )}
             </Grid>

@@ -121,7 +121,8 @@ const buildItemApprovedQuotations = (items = []) => items.map((it) => ({
   skuId: it.skuId || undefined,
   skuCode: (it.skuCode || '').trim().toUpperCase(),
   itemName: (it.itemName || '').trim(),
-  statusDone: it.statusDone === 'QUOTATION_NOT_APPROVED' ? 'QUOTATION_NOT_APPROVED' : 'YES',
+  // Carried from Step 1.2: YES needs a file; QUOTATION_NOT_APPROVED / QUOTE_NOT_REQUIRED don't.
+  statusDone: ['QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED'].includes(it.statusDone) ? it.statusDone : 'YES',
   approvedQuotationDocuments: (Array.isArray(it.approvedQuotationDocuments) ? it.approvedQuotationDocuments : [])
     .filter((d) => d?.fileUrl)
     .map(cleanFile),
@@ -591,6 +592,24 @@ export const indentService = {
 
     if (data.statusDone === 'YES') {
       indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_RECEIVED;
+      // If Step 1.3 was previously skipped (Step 1.2 had been "Quote Not Required"),
+      // a quote is now required again — reopen the Approved Quotation step. Clearing
+      // the skip + statusDone drops PO eligibility until the approval is completed.
+      if (indent.quotationApprovalStep?.skipped) {
+        indent.quotationApprovalStep = {
+          stepNo: 'Step 1.3',
+          stepName: 'Approved Quotation 1.03',
+          statusDone: null,
+          skipped: false,
+          skippedReason: '',
+          updatedBy: user?._id,
+        };
+        indent.activityTimeline.push({
+          action: 'APPROVE_QUOTATION',
+          description: 'Quote required again — Approved Quotation step reopened',
+          actorId: user?._id,
+        });
+      }
     } else {
       // QUOTE_NOT_REQUIRED — skip Step 1.3 (Approved Quotation) entirely and move
       // straight to PO eligibility (or service-pending for internal-service indents).
@@ -601,6 +620,7 @@ export const indentService = {
         stepName: 'Approved Quotation 1.03',
         statusDone: null,
         skipped: true,
+        skippedReason: 'Quotation Not Required',
         actualAt,
         updatedBy: user?._id,
         remarks: 'Quotation not required — Approved Quotation step skipped',
@@ -610,7 +630,9 @@ export const indentService = {
         : INDENT_OVERALL_STATUS.QUOTATION_APPROVED;
       indent.activityTimeline.push({
         action: 'APPROVE_QUOTATION',
-        description: 'Quotation not required — Approved Quotation step skipped',
+        description: isService
+          ? 'Quotation marked as Not Required. Approved Quotation step skipped. Ready for service.'
+          : 'Quotation marked as Not Required. Approved Quotation step skipped. Ready for Purchase Order.',
         actorId: user?._id,
       });
     }
@@ -621,12 +643,26 @@ export const indentService = {
   async approveQuotation(id, data, user) {
     const indent = await findOrThrow(id);
 
+    // Step 1.3 does not exist when Step 1.2 was "Quote Not Required" — it was
+    // auto-skipped and the indent went straight to PO eligibility. Reject any
+    // approval / upload here until Step 1.2 is changed back to "Quote Received".
+    if (indent.quotationApprovalStep?.skipped
+      || indent.quoteComparativeStep?.statusDone === 'QUOTE_NOT_REQUIRED') {
+      throw new AppError('Approved Quotation (Step 1.3) was skipped because the quotation is not required. Change Step 1.2 back to "Quote Received" to approve a quotation.', 400);
+    }
+
     // Step 1.2 must be completed first.
     const step12Done = ['YES', 'QUOTE_NOT_REQUIRED'].includes(indent.quoteComparativeStep?.statusDone)
       || [QUOTE_STEP_STATUS.RECEIVED, QUOTE_STEP_STATUS.NOT_REQUIRED].includes(indent.quoteStep?.status);
     if (!step12Done) {
       throw new AppError('Complete Step 1.2 (Receive Quote) before approving the quotation', 400);
     }
+
+    // Step 1.3 carries its status from Step 1.2 — the user is not asked to pick it
+    // again. The skip case (Step 1.2 = "Quote Not Required") is already rejected
+    // above, so reaching here means Step 1.2 was YES → Step 1.3 is YES. (The
+    // frontend no longer sends statusDone; this is derived, not trusted.)
+    const statusDone = QUOTATION_APPROVAL_STATUS.YES;
 
     const upload = data.approvedQuotation || {};
     const approvedVendors = Array.isArray(data.approvedVendors) && data.approvedVendors.length
@@ -654,13 +690,13 @@ export const indentService = {
     // precedence, else the flat multi-file upload.
     const legacyDocuments = hasItemQuotations ? itemDocs : documents;
 
-    if (data.statusDone === QUOTATION_APPROVAL_STATUS.YES) {
+    if (statusDone === QUOTATION_APPROVAL_STATUS.YES) {
       if (multiVendor) {
         if (approvedVendors.some((v) => !v.items.length)) {
           throw new AppError('Each approved vendor must have at least one item', 400);
         }
       } else if (hasItemQuotations) {
-        // Only items marked YES need a file; QUOTATION_NOT_APPROVED items optional.
+        // Only items carried YES need a file; QUOTATION_NOT_APPROVED / QUOTE_NOT_REQUIRED optional.
         const missing = itemApprovedQuotations.find((iq) => iq.statusDone === 'YES' && !iq.approvedQuotationDocuments.length);
         if (missing) {
           throw new AppError(`At least one approved quotation file is required for each item marked Yes (missing for "${missing.itemName || 'item'}")`, 400);
@@ -680,7 +716,7 @@ export const indentService = {
     const quotationApprovalStep = {
       stepNo: 'Step 1.3',
       stepName: 'Approved Quotation 1.03',
-      statusDone: data.statusDone,
+      statusDone,
       approvedQuotation: mirrorDoc,
       approvedQuotationDocuments: multiVendor ? [] : legacyDocuments,
       itemApprovedQuotations,
@@ -692,9 +728,23 @@ export const indentService = {
     // Internal-service indents skip the PO/PI/GRN chain — an approved quotation
     // goes straight to SERVICE_PENDING (awaiting Step 1.8A Service Completion).
     const isService = indent.requestType === INDENT_REQUEST_TYPE.INTERNAL_SERVICE;
-    const overallStatus = data.statusDone === QUOTATION_APPROVAL_STATUS.YES
+    const overallStatus = statusDone === QUOTATION_APPROVAL_STATUS.YES
       ? (isService ? INDENT_OVERALL_STATUS.SERVICE_PENDING : INDENT_OVERALL_STATUS.QUOTATION_APPROVED)
       : INDENT_OVERALL_STATUS.QUOTATION_NOT_APPROVED;
+
+    // Timeline: how many Step 1.2 quotations were kept (approved) vs removed
+    // (rejected). Step 1.3 reuses Step 1.2's files, so the difference is the
+    // rejected count.
+    const step12 = indent.quoteComparativeStep;
+    const step12DocCount = (step12?.itemQuotations || []).reduce((n, iq) => n + (iq.quotationDocuments?.length || 0), 0)
+      || (step12?.quotationDocuments?.length || 0);
+    const approvedDocCount = multiVendor
+      ? approvedVendors.filter((v) => v.approvedQuotationDocument?.fileUrl).length
+      : legacyDocuments.length;
+    const rejectedDocCount = Math.max(0, step12DocCount - approvedDocCount);
+    const timelineDesc = multiVendor
+      ? `Step 1.3 — ${approvedVendors.length} approved vendor(s)`
+      : `Step 1.3 — ${approvedDocCount} quotation(s) approved (reused from Step 1.2)${rejectedDocCount ? `, ${rejectedDocCount} rejected` : ''}`;
 
     // Use $set so the whole sub-document is replaced at the DB level. This
     // overwrites any legacy shape (older docs stored `approvedQuotation` as a
@@ -706,7 +756,7 @@ export const indentService = {
         $push: {
           activityTimeline: {
             action: 'APPROVE_QUOTATION',
-            description: `Step 1.3 — ${data.statusDone}${multiVendor ? ` (${approvedVendors.length} approved vendor(s))` : ''}`,
+            description: timelineDesc,
             actorId: user?._id,
             timestamp: new Date(),
           },

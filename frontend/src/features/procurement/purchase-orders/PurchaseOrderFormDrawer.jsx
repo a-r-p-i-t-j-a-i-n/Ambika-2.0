@@ -19,6 +19,7 @@ import { useGetVendorsQuery, useGetVendorByIdQuery } from '../../../store/api/ve
 import { fmtINR } from './poMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
+import AddVendorForItemModal from './AddVendorForItemModal';
 import { norm, matchVendorProduct, fillOtherRates } from './vendorRateMatch';
 import { itemRef } from '../indents/indentMeta';
 
@@ -504,6 +505,43 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
   const isJsl = poFormatType === 'JSL';
 
+  // Vendor filter (New PO item-picker): the vendor dropdown is limited to Vendor
+  // Master records whose catalog (products[]) carries EVERY selected item's SKU —
+  // i.e. vendors we can actually buy all the chosen items from. JSL is exempt (it
+  // is always Jindal). `null` = no restriction (no items selected yet, or JSL).
+  const selectedSkuCodes = useMemo(
+    () => [...new Set(selectedApprovedItems.map((it) => String(it.skuCode || '').toUpperCase()).filter(Boolean))],
+    [selectedApprovedItems],
+  );
+  const skuFilteredVendors = useMemo(() => {
+    if (!approvedItemMode || isJsl || !selectedSkuCodes.length) return null;
+    const hasSku = (v, sku) => (v.products || []).some((p) => String(p.skuCode || '').toUpperCase() === sku);
+    return vendorOptions.filter((v) => selectedSkuCodes.every((sku) => hasSku(v, sku)));
+  }, [approvedItemMode, isJsl, selectedSkuCodes, vendorOptions]);
+
+  const vendorOptionsFiltered = skuFilteredVendors || vendorOptions;
+  // No Vendor Master record carries the selected SKU(s) → prompt to add one.
+  const noVendorForSku = skuFilteredVendors !== null && skuFilteredVendors.length === 0;
+
+  const [addVendorOpen, setAddVendorOpen] = useState(false);
+
+  // Auto-select when exactly one vendor matches; drop a vendor that no longer
+  // covers the selected SKUs once the item selection changes.
+  useEffect(() => {
+    if (isJsl || !skuFilteredVendors) return;
+    if (skuFilteredVendors.length === 1) {
+      if (vendor?._id !== skuFilteredVendors[0]._id) applyVendor(skuFilteredVendors[0]);
+    } else if (vendor?._id && !skuFilteredVendors.some((v) => v._id === vendor._id)) {
+      setVendor(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skuFilteredVendors]);
+
+  // After adding a vendor for the selected item(s): select it and auto-fill rates.
+  const handleVendorAdded = (added) => {
+    if (added?._id) applyVendor(added);
+  };
+
   const totals = useMemo(() => {
     if (isJsl) {
       const taxable = items.reduce((s, it) => s + jslLineCalc(it).value, 0);
@@ -689,7 +727,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   }}
                   renderOption={(props, o) => (
                     <Box component="li" {...props} key={o.indentItemId} sx={{ display: 'block !important', py: 1 }}>
-                      <Typography variant="body2" fontWeight={700} color="primary.main">{o.indentItemDisplayNumber || o.itemDisplayNumber}</Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography variant="body2" fontWeight={700} color="primary.main">{o.indentItemDisplayNumber || o.itemDisplayNumber}</Typography>
+                        {o.quoteNotRequired ? (
+                          <Chip label="Quote Not Required" size="small"
+                            sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: '#eef2f6', color: '#475569' }} />
+                        ) : null}
+                      </Box>
                       <Typography variant="caption" color="text.secondary">
                         {[o.itemName, o.skuCode && `SKU: ${o.skuCode}`, `Approved: ${o.approvedQuantity}`].filter(Boolean).join(' · ')}
                       </Typography>
@@ -722,12 +766,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                 </TextField>
               ) : (
                 <Autocomplete
-                  options={vendorOptions}
+                  options={vendorOptionsFiltered}
                   loading={vendorsLoading}
                   value={vendor}
                   getOptionLabel={(o) => (o?.name || '')}
                   isOptionEqualToValue={(o, v) => o._id === v._id}
                   onChange={(_e, v) => applyVendor(v)}
+                  noOptionsText={noVendorForSku
+                    ? 'No vendor found for selected SKU'
+                    : 'No matching vendor'}
                   filterOptions={(opts, { inputValue }) => {
                     const q = inputValue.trim().toLowerCase();
                     if (!q) return opts;
@@ -763,9 +810,23 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   )}
                   renderInput={(params) => (
                     <TextField {...params} label="Vendor *" placeholder="Select from Vendor Master"
+                      error={noVendorForSku}
+                      helperText={
+                        noVendorForSku
+                          ? 'No vendor found for selected SKU. Add vendor for this item.'
+                          : (skuFilteredVendors
+                            ? 'Filtered to vendors whose catalog carries the selected SKU(s).'
+                            : ' ')
+                      }
                       InputProps={{ ...params.InputProps, endAdornment: (<>{vendorsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
                   )}
                 />
+              )}
+              {approvedItemMode && !isJsl && selectedApprovedItems.length > 0 && (
+                <Button size="small" startIcon={<Plus size={15} />} onClick={() => setAddVendorOpen(true)}
+                  sx={{ mt: 0.5, textTransform: 'none' }}>
+                  Add Vendor for this Item
+                </Button>
               )}
             </Grid>
           </Grid>
@@ -1080,6 +1141,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
       {/* Draft PDF preview — temporary, never saved */}
       <PurchaseOrderPdfPreview open={previewOpen} onClose={closePreview} previewUrl={previewUrl} />
+
+      {/* Add a Vendor Master record (or product) for the selected approved item(s) */}
+      <AddVendorForItemModal
+        open={addVendorOpen}
+        onClose={() => setAddVendorOpen(false)}
+        items={selectedApprovedItems}
+        vendorOptions={vendorOptions}
+        onAdded={handleVendorAdded}
+      />
     </Dialog>
   );
 };

@@ -16,6 +16,8 @@ import {
 import { TallyStatusChip, CHECKLIST_ITEMS, CHECKLIST_TOTAL, checklistProgress, fmtDate } from './tallyMeta';
 import TallyEntryFormDialog from './TallyEntryFormDialog';
 import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
+import WorkflowStepper from '../components/WorkflowStepper';
+import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -36,6 +38,7 @@ const TallyEntryDetail = () => {
   const { enqueueSnackbar } = useSnackbar();
   const { data, isLoading } = useGetTallyEntryByIdQuery(id);
   const t = data?.data;
+  const wfSteps = resolveWorkflowSteps({ tallyEntry: t });
 
   const [formOpen, setFormOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
@@ -81,6 +84,7 @@ const TallyEntryDetail = () => {
         </Box>
       </Box>
 
+      <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         <Grid item xs={12} md={7}>
           <SectionCard icon={<ListChecks size={18} />} title={`Invoice Checklist — ${done}/${CHECKLIST_TOTAL}`}>

@@ -271,7 +271,10 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
                   onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
                   onChange={(_e, val) => {
                     if (val && typeof val === 'object') {
-                      setItem(idx, { itemName: val.name, skuCode: val.code || '', skuId: val._id || '', unit: normalizeUnit(val.unit) || it.unit });
+                      // Auto-fetch the unit from the SKU master on selection; if the
+                      // SKU has no unit, default to Pcs. Re-runs every time the item is
+                      // changed, so picking a different SKU always refreshes the unit.
+                      setItem(idx, { itemName: val.name, skuCode: val.code || '', skuId: val._id || '', unit: normalizeUnit(val.unit) || 'Pcs' });
                     }
                   }}
                   renderInput={(params) => (

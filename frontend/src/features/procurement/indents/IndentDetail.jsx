@@ -196,6 +196,10 @@ const IndentDetail = () => {
   const isService = indent.requestType === 'INTERNAL_SERVICE';
   const isRejected = indent.approvalStatus === 'REJECTED';
   const detailItems = itemsOf(indent);
+  // Whether any PO has been raised from this indent — once it has, Step 1.2 must
+  // not be re-edited (it would desync the downstream approval / PO chain).
+  const hasPo = ['PARTIAL_PO_CREATED', 'PO_READY'].includes(indent.overallStatus)
+    || detailItems.some((it) => it.procurementStatus === 'PO_CREATED' || it.poId);
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
   const goToPOs = () => navigate('/procurement/purchase-orders');
@@ -285,7 +289,7 @@ const IndentDetail = () => {
           {isDraft && <Button variant="contained" startIcon={<Send size={16} />} onClick={onSubmit}>Submit</Button>}
           {isPending && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
           {isApproved && !quoteDone && <Button variant="contained" startIcon={<FileText size={16} />} onClick={() => setComparativeOpen(true)}>Receive Quote / Comparative</Button>}
-          {step12Done && !quotationDone && <Button variant="contained" color="success" startIcon={<FileCheck2 size={16} />} onClick={() => setQuotationOpen(true)}>Approved Quotation 1.03</Button>}
+          {step12Done && !quotationDone && !quoteSkipped && <Button variant="contained" color="success" startIcon={<FileCheck2 size={16} />} onClick={() => setQuotationOpen(true)}>Approved Quotation 1.03</Button>}
           {indent.requestType === 'INTERNAL_SERVICE' && indent.overallStatus === 'SERVICE_PENDING' && (
             <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setServiceOpen(true)}>Mark Service Completed</Button>
           )}
@@ -350,7 +354,17 @@ const IndentDetail = () => {
 
         {/* Quote step */}
         <Grid item xs={12} md={6}>
-          <SectionCard icon={<FileText size={18} />} title="Quote Step">
+          <SectionCard
+            icon={<FileText size={18} />}
+            title="Quote Step"
+            action={isApproved && quoteDone && !hasPo ? (
+              <Tooltip title={quoteSkipped ? 'Change Step 1.2 back to "Quote Received" to require quotation approval again' : 'Edit the received quote / comparative'}>
+                <Button size="small" variant="outlined" startIcon={<Pencil size={14} />} onClick={() => setComparativeOpen(true)}>
+                  Edit
+                </Button>
+              </Tooltip>
+            ) : null}
+          >
             <StepBlock step={indent.quoteStep} />
             {(() => {
               const step = indent.quoteComparativeStep;
