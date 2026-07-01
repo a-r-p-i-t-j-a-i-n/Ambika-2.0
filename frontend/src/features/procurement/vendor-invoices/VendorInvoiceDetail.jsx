@@ -66,7 +66,8 @@ const VendorInvoiceDetail = () => {
     );
   }
 
-  const editable = ['DRAFT', 'RECEIVED'].includes(inv.invoiceStatus);
+  const canEdit = ['DRAFT', 'RECEIVED', 'APPROVED', 'PAYMENT_PENDING'].includes(inv.invoiceStatus);
+  const canApproveReject = ['DRAFT', 'RECEIVED'].includes(inv.invoiceStatus);
   const canCreateVoucher = inv.invoiceStatus === 'PAYMENT_PENDING' && !liveVoucher;
 
   return (
@@ -85,8 +86,8 @@ const VendorInvoiceDetail = () => {
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           {inv.qcId && <Button variant="outlined" startIcon={<ClipboardCheck size={16} />} onClick={() => navigate(`/procurement/incoming-qc/${inv.qcId}`)}>View QC</Button>}
-          {editable && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {editable && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
+          {canEdit && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
+          {canApproveReject && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
           {canCreateVoucher && <Button variant="contained" startIcon={<Banknote size={16} />} onClick={() => setVoucherFormOpen(true)}>Create Voucher</Button>}
           {liveVoucher && <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate(`/procurement/vouchers/${liveVoucher._id}`)}>View Voucher</Button>}
         </Box>
