@@ -22,6 +22,8 @@ import GrnPdfPreview from './GrnPdfPreview';
 import { QcResultChip } from '../incoming-qc/qcMeta';
 import IncomingQCFormDialog from '../incoming-qc/IncomingQCFormDialog';
 import { Eye, ClipboardCheck } from 'lucide-react';
+import WorkflowStepper from '../components/WorkflowStepper';
+import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -46,6 +48,7 @@ const GrnDetail = () => {
 
   const { data, isLoading } = useGetGrnByIdQuery(id);
   const grn = data?.data;
+  const wfSteps = resolveWorkflowSteps({ grn });
   const [cancelGrn] = useCancelGrnMutation();
 
   const isCompleted = grn && ['PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(grn.grnStatus);
@@ -170,6 +173,7 @@ const GrnDetail = () => {
         );
       })()}
 
+      <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         {/* GRN + PO info */}
         <Grid item xs={12} md={6}>

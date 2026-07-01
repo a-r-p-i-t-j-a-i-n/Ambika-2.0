@@ -55,6 +55,22 @@ export const mongoIdParamSchema = Joi.object({
   id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });
 
+// Add / upsert a single product on a vendor's catalog (POST /vendors/:id/products).
+// Used by the New PO "Add Vendor for this Item" flow — ensures the SKU exists on
+// the vendor and records pricing history when the rate/GST is new or changed.
+export const addVendorProductSchema = Joi.object({
+  skuId:       Joi.string().regex(/^[0-9a-fA-F]{24}$/).allow('', null),
+  skuCode:     Joi.string().trim().max(50).required(),
+  productName: Joi.string().trim().max(200).required(),
+  unit:        Joi.string().trim().max(20).required(),
+  rate:        Joi.number().min(0).required(),
+  gstRate:     Joi.number().min(0).max(100).required(),
+  hsn:         Joi.string().trim().max(20).allow('', null),
+  notes:       Joi.string().trim().max(300).allow('', null),
+  remarks:     Joi.string().trim().max(300).allow('', null),
+  effectiveDate: Joi.date().optional(),
+});
+
 // Manual Vendor-Master rate change (POST /vendors/:id/pricing-history).
 export const addPricingHistorySchema = Joi.object({
   skuId:    Joi.string().regex(/^[0-9a-fA-F]{24}$/).allow('', null),

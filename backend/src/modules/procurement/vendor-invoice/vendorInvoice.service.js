@@ -274,6 +274,33 @@ export const vendorInvoiceService = {
     }).filter((q) => q.totalPendingInvoiceQty > 0); // hide fully-invoiced
   },
 
+  /**
+   * GRNs that can still be invoiced — a GRN-centric view of getInvoiceableQcs.
+   * Users identify documents by GRN, not QC, so the invoice form selects GRNs and
+   * the system auto-links each GRN's QC. Each entry keeps `_id` = the linked qcId
+   * so the existing selection / create machinery (which submits qcIds[]) is
+   * unchanged. Only GRNs whose QC is PASSED/PARTIAL with remaining pending qty
+   * appear (fully-invoiced GRNs are already filtered out upstream).
+   */
+  async getInvoiceableGrns(query = {}) {
+    const qcs = await this.getInvoiceableQcs(query);
+    return qcs
+      .filter((q) => q.grnId) // GRN-backed material QCs only
+      .map((q) => ({
+        _id: q._id, // = qcId — keeps the qcIds[] create payload working unchanged
+        grnId: q.grnId, grnNumber: q.grnNumber,
+        qcId: q._id, qcNumber: q.qcNumber,
+        poId: q.poId, poNumber: q.poNumber,
+        piId: q.piId, piNumber: q.piNumber,
+        vendorId: q.vendorId, vendorName: q.vendorName,
+        qcStatus: q.qcStatus, overallResult: q.overallResult,
+        totalAccepted: q.totalAccepted,
+        pendingInvoiceQty: q.totalPendingInvoiceQty,
+        totalPendingInvoiceQty: q.totalPendingInvoiceQty, // alias for shared rows builder
+        items: q.items,
+      }));
+  },
+
   async getStats() {
     const rows = await VendorInvoice.aggregate([
       { $match: { isDeleted: { $ne: true } } },

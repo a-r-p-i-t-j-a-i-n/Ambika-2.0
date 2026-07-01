@@ -174,9 +174,10 @@ const itemApprovedQuotationSchema = new Schema({
   skuId:     { type: Schema.Types.ObjectId, ref: 'SKU' },
   skuCode:   { type: String, trim: true, uppercase: true, default: '' },
   itemName:  { type: String, trim: true, default: '' },
-  // Per-item status — YES (approved) requires ≥1 file; QUOTATION_NOT_APPROVED
-  // makes the upload optional for this item.
-  statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED'], default: 'YES' },
+  // Per-item status — carried forward from Step 1.2. YES (approved) requires ≥1
+  // file; QUOTATION_NOT_APPROVED / QUOTE_NOT_REQUIRED (item had no quote in Step
+  // 1.2) make the upload optional for this item.
+  statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED'], default: 'YES' },
   // One or more approved quotation documents for this specific item.
   approvedQuotationDocuments: { type: [fileSchema], default: [] },
   actualAt:  { type: Date, default: null },
@@ -190,7 +191,8 @@ const quotationApprovalStepSchema = new Schema({
   statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED'], default: null },
   // Set when Step 1.2 was marked QUOTE_NOT_REQUIRED — Step 1.3 is skipped and the
   // indent goes straight to PO/service eligibility without an approval upload.
-  skipped:    { type: Boolean, default: false },
+  skipped:       { type: Boolean, default: false },
+  skippedReason: { type: String, trim: true, default: '' },
   // Legacy single approved-quotation upload (back-compat — mirrors the first
   // entry of approvedQuotationDocuments).
   approvedQuotation: {

@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import {
-  Box, Typography, Button, IconButton, Stack, CircularProgress, TextField, MenuItem,
+  Box, Typography, Button, IconButton, Stack, CircularProgress, TextField, MenuItem, Tooltip,
 } from '@mui/material';
 import { Upload, FileText, X, ExternalLink } from 'lucide-react';
 import { fileHref } from './indentMeta';
@@ -21,6 +21,8 @@ const ItemQuotationTable = ({
   accept,
   statusOptions = [],   // [{ value, label }] — the per-item Status Done choices
   yesValue = 'YES',     // which status value requires a file
+  hideStatus = false,   // hide the Status Done column (Step 1.3 carries it from Step 1.2)
+  noUpload = false,     // hide the upload control — files are reused (Step 1.3 selects from Step 1.2)
   uploadingIdx = -1,
   onUploadRow,
   onRemoveFile,
@@ -36,8 +38,12 @@ const ItemQuotationTable = ({
     );
   }
 
-  const COLS = '1.5fr 0.9fr 0.55fr 0.55fr 1.2fr 2fr 1.15fr 1.3fr';
-  const headers = ['Item Name', 'SKU', qtyLabel, 'Unit', 'Status Done?', uploadLabel, 'Actual Date', 'Remarks'];
+  const COLS = hideStatus
+    ? '1.5fr 0.9fr 0.55fr 0.55fr 2fr 1.15fr 1.3fr'
+    : '1.5fr 0.9fr 0.55fr 0.55fr 1.2fr 2fr 1.15fr 1.3fr';
+  const headers = hideStatus
+    ? ['Item Name', 'SKU', qtyLabel, 'Unit', uploadLabel, 'Actual Date', 'Remarks']
+    : ['Item Name', 'SKU', qtyLabel, 'Unit', 'Status Done?', uploadLabel, 'Actual Date', 'Remarks'];
 
   return (
     <Box>
@@ -52,6 +58,7 @@ const ItemQuotationTable = ({
         {rows.map((row, idx) => {
           const uploading = uploadingIdx === idx;
           const needsFile = row.statusDone === yesValue;
+          const statusLabel = statusOptions.find((o) => o.value === row.statusDone)?.label || 'Not Required';
           return (
             <Box
               key={row.itemId || idx}
@@ -91,61 +98,93 @@ const ItemQuotationTable = ({
                 <Typography variant="body2" color="text.secondary">{row.unit || '—'}</Typography>
               </Box>
 
-              {/* Status Done */}
-              <Box>
-                <Typography variant="caption" sx={{ display: { md: 'none' }, color: 'text.secondary', fontWeight: 700 }}>Status Done?</Typography>
-                <TextField
-                  select
-                  fullWidth
-                  size="small"
-                  value={row.statusDone || yesValue}
-                  onChange={(e) => onPatchRow(idx, { statusDone: e.target.value })}
-                >
-                  {statusOptions.map((o) => (
-                    <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
-                  ))}
-                </TextField>
-              </Box>
+              {/* Status Done — hidden when the status is carried from a prior step */}
+              {!hideStatus && (
+                <Box>
+                  <Typography variant="caption" sx={{ display: { md: 'none' }, color: 'text.secondary', fontWeight: 700 }}>Status Done?</Typography>
+                  <TextField
+                    select
+                    fullWidth
+                    size="small"
+                    value={row.statusDone || yesValue}
+                    onChange={(e) => {
+                      const statusDone = e.target.value;
+                      // When a quotation is no longer required, the upload control is
+                      // disabled — so drop any already-attached files to avoid leaving
+                      // an orphaned document behind a greyed-out control.
+                      onPatchRow(idx, statusDone === yesValue ? { statusDone } : { statusDone, files: [] });
+                    }}
+                  >
+                    {statusOptions.map((o) => (
+                      <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                    ))}
+                  </TextField>
+                </Box>
+              )}
 
-              {/* Upload + file list */}
+              {/* Upload / reuse + file list */}
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="caption" sx={{ display: { md: 'none' }, color: 'text.secondary', fontWeight: 700 }}>
                   {uploadLabel}{needsFile ? ' *' : ' (optional)'}
                 </Typography>
-                <input
-                  ref={(el) => { inputRefs.current[idx] = el; }}
-                  type="file"
-                  accept={accept}
-                  multiple
-                  hidden
-                  onChange={(e) => {
-                    const picked = Array.from(e.target.files || []);
-                    e.target.value = '';
-                    onUploadRow(idx, picked);
-                  }}
-                />
+                {!noUpload && (
+                  <input
+                    ref={(el) => { inputRefs.current[idx] = el; }}
+                    type="file"
+                    accept={accept}
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      const picked = Array.from(e.target.files || []);
+                      e.target.value = '';
+                      onUploadRow(idx, picked);
+                    }}
+                  />
+                )}
                 {row.files?.length > 0 && (
                   <Stack spacing={0.5} sx={{ mb: 0.75 }}>
                     {row.files.map((f, fi) => (
                       <Box key={fi} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, p: 0.5, border: '1px solid', borderColor: 'divider', borderRadius: '8px', bgcolor: '#f8fafc' }}>
                         <FileText size={14} />
-                        <Typography variant="caption" sx={{ flexGrow: 1, minWidth: 0 }} noWrap title={f.fileName}>{f.fileName || `File ${fi + 1}`}</Typography>
-                        <IconButton size="small" href={fileHref(f.fileUrl)} target="_blank" rel="noopener"><ExternalLink size={13} /></IconButton>
-                        <IconButton size="small" color="error" onClick={() => onRemoveFile(idx, fi)}><X size={13} /></IconButton>
+                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                          <Typography variant="caption" sx={{ display: 'block' }} noWrap title={f.fileName}>{f.fileName || `File ${fi + 1}`}</Typography>
+                          {f.uploadedAt ? (
+                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.6rem' }}>
+                              {new Date(f.uploadedAt).toLocaleDateString()}
+                            </Typography>
+                          ) : null}
+                        </Box>
+                        <Tooltip title="View / Download"><IconButton size="small" href={fileHref(f.fileUrl)} target="_blank" rel="noopener"><ExternalLink size={13} /></IconButton></Tooltip>
+                        <Tooltip title={noUpload ? 'Remove (reject this quotation)' : 'Remove file'}><IconButton size="small" color="error" onClick={() => onRemoveFile(idx, fi)}><X size={13} /></IconButton></Tooltip>
                       </Box>
                     ))}
                   </Stack>
                 )}
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={uploading ? <CircularProgress size={14} /> : <Upload size={14} />}
-                  onClick={() => inputRefs.current[idx]?.click()}
-                  disabled={uploading}
-                  sx={{ textTransform: 'none' }}
-                >
-                  {uploading ? 'Uploading…' : (row.files?.length ? 'Add file' : 'Upload PDF / Image / Excel')}
-                </Button>
+                {!noUpload && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={uploading ? <CircularProgress size={14} /> : <Upload size={14} />}
+                    onClick={() => inputRefs.current[idx]?.click()}
+                    disabled={uploading || !needsFile}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    {uploading ? 'Uploading…' : (row.files?.length ? 'Add file' : 'Upload PDF / Image / Excel')}
+                  </Button>
+                )}
+                {/* Reuse mode (Step 1.3): no upload — guide the user to keep approved quotations. */}
+                {noUpload && needsFile && !row.files?.length && (
+                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                    All quotations removed — keep at least one to approve this item.
+                  </Typography>
+                )}
+                {!needsFile && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    {hideStatus
+                      ? 'No quotation was required for this item in Step 1.2 — nothing to approve.'
+                      : `Quotation upload is disabled because '${statusLabel}' is selected.`}
+                  </Typography>
+                )}
               </Box>
 
               {/* Actual date */}

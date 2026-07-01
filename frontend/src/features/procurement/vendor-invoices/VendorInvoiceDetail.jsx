@@ -18,6 +18,8 @@ import { VoucherStatusChip } from '../vouchers/voucherMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
 import VoucherFormDialog from '../vouchers/VoucherFormDialog';
+import WorkflowStepper from '../components/WorkflowStepper';
+import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 
 const INV_ITEM_COLS = '2fr 0.8fr 0.8fr 0.6fr 0.9fr 0.9fr 0.95fr 1.4fr';
 const CMP_COLS = '1.8fr 1fr 0.5fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.95fr';
@@ -44,6 +46,7 @@ const VendorInvoiceDetail = () => {
   const navigate = useNavigate();
   const { data, isLoading } = useGetVendorInvoiceByIdQuery(id);
   const inv = data?.data;
+  const wfSteps = resolveWorkflowSteps({ invoice: inv });
 
   const voucherRelevant = inv && ['PAYMENT_PENDING', 'PAYMENT_COMPLETED'].includes(inv.invoiceStatus);
   const { data: vouRes } = useGetVouchersByInvoiceQuery(id, { skip: !voucherRelevant });
@@ -89,6 +92,7 @@ const VendorInvoiceDetail = () => {
         </Box>
       </Box>
 
+      <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>
           <SectionCard icon={<FileText size={18} />} title="Invoice & Linkage">

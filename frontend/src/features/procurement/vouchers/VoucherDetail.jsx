@@ -26,6 +26,8 @@ import TallyEntryFormDialog from '../tally-entry/TallyEntryFormDialog';
 import { TallyStatusChip, CHECKLIST_TOTAL, checklistProgress } from '../tally-entry/tallyMeta';
 import FinalPaymentFormDialog from '../final-payments/FinalPaymentFormDialog';
 import { PaymentStatusChip } from '../final-payments/paymentMeta';
+import WorkflowStepper from '../components/WorkflowStepper';
+import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -46,6 +48,7 @@ const VoucherDetail = () => {
   const { enqueueSnackbar } = useSnackbar();
   const { data, isLoading } = useGetVoucherByIdQuery(id);
   const v = data?.data;
+  const wfSteps = resolveWorkflowSteps({ voucher: v });
 
   const [formOpen, setFormOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -133,6 +136,7 @@ const VoucherDetail = () => {
         </Box>
       </Box>
 
+      <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         <Grid item xs={12} md={7}>
           <SectionCard icon={<Wallet size={18} />} title="Payment Status">
