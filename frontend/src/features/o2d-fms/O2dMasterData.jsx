@@ -77,21 +77,34 @@ const COLUMNS = {
     col('transporterName', 'Transporter', { minWidth: 140, valueGetter: (v, r) => r.transporterName || '—' }),
     col('status', 'Status', { minWidth: 110 }),
   ],
-  payment: [
+  // 2.10 — Payment Follow-up (Payment.followUp)
+  paymentFollowup: [
     col('partyName', 'Party', { minWidth: 170 }),
     col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || '—' }),
-    col('type', 'Type', { minWidth: 140 }),
-    col('followUp', 'Follow-up', { minWidth: 110, valueGetter: (v, r) => r.followUp?.status || 'PENDING' }),
-    col('receivedAmount', 'Received ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.confirmation?.receivedAmount || 0) }),
-    col('receivedDate', 'Received On', { minWidth: 120, valueGetter: (v, r) => dd(r.confirmation?.receivedDate) }),
-    col('confirmation', 'Confirmed', { minWidth: 110, valueGetter: (v, r) => r.confirmation?.status || 'PENDING' }),
+    col('type', 'Type', { minWidth: 140, valueGetter: (v, r) => r.type || '—' }),
+    col('followUpStatus', 'Follow-up', { minWidth: 120, valueGetter: (v, r) => r.followUp?.status || 'PENDING' }),
+    col('followedOn', 'Followed On', { minWidth: 130, valueGetter: (v, r) => dd(r.followUp?.actual) }),
+    col('followDelay', 'Delay', { minWidth: 100, valueGetter: (v, r) => r.followUp?.timeDelay || '—' }),
   ],
-  transport: [
+  // 2.11 — Receive Payment & Tally (Payment.confirmation)
+  paymentReceipt: [
+    col('partyName', 'Party', { minWidth: 170 }),
+    col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || '—' }),
+    col('receivedAmount', 'Received ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.confirmation?.receivedAmount || 0) }),
+    col('receivedDate', 'Received On', { minWidth: 130, valueGetter: (v, r) => dd(r.confirmation?.receivedDate) }),
+    col('confirmation', 'Confirmed', { minWidth: 120, valueGetter: (v, r) => r.confirmation?.status || 'PENDING' }),
+  ],
+  // 2.12 — Receive Transport Bill (TransportBill.receipt)
+  transportReceipt: [
     col('dcNumber', 'DC No', { minWidth: 150, valueGetter: (v, r) => r.dcNumber || '—' }),
-    col('receiptStatus', 'Bill Received', { minWidth: 130, valueGetter: (v, r) => r.receipt?.status || 'PENDING' }),
-    col('receiptOn', 'Received On', { minWidth: 150, valueGetter: (v, r) => dt(r.receipt?.actual) }),
-    col('paymentStatus', 'Bill Paid', { minWidth: 120, valueGetter: (v, r) => r.payment?.status || 'PENDING' }),
-    col('paymentOn', 'Paid On', { minWidth: 150, valueGetter: (v, r) => dt(r.payment?.actual) }),
+    col('receiptStatus', 'Bill Received', { minWidth: 140, valueGetter: (v, r) => r.receipt?.status || 'PENDING' }),
+    col('receiptOn', 'Received On', { minWidth: 170, valueGetter: (v, r) => dt(r.receipt?.actual) }),
+  ],
+  // 2.13 — Transport Bill Payment (TransportBill.payment)
+  transportPayment: [
+    col('dcNumber', 'DC No', { minWidth: 150, valueGetter: (v, r) => r.dcNumber || '—' }),
+    col('paymentStatus', 'Bill Paid', { minWidth: 130, valueGetter: (v, r) => r.payment?.status || 'PENDING' }),
+    col('paymentOn', 'Paid On', { minWidth: 170, valueGetter: (v, r) => dt(r.payment?.actual) }),
   ],
 };
 
@@ -101,8 +114,10 @@ const TABS = [
   { key: 'plan', label: 'Dispatch Plans · 2.04' },
   { key: 'dispatch', label: 'Actual Dispatch · 2.06' },
   { key: 'invoice', label: 'Invoices · 2.07' },
-  { key: 'payment', label: 'Payments · 2.10–2.11' },
-  { key: 'transport', label: 'Transport Bills · 2.12–2.13' },
+  { key: 'paymentFollowup', label: 'Payment Follow-up · 2.10' },
+  { key: 'paymentReceipt', label: 'Receive Payment · 2.11' },
+  { key: 'transportReceipt', label: 'Transport Bill · 2.12' },
+  { key: 'transportPayment', label: 'Transport Payment · 2.13' },
 ];
 
 // Compute a column's display value for the non-grid views (sheet / cards / board).
@@ -114,7 +129,10 @@ const displayVal = (c, row) => {
 const statusOf = (tab, row) => ({
   intake: row.intakeStatus,
   so: row.status, plan: row.status, dispatch: row.status, invoice: row.status,
-  payment: row.confirmation?.status, transport: row.payment?.status,
+  paymentFollowup: row.followUp?.status,
+  paymentReceipt: row.confirmation?.status,
+  transportReceipt: row.receipt?.status,
+  transportPayment: row.payment?.status,
 }[tab]) || 'PENDING';
 
 const VIEWS = [
@@ -144,10 +162,14 @@ const O2dMasterData = () => {
   const planQ = useGetSchedulesQuery({ limit: 1000, sort: '-updatedAt' }, { skip: tab !== 'plan' });
   const dcQ = useGetChallansQuery({ limit: 1000, sort: '-dcDate' }, { skip: tab !== 'dispatch' });
   const invQ = useGetSalesInvoicesQuery({ limit: 1000, sort: '-invoiceDate' }, { skip: tab !== 'invoice' });
-  const payQ = useGetPaymentsQuery(undefined, { skip: tab !== 'payment' });
-  const tbQ = useGetTransportBillsQuery(undefined, { skip: tab !== 'transport' });
+  const payQ = useGetPaymentsQuery(undefined, { skip: tab !== 'paymentFollowup' && tab !== 'paymentReceipt' });
+  const tbQ = useGetTransportBillsQuery(undefined, { skip: tab !== 'transportReceipt' && tab !== 'transportPayment' });
 
-  const current = { intake: intakeQ, so: soQ, plan: planQ, dispatch: dcQ, invoice: invQ, payment: payQ, transport: tbQ }[tab];
+  const current = {
+    intake: intakeQ, so: soQ, plan: planQ, dispatch: dcQ, invoice: invQ,
+    paymentFollowup: payQ, paymentReceipt: payQ,
+    transportReceipt: tbQ, transportPayment: tbQ,
+  }[tab];
   const columns = COLUMNS[tab];
   const rawRows = useMemo(() => current?.data?.data || [], [current]);
 
@@ -165,26 +187,26 @@ const O2dMasterData = () => {
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{ color: '#fff', px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 7 },
+      {/* Hero (compact) */}
+      <Box sx={{ color: '#fff', px: { xs: 2, md: 3 }, pt: { xs: 1.75, md: 2 }, pb: { xs: 2.5, md: 3 },
         background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)' }}>
-        <Stack direction="row" spacing={2.5} alignItems="center">
-          <Box sx={{ width: 52, height: 52, borderRadius: 2.5, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <Database size={26} color="#fff" />
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <Box sx={{ width: 36, height: 36, borderRadius: 2, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
+            <Database size={18} color="#fff" />
           </Box>
           <Box>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800 }}>O2D Master Data</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>
+            <Typography sx={{ color: '#fff', fontSize: { xs: '1.05rem', md: '1.2rem' }, fontWeight: 800, lineHeight: 1.1 }}>O2D Master Data</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.72rem' }}>
               Every entry, step by step — who filled what, when. One tab per O2D step.
             </Typography>
           </Box>
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6 }}>
+      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -1.5, md: -1.75 }, position: 'relative', pb: 6 }}>
         <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
           <Tabs value={tab} onChange={(_, v) => switchTab(v)} variant="scrollable" scrollButtons="auto"
-            sx={{ borderBottom: `1px solid ${theme.palette.divider}`, minHeight: 40, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.78rem', minHeight: 40, py: 0.5 } }}>
+            sx={{ borderBottom: `1px solid ${theme.palette.divider}`, minHeight: 36, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.72rem', minHeight: 36, py: 0.25, minWidth: 'auto', px: 1.5 } }}>
             {TABS.map((t) => <Tab key={t.key} value={t.key} label={t.label} />)}
           </Tabs>
 

@@ -608,7 +608,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                           View
                         </Button>
                       )}
-                      {a.to && !done && (
+                      {/* Always available — even after the step is Done — so the doer can
+                          re-open the screen to correct/re-do it (e.g. Not Delivered → Delivered,
+                          re-generate a PDF, re-record a dispatch). */}
+                      {a.to && (
                         <Button size="small" variant={aDone ? 'outlined' : 'contained'} endIcon={<ArrowRight size={14} />}
                           onClick={() => goAction(a)} sx={{ whiteSpace: 'nowrap', boxShadow: 'none' }}>
                           {aDone ? 'Do again' : 'Do it now'}

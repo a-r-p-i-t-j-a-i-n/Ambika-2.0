@@ -352,6 +352,123 @@ const ConsignmentsPanel = ({ processId }) => {
   );
 };
 
+// One compact card in a left-to-right chain (a spine step or a consignment stage).
+// The whole card is clickable → jumps to that step's screen (view / do / redo).
+const ChainCard = ({ code, title, done, active, sub, subDate, onGo, goLabel }) => {
+  const c = done ? '#0f766e' : (active ? '#1d4ed8' : '#94a3b8');
+  return (
+    <Paper variant="outlined" onClick={onGo}
+      sx={{
+        flex: '0 0 auto', width: 156, p: 1, borderRadius: 2, borderTop: '3px solid', borderTopColor: c,
+        cursor: onGo ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s',
+        '&:hover': onGo ? { boxShadow: 4, transform: 'translateY(-2px)', borderColor: c } : {},
+      }}>
+      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem', fontWeight: 700 }}>{code}</Typography>
+      <Typography sx={{ fontWeight: 700, fontSize: '0.72rem', lineHeight: 1.2, minHeight: 30 }}>{title}</Typography>
+      <Chip size="small" label={done ? 'Done' : (sub || 'Pending')} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, maxWidth: '100%', bgcolor: alpha(c, 0.14), color: c }} />
+      {subDate && <Typography variant="caption" sx={{ display: 'block', mt: 0.4, color: 'text.secondary', fontSize: '0.62rem' }} noWrap>{subDate}</Typography>}
+      {onGo && (
+        <Stack direction="row" spacing={0.25} alignItems="center" sx={{ mt: 0.5, color: done ? '#0f766e' : '#1d4ed8' }}>
+          <Typography sx={{ fontSize: '0.6rem', fontWeight: 800 }}>{goLabel || (done ? 'Open' : 'Do it')}</Typography>
+          <ArrowRight size={11} />
+        </Stack>
+      )}
+    </Paper>
+  );
+};
+const ChainLink = () => <Box sx={{ flex: '0 0 auto', alignSelf: 'center', width: 16, height: 2, bgcolor: alpha('#94a3b8', 0.5) }} />;
+
+// ── Split view — the shared spine (1.01–2.05) runs ONCE, then the flow forks at
+// Actual Dispatch: every Delivery Challan gets its own chain (Dispatch → Invoice →
+// Eway → Delivery → Payment) left-to-right, stacked below. Steps before dispatch
+// never repeat. Driven by the per-consignment ledger (real documents).
+const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate }) => {
+  const { data, isFetching } = useGetConsignmentsQuery(processId, { skip: !processId });
+  const res = data?.data;
+  const consignments = res?.consignments || [];
+  const summary = res?.summary || {};
+  const accent = '#7c3aed';
+
+  const dispatchSeq = steps.find((s) => s.stepCode === '2.06' || s.triggerKey === 'ACTUAL_DISPATCH')?.sequence ?? 6;
+  const spine = steps.filter((s) => (s.sequence || 0) < dispatchSeq);
+  const soq = soNumber ? `?so=${encodeURIComponent(soNumber)}` : '';
+
+  // Full post-dispatch chain per consignment (2.06 → 2.13). Every card is clickable
+  // and jumps to that step's screen (pre-filtered to this order where supported).
+  const stagesFor = (c) => [
+    { code: '2.06', title: 'Actual Dispatch', done: true, sub: `${num(c.qty)} pcs`, subDate: c.dcDate ? fmt(c.dcDate) : null, onGo: () => navigate(`/challans?so=${encodeURIComponent(soNumber || '')}`), goLabel: 'View' },
+    { code: '2.07', title: 'Invoice & Eway', done: !!c.invoice?.has, sub: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending', subDate: c.invoice?.date ? fmt(c.invoice.date) : null, onGo: () => navigate(`/o2d/invoice-entry${soq}`), goLabel: c.invoice?.has ? 'Do again' : 'Invoice' },
+    { code: '2.08', title: 'Email Invoice', done: false, sub: c.invoice?.has ? 'Send to client' : 'After invoice', onGo: () => navigate(`/o2d/invoice-email${soq}`), goLabel: 'Email' },
+    { code: '2.09', title: 'Track Delivery', done: !!c.delivery?.delivered, sub: c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'), subDate: c.delivery?.date ? fmt(c.delivery.date) : null, onGo: () => navigate(`/o2d/track-delivery${soq}`), goLabel: c.delivery?.delivered ? 'Do again' : 'POD' },
+    { code: '2.10', title: 'Payment Follow-up', done: !!c.payment?.has, sub: c.payment?.has ? 'Following up' : 'Pending', onGo: () => navigate('/o2d/payments?part=followup'), goLabel: 'Follow up' },
+    { code: '2.11', title: 'Payment', done: !!c.payment?.confirmed, sub: c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Follow-up' : 'Pending'), onGo: () => navigate('/o2d/payments?part=receipt'), goLabel: c.payment?.confirmed ? 'Do again' : 'Pay' },
+    { code: '2.12', title: 'Transport Bill', done: c.transport?.receiptStatus === 'DONE', sub: c.transport?.receiptStatus === 'DONE' ? 'Received' : 'Pending', onGo: () => navigate('/o2d/transport-bill?part=receive'), goLabel: 'Receive' },
+    { code: '2.13', title: 'Transport Payment', done: c.transport?.paymentStatus === 'DONE', sub: c.transport?.paymentStatus === 'DONE' ? 'Paid' : 'Pending', onGo: () => navigate('/o2d/transport-bill?part=status'), goLabel: 'Pay bill' },
+  ];
+
+  return (
+    <Stack spacing={2}>
+      {/* Shared spine — runs once */}
+      <Paper sx={{ p: 2, borderRadius: 3 }}>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+          <Boxes size={16} color="#0b2545" />
+          <Typography sx={{ fontWeight: 800 }}>Order → Plan</Typography>
+          <Chip size="small" label="shared · runs once" sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, bgcolor: alpha('#0b2545', 0.08), color: '#0b2545' }} />
+        </Stack>
+        <Box sx={{ display: 'flex', alignItems: 'stretch', overflowX: 'auto', pb: 1 }}>
+          {spine.map((s, i) => (
+            <React.Fragment key={s.stepCode}>
+              {i > 0 && <ChainLink />}
+              <ChainCard code={s.stepCode} title={s.name}
+                done={['DONE', 'DELAYED'].includes(s.status)}
+                active={s.stepCode === currentStepCode || s.status === 'IN_PROGRESS'}
+                sub={(STATUS[s.status] || STATUS.PENDING).label}
+                subDate={s.actual ? fmt(s.actual) : null}
+                onGo={() => navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(s.stepCode)}`)} goLabel="Open" />
+            </React.Fragment>
+          ))}
+        </Box>
+      </Paper>
+
+      {/* Fork marker */}
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 0.5 }}>
+        <GitBranch size={15} color={accent} />
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+          Forks at Actual Dispatch — one chain per Delivery Challan{summary.total ? ` (${summary.total})` : ''}. Steps 1.01–2.05 never repeat.
+        </Typography>
+      </Stack>
+
+      {/* Per-consignment chains */}
+      {isFetching && !consignments.length ? (
+        <Skeleton variant="rounded" height={140} />
+      ) : !consignments.length ? (
+        <Paper sx={{ p: 3.5, borderRadius: 3, textAlign: 'center', color: 'text.secondary' }}>
+          <Truck size={28} style={{ opacity: 0.4 }} />
+          <Typography sx={{ mt: 0.5, fontWeight: 700 }}>No dispatches yet</Typography>
+          <Typography variant="caption">Once the first Delivery Challan is created, its chain appears here — and each further dispatch adds its own below.</Typography>
+        </Paper>
+      ) : consignments.map((c, idx) => (
+        <Paper key={String(c.dcId)} sx={{ p: 2, borderRadius: 3, border: '1px solid', borderColor: alpha(accent, 0.22) }}>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+            <Chip size="small" label={`Consignment ${idx + 1}`} sx={{ fontWeight: 800, height: 20, fontSize: '0.62rem', bgcolor: alpha(accent, 0.12), color: accent }} />
+            <Typography sx={{ fontWeight: 800, fontFamily: 'ui-monospace, monospace', fontSize: '0.82rem', color: '#0b2545' }}>{c.dcNumber}</Typography>
+            <Chip size="small" variant="outlined" label={c.phaseNo || '—'} sx={{ height: 18, fontSize: '0.6rem' }} />
+            <Typography variant="caption" color="text.secondary">{num(c.qty)} pcs{c.boxes ? ` · ${num(c.boxes)} box` : ''} · {c.dcDate ? fmt(c.dcDate) : '—'}</Typography>
+          </Stack>
+          <Box sx={{ display: 'flex', alignItems: 'stretch', overflowX: 'auto', pb: 1 }}>
+            {stagesFor(c).map((st, i) => (
+              <React.Fragment key={st.code}>
+                {i > 0 && <ChainLink />}
+                <ChainCard {...st} />
+              </React.Fragment>
+            ))}
+          </Box>
+        </Paper>
+      ))}
+    </Stack>
+  );
+};
+
 const ProcessDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -432,6 +549,7 @@ const ProcessDetail = () => {
             <ToggleButtonGroup size="small" value={view} exclusive onChange={(_, v) => v && setView(v)} sx={{ flexWrap: 'wrap' }}>
               <ToggleButton value="table"><TableIcon size={15} style={{ marginRight: 6 }} /> Full</ToggleButton>
               <ToggleButton value="sheet"><Columns3 size={15} style={{ marginRight: 6 }} /> Sheet</ToggleButton>
+              <ToggleButton value="split"><Boxes size={15} style={{ marginRight: 6 }} /> Split</ToggleButton>
               <ToggleButton value="board"><LayoutGrid size={15} style={{ marginRight: 6 }} /> Board</ToggleButton>
               <ToggleButton value="timeline"><GitBranch size={15} style={{ marginRight: 6 }} /> Timeline</ToggleButton>
             </ToggleButtonGroup>
@@ -535,6 +653,11 @@ const ProcessDetail = () => {
                 })}
               </Stack>
             </Paper>
+          )}
+
+          {/* ── Split view: shared spine once, then a chain per Delivery Challan ── */}
+          {view === 'split' && (
+            <SplitSheetView steps={steps} processId={id} soNumber={process.soNumber} currentStepCode={process.currentStepCode} navigate={navigate} />
           )}
 
           {/* ── Board view: steps grouped by where they stand (quick analysis) ── */}
