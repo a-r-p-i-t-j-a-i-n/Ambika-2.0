@@ -5,7 +5,7 @@ import { setAccess, logout } from '../store/slices/authSlice';
 import AppLoader from './AppLoader';
 
 /**
- * Mounted inside ProtectedRoute. When authenticated, fetch `/access-control/me`
+ * Mounted  inside ProtectedRoute. When authenticated, fetch `/access-control/me`
  * once and push the user + permissions into the auth slice.
  *
  * On a fresh page load the auth slice has a token but no `user` yet, so we hold
