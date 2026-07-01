@@ -105,6 +105,11 @@ const StepDefinitionSchema = new Schema({
   // primarily documentation / forward-compat.
   quantityGated: { type: Boolean, default: false },
 
+  // Consignment-gated step (Invoice / POD / Payment): recurs per Delivery Challan and
+  // completes only when EVERY consignment satisfies it. Runtime also treats INVOICE /
+  // POD / PAYMENT trigger keys as consignment-gated, so this flag is forward-compat.
+  consignmentGated: { type: Boolean, default: false },
+
   isActive: { type: Boolean, default: true },
 }, baseSchemaOptions);
 
@@ -253,6 +258,20 @@ const ProcessStepSchema = new Schema({
       phasesTotal:   { type: Number, default: 0 },
       phasesDone:    { type: Number, default: 0 },
       updatedAt:     { type: Date, default: null },
+    }, { _id: false }),
+    default: null,
+  },
+
+  // Consignment-gated downstream steps (Invoice / POD / Payment) — "2 of 3 invoiced".
+  executionProgress: {
+    type: new Schema({
+      kind:            { type: String, default: '' },   // INVOICE | POD | PAYMENT
+      label:           { type: String, default: '' },   // invoiced | delivered | paid
+      total:           { type: Number, default: 0 },    // consignment count
+      done:            { type: Number, default: 0 },
+      pending:         { type: Number, default: 0 },
+      fullyDispatched: { type: Boolean, default: false },
+      updatedAt:       { type: Date, default: null },
     }, { _id: false }),
     default: null,
   },

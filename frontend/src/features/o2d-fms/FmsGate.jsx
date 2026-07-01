@@ -72,17 +72,19 @@ export const FmsGateBanner = ({ gate, onOpen }) => {
   const blockingStep = gate?.blockingStep;
   if (!gate || gate.allowed !== false || !blockingStep) return null;
   return (
-    <Paper variant="outlined" sx={{
-      p: { xs: 1.25, md: 1.5 }, borderRadius: 3, mb: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
-      bgcolor: alpha('#b45309', 0.06), borderColor: alpha('#b45309', 0.4),
+    <Paper elevation={0} sx={{
+      p: { xs: 1.25, md: 1.5 }, borderRadius: 2.5, mb: 2, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+      // Solid card so the dark hero never bleeds through (it floats over the hero edge).
+      bgcolor: 'background.paper', border: `1px solid ${alpha('#b45309', 0.45)}`,
+      boxShadow: '0 6px 20px rgba(180,83,9,0.10)',
     }}>
-      <Box sx={{ p: 1, borderRadius: 2, bgcolor: alpha('#b45309', 0.12), color: '#b45309', display: 'flex' }}><AlertTriangle size={18} /></Box>
+      <Box sx={{ p: 0.85, borderRadius: 1.5, bgcolor: alpha('#b45309', 0.12), color: '#b45309', display: 'flex', flexShrink: 0 }}><AlertTriangle size={16} /></Box>
       <Box sx={{ flex: 1, minWidth: 200 }}>
-        <Typography variant="body2" sx={{ fontWeight: 800, color: '#92400e' }}>Locked — finish the previous FMS step first</Typography>
-        <Typography variant="caption" color="text.secondary">{gate.reason} This action stays disabled until then.</Typography>
+        <Typography sx={{ fontWeight: 800, color: '#92400e', fontSize: '0.86rem', lineHeight: 1.2 }}>Locked — finish the previous FMS step first</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>{gate.reason} This action stays disabled until then.</Typography>
       </Box>
-      <Button variant="contained" size="small" endIcon={<ArrowRight size={15} />}
-        onClick={() => (onOpen ? onOpen() : navigate(blockingStep.taskUrl))} sx={{ whiteSpace: 'nowrap' }}>
+      <Button variant="contained" size="small" endIcon={<ArrowRight size={14} />}
+        onClick={() => (onOpen ? onOpen() : navigate(blockingStep.taskUrl))} sx={{ whiteSpace: 'nowrap', fontWeight: 700 }}>
         Go complete it
       </Button>
     </Paper>

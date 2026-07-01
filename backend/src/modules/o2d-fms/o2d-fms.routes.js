@@ -84,6 +84,10 @@ router.get('/processes/by-order/:orderId',
 router.get('/processes/:id',
   requirePermission('o2dfms.view'), validate(mongoIdParamSchema, 'params'), c.getProcess);
 
+// Per-consignment ledger (Consignment Tracker) for an order's process.
+router.get('/processes/:id/consignments',
+  requirePermission('o2dfms.view'), validate(mongoIdParamSchema, 'params'), c.getConsignments);
+
 // Act-on-a-step endpoints are gated at view-level; the service then enforces
 // that the caller is the assignee/buddy or a privileged user.
 router.patch('/processes/:id/steps/:stepCode/complete',

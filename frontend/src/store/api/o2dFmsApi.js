@@ -47,6 +47,11 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       query: (id) => `/o2d-fms/processes/${id}`,
       providesTags: (r, e, id) => [{ type: 'O2DProcess', id }],
     }),
+    // Per-consignment ledger (Consignment Tracker) — one row per Delivery Challan.
+    getConsignments: builder.query({
+      query: (id) => `/o2d-fms/processes/${id}/consignments`,
+      providesTags: (r, e, id) => [{ type: 'O2DProcess', id: `consignments-${id}` }],
+    }),
     getProcessByOrder: builder.query({
       query: (orderId) => `/o2d-fms/processes/by-order/${orderId}`,
       providesTags: (r, e, orderId) => [{ type: 'O2DProcess', id: `order-${orderId}` }],
@@ -221,6 +226,7 @@ export const {
   useGetDoerProfileQuery,
   useGetProcessesQuery,
   useGetProcessByIdQuery,
+  useGetConsignmentsQuery,
   useGetProcessByOrderQuery,
   useCompleteStepMutation,
   useAssignStepMutation,

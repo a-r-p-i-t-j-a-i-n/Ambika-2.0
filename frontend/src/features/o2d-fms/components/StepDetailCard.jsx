@@ -7,7 +7,7 @@ import {
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
-  ExternalLink, Truck,
+  ExternalLink, Truck, Boxes,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -15,7 +15,7 @@ import {
   useAddStepCommentMutation, useGetProcessByIdQuery,
   useUploadFileMutation, useAddStepAttachmentsMutation, useRemoveStepAttachmentMutation,
   useAnswerVerificationMutation, useFillFormFieldMutation, useApproveStepMutation,
-  useMarkActionDoneMutation,
+  useMarkActionDoneMutation, useGetConsignmentsQuery,
 } from '../../../store/api/o2dFmsApi';
 import { useGetScheduleQuery } from '../../../store/api/dispatchControlApi';
 import PhaseTimeline from '../../planning/components/PhaseTimeline';
@@ -181,6 +181,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     procRes?.data?.soNumber,
     { skip: !open || !procRes?.data?.soNumber || !isQtyGated },
   );
+  // Consignment-gated downstream step (Invoice / POD / Payment) → load the
+  // per-challan ledger so the card shows which consignment is still pending.
+  const isConsGated = !!(liveStep?.consignmentGated || liveStep?.executionProgress);
+  const { data: consRes } = useGetConsignmentsQuery(processId, { skip: !open || !processId || !isConsGated });
 
   // Seed reassign multi-selects from the step's current doers/buddies.
   React.useEffect(() => {
@@ -398,10 +402,18 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   // it auto-completes on the last dispatch (balance 0). Mirror the backend guard.
   const qtyGatedBlocked = isQtyGated && !done
     && !(liveStep.dispatchProgress && liveStep.dispatchProgress.orderedQty > 0 && liveStep.dispatchProgress.balanceQty <= 0);
+  // Consignment-gated step (Invoice / POD / Payment) → blocked until every
+  // consignment is done; auto-completes on the last one.
+  const consSummary = consRes?.data?.summary;
+  const ep = liveStep.executionProgress;
+  const consGatedBlocked = isConsGated && !done
+    && !(consSummary ? (consSummary.fullyDispatched && (ep ? consSummary[`all${ep.kind === 'INVOICE' ? 'Invoiced' : ep.kind === 'POD' ? 'Delivered' : 'Paid'}`] : false))
+      : (ep && ep.total > 0 && ep.done >= ep.total && ep.fullyDispatched));
+  const gatedBlocked = qtyGatedBlocked || consGatedBlocked;
   const markDoneBtn = (!done && canAct) ? (
-    <Tooltip title={qtyGatedBlocked ? 'Completes automatically once all phases are dispatched (balance 0).' : ''}>
+    <Tooltip title={gatedBlocked ? (qtyGatedBlocked ? 'Completes automatically once all phases are dispatched (balance 0).' : 'Completes automatically once every consignment is done.') : ''}>
       <span>
-        <Button onClick={handleComplete} disabled={completing || checklistBlocks || qtyGatedBlocked} variant="contained" startIcon={<CheckCircle2 size={16} />}>
+        <Button onClick={handleComplete} disabled={completing || checklistBlocks || gatedBlocked} variant="contained" startIcon={<CheckCircle2 size={16} />}>
           Mark Done
         </Button>
       </span>
@@ -506,6 +518,52 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                 {!done && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
                     Completes automatically once every phase is dispatched (balance 0).
+                  </Typography>
+                )}
+              </Paper>
+            );
+          })()}
+
+          {/* ── Consignment-gated (Invoice / POD / Payment): per-challan status.
+                Completes only when every consignment is done. ── */}
+          {isConsGated && (() => {
+            const cons = consRes?.data?.consignments || [];
+            const sm = consRes?.data?.summary || {};
+            const stage = ep?.kind || (liveStep.triggerKey); // INVOICE | POD | PAYMENT
+            const accent = done ? '#0f766e' : '#7c3aed';
+            const doneCount = ep?.done ?? (stage === 'INVOICE' ? sm.invoicedDone : stage === 'POD' ? sm.deliveredDone : sm.paidDone) ?? 0;
+            const total = ep?.total ?? sm.total ?? cons.length;
+            const isStageDone = (c) => stage === 'INVOICE' ? c.invoice?.has : stage === 'POD' ? c.delivery?.delivered : c.payment?.confirmed;
+            const label = ep?.label || (stage === 'INVOICE' ? 'invoiced' : stage === 'POD' ? 'delivered' : 'paid');
+            return (
+              <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
+                <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.75 }}>
+                  <Boxes size={16} color={accent} />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>Per-consignment</Typography>
+                  <Chip size="small" label={done ? `All ${label}` : 'In progress'} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
+                  <Box sx={{ flex: 1 }} />
+                  <Typography variant="caption" color="text.secondary">{num(doneCount)} / {num(total)} {label}</Typography>
+                </Stack>
+                {cons.length ? (
+                  <Stack spacing={0.5}>
+                    {cons.map((c) => (
+                      <Stack key={String(c.dcId)} direction="row" alignItems="center" spacing={1} sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider' }}>
+                        {isStageDone(c) ? <CheckCircle2 size={14} color="#0f766e" /> : <Clock size={14} color="#94a3b8" />}
+                        <Typography variant="caption" sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700 }}>{c.dcNumber}</Typography>
+                        <Typography variant="caption" color="text.secondary">· {c.phaseNo} · {num(c.qty)} pcs</Typography>
+                        <Box sx={{ flex: 1 }} />
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: isStageDone(c) ? '#0f766e' : 'text.disabled' }}>
+                          {stage === 'INVOICE' ? (c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending')
+                            : stage === 'POD' ? (c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'))
+                            : (c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Following up' : 'Pending'))}
+                        </Typography>
+                      </Stack>
+                    ))}
+                  </Stack>
+                ) : <Typography variant="caption" color="text.secondary">No consignments (delivery challans) yet.</Typography>}
+                {!done && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                    Recurs per challan — completes automatically once every consignment is {label}.
                   </Typography>
                 )}
               </Paper>

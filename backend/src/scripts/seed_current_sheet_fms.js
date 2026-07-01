@@ -57,21 +57,23 @@ const STEPS = [
   { stepCode: '2.06', name: 'Final Qty to be dispatched (Create Delivery Challan)', sequence: 6, phase: 'EXECUTION',
     ownerName: 'Nidhi', ownerEmail: 'accounts@msambikaglobal.in', whenText: '10 days', slaMinutes: 14400, quantityGated: true },
 
+  // Consignment-gated: recurs per Delivery Challan; completes only when every
+  // consignment is invoiced. (POD 2.09 and Payment 2.11 are gated the same way.)
   { stepCode: '2.07', name: 'Create Invoice & Eway Bill', sequence: 7, phase: 'EXECUTION',
-    ownerName: 'Upasana', ownerEmail: 'pc@msambikaglobal.in', tool: 'Tally', slaMinutes: 60, requiresLink: true },
+    ownerName: 'Upasana', ownerEmail: 'pc@msambikaglobal.in', tool: 'Tally', slaMinutes: 60, requiresLink: true, consignmentGated: true },
 
   { stepCode: '2.08', name: 'Email Invoice & Eway Bill to Clients', sequence: 8, phase: 'EXECUTION',
     ownerName: 'Aarti', ownerEmail: 'imp@msambikaglobal.in', tool: 'Mail', slaMinutes: 60 },
 
   { stepCode: '2.09', name: 'Track delivery', sequence: 9, phase: 'POST_DISPATCH',
-    ownerName: 'Upasana', ownerEmail: 'pc@msambikaglobal.in', slaMinutes: 1440 },
+    ownerName: 'Upasana', ownerEmail: 'pc@msambikaglobal.in', slaMinutes: 1440, consignmentGated: true },
 
   { stepCode: '2.10', name: 'Follow up for Payment', sequence: 10, phase: 'POST_DISPATCH',
     ownerName: 'Upasana', ownerEmail: 'pc@msambikaglobal.in', tool: 'Telecommunication / Mail',
     whenText: 'After 1 day of delivery · 30-day credit', slaMinutes: 43200 },
 
   { stepCode: '2.11', name: 'Payment confirmation along with Tally Entry', sequence: 11, phase: 'POST_DISPATCH',
-    ownerName: 'Bikeshwar / Tejaswini', ownerEmail: 'accounts@msambikaglobal.in', tool: 'Tally', slaMinutes: 60 },
+    ownerName: 'Bikeshwar / Tejaswini', ownerEmail: 'accounts@msambikaglobal.in', tool: 'Tally', slaMinutes: 60, consignmentGated: true },
 
   { stepCode: '2.12', name: 'Receive Transportation Bill', sequence: 12, phase: 'POST_DISPATCH',
     ownerName: 'Upasana', ownerEmail: 'pc@msambikaglobal.in', tool: 'Tally', slaMinutes: 60 },

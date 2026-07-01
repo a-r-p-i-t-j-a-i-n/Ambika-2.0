@@ -65,6 +65,9 @@ const navSections = [
       // { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
     ],
   },
+  // ── IMS section HIDDEN from the sidebar (deploy) — uncomment to re-expose.
+  //    Routes still exist; this only removes the nav group. ──
+  /*
   {
     // IMS — Inventory. One group per inventory type.
     title: 'IMS',
@@ -98,6 +101,7 @@ const navSections = [
       },
     ],
   },
+  */
   {
     // Title-less section: the single expandable row IS the label — click the
     // chevron to reveal all 11 procurement screens.

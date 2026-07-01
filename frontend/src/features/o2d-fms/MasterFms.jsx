@@ -24,12 +24,18 @@ const stepTone = (s, currentStepCode) => {
   return { bg: '#cbd5e1', label: 'Waiting' };
 };
 
-// Short "1/5" phase tag for the dispatch step while it's mid-flight.
+// Short "1/5" progress tag for a gated step mid-flight (dispatch phases OR
+// consignment-gated invoice/POD/payment).
 const dispatchTag = (s) => {
+  if (s.status !== 'IN_PROGRESS') return '';
   const dp = s.dispatchProgress;
-  if (!dp || s.status !== 'IN_PROGRESS') return '';
-  if (dp.phasesTotal > 0) return `${dp.phasesDone}/${dp.phasesTotal}`;
-  return dp.orderedQty > 0 ? `${dp.pct || 0}%` : '';
+  if (dp) {
+    if (dp.phasesTotal > 0) return `${dp.phasesDone}/${dp.phasesTotal}`;
+    return dp.orderedQty > 0 ? `${dp.pct || 0}%` : '';
+  }
+  const ep = s.executionProgress;
+  if (ep && ep.total > 0) return `${ep.done}/${ep.total}`;
+  return '';
 };
 
 const progressPct = (steps = []) => {
@@ -52,6 +58,11 @@ const stepTip = (s) => (
       <Typography variant="caption" display="block">
         Dispatched: {Number(s.dispatchProgress.dispatchedQty || 0).toLocaleString('en-IN')} / {Number(s.dispatchProgress.orderedQty || 0).toLocaleString('en-IN')} pcs
         {s.dispatchProgress.phasesTotal > 0 ? ` · ${s.dispatchProgress.phasesDone}/${s.dispatchProgress.phasesTotal} phases` : ''}
+      </Typography>
+    )}
+    {s.executionProgress && (
+      <Typography variant="caption" display="block">
+        {s.executionProgress.done}/{s.executionProgress.total} consignment(s) {s.executionProgress.label}
       </Typography>
     )}
     <Typography variant="caption" display="block">Planned: {fmtD(s.planned)}</Typography>

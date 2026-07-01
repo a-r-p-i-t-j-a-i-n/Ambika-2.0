@@ -1,4 +1,11 @@
-# Netlify / Cloudflare Pages SPA fallback.
-# Any request that doesn't match a real file or _headers rule is served
-# index.html so React Router can resolve client-side routes.
+# Proxy API + uploads to the backend so the browser only ever talks to the same
+# HTTPS origin (Netlify forwards server-side). This avoids the browser blocking the
+# http:// backend as "mixed content" and sidesteps CORS.
+# ⚠️ To switch backends, change the target URL on these two lines and redeploy.
+/api/*       http://32.236.114.49:3006/api/:splat       200
+/uploads/*   http://32.236.114.49:3006/uploads/:splat   200
+
+# Netlify / Cloudflare Pages SPA fallback. MUST stay last — any request that doesn't
+# match a real file, the API proxy, or a _headers rule is served index.html so React
+# Router can resolve client-side routes.
 /*    /index.html   200

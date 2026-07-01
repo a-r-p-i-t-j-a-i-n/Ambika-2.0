@@ -33,6 +33,10 @@ const computeMis = (m) => {
   return { punctuality, accuracy, avgDelayMins, completionRate, misScore, grade };
 };
 import DispatchSchedule from '../schedule/schedule.model.js';
+import DeliveryChallan from '../challan/challan.model.js';
+import Invoice from '../invoice/invoice.model.js';
+import Payment from '../payment/payment.model.js';
+import TransportBill from '../transport/transport.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
@@ -155,6 +159,9 @@ const enrichSteps = (process, defMap) => {
       // Phased/split dispatch: flag + denormalised progress so the tracker can render
       // the per-phase sub-steps and the "x / y dispatched" bar.
       quantityGated:      !!def?.quantityGated || def?.triggerKey === 'ACTUAL_DISPATCH',
+      // Consignment-gated downstream steps (Invoice / POD / Payment) — recur per
+      // Delivery Challan until every consignment is done.
+      consignmentGated:   !!def?.consignmentGated || ['INVOICE', 'POD', 'PAYMENT'].includes(def?.triggerKey),
       checklistTotal: (s.checklist || []).length,
       checklistDone:  (s.checklist || []).filter((c) => c.done).length,
       // Normalise connected screens to an array (legacy single → [single]) and
@@ -310,6 +317,162 @@ const applyPhasedDispatch = async (process, step, defMap, actor) => {
     process.activityTimeline.push({
       action: 'DISPATCH_PROGRESS',
       description: `${step.stepCode} dispatch ${summary.dispatchedQty}/${summary.orderedQty} — ${summary.balanceQty} pending`,
+      actorId: actor?._id || null,
+    });
+  }
+
+  await process.save();
+  return enrichSteps(process, defMap);
+};
+
+// ── Per-consignment split execution ────────────────────────────────────────
+// A "consignment" is one Delivery Challan. The post-dispatch steps (Invoice / POD /
+// Payment) are CONSIGNMENT-GATED: they stay IN_PROGRESS (recurring) and complete only
+// once every consignment has satisfied them — never blocking the chain. Detected by
+// the explicit flag OR by the INVOICE/POD/PAYMENT trigger keys (no migration needed).
+const CONSIGNMENT_TRIGGERS = [TRIGGER_KEY.INVOICE, TRIGGER_KEY.POD, TRIGGER_KEY.PAYMENT];
+const isConsignmentGated = (def) => !!(def && (def.consignmentGated || CONSIGNMENT_TRIGGERS.includes(def.triggerKey)));
+
+/**
+ * Build the consignment ledger for an order — one row per Delivery Challan with its
+ * downstream lifecycle (invoice / eway / POD / payment / transport) read from the real
+ * documents, plus aggregate counts that drive the gated steps' completion. Single
+ * source of truth = the documents, so nothing can drift.
+ */
+const computeConsignments = async (soNumber) => {
+  const blank = {
+    total: 0, invoicedDone: 0, deliveredDone: 0, paidDone: 0,
+    allInvoiced: false, allDelivered: false, allPaid: false,
+    fullyDispatched: false, orderedQty: 0, dispatchedQty: 0, balanceQty: 0,
+  };
+  if (!soNumber) return { consignments: [], summary: blank };
+
+  const [order, challans] = await Promise.all([
+    SalesOrder.findOne({ soNumber }).select('totalOrderQty totalDispatchedQty totalBalanceQty').lean(),
+    DeliveryChallan.find({ soNumber, isDeleted: { $ne: true } }).sort({ dcDate: 1, createdAt: 1 }).lean(),
+  ]);
+  const orderedQty = Number(order?.totalOrderQty || 0);
+  const dispatchedQty = Number(order?.totalDispatchedQty || 0);
+  const balanceQty = order?.totalBalanceQty != null ? Number(order.totalBalanceQty) : Math.max(0, orderedQty - dispatchedQty);
+  const fullyDispatched = orderedQty > 0 && balanceQty <= 0;
+
+  if (!challans.length) {
+    return { consignments: [], summary: { ...blank, fullyDispatched, orderedQty, dispatchedQty, balanceQty } };
+  }
+
+  const dcIds = challans.map((c) => c._id);
+  const [invoices, payments, transportBills] = await Promise.all([
+    Invoice.find({ soNumber }).select('dcId invoiceNo invoiceDate status invoiceAmount amountReceived balance ewayBillUrls ewayBillUrl').lean(),
+    Payment.find({ dcId: { $in: dcIds }, type: 'CLIENT_PAYMENT' }).select('dcId confirmation followUp').lean(),
+    TransportBill.find({ dcId: { $in: dcIds } }).select('dcId receipt payment').lean(),
+  ]);
+  const invByDc = new Map(invoices.filter((iv) => iv.dcId).map((iv) => [String(iv.dcId), iv]));
+  const payByDc = new Map(payments.filter((p) => p.dcId).map((p) => [String(p.dcId), p]));
+  const tbByDc = new Map(transportBills.filter((t) => t.dcId).map((t) => [String(t.dcId), t]));
+
+  const consignments = challans.map((c) => {
+    const inv = invByDc.get(String(c._id)) || null;
+    const pay = payByDc.get(String(c._id)) || null;
+    const tb = tbByDc.get(String(c._id)) || null;
+    const phaseNo = c.isUnplanned
+      ? 'Unplanned'
+      : ([...new Set((c.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || c.phaseRef?.phaseNo || '—');
+    const delivered = c.deliveryStatus === 'Delivered' || c.status === 'DELIVERED';
+    return {
+      dcId: c._id,
+      dcNumber: c.dcNumber,
+      dcDate: c.dcDate,
+      qty: Number(c.totalQuantityPcs || 0),
+      boxes: Number(c.totalBoxes || 0),
+      phaseNo,
+      isUnplanned: !!c.isUnplanned,
+      dcStatus: c.status,
+      delivery: { delivered, status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'), date: c.deliveryDate || null },
+      invoice: {
+        has: !!inv, invoiceNo: inv?.invoiceNo || null, status: inv?.status || null, date: inv?.invoiceDate || null,
+        amount: Number(inv?.invoiceAmount || 0), received: Number(inv?.amountReceived || 0), balance: Number(inv?.balance || 0),
+      },
+      eway: { has: !!(inv && ((inv.ewayBillUrls || []).length || inv.ewayBillUrl)) },
+      payment: {
+        has: !!pay, status: pay?.confirmation?.status || (pay ? 'PENDING' : null),
+        confirmed: pay?.confirmation?.status === 'DONE', received: Number(pay?.confirmation?.receivedAmount || 0),
+      },
+      transport: { receiptStatus: tb?.receipt?.status || null, paymentStatus: tb?.payment?.status || null },
+    };
+  });
+
+  const total = consignments.length;
+  const invoicedDone = consignments.filter((c) => c.invoice.has).length;
+  const deliveredDone = consignments.filter((c) => c.delivery.delivered).length;
+  const paidDone = consignments.filter((c) => c.payment.confirmed).length;
+
+  return {
+    consignments,
+    summary: {
+      total, invoicedDone, deliveredDone, paidDone,
+      allInvoiced: total > 0 && invoicedDone === total,
+      allDelivered: total > 0 && deliveredDone === total,
+      allPaid: total > 0 && paidDone === total,
+      fullyDispatched, orderedQty, dispatchedQty, balanceQty,
+    },
+  };
+};
+
+// Which aggregate a gated step needs, by trigger key.
+const consignmentGate = (triggerKey, summary) => {
+  if (triggerKey === TRIGGER_KEY.INVOICE) return { kind: 'INVOICE', label: 'invoiced', done: summary.invoicedDone, satisfied: summary.fullyDispatched && summary.allInvoiced };
+  if (triggerKey === TRIGGER_KEY.POD)     return { kind: 'POD', label: 'delivered', done: summary.deliveredDone, satisfied: summary.fullyDispatched && summary.allDelivered };
+  return { kind: 'PAYMENT', label: 'paid', done: summary.paidDone, satisfied: summary.fullyDispatched && summary.allPaid };
+};
+
+/**
+ * Consignment-gated advance for the post-dispatch steps (INVOICE / POD / PAYMENT).
+ * Each event (invoice/POD/payment recorded) refreshes the step's progress. The step
+ * completes ONLY when every consignment satisfies it AND the order is fully dispatched;
+ * otherwise it stays IN_PROGRESS (recurring) and activates the next step so the chain
+ * never blocks — exactly like the dispatch step, one layer down.
+ */
+const applyConsignmentStep = async (process, step, def, defMap, actor) => {
+  const { summary } = await computeConsignments(process.soNumber);
+  const gate = consignmentGate(def.triggerKey, summary);
+  const now = new Date();
+  if (!step.startedAt) step.startedAt = now;
+  step.executionProgress = {
+    kind: gate.kind, label: gate.label,
+    total: summary.total, done: gate.done, pending: Math.max(0, summary.total - gate.done),
+    fullyDispatched: summary.fullyDispatched, updatedAt: now,
+  };
+
+  const idx = process.steps.findIndex((s) => s.stepCode === step.stepCode);
+  const next = process.steps[idx + 1];
+  const activateNext = async () => {
+    if (next && !next.startedAt) {
+      const nextDef = defMap.get(next.stepCode);
+      if (!next.planned) next.planned = addMinutes(now, next.leadTimeMins ?? nextDef?.slaMinutes ?? 60);
+      next.startedAt = now;
+      process.currentStepCode = next.stepCode;
+      await notifyStepOwners(process, next);
+    }
+  };
+
+  if (gate.satisfied) {
+    step.actual = now;
+    step.completedBy = actor?._id || null;
+    step.delayMins = computeDelayMins(step.planned, now);
+    step.status = step.delayMins > 0 ? O2D_STEP_STATUS.DELAYED : O2D_STEP_STATUS.DONE;
+    if (next) await activateNext();
+    else { process.isCompleted = true; process.completedAt = now; process.currentStepCode = null; }
+    process.activityTimeline.push({
+      action: 'STEP_COMPLETED',
+      description: `${step.stepCode} completed — all ${summary.total} consignment(s) ${gate.label}`,
+      actorId: actor?._id || null,
+    });
+  } else {
+    step.status = O2D_STEP_STATUS.IN_PROGRESS;
+    await activateNext();
+    process.activityTimeline.push({
+      action: 'CONSIGNMENT_PROGRESS',
+      description: `${step.stepCode} ${gate.done}/${summary.total} consignment(s) ${gate.label}`,
       actorId: actor?._id || null,
     });
   }
@@ -544,6 +707,19 @@ export const o2dFmsService = {
           );
         }
       }
+      // Consignment-gated (Invoice / POD / Payment): can't be ticked done until every
+      // consignment is processed — it auto-completes when the last one is.
+      if (isConsignmentGated(def)) {
+        const { summary } = await computeConsignments(process.soNumber);
+        const gate = consignmentGate(def.triggerKey, summary);
+        if (!gate.satisfied) {
+          throw new AppError(
+            `Only ${gate.done}/${summary.total} consignment(s) ${gate.label}${summary.fullyDispatched ? '' : ' (more dispatches pending)'}. `
+            + 'This step completes automatically once every consignment is done.',
+            422,
+          );
+        }
+      }
       // One gate for every requirement type: checklist, yes/no verifications,
       // data fields, proof attachments, approval, link.
       const unmet = unmetRequirements(step, def, payload);
@@ -684,6 +860,11 @@ export const o2dFmsService = {
     if (isQuantityGated(defMap.get(target.stepCode))) {
       return applyPhasedDispatch(process, target, defMap, actor);
     }
+    // Consignment-gated (Invoice / POD / Payment): completes only once every
+    // consignment satisfies it; otherwise stays IN_PROGRESS and lets the chain run.
+    if (isConsignmentGated(defMap.get(target.stepCode))) {
+      return applyConsignmentStep(process, target, defMap.get(target.stepCode), defMap, actor);
+    }
 
     // If the step still has unmet requirements (checklist, verifications, data
     // fields, proof, approval), the real action only makes it the ACTIVE task —
@@ -763,10 +944,15 @@ export const o2dFmsService = {
     const target = steps.find((s) => keysOf(s).includes(action) || s.triggerKey === action);
     if (!target) return { allowed: true, ungated: true, reason: 'This action is not gated by the FMS.' };
 
-    const DONE = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED];
+    // A step "passes the gate" when it's finished OR already IN_PROGRESS. The gated
+    // dispatch step (2.06) stays IN_PROGRESS across phases — once dispatching has
+    // STARTED (≥1 challan exists), the per-consignment downstream work (invoice / POD /
+    // payment) must be allowed even though more phases are still pending. Only a step
+    // that hasn't started at all (PENDING) blocks the next action.
+    const PASSABLE = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED, O2D_STEP_STATUS.IN_PROGRESS];
     const blocking = steps
       .filter((s) => (s.sequence || 0) < (target.sequence || 0))
-      .find((s) => !DONE.includes(s.status));
+      .find((s) => !PASSABLE.includes(s.status));
 
     const targetStep = { stepCode: target.stepCode, name: target.name || target.taskTitle || target.stepCode };
     if (!blocking) {
@@ -805,6 +991,19 @@ export const o2dFmsService = {
 
   /** The doer's "My Tasks" — every step where I'm the owner OR buddy, with its
    *  status, so the UI can show actionable (pending) vs completed. */
+  /** Per-consignment ledger for an order's process (the Consignment Tracker) —
+   *  one row per Delivery Challan with its invoice / eway / POD / payment status. */
+  async getConsignments(processId) {
+    const process = await O2DProcess.findById(processId).select('soNumber salesOrderId').lean();
+    if (!process) throw new AppError('O2D process not found', 404);
+    let soNumber = process.soNumber;
+    if (!soNumber && process.salesOrderId) {
+      const o = await SalesOrder.findById(process.salesOrderId).select('soNumber').lean();
+      soNumber = o?.soNumber;
+    }
+    return computeConsignments(soNumber);
+  },
+
   async getMyTasks(user, query = {}) {
     const uid = String(user._id);
     const filter = {
@@ -846,6 +1045,7 @@ export const o2dFmsService = {
           completedAt: s.actual,
           delayMins: s.delayMins || 0,
           dispatchProgress: s.dispatchProgress || null, // phased dispatch: "1,000 / 5,000"
+          executionProgress: s.executionProgress || null, // consignment-gated: "2 / 3 invoiced"
           isOverdue: !isDone && !!(s.planned && new Date(s.planned) < new Date()),
         });
       }

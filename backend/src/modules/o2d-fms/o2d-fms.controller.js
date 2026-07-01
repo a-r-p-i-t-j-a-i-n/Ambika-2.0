@@ -22,6 +22,10 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('O2D process retrieved', process));
   }),
 
+  getConsignments: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Consignments', await o2dFmsService.getConsignments(req.params.id)));
+  }),
+
   myTasks: asyncHandler(async (req, res) => {
     const tasks = await o2dFmsService.getMyTasks(req.user, req.query);
     res.json(ApiResponse.ok('My tasks retrieved', tasks));

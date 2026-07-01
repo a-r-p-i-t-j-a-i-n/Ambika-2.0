@@ -5,9 +5,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableRow, ToggleButtonGroup, ToggleButton,
   Accordion, AccordionSummary, AccordionDetails, Checkbox,
 } from '@mui/material';
-import { ArrowLeft, CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2, Truck } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2, Truck, Boxes, ReceiptText, IndianRupee, ArrowRight } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useGetProcessByIdQuery, usePlanOrderMutation } from '../../store/api/o2dFmsApi';
+import { useGetProcessByIdQuery, usePlanOrderMutation, useGetConsignmentsQuery } from '../../store/api/o2dFmsApi';
 import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
 import { useListAccessUsersQuery } from '../../store/api/accessControlApi';
 import { usePermissions } from '../../hooks/usePermission';
@@ -278,6 +278,80 @@ const DispatchPhasesPanel = ({ soNumber, dispatchStep, onPhaseClick }) => {
   );
 };
 
+// Small status pill — green when that stage is done, muted grey while pending.
+const StagePill = ({ ok, label }) => (
+  <Chip size="small" label={label}
+    sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700,
+      bgcolor: ok ? alpha('#0f766e', 0.14) : alpha('#94a3b8', 0.14),
+      color: ok ? '#0f766e' : 'text.disabled' }} />
+);
+
+// Consignment Tracker — one row per Delivery Challan with its downstream chain
+// (Invoice → Eway → Delivery → Payment). Each dispatch is its own consignment, so the
+// MD/doer sees exactly which challan is invoiced/delivered/paid and which is pending.
+const ConsignmentsPanel = ({ processId }) => {
+  const navigate = useNavigate();
+  const { data, isFetching } = useGetConsignmentsQuery(processId, { skip: !processId });
+  const res = data?.data;
+  const consignments = res?.consignments || [];
+  const s = res?.summary || {};
+  const accent = '#7c3aed';
+  if (!isFetching && !consignments.length) return null; // no dispatches yet
+
+  const goInvoice = () => navigate('/o2d/invoice-entry');
+  const goDeliver = () => navigate('/o2d/track-delivery');
+  const goPay = () => navigate('/o2d/payments');
+
+  return (
+    <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
+      <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1.25 }}>
+        <Boxes size={18} color={accent} />
+        <Typography sx={{ fontWeight: 800 }}>Consignments</Typography>
+        <Typography variant="caption" color="text.secondary">each challan’s invoice → eway → delivery → payment</Typography>
+        <Box sx={{ flex: 1 }} />
+        <Chip size="small" label={`${num(s.total)} consignment${s.total === 1 ? '' : 's'}`} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.1), color: accent }} />
+        <Chip size="small" variant="outlined" icon={<ReceiptText size={11} />} label={`${num(s.invoicedDone)}/${num(s.total)} invoiced`} />
+        <Chip size="small" variant="outlined" icon={<Truck size={11} />} label={`${num(s.deliveredDone)}/${num(s.total)} delivered`} />
+        <Chip size="small" variant="outlined" icon={<IndianRupee size={11} />} label={`${num(s.paidDone)}/${num(s.total)} paid`} />
+      </Stack>
+      {isFetching && !consignments.length ? <Skeleton variant="rounded" height={120} /> : (
+        <Box sx={{ overflowX: 'auto' }}>
+          <Table size="small" sx={{ minWidth: 760, '& td, & th': { fontSize: '0.74rem', py: 0.6, px: 1.25 } }}>
+            <TableHead>
+              <TableRow sx={{ bgcolor: alpha(accent, 0.05) }}>
+                {['Challan', 'Date', 'Phase', 'Qty', 'Invoice', 'Eway', 'Delivery', 'Payment', ''].map((h, i) => (
+                  <TableCell key={h || i} align={i === 3 ? 'right' : 'left'} sx={{ fontWeight: 700, fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'text.secondary', whiteSpace: 'nowrap' }}>{h}</TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {consignments.map((c) => (
+                <TableRow key={String(c.dcId)} hover>
+                  <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: '#0b2545', whiteSpace: 'nowrap' }}>{c.dcNumber}</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>{c.dcDate ? new Date(c.dcDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</TableCell>
+                  <TableCell><Chip size="small" label={c.phaseNo || '—'} sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} /></TableCell>
+                  <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{num(c.qty)}</TableCell>
+                  <TableCell><StagePill ok={c.invoice?.has} label={c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending'} /></TableCell>
+                  <TableCell><StagePill ok={c.eway?.has} label={c.eway?.has ? 'Eway ✓' : '—'} /></TableCell>
+                  <TableCell><StagePill ok={c.delivery?.delivered} label={c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending')} /></TableCell>
+                  <TableCell><StagePill ok={c.payment?.confirmed} label={c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Following up' : 'Pending')} /></TableCell>
+                  <TableCell align="right">
+                    <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                      {!c.invoice?.has && <Tooltip title="Create invoice for this challan"><Button size="small" variant="text" onClick={goInvoice} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>Invoice</Button></Tooltip>}
+                      {c.invoice?.has && !c.delivery?.delivered && <Tooltip title="Record delivery"><Button size="small" variant="text" onClick={goDeliver} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>POD</Button></Tooltip>}
+                      {c.invoice?.has && !c.payment?.confirmed && <Tooltip title="Record payment"><Button size="small" variant="text" onClick={goPay} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>Pay</Button></Tooltip>}
+                    </Stack>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
+      )}
+    </Paper>
+  );
+};
+
 const ProcessDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -349,6 +423,9 @@ const ProcessDetail = () => {
           {dispatchStep && process.soNumber && (
             <DispatchPhasesPanel soNumber={process.soNumber} dispatchStep={dispatchStep} onPhaseClick={openPlanForPhase} />
           )}
+
+          {/* Consignment Tracker — per-challan invoice/eway/delivery/payment status. */}
+          {process.soNumber && <ConsignmentsPanel processId={id} />}
 
           {/* Four ways to read the same flow — MD picks whatever's clearest. */}
           <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1 }}>

@@ -17,10 +17,14 @@ const statusChip = (t) => {
   if (t.isOverdue) return <Chip size="small" color="error" label="Overdue" />;
   if (t.status === 'DELAYED') return <Chip size="small" color="warning" label="Done late" />;
   if (t.status === 'DONE') return <Chip size="small" color="success" label="Done" />;
-  // Quantity-gated dispatch part-way through its phases — still the doer's task.
+  // Quantity-/consignment-gated step part-way through — still the doer's task.
   if (t.status === 'IN_PROGRESS') {
-    return <Chip size="small" color="primary"
-      label={t.dispatchProgress ? `In progress · ${num(t.dispatchProgress.balanceQty)} left` : 'In progress'} />;
+    const ep = t.executionProgress;
+    const label = t.dispatchProgress
+      ? `In progress · ${num(t.dispatchProgress.balanceQty)} left`
+      : ep ? `In progress · ${num(ep.done)}/${num(ep.total)} ${ep.label || ''}`.trim()
+      : 'In progress';
+    return <Chip size="small" color="primary" label={label} />;
   }
   if (isDueSoon(t.planned)) return <Chip size="small" color="warning" variant="outlined" label="Due soon" />;
   return <Chip size="small" variant="outlined" label="Pending" />;
@@ -171,6 +175,10 @@ const MyTasksWorkspace = () => {
                       {t.dispatchProgress && (
                         <Chip size="small" color="primary" variant="outlined" sx={{ flexShrink: 0, fontWeight: 700 }}
                           label={`${num(t.dispatchProgress.dispatchedQty)}/${num(t.dispatchProgress.orderedQty)}${t.dispatchProgress.phasesTotal > 0 ? ` · ${t.dispatchProgress.phasesDone}/${t.dispatchProgress.phasesTotal} ph` : ''}`} />
+                      )}
+                      {t.executionProgress && (
+                        <Chip size="small" color="secondary" variant="outlined" sx={{ flexShrink: 0, fontWeight: 700 }}
+                          label={`${num(t.executionProgress.done)}/${num(t.executionProgress.total)} ${t.executionProgress.label || ''}`.trim()} />
                       )}
                     </Stack>
                   </TableCell>

@@ -17,6 +17,7 @@ const ACTIVITY = {
   ORDER_ENTRY:        { icon: CheckCircle2, label: 'Order received',     color: '#0f766e' },
   STEP_COMPLETED:     { icon: CheckCircle2, label: 'Step completed',     color: '#0f766e' },
   DISPATCH_PROGRESS:  { icon: Truck,        label: 'Dispatch recorded',  color: '#1d4ed8' },
+  CONSIGNMENT_PROGRESS:{ icon: Truck,       label: 'Consignment update', color: '#7c3aed' },
   CHECKLIST_TICKED:   { icon: ListChecks,   label: 'Checklist ticked',   color: '#1d4ed8' },
   CHECKLIST_UNTICKED: { icon: ListChecks,   label: 'Checklist unticked', color: '#94a3b8' },
   STEP_PLAN_UPDATED:  { icon: FileEdit,     label: 'Plan updated',       color: '#b45309' },

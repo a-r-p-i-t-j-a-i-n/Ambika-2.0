@@ -176,20 +176,20 @@ const InvoiceEntryForm = () => {
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      <Box sx={{ color: '#fff', px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 7 },
+      <Box sx={{ color: '#fff', px: { xs: 2.5, md: 3.5 }, pt: { xs: 2.75, md: 3.25 }, pb: { xs: 3.5, md: 4.25 },
         background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)' }}>
-        <Stack direction="row" spacing={2.5} alignItems="center">
-          <Box sx={{ width: 52, height: 52, borderRadius: 2.5, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <ReceiptText size={26} color="#fff" />
+        <Stack direction="row" spacing={1.75} alignItems="center">
+          <Box sx={{ width: 42, height: 42, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0, background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
+            <ReceiptText size={20} color="#fff" />
           </Box>
-          <Box>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800 }}>Create Invoice & Eway Bill</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>Step 2.7 — record the tax invoice & e-way bill for a dispatch.</Typography>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ color: '#fff', fontSize: { xs: '1rem', md: '1.15rem' }, fontWeight: 800, letterSpacing: '-0.01em', lineHeight: 1.15 }}>Create Invoice &amp; Eway Bill</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.75rem', mt: 0.3 }}>Step 2.7 — record the tax invoice &amp; e-way bill for a dispatch.</Typography>
           </Box>
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6, maxWidth: 980, mx: 'auto' }}>
+      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -2.5, md: -3 }, position: 'relative', zIndex: 1, pb: 6, maxWidth: 1180, mx: 'auto' }}>
         {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Challan picker + auto-filled context */}
         <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
