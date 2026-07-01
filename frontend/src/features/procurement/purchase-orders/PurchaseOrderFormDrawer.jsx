@@ -47,7 +47,7 @@ const GST_PRESETS = [0, 5, 12, 18, 28];
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18, hsn: '', indentId: '', indentNumber: '', indentItemId: '', indentItemDisplayNumber: '', approvedQuantity: 0, fromApprovedItem: false, rateMatched: undefined, manual: false });
-const emptyJslItem = () => ({ grade: '', width: '', finish: '', quantity: '', unit: 'Kgs', baseRate: '', upfrontDiscount: '', bonanzaDiscount: '' });
+const emptyJslItem = () => ({ grade: '', width: '1250', finish: '2B/ME', quantity: '', unit: 'Kgs', baseRate: '', upfrontDiscount: '', bonanzaDiscount: '' });
 const emptyItemFor = (fmt) => (fmt === 'JSL' ? emptyJslItem() : emptyItem());
 
 // ── JSL auto-vendor + rate fetch helpers (Step 1.4) ──────────────────────────
@@ -284,8 +284,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     return {
       ...emptyJslItem(),
       grade:  spec.grade || o.itemName || '',
-      width:  spec.width || '',
-      finish: spec.finish || '',
+      width:  spec.width || '1250',
+      finish: spec.finish || '2B/ME',
       quantity: o.approvedQuantity || '',
       unit: o.unit || match?.unit || 'Kgs',
       baseRate: match ? (match.rate ?? 0) : 0,

@@ -64,8 +64,10 @@ const VendorInvoiceList = () => {
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
-    if (['DRAFT', 'RECEIVED'].includes(r.invoiceStatus)) {
+    if (['DRAFT', 'RECEIVED', 'APPROVED', 'PAYMENT_PENDING'].includes(r.invoiceStatus)) {
       a.push({ key: 'edit', label: 'Edit', icon: <Pencil size={16} />, fn: () => onEdit(r) });
+    }
+    if (['DRAFT', 'RECEIVED'].includes(r.invoiceStatus)) {
       a.push({ key: 'approve', label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, fn: () => onApprove(r) });
     }
     if (r.invoiceDocument?.fileUrl) a.push({ key: 'doc', label: 'View Document', icon: <FileDown size={16} />, fn: () => onDoc(r) });

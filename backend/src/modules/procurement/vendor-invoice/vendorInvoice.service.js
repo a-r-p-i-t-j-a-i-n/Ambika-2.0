@@ -321,8 +321,9 @@ export const vendorInvoiceService = {
 
   async update(id, data, user, opts = {}) {
     const inv = await findOrThrow(id);
-    if (![INVOICE_STATUS.DRAFT, INVOICE_STATUS.RECEIVED].includes(inv.invoiceStatus)) {
-      throw new AppError('Only draft / received invoices can be edited', 400);
+    const EDITABLE_STATUSES = [INVOICE_STATUS.DRAFT, INVOICE_STATUS.RECEIVED, INVOICE_STATUS.APPROVED, INVOICE_STATUS.PAYMENT_PENDING];
+    if (!EDITABLE_STATUSES.includes(inv.invoiceStatus)) {
+      throw new AppError('Invoice cannot be edited after payment is completed or when rejected', 400);
     }
     const { invoiceDocument, debitNoteDocument, items: submittedItems, ...rest } = data;
     Object.assign(inv, rest);
