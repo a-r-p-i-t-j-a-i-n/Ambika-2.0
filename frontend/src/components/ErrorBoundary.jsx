@@ -1,30 +1,77 @@
 import React from 'react';
 import { Box, Typography, Button, Paper } from '@mui/material';
-import { AlertTriangle, RotateCcw, Home } from 'lucide-react';
+import { AlertTriangle, RotateCcw, Home, RefreshCw } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// App-level ErrorBoundary
+// Self-healing app ErrorBoundary
 //
-// Wraps the whole router so a runtime error in any screen renders a
-// branded recovery surface instead of a blank white page. The fallback
-// offers two paths: hard reload, or jump back to /dashboard.
+// Wraps the router so a runtime error in any screen renders a branded recovery
+// surface instead of a blank white page — but, crucially, it RECOVERS on its
+// own so users don't have to keep hard-reloading:
+//
+//  1. Auto-retry — transient render errors (e.g. a one-off "Maximum update depth"
+//     from a focus-refetch race) self-heal once, silently, by remounting the
+//     subtree. A genuine hard loop re-throws, hits the cap, and falls through to
+//     the manual UI so we never spin forever.
+//  2. Recover on navigation — when `resetKey` (the route) changes, the error is
+//     cleared automatically, so clicking ANY nav link revives the app with no
+//     browser reload. (Supplied by the RouteErrorBoundary wrapper below.)
+//  3. Remount on retry — children are keyed by a generation counter, so a retry
+//     gives the failed screen a completely fresh mount (no stale state to re-loop).
+//
+// Still offers manual "Try again", "Reload page" and "Back to dashboard".
 // ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_AUTO_RETRIES = 1; // silent self-heal attempts before showing the manual UI
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, autoRetries: 0, generation: 0 };
+    this._retryTimer = null;
   }
 
   static getDerivedStateFromError(error) {
     return { hasError: true, error };
   }
 
+  componentDidUpdate(prevProps) {
+    // Route changed while showing the fallback → recover automatically. Also
+    // refreshes the auto-retry budget so each new screen gets a fresh chance.
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.reset(true);
+    }
+  }
+
   componentDidCatch(error, info) {
     // Production crash visibility — wire to a reporter later if desired.
     // eslint-disable-next-line no-console
     console.error('[ErrorBoundary]', error, info?.componentStack);
+    // Silently self-heal a transient error once by remounting the subtree.
+    if (this.state.autoRetries < MAX_AUTO_RETRIES) {
+      if (this._retryTimer) clearTimeout(this._retryTimer);
+      this._retryTimer = setTimeout(() => {
+        this.setState((s) => ({
+          hasError: false, error: null, autoRetries: s.autoRetries + 1, generation: s.generation + 1,
+        }));
+      }, 500);
+    }
   }
+
+  componentWillUnmount() {
+    if (this._retryTimer) clearTimeout(this._retryTimer);
+  }
+
+  // Clear the error and remount children. `freshBudget` resets the auto-retry
+  // counter (used on navigation and on an explicit user "Try again").
+  reset = (freshBudget = false) => {
+    if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
+    this.setState((s) => ({
+      hasError: false, error: null, generation: s.generation + 1,
+      autoRetries: freshBudget ? 0 : s.autoRetries,
+    }));
+  };
 
   handleReload = () => {
     window.location.reload();
@@ -35,7 +82,11 @@ class ErrorBoundary extends React.Component {
   };
 
   render() {
-    if (!this.state.hasError) return this.props.children;
+    // Key by generation so a retry fully unmounts + remounts the subtree,
+    // discarding any stale component state that caused the loop.
+    if (!this.state.hasError) {
+      return <React.Fragment key={this.state.generation}>{this.props.children}</React.Fragment>;
+    }
 
     return (
       <Box
@@ -128,6 +179,14 @@ class ErrorBoundary extends React.Component {
           <Box sx={{ display: 'flex', gap: 1.5, justifyContent: 'center', flexWrap: 'wrap' }}>
             <Button
               variant="contained"
+              startIcon={<RefreshCw size={16} />}
+              onClick={() => this.reset(true)}
+              sx={{ fontWeight: 700, px: 3 }}
+            >
+              Try again
+            </Button>
+            <Button
+              variant="outlined"
               startIcon={<RotateCcw size={16} />}
               onClick={this.handleReload}
               sx={{ fontWeight: 700, px: 3 }}
@@ -135,7 +194,7 @@ class ErrorBoundary extends React.Component {
               Reload page
             </Button>
             <Button
-              variant="outlined"
+              variant="text"
               startIcon={<Home size={16} />}
               onClick={this.handleHome}
               sx={{ fontWeight: 700, px: 3 }}
@@ -148,5 +207,15 @@ class ErrorBoundary extends React.Component {
     );
   }
 }
+
+/**
+ * Route-aware boundary — mount INSIDE the Router. Feeds the current location as
+ * `resetKey`, so any caught error clears itself the moment the user navigates
+ * (clicking a nav link revives the app — no manual reload needed).
+ */
+export const RouteErrorBoundary = ({ children }) => {
+  const location = useLocation();
+  return <ErrorBoundary resetKey={location.pathname + location.search}>{children}</ErrorBoundary>;
+};
 
 export default ErrorBoundary;

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Stack, Typography, Box, Paper, alpha, IconButton,
 } from '@mui/material';
@@ -22,13 +22,15 @@ export const useFmsGate = ({ soNumber, salesOrderId, intakeId, action }) => {
   const params = { action, ...(salesOrderId ? { salesOrderId } : {}), ...(intakeId ? { intakeId } : {}), ...(soNumber ? { soNumber } : {}) };
   const { data, isFetching } = useGetFmsGateQuery(params, { skip });
   const gate = data?.data || null;
-  return {
+  // Stable identity — so a consumer that lists `gate` in an effect's deps never
+  // re-runs (and never loops) just because this hook returned a fresh object.
+  return useMemo(() => ({
     loading: isFetching,
     gate,
     blocked: !!gate && gate.allowed === false,
     blockingStep: gate?.blockingStep || null,
     reason: gate?.reason || '',
-  };
+  }), [gate, isFetching]);
 };
 
 /** Blocking modal — explains why and links straight to the pending step's task. */

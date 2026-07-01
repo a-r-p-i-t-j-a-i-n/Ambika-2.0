@@ -900,7 +900,7 @@ export const o2dFmsService = {
    * doer straight to it: returns { processId, stepCode } or null. Picks the
    * process's currentStepCode, else the first not-done/not-skipped step.
    */
-  async getActiveTask({ soNumber, salesOrderId, intakeId } = {}) {
+  async getActiveTask({ soNumber, salesOrderId, intakeId, action } = {}) {
     let q = null;
     if (salesOrderId) q = { salesOrderId };
     else if (intakeId) q = { intakeId };
@@ -908,6 +908,20 @@ export const o2dFmsService = {
     if (!q) return null;
     const p = await O2DProcess.findOne({ ...q, isDeleted: { $ne: true } }).lean();
     if (!p) return null;
+
+    // When the caller names the action they just did (e.g. ACTUAL_DISPATCH), land
+    // on the step that OWNS that action — so a module-first entry returns to the
+    // right task (the one the work belongs to), not merely the order's current
+    // step. This is what makes a phased "record dispatch" reopen the Actual
+    // Dispatch step (2.06) with its checklist, instead of jumping ahead to 2.08.
+    if (action) {
+      const defMap = await loadDefMap();
+      const enriched = enrichSteps(p, defMap);
+      const keysOf = (s) => (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : []));
+      const target = (enriched.steps || []).find((s) => keysOf(s).includes(action) || s.triggerKey === action);
+      if (target) return { processId: String(p._id), stepCode: target.stepCode };
+    }
+
     const openCodes = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED];
     const stepCode = p.currentStepCode
       || (p.steps.find((s) => !openCodes.includes(s.status))?.stepCode)

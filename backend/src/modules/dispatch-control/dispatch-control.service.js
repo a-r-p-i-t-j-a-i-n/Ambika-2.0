@@ -14,6 +14,8 @@ import { logger } from '../../utils/logger.js';
 import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 import { challanService } from '../challan/challan.routes.js';
 import { emailService } from '../../services/email.service.js';
+import { pdfService } from '../../services/pdf.service.js';
+import env from '../../config/env.js';
 
 const PLAN_LABEL_PREFIX = 'Dispatch Plan';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -1130,16 +1132,56 @@ export const dispatchControlService = {
     const recipient = (to || '').trim();
     if (!recipient) throw new AppError('Recipient email is required.', 400);
 
-    const atts = await emailService.resolveStoredAttachments(
+    // Auto-generate the dispatch-plan PDF on the server so it ALWAYS rides along
+    // as a real attachment (no reliance on the browser saving/uploading it).
+    const atts = [];
+    const attachedNames = [];
+    try {
+      const schedule = await this.getSchedule(soNumber);
+      const pdfBuffer = await pdfService.generateDispatchPlanBuffer(schedule);
+      const fileName = `Dispatch-Plan-${String(soNumber || 'order').replace(/[^\w.-]+/g, '_')}.pdf`;
+      atts.push({ filename: fileName, content: pdfBuffer });
+      attachedNames.push('Dispatch Plan (PDF)');
+    } catch (err) {
+      logger.error(`[dispatch] plan PDF generation failed${soNumber ? ` for ${soNumber}` : ''}: ${err.message}`);
+    }
+
+    // Plus any extra files the doer attached from their computer.
+    const extra = await emailService.resolveStoredAttachments(
       (attachments || []).map((a) => ({ filename: a.fileName, url: a.fileUrl, key: a.fileKey })),
     );
+    extra.forEach((a) => { atts.push(a); attachedNames.push(a.filename); });
+
+    // Professional, branded HTML — NO raw URLs; documents ride as attachments.
+    const bodyHtml = (message || '').replace(/\n/g, '<br/>');
+    const docChips = attachedNames.length
+      ? `<tr><td style="padding:14px 24px 4px;font:600 13px Arial,Helvetica,sans-serif;color:#334155;">Attached documents</td></tr>`
+        + `<tr><td style="padding:0 24px 18px;">`
+        + attachedNames.map((n) => `<span style="display:inline-block;margin:4px 6px 0 0;padding:5px 11px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;font:600 12px Arial,Helvetica,sans-serif;color:#0f172a;">📎 ${n}</span>`).join('')
+        + `</td></tr>`
+      : '';
+    const html = `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:24px 0;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+            <tr><td style="background:#0f172a;padding:20px 24px;">
+              <span style="font:700 18px Arial,Helvetica,sans-serif;color:#ffffff;letter-spacing:.3px;">${env.COMPANY_NAME || 'M/s AMBIKA GLOBAL'}</span>
+            </td></tr>
+            <tr><td style="padding:24px;font:400 14px/1.6 Arial,Helvetica,sans-serif;color:#1e293b;">${bodyHtml}</td></tr>
+            ${docChips ? `<tr><td><div style="border-top:1px solid #eef2f6;"></div></td></tr>${docChips}` : ''}
+            <tr><td style="background:#f8fafc;border-top:1px solid #eef2f6;padding:16px 24px;font:400 12px Arial,Helvetica,sans-serif;color:#94a3b8;">
+              This is a system-generated email from ${env.COMPANY_NAME || 'Ambika Global'}. Please do not reply to this message.
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>`;
 
     let emailStatus = 'SENT';
     try {
       await emailService.sendEmail({
         to: recipient,
         subject: subject || `Dispatch Schedule${soNumber ? ` — ${soNumber}` : ''}`,
-        html: (message || '').replace(/\n/g, '<br/>'),
+        html,
         attachments: atts,
       });
     } catch (err) {

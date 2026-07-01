@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, MenuItem, Chip, CircularProgress, Divider, alpha, useTheme, Link,
 } from '@mui/material';
@@ -36,6 +36,18 @@ const TransportBill = () => {
 
   const [dc, setDc] = useState(null);
   const gate = useFmsGate({ soNumber: dc?.soNumber, action: part === 'status' ? 'TRANSPORT_BILL_STATUS' : 'TRANSPORT_BILL_RECEIVE' });
+
+  // Auto-select the challan from a "Do it now" / consignment card: exact DC (?dc) first,
+  // else the order's latest challan (?so).
+  const soParam = params.get('so') || '';
+  const dcParam = params.get('dc') || '';
+  const presetRef = useRef(false);
+  useEffect(() => {
+    if (presetRef.current || dc || !challans.length) return;
+    const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
+      || (soParam && challans.find((c) => c.soNumber === soParam));
+    if (match) { presetRef.current = true; setDc(match); }
+  }, [challans, soParam, dcParam, dc]);
   const [rcvStatus, setRcvStatus] = useState('Done');
   const [attachment, setAttachment] = useState(null); // { fileName, url }
   const [payState, setPayState] = useState('Yes');
@@ -53,7 +65,7 @@ const TransportBill = () => {
     try {
       await receive({ dcId: dc._id, status: rcvStatus, attachment: attachment?.url }).unwrap();
       enqueueSnackbar('Transport bill receipt saved.', { variant: 'success' });
-      setTimeout(() => finishToTask({ soNumber: dc.soNumber }), 600);
+      setTimeout(() => finishToTask({ soNumber: dc.soNumber, action: 'TRANSPORT_BILL_RECEIVE' }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 
@@ -62,7 +74,7 @@ const TransportBill = () => {
     try {
       await payStatus({ dcId: dc._id, status: payState }).unwrap();
       enqueueSnackbar('Transport bill payment status saved.', { variant: 'success' });
-      setTimeout(() => finishToTask({ soNumber: dc.soNumber }), 600);
+      setTimeout(() => finishToTask({ soNumber: dc.soNumber, action: 'TRANSPORT_BILL_STATUS' }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 

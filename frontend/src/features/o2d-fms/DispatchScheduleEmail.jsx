@@ -189,7 +189,7 @@ const DispatchScheduleEmail = () => {
       if (fromTask && fromStep && attachments.length) {
         try { await addAttachments({ id: fromTask, stepCode: fromStep, attachments }).unwrap(); } catch { /* non-fatal */ }
       }
-      setTimeout(() => finishToTask({ soNumber: order.soNumber }), 800);
+      setTimeout(() => finishToTask({ soNumber: order.soNumber, action: 'EMAIL_DISPATCH_SCHEDULE' }), 800);
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Could not send the email.', { variant: 'error' });
     } finally { setSending(false); }
@@ -316,22 +316,30 @@ const DispatchScheduleEmail = () => {
             <TextField label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} size="small" fullWidth />
             <TextField label="Message" value={message} onChange={(e) => setMessage(e.target.value)} size="small" fullWidth multiline minRows={7} />
 
-            {/* Attachments — the plan PDF + any extra files */}
-            <Box>
+            {/* Attachments — the plan PDF (auto-generated & attached) + any extra files */}
+            <Box sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2, p: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.02) }}>
               <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.75 }}>
                 <Paperclip size={14} color={theme.palette.primary.main} />
                 <Typography variant="caption" sx={{ fontWeight: 800 }}>Attachments</Typography>
               </Stack>
+              {/* The dispatch-plan PDF is built on the server and attached automatically. */}
               <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" useFlexGap>
-                <Chip icon={<FileText size={13} />} variant="outlined" clickable onClick={openPlanPdf} disabled={!hasPlan}
-                  label="Dispatch Plan PDF (preview)" sx={{ borderColor: alpha(theme.palette.primary.main, 0.4) }} />
+                <Chip icon={<CheckCircle2 size={13} />} color="success" variant="outlined"
+                  label="Dispatch Plan PDF — auto-attached" sx={{ fontWeight: 700 }} />
+                <Button size="small" variant="text" startIcon={<FileText size={13} />} onClick={openPlanPdf} disabled={!hasPlan} sx={{ textTransform: 'none' }}>
+                  Preview
+                </Button>
+                <Box sx={{ flex: 1 }} />
                 <input ref={fileRef} type="file" multiple hidden onChange={(e) => { uploadAndAttach(e.target.files); e.target.value = ''; }} />
                 <Button size="small" variant="outlined" startIcon={<Paperclip size={14} />} onClick={() => fileRef.current?.click()} disabled={uploading}>
-                  {uploading ? 'Uploading…' : 'Attach files'}
+                  {uploading ? 'Uploading…' : 'Attach more'}
                 </Button>
               </Stack>
               <AttachmentList attachments={attachments} dense
                 onRemove={(att) => setAttachments((a) => a.filter((x) => x !== att))} />
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                The plan PDF is generated fresh and attached to this email automatically. Add more files above if needed.
+              </Typography>
             </Box>
 
             <Divider />

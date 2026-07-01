@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import AppLoader from './components/AppLoader';
 import RequirePermission from './components/RequirePermission';
 import UpdateBanner from './components/UpdateBanner';
+import { RouteErrorBoundary } from './components/ErrorBoundary';
 import { lazyWithRetry } from './utils/lazyWithRetry';
 
 // ─── Eager: shell, auth, and the post-login landing page ───────────────────
@@ -113,6 +114,9 @@ function App() {
   return (
     <>
       <UpdateBanner />
+      {/* Route-aware boundary: a render error in any screen recovers on its own —
+          silently retried once, and always cleared the instant the user navigates. */}
+      <RouteErrorBoundary>
       <Suspense fallback={<AppLoader />}>
       <Routes>
         <Route path="/login" element={<Login />} />
@@ -290,6 +294,7 @@ function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>
+      </RouteErrorBoundary>
     </>
   );
 }

@@ -85,6 +85,7 @@ const InvoiceEntryForm = () => {
   const { finishToTask } = useReturnToTask();
   const [searchParams] = useSearchParams();
   const soParam = searchParams.get('so') || '';
+  const dcParam = searchParams.get('dc') || '';
   const [gateOpen, setGateOpen] = useState(false);
 
   const [dc, setDc] = useState(null);
@@ -135,11 +136,12 @@ const InvoiceEntryForm = () => {
   // already sorted -dcDate, so the first match is the newest).
   const presetRef = useRef(false);
   useEffect(() => {
-    if (presetRef.current || !soParam || dc || !challans.length) return;
-    const match = challans.find((c) => c.soNumber === soParam);
+    if (presetRef.current || dc || !challans.length || !(soParam || dcParam)) return;
+    const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
+      || (soParam && challans.find((c) => c.soNumber === soParam));
     if (match) { presetRef.current = true; onPickDc(match); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soParam, challans, dc]);
+  }, [soParam, dcParam, challans, dc]);
 
   const reset = () => {
     setDc(null);
@@ -167,7 +169,7 @@ const InvoiceEntryForm = () => {
       }).unwrap();
       enqueueSnackbar(`Invoice ${res.data.invoiceNo} saved.`, { variant: 'success' });
       // Open the order's FMS task (checklist auto-marked); reset only if none.
-      const opened = await finishToTask({ soNumber: dc?.soNumber });
+      const opened = await finishToTask({ soNumber: dc?.soNumber, action: 'INVOICE_ENTRY' });
       if (!opened) reset();
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Could not save the invoice.', { variant: 'error' });

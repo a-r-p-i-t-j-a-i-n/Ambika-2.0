@@ -21,16 +21,19 @@ const TrackDelivery = () => {
   const [searchParams] = useSearchParams();
   const soParam = searchParams.get('so') || '';
 
+  const dcParam = searchParams.get('dc') || '';
   const [dc, setDc] = useState(null);
   const gate = useFmsGate({ soNumber: dc?.soNumber || soParam, action: 'TRACK_DELIVERY' });
 
-  // Came from an FMS "Do it now" with ?so=… → auto-select that order's challan.
+  // Came from a "Do it now" / consignment card → auto-select the challan: exact DC
+  // (?dc) first, else the order's latest challan (?so).
   useEffect(() => {
-    if (dc || !soParam || !challans.length) return;
-    const match = challans.find((c) => c.soNumber === soParam);
+    if (dc || !challans.length || !(soParam || dcParam)) return;
+    const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
+      || (soParam && challans.find((c) => c.soNumber === soParam));
     if (match) setDc(match);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soParam, challans]);
+  }, [soParam, dcParam, challans]);
   const [status, setStatus] = useState('Delivered');
   const [deliveryDate, setDeliveryDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [newTrackDate, setNewTrackDate] = useState('');
@@ -45,7 +48,7 @@ const TrackDelivery = () => {
         newTrackDate: status === 'Not Delivered' ? (newTrackDate || undefined) : undefined,
       }).unwrap();
       enqueueSnackbar(`Delivery for ${dc.dcNumber} updated.`, { variant: 'success' });
-      setTimeout(() => finishToTask({ soNumber: dc.soNumber }), 600);
+      setTimeout(() => finishToTask({ soNumber: dc.soNumber, action: 'TRACK_DELIVERY' }), 600);
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Could not update delivery.', { variant: 'error' });
     }

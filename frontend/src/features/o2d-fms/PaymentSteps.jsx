@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, MenuItem, Chip, CircularProgress, Divider, alpha, useTheme,
 } from '@mui/material';
@@ -38,6 +38,18 @@ const PaymentSteps = () => {
 
   const [inv, setInv] = useState(null);
   const gate = useFmsGate({ soNumber: inv?.soNumber, action: part === 'receipt' ? 'PAYMENT_RECEIPT' : 'PAYMENT_FOLLOWUP' });
+
+  // Auto-select the invoice when opened from a "Do it now" / consignment card:
+  // prefer the exact challan (?dc = its DC number), else the order's invoice (?so).
+  const soParam = params.get('so') || '';
+  const dcParam = params.get('dc') || '';
+  const presetRef = useRef(false);
+  useEffect(() => {
+    if (presetRef.current || inv || !invoices.length) return;
+    const match = (dcParam && invoices.find((i) => i.dcNumber === dcParam))
+      || (soParam && invoices.find((i) => i.soNumber === soParam));
+    if (match) { presetRef.current = true; setInv(match); }
+  }, [invoices, soParam, dcParam, inv]);
   const [fuStatus, setFuStatus] = useState('Yes');
   const [rcStatus, setRcStatus] = useState('Yes');
   const [rcDate, setRcDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -48,7 +60,7 @@ const PaymentSteps = () => {
     try {
       await followUp({ invoiceId: inv._id, dcId: inv.dcId, status: fuStatus }).unwrap();
       enqueueSnackbar('Payment follow-up saved.', { variant: 'success' });
-      setTimeout(() => finishToTask({ soNumber: inv.soNumber }), 600);
+      setTimeout(() => finishToTask({ soNumber: inv.soNumber, action: 'PAYMENT_FOLLOWUP' }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 
@@ -57,7 +69,7 @@ const PaymentSteps = () => {
     try {
       await receipt({ invoiceId: inv._id, dcId: inv.dcId, status: rcStatus, receivedDate: rcDate, receivedAmount: Number(rcAmount) || 0 }).unwrap();
       enqueueSnackbar('Payment receipt saved.', { variant: 'success' });
-      setTimeout(() => finishToTask({ soNumber: inv.soNumber }), 600);
+      setTimeout(() => finishToTask({ soNumber: inv.soNumber, action: 'PAYMENT_RECEIPT' }), 600);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Failed to save.', { variant: 'error' }); }
   };
 

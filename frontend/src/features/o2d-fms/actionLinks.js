@@ -26,12 +26,13 @@ export const ACTION_LINKS = [
   { key: 'INVOICE_ENTRY',     label: 'Create Invoice & Eway Bill (2.7)', route: '/o2d/invoice-entry?so={soNumber}', viewRoute: '/invoices?so={soNumber}', viewLabel: 'Invoice' },
   { key: 'INVOICE_EMAIL',     label: 'Email Invoice & Eway (2.8)',      route: '/o2d/invoice-email?so={soNumber}' },
   { key: 'TRACK_DELIVERY',    label: 'Track Delivery (2.9)',            route: '/o2d/track-delivery?so={soNumber}' },
-  // Payment is two distinct steps — each opens its own focused screen.
-  { key: 'PAYMENT_FOLLOWUP',  label: 'Payment Follow-up (2.10)',        route: '/o2d/payments?part=followup' },
-  { key: 'PAYMENT_RECEIPT',   label: 'Receive Payment & Tally Entry (2.11)', route: '/o2d/payments?part=receipt' },
+  // Payment is two distinct steps — each opens its own focused screen. `so` lets the
+  // screen auto-select the order's invoice when opened from "Do it now".
+  { key: 'PAYMENT_FOLLOWUP',  label: 'Payment Follow-up (2.10)',        route: '/o2d/payments?part=followup&so={soNumber}' },
+  { key: 'PAYMENT_RECEIPT',   label: 'Receive Payment & Tally Entry (2.11)', route: '/o2d/payments?part=receipt&so={soNumber}' },
   // Transport bill is two distinct steps too.
-  { key: 'TRANSPORT_BILL_RECEIVE', label: 'Receive Transport Bill (2.12)', route: '/o2d/transport-bill?part=receive' },
-  { key: 'TRANSPORT_BILL_STATUS',  label: 'Transport Bill Payment Status (2.13)', route: '/o2d/transport-bill?part=status' },
+  { key: 'TRANSPORT_BILL_RECEIVE', label: 'Receive Transport Bill (2.12)', route: '/o2d/transport-bill?part=receive&so={soNumber}' },
+  { key: 'TRANSPORT_BILL_STATUS',  label: 'Transport Bill Payment Status (2.13)', route: '/o2d/transport-bill?part=status&so={soNumber}' },
   // Legacy combined links — kept so older in-flight orders still resolve their "Do it now".
   { key: 'PAYMENTS',          label: 'Payment Follow-up & Receipt (2.10–2.11)', route: '/o2d/payments' },
   { key: 'TRANSPORT_BILL',    label: 'Transport Bill (2.12–2.13)',      route: '/o2d/transport-bill' },

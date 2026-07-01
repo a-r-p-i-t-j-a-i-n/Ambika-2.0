@@ -313,9 +313,11 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
       enqueueSnackbar(`${dcNumber} created — plan vs actual updated`, { variant: 'success' });
       onClose?.();
       // Back to the FMS task: if we came from "Do it now" this returns to that
-      // exact step (checklist auto-ticks, the action is marked done); otherwise
-      // it opens the order's active task.
-      if (step1Order?.soNumber) await finishToTask({ soNumber: step1Order.soNumber });
+      // exact step; otherwise `action` lands us on the ACTUAL DISPATCH step (2.06)
+      // it belongs to — NOT the order's current step — with that action marked
+      // done (shows View / Do again) and the checklist auto-ticked. This keeps a
+      // phased "record dispatch" anchored to the right task every time.
+      if (step1Order?.soNumber) await finishToTask({ soNumber: step1Order.soNumber, action: 'ACTUAL_DISPATCH' });
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Could not record dispatch', { variant: 'error' });
     }
@@ -397,7 +399,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
             <Autocomplete
               options={orders}
               value={step1Order}
-              onChange={(_, val) => { setStep1Order(val); setPhaseSel(null); }}
+              onChange={(_, val) => { setStep1Order(val); setPhaseSels([]); }}
               loading={ordersLoading}
               getOptionLabel={(o) => o ? `${o.soNumber} — ${o.partyName || ''}` : ''}
               isOptionEqualToValue={(a, b) => a._id === b?._id}

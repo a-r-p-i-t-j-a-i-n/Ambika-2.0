@@ -47,7 +47,13 @@ const sendViaBrevoApi = async ({ to, subject, text, html, attachments }) => {
     subject,
     htmlContent: html || (text ? `<pre>${text}</pre>` : ' '),
     ...(text ? { textContent: text } : {}),
-    ...(attachments?.length ? { attachment: attachments.map((a) => ({ url: a.path, name: a.filename })) } : {}),
+    // Brevo accepts either a fetchable URL or inline base64 content. Buffer/base64
+    // attachments (e.g. a server-generated PDF) go as `content`; stored files as `url`.
+    ...(attachments?.length ? {
+      attachment: attachments.map((a) => (a.content
+        ? { content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : String(a.content), name: a.filename }
+        : { url: a.path, name: a.filename })),
+    } : {}),
   };
   const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',

@@ -298,9 +298,10 @@ const ConsignmentsPanel = ({ processId }) => {
   const accent = '#7c3aed';
   if (!isFetching && !consignments.length) return null; // no dispatches yet
 
-  const goInvoice = () => navigate('/o2d/invoice-entry');
-  const goDeliver = () => navigate('/o2d/track-delivery');
-  const goPay = () => navigate('/o2d/payments');
+  // Pass ?dc=<this challan> so the target form auto-selects the exact consignment.
+  const goInvoice = (c) => navigate(`/o2d/invoice-entry?dc=${encodeURIComponent(c.dcNumber || '')}`);
+  const goDeliver = (c) => navigate(`/o2d/track-delivery?dc=${encodeURIComponent(c.dcNumber || '')}`);
+  const goPay = (c) => navigate(`/o2d/payments?part=receipt&dc=${encodeURIComponent(c.dcNumber || '')}`);
 
   return (
     <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
@@ -337,9 +338,9 @@ const ConsignmentsPanel = ({ processId }) => {
                   <TableCell><StagePill ok={c.payment?.confirmed} label={c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Following up' : 'Pending')} /></TableCell>
                   <TableCell align="right">
                     <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                      {!c.invoice?.has && <Tooltip title="Create invoice for this challan"><Button size="small" variant="text" onClick={goInvoice} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>Invoice</Button></Tooltip>}
-                      {c.invoice?.has && !c.delivery?.delivered && <Tooltip title="Record delivery"><Button size="small" variant="text" onClick={goDeliver} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>POD</Button></Tooltip>}
-                      {c.invoice?.has && !c.payment?.confirmed && <Tooltip title="Record payment"><Button size="small" variant="text" onClick={goPay} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>Pay</Button></Tooltip>}
+                      {!c.invoice?.has && <Tooltip title="Create invoice for this challan"><Button size="small" variant="text" onClick={() => goInvoice(c)} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>Invoice</Button></Tooltip>}
+                      {c.invoice?.has && !c.delivery?.delivered && <Tooltip title="Record delivery"><Button size="small" variant="text" onClick={() => goDeliver(c)} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>POD</Button></Tooltip>}
+                      {c.invoice?.has && !c.payment?.confirmed && <Tooltip title="Record payment"><Button size="small" variant="text" onClick={() => goPay(c)} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>Pay</Button></Tooltip>}
                     </Stack>
                   </TableCell>
                 </TableRow>
@@ -391,20 +392,30 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate 
 
   const dispatchSeq = steps.find((s) => s.stepCode === '2.06' || s.triggerKey === 'ACTUAL_DISPATCH')?.sequence ?? 6;
   const spine = steps.filter((s) => (s.sequence || 0) < dispatchSeq);
-  const soq = soNumber ? `?so=${encodeURIComponent(soNumber)}` : '';
 
-  // Full post-dispatch chain per consignment (2.06 → 2.13). Every card is clickable
-  // and jumps to that step's screen (pre-filtered to this order where supported).
-  const stagesFor = (c) => [
-    { code: '2.06', title: 'Actual Dispatch', done: true, sub: `${num(c.qty)} pcs`, subDate: c.dcDate ? fmt(c.dcDate) : null, onGo: () => navigate(`/challans?so=${encodeURIComponent(soNumber || '')}`), goLabel: 'View' },
-    { code: '2.07', title: 'Invoice & Eway', done: !!c.invoice?.has, sub: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending', subDate: c.invoice?.date ? fmt(c.invoice.date) : null, onGo: () => navigate(`/o2d/invoice-entry${soq}`), goLabel: c.invoice?.has ? 'Do again' : 'Invoice' },
-    { code: '2.08', title: 'Email Invoice', done: false, sub: c.invoice?.has ? 'Send to client' : 'After invoice', onGo: () => navigate(`/o2d/invoice-email${soq}`), goLabel: 'Email' },
-    { code: '2.09', title: 'Track Delivery', done: !!c.delivery?.delivered, sub: c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'), subDate: c.delivery?.date ? fmt(c.delivery.date) : null, onGo: () => navigate(`/o2d/track-delivery${soq}`), goLabel: c.delivery?.delivered ? 'Do again' : 'POD' },
-    { code: '2.10', title: 'Payment Follow-up', done: !!c.payment?.has, sub: c.payment?.has ? 'Following up' : 'Pending', onGo: () => navigate('/o2d/payments?part=followup'), goLabel: 'Follow up' },
-    { code: '2.11', title: 'Payment', done: !!c.payment?.confirmed, sub: c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Follow-up' : 'Pending'), onGo: () => navigate('/o2d/payments?part=receipt'), goLabel: c.payment?.confirmed ? 'Do again' : 'Pay' },
-    { code: '2.12', title: 'Transport Bill', done: c.transport?.receiptStatus === 'DONE', sub: c.transport?.receiptStatus === 'DONE' ? 'Received' : 'Pending', onGo: () => navigate('/o2d/transport-bill?part=receive'), goLabel: 'Receive' },
-    { code: '2.13', title: 'Transport Payment', done: c.transport?.paymentStatus === 'DONE', sub: c.transport?.paymentStatus === 'DONE' ? 'Paid' : 'Pending', onGo: () => navigate('/o2d/transport-bill?part=status'), goLabel: 'Pay bill' },
-  ];
+  // Full post-dispatch chain per consignment (2.06 → 2.13). Every card is clickable and
+  // jumps to that step's screen, passing BOTH ?so and ?dc so the target form auto-selects
+  // THIS exact Delivery Challan (not just the order's newest one).
+  const stagesFor = (c) => {
+    const link = (base, part) => {
+      const sp = new URLSearchParams();
+      if (part) sp.set('part', part);
+      if (soNumber) sp.set('so', soNumber);
+      if (c.dcNumber) sp.set('dc', c.dcNumber);
+      const qs = sp.toString();
+      return qs ? `${base}?${qs}` : base;
+    };
+    return [
+      { code: '2.06', title: 'Actual Dispatch', done: true, sub: `${num(c.qty)} pcs`, subDate: c.dcDate ? fmt(c.dcDate) : null, onGo: () => navigate(link('/challans')), goLabel: 'View' },
+      { code: '2.07', title: 'Invoice & Eway', done: !!c.invoice?.has, sub: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending', subDate: c.invoice?.date ? fmt(c.invoice.date) : null, onGo: () => navigate(link('/o2d/invoice-entry')), goLabel: c.invoice?.has ? 'Do again' : 'Invoice' },
+      { code: '2.08', title: 'Email Invoice', done: false, sub: c.invoice?.has ? 'Send to client' : 'After invoice', onGo: () => navigate(link('/o2d/invoice-email')), goLabel: 'Email' },
+      { code: '2.09', title: 'Track Delivery', done: !!c.delivery?.delivered, sub: c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'), subDate: c.delivery?.date ? fmt(c.delivery.date) : null, onGo: () => navigate(link('/o2d/track-delivery')), goLabel: c.delivery?.delivered ? 'Do again' : 'POD' },
+      { code: '2.10', title: 'Payment Follow-up', done: !!c.payment?.has, sub: c.payment?.has ? 'Following up' : 'Pending', onGo: () => navigate(link('/o2d/payments', 'followup')), goLabel: 'Follow up' },
+      { code: '2.11', title: 'Payment', done: !!c.payment?.confirmed, sub: c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Follow-up' : 'Pending'), onGo: () => navigate(link('/o2d/payments', 'receipt')), goLabel: c.payment?.confirmed ? 'Do again' : 'Pay' },
+      { code: '2.12', title: 'Transport Bill', done: c.transport?.receiptStatus === 'DONE', sub: c.transport?.receiptStatus === 'DONE' ? 'Received' : 'Pending', onGo: () => navigate(link('/o2d/transport-bill', 'receive')), goLabel: 'Receive' },
+      { code: '2.13', title: 'Transport Payment', done: c.transport?.paymentStatus === 'DONE', sub: c.transport?.paymentStatus === 'DONE' ? 'Paid' : 'Pending', onGo: () => navigate(link('/o2d/transport-bill', 'status')), goLabel: 'Pay bill' },
+    ];
+  };
 
   return (
     <Stack spacing={2}>

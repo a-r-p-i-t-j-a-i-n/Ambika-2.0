@@ -32,11 +32,11 @@ const UpdateBanner = () => {
       <Box
         sx={{
           display: 'flex', alignItems: 'center', gap: { xs: 1.5, sm: 2 },
-          px: { xs: 2, sm: 2.75 }, py: { xs: 1.5, sm: 1.75 }, borderRadius: 3.5,
-          background: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)',
-          color: '#ffffff',
-          border: '1px solid rgba(255,255,255,0.18)',
-          boxShadow: '0 18px 48px rgba(13,37,69,0.55)',
+          px: { xs: 1.75, sm: 2.25 }, py: { xs: 1.25, sm: 1.5 }, borderRadius: 3,
+          bgcolor: '#ffffff',
+          border: '1px solid #e2e8f0',
+          borderTop: '3px solid #1d4ed8',
+          boxShadow: '0 16px 44px rgba(13,37,69,0.22)',
           width: { xs: '100%', sm: 'auto' }, maxWidth: 540,
         }}
       >
@@ -45,32 +45,34 @@ const UpdateBanner = () => {
           sx={{
             flexShrink: 0, width: 40, height: 40, borderRadius: '50%',
             display: 'grid', placeItems: 'center',
-            bgcolor: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)',
+            bgcolor: 'rgba(29,78,216,0.10)', border: '1px solid rgba(29,78,216,0.20)',
           }}
         >
-          <Sparkles size={20} color="#ffffff" />
+          <Sparkles size={20} color="#1d4ed8" />
         </Box>
 
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', lineHeight: 1.25, color: '#ffffff' }}>
+          <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', lineHeight: 1.25, color: '#0b2545' }}>
             A new version is available
           </Typography>
-          <Typography sx={{ fontSize: '0.8rem', lineHeight: 1.3, color: 'rgba(255,255,255,0.92)' }}>
+          <Typography sx={{ fontSize: '0.8rem', lineHeight: 1.3, color: '#475569' }}>
             Update now to get the latest features and fixes.
           </Typography>
         </Box>
 
         <Button
           onClick={reload}
-          variant="contained"
           disableElevation
-          startIcon={<RefreshCw size={16} />}
+          disableRipple
+          startIcon={<RefreshCw size={16} color="#ffffff" />}
           sx={{
             flexShrink: 0, fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap',
             borderRadius: 2, px: 2.25, py: 1,
-            bgcolor: '#ffffff', color: '#1d4ed8',
-            boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
-            '&:hover': { bgcolor: '#eef2ff' },
+            // Force high-contrast solid blue button that no theme override can flatten.
+            bgcolor: '#1d4ed8 !important', color: '#ffffff !important',
+            boxShadow: '0 4px 14px rgba(29,78,216,0.35)',
+            '& .MuiButton-startIcon': { color: '#ffffff' },
+            '&:hover': { bgcolor: '#1e40af !important' },
           }}
         >
           Update now

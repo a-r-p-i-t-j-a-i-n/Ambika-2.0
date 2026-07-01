@@ -91,8 +91,11 @@ export const invoiceService = {
     return inv.toObject();
   },
 
-  /** Step 2.8 — email the invoice + e-way bill to the client. */
-  async sendToClient(id, { to, subject, message }) {
+  /** Step 2.8 — email the invoice + e-way bill to the client.
+   *  `attachments` (optional): the exact set the sender chose — selected invoice
+   *  documents plus any files uploaded from their computer. When provided we honor
+   *  it exactly; when omitted we fall back to ALL of the invoice's stored docs. */
+  async sendToClient(id, { to, subject, message, attachments: chosen }) {
     const inv = await Invoice.findById(id).populate('partyId', 'name email').lean();
     if (!inv) throw new AppError('Invoice not found', 404);
     const recipient = to || inv.partyId?.email;
@@ -100,22 +103,50 @@ export const invoiceService = {
 
     // Build real file attachments (nodemailer streams each URL) AND keep links in
     // the body as a fallback, so the client always gets the documents.
-    const tagged = [
-      ...(inv.invoiceUrls || []).map((u, i) => ({ url: u, name: `Invoice-${i + 1}`, label: 'Invoice' })),
-      ...(inv.ewayBillUrls || []).map((u, i) => ({ url: u, name: `EwayBill-${i + 1}`, label: 'E-way Bill' })),
-      ...(inv.pdirUrls || []).map((u, i) => ({ url: u, name: `PDIR-${i + 1}`, label: 'PDIR' })),
-    ].filter((a) => a.url);
+    const tagged = (Array.isArray(chosen)
+      ? chosen.map((a, i) => (typeof a === 'string'
+        ? { url: a, name: `Attachment-${i + 1}`, label: 'Document' }
+        : { url: a.url || a.fileUrl, name: a.name || a.fileName || `Attachment-${i + 1}`, label: a.label || 'Document' }))
+      : [
+        ...(inv.invoiceUrls || []).map((u, i) => ({ url: u, name: `Invoice-${i + 1}`, label: 'Invoice' })),
+        ...(inv.ewayBillUrls || []).map((u, i) => ({ url: u, name: `EwayBill-${i + 1}`, label: 'E-way Bill' })),
+        ...(inv.pdirUrls || []).map((u, i) => ({ url: u, name: `PDIR-${i + 1}`, label: 'PDIR' })),
+      ]
+    ).filter((a) => a.url);
     // Resolve stored URLs → fetchable signed URLs so the files actually attach.
     const attachments = await emailService.resolveStoredAttachments(
       tagged.map((a) => ({ filename: a.name, url: a.url })),
     );
+    // A clean, professional HTML email — NO raw URLs in the body. The documents
+    // ride along as real attachments; we just list their names for reference.
+    const bodyHtml = message || `<p>Dear ${inv.partyName || 'Customer'},</p><p>Please find your tax invoice <b>${inv.invoiceNo}</b> and supporting documents attached.</p>`;
+    const docListHtml = tagged.length
+      ? `<tr><td style="padding:14px 24px 4px;font:600 13px Arial,Helvetica,sans-serif;color:#334155;">Attached documents</td></tr>`
+        + `<tr><td style="padding:0 24px 18px;">`
+        + tagged.map((a) => `<span style="display:inline-block;margin:4px 6px 0 0;padding:5px 11px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;font:600 12px Arial,Helvetica,sans-serif;color:#0f172a;">📎 ${a.name}</span>`).join('')
+        + `</td></tr>`
+      : '';
+    const html = `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:24px 0;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+            <tr><td style="background:#0f172a;padding:20px 24px;">
+              <span style="font:700 18px Arial,Helvetica,sans-serif;color:#ffffff;letter-spacing:.3px;">M/s AMBIKA GLOBAL</span>
+            </td></tr>
+            <tr><td style="padding:24px;font:400 14px/1.6 Arial,Helvetica,sans-serif;color:#1e293b;">${bodyHtml}</td></tr>
+            ${docListHtml ? `<tr><td><div style="border-top:1px solid #eef2f6;"></div></td></tr>${docListHtml}` : ''}
+            <tr><td style="background:#f8fafc;border-top:1px solid #eef2f6;padding:16px 24px;font:400 12px Arial,Helvetica,sans-serif;color:#94a3b8;">
+              This is a system-generated email from Ambika Global. Please do not reply to this message.
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>`;
     let emailStatus = 'SENT';
     try {
       await emailService.sendEmail({
         to: recipient,
         subject: subject || `Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`,
-        html: (message || `<p>Dear ${inv.partyName || 'Customer'},</p><p>Please find your invoice <b>${inv.invoiceNo}</b> and supporting documents attached.</p>`)
-          + (tagged.length ? `<p><b>Documents:</b></p>${tagged.map((a) => `<p>${a.label}: <a href="${a.url}">${a.url}</a></p>`).join('')}` : ''),
+        html,
         attachments,
       });
     } catch (err) {

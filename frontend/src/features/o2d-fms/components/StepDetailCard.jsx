@@ -42,6 +42,21 @@ const stepActionKeys = (step) => (step?.actionLinks?.length
   ? step.actionLinks
   : (step?.actionLink ? [step.actionLink] : []));
 
+// A spine / order-level connected action is effectively "done" the moment the
+// record it produces exists on the process — even when the doer punched it in on
+// a screen that can't call back into this task (Orders / Order-Intake), so
+// markActionDone never fired. Only ONCE-PER-ORDER actions are inferred here;
+// per-consignment actions (invoice / dispatch / payment…) are intentionally
+// excluded so one consignment's record never marks another's action as done.
+const inferActionDone = (key, proc) => {
+  switch (key) {
+    case 'ORDER_INTAKE': return !!(proc?.intakeId);
+    case 'ORDER_ENTRY':
+    case 'ORDER_DETAILS': return !!(proc?.salesOrderId);
+    default: return false;
+  }
+};
+
 // Work out the business records this task is mapped to, so a watcher can jump
 // straight to them to verify: the order it belongs to (universal) plus the
 // specific record(s) this step produces/touches (challan, dispatch plan, invoice…).
@@ -308,10 +323,15 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       const meta = actionLinkMeta(key);
       if (!meta) return null;
       const prog = actionProgress.find((a) => a.key === key) || null;
-      return { key, meta, to: resolveActionLink(key, ctxIds), prog };
+      // Fall back to record-existence for spine actions the external screen
+      // couldn't record (see inferActionDone). The "View" link then points at
+      // the produced record itself.
+      const inferredDone = !prog && inferActionDone(key, proc);
+      const viewTo = prog?.link || (inferredDone ? resolveEntityLink(key, ctxIds)?.to : null);
+      return { key, meta, to: resolveActionLink(key, ctxIds), prog, inferredDone, viewTo };
     })
     .filter(Boolean);
-  const actionsDone = actions.filter((a) => a.prog).length;
+  const actionsDone = actions.filter((a) => a.prog || a.inferredDone).length;
 
   // Linked business records this task maps to — for anyone reviewing the step.
   const { orderLink, recordLinks } = deriveLinks(proc, liveStep);
@@ -585,7 +605,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               </Stack>
               <Stack spacing={1}>
                 {actions.map((a) => {
-                  const aDone = !!a.prog;
+                  const aDone = !!a.prog || a.inferredDone;
                   return (
                     <Stack key={a.key} direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap
                       sx={{ p: 1, borderRadius: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: aDone ? alpha('#0f766e', 0.35) : 'divider' }}>
@@ -596,15 +616,17 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                         <Typography variant="body2" sx={{ fontWeight: 600 }}>{a.meta.label}</Typography>
                         {aDone ? (
                           <Typography variant="caption" sx={{ color: '#0f766e' }}>
-                            Done{a.prog.doneByName ? ` by ${a.prog.doneByName}` : ''}{a.prog.doneAt ? ` · ${fmt(a.prog.doneAt)}` : ''}
+                            {a.prog
+                              ? `Done${a.prog.doneByName ? ` by ${a.prog.doneByName}` : ''}${a.prog.doneAt ? ` · ${fmt(a.prog.doneAt)}` : ''}`
+                              : 'Done — this entry already exists in the system.'}
                           </Typography>
                         ) : (
                           <Typography variant="caption" color="text.secondary">Not done yet — do the work there; this gets recorded for you.</Typography>
                         )}
                       </Box>
-                      {aDone && a.prog.link && (
+                      {aDone && a.viewTo && (
                         <Button size="small" variant="text" color="success" endIcon={<ExternalLink size={13} />}
-                          onClick={() => openLink(a.prog.link)} sx={{ textTransform: 'none' }}>
+                          onClick={() => openLink(a.viewTo)} sx={{ textTransform: 'none' }}>
                           View
                         </Button>
                       )}

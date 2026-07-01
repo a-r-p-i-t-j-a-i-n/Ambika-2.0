@@ -1,14 +1,15 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, Chip, alpha, useTheme,
-  CircularProgress, Divider, Link, Box,
+  CircularProgress, Divider, Link, Box, Checkbox, IconButton,
 } from '@mui/material';
-import { Mail, Send, Paperclip, FileText, ShieldCheck, ClipboardList, CheckCircle2 } from 'lucide-react';
+import { Mail, Send, Paperclip, FileText, ShieldCheck, ClipboardList, CheckCircle2, UploadCloud, X } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useSearchParams } from 'react-router-dom';
 import O2dStepShell from './components/O2dStepShell';
 import { useGetSalesInvoicesQuery, useSendSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
+import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
 
@@ -56,6 +57,7 @@ const InvoiceEmail = () => {
   const [searchParams] = useSearchParams();
   const soParam = searchParams.get('so') || '';
 
+  const [uploadFile] = useUploadFileMutation();
   const [inv, setInv] = useState(null);
   const gate = useFmsGate({ soNumber: inv?.soNumber || soParam, action: 'INVOICE_EMAIL' });
   const [to, setTo] = useState('');
@@ -63,10 +65,43 @@ const InvoiceEmail = () => {
   const [message, setMessage] = useState('');
   const [sentInfo, setSentInfo] = useState(null); // { to, at } after a successful send this session
 
-  const allAttachments = useMemo(
-    () => [...(inv?.invoiceUrls || []), ...(inv?.ewayBillUrls || []), ...(inv?.pdirUrls || [])].filter(Boolean),
-    [inv],
-  );
+  // Attachment control: which of the invoice's stored docs are ticked + local uploads.
+  const [selectedUrls, setSelectedUrls] = useState(() => new Set());
+  const [uploads, setUploads] = useState([]); // { fileName, url }
+  const [uploading, setUploading] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const fileRef = useRef(null);
+
+  // The invoice's stored documents, flattened + labelled (Invoice / Eway / PDIR).
+  const docList = useMemo(() => [
+    ...(inv?.invoiceUrls || []).map((u, i) => ({ url: u, label: 'Invoice', name: `Invoice ${i + 1}` })),
+    ...(inv?.ewayBillUrls || []).map((u, i) => ({ url: u, label: 'Eway Bill', name: `Eway Bill ${i + 1}` })),
+    ...(inv?.pdirUrls || []).map((u, i) => ({ url: u, label: 'PDIR', name: `PDIR ${i + 1}` })),
+  ].filter((d) => d.url), [inv]);
+
+  const totalToSend = selectedUrls.size + uploads.length;
+
+  const toggleUrl = (url) => setSelectedUrls((s) => {
+    const n = new Set(s);
+    if (n.has(url)) n.delete(url); else n.add(url);
+    return n;
+  });
+
+  const uploadFiles = async (files) => {
+    const arr = Array.from(files || []);
+    if (!arr.length) return;
+    setUploading(true);
+    try {
+      const out = [];
+      for (const f of arr) {
+        const res = await uploadFile({ file: f, folder: 'o2d-fms' }).unwrap();
+        const d = res.data || res;
+        out.push({ fileName: d.fileName || f.name, url: d.url });
+      }
+      setUploads((u) => [...u, ...out]);
+    } catch (e) { enqueueSnackbar(e?.data?.message || 'Upload failed.', { variant: 'error' }); }
+    finally { setUploading(false); }
+  };
 
   // Came from an FMS "Do it now" with ?so=… → auto-select that order's invoice.
   useEffect(() => {
@@ -79,6 +114,9 @@ const InvoiceEmail = () => {
   useEffect(() => {
     if (!inv) return;
     setSentInfo(null);
+    // Default: every stored document ticked; fresh (no) local uploads.
+    setSelectedUrls(new Set([...(inv.invoiceUrls || []), ...(inv.ewayBillUrls || []), ...(inv.pdirUrls || [])].filter(Boolean)));
+    setUploads([]);
     setTo(inv.partyId?.email || '');
     setSubject(`Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`);
     setMessage(
@@ -94,7 +132,12 @@ const InvoiceEmail = () => {
     if (!inv) return enqueueSnackbar('Select an invoice first.', { variant: 'warning' });
     if (!to.trim()) return enqueueSnackbar('Recipient email is required.', { variant: 'warning' });
     try {
-      const res = await send({ id: inv._id, to: to.trim(), subject, message: message.replace(/\n/g, '<br/>') }).unwrap();
+      // The exact set the user chose: ticked invoice docs + local uploads.
+      const attachments = [
+        ...docList.filter((d) => selectedUrls.has(d.url)).map((d) => ({ url: d.url, name: d.name, label: d.label })),
+        ...uploads.map((u) => ({ url: u.url, name: u.fileName, label: 'Attachment' })),
+      ];
+      const res = await send({ id: inv._id, to: to.trim(), subject, message: message.replace(/\n/g, '<br/>'), attachments }).unwrap();
       const st = res.data?.emailStatus;
       if (st === 'SENT') {
         setSentInfo({ to: res.data.recipient || to.trim(), at: new Date() });
@@ -102,7 +145,7 @@ const InvoiceEmail = () => {
       } else {
         enqueueSnackbar(`Email could not be sent (${st}). Check SMTP settings.`, { variant: 'warning' });
       }
-      setTimeout(() => finishToTask({ soNumber: inv.soNumber }), 800);
+      setTimeout(() => finishToTask({ soNumber: inv.soNumber, action: 'INVOICE_EMAIL' }), 800);
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Failed to send.', { variant: 'error' });
     }
@@ -143,7 +186,8 @@ const InvoiceEmail = () => {
                 <Detail label="L.R. No" value={inv.lrNo} />
               </Stack>
               <Divider sx={{ mb: 2 }} />
-              {/* Attachments grouped by type */}
+              {/* The documents created in step 2.7 (read-only reference). They're
+                  auto-listed & attached in the email section below. */}
               <Stack direction="row" spacing={4} flexWrap="wrap" useFlexGap>
                 <AttachGroup icon={FileText} label="Invoice" urls={inv.invoiceUrls} theme={theme} />
                 <AttachGroup icon={ShieldCheck} label="Eway Bill" urls={inv.ewayBillUrls} theme={theme} />
@@ -172,8 +216,76 @@ const InvoiceEmail = () => {
               <TextField label="To" value={to} onChange={(e) => setTo(e.target.value)} size="small" fullWidth placeholder="client@email.com" />
               <TextField label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} size="small" fullWidth />
               <TextField label="Message" value={message} onChange={(e) => setMessage(e.target.value)} size="small" fullWidth multiline minRows={6} />
+
+              {/* Attachments that go WITH this mail — the 2.7 documents auto-listed &
+                  ticked, plus anything the sender adds from their computer. */}
+              <Box sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2, p: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.02) }}>
+                <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+                  <Paperclip size={15} color={theme.palette.primary.main} />
+                  <Typography sx={{ fontWeight: 800, fontSize: '0.85rem' }}>Attachments</Typography>
+                  <Chip size="small" label={`${totalToSend} to send`} sx={{ height: 20, fontWeight: 700, bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} />
+                  <Box sx={{ flex: 1 }} />
+                  {docList.length > 0 && (
+                    <>
+                      <Button size="small" variant="text" onClick={() => setSelectedUrls(new Set(docList.map((d) => d.url)))}>Select all</Button>
+                      <Button size="small" variant="text" color="inherit" onClick={() => setSelectedUrls(new Set())}>Clear</Button>
+                    </>
+                  )}
+                </Stack>
+
+                {docList.length === 0 ? (
+                  <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1 }}>No documents from step 2.7 — attach files below.</Typography>
+                ) : (
+                  <Stack sx={{ mb: 1.5 }}>
+                    {docList.map((d) => (
+                      <Stack key={d.url} direction="row" alignItems="center" spacing={0.5} sx={{ py: 0.15 }}>
+                        <Checkbox size="small" checked={selectedUrls.has(d.url)} onChange={() => toggleUrl(d.url)} sx={{ p: 0.5 }} />
+                        <Chip size="small" variant="outlined" label={d.label} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, flexShrink: 0 }} />
+                        <Link href={d.url} target="_blank" rel="noopener" sx={{ fontSize: '0.78rem', flex: 1 }} noWrap>{d.name}</Link>
+                      </Stack>
+                    ))}
+                  </Stack>
+                )}
+
+                {/* Local upload — drag & drop or click to browse */}
+                <Box
+                  onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+                  onDragLeave={() => setDrag(false)}
+                  onDrop={(e) => { e.preventDefault(); setDrag(false); uploadFiles(e.dataTransfer.files); }}
+                  onClick={() => fileRef.current?.click()}
+                  sx={{
+                    cursor: uploading ? 'wait' : 'pointer', border: '1.5px dashed',
+                    borderColor: drag ? 'primary.main' : alpha(theme.palette.primary.main, 0.35), borderRadius: 2, p: 1.5,
+                    display: 'flex', alignItems: 'center', gap: 1.25, transition: 'all .15s',
+                    bgcolor: drag ? alpha(theme.palette.primary.main, 0.06) : 'transparent',
+                    '&:hover': { borderColor: 'primary.main' },
+                  }}
+                >
+                  <input ref={fileRef} type="file" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.doc,.docx" onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
+                  <Box sx={{ width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.main', flexShrink: 0 }}>
+                    {uploading ? <CircularProgress size={15} /> : <UploadCloud size={17} />}
+                  </Box>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>{uploading ? 'Uploading…' : 'Drag & drop files here, or click to browse'}</Typography>
+                    <Typography variant="caption" color="text.secondary">Attach extra files from your computer — PDF, images, Excel, Word…</Typography>
+                  </Box>
+                </Box>
+
+                {uploads.length > 0 && (
+                  <Stack sx={{ mt: 1 }} spacing={0.25}>
+                    {uploads.map((u, i) => (
+                      <Stack key={i} direction="row" alignItems="center" spacing={0.75} sx={{ py: 0.15, px: 0.5, borderRadius: 1, bgcolor: alpha(theme.palette.success.main, 0.06) }}>
+                        <Paperclip size={12} color={theme.palette.success.dark} />
+                        <Link href={u.url} target="_blank" rel="noopener" sx={{ fontSize: '0.78rem', flex: 1 }} noWrap>{u.fileName}</Link>
+                        <IconButton size="small" onClick={() => setUploads((x) => x.filter((_, j) => j !== i))}><X size={13} /></IconButton>
+                      </Stack>
+                    ))}
+                  </Stack>
+                )}
+              </Box>
+
               <Typography variant="caption" color="text.secondary">
-                {allAttachments.length} document{allAttachments.length === 1 ? '' : 's'} linked (Invoice + Eway + PDIR) will be included.
+                {totalToSend} attachment{totalToSend === 1 ? '' : 's'} will be sent{totalToSend === 0 ? ' — none selected' : ''} (ticked invoice docs + your uploads).
               </Typography>
               <Divider />
               <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1.5}>
