@@ -3,9 +3,38 @@ import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
   Chip, LinearProgress, TextField, Skeleton, Button, InputAdornment,
 } from '@mui/material';
-import { Search, ArrowRight, Workflow } from 'lucide-react';
+import { Search, ArrowRight, Workflow, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
+
+// Status pill styles — tinted background + matching text/icon colour per state.
+const STATUS_STYLES = {
+  completed: { label: 'Completed',   color: '#15803d', bg: '#ecfdf5', border: '#bbf7d0', Icon: CheckCircle2 },
+  progress:  { label: 'In progress', color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', Icon: Clock },
+  overdue:   { label: 'Overdue',     color: '#dc2626', bg: '#fef2f2', border: '#fecaca', Icon: AlertTriangle },
+};
+
+const StatusPill = ({ variant, label }) => {
+  const s = STATUS_STYLES[variant];
+  const Icon = s.Icon;
+  return (
+    <Chip
+      size="small"
+      icon={<Icon size={14} />}
+      label={label || s.label}
+      sx={{
+        height: 26,
+        fontWeight: 700,
+        color: s.color,
+        bgcolor: s.bg,
+        border: `1px solid ${s.border}`,
+        borderRadius: '999px',
+        '& .MuiChip-icon': { color: s.color, ml: 0.75, mr: -0.25 },
+        '& .MuiChip-label': { px: 1 },
+      }}
+    />
+  );
+};
 
 const ProcessList = () => {
   const [search, setSearch] = useState('');
@@ -66,9 +95,9 @@ const ProcessList = () => {
                       </Stack>
                     </TableCell>
                     <TableCell>
-                      {p.isCompleted ? <Chip size="small" color="success" label="Completed" />
-                        : od > 0 ? <Chip size="small" color="error" label={`${od} overdue`} />
-                        : <Chip size="small" color="primary" variant="outlined" label="In progress" />}
+                      {p.isCompleted ? <StatusPill variant="completed" />
+                        : od > 0 ? <StatusPill variant="overdue" label={`${od} overdue`} />
+                        : <StatusPill variant="progress" />}
                     </TableCell>
                     <TableCell align="right">
                       <Button size="small" endIcon={<ArrowRight size={14} />} onClick={() => navigate(`/o2d-fms/process/${p._id}`)}>Open</Button>
