@@ -14,7 +14,25 @@ const isDueSoon = (d) => d && (new Date(d) - Date.now()) > 0 && (new Date(d) - D
 
 // Status chip shown in the dedicated Status column.
 const statusChip = (t) => {
-  if (t.isOverdue) return <Chip size="small" color="error" label="Overdue" />;
+  if (t.isOverdue) {
+    return (
+      <Chip
+        size="small"
+        icon={<AlertTriangle size={14} />}
+        label="Overdue"
+        sx={{
+          height: 26,
+          fontWeight: 700,
+          color: '#dc2626',
+          bgcolor: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: '999px',
+          '& .MuiChip-icon': { color: '#dc2626', ml: 0.75, mr: -0.25 },
+          '& .MuiChip-label': { px: 1 },
+        }}
+      />
+    );
+  }
   if (t.status === 'DELAYED') return <Chip size="small" color="warning" label="Done late" />;
   if (t.status === 'DONE') return <Chip size="small" color="success" label="Done" />;
   // Quantity-/consignment-gated step part-way through — still the doer's task.
@@ -159,6 +177,7 @@ const MyTasksWorkspace = () => {
                   hover
                   onClick={() => openTask(t)}
                   sx={{
+                    height: 56,
                     cursor: 'pointer',
                     // Overdue → light red; buddy → purple; else default.
                     bgcolor: t.isOverdue ? alpha('#be123c', 0.06) : (t.asBuddy ? alpha('#7c3aed', 0.16) : 'inherit'),
@@ -169,7 +188,7 @@ const MyTasksWorkspace = () => {
                   <TableCell sx={{ maxWidth: 300 }}>
                     <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
                       <ClipboardList size={15} style={{ flexShrink: 0 }} />
-                      <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap title={t.name}>{t.name}</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 700, minWidth: 0 }} noWrap title={t.name}>{t.name}</Typography>
                       <Chip size="small" variant="outlined" label={t.stepCode} sx={{ flexShrink: 0 }} />
                       {t.tool && <Chip size="small" label={t.tool} sx={{ bgcolor: alpha('#1d4ed8', 0.08), flexShrink: 0 }} />}
                       {t.dispatchProgress && (

@@ -140,19 +140,19 @@ const AllTasks = () => {
               ) : paged.map((t, i) => {
                 const tone = STATUS_TONE[t.status] || '#475569';
                 return (
-                  <TableRow key={`${t.processId}-${t.stepCode}`} hover sx={{ cursor: 'pointer', bgcolor: t.isOverdue ? alpha('#be123c', 0.04) : 'inherit' }}
+                  <TableRow key={`${t.processId}-${t.stepCode}`} hover sx={{ height: 56, cursor: 'pointer', bgcolor: t.isOverdue ? alpha('#be123c', 0.04) : 'inherit' }}
                     onClick={() => navigate(`/o2d-fms/task/${t.processId}/${encodeURIComponent(t.stepCode)}`)}>
                     <TableCell>{page * rowsPerPage + i + 1}</TableCell>
-                    <TableCell>
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <ListChecks size={15} />
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{t.name}</Typography>
-                        <Chip size="small" variant="outlined" label={t.stepCode} />
+                    <TableCell sx={{ maxWidth: 300 }}>
+                      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                        <ListChecks size={15} style={{ flexShrink: 0 }} />
+                        <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 0 }} noWrap title={t.name}>{t.name}</Typography>
+                        <Chip size="small" variant="outlined" label={t.stepCode} sx={{ flexShrink: 0 }} />
                       </Stack>
                     </TableCell>
-                    <TableCell>
-                      <Typography variant="body2">{t.soNumber}</Typography>
-                      <Typography variant="caption" color="text.secondary">{t.partyName}</Typography>
+                    <TableCell sx={{ maxWidth: 220 }}>
+                      <Typography variant="body2" noWrap>{t.soNumber}</Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap display="block">{t.partyName}</Typography>
                     </TableCell>
                     <TableCell><Typography variant="body2">{(t.doers || []).map((d) => d.name).join(', ') || <em style={{ color: '#94a3b8' }}>Unassigned</em>}</Typography></TableCell>
                     <TableCell><Chip size="small" label={t.isOverdue ? 'Overdue' : t.status} sx={{ bgcolor: alpha(t.isOverdue ? '#be123c' : tone, 0.12), color: t.isOverdue ? '#be123c' : tone, fontWeight: 600 }} /></TableCell>

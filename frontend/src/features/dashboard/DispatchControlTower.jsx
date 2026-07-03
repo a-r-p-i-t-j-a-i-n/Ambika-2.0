@@ -8,7 +8,7 @@ import {
 import {
   Search, Filter, ChevronDown, ChevronUp, ExternalLink,
   AlertCircle, CheckCircle2, Clock, TrendingUp, TrendingDown,
-  FileText, LayoutDashboard, MoreVertical, Package
+  FileText, MoreVertical, Package
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { alpha } from '@mui/material/styles';
@@ -412,41 +412,36 @@ const DispatchControlTower = () => {
     <Box sx={{ p: { xs: 2, md: 4 }, bgcolor: BRAND.bg, minHeight: '100vh' }}>
       
       {/* ── Header ─────────────────────────────────────────── */}
-      <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
-            <Box sx={{ p: 1, borderRadius: '10px', bgcolor: BRAND.primary, color: '#fff' }}>
-              <LayoutDashboard size={24} />
-            </Box>
-            <Typography variant="h4" fontWeight={900} color="#0b2545">Dispatch Control Tower</Typography>
+      <Box sx={{ mb: 4 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+          <Typography variant="h4" fontWeight={900} color="#0b2545">Dispatch Control Tower</Typography>
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+            <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, v) => v && setView(v)}
+              sx={{ bgcolor: '#fff', borderRadius: '10px', '& .MuiToggleButton-root': { px: 1.75, py: 0.75, textTransform: 'none', fontWeight: 800, border: '1px solid #e2e8f0' } }}>
+              <ToggleButton value="orders">By Order</ToggleButton>
+              <ToggleButton value="phases">All Phases</ToggleButton>
+            </ToggleButtonGroup>
+            <TextField
+              size="small"
+              placeholder="Quick search orders..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> }}
+              sx={{ width: 280, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: '10px' } }}
+            />
+            <Badge color="error" badgeContent={activeFilters} invisible={activeFilters === 0} overlap="circular">
+              <Button
+                variant={activeFilters ? 'contained' : 'outlined'}
+                startIcon={<Filter size={16} />}
+                onClick={(e) => setFilterAnchor(e.currentTarget)}
+                sx={{ borderRadius: '10px', px: 3, boxShadow: 'none', bgcolor: activeFilters ? BRAND.primary : '#fff' }}
+              >
+                Filters
+              </Button>
+            </Badge>
           </Box>
-          <Typography variant="body1" color="text.secondary">Centralized Planned vs Actual Monitoring Hub</Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-          <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, v) => v && setView(v)}
-            sx={{ bgcolor: '#fff', borderRadius: '10px', '& .MuiToggleButton-root': { px: 1.75, py: 0.75, textTransform: 'none', fontWeight: 800, border: '1px solid #e2e8f0' } }}>
-            <ToggleButton value="orders">By Order</ToggleButton>
-            <ToggleButton value="phases">All Phases</ToggleButton>
-          </ToggleButtonGroup>
-          <TextField
-            size="small"
-            placeholder="Quick search orders..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> }}
-            sx={{ width: 280, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: '10px' } }}
-          />
-          <Badge color="error" badgeContent={activeFilters} invisible={activeFilters === 0} overlap="circular">
-            <Button
-              variant={activeFilters ? 'contained' : 'outlined'}
-              startIcon={<Filter size={16} />}
-              onClick={(e) => setFilterAnchor(e.currentTarget)}
-              sx={{ borderRadius: '10px', px: 3, boxShadow: 'none', bgcolor: activeFilters ? BRAND.primary : '#fff' }}
-            >
-              Filters
-            </Button>
-          </Badge>
-        </Box>
+        <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>Centralized Planned vs Actual Monitoring Hub</Typography>
       </Box>
 
       {/* ── Active filter chips ────────────────────────────── */}
