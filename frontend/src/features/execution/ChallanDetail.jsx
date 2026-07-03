@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, Chip, Stack, Button, IconButton, Skeleton,
@@ -14,6 +14,10 @@ import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useGetChallanByIdQuery, useGenerateChallanPdfMutation, useUpdateChallanMutation } from '../../store/api/dispatchControlApi';
 import { resolveFileUrl } from '../../utils/fileUrl';
+
+// Render the challan PDF live from the backend (fresh each time) — never rely on
+// a stored pdfUrl, which may point at the dev host (localhost) and be dead on prod.
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
 const DISPATCH_STATUSES = ['CREATED', 'DISPATCHED', 'DELIVERED', 'CANCELLED'];
 const TRANSPORT_TYPES = ['Freight Paid', 'To Pay', 'Party Vehicle'];
@@ -95,8 +99,34 @@ const ChallanDetail = () => {
       enqueueSnackbar(e?.data?.message || 'Could not update the dispatch.', { variant: 'error' });
     }
   };
-  // Resolve against the current API host (stored URLs may carry the upload-time host).
-  const pdfHref = dc?.pdfUrl ? resolveFileUrl({ fileUrl: dc.pdfUrl, fileKey: dc.pdfKey }) : '';
+  // Live PDF: fetch the freshly-rendered bytes from the backend and show them via a
+  // blob URL — works on prod regardless of any stale stored URL. Re-fetched on edit.
+  const [pdfBlobUrl, setPdfBlobUrl] = useState('');
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState('');
+
+  const loadPdf = useCallback(async () => {
+    if (!id) return;
+    setPdfLoading(true); setPdfError('');
+    let url;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_BASE}/challans/${id}/pdf/preview`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('Could not render the challan PDF.');
+      const blob = await res.blob();
+      url = URL.createObjectURL(blob);
+      setPdfBlobUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return url; });
+    } catch (e) {
+      setPdfError(e.message || 'Could not render the challan PDF.');
+    } finally {
+      setPdfLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => { if (dc?._id) loadPdf(); }, [dc?._id, loadPdf]);
+  useEffect(() => () => { if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl); }, [pdfBlobUrl]);
+
+  const pdfHref = pdfBlobUrl;
 
   if (isLoading) {
     return <Box sx={{ p: 3 }}><Skeleton variant="rectangular" height={420} sx={{ borderRadius: 2 }} /></Box>;
@@ -141,24 +171,16 @@ const ChallanDetail = () => {
               Edit
             </Button>
           )}
-          {dc.pdfUrl ? (
-            <>
-              <Button size="small" variant="contained" startIcon={<Download size={14} />}
-                href={pdfHref} target="_blank" rel="noreferrer"
-                sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
-                Download
-              </Button>
-              <Button size="small" startIcon={<RefreshCw size={14} />} onClick={() => generatePdf(id)} disabled={generating}
-                sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.25)' }}>
-                Regenerate
-              </Button>
-            </>
-          ) : (
-            <Button size="small" variant="contained" startIcon={<FileText size={14} />} onClick={() => generatePdf(id)} disabled={generating}
-              sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
-              {generating ? 'Generating…' : 'Generate PDF'}
-            </Button>
-          )}
+          <Button size="small" variant="contained" startIcon={<Download size={14} />}
+            href={pdfHref || undefined} target="_blank" rel="noreferrer" disabled={!pdfHref}
+            sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
+            Download
+          </Button>
+          <Button size="small" startIcon={<RefreshCw size={14} />} disabled={generating || pdfLoading}
+            onClick={async () => { try { await generatePdf(id).unwrap(); } catch { /* non-fatal */ } loadPdf(); }}
+            sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.25)' }}>
+            Regenerate
+          </Button>
         </Stack>
       </Box>
 
@@ -305,19 +327,28 @@ const ChallanDetail = () => {
           <Box sx={{ p: 2, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 1 }}>
             <FileSearch size={16} color={C.primary} />
             <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: C.ink }}>Delivery Challan PDF</Typography>
-            {dc.pdfUrl && (
-              <Button size="small" startIcon={<Download size={14} />} href={pdfHref} target="_blank" rel="noreferrer" sx={{ ml: 'auto', fontWeight: 700 }}>
-                Download
-              </Button>
-            )}
+            <Button size="small" startIcon={<Download size={14} />} href={pdfHref || undefined} target="_blank" rel="noreferrer" disabled={!pdfHref} sx={{ ml: 'auto', fontWeight: 700 }}>
+              Download
+            </Button>
           </Box>
-          {dc.pdfUrl ? (
+          {pdfLoading ? (
+            <Box sx={{ p: 6, textAlign: 'center', color: C.faint }}>
+              <CircularProgress size={26} />
+              <Typography sx={{ mt: 1.5 }}>Rendering the challan PDF…</Typography>
+            </Box>
+          ) : pdfError ? (
+            <Box sx={{ p: 5, textAlign: 'center', color: C.error }}>
+              <AlertTriangle size={30} style={{ opacity: 0.7 }} />
+              <Typography sx={{ mt: 1 }}>{pdfError}</Typography>
+              <Button size="small" startIcon={<RefreshCw size={14} />} onClick={loadPdf} sx={{ mt: 1, fontWeight: 700 }}>Retry</Button>
+            </Box>
+          ) : pdfHref ? (
             <Box component="iframe" title="Delivery Challan PDF" src={pdfHref}
               sx={{ width: '100%', height: { xs: 420, md: 640 }, border: 0, display: 'block' }} />
           ) : (
             <Box sx={{ p: 5, textAlign: 'center', color: C.faint }}>
               <FileText size={34} style={{ opacity: 0.5 }} />
-              <Typography sx={{ mt: 1 }}>No PDF yet — click “Generate PDF” above to create it.</Typography>
+              <Typography sx={{ mt: 1 }}>No PDF available.</Typography>
             </Box>
           )}
         </Paper>

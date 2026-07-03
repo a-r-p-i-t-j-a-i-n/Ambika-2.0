@@ -3,15 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, Paper, Typography, Stack, Button, IconButton, Chip, alpha, useTheme,
   TextField, MenuItem, Dialog, DialogTitle, DialogContent, Divider, Tooltip,
-  useMediaQuery, Skeleton, Popover,
+  useMediaQuery, Skeleton, Popover, Checkbox, ListItemText,
 } from '@mui/material';
 import {
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Truck, Search, X, ArrowRight,
-  Package, Building2,
+  Package, Building2, Download,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useGetSchedulesQuery } from '../../store/api/dispatchControlApi';
+import { printDispatchCalendar } from '../../utils/printDispatchCalendar';
 
 dayjs.extend(isoWeek);
 
@@ -40,6 +41,49 @@ const statusMeta = (s) => STATUS[s] || STATUS.PLANNED;
 // Worst-status wins when several SKUs share one phase.
 const PRIORITY = { DELAYED: 5, IN_PROGRESS: 4, PLANNED: 3, DISPATCHED: 2, CANCELLED: 1 };
 
+const CONTENT_FILTERS = {
+  all: 'All dispatches',
+  scheduled: 'Scheduled only',
+  actual: 'Actual only',
+  delayed: 'Delayed only',
+};
+
+const EVENT_TYPE = {
+  scheduled: { label: 'Scheduled', short: 'SCH', color: BRAND },
+  actual: { label: 'Actual', short: 'ACT', color: STATUS.DISPATCHED.color },
+};
+
+const eventQty = (event) => (
+  event.eventType === 'actual'
+    ? Number(event.actualQty || 0)
+    : Number(event.plannedQty || 0)
+);
+
+const eventMeta = (event) => {
+  if (event.isDelayed) return { label: 'Delayed', short: EVENT_TYPE[event.eventType]?.short || 'SCH', color: STATUS.DELAYED.color };
+  if (event.eventType === 'actual') return EVENT_TYPE.actual;
+  return statusMeta(event.status);
+};
+
+const maxDate = (dates) => {
+  const valid = dates.map((d) => dayjs(d)).filter((d) => d.isValid());
+  if (!valid.length) return null;
+  return valid.reduce((latest, d) => (d.isAfter(latest) ? d : latest), valid[0]);
+};
+
+const delayDaysFor = ({ plannedDate, actualDate, pendingQty, today }) => {
+  const planned = dayjs(plannedDate);
+  if (!planned.isValid()) return 0;
+  const actual = actualDate ? dayjs(actualDate) : null;
+  if (actual?.isValid() && actual.startOf('day').isAfter(planned.startOf('day'))) {
+    return actual.startOf('day').diff(planned.startOf('day'), 'day');
+  }
+  if (Number(pendingQty || 0) > 0 && planned.startOf('day').isBefore(today)) {
+    return today.diff(planned.startOf('day'), 'day');
+  }
+  return 0;
+};
+
 /**
  * Dispatch Calendar — a Google-Calendar-style month grid of every planned
  * dispatch phase across all orders. Each day cell shows small pills (party ·
@@ -52,7 +96,8 @@ const DispatchCalendar = () => {
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const [cursor, setCursor] = useState(dayjs().startOf('month'));
-  const [partyFilter, setPartyFilter] = useState('');
+  const [partyFilter, setPartyFilter] = useState([]);
+  const [contentFilter, setContentFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
   const [openDay, setOpenDay] = useState(null); // 'YYYY-MM-DD' of the day dialog
@@ -69,10 +114,30 @@ const DispatchCalendar = () => {
   // the SKU lines so a multi-SKU phase shows as a single calendar entry.
   const allEvents = useMemo(() => {
     const map = new Map();
+    const todayStart = dayjs().startOf('day');
     schedules.forEach((s) => {
       (s.items || []).forEach((item) => {
         (item.phases || []).forEach((ph) => {
           if (!ph.plannedDate) return;
+          const plannedQty = Number(ph.plannedQty || 0);
+          const actualQty = Number(ph.totalActualQty || 0);
+          const pendingQty = Math.max(0, plannedQty - actualQty);
+          const actualDispatches = (ph.actualDispatches || [])
+            .map((a) => ({
+              date: a.date || a.actualDate || a.dcDate || a.invoiceDate,
+              qty: Number(a.qty || a.actualQty || a.quantityPcs || 0),
+              invoiceNo: a.invoiceNo,
+              invoiceDate: a.invoiceDate,
+              invoiceDoc: a.invoiceDoc,
+            }))
+            .filter((a) => a.date && dayjs(a.date).isValid() && a.qty > 0);
+          const lastActual = maxDate(actualDispatches.map((a) => a.date));
+          const phaseDelayDays = delayDaysFor({
+            plannedDate: ph.plannedDate,
+            actualDate: lastActual,
+            pendingQty,
+            today: todayStart,
+          });
           const dateKey = dayjs(ph.plannedDate).format('YYYY-MM-DD');
           const key = `${s.soNumber}__${ph.phaseNo}__${dateKey}`;
           const ev = map.get(key) || {
@@ -80,13 +145,22 @@ const DispatchCalendar = () => {
             soNumber: s.soNumber, poNumber: s.poNumber, partyName: s.partyName || '—',
             phaseNo: ph.phaseNo, plannedQty: 0, actualQty: 0, status: 'CANCELLED', skus: [],
           };
-          ev.plannedQty += Number(ph.plannedQty || 0);
-          ev.actualQty += Number(ph.totalActualQty || 0);
+          ev.eventType = 'scheduled';
+          ev.typeLabel = EVENT_TYPE.scheduled.label;
+          ev.plannedDate = ph.plannedDate;
+          ev.pendingQty = Number(ev.pendingQty || 0) + pendingQty;
+          ev.delayDays = Math.max(Number(ev.delayDays || 0), phaseDelayDays);
+          ev.isDelayed = Boolean(ev.isDelayed || ph.status === 'DELAYED' || phaseDelayDays > 0);
+          ev.lastActualDate = lastActual?.isValid()
+            ? (ev.lastActualDate && dayjs(ev.lastActualDate).isAfter(lastActual) ? ev.lastActualDate : lastActual.toISOString())
+            : ev.lastActualDate;
+          ev.plannedQty += plannedQty;
+          ev.actualQty += actualQty;
           if ((PRIORITY[ph.status] || 0) > (PRIORITY[ev.status] || 0)) ev.status = ph.status;
           ev.skus.push({
             skuName: item.skuName, skuCode: item.skuCode,
-            plannedQty: Number(ph.plannedQty || 0), actualQty: Number(ph.totalActualQty || 0),
-            status: ph.status,
+            plannedQty, actualQty, pendingQty,
+            status: ph.status, actualDispatches,
           });
           map.set(key, ev);
         });
@@ -94,6 +168,81 @@ const DispatchCalendar = () => {
     });
     return [...map.values()];
   }, [schedules]);
+
+  const actualEvents = useMemo(() => {
+    const map = new Map();
+    const todayStart = dayjs().startOf('day');
+
+    schedules.forEach((s) => {
+      (s.items || []).forEach((item) => {
+        (item.phases || []).forEach((ph) => {
+          const plannedQty = Number(ph.plannedQty || 0);
+          const actualDispatches = (ph.actualDispatches || [])
+            .map((a) => ({
+              date: a.date || a.actualDate || a.dcDate || a.invoiceDate,
+              qty: Number(a.qty || a.actualQty || a.quantityPcs || 0),
+              invoiceNo: a.invoiceNo,
+              invoiceDate: a.invoiceDate,
+              invoiceDoc: a.invoiceDoc,
+            }))
+            .filter((a) => a.date && dayjs(a.date).isValid() && a.qty > 0);
+
+          actualDispatches.forEach((actual) => {
+            const actualDate = dayjs(actual.date);
+            const dateKey = actualDate.format('YYYY-MM-DD');
+            const key = `actual__${s.soNumber}__${ph.phaseNo}__${dateKey}`;
+            const actualDelayDays = delayDaysFor({
+              plannedDate: ph.plannedDate,
+              actualDate: actual.date,
+              pendingQty: 0,
+              today: todayStart,
+            });
+            const ev = map.get(key) || {
+              id: key,
+              eventType: 'actual',
+              typeLabel: EVENT_TYPE.actual.label,
+              dateKey,
+              date: actual.date,
+              plannedDate: ph.plannedDate,
+              soNumber: s.soNumber,
+              poNumber: s.poNumber,
+              partyName: s.partyName || '-',
+              phaseNo: ph.phaseNo,
+              plannedQty: 0,
+              actualQty: 0,
+              pendingQty: 0,
+              status: ph.status || 'DISPATCHED',
+              isDelayed: false,
+              delayDays: 0,
+              lastActualDate: actual.date,
+              skus: [],
+            };
+            ev.plannedQty += plannedQty;
+            ev.actualQty += actual.qty;
+            ev.delayDays = Math.max(Number(ev.delayDays || 0), actualDelayDays);
+            ev.isDelayed = Boolean(ev.isDelayed || ph.status === 'DELAYED' || actualDelayDays > 0);
+            if ((PRIORITY[ph.status] || 0) > (PRIORITY[ev.status] || 0)) ev.status = ph.status;
+            ev.skus.push({
+              skuName: item.skuName,
+              skuCode: item.skuCode,
+              plannedQty,
+              actualQty: actual.qty,
+              pendingQty: 0,
+              status: ph.status,
+              actualDate: actual.date,
+              invoiceNo: actual.invoiceNo,
+              invoiceDoc: actual.invoiceDoc,
+            });
+            map.set(key, ev);
+          });
+        });
+      });
+    });
+
+    return [...map.values()];
+  }, [schedules]);
+
+  const calendarEvents = useMemo(() => [...allEvents, ...actualEvents], [allEvents, actualEvents]);
 
   const parties = useMemo(
     () => [...new Set(allEvents.map((e) => e.partyName).filter((p) => p && p !== '—'))].sort(),
@@ -103,19 +252,26 @@ const DispatchCalendar = () => {
   // Apply filters once, reused by the grid and the day dialog.
   const events = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return allEvents.filter((e) => {
-      if (partyFilter && e.partyName !== partyFilter) return false;
+    return calendarEvents.filter((e) => {
+      if (partyFilter.length && !partyFilter.includes(e.partyName)) return false;
+      if (contentFilter === 'scheduled' && e.eventType !== 'scheduled') return false;
+      if (contentFilter === 'actual' && e.eventType !== 'actual') return false;
+      if (contentFilter === 'delayed' && !e.isDelayed) return false;
       if (statusFilter && e.status !== statusFilter) return false;
-      if (q && !`${e.soNumber} ${e.partyName} ${e.phaseNo} ${e.skus.map((s) => s.skuName).join(' ')}`.toLowerCase().includes(q)) return false;
+      if (q && !`${e.soNumber} ${e.poNumber || ''} ${e.partyName} ${e.phaseNo} ${e.typeLabel || ''} ${e.skus.map((s) => `${s.skuName} ${s.skuCode || ''} ${s.invoiceNo || ''}`).join(' ')}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [allEvents, partyFilter, statusFilter, search]);
+  }, [calendarEvents, partyFilter, contentFilter, statusFilter, search]);
 
   const eventsByDate = useMemo(() => {
     const m = new Map();
     events.forEach((e) => { (m.get(e.dateKey) || m.set(e.dateKey, []).get(e.dateKey)).push(e); });
     // Sort each day's events by worst status first, then biggest qty.
-    m.forEach((list) => list.sort((a, b) => (PRIORITY[b.status] - PRIORITY[a.status]) || (b.plannedQty - a.plannedQty)));
+    m.forEach((list) => list.sort((a, b) => (
+      Number(b.isDelayed) - Number(a.isDelayed)
+      || (PRIORITY[b.status] - PRIORITY[a.status])
+      || (eventQty(b) - eventQty(a))
+    )));
     return m;
   }, [events]);
 
@@ -128,17 +284,57 @@ const DispatchCalendar = () => {
   // This-month roll-up for the header.
   const monthStats = useMemo(() => {
     const inMonth = events.filter((e) => dayjs(e.date).isSame(cursor, 'month'));
+    const scheduled = inMonth.filter((e) => e.eventType !== 'actual');
+    const actual = inMonth.filter((e) => e.eventType === 'actual');
     return {
-      phases: inMonth.length,
-      planned: inMonth.reduce((s, e) => s + e.plannedQty, 0),
-      dispatched: inMonth.reduce((s, e) => s + e.actualQty, 0),
+      entries: inMonth.length,
+      planned: scheduled.reduce((s, e) => s + e.plannedQty, 0),
+      dispatched: actual.length
+        ? actual.reduce((s, e) => s + e.actualQty, 0)
+        : scheduled.reduce((s, e) => s + e.actualQty, 0),
+      pending: scheduled.reduce((s, e) => s + Number(e.pendingQty || 0), 0),
+      delayed: inMonth.filter((e) => e.isDelayed).length,
     };
   }, [events, cursor]);
 
   const today = dayjs();
   const dayEvents = openDay ? (eventsByDate.get(openDay) || []) : [];
+  const dayScheduledQty = dayEvents
+    .filter((e) => e.eventType !== 'actual')
+    .reduce((sum, e) => sum + Number(e.plannedQty || 0), 0);
+  const dayActualRows = dayEvents.filter((e) => e.eventType === 'actual');
+  const dayActualQty = dayActualRows.length
+    ? dayActualRows.reduce((sum, e) => sum + Number(e.actualQty || 0), 0)
+    : dayEvents.reduce((sum, e) => sum + Number(e.actualQty || 0), 0);
 
   const goPlan = (e) => navigate(`/dispatch-planning?so=${encodeURIComponent(e.soNumber)}&phase=${encodeURIComponent(e.phaseNo)}`);
+  const partyLabel = partyFilter.length === 0
+    ? 'All parties'
+    : partyFilter.length === 1 ? partyFilter[0] : `${partyFilter.length} parties`;
+  const statusLabel = statusFilter ? statusMeta(statusFilter).label : 'All statuses';
+  const hasActiveFilters = partyFilter.length > 0 || contentFilter !== 'all' || statusFilter || search.trim();
+  const clearFilters = () => {
+    setPartyFilter([]);
+    setContentFilter('all');
+    setStatusFilter('');
+    setSearch('');
+  };
+  const handlePartyChange = (value) => {
+    setPartyFilter(typeof value === 'string' ? value.split(',') : value);
+  };
+  const handleExportPdf = () => {
+    const ok = printDispatchCalendar({
+      month: cursor.toISOString(),
+      events,
+      filters: {
+        contentLabel: CONTENT_FILTERS[contentFilter],
+        partyLabel,
+        statusLabel,
+        search: search.trim(),
+      },
+    });
+    return ok;
+  };
 
   return (
     <Box sx={{ p: { xs: 1, sm: 1.5 }, minHeight: '100vh' }}>
@@ -152,17 +348,18 @@ const DispatchCalendar = () => {
           <Box>
             <Typography sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' }, fontWeight: 800, lineHeight: 1.1, color: BRAND_DK }}>Dispatch Calendar</Typography>
             <Typography sx={{ color: 'text.secondary', fontSize: '0.76rem', display: { xs: 'none', sm: 'block' } }}>
-              Every planned dispatch, day by day. Click a date to see what&apos;s planned.
+              Scheduled, actual, and delayed dispatches by date.
             </Typography>
           </Box>
         </Stack>
         <Stack direction="row" spacing={2.5} sx={{ pr: 0.5 }}>
-          {[
-            { k: 'Phases', v: monthStats.phases },
+          {[ 
+            { k: 'Entries', v: monthStats.entries },
             { k: 'Planned', v: num(monthStats.planned) },
-            { k: 'Dispatched', v: num(monthStats.dispatched) },
+            { k: 'Actual', v: num(monthStats.dispatched) },
+            { k: 'Delayed', v: monthStats.delayed },
           ].map((s) => (
-            <Box key={s.k} sx={{ textAlign: 'right', display: { xs: s.k === 'Phases' ? 'block' : 'none', sm: 'block' } }}>
+            <Box key={s.k} sx={{ textAlign: 'right', display: { xs: s.k === 'Entries' ? 'block' : 'none', sm: 'block' } }}>
               <Typography sx={{ fontSize: '1rem', fontWeight: 800, lineHeight: 1, color: BRAND_DK }}>{s.v}</Typography>
               <Typography sx={{ fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'text.secondary' }}>{s.k}</Typography>
             </Box>
@@ -231,11 +428,24 @@ const DispatchCalendar = () => {
             sx={{ width: { xs: '100%', sm: 200 }, '& .MuiInputBase-root': { height: 34 } }}
             InputProps={{ startAdornment: <Search size={14} style={{ marginRight: 6 }} /> }}
           />
-          <TextField select size="small" value={partyFilter} onChange={(e) => setPartyFilter(e.target.value)}
-            sx={{ width: 160, '& .MuiInputBase-root': { height: 34 } }}
-            SelectProps={{ displayEmpty: true, renderValue: (v) => v || 'All clients' }}>
-            <MenuItem value="">All clients</MenuItem>
-            {parties.map((p) => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+          <TextField select size="small" value={contentFilter} onChange={(e) => setContentFilter(e.target.value)}
+            sx={{ width: 155, '& .MuiInputBase-root': { height: 34 } }}
+            SelectProps={{ displayEmpty: true, renderValue: (v) => CONTENT_FILTERS[v] || CONTENT_FILTERS.all }}>
+            {Object.entries(CONTENT_FILTERS).map(([value, label]) => <MenuItem key={value} value={value}>{label}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" value={partyFilter} onChange={(e) => handlePartyChange(e.target.value)}
+            sx={{ width: 180, '& .MuiInputBase-root': { height: 34 } }}
+            SelectProps={{
+              multiple: true,
+              displayEmpty: true,
+              renderValue: () => partyLabel,
+            }}>
+            {parties.map((p) => (
+              <MenuItem key={p} value={p}>
+                <Checkbox size="small" checked={partyFilter.includes(p)} sx={{ p: 0.5, mr: 0.5 }} />
+                <ListItemText primary={p} primaryTypographyProps={{ noWrap: true, fontSize: '0.78rem' }} />
+              </MenuItem>
+            ))}
           </TextField>
           <TextField select size="small" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
             sx={{ width: 140, '& .MuiInputBase-root': { height: 34 } }}
@@ -243,10 +453,25 @@ const DispatchCalendar = () => {
             <MenuItem value="">All statuses</MenuItem>
             {Object.keys(STATUS).map((s) => <MenuItem key={s} value={s}>{STATUS[s].label}</MenuItem>)}
           </TextField>
+          {hasActiveFilters && (
+            <Button size="small" variant="text" startIcon={<X size={14} />} onClick={clearFilters} sx={{ height: 34, fontWeight: 700 }}>
+              Clear
+            </Button>
+          )}
+          <Button size="small" variant="contained" startIcon={<Download size={15} />} onClick={handleExportPdf} sx={{ height: 34, fontWeight: 800, whiteSpace: 'nowrap' }}>
+            Export PDF
+          </Button>
         </Stack>
 
         {/* Legend */}
         <Stack direction="row" spacing={1.75} sx={{ px: { xs: 1.25, sm: 1.75 }, py: 0.5, flexWrap: 'wrap', rowGap: 0.4, borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: alpha(BRAND, 0.03) }}>
+          {Object.entries(EVENT_TYPE).map(([k, v]) => (
+            <Stack key={k} direction="row" spacing={0.5} alignItems="center">
+              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: v.color }} />
+              <Typography sx={{ fontSize: '0.64rem', fontWeight: 800, color: 'text.secondary' }}>{v.label}</Typography>
+            </Stack>
+          ))}
+          <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
           {Object.entries(STATUS).map(([k, v]) => (
             <Stack key={k} direction="row" spacing={0.5} alignItems="center">
               <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: v.color }} />
@@ -308,19 +533,24 @@ const DispatchCalendar = () => {
 
                       <Stack spacing={0.3}>
                         {shown.map((e) => {
-                          const m = statusMeta(e.status);
+                          const m = eventMeta(e);
+                          const qty = eventQty(e);
+                          const tooltipTitle = `${e.typeLabel || m.label} - ${e.soNumber} - ${e.phaseNo} - ${e.partyName} - ${num(qty)} pcs${e.delayDays > 0 ? ` - ${e.delayDays}d late` : ''}`;
                           return (
                             <Tooltip key={e.id} title={`${e.soNumber} · ${e.phaseNo} · ${e.partyName} · ${num(e.plannedQty)} pcs · ${m.label}`} disableInteractive>
-                              <Box sx={{
+                              <Box aria-label={tooltipTitle} sx={{
                                 px: 0.5, py: '1px', borderRadius: 0.6, overflow: 'hidden',
                                 bgcolor: alpha(m.color, 0.13), borderLeft: `3px solid ${m.color}`,
                                 display: 'flex', alignItems: 'center', gap: 0.4,
                               }}>
+                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 900, color: m.color, flexShrink: 0, lineHeight: 1 }}>
+                                  {EVENT_TYPE[e.eventType]?.short || 'SCH'}
+                                </Typography>
                                 <Typography noWrap sx={{ fontSize: '0.6rem', fontWeight: 700, color: m.color, flex: 1, minWidth: 0 }}>
                                   {e.partyName}
                                 </Typography>
                                 <Typography sx={{ fontSize: '0.58rem', fontWeight: 800, color: m.color, flexShrink: 0 }}>
-                                  {num(e.plannedQty)}
+                                  {num(qty)}
                                 </Typography>
                               </Box>
                             </Tooltip>
@@ -354,6 +584,9 @@ const DispatchCalendar = () => {
                   {openDay ? dayjs(openDay).format('dddd, DD MMMM YYYY') : ''}
                 </Typography>
                 <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', fontWeight: 600 }}>
+                  {dayEvents.length} entr{dayEvents.length === 1 ? 'y' : 'ies'} - Scheduled {num(dayScheduledQty)} pcs - Actual {num(dayActualQty)} pcs
+                </Typography>
+                <Typography sx={{ display: 'none' }}>
                   {dayEvents.length} phase{dayEvents.length === 1 ? '' : 's'} planned ·{' '}
                   {num(dayEvents.reduce((s, e) => s + e.plannedQty, 0))} pcs
                 </Typography>
@@ -365,15 +598,19 @@ const DispatchCalendar = () => {
         <DialogContent dividers sx={{ p: 1.5 }}>
           <Stack spacing={1.25}>
             {dayEvents.map((e) => {
-              const m = statusMeta(e.status);
+              const m = eventMeta(e);
+              const qty = eventQty(e);
+              const qtyLabel = e.eventType === 'actual' ? 'ACTUAL PCS' : 'SCHEDULED PCS';
               return (
                 <Paper key={e.id} variant="outlined" sx={{ p: 1.5, borderRadius: 2, borderLeft: `4px solid ${m.color}` }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
                     <Box sx={{ minWidth: 0 }}>
                       <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                        <Chip size="small" label={e.typeLabel || EVENT_TYPE[e.eventType]?.label || 'Scheduled'} sx={{ height: 20, fontSize: '0.6rem', fontWeight: 800, bgcolor: alpha(EVENT_TYPE[e.eventType]?.color || m.color, 0.12), color: EVENT_TYPE[e.eventType]?.color || m.color }} />
                         <Chip size="small" label={e.phaseNo} sx={{ height: 20, fontWeight: 800, bgcolor: alpha(m.color, 0.12), color: m.color }} />
                         <Typography sx={{ fontWeight: 800, fontSize: '0.9rem' }}>{e.soNumber}</Typography>
                         <Chip size="small" label={m.label} sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha(m.color, 0.1), color: m.color }} />
+                        {e.delayDays > 0 && <Chip size="small" label={`${e.delayDays}d late`} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 800, bgcolor: alpha(STATUS.DELAYED.color, 0.1), color: STATUS.DELAYED.color }} />}
                       </Stack>
                       <Stack direction="row" spacing={0.6} alignItems="center" sx={{ mt: 0.5, color: 'text.secondary' }}>
                         <Building2 size={13} />
@@ -381,11 +618,16 @@ const DispatchCalendar = () => {
                       </Stack>
                     </Box>
                     <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
-                      <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: m.color }}>{num(e.plannedQty)}</Typography>
-                      <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: 'text.secondary', letterSpacing: '0.05em' }}>PLANNED PCS</Typography>
-                      {e.actualQty > 0 && (
+                      <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: m.color }}>{num(qty)}</Typography>
+                      <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: 'text.secondary', letterSpacing: '0.05em' }}>{qtyLabel}</Typography>
+                      {e.eventType !== 'actual' && e.actualQty > 0 && (
                         <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: STATUS.DISPATCHED.color, mt: 0.25 }}>
                           {num(e.actualQty)} dispatched
+                        </Typography>
+                      )}
+                      {e.eventType !== 'actual' && Number(e.pendingQty || 0) > 0 && (
+                        <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: e.isDelayed ? STATUS.DELAYED.color : '#b45309', mt: 0.25 }}>
+                          {num(e.pendingQty)} pending
                         </Typography>
                       )}
                     </Box>
@@ -400,7 +642,9 @@ const DispatchCalendar = () => {
                           <Typography noWrap sx={{ fontSize: '0.74rem', fontWeight: 600 }}>{s.skuName}</Typography>
                         </Stack>
                         <Typography sx={{ fontSize: '0.74rem', fontWeight: 700, flexShrink: 0 }}>
-                          {num(s.plannedQty)}{s.actualQty > 0 ? ` / ${num(s.actualQty)}` : ''}
+                          {e.eventType === 'actual'
+                            ? `${num(s.actualQty)} actual${s.invoiceNo ? ` / ${s.invoiceNo}` : ''}`
+                            : `${num(s.plannedQty)}${s.actualQty > 0 ? ` / ${num(s.actualQty)}` : ''}`}
                         </Typography>
                       </Stack>
                     ))}
@@ -415,7 +659,7 @@ const DispatchCalendar = () => {
             {dayEvents.length === 0 && (
               <Stack alignItems="center" sx={{ py: 4, color: 'text.disabled' }}>
                 <Truck size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
-                <Typography sx={{ fontSize: '0.85rem' }}>Nothing planned this day.</Typography>
+                <Typography sx={{ fontSize: '0.85rem' }}>No dispatch entries this day.</Typography>
               </Stack>
             )}
           </Stack>

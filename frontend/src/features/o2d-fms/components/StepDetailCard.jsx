@@ -20,6 +20,7 @@ import {
 import { useGetScheduleQuery } from '../../../store/api/dispatchControlApi';
 import PhaseTimeline from '../../planning/components/PhaseTimeline';
 import { resolveActionLink, actionLinkMeta, resolveEntityLink } from '../actionLinks';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 import { useListAccessUsersQuery } from '../../../store/api/accessControlApi';
@@ -155,7 +156,7 @@ const FormFieldRow = ({ item, disabled, onSave }) => {
  * + the task layer (checklist, comments, buddy). When opened from My Tasks the
  * passed `step` is partial, so we fetch the full process to hydrate checklist/comments.
  */
-const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false }) => {
+const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false, consignment = null }) => {
   const myId = useSelector((s) => s.auth?.user?._id);
   const [link, setLink] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -282,13 +283,16 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const proc = procRes?.data;
 
   // ── Next step in this order's flow ──
-  // The first step AFTER this one that still needs doing — so a doer who just
-  // finished can jump straight to it. (A quantity-gated dispatch step counts as
-  // "still to do" until fully shipped, so it stays the next step across phases.)
+  // The IMMEDIATE next step by sequence (2.07 → 2.08 → 2.09 …), so the pipeline
+  // reads one-by-one and never appears to "skip" a step. Consignment-gated steps
+  // (Invoice/POD/Payment) can complete out of order, so we must NOT hop over a
+  // DONE step to the next pending one — that made 2.07 point at 2.09 (skipping the
+  // 2.08 email) and 2.09 point at 2.11 (skipping 2.10). Only a genuinely SKIPPED
+  // step (not part of this order's flow) is bypassed.
   const procSteps = proc?.steps || [];
   const myStepIdx = procSteps.findIndex((s) => s.stepCode === liveStep.stepCode);
   const nextStep = myStepIdx >= 0
-    ? procSteps.slice(myStepIdx + 1).find((s) => !['DONE', 'SKIPPED'].includes(s.status))
+    ? procSteps.slice(myStepIdx + 1).find((s) => s.status !== 'SKIPPED')
     : null;
   const flowComplete = !nextStep && (proc?.isCompleted || (myStepIdx >= 0 && myStepIdx === procSteps.length - 1));
 
@@ -336,11 +340,14 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   // Linked business records this task maps to — for anyone reviewing the step.
   const { orderLink, recordLinks } = deriveLinks(proc, liveStep);
   // Open an internal app route via the router; an external URL in a new tab.
-  const openLink = (to) => { if (!to) return; to.startsWith('/') ? navigate(to) : window.open(to, '_blank', 'noopener,noreferrer'); };
+  const openLink = (to) => { if (!to) return; to.startsWith('/') ? navigate(to) : window.open(resolveFileUrl(to), '_blank', 'noopener,noreferrer'); };
   const goAction = (a) => {
     if (!a?.to) return;
     const sep = a.to.includes('?') ? '&' : '?';
-    navigate(`${a.to}${sep}fromTask=${processId}&fromStep=${encodeURIComponent(liveStep.stepCode)}&fromAction=${encodeURIComponent(a.key)}`);
+    // When this task is opened for a specific consignment (multi-dispatch order),
+    // carry its DC so the connected form auto-selects that exact challan.
+    const dcPart = consignment?.dcNumber ? `&dc=${encodeURIComponent(consignment.dcNumber)}` : '';
+    navigate(`${a.to}${sep}fromTask=${processId}&fromStep=${encodeURIComponent(liveStep.stepCode)}&fromAction=${encodeURIComponent(a.key)}${dcPart}`);
   };
   // Jump to another step's task page in this same order.
   const goToStep = (code) => navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(code)}`);
@@ -442,6 +449,24 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
 
   const body = (
         <Stack spacing={2}>
+          {/* ── Consignment context — shown when this task was opened for ONE specific
+                delivery challan of a multi-dispatch order, so it's unmistakable which
+                challan's work this is and every action deep-links to that DC. ── */}
+          {consignment?.dcNumber && (
+            <Paper variant="outlined" sx={{
+              p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+              bgcolor: alpha('#7c3aed', 0.06), borderColor: alpha('#7c3aed', 0.35),
+            }}>
+              <Box sx={{ p: 0.6, borderRadius: 1.5, bgcolor: alpha('#7c3aed', 0.12), color: '#7c3aed', display: 'flex' }}><Boxes size={15} /></Box>
+              <Box sx={{ flex: 1, minWidth: 160 }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '0.05em' }}>This consignment</Typography>
+                <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                  {consignment.dcNumber}{consignment.phaseNo ? ` · ${consignment.phaseNo}` : ''}{consignment.qty ? ` · ${Number(consignment.qty).toLocaleString('en-IN')} pcs` : ''}
+                </Typography>
+              </Box>
+              <Chip size="small" label="Actions apply to this challan" sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, bgcolor: alpha('#7c3aed', 0.1), color: '#6d28d9' }} />
+            </Paper>
+          )}
           {/* ── Next step in the order's flow — always at the very top so the doer
                 can move straight on (Order Intake → Sales Order → Check Inventory →
                 Dispatch Planning → … → done). ── */}
@@ -457,13 +482,21 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                 <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   {done ? 'Next step' : 'Up next'}
                 </Typography>
-                <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                  {nextStep.stepCode} · {nextStep.taskTitle || nextStep.name}
-                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    {nextStep.stepCode} · {nextStep.taskTitle || nextStep.name}
+                  </Typography>
+                  {(STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING) && (
+                    <Chip size="small" label={(STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING).label}
+                      sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700,
+                        bgcolor: alpha((STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING).color, 0.12),
+                        color: (STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING).color }} />
+                  )}
+                </Stack>
               </Box>
               <Button variant="contained" size="small" endIcon={<ArrowRight size={14} />}
                 onClick={() => goToStep(nextStep.stepCode)} sx={{ boxShadow: 'none', whiteSpace: 'nowrap' }}>
-                {done ? 'Go to next step' : 'Open next step'}
+                {['DONE', 'DELAYED'].includes(nextStep.status) ? 'Review next step' : 'Open next step'}
               </Button>
             </Paper>
           )}
@@ -805,7 +838,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                   {liveStep.link}
                 </Box>
               ) : (
-                <a href={liveStep.link} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>{liveStep.link}</a>
+                <a href={resolveFileUrl(liveStep.link)} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>{liveStep.link}</a>
               )}
             </Stack>
           )}

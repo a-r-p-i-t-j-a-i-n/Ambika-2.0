@@ -9,6 +9,7 @@ import O2dStepShell from './components/O2dStepShell';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useTransportBillReceiveMutation, useTransportBillPaymentMutation } from '../../store/api/o2dFulfillmentApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
+import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
 
@@ -113,7 +114,7 @@ const TransportBill = () => {
                 {attachment ? (
                   <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 1, borderRadius: 1, bgcolor: alpha(theme.palette.success.main, 0.08), maxWidth: 460 }}>
                     <Paperclip size={14} color={theme.palette.success.dark} />
-                    <Link href={attachment.url} target="_blank" rel="noopener" sx={{ flex: 1, fontSize: '0.8rem' }} noWrap>{attachment.fileName}</Link>
+                    <Link href={resolveFileUrl(attachment.url)} target="_blank" rel="noopener" sx={{ flex: 1, fontSize: '0.8rem' }} noWrap>{attachment.fileName}</Link>
                     <Button size="small" onClick={() => setAttachment(null)} sx={{ minWidth: 0 }}><X size={14} /></Button>
                   </Stack>
                 ) : (

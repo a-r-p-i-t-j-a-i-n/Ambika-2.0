@@ -46,7 +46,7 @@ const drawDeliveryChallan = (doc, dcData) => {
   let rowY = tableTop + 25;
   (dcData.items || []).forEach((item, index) => {
     doc.text(index + 1, 50, rowY);
-    doc.text(`${item.skuName || ''}${item.skuCode ? ` (${item.skuCode})` : ''}`, 80, rowY, { width: 260 });
+    doc.text(`${item.skuName || item.skuCode || ''}`, 80, rowY, { width: 260 });
     doc.text(item.quantityPcs ?? 0, 350, rowY, { width: 60, align: 'right' });
     doc.text(item.noOfBoxes ?? 0, 420, rowY, { width: 60, align: 'right' });
     doc.text(Number(item.weightKg || 0).toFixed(2), 490, rowY, { width: 60, align: 'right' });
@@ -111,15 +111,15 @@ const drawDispatchPlan = (doc, data) => {
   }));
   const phases = [...phaseMap.values()].sort((a, b) => phaseSort(a.phaseNo) - phaseSort(b.phaseNo));
 
-  // Column layout for the plan table.
-  const cols = { ph: L, date: 95, sku: 190, qty: 400, status: 470 };
+  // Column layout — NO status column: this is a PLAN the client receives, so it
+  // must read as "on this date we will dispatch these items", never a dispatch state.
+  const cols = { ph: L, date: 100, sku: 210, qty: R - 90 };
   const drawHeadRow = (y) => {
     doc.font('Helvetica-Bold').fontSize(9);
-    doc.text('PHASE', cols.ph, y);
+    doc.text('DISPATCH', cols.ph, y);
     doc.text('PLANNED DATE', cols.date, y);
-    doc.text('SKU', cols.sku, y);
-    doc.text('QTY', cols.qty, y, { width: 60, align: 'right' });
-    doc.text('STATUS', cols.status, y);
+    doc.text('ITEM', cols.sku, y);
+    doc.text('QTY', cols.qty, y, { width: 80, align: 'right' });
     doc.moveTo(L, y + 13).lineTo(R, y + 13).stroke();
   };
 
@@ -134,9 +134,8 @@ const drawDispatchPlan = (doc, data) => {
       if (y > 760) { doc.addPage(); y = 60; drawHeadRow(y); y += 20; doc.font('Helvetica').fontSize(9.5); }
       doc.text(idx === 0 ? String(p.phaseNo) : '', cols.ph, y);
       doc.text(idx === 0 ? planDate(p.date) : '', cols.date, y);
-      doc.text(`${r.skuName || ''}${r.skuCode ? ` (${r.skuCode})` : ''}`, cols.sku, y, { width: cols.qty - cols.sku - 8 });
-      doc.text(planNum(r.qty), cols.qty, y, { width: 60, align: 'right' });
-      doc.text(String(r.status || 'Planned'), cols.status, y, { width: R - cols.status });
+      doc.text(`${r.skuName || r.skuCode || ''}`, cols.sku, y, { width: cols.qty - cols.sku - 8 });
+      doc.text(planNum(r.qty), cols.qty, y, { width: 80, align: 'right' });
       y += 18;
     });
     // Phase subtotal

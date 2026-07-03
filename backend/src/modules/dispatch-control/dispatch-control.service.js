@@ -1128,9 +1128,10 @@ export const dispatchControlService = {
    * dispatch-plan PDF). Returns { emailStatus, recipient } — never throws on a
    * send failure so the caller can still record the attempt.
    */
-  async emailSchedule({ soNumber, to, subject, message, attachments = [] }) {
+  async emailSchedule({ soNumber, to, cc, subject, message, attachments = [] }) {
     const recipient = (to || '').trim();
     if (!recipient) throw new AppError('Recipient email is required.', 400);
+    const ccList = (Array.isArray(cc) ? cc : String(cc || '').split(',')).map((e) => String(e).trim()).filter((e) => e.includes('@'));
 
     // Auto-generate the dispatch-plan PDF on the server so it ALWAYS rides along
     // as a real attachment (no reliance on the browser saving/uploading it).
@@ -1180,6 +1181,7 @@ export const dispatchControlService = {
     try {
       await emailService.sendEmail({
         to: recipient,
+        cc: ccList,
         subject: subject || `Dispatch Schedule${soNumber ? ` — ${soNumber}` : ''}`,
         html,
         attachments: atts,
@@ -1188,7 +1190,7 @@ export const dispatchControlService = {
       logger.error(`[dispatch] schedule email failed${soNumber ? ` for ${soNumber}` : ''}: ${err.message}`);
       emailStatus = `FAILED: ${err.message}`;
     }
-    return { emailStatus, recipient, attachmentCount: atts.length };
+    return { emailStatus, recipient, cc: ccList, attachmentCount: atts.length };
   },
 
   /**

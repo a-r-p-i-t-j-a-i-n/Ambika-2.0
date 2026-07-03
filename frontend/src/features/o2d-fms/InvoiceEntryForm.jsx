@@ -10,6 +10,7 @@ import { enqueueSnackbar } from 'notistack';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useCreateSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
+import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate, FmsGateBanner, FmsGateDialog } from './FmsGate';
 
@@ -58,9 +59,9 @@ const UploadField = ({ label, max, files, onChange, folder = 'invoices' }) => {
           {files.map((f, i) => (
             <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ p: 0.5, borderRadius: 1, bgcolor: alpha(theme.palette.success.main, 0.08) }}>
               <Paperclip size={13} color={theme.palette.success.dark} />
-              <Link href={f.url} target="_blank" rel="noopener" underline="hover"
+              <Link href={resolveFileUrl(f.url)} target="_blank" rel="noopener" underline="hover"
                 sx={{ flex: 1, fontSize: '0.78rem', color: 'text.primary', cursor: 'pointer' }} noWrap>{f.fileName}</Link>
-              <Tooltip title="Preview"><IconButton size="small" onClick={() => window.open(f.url, '_blank', 'noopener')}><Eye size={13} /></IconButton></Tooltip>
+              <Tooltip title="Preview"><IconButton size="small" onClick={() => window.open(resolveFileUrl(f.url), '_blank', 'noopener')}><Eye size={13} /></IconButton></Tooltip>
               <Tooltip title="Remove"><IconButton size="small" onClick={() => onChange(files.filter((_, j) => j !== i))}><X size={13} /></IconButton></Tooltip>
             </Stack>
           ))}

@@ -9,7 +9,9 @@ import { enqueueSnackbar } from 'notistack';
 import { useSearchParams } from 'react-router-dom';
 import O2dStepShell from './components/O2dStepShell';
 import { useGetSalesInvoicesQuery, useSendSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
+import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
+import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
 
@@ -39,7 +41,7 @@ const AttachGroup = ({ icon: Icon, label, urls = [], theme }) => (
         {urls.map((u, i) => (
           <Stack key={i} direction="row" spacing={0.75} alignItems="center">
             <Paperclip size={12} color={theme.palette.text.disabled} />
-            <Link href={u} target="_blank" rel="noopener" sx={{ fontSize: '0.76rem' }} noWrap>{label} {i + 1}</Link>
+            <Link href={resolveFileUrl(u)} target="_blank" rel="noopener" sx={{ fontSize: '0.76rem' }} noWrap>{label} {i + 1}</Link>
           </Stack>
         ))}
       </Stack>
@@ -52,6 +54,12 @@ const InvoiceEmail = () => {
   const theme = useTheme();
   const { data: invRes } = useGetSalesInvoicesQuery({ limit: 300, sort: '-invoiceDate' });
   const invoices = useMemo(() => invRes?.data || [], [invRes]);
+  const { data: partiesRes } = useGetPartiesQuery({ limit: 1000 });
+  const partyByName = useMemo(() => {
+    const m = new Map();
+    (partiesRes?.data || []).forEach((p) => m.set(String(p.name || '').toLowerCase(), p));
+    return m;
+  }, [partiesRes]);
   const [send, { isLoading }] = useSendSalesInvoiceMutation();
   const { finishToTask } = useReturnToTask();
   const [searchParams] = useSearchParams();
@@ -61,6 +69,7 @@ const InvoiceEmail = () => {
   const [inv, setInv] = useState(null);
   const gate = useFmsGate({ soNumber: inv?.soNumber || soParam, action: 'INVOICE_EMAIL' });
   const [to, setTo] = useState('');
+  const [cc, setCc] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [sentInfo, setSentInfo] = useState(null); // { to, at } after a successful send this session
@@ -118,6 +127,7 @@ const InvoiceEmail = () => {
     setSelectedUrls(new Set([...(inv.invoiceUrls || []), ...(inv.ewayBillUrls || []), ...(inv.pdirUrls || [])].filter(Boolean)));
     setUploads([]);
     setTo(inv.partyId?.email || '');
+    setCc('');
     setSubject(`Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`);
     setMessage(
       `Dear ${inv.partyName || 'Customer'},\n\n`
@@ -128,6 +138,17 @@ const InvoiceEmail = () => {
     );
   }, [inv]);
 
+  // Auto-fill To/CC from the selected party's saved email routing (party master).
+  // Runs once the parties list is available; the operator can still edit both.
+  useEffect(() => {
+    if (!inv) return;
+    const party = partyByName.get(String(inv.partyName || '').toLowerCase());
+    if (!party) return;
+    if (party.toEmails?.length) setTo(party.toEmails.join(', '));
+    setCc((party.ccEmails || []).join(', '));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inv, partyByName]);
+
   const handleSend = async () => {
     if (!inv) return enqueueSnackbar('Select an invoice first.', { variant: 'warning' });
     if (!to.trim()) return enqueueSnackbar('Recipient email is required.', { variant: 'warning' });
@@ -137,7 +158,7 @@ const InvoiceEmail = () => {
         ...docList.filter((d) => selectedUrls.has(d.url)).map((d) => ({ url: d.url, name: d.name, label: d.label })),
         ...uploads.map((u) => ({ url: u.url, name: u.fileName, label: 'Attachment' })),
       ];
-      const res = await send({ id: inv._id, to: to.trim(), subject, message: message.replace(/\n/g, '<br/>'), attachments }).unwrap();
+      const res = await send({ id: inv._id, to: to.trim(), cc: cc.trim(), subject, message: message.replace(/\n/g, '<br/>'), attachments }).unwrap();
       const st = res.data?.emailStatus;
       if (st === 'SENT') {
         setSentInfo({ to: res.data.recipient || to.trim(), at: new Date() });
@@ -214,6 +235,11 @@ const InvoiceEmail = () => {
             )}
             <Stack spacing={2} sx={{ p: 2.5 }}>
               <TextField label="To" value={to} onChange={(e) => setTo(e.target.value)} size="small" fullWidth placeholder="client@email.com" />
+              <TextField
+                label="CC" value={cc} onChange={(e) => setCc(e.target.value)} size="small" fullWidth sx={{ mt: 1 }}
+                placeholder="cc1@email.com, cc2@email.com"
+                helperText="Comma-separate multiple emails. Auto-filled from the party's CC list — add more if needed."
+              />
               <TextField label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} size="small" fullWidth />
               <TextField label="Message" value={message} onChange={(e) => setMessage(e.target.value)} size="small" fullWidth multiline minRows={6} />
 
@@ -241,7 +267,7 @@ const InvoiceEmail = () => {
                       <Stack key={d.url} direction="row" alignItems="center" spacing={0.5} sx={{ py: 0.15 }}>
                         <Checkbox size="small" checked={selectedUrls.has(d.url)} onChange={() => toggleUrl(d.url)} sx={{ p: 0.5 }} />
                         <Chip size="small" variant="outlined" label={d.label} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, flexShrink: 0 }} />
-                        <Link href={d.url} target="_blank" rel="noopener" sx={{ fontSize: '0.78rem', flex: 1 }} noWrap>{d.name}</Link>
+                        <Link href={resolveFileUrl(d.url)} target="_blank" rel="noopener" sx={{ fontSize: '0.78rem', flex: 1 }} noWrap>{d.name}</Link>
                       </Stack>
                     ))}
                   </Stack>
@@ -276,7 +302,7 @@ const InvoiceEmail = () => {
                     {uploads.map((u, i) => (
                       <Stack key={i} direction="row" alignItems="center" spacing={0.75} sx={{ py: 0.15, px: 0.5, borderRadius: 1, bgcolor: alpha(theme.palette.success.main, 0.06) }}>
                         <Paperclip size={12} color={theme.palette.success.dark} />
-                        <Link href={u.url} target="_blank" rel="noopener" sx={{ fontSize: '0.78rem', flex: 1 }} noWrap>{u.fileName}</Link>
+                        <Link href={resolveFileUrl(u.url)} target="_blank" rel="noopener" sx={{ fontSize: '0.78rem', flex: 1 }} noWrap>{u.fileName}</Link>
                         <IconButton size="small" onClick={() => setUploads((x) => x.filter((_, j) => j !== i))}><X size={13} /></IconButton>
                       </Stack>
                     ))}

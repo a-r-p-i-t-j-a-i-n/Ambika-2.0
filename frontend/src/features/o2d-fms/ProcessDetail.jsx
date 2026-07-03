@@ -480,6 +480,63 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate 
   );
 };
 
+// For the picked step, the status of ONE consignment at that stage — so the
+// chooser shows, per challan, whether this step is already done for it.
+const stepStageStatus = (step, c) => {
+  const key = step?.triggerKey;
+  const code = step?.stepCode || '';
+  if (key === 'ACTUAL_DISPATCH' || code === '2.06') return { done: true, label: 'Dispatched' };
+  if (key === 'INVOICE' || code === '2.07' || code === '2.08') return { done: !!c.invoice?.has, label: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Invoice pending' };
+  if (key === 'POD' || code === '2.09') return { done: !!c.delivery?.delivered, label: c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Delivery pending') };
+  if (key === 'PAYMENT' || code === '2.10' || code === '2.11') return { done: !!c.payment?.confirmed, label: c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Following up' : 'Payment pending') };
+  if (code === '2.12' || code === '2.13') return { done: !!c.transport?.received, label: c.transport?.received ? 'Bill received' : 'Transport pending' };
+  return { done: false, label: '' };
+};
+
+// "Which consignment?" chooser — shown when a per-consignment step is clicked on
+// an order that shipped in multiple Delivery Challans. Picking one opens that
+// step's task scoped to the chosen challan (its connected actions deep-link to it).
+const ConsignmentPickerDialog = ({ open, step, consignments = [], onPick, onClose }) => (
+  <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+    <DialogTitle sx={{ pr: 6 }}>
+      <Stack direction="row" spacing={1.25} alignItems="center">
+        <Box sx={{ width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha('#7c3aed', 0.12), color: '#7c3aed', flexShrink: 0 }}><Boxes size={18} /></Box>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 800 }}>Which consignment?</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {step?.stepCode} · {step?.name} — this order shipped in {consignments.length} challans
+          </Typography>
+        </Box>
+      </Stack>
+      <IconButton onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
+    </DialogTitle>
+    <DialogContent dividers>
+      <Stack spacing={1}>
+        {consignments.map((c) => {
+          const st = stepStageStatus(step, c);
+          return (
+            <Paper key={String(c.dcId)} variant="outlined" onClick={() => onPick(c)}
+              sx={{ p: 1.25, borderRadius: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1.25, transition: 'box-shadow .12s, border-color .12s',
+                '&:hover': { boxShadow: 3, borderColor: alpha('#7c3aed', 0.5) } }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800, color: '#0b2545' }}>{c.dcNumber}</Typography>
+                  {c.phaseNo && <Chip size="small" label={c.phaseNo} sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8' }} />}
+                  <Typography variant="caption" color="text.secondary">{num(c.qty)} pcs{c.dcDate ? ` · ${new Date(c.dcDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : ''}</Typography>
+                </Stack>
+                {st.label && (
+                  <Chip size="small" label={st.label} sx={{ mt: 0.5, height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha(st.done ? '#0f766e' : '#b45309', 0.12), color: st.done ? '#0f766e' : '#b45309' }} />
+                )}
+              </Box>
+              <ArrowRight size={16} color="#7c3aed" style={{ flexShrink: 0 }} />
+            </Paper>
+          );
+        })}
+      </Stack>
+    </DialogContent>
+  </Dialog>
+);
+
 const ProcessDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -488,11 +545,28 @@ const ProcessDetail = () => {
   const canManage = can('o2dfms.manage') || isRoot;
   const { data: usersRes } = useListAccessUsersQuery(undefined, { skip: !canManage });
   const [active, setActive] = useState(null);
+  const [activeConsignment, setActiveConsignment] = useState(null); // scopes the open task to one DC
+  const [pickStep, setPickStep] = useState(null); // step awaiting a "which consignment?" choice
   const [planOpen, setPlanOpen] = useState(false);
   const [view, setView] = useState('table'); // table = scannable full view (default) | timeline
 
   const process = data?.data;
   const steps = process?.steps || [];
+  // Consignments (one per Delivery Challan) — shared cache with ConsignmentsPanel.
+  const { data: consRes } = useGetConsignmentsQuery(id, { skip: !id });
+  const consignments = consRes?.data?.consignments || [];
+
+  // Open a step. For a per-consignment step (dispatch + downstream invoice/POD/
+  // payment/transport) on an order with MORE THAN ONE challan, first ask which
+  // consignment the doer means — each dispatch has its own invoice/eway/POD/etc.
+  // With 0–1 consignments there's nothing to disambiguate, so open it directly.
+  const isPerConsignment = (s) => !!(s && (s.consignmentGated || s.quantityGated));
+  const openStep = (s) => {
+    if (isPerConsignment(s) && consignments.length > 1) { setPickStep(s); return; }
+    setActiveConsignment(null);
+    setActive(s);
+  };
+  const chooseConsignment = (c) => { setActive(pickStep); setActiveConsignment(c); setPickStep(null); };
   const completed = steps.filter((s) => ['DONE', 'DELAYED'].includes(s.status)).length;
   const pct = steps.length ? Math.round((completed / steps.length) * 100) : 0;
   // The quantity-gated dispatch step (if any) drives the phased-dispatch panel.
@@ -588,7 +662,7 @@ const ProcessDetail = () => {
                     const tn = STATUS[s.status] || STATUS.PENDING;
                     const isCurrent = s.stepCode === process.currentStepCode;
                     return (
-                      <TableRow key={s.stepCode} hover onClick={() => setActive(s)}
+                      <TableRow key={s.stepCode} hover onClick={() => openStep(s)}
                         sx={{
                           cursor: 'pointer',
                           bgcolor: s.isOverdue ? alpha('#be123c', 0.05) : isCurrent ? alpha('#1d4ed8', 0.04) : 'inherit',
@@ -646,7 +720,7 @@ const ProcessDetail = () => {
                   const tn = STATUS[s.status] || STATUS.PENDING;
                   const head = s.isOverdue ? '#be123c' : tn.color;
                   return (
-                    <Paper key={s.stepCode} variant="outlined" onClick={() => setActive(s)}
+                    <Paper key={s.stepCode} variant="outlined" onClick={() => openStep(s)}
                       sx={{ flex: '0 0 auto', width: 210, p: 1.25, borderRadius: 2, cursor: 'pointer',
                         borderTop: '3px solid', borderTopColor: head, '&:hover': { boxShadow: 3 } }}>
                       <Typography variant="caption" color="text.secondary">Step {i + 1} · {s.stepCode}</Typography>
@@ -686,7 +760,7 @@ const ProcessDetail = () => {
                       {list.length === 0
                         ? <Typography variant="caption" color="text.disabled">—</Typography>
                         : list.map((s) => (
-                          <Paper key={s.stepCode} variant="outlined" onClick={() => setActive(s)}
+                          <Paper key={s.stepCode} variant="outlined" onClick={() => openStep(s)}
                             sx={{ p: 1, borderRadius: 2, cursor: 'pointer', '&:hover': { boxShadow: 2 } }}>
                             <Typography variant="body2" sx={{ fontWeight: 600 }}>{s.name}</Typography>
                             <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mt: 0.25, flexWrap: 'wrap' }}>
@@ -715,7 +789,7 @@ const ProcessDetail = () => {
                   return (
                     <Paper
                       key={s.stepCode}
-                      onClick={() => setActive(s)}
+                      onClick={() => openStep(s)}
                       sx={{
                         p: 1.5, borderRadius: 2, cursor: 'pointer',
                         display: 'flex', alignItems: 'center', gap: 1.5,
@@ -758,12 +832,23 @@ const ProcessDetail = () => {
 
       <StepDetailCard
         open={!!active}
-        onClose={(changed) => { setActive(null); if (changed) refetch(); }}
+        onClose={(changed) => { setActive(null); setActiveConsignment(null); if (changed) refetch(); }}
         processId={id}
         step={active}
+        consignment={activeConsignment}
         orderLabel={process ? `${process.soNumber} · ${process.partyName}` : ''}
         canAct={can('o2dfms.act') || isRoot}
         canManage={canManage}
+      />
+
+      {/* Which consignment? — asked when a per-consignment step is clicked on an
+          order that shipped in multiple challans (each has its own invoice/POD/…). */}
+      <ConsignmentPickerDialog
+        open={!!pickStep}
+        step={pickStep}
+        consignments={consignments}
+        onPick={chooseConsignment}
+        onClose={() => setPickStep(null)}
       />
 
       <PlanOrderDialog

@@ -39,11 +39,15 @@ if (apiConfigured) {
 
 // Send through Brevo's transactional HTTP API. Attachments are passed by URL
 // (Brevo fetches them) — our signed S3 links work directly.
-const sendViaBrevoApi = async ({ to, subject, text, html, attachments }) => {
-  const recipients = String(to).split(',').map((e) => e.trim()).filter(Boolean).map((email) => ({ email }));
+const toList = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((e) => String(e).trim()).filter(Boolean);
+
+const sendViaBrevoApi = async ({ to, cc, subject, text, html, attachments }) => {
+  const recipients = toList(to).map((email) => ({ email }));
+  const ccRecipients = toList(cc).map((email) => ({ email }));
   const payload = {
     sender: { name: env.COMPANY_NAME, email: fromEmail },
     to: recipients,
+    ...(ccRecipients.length ? { cc: ccRecipients } : {}),
     subject,
     htmlContent: html || (text ? `<pre>${text}</pre>` : ' '),
     ...(text ? { textContent: text } : {}),
@@ -62,7 +66,7 @@ const sendViaBrevoApi = async ({ to, subject, text, html, attachments }) => {
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(`Brevo API ${resp.status}: ${data.message || data.code || JSON.stringify(data)}`);
-  return { messageId: data.messageId, accepted: recipients.map((r) => r.email), rejected: [], response: `200 OK (Brevo API) id=${data.messageId || ''}` };
+  return { messageId: data.messageId, accepted: [...recipients, ...ccRecipients].map((r) => r.email), rejected: [], response: `200 OK (Brevo API) id=${data.messageId || ''}` };
 };
 
 // Our stored upload URLs are served through a signing proxy
@@ -98,18 +102,19 @@ export const resolveStoredAttachments = async (items = []) => {
 
 export const emailService = {
   resolveStoredAttachments,
-  async sendEmail({ to, subject, text, html, attachments = [] }) {
+  async sendEmail({ to, cc, subject, text, html, attachments = [] }) {
     if (!mailConfigured) {
       throw new Error('Email is not configured on the server (set BREVO_API_KEY, or SMTP_HOST/USER/PASS).');
     }
+    const ccStr = toList(cc).join(', ');
     try {
       const info = apiConfigured
-        ? await sendViaBrevoApi({ to, subject, text, html, attachments })
-        : await transporter.sendMail({ from: fromAddress, to, subject, text, html, attachments });
+        ? await sendViaBrevoApi({ to, cc, subject, text, html, attachments })
+        : await transporter.sendMail({ from: fromAddress, to, ...(ccStr ? { cc: ccStr } : {}), subject, text, html, attachments });
       const accepted = (info.accepted || []).join(', ') || 'none';
       const rejected = (info.rejected || []).join(', ') || 'none';
       // `response` carries the relay's reply, e.g. Brevo's "250 ... queued as <id>".
-      logger.info(`📧 Email "${subject}" → ${to} | id=${info.messageId} | accepted=[${accepted}] rejected=[${rejected}] | relay="${(info.response || '').trim()}"`);
+      logger.info(`📧 Email "${subject}" → ${to}${ccStr ? ` (cc: ${ccStr})` : ''} | id=${info.messageId} | accepted=[${accepted}] rejected=[${rejected}] | relay="${(info.response || '').trim()}"`);
       if ((info.rejected || []).length) {
         logger.warn(`⚠️ [mail] Recipient(s) rejected by relay: ${rejected} — they will NOT receive the email.`);
       }
@@ -120,13 +125,14 @@ export const emailService = {
     }
   },
 
-  async sendDispatchSchedule(to, partyName, soNumber, pdfPath) {
+  async sendDispatchSchedule(to, partyName, soNumber, pdfPath, cc) {
     const subject = `Dispatch Schedule - ${soNumber} - ${partyName}`;
     const text = `Dear ${partyName},\n\nPlease find attached the dispatch schedule for your order ${soNumber}.\n\nRegards,\n${env.COMPANY_NAME}`;
     const html = `<p>Dear ${partyName},</p><p>Please find attached the dispatch schedule for your order <b>${soNumber}</b>.</p><p>Regards,<br>${env.COMPANY_NAME}</p>`;
 
     return this.sendEmail({
       to,
+      cc,
       subject,
       text,
       html,
@@ -134,7 +140,7 @@ export const emailService = {
     });
   },
 
-  async sendInvoice(to, partyName, invoiceNo, pdfPath, ewayBillPath) {
+  async sendInvoice(to, partyName, invoiceNo, pdfPath, ewayBillPath, cc) {
     const subject = `Invoice - ${invoiceNo} - ${partyName}`;
     const text = `Dear ${partyName},\n\nPlease find attached the invoice ${invoiceNo} and E-way bill for your recent dispatch.\n\nRegards,\n${env.COMPANY_NAME}`;
     const html = `<p>Dear ${partyName},</p><p>Please find attached the invoice <b>${invoiceNo}</b> and E-way bill for your recent dispatch.</p><p>Regards,<br>${env.COMPANY_NAME}</p>`;
@@ -144,6 +150,6 @@ export const emailService = {
       attachments.push({ filename: `EWayBill_${invoiceNo}.pdf`, path: ewayBillPath });
     }
 
-    return this.sendEmail({ to, subject, text, html, attachments });
+    return this.sendEmail({ to, cc, subject, text, html, attachments });
   },
 };

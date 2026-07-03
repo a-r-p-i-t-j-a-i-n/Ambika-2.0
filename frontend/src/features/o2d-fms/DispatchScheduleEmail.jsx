@@ -64,6 +64,7 @@ const DispatchScheduleEmail = () => {
   const [order, setOrder] = useState(null);
   const gate = useFmsGate({ soNumber: order?.soNumber || soFromTask, action: 'EMAIL_DISPATCH_SCHEDULE' });
   const [to, setTo] = useState('');
+  const [cc, setCc] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState([]); // user-added files (proof)
@@ -108,7 +109,8 @@ const DispatchScheduleEmail = () => {
   useEffect(() => {
     if (!order) return;
     setSentInfo(null);
-    setTo(partyEmailOf(party));
+    setTo(party?.toEmails?.length ? party.toEmails.join(', ') : partyEmailOf(party));
+    setCc((party?.ccEmails || []).join(', '));
     setSubject(`Dispatch Schedule — ${order.soNumber}${order.poNumber ? ` (PO ${order.poNumber})` : ''}`);
     const lines = (schedule?.items || []).flatMap((it) =>
       (it.phases || []).map((ph) => `  • ${it.skuName || it.skuCode}: ${num(ph.plannedQty)} on ${fmtDate(ph.plannedDate)}`));
@@ -160,6 +162,7 @@ const DispatchScheduleEmail = () => {
       const res = await emailSchedule({
         soNumber: order.soNumber,
         to: to.trim(),
+        cc: cc.trim(),
         subject,
         message,
         attachments,
@@ -313,6 +316,9 @@ const DispatchScheduleEmail = () => {
           <Stack spacing={2} sx={{ p: 2.5 }}>
             <TextField label="To" value={to} onChange={(e) => setTo(e.target.value)} size="small" fullWidth placeholder="client@email.com"
               helperText={party ? `Auto-filled from party master: ${party.name}` : 'No matching party email found — enter manually.'} />
+            <TextField label="CC" value={cc} onChange={(e) => setCc(e.target.value)} size="small" fullWidth
+              placeholder="cc1@email.com, cc2@email.com"
+              helperText="Comma-separate multiple emails. Auto-filled from the party's CC list — add more if needed." />
             <TextField label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} size="small" fullWidth />
             <TextField label="Message" value={message} onChange={(e) => setMessage(e.target.value)} size="small" fullWidth multiline minRows={7} />
 

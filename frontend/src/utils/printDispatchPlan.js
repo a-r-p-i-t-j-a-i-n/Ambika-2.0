@@ -43,42 +43,46 @@ export function printDispatchPlan(schedule = {}) {
   const phases = [...phaseMap.values()].sort((a, b) => phaseNum(a.phaseNo) - phaseNum(b.phaseNo));
   const totalPlanned = phases.reduce((s, p) => s + p.total, 0);
 
+  // Client-friendly label: "P1" → "Dispatch 1".
+  const dispatchLabel = (phaseNo) => `Dispatch ${phaseNum(phaseNo) || esc(phaseNo)}`;
+
   const phaseSections = phases.length === 0
-    ? `<p class="empty">No planned phases in this dispatch schedule.</p>`
+    ? `<p class="empty">No planned dispatches in this schedule yet.</p>`
     : phases.map((p) => `
       <table class="grid phase">
         <thead>
           <tr class="phase-head">
-            <th colspan="2" class="phase-title">${esc(p.phaseNo)} &nbsp;·&nbsp; ${fmtDate(p.date)}</th>
-            <th colspan="2" class="phase-meta">${p.rows.length} item${p.rows.length > 1 ? 's' : ''} · ${num(p.total)} pcs planned</th>
+            <th colspan="2" class="phase-title">${dispatchLabel(p.phaseNo)} &nbsp;·&nbsp; ${fmtDate(p.date)}</th>
+            <th class="phase-meta">${p.rows.length} item${p.rows.length > 1 ? 's' : ''} · ${num(p.total)} pcs</th>
           </tr>
           <tr class="cols">
-            <th style="width:28px;">#</th><th>SKU</th><th class="num" style="width:120px;">Planned Qty</th><th style="width:100px;">Status</th>
+            <th style="width:34px;">#</th><th>Item</th><th class="num" style="width:150px;">Planned Qty</th>
           </tr>
         </thead>
         <tbody>
           ${p.rows.map((r, i) => `
             <tr>
               <td class="idx">${i + 1}</td>
-              <td><span class="code">${esc(r.skuCode || '')}</span>&nbsp; <span class="name">${esc(r.skuName || '')}</span></td>
+              <td class="name">${esc(r.skuName || r.skuCode || '')}</td>
               <td class="num bold">${num(r.qty)}</td>
-              <td class="status">${titleCase(r.status || 'Planned')}</td>
             </tr>`).join('')}
           <tr class="subtotal">
-            <td colspan="2">Phase ${esc(p.phaseNo)} total</td>
-            <td class="num">${num(p.total)}</td><td></td>
+            <td colspan="2">${dispatchLabel(p.phaseNo)} total</td>
+            <td class="num">${num(p.total)}</td>
           </tr>
         </tbody>
       </table>`).join('');
 
-  const summaryRows = items.map((it, i) => `
+  // Per-item planned totals (NO dispatched/balance — this is a plan the client receives).
+  const summaryRows = items.map((it, i) => {
+    const itPlanned = (it.phases || []).reduce((s, ph) => s + Number(ph.plannedQty || 0), 0);
+    return `
     <tr>
       <td class="idx">${i + 1}</td>
-      <td><span class="code">${esc(it.skuCode || '')}</span>&nbsp; <span class="name">${esc(it.skuName || '')}</span></td>
-      <td class="num">${num(it.poQty)}</td>
-      <td class="num">${num(it.dispatchedQty)}</td>
-      <td class="num bold">${num(it.balanceQty)}</td>
-    </tr>`).join('');
+      <td class="name">${esc(it.skuName || it.skuCode || '')}</td>
+      <td class="num bold">${num(itPlanned)}</td>
+    </tr>`;
+  }).join('');
 
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" />
@@ -108,10 +112,9 @@ export function printDispatchPlan(schedule = {}) {
   table.grid thead .cols th, table.summary thead th { background: #ececec; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 800; }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .idx { color: #555; }
-  .code { font-family: "Courier New", monospace; font-weight: 700; }
-  .name { color: #333; font-size: 10.5px; }
+  .name { color: #000; font-size: 11px; font-weight: 600; }
   .bold { font-weight: 800; }
-  .status { color: #333; font-size: 10.5px; }
+  .intro { font-size: 11px; color: #333; margin: 12px 0 2px; }
   .empty { color: #777; font-style: italic; text-align: center; padding: 16px; border: 1px solid #000; }
 
   /* ── Phase block ── */
@@ -160,13 +163,15 @@ export function printDispatchPlan(schedule = {}) {
       <div class="cell"><div class="label">SO / PO</div><div class="value">${esc(schedule.soNumber || '—')}${schedule.poNumber ? ` · PO ${esc(schedule.poNumber)}` : ''}</div></div>
     </div>
 
-    <div class="section-title">Phase-wise Plan</div>
+    <p class="intro">We plan to dispatch your order as per the schedule below.</p>
+
+    <div class="section-title">Planned Dispatch Schedule</div>
     ${phaseSections}
 
     ${items.length ? `
-    <div class="section-title">Order Summary</div>
+    <div class="section-title">Planned Total per Item</div>
     <table class="summary">
-      <thead><tr><th style="width:28px;">#</th><th>SKU</th><th class="num">PO Qty</th><th class="num">Dispatched</th><th class="num">Balance</th></tr></thead>
+      <thead><tr><th style="width:34px;">#</th><th>Item</th><th class="num">Total Planned Qty</th></tr></thead>
       <tbody>${summaryRows}</tbody>
     </table>` : ''}
 

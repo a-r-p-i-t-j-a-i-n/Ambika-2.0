@@ -1,17 +1,29 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme,
+  Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme, Button, Autocomplete,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, MenuItem, InputAdornment,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search } from 'lucide-react';
+import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, FileSpreadsheet, FileText, X } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useGetOrderIntakesQuery } from '../../store/api/orderIntakeApi';
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useGetChallansQuery, useGetSchedulesQuery } from '../../store/api/dispatchControlApi';
 import { useGetSalesInvoicesQuery } from '../../store/api/salesInvoiceApi';
 import { useGetPaymentsQuery, useGetTransportBillsQuery } from '../../store/api/o2dFulfillmentApi';
+import { useGetPartiesQuery } from '../../store/api/partyApi';
+import { exportRowsToExcel, printTablePdf } from '../../utils/exportMasterData';
+
+// The date each step is filtered on (its "when it happened" field).
+const dateOf = (tab, r) => ({
+  intake: r.createdAt, so: r.orderDate, plan: r.updatedAt || r.poDate, dispatch: r.dcDate,
+  invoice: r.invoiceDate,
+  paymentFollowup: r.followUp?.actual, paymentReceipt: r.confirmation?.receivedDate,
+  transportReceipt: r.receipt?.actual, transportPayment: r.payment?.actual,
+}[tab]);
+// Party for each step (undefined = this step has no party, so the party filter is skipped).
+const partyOf = (tab, r) => (tab === 'transportReceipt' || tab === 'transportPayment' ? undefined : r.partyName);
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const dt = (d) => (d ? dayjs(d).format('DD MMM YYYY · hh:mm A') : '—');
@@ -153,8 +165,36 @@ const O2dMasterData = () => {
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  // ── GLOBAL filters — set once, apply to every step tab (do NOT reset on switch).
+  const [partyFilter, setPartyFilter] = useState('');
+  const [dateMode, setDateMode] = useState('all'); // all | month | day | custom
+  const [monthVal, setMonthVal] = useState(dayjs().format('YYYY-MM'));
+  const [dayVal, setDayVal] = useState(dayjs().format('YYYY-MM-DD'));
+  const [fromVal, setFromVal] = useState('');
+  const [toVal, setToVal] = useState('');
 
+  // Party dropdown source — the full parties master (stable across tabs).
+  const { data: partiesRes } = useGetPartiesQuery({ limit: 1000, sort: 'name' });
+  const partyOptions = useMemo(() => (partiesRes?.data || []).map((p) => p.name).filter(Boolean), [partiesRes]);
+
+  // Switching tabs keeps the global party/date filters — only the per-tab search/status reset.
   const switchTab = (t) => { setTab(t); setSearch(''); setStatusFilter(''); };
+  const clearGlobal = () => { setPartyFilter(''); setDateMode('all'); setFromVal(''); setToVal(''); };
+
+  const inDateRange = (d) => {
+    if (dateMode === 'all') return true;
+    if (!d) return false;
+    const dj = dayjs(d);
+    if (!dj.isValid()) return false;
+    if (dateMode === 'month') return !monthVal || dj.format('YYYY-MM') === monthVal;
+    if (dateMode === 'day') return !dayVal || dj.format('YYYY-MM-DD') === dayVal;
+    if (dateMode === 'custom') {
+      const okFrom = !fromVal || !dj.isBefore(dayjs(fromVal), 'day');
+      const okTo = !toVal || !dj.isAfter(dayjs(toVal), 'day');
+      return okFrom && okTo;
+    }
+    return true;
+  };
 
   // Only the active tab fetches (skip the rest) — fast and cache-friendly.
   const intakeQ = useGetOrderIntakesQuery({ limit: 500, sort: '-createdAt' }, { skip: tab !== 'intake' });
@@ -176,14 +216,29 @@ const O2dMasterData = () => {
   // Distinct statuses present (for the status filter dropdown).
   const statuses = useMemo(() => [...new Set(rawRows.map((r) => statusOf(tab, r)).filter(Boolean))], [rawRows, tab]);
 
-  // Apply status filter + free-text search (matches any visible column).
+  // Apply GLOBAL party + date, then per-tab status + free-text search.
   const rows = useMemo(() => {
     let list = rawRows;
+    if (partyFilter) list = list.filter((r) => { const p = partyOf(tab, r); return p === undefined || p === partyFilter; });
+    if (dateMode !== 'all') list = list.filter((r) => inDateRange(dateOf(tab, r)));
     if (statusFilter) list = list.filter((r) => statusOf(tab, r) === statusFilter);
     const q = search.trim().toLowerCase();
     if (q) list = list.filter((r) => columns.some((c) => String(displayVal(c, r)).toLowerCase().includes(q)));
     return list;
-  }, [rawRows, statusFilter, search, tab, columns]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawRows, statusFilter, search, tab, columns, partyFilter, dateMode, monthVal, dayVal, fromVal, toVal]);
+
+  const activeTab = TABS.find((t) => t.key === tab);
+  const filterSummary = [
+    partyFilter && `Party: ${partyFilter}`,
+    dateMode === 'month' && monthVal && `Month: ${dayjs(`${monthVal}-01`).format('MMM YYYY')}`,
+    dateMode === 'day' && dayVal && `Day: ${dayjs(dayVal).format('DD MMM YYYY')}`,
+    dateMode === 'custom' && (fromVal || toVal) && `Range: ${fromVal ? dayjs(fromVal).format('DD MMM YYYY') : '…'} → ${toVal ? dayjs(toVal).format('DD MMM YYYY') : '…'}`,
+    statusFilter && `Status: ${statusFilter}`,
+  ].filter(Boolean).join('  ·  ') || 'All records';
+  const exportBase = `O2D ${activeTab?.label || tab}${partyFilter ? ` - ${partyFilter}` : ''}`.replace(/[\\/:*?"<>|]/g, '-');
+  const doExcel = () => exportRowsToExcel({ columns, rows, displayVal, sheetName: activeTab?.label || tab, fileName: `${exportBase}.xlsx` });
+  const doPdf = () => printTablePdf({ title: activeTab?.label ? `O2D — ${activeTab.label}` : 'O2D Master Data', subtitle: filterSummary, columns, rows, displayVal });
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
@@ -204,6 +259,47 @@ const O2dMasterData = () => {
       </Box>
 
       <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -1.5, md: -1.75 }, position: 'relative', pb: 6 }}>
+        {/* ── GLOBAL filters (apply to every step tab) + export ── */}
+        <Paper sx={{ borderRadius: 3, p: 1.25, mb: 1.5, border: `1px solid ${theme.palette.divider}` }}>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
+            <Chip label="FILTERS" size="small" sx={{ fontWeight: 800, letterSpacing: '0.06em', bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.dark' }} />
+            <Autocomplete
+              size="small" options={partyOptions} value={partyFilter || null}
+              onChange={(_, v) => setPartyFilter(v || '')}
+              sx={{ width: 230 }}
+              renderInput={(pr) => <TextField {...pr} placeholder="All parties" sx={{ '& .MuiInputBase-root': { height: 34 } }} />}
+            />
+            <TextField select size="small" value={dateMode} onChange={(e) => setDateMode(e.target.value)}
+              sx={{ width: 140, '& .MuiInputBase-root': { height: 34 } }}>
+              <MenuItem value="all">All dates</MenuItem>
+              <MenuItem value="month">By month</MenuItem>
+              <MenuItem value="day">By day</MenuItem>
+              <MenuItem value="custom">Custom range</MenuItem>
+            </TextField>
+            {dateMode === 'month' && (
+              <TextField size="small" type="month" value={monthVal} onChange={(e) => setMonthVal(e.target.value)} sx={{ width: 150, '& .MuiInputBase-root': { height: 34 } }} />
+            )}
+            {dateMode === 'day' && (
+              <TextField size="small" type="date" value={dayVal} onChange={(e) => setDayVal(e.target.value)} sx={{ width: 160, '& .MuiInputBase-root': { height: 34 } }} />
+            )}
+            {dateMode === 'custom' && (
+              <>
+                <TextField size="small" type="date" label="From" InputLabelProps={{ shrink: true }} value={fromVal} onChange={(e) => setFromVal(e.target.value)} sx={{ width: 155, '& .MuiInputBase-root': { height: 34 } }} />
+                <TextField size="small" type="date" label="To" InputLabelProps={{ shrink: true }} value={toVal} onChange={(e) => setToVal(e.target.value)} sx={{ width: 155, '& .MuiInputBase-root': { height: 34 } }} />
+              </>
+            )}
+            {(partyFilter || dateMode !== 'all') && (
+              <Button size="small" startIcon={<X size={14} />} onClick={clearGlobal} sx={{ fontWeight: 700 }}>Clear</Button>
+            )}
+            <Box sx={{ flex: 1 }} />
+            <Button size="small" variant="outlined" startIcon={<FileSpreadsheet size={15} />} onClick={doExcel}>Excel</Button>
+            <Button size="small" variant="contained" startIcon={<FileText size={15} />} onClick={doPdf}>PDF</Button>
+          </Stack>
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, mt: 0.75, display: 'block' }}>
+            {filterSummary} — applies to <strong>every step tab</strong>. Export reflects the current tab &amp; filters.
+          </Typography>
+        </Paper>
+
         <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
           <Tabs value={tab} onChange={(_, v) => switchTab(v)} variant="scrollable" scrollButtons="auto"
             sx={{ borderBottom: `1px solid ${theme.palette.divider}`, minHeight: 36, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.72rem', minHeight: 36, py: 0.25, minWidth: 'auto', px: 1.5 } }}>

@@ -64,15 +64,16 @@ const UpdateBanner = () => {
           onClick={reload}
           disableElevation
           disableRipple
-          startIcon={<RefreshCw size={16} color="#ffffff" />}
+          variant="text"
+          startIcon={<RefreshCw size={16} color="#059669" />}
           sx={{
             flexShrink: 0, fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap',
-            borderRadius: 2, px: 2.25, py: 1,
-            // Force high-contrast solid blue button that no theme override can flatten.
-            bgcolor: '#1d4ed8 !important', color: '#ffffff !important',
-            boxShadow: '0 4px 14px rgba(29,78,216,0.35)',
-            '& .MuiButton-startIcon': { color: '#ffffff' },
-            '&:hover': { bgcolor: '#1e40af !important' },
+            borderRadius: 2, px: 2,
+            // No background — plain green text so it always reads clearly.
+            bgcolor: 'transparent !important', boxShadow: 'none !important',
+            color: '#059669 !important',
+            '& .MuiButton-startIcon': { color: '#059669' },
+            '&:hover': { bgcolor: 'rgba(5,150,105,0.08) !important' },
           }}
         >
           Update now

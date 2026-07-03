@@ -95,11 +95,12 @@ export const invoiceService = {
    *  `attachments` (optional): the exact set the sender chose — selected invoice
    *  documents plus any files uploaded from their computer. When provided we honor
    *  it exactly; when omitted we fall back to ALL of the invoice's stored docs. */
-  async sendToClient(id, { to, subject, message, attachments: chosen }) {
+  async sendToClient(id, { to, cc, subject, message, attachments: chosen }) {
     const inv = await Invoice.findById(id).populate('partyId', 'name email').lean();
     if (!inv) throw new AppError('Invoice not found', 404);
     const recipient = to || inv.partyId?.email;
     if (!recipient) throw new AppError('No recipient email — add one to send.', 400);
+    const ccList = (Array.isArray(cc) ? cc : String(cc || '').split(',')).map((e) => String(e).trim()).filter((e) => e.includes('@'));
 
     // Build real file attachments (nodemailer streams each URL) AND keep links in
     // the body as a fallback, so the client always gets the documents.
@@ -145,6 +146,7 @@ export const invoiceService = {
     try {
       await emailService.sendEmail({
         to: recipient,
+        cc: ccList,
         subject: subject || `Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`,
         html,
         attachments,

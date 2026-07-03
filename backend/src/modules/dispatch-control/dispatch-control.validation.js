@@ -154,6 +154,7 @@ export const soNumberParamSchema = Joi.object({
 export const emailScheduleSchema = Joi.object({
   soNumber: optionalString,
   to:       Joi.string().trim().required(),
+  cc:       Joi.alternatives(Joi.string().allow('', null), Joi.array().items(Joi.string())),
   subject:  optionalString,
   message:  Joi.string().allow('', null),
   attachments: Joi.array().items(Joi.object({

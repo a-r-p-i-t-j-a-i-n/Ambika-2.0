@@ -226,8 +226,8 @@ const GenerateDispatchPlanPdf = () => {
               }}>
                 <TableHead>
                   <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
-                    {['SKU', 'PO Qty', 'Dispatched', 'Balance', 'Phase', 'Planned Date', 'Planned Qty', 'Status'].map((h, i) => (
-                      <TableCell key={h} align={[1, 2, 3, 6].includes(i) ? 'right' : 'left'}
+                    {['Item', 'PO Qty', 'To Plan', 'Dispatch', 'Planned Date', 'Planned Qty'].map((h, i) => (
+                      <TableCell key={h} align={[1, 2, 5].includes(i) ? 'right' : 'left'}
                         sx={{ fontWeight: 700, fontSize: '0.64rem !important', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'text.secondary', whiteSpace: 'nowrap' }}>{h}</TableCell>
                     ))}
                   </TableRow>
@@ -245,14 +245,12 @@ const GenerateDispatchPlanPdf = () => {
                               <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.66rem' }}>{r.it.skuName}</Typography>
                             </TableCell>
                             <TableCell align="right" rowSpan={span} sx={{ verticalAlign: 'top', fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{num(r.it.poQty)}</TableCell>
-                            <TableCell align="right" rowSpan={span} sx={{ verticalAlign: 'top', fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{num(r.it.dispatchedQty)}</TableCell>
                             <TableCell align="right" rowSpan={span} sx={{ verticalAlign: 'top', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: Number(r.it.balanceQty) > 0 ? theme.palette.warning.dark : 'text.primary' }}>{num(r.it.balanceQty)}</TableCell>
                           </>
                         ) : null}
                         <TableCell>{r.phase ? <Chip size="small" label={r.phase.phaseNo} sx={{ fontWeight: 700, height: 18, fontSize: '0.6rem', bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} /> : <Typography variant="caption" color="text.disabled">—</Typography>}</TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>{r.phase ? fmtDate(r.phase.plannedDate) : <Typography variant="caption" color="text.disabled">no plan</Typography>}</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: theme.palette.primary.dark }}>{r.phase ? num(r.phase.plannedQty) : '—'}</TableCell>
-                        <TableCell>{r.phase ? <Chip size="small" color={STATUS_COLOR[r.phase.status] || 'default'} variant="outlined" label={r.phase.status} sx={{ height: 18, fontSize: '0.56rem', fontWeight: 700 }} /> : null}</TableCell>
                       </TableRow>
                     );
                   })}
