@@ -11,7 +11,7 @@ import env from './config/env.js';
 import errorHandler from './middleware/errorHandler.js';
 import { AppError } from './utils/apiResponse.js';
 
-// ── Route Imports   ───────────────────────────────────────────
+// ── Route Imports     ───────────────────────────────────────────
 import authRoutes    from './modules/auth/auth.routes.js';
 import clientRoutes  from './modules/clients/client.routes.js';
 import skuRoutes     from './modules/skus/sku.routes.js';
