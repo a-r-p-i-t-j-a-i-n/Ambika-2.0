@@ -3,7 +3,7 @@ import env from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { s3Enabled, getSignedDownloadUrl } from '../common/uploads/s3.service.js';
 
-// Transport selection: prefer the Brevo HTTP API (HTTPS/443 — immune to ISPs
+//  Transport selection: prefer the Brevo HTTP API (HTTPS/443 — immune to ISPs
 // that block SMTP ports), fall back to SMTP when only SMTP creds are present.
 const apiConfigured  = Boolean(env.BREVO_API_KEY);
 const smtpConfigured = Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
