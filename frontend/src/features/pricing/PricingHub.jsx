@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Stack, Chip, Button, TextField, InputAdornment,
   Paper, alpha, useTheme, IconButton, Tooltip,
-  Popover, MenuItem, Divider, CircularProgress, Badge,
+  Popover, MenuItem, Divider, CircularProgress, Badge, Autocomplete,
 } from '@mui/material';
 import {
   IndianRupee, Search, Plus, RefreshCw, Sparkles, TriangleAlert,
@@ -18,6 +18,7 @@ import {
   useGetPricingReviewersQuery,
   useLazyGetPricingExportQuery,
 } from '../../store/api/pricingApi';
+import { useGetPartiesQuery } from '../../store/api/partyApi';
 import PriceMasterTable from './components/PriceMasterTable';
 import RevisePriceDialog from './components/RevisePriceDialog';
 import PriceHistoryDrawer from './components/PriceHistoryDrawer';
@@ -106,6 +107,9 @@ const PricingHub = () => {
   const [effectiveFrom, setEffectiveFrom] = useState(() => searchParams.get('from') || '');
   const [effectiveTo,   setEffectiveTo]   = useState(() => searchParams.get('to') || '');
   const [revisedBy,     setRevisedBy]     = useState(() => searchParams.get('by') || '');
+  // Party (client) scope — multi-select; default empty = all SKUs. Ids in the URL
+  // as a comma list so the view is shareable.
+  const [partyIds,      setPartyIds]      = useState(() => (searchParams.get('party') || '').split(',').filter(Boolean));
   const [filterAnchor,  setFilterAnchor]  = useState(null);
   const [exportAnchor,  setExportAnchor]  = useState(null);
   const [isExporting,   setIsExporting]   = useState(false);
@@ -141,7 +145,8 @@ const PricingHub = () => {
     ...(effectiveFrom ? { effectiveFrom } : {}),
     ...(effectiveTo   ? { effectiveTo }   : {}),
     ...(revisedBy     ? { revisedBy }     : {}),
-  }), [effectivePriceType, search, status, queryItemType, category, effectiveFrom, effectiveTo, revisedBy]);
+    ...(partyIds.length ? { partyIds: partyIds.join(',') } : {}),
+  }), [effectivePriceType, search, status, queryItemType, category, effectiveFrom, effectiveTo, revisedBy, partyIds]);
 
   const { data, isFetching, refetch } = useGetPriceMasterQuery(masterQuery);
   const rows = data?.data?.rows || [];
@@ -173,12 +178,13 @@ const PricingHub = () => {
     if (effectiveFrom) next.set('from',   effectiveFrom);
     if (effectiveTo)   next.set('to',     effectiveTo);
     if (revisedBy)     next.set('by',     revisedBy);
+    if (partyIds.length) next.set('party', partyIds.join(','));
     if (drawerSkuId)   next.set('sku',    drawerSkuId);
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [priceType, itemType, category, status, search, effectiveFrom, effectiveTo, revisedBy, drawerSkuId]);
+  }, [priceType, itemType, category, status, search, effectiveFrom, effectiveTo, revisedBy, partyIds, drawerSkuId]);
 
   // Keep the price stream in sync with the URL. The sidebar's "Selling Price"
   // / "RM Cost" entries navigate here with ?stream=…, and this screen never
@@ -191,14 +197,23 @@ const PricingHub = () => {
   const { data: reviewersRes } = useGetPricingReviewersQuery();
   const reviewers = reviewersRes?.data || [];
 
+  // Party list for the "filter by client" multi-select (id + name only needed —
+  // the backend resolves each party's ordered SKUs).
+  const { data: partiesRes } = useGetPartiesQuery({ limit: 1000, sort: 'name' });
+  const parties = useMemo(() => partiesRes?.data || [], [partiesRes]);
+  const selectedParties = useMemo(
+    () => parties.filter((p) => partyIds.includes(String(p._id))),
+    [parties, partyIds],
+  );
+
   const [triggerExport] = useLazyGetPricingExportQuery();
 
   // How many advanced filters are active (badge on the Filters button)
   const activeFilterCount =
-    (effectiveFrom ? 1 : 0) + (effectiveTo ? 1 : 0) + (revisedBy ? 1 : 0);
+    (effectiveFrom ? 1 : 0) + (effectiveTo ? 1 : 0) + (revisedBy ? 1 : 0) + (partyIds.length ? 1 : 0);
 
   const clearAdvancedFilters = () => {
-    setEffectiveFrom(''); setEffectiveTo(''); setRevisedBy('');
+    setEffectiveFrom(''); setEffectiveTo(''); setRevisedBy(''); setPartyIds([]);
   };
 
   // Quick-pick month presets
@@ -652,6 +667,22 @@ const PricingHub = () => {
                 }}
               />
             )}
+            {selectedParties.map((p) => (
+              <Chip
+                key={p._id}
+                size="small"
+                icon={<UserCircle2 size={11} style={{ marginLeft: 6 }} />}
+                label={p.name}
+                onDelete={() => setPartyIds((ids) => ids.filter((x) => x !== String(p._id)))}
+                deleteIcon={<X size={12} />}
+                sx={{
+                  height: 24, fontWeight: 700, fontSize: '0.7rem',
+                  color: theme.palette.primary.dark,
+                  bgcolor: alpha(theme.palette.primary.main, 0.10),
+                  '& .MuiChip-icon': { color: 'inherit' },
+                }}
+              />
+            ))}
             <Button
               size="small"
               onClick={clearAdvancedFilters}
@@ -776,6 +807,29 @@ const PricingHub = () => {
             <MenuItem key={name} value={name}>{name}</MenuItem>
           ))}
         </TextField>
+
+        {/* Party (client) scope — show only the SKUs the chosen client(s) order.
+            Multi-select; empty = all SKUs. Resolved server-side from Party.orderedSkus. */}
+        <Typography sx={{
+          fontSize: '0.66rem', fontWeight: 800, color: 'text.disabled',
+          letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.75,
+        }}>
+          Filter by client (party)
+        </Typography>
+        <Autocomplete
+          multiple
+          size="small"
+          options={parties}
+          value={selectedParties}
+          onChange={(_, vals) => setPartyIds(vals.map((v) => String(v._id)))}
+          getOptionLabel={(o) => (o ? `${o.name}${o.code ? ` (${o.code})` : ''}` : '')}
+          isOptionEqualToValue={(a, b) => String(a._id) === String(b._id)}
+          limitTags={3}
+          renderInput={(p) => (
+            <TextField {...p} placeholder={selectedParties.length ? '' : 'All clients — pick to narrow'} />
+          )}
+          sx={{ mb: 2 }}
+        />
 
         <Divider sx={{ mb: 1.5 }} />
 

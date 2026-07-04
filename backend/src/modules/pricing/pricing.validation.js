@@ -40,6 +40,9 @@ export const masterQuerySchema = Joi.object({
   effectiveFrom: Joi.date().allow('', null),
   effectiveTo:   Joi.date().allow('', null),
   revisedBy:     Joi.string().allow('').max(160).default(''),
+  // Party (client) scope — comma-separated party ids. MUST be listed here, else
+  // the `stripUnknown` validator deletes it before the controller ever sees it.
+  partyIds:      Joi.string().allow('').max(2000).default(''),
 });
 
 export const updateSkuRemarksSchema = Joi.object({

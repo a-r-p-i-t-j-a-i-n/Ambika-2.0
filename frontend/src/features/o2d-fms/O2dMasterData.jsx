@@ -2,10 +2,14 @@ import React, { useState, useMemo } from 'react';
 import {
   Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme, Button, Autocomplete,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
-  TextField, MenuItem, InputAdornment,
+  TextField, MenuItem, InputAdornment, Drawer, Divider, IconButton, Tooltip, Link,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, FileSpreadsheet, FileText, X } from 'lucide-react';
+import { Link as RouterLink } from 'react-router-dom';
+import {
+  Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, FileSpreadsheet,
+  FileText, X, ExternalLink, ScrollText, CheckCircle2, Circle, Link2, Clock, User as UserIcon,
+} from 'lucide-react';
 import dayjs from 'dayjs';
 import { useGetOrderIntakesQuery } from '../../store/api/orderIntakeApi';
 import { useGetOrdersQuery } from '../../store/api/orderApi';
@@ -13,22 +17,113 @@ import { useGetChallansQuery, useGetSchedulesQuery } from '../../store/api/dispa
 import { useGetSalesInvoicesQuery } from '../../store/api/salesInvoiceApi';
 import { useGetPaymentsQuery, useGetTransportBillsQuery } from '../../store/api/o2dFulfillmentApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
+import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
+import { actionLinkMeta, resolveEntityLink, TRIGGER_TO_ACTION } from './actionLinks';
 import { exportRowsToExcel, printTablePdf } from '../../utils/exportMasterData';
-
-// The date each step is filtered on (its "when it happened" field).
-const dateOf = (tab, r) => ({
-  intake: r.createdAt, so: r.orderDate, plan: r.updatedAt || r.poDate, dispatch: r.dcDate,
-  invoice: r.invoiceDate,
-  paymentFollowup: r.followUp?.actual, paymentReceipt: r.confirmation?.receivedDate,
-  transportReceipt: r.receipt?.actual, transportPayment: r.payment?.actual,
-}[tab]);
-// Party for each step (undefined = this step has no party, so the party filter is skipped).
-const partyOf = (tab, r) => (tab === 'transportReceipt' || tab === 'transportPayment' ? undefined : r.partyName);
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const dt = (d) => (d ? dayjs(d).format('DD MMM YYYY · hh:mm A') : '—');
 const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
 const col = (field, headerName, extra = {}) => ({ field, headerName, flex: 1, minWidth: 120, sortable: true, ...extra });
+
+// ── Step catalog (ACTIVE fmsKey = CURRENT_SHEET) — every O2D step, in order.
+// `code` ties a tab to its FMS step so each row can show that step's audit + links.
+const STEP_META = {
+  intake:           { code: '1.01', name: 'Order Received' },
+  so:               { code: '2.02', name: 'PO Entry in Tally & Dispatch vs PO' },
+  inventory:        { code: '2.03', name: 'Check Inventory' },
+  plan:             { code: '2.04', name: 'Dispatch Scheduler & PDF' },
+  emailSchedule:    { code: '2.05', name: 'Email Dispatch Schedule' },
+  dispatch:         { code: '2.06', name: 'Final Qty to be Dispatched (Challan)' },
+  invoice:          { code: '2.07', name: 'Create Invoice & Eway Bill' },
+  emailInvoice:     { code: '2.08', name: 'Email Invoice & Eway to Client' },
+  trackDelivery:    { code: '2.09', name: 'Track Delivery' },
+  paymentFollowup:  { code: '2.10', name: 'Follow up for Payment' },
+  paymentReceipt:   { code: '2.11', name: 'Payment Confirmation & Tally Entry' },
+  transportReceipt: { code: '2.12', name: 'Receive Transportation Bill' },
+  transportPayment: { code: '2.13', name: 'Transportation Bill Payment' },
+};
+
+// Tabs that have NO dedicated entity collection — their data & audit live purely
+// on the FMS process step (email / inventory / delivery-tracking steps).
+const PROC_TABS = ['inventory', 'emailSchedule', 'emailInvoice', 'trackDelivery'];
+
+// The date each step is filtered on (its "when it happened" field).
+const dateOf = (tab, r) => {
+  if (r.__step) return r.__step.actual || r.__step.planned; // process-step rows
+  return ({
+    intake: r.createdAt, so: r.orderDate, plan: r.updatedAt || r.poDate, dispatch: r.dcDate,
+    invoice: r.invoiceDate,
+    paymentFollowup: r.followUp?.actual, paymentReceipt: r.confirmation?.receivedDate,
+    transportReceipt: r.receipt?.actual, transportPayment: r.payment?.actual,
+  }[tab]);
+};
+// Party for each step (undefined = this step has no party, so the party filter is skipped).
+const partyOf = (tab, r) => (tab === 'transportReceipt' || tab === 'transportPayment' ? undefined : r.partyName);
+
+// ── Human helpers for the FMS step audit ──
+const humanDelay = (step) => {
+  if (!step) return '—';
+  const mins = step.delayMins || 0;
+  if (mins <= 0) return step.status === 'DONE' ? 'On time' : '—';
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const parts = [d && `${d}d`, h && `${h}h`, !d && !h && `${m}m`].filter(Boolean);
+  return `${parts.join(' ')} late`;
+};
+// Best available "who did this step" from the denormalised sub-item names.
+const stepDoer = (step) => {
+  if (!step) return '—';
+  const ap = (step.actionProgress || []).filter((a) => a.doneByName);
+  if (ap.length) return ap[ap.length - 1].doneByName;
+  const ff = (step.formFields || []).find((f) => f.filledByName);
+  if (ff) return ff.filledByName;
+  const ck = (step.checklist || []).find((c) => c.doneByName);
+  if (ck) return ck.doneByName;
+  return step.status === 'DONE' ? 'Completed' : '—';
+};
+
+// Resolve a step's connected records → clickable links with their own "who/when" log.
+// This is the "two links on 2.06 = Actual Dispatch + Delivery Challan" the sheet expects.
+const stepLinks = (step, proc) => {
+  if (!step || !proc) return [];
+  const ctx = {
+    soNumber: proc.soNumber,
+    orderId: proc.salesOrderId?._id || proc.salesOrderId,
+    processId: proc._id,
+    intakeId: proc.intakeId?._id || proc.intakeId,
+  };
+  const configured = step.actionLinks?.length ? step.actionLinks : (step.actionLink ? [step.actionLink] : []);
+  // Also surface the record this step's trigger produces (e.g. ACTUAL_DISPATCH on
+  // step 2.06) so trigger-driven steps always show their produced record alongside
+  // any explicitly-configured links. De-duped, configured links first.
+  const trig = step.triggerKey && step.triggerKey !== 'MANUAL' ? TRIGGER_TO_ACTION[step.triggerKey] : null;
+  const keys = [...new Set([...configured, ...(trig ? [trig] : [])])];
+  return keys.map((key) => {
+    const meta = actionLinkMeta(key);
+    const prog = (step.actionProgress || []).find((a) => a.key === key);
+    const rec = resolveEntityLink(key, ctx);
+    return {
+      key,
+      label: meta?.viewLabel || meta?.label || key,
+      to: prog?.link || rec?.to || null,
+      doneByName: prog?.doneByName || null,
+      doneAt: prog?.doneAt || null,
+    };
+  });
+};
+
+// Standard audit columns for the pure process-step tabs (no entity collection).
+const procCols = [
+  col('order', 'Order', { minWidth: 150, valueGetter: (v, r) => r.soNumber || r.uniqueO2DId || '—' }),
+  col('partyName', 'Party', { minWidth: 170, valueGetter: (v, r) => r.partyName || '—' }),
+  col('poNumber', 'PO Number', { minWidth: 130, valueGetter: (v, r) => r.poNumber || '—' }),
+  col('status', 'Status', { minWidth: 120, valueGetter: (v, r) => r.__step?.status || 'PENDING' }),
+  col('planned', 'Planned', { minWidth: 120, valueGetter: (v, r) => dd(r.__step?.planned) }),
+  col('doneOn', 'Done On', { minWidth: 180, valueGetter: (v, r) => dt(r.__step?.actual) }),
+  col('delay', 'Delay', { minWidth: 110, valueGetter: (v, r) => humanDelay(r.__step) }),
+  col('doneBy', 'Done By', { minWidth: 140, valueGetter: (v, r) => stepDoer(r.__step) }),
+  col('remarks', 'Remarks', { minWidth: 180, sortable: false, valueGetter: (v, r) => r.__step?.remarks || '—' }),
+];
 
 // One column set per O2D step (mirrors the client's sheet tabs).
 const COLUMNS = {
@@ -52,6 +147,7 @@ const COLUMNS = {
     col('totalBalanceQty', 'Balance', { minWidth: 100, type: 'number', valueGetter: (v, r) => Number(r.totalBalanceQty || 0) }),
     col('status', 'Status', { minWidth: 120 }),
   ],
+  inventory: procCols,
   plan: [
     col('soNumber', 'SO Number', { minWidth: 150 }),
     col('poNumber', 'PO Number', { minWidth: 130 }),
@@ -62,6 +158,7 @@ const COLUMNS = {
     col('poDate', 'PO Date', { minWidth: 120, valueGetter: (v, r) => dd(r.poDate) }),
     col('status', 'Status', { minWidth: 110 }),
   ],
+  emailSchedule: procCols,
   dispatch: [
     col('dcNumber', 'DC Number', { minWidth: 150 }),
     col('dcDate', 'Date', { minWidth: 120, valueGetter: (v, r) => dd(r.dcDate) }),
@@ -89,6 +186,8 @@ const COLUMNS = {
     col('transporterName', 'Transporter', { minWidth: 140, valueGetter: (v, r) => r.transporterName || '—' }),
     col('status', 'Status', { minWidth: 110 }),
   ],
+  emailInvoice: procCols,
+  trackDelivery: procCols,
   // 2.10 — Payment Follow-up (Payment.followUp)
   paymentFollowup: [
     col('partyName', 'Party', { minWidth: 170 }),
@@ -121,11 +220,15 @@ const COLUMNS = {
 };
 
 const TABS = [
-  { key: 'intake', label: 'Order Intake · 1.01' },
+  { key: 'intake', label: 'Order Received · 1.01' },
   { key: 'so', label: 'Sales Orders · 2.02' },
+  { key: 'inventory', label: 'Check Inventory · 2.03' },
   { key: 'plan', label: 'Dispatch Plans · 2.04' },
+  { key: 'emailSchedule', label: 'Email Schedule · 2.05' },
   { key: 'dispatch', label: 'Actual Dispatch · 2.06' },
   { key: 'invoice', label: 'Invoices · 2.07' },
+  { key: 'emailInvoice', label: 'Email Invoice · 2.08' },
+  { key: 'trackDelivery', label: 'Track Delivery · 2.09' },
   { key: 'paymentFollowup', label: 'Payment Follow-up · 2.10' },
   { key: 'paymentReceipt', label: 'Receive Payment · 2.11' },
   { key: 'transportReceipt', label: 'Transport Bill · 2.12' },
@@ -138,14 +241,17 @@ const displayVal = (c, row) => {
   return typeof raw === 'number' ? num(raw) : (raw ?? '—');
 };
 // Status accessor per step — used to group records in the Board view.
-const statusOf = (tab, row) => ({
-  intake: row.intakeStatus,
-  so: row.status, plan: row.status, dispatch: row.status, invoice: row.status,
-  paymentFollowup: row.followUp?.status,
-  paymentReceipt: row.confirmation?.status,
-  transportReceipt: row.receipt?.status,
-  transportPayment: row.payment?.status,
-}[tab]) || 'PENDING';
+const statusOf = (tab, row) => {
+  if (row.__step) return row.__step.status || 'PENDING';
+  return ({
+    intake: row.intakeStatus,
+    so: row.status, plan: row.status, dispatch: row.status, invoice: row.status,
+    paymentFollowup: row.followUp?.status,
+    paymentReceipt: row.confirmation?.status,
+    transportReceipt: row.receipt?.status,
+    transportPayment: row.payment?.status,
+  }[tab]) || 'PENDING';
+};
 
 const VIEWS = [
   { key: 'table', label: 'Table', icon: TableIcon },
@@ -154,9 +260,227 @@ const VIEWS = [
   { key: 'board', label: 'Board', icon: Columns3 },
 ];
 
+// ── Small building blocks for the audit log ──
+const LogLine = ({ icon: Icon, children }) => (
+  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ color: 'text.secondary', fontSize: '0.72rem' }}>
+    {Icon && <Icon size={12} />}<span>{children}</span>
+  </Stack>
+);
+
+/** Inline "connected records" chips shown in each row — click to open the record. */
+const LinkChips = ({ links }) => {
+  if (!links?.length) return <Typography variant="caption" color="text.disabled">—</Typography>;
+  return (
+    <Stack direction="row" spacing={0.5} flexWrap="wrap" rowGap={0.5}>
+      {links.map((l) => (
+        <Tooltip key={l.key} title={l.doneByName ? `${l.doneByName}${l.doneAt ? ` · ${dd(l.doneAt)}` : ''}` : (l.to ? 'Open record' : 'Not done yet')}>
+          <span>
+            <Chip
+              size="small" label={l.label}
+              icon={<ExternalLink size={11} />}
+              clickable={!!l.to}
+              component={l.to ? RouterLink : 'div'}
+              to={l.to || undefined}
+              sx={{ height: 22, fontSize: '0.66rem', fontWeight: 600,
+                bgcolor: (t) => alpha(l.doneByName ? t.palette.success.main : t.palette.primary.main, 0.1),
+                '& .MuiChip-icon': { ml: '4px' } }}
+            />
+          </span>
+        </Tooltip>
+      ))}
+    </Stack>
+  );
+};
+
+/** Right-side drawer: the full "who did what, when, why" log for one step + its links. */
+const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
+  const theme = useTheme();
+  const { step, proc } = (open && row) ? resolve(row) : { step: null, proc: null };
+  const meta = STEP_META[tab] || {};
+  const links = stepLinks(step, proc);
+  const orderLink = proc?.salesOrderId
+    ? { label: `Sales Order · ${proc.soNumber || ''}`, to: `/orders/${encodeURIComponent(String(proc.salesOrderId?._id || proc.salesOrderId))}` }
+    : (proc?.intakeId ? { label: 'Order Intake', to: `/order-intake?convert=${encodeURIComponent(String(proc.intakeId?._id || proc.intakeId))}` } : null);
+
+  const Section = ({ title, children }) => (
+    <Box sx={{ mb: 2 }}>
+      <Typography sx={{ fontWeight: 800, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', mb: 0.75 }}>{title}</Typography>
+      {children}
+    </Box>
+  );
+
+  return (
+    <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { width: { xs: '100%', sm: 440 }, p: 0 } }}>
+      {/* Header */}
+      <Box sx={{ px: 2, py: 1.75, color: '#fff', background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 100%)' }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+          <Box>
+            <Typography sx={{ fontSize: '0.68rem', opacity: 0.8, fontWeight: 700 }}>STEP {meta.code}</Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: '1rem', lineHeight: 1.15 }}>{meta.name}</Typography>
+            <Typography sx={{ fontSize: '0.74rem', opacity: 0.85, mt: 0.25 }}>
+              {proc?.soNumber || proc?.uniqueO2DId || '—'}{proc?.partyName ? ` · ${proc.partyName}` : ''}
+            </Typography>
+          </Box>
+          <IconButton size="small" onClick={onClose} sx={{ color: '#fff' }}><X size={18} /></IconButton>
+        </Stack>
+      </Box>
+
+      <Box sx={{ p: 2, overflowY: 'auto' }}>
+        {!proc && (
+          <Typography variant="body2" color="text.disabled" sx={{ py: 2 }}>
+            No FMS process record found for this row.
+          </Typography>
+        )}
+
+        {proc && (
+          <>
+            {/* Timeline */}
+            <Section title="Status & Timing">
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5} sx={{ mb: 1 }}>
+                <Chip size="small" label={step?.status || 'PENDING'}
+                  sx={{ fontWeight: 700, bgcolor: (t) => alpha(
+                    step?.status === 'DONE' ? t.palette.success.main : step?.status === 'DELAYED' ? t.palette.error.main : t.palette.warning.main, 0.14) }} />
+                {humanDelay(step) !== '—' && (
+                  <Chip size="small" label={humanDelay(step)}
+                    color={humanDelay(step) === 'On time' ? 'success' : 'error'} variant="outlined" sx={{ fontWeight: 700 }} />
+                )}
+              </Stack>
+              <Stack spacing={0.4}>
+                <LogLine icon={Clock}>Planned: <b>{dd(step?.planned)}</b></LogLine>
+                <LogLine icon={Clock}>Done on: <b>{dt(step?.actual)}</b></LogLine>
+                <LogLine icon={UserIcon}>By: <b>{stepDoer(step)}</b></LogLine>
+              </Stack>
+            </Section>
+
+            {/* Connected records */}
+            <Section title="Connected Records (Links)">
+              <Stack spacing={0.75}>
+                {orderLink && (
+                  <Link component={RouterLink} to={orderLink.to} onClick={onClose}
+                    sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: '0.8rem', fontWeight: 700 }}>
+                    <Link2 size={14} /> {orderLink.label}
+                  </Link>
+                )}
+                {links.length === 0 && <Typography variant="caption" color="text.disabled">No connected screens on this step.</Typography>}
+                {links.map((l) => (
+                  <Box key={l.key} sx={{ p: 1, borderRadius: 1.5, border: `1px solid ${theme.palette.divider}` }}>
+                    {l.to ? (
+                      <Link component={RouterLink} to={l.to} onClick={onClose}
+                        sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: '0.8rem', fontWeight: 700 }}>
+                        <ExternalLink size={14} /> {l.label}
+                      </Link>
+                    ) : (
+                      <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'text.secondary', display: 'flex', gap: 0.75, alignItems: 'center' }}>
+                        <ExternalLink size={14} /> {l.label}
+                      </Typography>
+                    )}
+                    <LogLine icon={l.doneByName ? CheckCircle2 : Circle}>
+                      {l.doneByName ? <>Done by <b>{l.doneByName}</b>{l.doneAt ? ` · ${dt(l.doneAt)}` : ''}</> : 'Not completed yet'}
+                    </LogLine>
+                  </Box>
+                ))}
+              </Stack>
+            </Section>
+
+            {/* Form fields captured */}
+            {(step?.formFields || []).length > 0 && (
+              <Section title="Data Captured">
+                <Stack spacing={0.75}>
+                  {step.formFields.map((f) => (
+                    <Box key={f._id}>
+                      <Stack direction="row" justifyContent="space-between" spacing={1}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>{f.label}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 700, textAlign: 'right' }}>
+                          {f.value == null || f.value === '' ? '—' : (f.fieldType === 'DATE' ? dd(f.value) : String(f.value))}
+                        </Typography>
+                      </Stack>
+                      {f.filledByName && <LogLine icon={UserIcon}>{f.filledByName}{f.filledAt ? ` · ${dd(f.filledAt)}` : ''}</LogLine>}
+                    </Box>
+                  ))}
+                </Stack>
+              </Section>
+            )}
+
+            {/* Checklist */}
+            {(step?.checklist || []).length > 0 && (
+              <Section title={`Checklist (${(step.checklist || []).filter((c) => c.done).length}/${step.checklist.length})`}>
+                <Stack spacing={0.5}>
+                  {step.checklist.map((c) => (
+                    <Stack key={c._id} direction="row" spacing={0.75} alignItems="flex-start">
+                      {c.done ? <CheckCircle2 size={14} color={theme.palette.success.main} style={{ marginTop: 2 }} /> : <Circle size={14} color={theme.palette.text.disabled} style={{ marginTop: 2 }} />}
+                      <Box>
+                        <Typography variant="caption" sx={{ fontWeight: 600 }}>{c.text}</Typography>
+                        {c.done && c.doneByName && <LogLine icon={UserIcon}>{c.doneByName}{c.doneAt ? ` · ${dd(c.doneAt)}` : ''}</LogLine>}
+                      </Box>
+                    </Stack>
+                  ))}
+                </Stack>
+              </Section>
+            )}
+
+            {/* Verifications */}
+            {(step?.verifications || []).length > 0 && (
+              <Section title="Verifications">
+                <Stack spacing={0.75}>
+                  {step.verifications.map((vv) => (
+                    <Box key={vv._id}>
+                      <Typography variant="caption" sx={{ fontWeight: 600 }}>{vv.question}</Typography>
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <Chip size="small" label={vv.answer || '—'} color={vv.answer === 'YES' ? 'success' : vv.answer === 'NO' ? 'error' : 'default'} sx={{ height: 18, fontSize: '0.62rem' }} />
+                        {vv.remark && <Typography variant="caption" color="text.secondary">{vv.remark}</Typography>}
+                      </Stack>
+                      {vv.answeredByName && <LogLine icon={UserIcon}>{vv.answeredByName}{vv.answeredAt ? ` · ${dd(vv.answeredAt)}` : ''}</LogLine>}
+                    </Box>
+                  ))}
+                </Stack>
+              </Section>
+            )}
+
+            {/* Remarks */}
+            {step?.remarks && (
+              <Section title="Remarks">
+                <Typography variant="body2">{step.remarks}</Typography>
+              </Section>
+            )}
+
+            {/* Comments */}
+            {(step?.comments || []).length > 0 && (
+              <Section title="Comments">
+                <Stack spacing={0.75}>
+                  {step.comments.map((cm) => (
+                    <Box key={cm._id} sx={{ p: 1, borderRadius: 1.5, bgcolor: (t) => alpha(t.palette.primary.main, 0.04) }}>
+                      <Typography variant="body2">{cm.text}</Typography>
+                      <LogLine icon={UserIcon}>{cm.userName || 'User'}{cm.at ? ` · ${dt(cm.at)}` : ''}</LogLine>
+                    </Box>
+                  ))}
+                </Stack>
+              </Section>
+            )}
+
+            {/* Attachments */}
+            {(step?.attachments || []).length > 0 && (
+              <Section title="Attachments">
+                <Stack spacing={0.5}>
+                  {step.attachments.map((a) => (
+                    <LogLine key={a._id} icon={FileText}>
+                      <Link href={a.fileUrl} target="_blank" rel="noreferrer" sx={{ fontWeight: 700 }}>{a.fileName}</Link>
+                      {a.uploadedByName ? ` · ${a.uploadedByName}` : ''}
+                    </LogLine>
+                  ))}
+                </Stack>
+              </Section>
+            )}
+          </>
+        )}
+      </Box>
+    </Drawer>
+  );
+};
+
 /**
  * O2D Master Data — a per-step data view (one tab per O2D step) mirroring the
- * client's sheet tabs: every entry shown with its full columns (who/what/when).
+ * client's sheet tabs: every entry shown with its full columns (who/what/when),
+ * its connected records (links), and a full audit log per step (Links & Log).
  * Switch between Table / Sheet / Cards / Board views. Read-only.
  */
 const O2dMasterData = () => {
@@ -165,6 +489,7 @@ const O2dMasterData = () => {
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [logRow, setLogRow] = useState(null); // row whose Links & Log drawer is open
   // ── GLOBAL filters — set once, apply to every step tab (do NOT reset on switch).
   const [partyFilter, setPartyFilter] = useState('');
   const [dateMode, setDateMode] = useState('all'); // all | month | day | custom
@@ -196,7 +521,33 @@ const O2dMasterData = () => {
     return true;
   };
 
-  // Only the active tab fetches (skip the rest) — fast and cache-friendly.
+  const isProcTab = PROC_TABS.includes(tab);
+
+  // The FMS process register — the audit ledger. Loaded always: it drives the
+  // pure process tabs AND supplies the "Links & Log" for every entity tab.
+  const procQ = useGetProcessesQuery({ limit: 3000, sort: '-createdAt' });
+  const processes = useMemo(() => procQ?.data?.data || [], [procQ]);
+  const procBySo = useMemo(() => {
+    const m = new Map();
+    processes.forEach((p) => { if (p.soNumber) m.set(String(p.soNumber), p); });
+    return m;
+  }, [processes]);
+  const procByIntake = useMemo(() => {
+    const m = new Map();
+    processes.forEach((p) => { const id = p.intakeId?._id || p.intakeId; if (id) m.set(String(id), p); });
+    return m;
+  }, [processes]);
+
+  // Payment/transport rows carry only dcNumber → resolve to soNumber via challans.
+  const needDcMap = ['paymentFollowup', 'paymentReceipt', 'transportReceipt', 'transportPayment'].includes(tab);
+  const dcMapQ = useGetChallansQuery({ limit: 3000, sort: '-dcDate' }, { skip: !needDcMap });
+  const dcToSo = useMemo(() => {
+    const m = new Map();
+    (dcMapQ?.data?.data || []).forEach((c) => { if (c.dcNumber) m.set(String(c.dcNumber), c.soNumber); });
+    return m;
+  }, [dcMapQ]);
+
+  // Only the active entity tab fetches (skip the rest) — fast and cache-friendly.
   const intakeQ = useGetOrderIntakesQuery({ limit: 500, sort: '-createdAt' }, { skip: tab !== 'intake' });
   const soQ = useGetOrdersQuery({ limit: 1000, sort: '-orderDate' }, { skip: tab !== 'so' });
   const planQ = useGetSchedulesQuery({ limit: 1000, sort: '-updatedAt' }, { skip: tab !== 'plan' });
@@ -205,13 +556,46 @@ const O2dMasterData = () => {
   const payQ = useGetPaymentsQuery(undefined, { skip: tab !== 'paymentFollowup' && tab !== 'paymentReceipt' });
   const tbQ = useGetTransportBillsQuery(undefined, { skip: tab !== 'transportReceipt' && tab !== 'transportPayment' });
 
-  const current = {
+  const current = isProcTab ? procQ : {
     intake: intakeQ, so: soQ, plan: planQ, dispatch: dcQ, invoice: invQ,
     paymentFollowup: payQ, paymentReceipt: payQ,
     transportReceipt: tbQ, transportPayment: tbQ,
   }[tab];
   const columns = COLUMNS[tab];
-  const rawRows = useMemo(() => current?.data?.data || [], [current]);
+
+  // Rows for the pure process-step tabs: one row per order that has this step.
+  const procRows = useMemo(() => {
+    if (!isProcTab) return [];
+    const code = STEP_META[tab].code;
+    return processes.map((p) => {
+      const step = (p.steps || []).find((s) => s.stepCode === code);
+      if (!step) return null;
+      return {
+        _id: `${p._id}_${code}`, processId: p._id,
+        soNumber: p.soNumber, poNumber: p.poNumber, partyName: p.partyName, uniqueO2DId: p.uniqueO2DId,
+        __step: step, __proc: p,
+      };
+    }).filter(Boolean);
+  }, [processes, tab, isProcTab]);
+
+  const rawRows = useMemo(() => (isProcTab ? procRows : (current?.data?.data || [])), [isProcTab, procRows, current]);
+
+  // Resolve any row → its FMS process step (for the Links & Log layer).
+  const stepForRow = useMemo(() => (row) => {
+    if (row.__step) return { step: row.__step, proc: row.__proc };
+    let proc = null;
+    if (tab === 'intake') proc = procByIntake.get(String(row._id));
+    else {
+      const so = row.soNumber || dcToSo.get(String(row.dcNumber));
+      if (so) proc = procBySo.get(String(so));
+    }
+    if (!proc) return { step: null, proc: null };
+    const code = STEP_META[tab].code;
+    return { step: (proc.steps || []).find((s) => s.stepCode === code) || null, proc };
+  }, [tab, procBySo, procByIntake, dcToSo]);
+
+  // Connected-record chips for a row (resolves its FMS step, then its links).
+  const linksForRow = useMemo(() => (row) => { const { step, proc } = stepForRow(row); return stepLinks(step, proc); }, [stepForRow]);
 
   // Distinct statuses present (for the status filter dropdown).
   const statuses = useMemo(() => [...new Set(rawRows.map((r) => statusOf(tab, r)).filter(Boolean))], [rawRows, tab]);
@@ -227,6 +611,21 @@ const O2dMasterData = () => {
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawRows, statusFilter, search, tab, columns, partyFilter, dateMode, monthVal, dayVal, fromVal, toVal]);
+
+  // Grid columns = the tab's columns + a Connected-records column + a Log button.
+  const gridColumns = useMemo(() => [
+    ...columns,
+    col('__links', 'Connected', {
+      minWidth: 210, flex: 1.2, sortable: false, filterable: false,
+      renderCell: (p) => <LinkChips links={linksForRow(p.row)} />,
+    }),
+    col('__log', 'Log', {
+      width: 92, flex: 0, sortable: false, filterable: false,
+      renderCell: (p) => (
+        <Button size="small" startIcon={<ScrollText size={14} />} onClick={() => setLogRow(p.row)} sx={{ fontWeight: 700 }}>Log</Button>
+      ),
+    }),
+  ], [columns, stepForRow]);
 
   const activeTab = TABS.find((t) => t.key === tab);
   const filterSummary = [
@@ -252,7 +651,7 @@ const O2dMasterData = () => {
           <Box>
             <Typography sx={{ color: '#fff', fontSize: { xs: '1.05rem', md: '1.2rem' }, fontWeight: 800, lineHeight: 1.1 }}>O2D Master Data</Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.72rem' }}>
-              Every entry, step by step — who filled what, when. One tab per O2D step.
+              Every step · who did what, when · connected records &amp; full audit log. One tab per O2D step.
             </Typography>
           </Box>
         </Stack>
@@ -340,7 +739,7 @@ const O2dMasterData = () => {
           {view === 'table' && (
             <Box sx={{ px: 1.5, pb: 1.5 }}>
               <DataGrid
-                rows={rows} columns={columns} getRowId={(r) => r._id} loading={current?.isFetching}
+                rows={rows} columns={gridColumns} getRowId={(r) => r._id} loading={current?.isFetching}
                 autoHeight density="compact"
                 initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
                 pageSizeOptions={[25, 50, 100]} disableRowSelectionOnClick
@@ -357,6 +756,8 @@ const O2dMasterData = () => {
                   <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.06) }}>
                     <TableCell sx={{ fontWeight: 800 }}>#</TableCell>
                     {columns.map((c) => <TableCell key={c.field} sx={{ fontWeight: 800 }}>{c.headerName}</TableCell>)}
+                    <TableCell sx={{ fontWeight: 800 }}>Connected</TableCell>
+                    <TableCell sx={{ fontWeight: 800 }}>Log</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -364,9 +765,13 @@ const O2dMasterData = () => {
                     <TableRow key={row._id} hover>
                       <TableCell sx={{ color: 'text.disabled' }}>{i + 1}</TableCell>
                       {columns.map((c) => <TableCell key={c.field}>{displayVal(c, row)}</TableCell>)}
+                      <TableCell sx={{ whiteSpace: 'normal' }}><LinkChips links={linksForRow(row)} /></TableCell>
+                      <TableCell>
+                        <Button size="small" startIcon={<ScrollText size={13} />} onClick={() => setLogRow(row)}>Log</Button>
+                      </TableCell>
                     </TableRow>
                   ))}
-                  {rows.length === 0 && <TableRow><TableCell colSpan={columns.length + 1} sx={{ textAlign: 'center', color: 'text.disabled', py: 3 }}>No records.</TableCell></TableRow>}
+                  {rows.length === 0 && <TableRow><TableCell colSpan={columns.length + 3} sx={{ textAlign: 'center', color: 'text.disabled', py: 3 }}>No records.</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </Box>
@@ -388,6 +793,11 @@ const O2dMasterData = () => {
                       </Stack>
                     ))}
                   </Stack>
+                  <Divider sx={{ my: 1 }} />
+                  <LinkChips links={linksForRow(row)} />
+                  <Button size="small" fullWidth startIcon={<ScrollText size={14} />} onClick={() => setLogRow(row)} sx={{ mt: 0.75, fontWeight: 700 }}>
+                    Links &amp; Log
+                  </Button>
                 </Paper>
               ))}
               {rows.length === 0 && <Typography variant="body2" color="text.disabled" sx={{ p: 2 }}>No records.</Typography>}
@@ -410,7 +820,7 @@ const O2dMasterData = () => {
                     </Stack>
                     <Stack spacing={1}>
                       {groups[s].map((row) => (
-                        <Paper key={row._id} variant="outlined" sx={{ p: 1.25, borderRadius: 2 }}>
+                        <Paper key={row._id} variant="outlined" sx={{ p: 1.25, borderRadius: 2, cursor: 'pointer' }} onClick={() => setLogRow(row)}>
                           <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', color: theme.palette.primary.dark }}>{displayVal(columns[0], row)}</Typography>
                           {columns.slice(1, 4).map((c) => (
                             <Typography key={c.field} variant="caption" display="block" color="text.secondary">
@@ -427,6 +837,9 @@ const O2dMasterData = () => {
           )}
         </Paper>
       </Box>
+
+      {/* Links & Log drawer — the full "who did what, when, why" audit for a step. */}
+      <StepLogDrawer open={!!logRow} onClose={() => setLogRow(null)} tab={tab} row={logRow} resolve={stepForRow} />
     </Box>
   );
 };

@@ -28,6 +28,9 @@ export const pricingController = {
   // ── Master & history ──────────────────────────────────────────
   master: asyncHandler(async (req, res) => {
     const data = await svc.getPriceMaster(req.query);
+    // Never let the browser serve a stale cached copy (party filters change the
+    // result for the same-ish URL) — always revalidate, no 304-from-old-body.
+    res.set('Cache-Control', 'no-store, must-revalidate');
     res.json(ApiResponse.ok('Price master', data));
   }),
   history: asyncHandler(async (req, res) => {

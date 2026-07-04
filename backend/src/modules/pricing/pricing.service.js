@@ -22,6 +22,7 @@ import dayjs from 'dayjs';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore.js';
 dayjs.extend(isSameOrBefore);
 import SKU from '../skus/sku.model.js';
+import Party from '../clients/party.model.js';
 import PriceRevision from './price-revision.model.js';
 import CompanySettings from './company-settings.model.js';
 import { AppError } from '../../utils/apiResponse.js';
@@ -300,21 +301,48 @@ export const correctRevision = async (revisionId, body, req) => {
 
 export const getPriceMaster = async ({
   priceType = 'SELLING', itemType = '', category = '', search = '', status = '',
-  effectiveFrom = null, effectiveTo = null, revisedBy = '',
+  effectiveFrom = null, effectiveTo = null, revisedBy = '', partyIds = '',
 } = {}) => {
   const today = new Date();
   const fromDate = effectiveFrom ? new Date(effectiveFrom) : null;
   const toDate   = effectiveTo   ? new Date(effectiveTo)   : null;
   const revisedByQ = (revisedBy || '').trim().toLowerCase();
 
-  // 1) Find all SKUs (optionally filtered by kind / sub-group / search).
+  // 1) Find all SKUs (optionally filtered by kind / sub-group / search / party).
   const skuFilter = {};
   if (itemType) skuFilter.itemType = itemType;
   if (category) skuFilter.category = category;
+  // Combine search + party scope with $and so both constrain (each brings its own $or).
+  const andClauses = [];
   if (search) {
     const rx = new RegExp(search.trim(), 'i');
-    skuFilter.$or = [{ code: rx }, { name: rx }];
+    andClauses.push({ $or: [{ code: rx }, { name: rx }] });
   }
+  // Party scope: only SKUs that any of the selected clients regularly order
+  // (from Party.orderedSkus — the party↔SKU list learned from Sales Orders).
+  // Built as a reusable match so the rows AND the nav counts (kind tabs / group
+  // chips) all reflect the same party scope. Uses real ObjectIds because the
+  // aggregation `$match` (unlike Mongoose `find`) does not auto-cast strings.
+  const partyIdList = (Array.isArray(partyIds) ? partyIds : String(partyIds || '').split(','))
+    .map((s) => String(s || '').trim()).filter(Boolean);
+  let partyMatch = null;
+  if (partyIdList.length) {
+    const parties = await Party.find({ _id: { $in: partyIdList } })
+      .select('orderedSkus.skuId orderedSkus.skuCode').lean();
+    const pSkuIds = new Set();
+    const pSkuCodes = new Set();
+    parties.forEach((p) => (p.orderedSkus || []).forEach((o) => {
+      if (o.skuId) pSkuIds.add(String(o.skuId));
+      if (o.skuCode) pSkuCodes.add(String(o.skuCode).toUpperCase());
+    }));
+    const idArr = [...pSkuIds]
+      .filter((x) => mongoose.Types.ObjectId.isValid(x))
+      .map((x) => new mongoose.Types.ObjectId(x));
+    // Match by linked SKU id OR by code (some ordered rows carry only a code).
+    partyMatch = { $or: [{ _id: { $in: idArr } }, { code: { $in: [...pSkuCodes] } }] };
+    andClauses.push(partyMatch);
+  }
+  if (andClauses.length) skuFilter.$and = andClauses;
   const skus = await SKU.find(skuFilter)
     .select('_id code name itemType category sellingPrice rmCost gstRate marginFloor sellingPriceFrom rmCostFrom pricingRemarks')
     .lean();
@@ -423,8 +451,12 @@ export const getPriceMaster = async ({
   //    for the active kind. Computed independently of search/status so the
   //    tabs and chips stay stable while the user filters the list below.
   const [itemTypeAgg, catAgg] = await Promise.all([
-    SKU.aggregate([{ $group: { _id: '$itemType', count: { $sum: 1 } } }]),
     SKU.aggregate([
+      ...(partyMatch ? [{ $match: partyMatch }] : []),
+      { $group: { _id: '$itemType', count: { $sum: 1 } } },
+    ]),
+    SKU.aggregate([
+      ...(partyMatch ? [{ $match: partyMatch }] : []),
       ...(itemType ? [{ $match: { itemType } }] : []),
       { $group: { _id: { $ifNull: ['$category', ''] }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },

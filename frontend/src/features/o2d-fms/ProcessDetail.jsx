@@ -383,15 +383,30 @@ const ChainLink = () => <Box sx={{ flex: '0 0 auto', alignSelf: 'center', width:
 // Actual Dispatch: every Delivery Challan gets its own chain (Dispatch → Invoice →
 // Eway → Delivery → Payment) left-to-right, stacked below. Steps before dispatch
 // never repeat. Driven by the per-consignment ledger (real documents).
-const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate }) => {
+const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate, selectedDcId = null, onOpenStep }) => {
   const { data, isFetching } = useGetConsignmentsQuery(processId, { skip: !processId });
   const res = data?.data;
-  const consignments = res?.consignments || [];
+  const allConsignments = res?.consignments || [];
+  // When a consignment is picked in the selector above, show only that chain.
+  const consignments = selectedDcId ? allConsignments.filter((c) => String(c.dcId) === selectedDcId) : allConsignments;
   const summary = res?.summary || {};
   const accent = '#7c3aed';
 
   const dispatchSeq = steps.find((s) => s.stepCode === '2.06' || s.triggerKey === 'ACTUAL_DISPATCH')?.sequence ?? 6;
   const spine = steps.filter((s) => (s.sequence || 0) < dispatchSeq);
+
+  // Click a downstream stage → open its task DRAWER scoped to THIS challan (checklist
+  // + "Do it now" link that carries ?dc). Falls back to the deep-link if the process
+  // has no matching step record.
+  const openOrNav = (code, c, base, part) => () => {
+    if (onOpenStep && onOpenStep(code, c)) return;
+    const sp = new URLSearchParams();
+    if (part) sp.set('part', part);
+    if (soNumber) sp.set('so', soNumber);
+    if (c.dcNumber) sp.set('dc', c.dcNumber);
+    const qs = sp.toString();
+    navigate(qs ? `${base}?${qs}` : base);
+  };
 
   // Full post-dispatch chain per consignment (2.06 → 2.13). Every card is clickable and
   // jumps to that step's screen, passing BOTH ?so and ?dc so the target form auto-selects
@@ -407,13 +422,13 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate 
     };
     return [
       { code: '2.06', title: 'Actual Dispatch', done: true, sub: `${num(c.qty)} pcs`, subDate: c.dcDate ? fmt(c.dcDate) : null, onGo: () => navigate(link('/challans')), goLabel: 'View' },
-      { code: '2.07', title: 'Invoice & Eway', done: !!c.invoice?.has, sub: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending', subDate: c.invoice?.date ? fmt(c.invoice.date) : null, onGo: () => navigate(link('/o2d/invoice-entry')), goLabel: c.invoice?.has ? 'Do again' : 'Invoice' },
-      { code: '2.08', title: 'Email Invoice', done: false, sub: c.invoice?.has ? 'Send to client' : 'After invoice', onGo: () => navigate(link('/o2d/invoice-email')), goLabel: 'Email' },
-      { code: '2.09', title: 'Track Delivery', done: !!c.delivery?.delivered, sub: c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'), subDate: c.delivery?.date ? fmt(c.delivery.date) : null, onGo: () => navigate(link('/o2d/track-delivery')), goLabel: c.delivery?.delivered ? 'Do again' : 'POD' },
-      { code: '2.10', title: 'Payment Follow-up', done: !!c.payment?.has, sub: c.payment?.has ? 'Following up' : 'Pending', onGo: () => navigate(link('/o2d/payments', 'followup')), goLabel: 'Follow up' },
-      { code: '2.11', title: 'Payment', done: !!c.payment?.confirmed, sub: c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Follow-up' : 'Pending'), onGo: () => navigate(link('/o2d/payments', 'receipt')), goLabel: c.payment?.confirmed ? 'Do again' : 'Pay' },
-      { code: '2.12', title: 'Transport Bill', done: c.transport?.receiptStatus === 'DONE', sub: c.transport?.receiptStatus === 'DONE' ? 'Received' : 'Pending', onGo: () => navigate(link('/o2d/transport-bill', 'receive')), goLabel: 'Receive' },
-      { code: '2.13', title: 'Transport Payment', done: c.transport?.paymentStatus === 'DONE', sub: c.transport?.paymentStatus === 'DONE' ? 'Paid' : 'Pending', onGo: () => navigate(link('/o2d/transport-bill', 'status')), goLabel: 'Pay bill' },
+      { code: '2.07', title: 'Invoice & Eway', done: !!c.invoice?.has, sub: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending', subDate: c.invoice?.date ? fmt(c.invoice.date) : null, onGo: openOrNav('2.07', c, '/o2d/invoice-entry'), goLabel: 'Open task' },
+      { code: '2.08', title: 'Email Invoice', done: false, sub: c.invoice?.has ? 'Send to client' : 'After invoice', onGo: openOrNav('2.08', c, '/o2d/invoice-email'), goLabel: 'Open task' },
+      { code: '2.09', title: 'Track Delivery', done: !!c.delivery?.delivered, sub: c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'), subDate: c.delivery?.date ? fmt(c.delivery.date) : null, onGo: openOrNav('2.09', c, '/o2d/track-delivery'), goLabel: 'Open task' },
+      { code: '2.10', title: 'Payment Follow-up', done: !!c.payment?.has, sub: c.payment?.has ? 'Following up' : 'Pending', onGo: openOrNav('2.10', c, '/o2d/payments', 'followup'), goLabel: 'Open task' },
+      { code: '2.11', title: 'Payment', done: !!c.payment?.confirmed, sub: c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Follow-up' : 'Pending'), onGo: openOrNav('2.11', c, '/o2d/payments', 'receipt'), goLabel: 'Open task' },
+      { code: '2.12', title: 'Transport Bill', done: c.transport?.receiptStatus === 'DONE', sub: c.transport?.receiptStatus === 'DONE' ? 'Received' : 'Pending', onGo: openOrNav('2.12', c, '/o2d/transport-bill', 'receive'), goLabel: 'Open task' },
+      { code: '2.13', title: 'Transport Payment', done: c.transport?.paymentStatus === 'DONE', sub: c.transport?.paymentStatus === 'DONE' ? 'Paid' : 'Pending', onGo: openOrNav('2.13', c, '/o2d/transport-bill', 'status'), goLabel: 'Open task' },
     ];
   };
 
@@ -549,6 +564,7 @@ const ProcessDetail = () => {
   const [pickStep, setPickStep] = useState(null); // step awaiting a "which consignment?" choice
   const [planOpen, setPlanOpen] = useState(false);
   const [view, setView] = useState('table'); // table = scannable full view (default) | timeline
+  const [selectedDcId, setSelectedDcId] = useState(null); // scope the views below to ONE consignment
 
   const process = data?.data;
   const steps = process?.steps || [];
@@ -567,6 +583,16 @@ const ProcessDetail = () => {
     setActive(s);
   };
   const chooseConsignment = (c) => { setActive(pickStep); setActiveConsignment(c); setPickStep(null); };
+  // Open a step's task drawer scoped to ONE consignment — used by the Split view
+  // so clicking a stage card opens the checklist + "Do it now" link (carrying this
+  // exact challan's ?dc), instead of jumping straight to the action screen.
+  const openStepForConsignment = (stepCode, cons) => {
+    const s = steps.find((x) => x.stepCode === stepCode);
+    if (!s) return false;
+    setActiveConsignment(cons || null);
+    setActive(s);
+    return true;
+  };
   const completed = steps.filter((s) => ['DONE', 'DELAYED'].includes(s.status)).length;
   const pct = steps.length ? Math.round((completed / steps.length) * 100) : 0;
   // The quantity-gated dispatch step (if any) drives the phased-dispatch panel.
@@ -628,6 +654,33 @@ const ProcessDetail = () => {
 
           {/* Consignment Tracker — per-challan invoice/eway/delivery/payment status. */}
           {process.soNumber && <ConsignmentsPanel processId={id} />}
+
+          {/* Consignment selector — pick ONE challan to see just its chain below.
+              (Only when the order shipped in more than one Delivery Challan.) */}
+          {consignments.length > 1 && (
+            <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2.5, mb: 1.5, borderColor: alpha('#7c3aed', 0.3) }}>
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Boxes size={16} color="#7c3aed" />
+                <Typography variant="caption" sx={{ fontWeight: 800, color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '0.05em' }}>View consignment</Typography>
+                <Chip label="All" size="small" clickable
+                  color={!selectedDcId ? 'secondary' : 'default'} variant={!selectedDcId ? 'filled' : 'outlined'}
+                  onClick={() => setSelectedDcId(null)} sx={{ fontWeight: 700 }} />
+                {consignments.map((c) => {
+                  const on = selectedDcId === String(c.dcId);
+                  return (
+                    <Chip key={String(c.dcId)} size="small" clickable
+                      label={`${c.dcNumber}${c.phaseNo ? ` · ${c.phaseNo}` : ''} · ${num(c.qty)} pcs`}
+                      onClick={() => { setSelectedDcId(String(c.dcId)); setView('split'); }}
+                      sx={{ fontWeight: 700, bgcolor: on ? '#7c3aed' : alpha('#7c3aed', 0.08), color: on ? '#fff' : '#6d28d9', border: `1px solid ${alpha('#7c3aed', on ? 0 : 0.3)}` }} />
+                  );
+                })}
+                <Box sx={{ flex: 1 }} />
+                <Typography variant="caption" color="text.secondary">
+                  {selectedDcId ? 'Showing one consignment in the Split view' : 'Showing all consignments'}
+                </Typography>
+              </Stack>
+            </Paper>
+          )}
 
           {/* Four ways to read the same flow — MD picks whatever's clearest. */}
           <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1 }}>
@@ -742,7 +795,8 @@ const ProcessDetail = () => {
 
           {/* ── Split view: shared spine once, then a chain per Delivery Challan ── */}
           {view === 'split' && (
-            <SplitSheetView steps={steps} processId={id} soNumber={process.soNumber} currentStepCode={process.currentStepCode} navigate={navigate} />
+            <SplitSheetView steps={steps} processId={id} soNumber={process.soNumber} currentStepCode={process.currentStepCode}
+              navigate={navigate} selectedDcId={selectedDcId} onOpenStep={openStepForConsignment} />
           )}
 
           {/* ── Board view: steps grouped by where they stand (quick analysis) ── */}

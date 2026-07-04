@@ -238,12 +238,17 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   React.useEffect(() => {
     const ls = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
     if (!ls || ['DONE', 'DELAYED'].includes(ls.status)) return;
-    if (seededFor.current === ls.stepCode) return;
+    // Scope the completion fields to (step + consignment). Switching to another
+    // challan re-seeds fresh, so one consignment's link/remarks never carry into
+    // another's — each challan's step is filled and completed independently.
+    const scopeKey = `${ls.stepCode}::${consignment?.dcNumber || ''}`;
+    if (seededFor.current === scopeKey) return;
+    seededFor.current = scopeKey;
+    setRemarks('');
     const { recordLinks } = deriveLinks(procRes?.data, ls);
-    const seed = recordLinks[0]?.to;
-    if (seed) { seededFor.current = ls.stepCode; setLink((cur) => cur || seed); }
+    setLink(recordLinks[0]?.to || '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [procRes?.data, step?.stepCode]);
+  }, [procRes?.data, step?.stepCode, consignment?.dcNumber]);
 
   // Returning from a connected screen's "Do it now" (?doneAction=<key>) → record
   // that exact action as done on the step, capturing its record deep-link. The
