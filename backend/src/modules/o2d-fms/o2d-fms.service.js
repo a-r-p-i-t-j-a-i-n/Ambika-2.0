@@ -339,7 +339,7 @@ const isConsignmentGated = (def) => !!(def && (def.consignmentGated || CONSIGNME
  * documents, plus aggregate counts that drive the gated steps' completion. Single
  * source of truth = the documents, so nothing can drift.
  */
-const computeConsignments = async (soNumber) => {
+const computeConsignments = async (soNumber, consignmentLog = []) => {
   const blank = {
     total: 0, invoicedDone: 0, deliveredDone: 0, paidDone: 0,
     allInvoiced: false, allDelivered: false, allPaid: false,
@@ -349,8 +349,17 @@ const computeConsignments = async (soNumber) => {
 
   const [order, challans] = await Promise.all([
     SalesOrder.findOne({ soNumber }).select('totalOrderQty totalDispatchedQty totalBalanceQty').lean(),
-    DeliveryChallan.find({ soNumber, isDeleted: { $ne: true } }).sort({ dcDate: 1, createdAt: 1 }).lean(),
+    DeliveryChallan.find({ soNumber, isDeleted: { $ne: true } }).populate('createdBy', 'name').sort({ dcDate: 1, createdAt: 1 }).lean(),
   ]);
+
+  // Per-challan step audit (who did 2.06–2.13 for THIS challan, and when).
+  const logByDc = new Map();
+  (consignmentLog || []).forEach((l) => {
+    const key = String(l.dcId);
+    const m = logByDc.get(key) || {};
+    m[l.stepCode] = { doneByName: l.doneByName || null, doneAt: l.doneAt || null, status: l.status || 'DONE' };
+    logByDc.set(key, m);
+  });
   const orderedQty = Number(order?.totalOrderQty || 0);
   const dispatchedQty = Number(order?.totalDispatchedQty || 0);
   const balanceQty = order?.totalBalanceQty != null ? Number(order.totalBalanceQty) : Math.max(0, orderedQty - dispatchedQty);
@@ -362,7 +371,7 @@ const computeConsignments = async (soNumber) => {
 
   const dcIds = challans.map((c) => c._id);
   const [invoices, payments, transportBills] = await Promise.all([
-    Invoice.find({ soNumber }).select('dcId invoiceNo invoiceDate status invoiceAmount amountReceived balance ewayBillUrls ewayBillUrl').lean(),
+    Invoice.find({ soNumber }).select('dcId invoiceNo invoiceDate status invoiceAmount amountReceived balance ewayBillUrls ewayBillUrl emailToClient').lean(),
     Payment.find({ dcId: { $in: dcIds }, type: 'CLIENT_PAYMENT' }).select('dcId confirmation followUp').lean(),
     TransportBill.find({ dcId: { $in: dcIds } }).select('dcId receipt payment').lean(),
   ]);
@@ -378,9 +387,16 @@ const computeConsignments = async (soNumber) => {
       ? 'Unplanned'
       : ([...new Set((c.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || c.phaseRef?.phaseNo || '—');
     const delivered = c.deliveryStatus === 'Delivered' || c.status === 'DELIVERED';
+    // Per-challan who/when log. 2.06 (Actual Dispatch) falls back to the challan's
+    // own creator + date when not explicitly logged.
+    const log = { ...(logByDc.get(String(c._id)) || {}) };
+    if (!log['2.06'] && c.createdBy) {
+      log['2.06'] = { doneByName: c.createdBy.name || null, doneAt: c.dcDate || c.createdAt || null, status: 'DONE' };
+    }
     return {
       dcId: c._id,
       dcNumber: c.dcNumber,
+      log,
       dcDate: c.dcDate,
       qty: Number(c.totalQuantityPcs || 0),
       boxes: Number(c.totalBoxes || 0),
@@ -391,6 +407,9 @@ const computeConsignments = async (soNumber) => {
       invoice: {
         has: !!inv, invoiceNo: inv?.invoiceNo || null, status: inv?.status || null, date: inv?.invoiceDate || null,
         amount: Number(inv?.invoiceAmount || 0), received: Number(inv?.amountReceived || 0), balance: Number(inv?.balance || 0),
+        // Email-to-client (2.08) status so the tracker card can show Sent / Failed.
+        emailStatus: inv?.emailToClient?.emailStatus || null, // 'SENT' | 'FAILED' | null
+        emailSentAt: inv?.emailToClient?.actual || null,
       },
       eway: { has: !!(inv && ((inv.ewayBillUrls || []).length || inv.ewayBillUrl)) },
       payment: {
@@ -672,6 +691,76 @@ export const o2dFmsService = {
     if (!process) return null;
     const defMap = await loadDefMap();
     return enrichSteps(process, defMap);
+  },
+
+  /**
+   * Record an email sent from a step (2.05 Dispatch Schedule / 2.08 Invoice & Eway)
+   * onto the matching process, so the Master Data / pipeline shows the full audit:
+   * what was sent, to whom, by whom, when, with which files, success or failure.
+   * Best-effort — never throws (email delivery must not fail because logging did).
+   */
+  async recordStepEmail({ soNumber, salesOrderId, stepCode, email, actor }) {
+    try {
+      if (!stepCode || (!soNumber && !salesOrderId)) return null;
+      const query = salesOrderId ? { salesOrderId } : { soNumber };
+      const process = await O2DProcess.findOne({ ...query, isDeleted: { $ne: true } });
+      if (!process) return null;
+      const step = process.steps.find((s) => s.stepCode === stepCode);
+      if (!step) return null;
+      step.emailLog = step.emailLog || [];
+      step.emailLog.push({
+        to: email.to || null,
+        cc: Array.isArray(email.cc) ? email.cc : [],
+        subject: email.subject || null,
+        body: email.body || null,
+        attachments: (email.attachments || []).map((a) => ({ fileName: a.fileName || a.filename || 'file' })),
+        status: email.status || 'SENT',
+        error: email.error || null,
+        sentBy: actor?._id || actor?.id || null,
+        sentByName: actor?.name || actor?.fullName || null,
+        sentAt: new Date(),
+      });
+      await process.save();
+      return step.emailLog[step.emailLog.length - 1];
+    } catch (err) {
+      logger?.error?.(`[o2d-fms] recordStepEmail failed: ${err.message}`);
+      return null;
+    }
+  },
+
+  /**
+   * Record that a downstream step was done for a SPECIFIC Delivery Challan, so each
+   * consignment keeps its own who/when history (the flow forks per challan after
+   * Actual Dispatch). Upserts by (dcId, stepCode) — the latest doer/time wins.
+   * Best-effort — never throws (the real work must not fail because logging did).
+   */
+  async recordConsignmentStep({ soNumber, salesOrderId, dcId, dcNumber, stepCode, actor, status = 'DONE', at }) {
+    try {
+      if (!stepCode || !dcId || (!soNumber && !salesOrderId)) return null;
+      const query = salesOrderId ? { salesOrderId } : { soNumber };
+      const process = await O2DProcess.findOne({ ...query, isDeleted: { $ne: true } });
+      if (!process) return null;
+      process.consignmentLog = process.consignmentLog || [];
+      const entry = {
+        dcId, dcNumber: dcNumber || null, stepCode, status,
+        doneBy: actor?._id || actor?.id || null,
+        doneByName: actor?.name || actor?.fullName || null,
+        doneAt: at ? new Date(at) : new Date(),
+      };
+      const existing = process.consignmentLog.find(
+        (l) => String(l.dcId) === String(dcId) && l.stepCode === stepCode,
+      );
+      if (existing) {
+        Object.assign(existing, entry);
+      } else {
+        process.consignmentLog.push(entry);
+      }
+      await process.save();
+      return entry;
+    } catch (err) {
+      logger?.error?.(`[o2d-fms] recordConsignmentStep failed: ${err.message}`);
+      return null;
+    }
   },
 
   // ── Doer actions ──────────────────────────────────────────────────────────
@@ -1008,14 +1097,14 @@ export const o2dFmsService = {
   /** Per-consignment ledger for an order's process (the Consignment Tracker) —
    *  one row per Delivery Challan with its invoice / eway / POD / payment status. */
   async getConsignments(processId) {
-    const process = await O2DProcess.findById(processId).select('soNumber salesOrderId').lean();
+    const process = await O2DProcess.findById(processId).select('soNumber salesOrderId consignmentLog').lean();
     if (!process) throw new AppError('O2D process not found', 404);
     let soNumber = process.soNumber;
     if (!soNumber && process.salesOrderId) {
       const o = await SalesOrder.findById(process.salesOrderId).select('soNumber').lean();
       soNumber = o?.soNumber;
     }
-    return computeConsignments(soNumber);
+    return computeConsignments(soNumber, process.consignmentLog || []);
   },
 
   async getMyTasks(user, query = {}) {

@@ -28,6 +28,13 @@ const advance = async (soNumber, trigger) => {
   catch (e) { logger.error(`[o2d-fulfillment] ${trigger} advance failed: ${e.message}`); }
 };
 
+// Best-effort: record WHO did this step for THIS challan (per-consignment audit).
+const logStep = async (soNumber, dcId, dcNumber, stepCode, actor, status = 'DONE') => {
+  if (!soNumber || !dcId) return;
+  try { await o2dFmsService.recordConsignmentStep({ soNumber, dcId, dcNumber, stepCode, actor, status }); }
+  catch (e) { logger.error(`[o2d-fulfillment] log ${stepCode} failed: ${e.message}`); }
+};
+
 // Yes/Done → DONE, Cancelled → SKIPPED, No → PENDING.
 const toStep = (s) => {
   const v = String(s || '').toUpperCase();
@@ -38,7 +45,7 @@ const toStep = (s) => {
 
 export const fulfillmentService = {
   // ── 2.9 Track delivery ────────────────────────────────────
-  async trackDelivery({ dcId, status, deliveryDate, newTrackDate }) {
+  async trackDelivery({ dcId, status, deliveryDate, newTrackDate }, actor) {
     const dc = await DeliveryChallan.findById(dcId);
     if (!dc) throw new AppError('Delivery Challan not found', 404);
     dc.deliveryStatus = status || dc.deliveryStatus;
@@ -46,7 +53,10 @@ export const fulfillmentService = {
     else if (status === 'Cancelled') { dc.status = DC_STATUS.CANCELLED; }
     if (newTrackDate) dc.newTrackDate = newTrackDate;
     await dc.save();
-    if (status === 'Delivered') await advance(dc.soNumber, 'POD'); // reflect in FMS tracker
+    if (status === 'Delivered') {
+      await advance(dc.soNumber, 'POD'); // reflect in FMS tracker
+      await logStep(dc.soNumber, dc._id, dc.dcNumber, '2.09', actor);
+    }
     return dc.toObject();
   },
 
@@ -64,15 +74,17 @@ export const fulfillmentService = {
   },
 
   // ── 2.10 Follow up for payment ────────────────────────────
-  async paymentFollowUp({ invoiceId, dcId, status }) {
+  async paymentFollowUp({ invoiceId, dcId, status }, actor) {
     const pay = await this._payment(invoiceId, dcId);
     pay.followUp = { ...pay.followUp, actual: new Date(), status: toStep(status) };
     await pay.save();
+    const inv = invoiceId ? await Invoice.findById(invoiceId).select('soNumber dcNumber dcId').lean() : null;
+    await logStep(inv?.soNumber, dcId || pay.dcId || inv?.dcId, pay.dcNumber || inv?.dcNumber, '2.10', actor);
     return pay.toObject();
   },
 
   // ── 2.11 Receive payment + Tally entry ────────────────────
-  async paymentReceipt({ invoiceId, dcId, status, receivedDate, receivedAmount }) {
+  async paymentReceipt({ invoiceId, dcId, status, receivedDate, receivedAmount }, actor) {
     const pay = await this._payment(invoiceId, dcId);
     pay.confirmation = {
       ...pay.confirmation,
@@ -92,6 +104,7 @@ export const fulfillmentService = {
           ? INVOICE_STATUS.PAID : INVOICE_STATUS.PARTIAL;
         await inv.save(); // pre-save recomputes balance
         await advance(inv.soNumber, 'PAYMENT'); // reflect in FMS tracker
+        await logStep(inv.soNumber, inv.dcId || dcId || pay.dcId, inv.dcNumber || pay.dcNumber, '2.11', actor);
       }
     }
     return pay.toObject();
@@ -108,18 +121,22 @@ export const fulfillmentService = {
   },
 
   // ── 2.12 Receive transport bill ───────────────────────────
-  async transportReceive({ dcId, status, attachment }) {
+  async transportReceive({ dcId, status, attachment }, actor) {
     const tb = await this._transport(dcId);
     tb.receipt = { ...tb.receipt, actual: new Date(), status: toStep(status), attachment: attachment || tb.receipt?.attachment };
     await tb.save();
+    const dc = await DeliveryChallan.findById(dcId).select('soNumber dcNumber').lean();
+    await logStep(dc?.soNumber, dcId, dc?.dcNumber || tb.dcNumber, '2.12', actor);
     return tb.toObject();
   },
 
   // ── 2.13 Transport bill payment status ────────────────────
-  async transportPayment({ dcId, status }) {
+  async transportPayment({ dcId, status }, actor) {
     const tb = await this._transport(dcId);
     tb.payment = { ...tb.payment, actual: new Date(), status: toStep(status) };
     await tb.save();
+    const dc = await DeliveryChallan.findById(dcId).select('soNumber dcNumber').lean();
+    await logStep(dc?.soNumber, dcId, dc?.dcNumber || tb.dcNumber, '2.13', actor);
     return tb.toObject();
   },
 
@@ -132,16 +149,16 @@ export const fulfillmentService = {
   },
 };
 
-const wrap = (fn, msg) => asyncHandler(async (req, res) => res.json(ApiResponse.ok(msg, await fn(req.body))));
+const wrap = (fn, msg) => asyncHandler(async (req, res) => res.json(ApiResponse.ok(msg, await fn(req.body, req.user))));
 
 const router = Router();
 router.use(protect, attachUserPermissions);
 router.get('/payments',        asyncHandler(async (_req, res) => res.json(ApiResponse.ok('Payments', await fulfillmentService.listPayments()))));
 router.get('/transport-bills', asyncHandler(async (_req, res) => res.json(ApiResponse.ok('Transport bills', await fulfillmentService.listTransportBills()))));
-router.post('/track-delivery',          wrap((b) => fulfillmentService.trackDelivery(b), 'Delivery updated'));
-router.post('/payment-followup',        wrap((b) => fulfillmentService.paymentFollowUp(b), 'Payment follow-up saved'));
-router.post('/payment-receipt',         wrap((b) => fulfillmentService.paymentReceipt(b), 'Payment receipt saved'));
-router.post('/transport-bill-receive',  wrap((b) => fulfillmentService.transportReceive(b), 'Transport bill receipt saved'));
-router.post('/transport-bill-payment',  wrap((b) => fulfillmentService.transportPayment(b), 'Transport bill payment saved'));
+router.post('/track-delivery',          wrap((b, u) => fulfillmentService.trackDelivery(b, u), 'Delivery updated'));
+router.post('/payment-followup',        wrap((b, u) => fulfillmentService.paymentFollowUp(b, u), 'Payment follow-up saved'));
+router.post('/payment-receipt',         wrap((b, u) => fulfillmentService.paymentReceipt(b, u), 'Payment receipt saved'));
+router.post('/transport-bill-receive',  wrap((b, u) => fulfillmentService.transportReceive(b, u), 'Transport bill receipt saved'));
+router.post('/transport-bill-payment',  wrap((b, u) => fulfillmentService.transportPayment(b, u), 'Transport bill payment saved'));
 
 export default router;

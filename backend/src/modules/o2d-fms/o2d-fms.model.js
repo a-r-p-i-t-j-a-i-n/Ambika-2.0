@@ -192,6 +192,37 @@ const StepCommentSchema = new Schema({
   at:       { type: Date, default: Date.now },
 }, { _id: true });
 
+// An email dispatched from a step (2.05 Dispatch Schedule / 2.08 Invoice & Eway).
+// Recorded so the Master Data / pipeline shows exactly what was sent, to whom, by
+// whom, when, with which attachments, and whether it succeeded — a full audit.
+const StepEmailSchema = new Schema({
+  to:          { type: String, default: null },
+  cc:          [{ type: String }],
+  subject:     { type: String, default: null },
+  body:        { type: String, default: null },        // HTML body actually sent
+  attachments: [{ fileName: { type: String } }],
+  status:      { type: String, default: 'SENT' },      // SENT | FAILED
+  error:       { type: String, default: null },
+  sentBy:      { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  sentByName:  { type: String, default: null },
+  sentAt:      { type: Date, default: Date.now },
+}, { _id: true });
+
+// Per-Delivery-Challan audit of a downstream step (2.06–2.13). The order-level
+// step stays a single record, but AFTER the flow forks at Actual Dispatch each
+// challan's steps are done independently (Aarti does challan 1's chain, Rajesh
+// challan 2's) — this captures who did each step for each challan, and when, so
+// the tracker shows every challan's own history separately.
+const ConsignmentStepSchema = new Schema({
+  dcId:       { type: Schema.Types.ObjectId, ref: 'DeliveryChallan' },
+  dcNumber:   { type: String, default: null },
+  stepCode:   { type: String, required: true },
+  status:     { type: String, default: 'DONE' },
+  doneBy:     { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  doneByName: { type: String, default: null },
+  doneAt:     { type: Date, default: Date.now },
+}, { _id: true });
+
 // ── O2DProcess step sub-document (runtime) ──────────────────────────────────
 const ProcessStepSchema = new Schema({
   stepCode: { type: String, required: true },
@@ -227,6 +258,8 @@ const ProcessStepSchema = new Schema({
     doneByName: { type: String, default: null },
   }, { _id: false })],
   comments:     [StepCommentSchema],
+  // Emails sent from this step (dispatch schedule / invoice & eway) — full audit.
+  emailLog:     [StepEmailSchema],
 
   // Per-step "a link is required to complete" override. null = inherit the
   // Step Definition's default; true/false = explicit choice set on the template.
@@ -302,6 +335,8 @@ const O2DProcessSchema = new Schema({
   completedAt:     { type: Date, default: null },
 
   steps: [ProcessStepSchema],
+  // Per-challan audit of the post-dispatch steps (independent per Delivery Challan).
+  consignmentLog: [ConsignmentStepSchema],
 }, baseSchemaOptions);
 
 // One process per Sales Order / per Intake — but only when the id is actually set.

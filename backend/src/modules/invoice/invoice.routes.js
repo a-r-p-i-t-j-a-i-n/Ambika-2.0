@@ -64,6 +64,8 @@ export const invoiceService = {
     if (inv.soNumber && data.status !== 'CANCELLED') {
       try { await o2dFmsService.advanceByTrigger({ soNumber: inv.soNumber }, 'INVOICE', actor); }
       catch (e) { logger.error(`[invoice] FMS advance failed: ${e.message}`); }
+      // Per-challan audit: who created this challan's invoice (step 2.07).
+      await o2dFmsService.recordConsignmentStep({ soNumber: inv.soNumber, dcId: inv.dcId, dcNumber: inv.dcNumber, stepCode: '2.07', actor });
     }
     return inv.toObject();
   },
@@ -95,7 +97,7 @@ export const invoiceService = {
    *  `attachments` (optional): the exact set the sender chose — selected invoice
    *  documents plus any files uploaded from their computer. When provided we honor
    *  it exactly; when omitted we fall back to ALL of the invoice's stored docs. */
-  async sendToClient(id, { to, cc, subject, message, attachments: chosen }) {
+  async sendToClient(id, { to, cc, subject, message, attachments: chosen }, actor = null) {
     const inv = await Invoice.findById(id).populate('partyId', 'name email').lean();
     if (!inv) throw new AppError('Invoice not found', 404);
     const recipient = to || inv.partyId?.email;
@@ -142,18 +144,21 @@ export const invoiceService = {
           </table>
         </td></tr>
       </table>`;
+    const finalSubject = subject || `Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`;
     let emailStatus = 'SENT';
+    let emailError = null;
     try {
       await emailService.sendEmail({
         to: recipient,
         cc: ccList,
-        subject: subject || `Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`,
+        subject: finalSubject,
         html,
         attachments,
       });
     } catch (err) {
       logger.error(`[invoice] email failed for ${inv.invoiceNo}: ${err.message}`);
-      emailStatus = `FAILED: ${err.message}`;
+      emailStatus = 'FAILED';
+      emailError = err.message;
     }
     await Invoice.updateOne({ _id: id }, {
       $set: {
@@ -163,6 +168,22 @@ export const invoiceService = {
         'emailToClient.emailStatus': emailStatus,
       },
     });
+
+    // Log this email onto the FMS step 2.08 so it shows in the Master Data audit.
+    await o2dFmsService.recordStepEmail({
+      soNumber: inv.soNumber, stepCode: '2.08', actor,
+      email: {
+        to: recipient, cc: ccList, subject: finalSubject, body: html,
+        attachments: tagged.map((a) => ({ fileName: a.name })),
+        status: emailStatus, error: emailError,
+      },
+    });
+    // Per-challan audit: who emailed this challan's invoice (step 2.08).
+    await o2dFmsService.recordConsignmentStep({
+      soNumber: inv.soNumber, dcId: inv.dcId, dcNumber: inv.dcNumber, stepCode: '2.08', actor,
+      status: emailStatus === 'SENT' ? 'DONE' : 'FAILED',
+    });
+
     return { emailStatus, recipient };
   },
 };
@@ -172,7 +193,7 @@ const c = {
   getAll:  asyncHandler(async (req, res) => { const { docs, pagination } = await invoiceService.getAll(req.query); res.json(ApiResponse.ok('Invoices retrieved', docs, pagination)); }),
   getById: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice retrieved', await invoiceService.getById(req.params.id))); }),
   update:  asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice updated', await invoiceService.update(req.params.id, req.body))); }),
-  send:    asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice email processed', await invoiceService.sendToClient(req.params.id, req.body))); }),
+  send:    asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice email processed', await invoiceService.sendToClient(req.params.id, req.body, req.user))); }),
 };
 
 const router = Router();

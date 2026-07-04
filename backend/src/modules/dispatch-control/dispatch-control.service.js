@@ -1128,7 +1128,7 @@ export const dispatchControlService = {
    * dispatch-plan PDF). Returns { emailStatus, recipient } — never throws on a
    * send failure so the caller can still record the attempt.
    */
-  async emailSchedule({ soNumber, to, cc, subject, message, attachments = [] }) {
+  async emailSchedule({ soNumber, to, cc, subject, message, attachments = [] }, actor = null) {
     const recipient = (to || '').trim();
     if (!recipient) throw new AppError('Recipient email is required.', 400);
     const ccList = (Array.isArray(cc) ? cc : String(cc || '').split(',')).map((e) => String(e).trim()).filter((e) => e.includes('@'));
@@ -1177,19 +1177,33 @@ export const dispatchControlService = {
         </td></tr>
       </table>`;
 
+    const finalSubject = subject || `Dispatch Schedule${soNumber ? ` — ${soNumber}` : ''}`;
     let emailStatus = 'SENT';
+    let emailError = null;
     try {
       await emailService.sendEmail({
         to: recipient,
         cc: ccList,
-        subject: subject || `Dispatch Schedule${soNumber ? ` — ${soNumber}` : ''}`,
+        subject: finalSubject,
         html,
         attachments: atts,
       });
     } catch (err) {
       logger.error(`[dispatch] schedule email failed${soNumber ? ` for ${soNumber}` : ''}: ${err.message}`);
-      emailStatus = `FAILED: ${err.message}`;
+      emailStatus = 'FAILED';
+      emailError = err.message;
     }
+
+    // Log this email onto the FMS step 2.05 so it shows in the Master Data audit.
+    await o2dFmsService.recordStepEmail({
+      soNumber, stepCode: '2.05', actor,
+      email: {
+        to: recipient, cc: ccList, subject: finalSubject, body: html,
+        attachments: attachedNames.map((fileName) => ({ fileName })),
+        status: emailStatus, error: emailError,
+      },
+    });
+
     return { emailStatus, recipient, cc: ccList, attachmentCount: atts.length };
   },
 

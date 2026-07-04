@@ -355,8 +355,12 @@ const ConsignmentsPanel = ({ processId }) => {
 
 // One compact card in a left-to-right chain (a spine step or a consignment stage).
 // The whole card is clickable → jumps to that step's screen (view / do / redo).
-const ChainCard = ({ code, title, done, active, sub, subDate, onGo, goLabel }) => {
-  const c = done ? '#0f766e' : (active ? '#1d4ed8' : '#94a3b8');
+const ChainCard = ({ code, title, done, active, sub, subDate, onGo, goLabel, tone, by }) => {
+  // `tone` forces a status colour regardless of done/active — 'success' (green) or
+  // 'error' (red) — used e.g. to show an email as Sent (green) or Failed (red).
+  const c = tone === 'error' ? '#dc2626' : tone === 'success' ? '#0f766e'
+    : (done ? '#0f766e' : (active ? '#1d4ed8' : '#94a3b8'));
+  const chipLabel = tone ? (sub || '—') : (done ? 'Done' : (sub || 'Pending'));
   return (
     <Paper variant="outlined" onClick={onGo}
       sx={{
@@ -366,8 +370,9 @@ const ChainCard = ({ code, title, done, active, sub, subDate, onGo, goLabel }) =
       }}>
       <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem', fontWeight: 700 }}>{code}</Typography>
       <Typography sx={{ fontWeight: 700, fontSize: '0.72rem', lineHeight: 1.2, minHeight: 30 }}>{title}</Typography>
-      <Chip size="small" label={done ? 'Done' : (sub || 'Pending')} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, maxWidth: '100%', bgcolor: alpha(c, 0.14), color: c }} />
+      <Chip size="small" label={chipLabel} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 700, maxWidth: '100%', bgcolor: alpha(c, 0.14), color: c }} />
       {subDate && <Typography variant="caption" sx={{ display: 'block', mt: 0.4, color: 'text.secondary', fontSize: '0.62rem' }} noWrap>{subDate}</Typography>}
+      {by && <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.62rem' }} noWrap>by {by}</Typography>}
       {onGo && (
         <Stack direction="row" spacing={0.25} alignItems="center" sx={{ mt: 0.5, color: done ? '#0f766e' : '#1d4ed8' }}>
           <Typography sx={{ fontSize: '0.6rem', fontWeight: 800 }}>{goLabel || (done ? 'Open' : 'Do it')}</Typography>
@@ -379,11 +384,44 @@ const ChainCard = ({ code, title, done, active, sub, subDate, onGo, goLabel }) =
 };
 const ChainLink = () => <Box sx={{ flex: '0 0 auto', alignSelf: 'center', width: 16, height: 2, bgcolor: alpha('#94a3b8', 0.5) }} />;
 
+// A full-detail per-consignment step card for the Sheet view — mirrors the spine's
+// "bigger card" (Doer / Planned / Actual / Delay / Checklist / Done by) but for THIS
+// Delivery Challan's stage. `stage` carries the per-challan status/date; `step` is the
+// matching FMS process step (who's assigned, checklist, who completed).
+const RichStageCard = ({ stage, step }) => {
+  const done = stage.done;
+  const c = stage.tone === 'error' ? '#dc2626' : stage.tone === 'success' ? '#0f766e'
+    : (done ? '#0f766e' : '#94a3b8');
+  const chipLabel = stage.tone ? (stage.sub || '—') : (done ? 'Done' : (stage.sub || 'Pending'));
+  return (
+    <Paper variant="outlined" onClick={stage.onGo}
+      sx={{ flex: '0 0 auto', width: 194, p: 1.25, borderRadius: 2, borderTop: '3px solid', borderTopColor: c,
+        cursor: stage.onGo ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s',
+        '&:hover': stage.onGo ? { boxShadow: 4, transform: 'translateY(-2px)', borderColor: c } : {} }}>
+      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem', fontWeight: 700 }}>{stage.code}</Typography>
+      <Typography sx={{ fontWeight: 700, fontSize: '0.75rem', lineHeight: 1.2, minHeight: 32, mb: 0.5 }}>{stage.title}</Typography>
+      <Chip size="small" label={chipLabel} sx={{ mb: 0.75, height: 18, fontSize: '0.58rem', fontWeight: 700, maxWidth: '100%', bgcolor: alpha(c, 0.14), color: c }} />
+      <SheetRow label="Assigned" value={(step && doerNames(step)) || step?.defaultOwnerRole || 'Unassigned'} />
+      <SheetRow label="Planned" value={fmt(step?.planned)} />
+      <SheetRow label="Actual" value={stage.subDate || fmt(step?.actual)} />
+      <SheetRow label="Delay" value={step?.delayMins > 0 ? `+${step.delayMins}m` : '—'} />
+      <SheetRow label="Checklist" value={step?.checklistTotal ? `${step.checklistDone}/${step.checklistTotal}` : '—'} />
+      <SheetRow label="Done by" value={stage.by || step?.completedBy?.name || '—'} />
+      {stage.onGo && (
+        <Stack direction="row" spacing={0.25} alignItems="center" sx={{ mt: 0.5, color: done ? '#0f766e' : '#1d4ed8' }}>
+          <Typography sx={{ fontSize: '0.62rem', fontWeight: 800 }}>{stage.goLabel || 'Open'}</Typography>
+          <ArrowRight size={11} />
+        </Stack>
+      )}
+    </Paper>
+  );
+};
+
 // ── Split view — the shared spine (1.01–2.05) runs ONCE, then the flow forks at
 // Actual Dispatch: every Delivery Challan gets its own chain (Dispatch → Invoice →
 // Eway → Delivery → Payment) left-to-right, stacked below. Steps before dispatch
 // never repeat. Driven by the per-consignment ledger (real documents).
-const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate, selectedDcId = null, onOpenStep }) => {
+const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate, selectedDcId = null, onOpenStep, hideSpine = false, richCards = false }) => {
   const { data, isFetching } = useGetConsignmentsQuery(processId, { skip: !processId });
   const res = data?.data;
   const allConsignments = res?.consignments || [];
@@ -420,21 +458,35 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate,
       const qs = sp.toString();
       return qs ? `${base}?${qs}` : base;
     };
-    return [
+    const lg = (code) => c.log?.[code] || {};
+    const stages = [
       { code: '2.06', title: 'Actual Dispatch', done: true, sub: `${num(c.qty)} pcs`, subDate: c.dcDate ? fmt(c.dcDate) : null, onGo: () => navigate(link('/challans')), goLabel: 'View' },
       { code: '2.07', title: 'Invoice & Eway', done: !!c.invoice?.has, sub: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending', subDate: c.invoice?.date ? fmt(c.invoice.date) : null, onGo: openOrNav('2.07', c, '/o2d/invoice-entry'), goLabel: 'Open task' },
-      { code: '2.08', title: 'Email Invoice', done: false, sub: c.invoice?.has ? 'Send to client' : 'After invoice', onGo: openOrNav('2.08', c, '/o2d/invoice-email'), goLabel: 'Open task' },
+      { code: '2.08', title: 'Email Invoice',
+        done: c.invoice?.emailStatus === 'SENT',
+        tone: c.invoice?.emailStatus === 'SENT' ? 'success' : (c.invoice?.emailStatus === 'FAILED' ? 'error' : undefined),
+        sub: c.invoice?.emailStatus === 'SENT' ? 'Sent to client'
+          : (c.invoice?.emailStatus === 'FAILED' ? 'Send failed' : (c.invoice?.has ? 'Send to client' : 'After invoice')),
+        subDate: c.invoice?.emailSentAt ? fmt(c.invoice.emailSentAt) : null,
+        onGo: openOrNav('2.08', c, '/o2d/invoice-email'), goLabel: 'Open task' },
       { code: '2.09', title: 'Track Delivery', done: !!c.delivery?.delivered, sub: c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'), subDate: c.delivery?.date ? fmt(c.delivery.date) : null, onGo: openOrNav('2.09', c, '/o2d/track-delivery'), goLabel: 'Open task' },
       { code: '2.10', title: 'Payment Follow-up', done: !!c.payment?.has, sub: c.payment?.has ? 'Following up' : 'Pending', onGo: openOrNav('2.10', c, '/o2d/payments', 'followup'), goLabel: 'Open task' },
       { code: '2.11', title: 'Payment', done: !!c.payment?.confirmed, sub: c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Follow-up' : 'Pending'), onGo: openOrNav('2.11', c, '/o2d/payments', 'receipt'), goLabel: 'Open task' },
       { code: '2.12', title: 'Transport Bill', done: c.transport?.receiptStatus === 'DONE', sub: c.transport?.receiptStatus === 'DONE' ? 'Received' : 'Pending', onGo: openOrNav('2.12', c, '/o2d/transport-bill', 'receive'), goLabel: 'Open task' },
       { code: '2.13', title: 'Transport Payment', done: c.transport?.paymentStatus === 'DONE', sub: c.transport?.paymentStatus === 'DONE' ? 'Paid' : 'Pending', onGo: openOrNav('2.13', c, '/o2d/transport-bill', 'status'), goLabel: 'Open task' },
     ];
+    // Overlay each stage with THIS challan's own who/when (per-consignment audit),
+    // so every Delivery Challan's chain shows its own doer + date independently.
+    return stages.map((st) => {
+      const l = lg(st.code);
+      return { ...st, by: l.doneByName || null, at: l.doneAt || null, subDate: l.doneAt ? fmt(l.doneAt) : st.subDate };
+    });
   };
 
   return (
     <Stack spacing={2}>
-      {/* Shared spine — runs once */}
+      {/* Shared spine — runs once (hidden when the Sheet view already shows it) */}
+      {!hideSpine && (
       <Paper sx={{ p: 2, borderRadius: 3 }}>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
           <Boxes size={16} color="#0b2545" />
@@ -455,6 +507,7 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate,
           ))}
         </Box>
       </Paper>
+      )}
 
       {/* Fork marker */}
       <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 0.5 }}>
@@ -485,7 +538,9 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate,
             {stagesFor(c).map((st, i) => (
               <React.Fragment key={st.code}>
                 {i > 0 && <ChainLink />}
-                <ChainCard {...st} />
+                {richCards
+                  ? <RichStageCard stage={st} step={steps.find((s) => s.stepCode === st.code)} />
+                  : <ChainCard {...st} />}
               </React.Fragment>
             ))}
           </Box>
@@ -765,32 +820,40 @@ const ProcessDetail = () => {
             </Paper>
           )}
 
-          {/* ── Sheet view: horizontal, step-by-step columns (like the original FMS sheet) ── */}
+          {/* ── Sheet view: horizontal spine + a full per-consignment breakdown below ── */}
           {view === 'sheet' && (
-            <Paper sx={{ borderRadius: 3, p: 1.5, overflowX: 'auto' }}>
-              <Stack direction="row" spacing={1.5} sx={{ minWidth: 'min-content', pb: 1 }}>
-                {steps.map((s, i) => {
-                  const tn = STATUS[s.status] || STATUS.PENDING;
-                  const head = s.isOverdue ? '#be123c' : tn.color;
-                  return (
-                    <Paper key={s.stepCode} variant="outlined" onClick={() => openStep(s)}
-                      sx={{ flex: '0 0 auto', width: 210, p: 1.25, borderRadius: 2, cursor: 'pointer',
-                        borderTop: '3px solid', borderTopColor: head, '&:hover': { boxShadow: 3 } }}>
-                      <Typography variant="caption" color="text.secondary">Step {i + 1} · {s.stepCode}</Typography>
-                      <Typography sx={{ fontWeight: 700, lineHeight: 1.2, mb: 1, minHeight: 34 }}>{s.name}</Typography>
-                      <Chip size="small" label={s.isOverdue ? 'Overdue' : tn.label}
-                        sx={{ mb: 1, bgcolor: alpha(head, 0.12), color: head, fontWeight: 600 }} />
-                      <SheetRow label="Doer(s)" value={doerNames(s) || s.defaultOwnerRole || 'Unassigned'} />
-                      <SheetRow label="Planned" value={fmt(s.planned)} />
-                      <SheetRow label="Actual" value={fmt(s.actual)} />
-                      <SheetRow label="Delay" value={s.delayMins > 0 ? `+${s.delayMins}m` : '—'} />
-                      <SheetRow label="Checklist" value={s.checklistTotal ? `${s.checklistDone}/${s.checklistTotal}` : '—'} />
-                      <SheetRow label="Done by" value={s.completedBy?.name || '—'} />
-                    </Paper>
-                  );
-                })}
-              </Stack>
-            </Paper>
+            <Stack spacing={2}>
+              <Paper sx={{ borderRadius: 3, p: 1.5, overflowX: 'auto' }}>
+                <Stack direction="row" spacing={1.5} sx={{ minWidth: 'min-content', pb: 1 }}>
+                  {steps.map((s, i) => {
+                    const tn = STATUS[s.status] || STATUS.PENDING;
+                    const head = s.isOverdue ? '#be123c' : tn.color;
+                    return (
+                      <Paper key={s.stepCode} variant="outlined" onClick={() => openStep(s)}
+                        sx={{ flex: '0 0 auto', width: 210, p: 1.25, borderRadius: 2, cursor: 'pointer',
+                          borderTop: '3px solid', borderTopColor: head, '&:hover': { boxShadow: 3 } }}>
+                        <Typography variant="caption" color="text.secondary">Step {i + 1} · {s.stepCode}</Typography>
+                        <Typography sx={{ fontWeight: 700, lineHeight: 1.2, mb: 1, minHeight: 34 }}>{s.name}</Typography>
+                        <Chip size="small" label={s.isOverdue ? 'Overdue' : tn.label}
+                          sx={{ mb: 1, bgcolor: alpha(head, 0.12), color: head, fontWeight: 600 }} />
+                        <SheetRow label="Doer(s)" value={doerNames(s) || s.defaultOwnerRole || 'Unassigned'} />
+                        <SheetRow label="Planned" value={fmt(s.planned)} />
+                        <SheetRow label="Actual" value={fmt(s.actual)} />
+                        <SheetRow label="Delay" value={s.delayMins > 0 ? `+${s.delayMins}m` : '—'} />
+                        <SheetRow label="Checklist" value={s.checklistTotal ? `${s.checklistDone}/${s.checklistTotal}` : '—'} />
+                        <SheetRow label="Done by" value={s.completedBy?.name || '—'} />
+                      </Paper>
+                    );
+                  })}
+                </Stack>
+              </Paper>
+              {/* Below the spine: each Delivery Challan's downstream steps, separately —
+                  so a 2nd/3rd dispatch isn't hidden behind the first. Same scoped
+                  drawer as the Split view (each challan works independently). */}
+              <SplitSheetView hideSpine richCards steps={steps} processId={id} soNumber={process.soNumber}
+                currentStepCode={process.currentStepCode} navigate={navigate}
+                selectedDcId={selectedDcId} onOpenStep={openStepForConsignment} />
+            </Stack>
           )}
 
           {/* ── Split view: shared spine once, then a chain per Delivery Challan ── */}

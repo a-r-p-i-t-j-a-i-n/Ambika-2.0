@@ -7,6 +7,7 @@ import { dispatchControlService } from './dispatch-control.service.js';
 const buildActor = (req) => ({
   _id: req.user?._id,
   userId: req.user?._id,
+  name: req.user?.name || req.user?.fullName,
   companyId: req.user?.companyId,
   ipAddress: req.ip,
   userAgent: req.headers?.['user-agent'],
@@ -29,7 +30,7 @@ export const dispatchControlController = {
   }),
 
   emailSchedule: asyncHandler(async (req, res) => {
-    const result = await dispatchControlService.emailSchedule(req.body);
+    const result = await dispatchControlService.emailSchedule(req.body, buildActor(req));
     res.json(ApiResponse.ok('Dispatch schedule email processed', result));
   }),
 

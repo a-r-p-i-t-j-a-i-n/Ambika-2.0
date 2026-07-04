@@ -9,6 +9,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import {
   Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, FileSpreadsheet,
   FileText, X, ExternalLink, ScrollText, CheckCircle2, Circle, Link2, Clock, User as UserIcon,
+  Paperclip, Mail,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useGetOrderIntakesQuery } from '../../store/api/orderIntakeApi';
@@ -153,7 +154,7 @@ const COLUMNS = {
     col('poNumber', 'PO Number', { minWidth: 130 }),
     col('partyName', 'Party', { minWidth: 170 }),
     col('skuCount', 'SKUs', { minWidth: 80, type: 'number', valueGetter: (v, r) => (r.items || []).length }),
-    col('phaseCount', 'Phases', { minWidth: 80, type: 'number', valueGetter: (v, r) => (r.items || []).reduce((s, it) => s + (it.phases || []).length, 0) }),
+    col('phaseCount', 'Phases', { minWidth: 80, type: 'number', valueGetter: (v, r) => new Set((r.items || []).flatMap((it) => (it.phases || []).map((ph) => ph.phaseNo).filter((n) => n != null))).size }),
     col('totalPlanned', 'Planned Qty', { minWidth: 110, type: 'number', valueGetter: (v, r) => (r.items || []).reduce((s, it) => s + (it.phases || []).reduce((p, ph) => p + Number(ph.plannedQty || 0), 0), 0) }),
     col('poDate', 'PO Date', { minWidth: 120, valueGetter: (v, r) => dd(r.poDate) }),
     col('status', 'Status', { minWidth: 110 }),
@@ -292,6 +293,29 @@ const LinkChips = ({ links }) => {
   );
 };
 
+/** Row cell: connected-record chips + small indicators for attachments / emails sent. */
+const ConnectedCell = ({ step, proc }) => {
+  const links = stepLinks(step, proc);
+  const atts = step?.attachments?.length || 0;
+  const emails = step?.emailLog?.length || 0;
+  if (!links.length && !atts && !emails) return <Typography variant="caption" color="text.disabled">—</Typography>;
+  return (
+    <Stack direction="row" spacing={0.5} flexWrap="wrap" rowGap={0.5} alignItems="center">
+      <LinkChips links={links} />
+      {atts > 0 && (
+        <Tooltip title={`${atts} attachment${atts > 1 ? 's' : ''}`}>
+          <Chip size="small" icon={<Paperclip size={11} />} label={atts} sx={{ height: 22, fontSize: '0.66rem', fontWeight: 700 }} />
+        </Tooltip>
+      )}
+      {emails > 0 && (
+        <Tooltip title={`${emails} email${emails > 1 ? 's' : ''} sent`}>
+          <Chip size="small" icon={<Mail size={11} />} label={emails} color="info" variant="outlined" sx={{ height: 22, fontSize: '0.66rem', fontWeight: 700 }} />
+        </Tooltip>
+      )}
+    </Stack>
+  );
+};
+
 /** Right-side drawer: the full "who did what, when, why" log for one step + its links. */
 const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
   const theme = useTheme();
@@ -381,6 +405,43 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                 ))}
               </Stack>
             </Section>
+
+            {/* Emails sent (2.05 dispatch schedule / 2.08 invoice & eway) */}
+            {(step?.emailLog || []).length > 0 && (
+              <Section title="Emails Sent">
+                <Stack spacing={1}>
+                  {step.emailLog.map((em) => {
+                    const failed = String(em.status || '').toUpperCase().startsWith('FAIL');
+                    return (
+                      <Box key={em._id} sx={{ p: 1, borderRadius: 1.5, border: `1px solid ${theme.palette.divider}` }}>
+                        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
+                          <Mail size={14} color={failed ? theme.palette.error.main : theme.palette.success.main} />
+                          <Chip size="small" label={failed ? 'Failed' : 'Sent'} color={failed ? 'error' : 'success'} sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700 }} />
+                          <Typography variant="caption" color="text.secondary">{dt(em.sentAt)}</Typography>
+                        </Stack>
+                        <Typography sx={{ fontSize: '0.8rem', fontWeight: 700 }}>{em.subject || '(no subject)'}</Typography>
+                        <LogLine icon={UserIcon}>Sent by <b>{em.sentByName || '—'}</b></LogLine>
+                        <LogLine>To: {em.to || '—'}</LogLine>
+                        {em.cc?.length > 0 && <LogLine>CC: {em.cc.join(', ')}</LogLine>}
+                        {em.body && (
+                          <Box sx={{ mt: 0.5, p: 0.75, borderRadius: 1, bgcolor: (t) => alpha(t.palette.primary.main, 0.04),
+                            fontSize: '0.74rem', maxHeight: 140, overflowY: 'auto', whiteSpace: 'pre-wrap' }}
+                            dangerouslySetInnerHTML={{ __html: em.body }} />
+                        )}
+                        {(em.attachments || []).length > 0 && (
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" rowGap={0.5} sx={{ mt: 0.5 }}>
+                            {em.attachments.map((a, ai) => (
+                              <Chip key={ai} size="small" icon={<Paperclip size={11} />} label={a.fileName || 'file'} sx={{ height: 20, fontSize: '0.64rem' }} />
+                            ))}
+                          </Stack>
+                        )}
+                        {failed && em.error && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>{em.error}</Typography>}
+                      </Box>
+                    );
+                  })}
+                </Stack>
+              </Section>
+            )}
 
             {/* Form fields captured */}
             {(step?.formFields || []).length > 0 && (
@@ -525,7 +586,7 @@ const O2dMasterData = () => {
 
   // The FMS process register — the audit ledger. Loaded always: it drives the
   // pure process tabs AND supplies the "Links & Log" for every entity tab.
-  const procQ = useGetProcessesQuery({ limit: 3000, sort: '-createdAt' });
+  const procQ = useGetProcessesQuery({ limit: 1000, sort: '-createdAt' });
   const processes = useMemo(() => procQ?.data?.data || [], [procQ]);
   const procBySo = useMemo(() => {
     const m = new Map();
@@ -540,7 +601,7 @@ const O2dMasterData = () => {
 
   // Payment/transport rows carry only dcNumber → resolve to soNumber via challans.
   const needDcMap = ['paymentFollowup', 'paymentReceipt', 'transportReceipt', 'transportPayment'].includes(tab);
-  const dcMapQ = useGetChallansQuery({ limit: 3000, sort: '-dcDate' }, { skip: !needDcMap });
+  const dcMapQ = useGetChallansQuery({ limit: 1000, sort: '-dcDate' }, { skip: !needDcMap });
   const dcToSo = useMemo(() => {
     const m = new Map();
     (dcMapQ?.data?.data || []).forEach((c) => { if (c.dcNumber) m.set(String(c.dcNumber), c.soNumber); });
@@ -594,9 +655,6 @@ const O2dMasterData = () => {
     return { step: (proc.steps || []).find((s) => s.stepCode === code) || null, proc };
   }, [tab, procBySo, procByIntake, dcToSo]);
 
-  // Connected-record chips for a row (resolves its FMS step, then its links).
-  const linksForRow = useMemo(() => (row) => { const { step, proc } = stepForRow(row); return stepLinks(step, proc); }, [stepForRow]);
-
   // Distinct statuses present (for the status filter dropdown).
   const statuses = useMemo(() => [...new Set(rawRows.map((r) => statusOf(tab, r)).filter(Boolean))], [rawRows, tab]);
 
@@ -615,16 +673,18 @@ const O2dMasterData = () => {
   // Grid columns = the tab's columns + a Connected-records column + a Log button.
   const gridColumns = useMemo(() => [
     ...columns,
-    col('__links', 'Connected', {
-      minWidth: 210, flex: 1.2, sortable: false, filterable: false,
-      renderCell: (p) => <LinkChips links={linksForRow(p.row)} />,
-    }),
-    col('__log', 'Log', {
-      width: 92, flex: 0, sortable: false, filterable: false,
+    {
+      field: '__links', headerName: 'Connected', flex: 1, minWidth: 150,
+      sortable: false, filterable: false, disableColumnMenu: true,
+      renderCell: (p) => <ConnectedCell {...stepForRow(p.row)} />,
+    },
+    {
+      field: '__log', headerName: 'Log', width: 78, minWidth: 78,
+      sortable: false, filterable: false, disableColumnMenu: true,
       renderCell: (p) => (
-        <Button size="small" startIcon={<ScrollText size={14} />} onClick={() => setLogRow(p.row)} sx={{ fontWeight: 700 }}>Log</Button>
+        <Button size="small" startIcon={<ScrollText size={14} />} onClick={() => setLogRow(p.row)} sx={{ fontWeight: 700, minWidth: 0 }}>Log</Button>
       ),
-    }),
+    },
   ], [columns, stepForRow]);
 
   const activeTab = TABS.find((t) => t.key === tab);
@@ -640,7 +700,7 @@ const O2dMasterData = () => {
   const doPdf = () => printTablePdf({ title: activeTab?.label ? `O2D — ${activeTab.label}` : 'O2D Master Data', subtitle: filterSummary, columns, rows, displayVal });
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', overflowX: 'hidden', maxWidth: '100%' }}>
       {/* Hero (compact) */}
       <Box sx={{ color: '#fff', px: { xs: 2, md: 3 }, pt: { xs: 1.75, md: 2 }, pb: { xs: 2.5, md: 3 },
         background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)' }}>
@@ -657,7 +717,7 @@ const O2dMasterData = () => {
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -1.5, md: -1.75 }, position: 'relative', pb: 6 }}>
+      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -1.5, md: -1.75 }, position: 'relative', pb: 6, minWidth: 0, overflowX: 'hidden' }}>
         {/* ── GLOBAL filters (apply to every step tab) + export ── */}
         <Paper sx={{ borderRadius: 3, p: 1.25, mb: 1.5, border: `1px solid ${theme.palette.divider}` }}>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
@@ -737,13 +797,15 @@ const O2dMasterData = () => {
 
           {/* ── Table view (DataGrid) ── */}
           {view === 'table' && (
-            <Box sx={{ px: 1.5, pb: 1.5 }}>
+            <Box sx={{ px: 1.5, pb: 1.5, width: '100%', minWidth: 0, overflowX: 'hidden' }}>
               <DataGrid
                 rows={rows} columns={gridColumns} getRowId={(r) => r._id} loading={current?.isFetching}
                 autoHeight density="compact"
                 initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
                 pageSizeOptions={[25, 50, 100]} disableRowSelectionOnClick
-                sx={{ border: 0, '& .MuiDataGrid-columnHeaders': { bgcolor: alpha(theme.palette.primary.main, 0.04) } }}
+                onCellClick={(p) => { if (p.field !== '__links' && p.field !== '__log') setLogRow(p.row); }}
+                sx={{ border: 0, cursor: 'pointer', maxWidth: '100%',
+                  '& .MuiDataGrid-columnHeaders': { bgcolor: alpha(theme.palette.primary.main, 0.04) } }}
               />
             </Box>
           )}
@@ -762,11 +824,11 @@ const O2dMasterData = () => {
                 </TableHead>
                 <TableBody>
                   {rows.map((row, i) => (
-                    <TableRow key={row._id} hover>
+                    <TableRow key={row._id} hover sx={{ cursor: 'pointer' }} onClick={() => setLogRow(row)}>
                       <TableCell sx={{ color: 'text.disabled' }}>{i + 1}</TableCell>
                       {columns.map((c) => <TableCell key={c.field}>{displayVal(c, row)}</TableCell>)}
-                      <TableCell sx={{ whiteSpace: 'normal' }}><LinkChips links={linksForRow(row)} /></TableCell>
-                      <TableCell>
+                      <TableCell sx={{ whiteSpace: 'normal' }} onClick={(e) => e.stopPropagation()}><ConnectedCell {...stepForRow(row)} /></TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
                         <Button size="small" startIcon={<ScrollText size={13} />} onClick={() => setLogRow(row)}>Log</Button>
                       </TableCell>
                     </TableRow>
@@ -794,7 +856,7 @@ const O2dMasterData = () => {
                     ))}
                   </Stack>
                   <Divider sx={{ my: 1 }} />
-                  <LinkChips links={linksForRow(row)} />
+                  <ConnectedCell {...stepForRow(row)} />
                   <Button size="small" fullWidth startIcon={<ScrollText size={14} />} onClick={() => setLogRow(row)} sx={{ mt: 0.75, fontWeight: 700 }}>
                     Links &amp; Log
                   </Button>
