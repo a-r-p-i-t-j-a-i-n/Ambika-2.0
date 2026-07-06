@@ -20,7 +20,7 @@ const transporter = nodemailer.createTransport({
     user: env.SMTP_USER,
     pass: env.SMTP_PASS,
   },
-  // Fail fast if the port is blocked/throttled instead of hanging ~60s.
+  //  Fail fast if the port is blocked/throttled instead of hanging ~60s.
   connectionTimeout: 15000, // TCP connect
   greetingTimeout:   10000, // wait for server greeting
   socketTimeout:     20000, // inactivity after connect
