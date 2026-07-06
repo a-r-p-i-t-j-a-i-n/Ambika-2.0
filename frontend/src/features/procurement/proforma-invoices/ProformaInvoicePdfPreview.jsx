@@ -3,11 +3,13 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, IconButton,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
-import { fileHref } from '../indents/indentMeta';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the uploaded PI document (PDF/image) with open/download. */
 const ProformaInvoicePdfPreview = ({ open, onClose, pi }) => {
-  const url = pi?.piDocument?.fileUrl ? fileHref(pi.piDocument.fileUrl) : '';
+  // Resolve against the current API host (uses the S3 key when present) so a
+  // dev-baked localhost URL doesn't break the preview on the live site.
+  const url = pi?.piDocument ? resolveFileUrl(pi.piDocument) : '';
   const isImage = /image\//i.test(pi?.piDocument?.fileType || '');
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth

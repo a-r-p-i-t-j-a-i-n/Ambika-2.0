@@ -3,10 +3,13 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, IconButton,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the generated Incoming QC Report PDF. */
 const IncomingQCPdfPreview = ({ open, onClose, qc }) => {
-  const url = qc?.qcPdfUrl || '';
+  // Re-point the stored URL at the current API host — a baked-in localhost link
+  // (dev-generated) otherwise fails to load on the live site.
+  const url = resolveFileUrl(qc?.qcPdfUrl);
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>

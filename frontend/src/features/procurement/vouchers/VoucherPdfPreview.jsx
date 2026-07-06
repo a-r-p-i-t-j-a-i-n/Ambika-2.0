@@ -3,11 +3,13 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, IconButton,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
-import { fileHref } from '../indents/indentMeta';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the generated Voucher PDF (Step 1.11). */
 const VoucherPdfPreview = ({ open, onClose, voucher }) => {
-  const url = fileHref(voucher?.voucherPdfUrl) || '';
+  // Re-point the stored URL at the current API host — a baked-in localhost link
+  // (dev-generated) otherwise fails to load on the live site.
+  const url = resolveFileUrl(voucher?.voucherPdfUrl);
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>
