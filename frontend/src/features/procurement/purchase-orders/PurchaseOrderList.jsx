@@ -6,7 +6,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, Send, FileDown,
-  Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, RotateCcw,
+  Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, RotateCcw, SendHorizontal,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
@@ -18,12 +18,13 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
-import { PoStatusChip, PoReleaseChip, PO_STATUSES, fmtINR, fmtDate } from './poMeta';
+import { PoStatusChip, PoReleaseChip, PO_STATUSES, fmtINR, fmtDate, poDisplayNumber } from './poMeta';
 import { PoPiChip } from '../proforma-invoices/piMeta';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
+import BulkReleasePoDialog from './BulkReleasePoDialog';
 
 const KpiCard = ({ icon, label, value, color }) => (
   <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
@@ -53,6 +54,7 @@ const PurchaseOrderList = () => {
   const [reviseFromPo, setReviseFromPo] = useState(null);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
+  const [bulkReleaseOpen, setBulkReleaseOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const [activePo, setActivePo] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -112,7 +114,11 @@ const PurchaseOrderList = () => {
 
   const columns = [
     { field: 'poNumber', headerName: 'PO NUMBER', width: 145,
-      renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
+      renderCell: (p) => (
+        <Typography variant="body2" fontWeight={700} color={p.value ? 'primary.main' : 'text.secondary'}>
+          {poDisplayNumber(p.row)}
+        </Typography>
+      ) },
     { field: 'poDate', headerName: 'PO DATE', width: 100,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'indentNumber', headerName: 'INDENT / ITEM REF', width: 165, sortable: false,
@@ -162,6 +168,9 @@ const PurchaseOrderList = () => {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button variant="outlined" startIcon={<SendHorizontal size={16} />} onClick={() => setBulkReleaseOpen(true)}>
+            Bulk Release PO
+          </Button>
           <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditPo(null); setFormOpen(true); }}>
             Create Purchase Order
           </Button>
@@ -235,6 +244,7 @@ const PurchaseOrderList = () => {
       <PurchaseOrderApprovalDialog open={approvalOpen} po={activePo} onClose={() => { setApprovalOpen(false); setActivePo(null); }} />
       <PurchaseOrderReleaseDialog open={releaseOpen} po={activePo} onClose={() => { setReleaseOpen(false); setActivePo(null); }} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={activePo} onClose={() => { setPdfOpen(false); setActivePo(null); }} />
+      <BulkReleasePoDialog open={bulkReleaseOpen} onClose={() => setBulkReleaseOpen(false)} />
     </Box>
   );
 };

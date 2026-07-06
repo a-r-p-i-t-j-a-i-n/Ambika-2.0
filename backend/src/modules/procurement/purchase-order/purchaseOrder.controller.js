@@ -58,6 +58,16 @@ export const purchaseOrderController = {
     res.json(ApiResponse.ok('Purchase order released to vendor', po));
   }),
 
+  bulkRelease: asyncHandler(async (req, res) => {
+    const result = await purchaseOrderService.bulkRelease(req.body, req.user);
+    res.json(ApiResponse.ok(`${result.released} of ${result.total} PO(s) released`, result));
+  }),
+
+  getReleasePreview: asyncHandler(async (req, res) => {
+    const data = await purchaseOrderService.getReleasePreview(req.body);
+    res.json(ApiResponse.ok('Release preview', data));
+  }),
+
   piNotRequired: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.markPiNotRequired(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('PI marked as Not Required', po));

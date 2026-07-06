@@ -14,6 +14,8 @@ import { generateGrnNumber, generateGrnUniqueId } from '../../../utils/docNumber
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
+import { registerApprovalDocument } from '../../approvals/approval.registry.js';
+import { approvalService } from '../../approvals/approval.service.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -32,13 +34,14 @@ const computeLines = (items = []) => {
     const invoiceQty = round2(it.invoiceQty);
     const receivedQty = round2(it.receivedQty);
     const rate = round2(it.rate);
-    const pendingAvailable = Math.max(0, round2(orderedQty - prev)); // before this GRN
+    const pendingAvailable = Math.max(0, round2(orderedQty - prev)); // before this GRN — read-only, PO-derived
     return {
       ...it,
       orderedQty, previouslyReceivedQty: prev, invoiceQty, receivedQty, rate,
+      pendingBeforeGrn: pendingAvailable,
       shortQty: round2(invoiceQty - receivedQty),
       extraQty: Math.max(0, round2(receivedQty - pendingAvailable)),
-      pendingQty: Math.max(0, round2(orderedQty - (prev + receivedQty))),
+      pendingQty: Math.max(0, round2(orderedQty - (prev + receivedQty))), // after this GRN
       amount: round2(receivedQty * rate),
     };
   });
@@ -59,7 +62,7 @@ const computeLines = (items = []) => {
 // ─────────────────────────────────────────────────────────────
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
-export const buildGrnPdfBuffer = (grn, company = {}) => new Promise((resolve, reject) => {
+export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Promise((resolve, reject) => {
   try {
     const M = 40;
     const doc = new PDFDocument({ size: 'A4', margin: M });
@@ -207,8 +210,53 @@ export const buildGrnPdfBuffer = (grn, company = {}) => new Promise((resolve, re
     doc.font('Helvetica-Bold').fontSize(9).fill(navy).text(`For ${company.name || env.COMPANY_NAME}`, M + W - 180, y + 30, { width: 180, align: 'center' });
     doc.font('Helvetica').fontSize(8).text(`Prepared By: ${grn.preparedBy || grn.receivedBy || '—'}`, M + W - 180, y + 70, { width: 180, align: 'center' });
 
+    // ── MD Approval block (Digital Approval & Signature engine) — always
+    // rendered so the unsigned PDF shows exactly where the signature will
+    // land; a signature image fills the placeholder once signed. ──
+    let ay = y + 100;
+    if (ay + 110 > 780) { doc.addPage(); ay = M; }
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('APPROVED BY (MD)', M, ay);
+    if (signature?.imageBuffer) {
+      doc.image(signature.imageBuffer, M, ay + 14, { width: 140, height: 50, fit: [140, 50] });
+    } else {
+      doc.roundedRect(M, ay + 14, 140, 50, 4).dash(3, { space: 2 }).stroke(line).undash();
+      doc.font('Helvetica').fontSize(7).fill('#94a3b8').text('Signature will appear here', M + 8, ay + 34, { width: 124 });
+    }
+    doc.font('Helvetica-Bold').fontSize(9).fill(navy).text(signature?.signedByName || '—', M, ay + 70);
+    doc.font('Helvetica').fontSize(8).fill('#475a8a').text(signature?.designation || 'Managing Director', M, ay + 83);
+    if (signature?.signedAt) {
+      const t = new Date(signature.signedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      doc.font('Helvetica').fontSize(7.5).fill('#475a8a').text(`${fmtDate(signature.signedAt)} · ${t}`, M, ay + 95);
+    }
+
     doc.end();
   } catch (err) { reject(err); }
+});
+
+/** Resolve the company profile once, for the approval engine's PDF adapter. */
+const resolveCompanyForApproval = async () => {
+  try {
+    const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
+    const s = await CompanySettings.findOne().lean();
+    if (s) return { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, email: s.companyEmail };
+  } catch { /* env fallback */ }
+  return {};
+};
+
+// Wire GRN into the generic Digital Approval & Signature engine (see
+// modules/approvals) — the engine calls back into this adapter, it never
+// contains GRN-specific logic itself.
+registerApprovalDocument('GRN', {
+  model: GoodsReceiptNote,
+  numberField: 'grnNumber',
+  mirrorStatusField: 'approvalStatus',
+  pdfUrlField: 'grnPdfUrl',
+  pdfFileNameField: 'grnPdfFileName',
+  uploadFolder: 'grns',
+  buildPdfBuffer: async (grn, opts) => {
+    const company = await resolveCompanyForApproval();
+    return buildGrnPdfBuffer(grn, company, opts?.signature || null);
+  },
 });
 
 export const grnService = {
@@ -331,6 +379,11 @@ export const grnService = {
 
   async update(id, data, user) {
     const grn = await findOrThrow(id);
+    if (grn.approvalStatus === 'MD_APPROVED') {
+      grn.activityTimeline.push({ action: 'EDIT_BLOCKED', description: 'Edit blocked — GRN is MD-signed and locked', actorId: user?._id });
+      await grn.save();
+      throw new AppError('This GRN has been digitally signed by the MD and is locked for editing', 400);
+    }
     if (grn.grnStatus !== GRN_STATUS.DRAFT) throw new AppError('Only draft GRNs can be edited', 400);
     const { items, challanDocument, invoiceDocument, ...rest } = data;
     Object.assign(grn, rest);
@@ -447,6 +500,11 @@ export const grnService = {
       grn.grnPdfFileName = grnPdfFileName;
     } catch (err) { logger.error(`[grn] PDF generation failed for ${grn.grnNumber}: ${err.message}`); }
 
+    // ── 7) Ready for MD Approval (non-fatal) ──
+    try {
+      await approvalService.ensureReady({ documentType: 'GRN', documentId: grn._id, documentNumber: grn.grnNumber }, user);
+    } catch (err) { logger.error(`[grn] approval ensureReady failed for ${grn.grnNumber}: ${err.message}`); }
+
     return grn;
   },
 
@@ -502,6 +560,13 @@ export const grnService = {
     const grn = await GoodsReceiptNote.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
     if (!grn) throw new AppError('GRN not found', 404);
 
+    // MD-signed GRNs are locked — the signed PDF lives in DocumentApproval and is
+    // mirrored onto grnPdfUrl/grnPdfFileName by the approval engine. Never
+    // re-render an unsigned copy over it; just hand back what's already stored.
+    if (grn.approvalStatus === 'MD_APPROVED') {
+      return { grnPdfUrl: grn.grnPdfUrl, grnPdfFileName: grn.grnPdfFileName };
+    }
+
     let company = {};
     try {
       const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
@@ -529,6 +594,11 @@ export const grnService = {
 
   async cancel(id, data, user) {
     const grn = await findOrThrow(id);
+    if (grn.approvalStatus === 'MD_APPROVED') {
+      grn.activityTimeline.push({ action: 'EDIT_BLOCKED', description: 'Cancel blocked — GRN is MD-signed and locked', actorId: user?._id });
+      await grn.save();
+      throw new AppError('This GRN has been digitally signed by the MD and cannot be cancelled', 400);
+    }
     if ([GRN_STATUS.PARTIAL_RECEIVED, GRN_STATUS.FULLY_RECEIVED].includes(grn.grnStatus) || grn.stockPosted) {
       throw new AppError('A completed GRN cannot be cancelled (stock already posted)', 400);
     }

@@ -16,3 +16,7 @@ export const fmtINR = (n) =>
 
 export const fmtDate = (d) =>
   (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
+
+// A PO only gets its final poNumber on approval; until then show the draft
+// reference (or a plain "Pending Approval" label if even that hasn't loaded).
+export const poDisplayNumber = (po) => po?.poNumber || po?.draftNumber || 'Pending Approval';

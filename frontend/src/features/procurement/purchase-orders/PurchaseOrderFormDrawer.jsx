@@ -16,7 +16,7 @@ import {
   usePreviewPurchaseOrderPdfMutation,
 } from '../../../store/api/procurementApi';
 import { useGetVendorsQuery, useGetVendorByIdQuery } from '../../../store/api/vendorApi';
-import { fmtINR } from './poMeta';
+import { fmtINR, poDisplayNumber } from './poMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import AddVendorForItemModal from './AddVendorForItemModal';
@@ -648,17 +648,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       if (isRevise) {
         // New draft PO from the cancelled one — source indents derived server-side.
         const res = await revisePo({ id: reviseFrom._id, ...payload }).unwrap();
-        enqueueSnackbar(`Revised PO ${res?.data?.poNumber || ''} saved as draft`, { variant: 'success' });
+        enqueueSnackbar(`Revised PO ${poDisplayNumber(res?.data)} saved as draft`, { variant: 'success' });
       } else if (isEdit) {
         await updatePo({ id: po._id, ...payload }).unwrap();
         enqueueSnackbar('Purchase order updated', { variant: 'success' });
       } else if (approvedItemMode) {
         // Item-wise: one vendor, hand-picked approved items (source indents derived).
         const res = await createFromItems(payload).unwrap();
-        enqueueSnackbar(`PO ${res?.data?.poNumber || ''} saved as draft`, { variant: 'success' });
+        enqueueSnackbar(`PO ${poDisplayNumber(res?.data)} saved as draft`, { variant: 'success' });
       } else {
         const res = await createPo({ ...payload, indentId: indent._id }).unwrap();
-        enqueueSnackbar(`PO ${res?.data?.poNumber || ''} saved as draft`, { variant: 'success' });
+        enqueueSnackbar(`PO ${poDisplayNumber(res?.data)} saved as draft`, { variant: 'success' });
       }
       onClose?.(true);
     } catch (err) {
@@ -676,7 +676,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           <ShoppingBag size={22} />
           <Box>
             <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: '#fff' }}>
-              {isEdit ? `Edit ${po.poNumber}` : isRevise ? `Revise ${reviseFrom.poNumber}` : 'New Purchase Order'}
+              {isEdit ? `Edit ${poDisplayNumber(po)}` : isRevise ? `Revise ${poDisplayNumber(reviseFrom)}` : 'New Purchase Order'}
             </Typography>
             <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.8)' }}>
               {isRevise ? 'Create a new PO from the cancelled one — edit, then Save as Draft' : 'Step 1.4 · Create PO & Release to Supplier'}
@@ -707,7 +707,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
               {isEdit ? (
                 <TextField label="Indent Number" fullWidth value={indent?.indentNumber || ''} disabled />
               ) : isRevise ? (
-                <TextField label="Revised From" fullWidth value={reviseFrom.poNumber || ''} disabled
+                <TextField label="Revised From" fullWidth value={poDisplayNumber(reviseFrom)} disabled
                   helperText="A new PO will be created — the cancelled PO is left unchanged" />
               ) : approvedItemMode ? (
                 <Autocomplete

@@ -29,6 +29,15 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' };
 
+// Read-only qty display — the mobile-only caption keeps each stacked row legible
+// once the column headers (desktop-only) are hidden.
+const QtyCell = ({ label, value, color }) => (
+  <Box sx={{ textAlign: { xs: 'left', md: 'right' } }}>
+    <Typography variant="caption" color="text.disabled" sx={{ display: { xs: 'block', md: 'none' } }}>{label}</Typography>
+    <Typography variant="body2" sx={{ fontWeight: 700, color: color || 'text.secondary' }}>{value}</Typography>
+  </Box>
+);
+
 const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
   const { enqueueSnackbar } = useSnackbar();
   const isEdit = Boolean(grn?._id);
@@ -290,36 +299,49 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
             </Typography>
           ) : (
             <>
-              <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: '1.8fr 0.9fr 0.8fr 0.85fr 0.8fr 0.9fr 1.3fr', gap: 1, px: 1, mb: 0.5 }}>
-                {['Description', 'SKU', 'Invoice Qty', 'Received Qty', 'Pending Qty', 'Batch No', 'Remarks'].map((h, i) => (
+              <Box sx={{
+                display: { xs: 'none', md: 'grid' },
+                gridTemplateColumns: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 0.9fr 1.3fr',
+                gap: 1, px: 1, mb: 0.5,
+              }}>
+                {['Description', 'SKU', 'Ordered Qty', 'Already Received', 'Pending Qty', 'Invoice Qty', 'Received Qty', 'Batch No', 'Remarks'].map((h, i) => (
                   <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
                 ))}
               </Box>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {items.map((it, idx) => {
-                  const pendingAfter = Math.max(0, round2(it.orderedQty - (it.previouslyReceivedQty + round2(it.receivedQty))));
-                  const extra = round2(it.receivedQty) > round2(it.pendingBefore);
+                  // Pending Qty is fixed (orderedQty − alreadyReceived), computed from the
+                  // PO — read-only and never recalculated off the in-progress receivedQty.
+                  const pendingBefore = round2(it.pendingBefore);
+                  const extra = round2(it.receivedQty) > pendingBefore;
+                  const extraQty = extra ? round2(it.receivedQty - pendingBefore) : 0;
                   return (
                     <Box key={idx} sx={{
                       display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', md: '1.8fr 0.9fr 0.8fr 0.85fr 0.8fr 0.9fr 1.3fr' },
-                      gap: 1, alignItems: 'center', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
+                      gridTemplateColumns: { xs: '1fr', md: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 0.9fr 1.3fr' },
+                      gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
                       borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
                       '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
                     }}>
                       <Box sx={{ minWidth: 0 }}>
                         <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
-                        <Typography variant="caption" color="text.disabled">Ordered {it.orderedQty} · Prev {it.previouslyReceivedQty}</Typography>
+                        <Typography variant="caption" color="text.disabled">{it.unit}</Typography>
                       </Box>
                       <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
-                      <TextField size="small" type="number" value={it.invoiceQty}
-                        onChange={(e) => setItem(idx, { invoiceQty: e.target.value })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                      <TextField size="small" type="number" value={it.receivedQty} error={extra}
-                        onChange={(e) => setItem(idx, { receivedQty: e.target.value })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                      <Typography variant="body2" sx={{ textAlign: 'right', color: pendingAfter > 0 ? '#b45309' : '#0f766e', fontWeight: 700 }}>{pendingAfter}</Typography>
-                      <TextField size="small" placeholder="optional" value={it.batchNo}
+                      <QtyCell label="Ordered Qty" value={it.orderedQty} />
+                      <QtyCell label="Already Received" value={it.previouslyReceivedQty} />
+                      <QtyCell label="Pending Qty" value={pendingBefore} color={pendingBefore > 0 ? '#b45309' : '#0f766e'} />
+                      <TextField size="small" type="number" label="Invoice Qty" value={it.invoiceQty}
+                        onChange={(e) => setItem(idx, { invoiceQty: e.target.value })}
+                        helperText={`Pending: ${pendingBefore}`}
+                        inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
+                      <TextField size="small" type="number" label="Received Qty" value={it.receivedQty} error={extra}
+                        onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
+                        helperText={extra ? `Pending: ${pendingBefore} · Extra ${extraQty}` : `Pending: ${pendingBefore}`}
+                        inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
+                      <TextField size="small" label="Batch No" placeholder="optional" value={it.batchNo}
                         onChange={(e) => setItem(idx, { batchNo: e.target.value })} />
-                      <TextField size="small" placeholder={extra ? 'required (extra)' : 'optional'} value={it.remarks}
+                      <TextField size="small" label="Remarks" placeholder={extra ? 'required (extra)' : 'optional'} value={it.remarks}
                         onChange={(e) => setItem(idx, { remarks: e.target.value })} error={extra && !it.remarks?.trim() && !header.remarks.trim()} />
                     </Box>
                   );

@@ -68,6 +68,25 @@ export async function generateVendorPoNumber(date = new Date()) {
 }
 
 /**
+ * Generate a temporary Vendor PO draft number (Purchase FMS — Step 1.4).
+ * Assigned at draft creation so the PO has a stable reference before approval,
+ * WITHOUT consuming the final poNumber sequence — that sequence only advances
+ * via generateVendorPoNumber(), called on approval, so numbering follows
+ * approval order rather than draft-creation order.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "DRAFT-001/26-27"
+ */
+export async function generateVendorPoDraftNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `AGL/PO_DRAFT_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `DRAFT-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
  * Generate next Material Follow-up number (Purchase FMS — Step 1.5).
  * Zero-padded sequence, reset per fiscal year.
  * @param {Date} date — date to determine fiscal year

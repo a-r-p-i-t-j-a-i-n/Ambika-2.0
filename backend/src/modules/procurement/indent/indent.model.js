@@ -221,6 +221,28 @@ export const ITEM_PROCUREMENT_STATUS = {
   PO_CREATED: 'PO_CREATED',
 };
 
+// Per-item approval decision made during indent approval (Step 1.1). PENDING on
+// documents that predate this feature — see isItemApprovalEffective() below for
+// how legacy items are treated as approved via the header status.
+export const ITEM_APPROVAL_STATUS = {
+  PENDING:  'PENDING',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED',
+};
+
+/**
+ * Whether an indent line item is currently "in play" for Step 1.2/1.3/PO.
+ *  - Explicitly APPROVED/REJECTED (set by the new approve()/reject() flow) → trust it.
+ *  - PENDING/undefined — the item predates this feature (never got a per-item
+ *    decision) — fall back to the header approvalStatus, the only approval
+ *    signal that existed before this change.
+ */
+export const isItemApprovalEffective = (indent, item) => {
+  if (item?.approvalStatus === ITEM_APPROVAL_STATUS.REJECTED) return false;
+  if (item?.approvalStatus === ITEM_APPROVAL_STATUS.APPROVED) return true;
+  return indent?.approvalStatus === INDENT_APPROVAL_STATUS.APPROVED;
+};
+
 /**
  * Build an item-level display reference from an indent number + line number.
  * Display-only — the original indentNumber is never changed and no separate
@@ -252,6 +274,12 @@ const indentItemSchema = new Schema({
   revisedQuantity:  { type: Number, default: 0, min: 0 },
   approvedQuantity: { type: Number, default: 0, min: 0 },
   remarks:  { type: String, trim: true, default: '' },
+  // Per-item approval decision (Step 1.1) — lets one indent mix approved and
+  // rejected SKUs in the same approval action.
+  approvalStatus:  { type: String, enum: Object.values(ITEM_APPROVAL_STATUS), default: ITEM_APPROVAL_STATUS.PENDING },
+  rejectionReason: { type: String, trim: true, default: '' },
+  approvedAt:      { type: Date, default: null },
+  approvedBy:      { type: String, trim: true, default: '' },
   // Stable per-item line number (1-based), assigned when the indent is created so
   // the item-level display reference (e.g. Ind-50.1/26-27) stays consistent even
   // if the items array is later re-ordered. Display-only; never the source of truth.

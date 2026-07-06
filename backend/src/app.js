@@ -53,6 +53,7 @@ import tallyEntryRoutes from './modules/procurement/tally-entry/tallyEntry.route
 import finalPaymentRoutes from './modules/procurement/final-payment/finalPayment.routes.js';
 import vendorRoutes from './modules/vendors/vendor.routes.js';
 import transporterRoutes from './modules/transporters/transporter.routes.js';
+import approvalRoutes from './modules/approvals/approval.routes.js';
 
 
 
@@ -153,6 +154,7 @@ app.use('/api/v1/procurement/vendor-invoices', vendorInvoiceRoutes); // Purchase
 app.use('/api/v1/procurement/vouchers', voucherRoutes); // Purchase FMS — Vouchers (Step 1.11)
 app.use('/api/v1/procurement/tally-entries', tallyEntryRoutes); // Purchase FMS — Purchase Entry in Tally (Step 1.12)
 app.use('/api/v1/procurement/final-payments', finalPaymentRoutes); // Purchase FMS — Make Payment (Step 1.13)
+app.use('/api/v1/approvals', approvalRoutes); // Purchase FMS — Generic Digital Approval & Signature engine
 
 
 // ── Static — uploaded files (served as /uploads/...) ────────

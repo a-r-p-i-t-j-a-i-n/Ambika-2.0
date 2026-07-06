@@ -9,7 +9,7 @@ import { useQuoteComparativeMutation } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import ItemQuotationTable from './ItemQuotationTable';
-import { itemRef } from './indentMeta';
+import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } from './indentMeta';
 
 /**
  * Step 1.2 — Receive Quote & Make Comparative 1.02.
@@ -27,9 +27,10 @@ const STATUS_OPTIONS = [
   { value: 'QUOTE_NOT_REQUIRED', label: 'Quote Not Required' },
 ];
 
-// Indent line items (multi-item, with legacy single-product fallback).
+// Indent line items (multi-item, with legacy single-product fallback). Items
+// rejected during indent approval (Step 1.1) never reach Step 1.2.
 const itemsOf = (indent) => {
-  if (indent?.items?.length) return indent.items;
+  if (indent?.items?.length) return indent.items.filter((it) => isItemEligibleForQuote(indent, it));
   if (indent?.productNameRevised) {
     return [{
       _id: 'legacy', itemName: indent.productNameRevised, skuCode: indent.skuCode,
@@ -56,23 +57,18 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
     setActualAt(existing?.actualAt ? existing.actualAt.slice(0, 10) : todayStr());
     setRemarks(existing?.remarks || '');
 
-    // Hydrate per-item files from saved itemQuotations[] (match by itemId, then
-    // skuCode, then itemName). Falls back to the legacy flat documents on the
-    // first item so older records remain editable.
+    // Hydrate per-item files from saved itemQuotations[] — strictly keyed by
+    // itemId first (matchItemRow never lets a skuCode/itemName match on the
+    // wrong row win over a correct itemId match elsewhere in the array). The
+    // legacy flat fallback only applies to a true single-item/pre-item-wise
+    // indent — it is never spread across multiple items or dumped onto item 0.
     const saved = existing?.itemQuotations || [];
-    const findSaved = (it) => saved.find((s) =>
-      (it._id && String(s.itemId) === String(it._id))
-      || (it.skuCode && s.skuCode && s.skuCode === it.skuCode)
-      || (s.itemName && s.itemName === it.itemName));
-    const legacyDocs = !saved.length
-      ? (existing?.quotationDocuments?.length
-        ? existing.quotationDocuments
-        : (existing?.quotationUploaded?.fileUrl ? [existing.quotationUploaded] : []))
-      : [];
+    const indentItems = itemsOf(indent);
+    const legacyDocs = legacyFallbackDocs(saved, indentItems, existing?.quotationDocuments, existing?.quotationUploaded);
 
-    setRows(itemsOf(indent).map((it, i) => {
-      const s = findSaved(it);
-      const files = (s?.quotationDocuments?.length ? s.quotationDocuments : (i === 0 ? legacyDocs : []))
+    setRows(indentItems.map((it, i) => {
+      const s = matchItemRow(saved, it);
+      const files = (s?.quotationDocuments?.length ? s.quotationDocuments : legacyDocs)
         .filter((d) => d?.fileUrl)
         .map((d) => ({ fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType }));
       return {

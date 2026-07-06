@@ -4,6 +4,19 @@ import { baseApi } from './baseApi';
  * Purchase FMS — Procurement API.
  * Module 1: Purchase Indents.  Base: /api/v1/procurement/indents
  */
+
+// Maps a Digital Approval documentType to the RTK tag its parent doc already
+// uses, so signing/replacing/removing a signature also refreshes the GRN/
+// Voucher detail query that mirrors approvalStatus — same invalidation
+// convention used everywhere else in this file.
+const APPROVAL_PARENT_TAG = { GRN: 'Grn', VOUCHER: 'Voucher' };
+const approvalInvalidates = (documentType, documentId) => {
+  const parentTag = APPROVAL_PARENT_TAG[documentType];
+  return [
+    { type: 'Approval', id: `${documentType}-${documentId}` },
+    ...(parentTag ? [parentTag, { type: parentTag, id: documentId }] : []),
+  ];
+};
 export const procurementApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     // ── Indents ──────────────────────────────────────────────
@@ -111,6 +124,15 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/release`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
+    bulkReleasePurchaseOrders: builder.mutation({
+      query: (body) => ({ url: '/procurement/purchase-orders/bulk-release', method: 'POST', body }),
+      invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats'],
+    }),
+    // Read-only — resolved To/CC/BCC/subject/attachment for a set of POs before
+    // a bulk release actually sends anything.
+    getPoReleasePreview: builder.mutation({
+      query: (body) => ({ url: '/procurement/purchase-orders/release-preview', method: 'POST', body }),
+    }),
     cancelPurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/cancel`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
@@ -152,7 +174,10 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     markFollowUpDone: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/follow-ups/${id}/mark-done`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['FollowUp', 'FollowUpStats', { type: 'FollowUp', id }],
+      // A final material date flips the PO's followUpStatus mirror to READY_FOR_GRN
+      // server-side (see followUp.service.js markDone) — invalidate PurchaseOrder too,
+      // so PurchaseOrderDetail's nextAction/canCreatePi recompute without a manual refresh.
+      invalidatesTags: (_r, _e, { id }) => ['FollowUp', 'FollowUpStats', 'PurchaseOrder', 'PurchaseOrderStats', { type: 'FollowUp', id }],
     }),
     rescheduleFollowUp: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/follow-ups/${id}/reschedule`, method: 'POST', body }),
@@ -239,7 +264,7 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     createGrn: builder.mutation({
       query: (body) => ({ url: '/procurement/grns', method: 'POST', body }),
-      invalidatesTags: ['Grn', 'GrnStats', 'PurchaseOrder'],
+      invalidatesTags: ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats'],
     }),
     // Preview-only: returns the PDF as a Blob; persists nothing, invalidates nothing.
     previewGrnPdf: builder.mutation({
@@ -476,6 +501,26 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['FinalPayment', 'FinalPaymentStats', 'Voucher', 'VoucherStats', 'VendorInvoice', { type: 'FinalPayment', id }],
     }),
 
+    // ── Digital Approval & Signature (generic engine) ────────
+    // documentType is one of GRN | VOUCHER (today) — the same 4 endpoints
+    // work for any future document type the backend registers.
+    getApproval: builder.query({
+      query: ({ documentType, documentId }) => `/approvals/${documentType}/${documentId}`,
+      providesTags: (_r, _e, { documentType, documentId }) => [{ type: 'Approval', id: `${documentType}-${documentId}` }],
+    }),
+    signDocument: builder.mutation({
+      query: ({ documentType, documentId, ...body }) => ({ url: `/approvals/${documentType}/${documentId}/sign`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { documentType, documentId }) => approvalInvalidates(documentType, documentId),
+    }),
+    replaceSignature: builder.mutation({
+      query: ({ documentType, documentId, ...body }) => ({ url: `/approvals/${documentType}/${documentId}/replace`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { documentType, documentId }) => approvalInvalidates(documentType, documentId),
+    }),
+    removeSignature: builder.mutation({
+      query: ({ documentType, documentId, ...body }) => ({ url: `/approvals/${documentType}/${documentId}/remove`, method: 'POST', body }),
+      invalidatesTags: (_r, _e, { documentType, documentId }) => approvalInvalidates(documentType, documentId),
+    }),
+
     // ── Inventory (shared foundation) ────────────────────────
     getInventoryMovementsByRef: builder.query({
       query: ({ refType, refId }) => `/inventory/movements/by-ref/${refType}/${refId}`,
@@ -508,6 +553,8 @@ export const {
   useUpdatePurchaseOrderMutation,
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,
+  useBulkReleasePurchaseOrdersMutation,
+  useGetPoReleasePreviewMutation,
   useCancelPurchaseOrderMutation,
   useRevisePurchaseOrderMutation,
   useMarkPoPiNotRequiredMutation,
@@ -594,4 +641,9 @@ export const {
   useUpdateFinalPaymentMutation,
   useGenerateFinalPaymentPdfMutation,
   useCancelFinalPaymentMutation,
+
+  useGetApprovalQuery,
+  useSignDocumentMutation,
+  useReplaceSignatureMutation,
+  useRemoveSignatureMutation,
 } = procurementApi;

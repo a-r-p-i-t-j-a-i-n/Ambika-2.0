@@ -6,7 +6,7 @@ import {
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useApprovePurchaseOrderMutation } from '../../../store/api/procurementApi';
-import { fmtINR } from './poMeta';
+import { fmtINR, poDisplayNumber } from './poMeta';
 
 /** Approve / reject a draft Vendor PO. */
 const PurchaseOrderApprovalDialog = ({ open, onClose, po }) => {
@@ -18,8 +18,9 @@ const PurchaseOrderApprovalDialog = ({ open, onClose, po }) => {
 
   const decide = async (decision) => {
     try {
-      await approvePo({ id: po._id, decision, remarks: remarks.trim() }).unwrap();
-      enqueueSnackbar(`PO ${decision === 'REJECTED' ? 'rejected' : 'approved'}`, { variant: decision === 'REJECTED' ? 'info' : 'success' });
+      const res = await approvePo({ id: po._id, decision, remarks: remarks.trim() }).unwrap();
+      const msg = decision === 'REJECTED' ? 'PO rejected' : `PO approved — ${poDisplayNumber(res?.data)}`;
+      enqueueSnackbar(msg, { variant: decision === 'REJECTED' ? 'info' : 'success' });
       onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save decision', { variant: 'error' });
@@ -30,7 +31,7 @@ const PurchaseOrderApprovalDialog = ({ open, onClose, po }) => {
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="xs" fullWidth>
       <DialogTitle sx={{ fontWeight: 800 }}>
         Approve Purchase Order
-        {po?.poNumber && <Typography component="span" sx={{ ml: 1, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{po.poNumber}</Typography>}
+        <Typography component="span" sx={{ ml: 1, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{poDisplayNumber(po)}</Typography>
       </DialogTitle>
       <DialogContent dividers>
         <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9' }}>

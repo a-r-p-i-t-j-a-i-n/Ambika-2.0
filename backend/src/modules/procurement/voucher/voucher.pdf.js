@@ -46,17 +46,46 @@ const totalsBlock = (doc, yStart, rows) => {
   return y;
 };
 
-const signature = (doc, company) => {
+const signature = (doc, company, mdSig) => {
+  // This block is bottom-anchored via absolute PAGE.h-relative coordinates —
+  // it's deliberately positioned to fit within the physical page. PDFKit's
+  // auto-page-break checks against the MARGIN-constrained maxY (page height
+  // minus bottom margin) rather than the true page height, so text this close
+  // to the bottom silently overflowed onto a spurious, near-empty second page.
+  // Zeroing the bottom margin for this trailing block gives PDFKit the full
+  // physical page to check against; genuinely long content above (remarks,
+  // long item tables) still paginates normally since it's drawn before this
+  // margin change and flows against the normal margin.
+  doc.page.margins.bottom = 0;
   const W = PAGE.w - PAGE.m * 2;
   doc.font('Helvetica-Bold').fontSize(9).fill(navy)
     .text(`For ${company.name || env.COMPANY_NAME}`, PAGE.m + W - 180, PAGE.h - 110, { width: 180, align: 'center' });
   doc.font('Helvetica').fontSize(8).text('Authorized Signatory', PAGE.m + W - 180, PAGE.h - 60, { width: 180, align: 'center' });
   doc.font('Helvetica').fontSize(7.5).fill('#475a8a')
     .text('This is a computer generated voucher.', PAGE.m, PAGE.h - 48, { width: W, align: 'center' });
+
+  // ── MD Approval block (Digital Approval & Signature engine) — always
+  // rendered (left column) so the unsigned PDF shows exactly where the
+  // signature will land; a signature image fills the placeholder once signed.
+  const ax = PAGE.m;
+  const ay = PAGE.h - 150;
+  doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('APPROVED BY (MD)', ax, ay);
+  if (mdSig?.imageBuffer) {
+    doc.image(mdSig.imageBuffer, ax, ay + 14, { width: 140, height: 50, fit: [140, 50] });
+  } else {
+    doc.roundedRect(ax, ay + 14, 140, 50, 4).dash(3, { space: 2 }).stroke(line).undash();
+    doc.font('Helvetica').fontSize(7).fill('#94a3b8').text('Signature will appear here', ax + 8, ay + 34, { width: 124 });
+  }
+  doc.font('Helvetica-Bold').fontSize(9).fill(navy).text(mdSig?.signedByName || '—', ax, ay + 70);
+  doc.font('Helvetica').fontSize(8).fill('#475a8a').text(mdSig?.designation || 'Managing Director', ax, ay + 83);
+  if (mdSig?.signedAt) {
+    const t = new Date(mdSig.signedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    doc.font('Helvetica').fontSize(7.5).fill('#475a8a').text(`${fmtDate(mdSig.signedAt)} · ${t}`, ax, ay + 95);
+  }
 };
 
 // ── Purchase Voucher (AGL/PUR) ──
-export const buildPurchaseVoucherPdfBuffer = (v, company = {}) => new Promise((resolve, reject) => {
+export const buildPurchaseVoucherPdfBuffer = (v, company = {}, mdSig = null) => new Promise((resolve, reject) => {
   try {
     const doc = new PDFDocument({ size: 'A4', margin: PAGE.m });
     const chunks = [];
@@ -90,13 +119,13 @@ export const buildPurchaseVoucherPdfBuffer = (v, company = {}) => new Promise((r
       doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('REMARKS', PAGE.m, y); y += 12;
       doc.font('Helvetica').fontSize(8).fill(navy).text(v.remarks, PAGE.m, y, { width: W - 200 });
     }
-    signature(doc, company);
+    signature(doc, company, mdSig);
     doc.end();
   } catch (err) { reject(err); }
 });
 
 // ── Expense Voucher (AGL/EXP) ──
-export const buildExpenseVoucherPdfBuffer = (v, company = {}) => new Promise((resolve, reject) => {
+export const buildExpenseVoucherPdfBuffer = (v, company = {}, mdSig = null) => new Promise((resolve, reject) => {
   try {
     const doc = new PDFDocument({ size: 'A4', margin: PAGE.m });
     const chunks = [];
@@ -139,12 +168,12 @@ export const buildExpenseVoucherPdfBuffer = (v, company = {}) => new Promise((re
       doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('REMARKS', PAGE.m, y); y += 12;
       doc.font('Helvetica').fontSize(8).fill(navy).text(v.remarks, PAGE.m, y, { width: W - 200 });
     }
-    signature(doc, company);
+    signature(doc, company, mdSig);
     doc.end();
   } catch (err) { reject(err); }
 });
 
 // Dispatch by voucher type.
-export const buildVoucherPdfBuffer = (v, company = {}) => (
-  v?.voucherType === 'EXPENSE' ? buildExpenseVoucherPdfBuffer(v, company) : buildPurchaseVoucherPdfBuffer(v, company)
+export const buildVoucherPdfBuffer = (v, company = {}, mdSig = null) => (
+  v?.voucherType === 'EXPENSE' ? buildExpenseVoucherPdfBuffer(v, company, mdSig) : buildPurchaseVoucherPdfBuffer(v, company, mdSig)
 );

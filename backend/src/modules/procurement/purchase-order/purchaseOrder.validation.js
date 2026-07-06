@@ -143,10 +143,30 @@ export const approvePoSchema = Joi.object({
 });
 
 // ── Release ──
+const emailList = Joi.array().items(Joi.string().trim().email({ tlds: false }));
 export const releasePoSchema = Joi.object({
   sendEmail:               Joi.boolean().default(false),
   supplierAcknowledgement: Joi.string().trim().max(500).allow('', null),
   remarks:                 Joi.string().trim().max(1000).allow('', null),
+  emailMessage:            Joi.string().trim().max(2000).allow('', null),
+  ccEmails:                emailList.default([]),
+  bccEmails:               emailList.default([]),
+});
+
+// ── Bulk release (multiple approved, not-yet-released POs) ──
+export const bulkReleasePoSchema = Joi.object({
+  poIds:        Joi.array().min(1).items(objectId.required()).required(),
+  emailMessage: Joi.string().trim().max(2000).allow('', null),
+  ccEmails:     emailList.default([]),
+  bccEmails:    emailList.default([]),
+});
+
+// ── Release preview (read-only — resolved recipients/subject before sending) ──
+export const releasePreviewSchema = Joi.object({
+  poIds:        Joi.array().min(1).items(objectId.required()).required(),
+  emailMessage: Joi.string().trim().max(2000).allow('', null),
+  ccEmails:     emailList.default([]),
+  bccEmails:    emailList.default([]),
 });
 
 // ── Cancel ──

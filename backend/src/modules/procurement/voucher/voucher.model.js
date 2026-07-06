@@ -94,6 +94,14 @@ const voucherSchema = new Schema({
   voucherPdfUrl:      { type: String, trim: true, default: '' },
   voucherPdfFileName: { type: String, trim: true, default: '' },
 
+  // ── MD Digital Approval (mirror of DocumentApproval — see modules/approvals) ──
+  approvalStatus: {
+    type: String,
+    enum: ['NOT_REQUIRED', 'READY_FOR_MD_APPROVAL', 'MD_APPROVED'],
+    default: 'NOT_REQUIRED',
+    index: true,
+  },
+
   // ── Payment ──
   paymentMode:     { type: String, enum: Object.values(PAYMENT_MODE), default: PAYMENT_MODE.NEFT },
   referenceNumber: { type: String, trim: true, default: '' },

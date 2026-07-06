@@ -8,7 +8,7 @@ import { useSnackbar } from 'notistack';
 import { useApproveQuotationMutation } from '../../../store/api/procurementApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import ItemQuotationTable from './ItemQuotationTable';
-import { itemRef } from './indentMeta';
+import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } from './indentMeta';
 
 /**
  * Step 1.3 — Approved Quotation 1.03.
@@ -22,24 +22,19 @@ import { itemRef } from './indentMeta';
  */
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-// Match a saved step row (Step 1.2 / Step 1.3) to an indent line item — by item
-// _id first, then SKU code, then name (covers legacy records without itemId).
-const matchItem = (s, it) =>
-  (it._id && it._id !== 'legacy' && String(s.itemId) === String(it._id))
-  || (it.skuCode && s.skuCode && s.skuCode === it.skuCode)
-  || (s.itemName && s.itemName === it.itemName);
-
 // Carry each item's Step 1.2 status forward into Step 1.3. Items that had a quote
 // (YES) need an approved-quotation; items marked "Quote Not Required" in Step 1.2
-// have nothing to approve.
+// have nothing to approve. Uses the shared strict itemId-first matcher so a
+// skuCode/itemName collision on another row never wins over the correct item.
 const carriedItemStatus = (step12, it) => {
-  const match = (step12?.itemQuotations || []).find((s) => matchItem(s, it));
+  const match = matchItemRow(step12?.itemQuotations, it);
   return match?.statusDone === 'QUOTE_NOT_REQUIRED' ? 'QUOTE_NOT_REQUIRED' : 'YES';
 };
 
-// Indent line items (multi-item, with legacy single-product fallback).
+// Indent line items (multi-item, with legacy single-product fallback). Items
+// rejected during indent approval (Step 1.1) never reach Step 1.3 either.
 const itemsOf = (indent) => {
-  if (indent?.items?.length) return indent.items;
+  if (indent?.items?.length) return indent.items.filter((it) => isItemEligibleForQuote(indent, it));
   if (indent?.productNameRevised) {
     return [{
       _id: 'legacy', itemName: indent.productNameRevised, skuCode: indent.skuCode,
@@ -67,23 +62,24 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
     // Step 1.3 reuses the quotations uploaded in Step 1.2 — the user never
     // re-uploads. On first open, load each item's Step 1.2 documents; on re-edit,
     // restore the previously-kept approved selection so prior removals persist.
+    // Matching is strictly itemId-first (matchItemRow) so a skuCode/itemName
+    // collision between two lines never pulls in the wrong item's files.
     const step12 = indent?.quoteComparativeStep;
     const saved = existing?.itemApprovedQuotations || [];
-    const findSaved = (it) => saved.find((s) => matchItem(s, it));
-    const findStep12 = (it) => (step12?.itemQuotations || []).find((s) => matchItem(s, it));
-    // Legacy flat Step 1.2 docs (older records without item-wise uploads).
-    const step12FlatDocs = step12?.quotationDocuments?.length
-      ? step12.quotationDocuments
-      : (step12?.quotationUploaded?.fileUrl ? [step12.quotationUploaded] : []);
+    const indentItems = itemsOf(indent);
+    const step12Items = step12?.itemQuotations || [];
+    // Legacy flat Step 1.2 docs — only valid for a true single-item/pre-item-wise
+    // indent, never spread across multiple items.
+    const step12FlatDocs = legacyFallbackDocs(step12Items, indentItems, step12?.quotationDocuments, step12?.quotationUploaded);
 
-    setRows(itemsOf(indent).map((it, i) => {
-      const s = findSaved(it);
-      const s12 = findStep12(it);
+    setRows(indentItems.map((it, i) => {
+      const s = matchItemRow(saved, it);
+      const s12 = matchItemRow(step12Items, it);
       const sourceDocs = s?.approvedQuotationDocuments?.length
         ? s.approvedQuotationDocuments                     // re-edit: prior approved selection
         : (s12?.quotationDocuments?.length
           ? s12.quotationDocuments                         // first open: reuse Step 1.2 files
-          : (i === 0 ? step12FlatDocs : []));              // legacy flat fallback
+          : step12FlatDocs);                                // legacy flat fallback (single-item only)
       // Reuse the original file references verbatim — same URL, no new upload.
       const files = sourceDocs
         .filter((d) => d?.fileUrl)

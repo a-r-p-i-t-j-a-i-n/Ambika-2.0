@@ -41,7 +41,7 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
   );
   const voucherOptions = useMemo(() => {
     const list = (vouRes?.data || []).filter(
-      (v) => ELIGIBLE.includes(v.voucherStatus) && v.tallyEntryStatus !== 'COMPLETED',
+      (v) => ELIGIBLE.includes(v.voucherStatus) && v.tallyEntryStatus !== 'COMPLETED' && v.approvalStatus === 'MD_APPROVED',
     );
     if (presetVoucher) return [presetVoucher];
     return list;

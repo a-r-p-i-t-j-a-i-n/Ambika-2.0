@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
@@ -21,6 +22,7 @@ import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnPdfPreview from './GrnPdfPreview';
 import { QcResultChip } from '../incoming-qc/qcMeta';
 import IncomingQCFormDialog from '../incoming-qc/IncomingQCFormDialog';
+import MdApprovalCard from '../approvals/MdApprovalCard';
 import { Eye, ClipboardCheck } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
@@ -50,6 +52,7 @@ const GrnDetail = () => {
   const grn = data?.data;
   const wfSteps = resolveWorkflowSteps({ grn });
   const [cancelGrn] = useCancelGrnMutation();
+  const isMd = useSelector((s) => s.auth.isRoot);
 
   const isCompleted = grn && ['PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(grn.grnStatus);
   const { data: movRes } = useGetInventoryMovementsByRefQuery({ refType: 'GRN', refId: id }, { skip: !isCompleted });
@@ -71,6 +74,9 @@ const GrnDetail = () => {
   }
 
   const isDraft = grn.grnStatus === 'DRAFT';
+  // MD-signed GRNs are locked — editing/cancelling is blocked here (mirrors the
+  // backend guard in grn.service.js) even if grnStatus were somehow still DRAFT.
+  const isLocked = grn.approvalStatus === 'MD_APPROVED';
   const handleCancel = async () => {
     try { await cancelGrn({ id: grn._id }).unwrap(); enqueueSnackbar('GRN cancelled', { variant: 'info' }); }
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
@@ -91,6 +97,12 @@ const GrnDetail = () => {
       return { tone: 'info', title: 'QC created — next: complete the inspection (Step 1.9)',
         desc: 'Open the QC to record accepted / rejected quantities and complete it.',
         primary: { label: 'Open QC', icon: <ClipboardCheck size={16} />, onClick: () => navigate(`/procurement/incoming-qc/${grn.qcId}`) } };
+    }
+    if (isCompleted && grn.qcStatus === 'PENDING' && grn.approvalStatus !== 'MD_APPROVED') {
+      // MD Digital Approval gate — QC cannot start until this GRN is signed.
+      return { tone: 'info', title: 'Awaiting MD Approval',
+        desc: 'Incoming QC can only start once the Managing Director has digitally signed this GRN — see the MD Approval card below.',
+        primary: null };
     }
     if (isCompleted && grn.qcStatus === 'PENDING') {
       return { tone: 'success', title: 'Goods received — next: run Incoming QC (Step 1.9)',
@@ -136,10 +148,10 @@ const GrnDetail = () => {
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           {grn.poId && <Button variant="outlined" startIcon={<ShoppingBag size={16} />} onClick={() => navigate(`/procurement/purchase-orders/${grn.poId}`)}>View PO</Button>}
-          {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {isDraft && <Button variant="contained" color="success" startIcon={<PackageCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete &amp; Post Stock</Button>}
-          {grn.grnPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>GRN PDF</Button>}
-          {isDraft && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
+          {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
+          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={<PackageCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete &amp; Post Stock</Button>}
+          {grn.grnPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>{isLocked ? 'View Signed PDF' : 'GRN PDF'}</Button>}
+          {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
         </Box>
       </Box>
 
@@ -227,31 +239,40 @@ const GrnDetail = () => {
                     <TableCell>Description</TableCell>
                     <TableCell>SKU</TableCell>
                     <TableCell align="right">Ordered</TableCell>
+                    <TableCell align="right">Already Received</TableCell>
+                    <TableCell align="right">Pending Before GRN</TableCell>
                     <TableCell align="right">Invoice</TableCell>
                     <TableCell align="right">Received</TableCell>
                     <TableCell align="right">Short</TableCell>
-                    <TableCell align="right">Pending</TableCell>
+                    <TableCell align="right">Pending After GRN</TableCell>
                     <TableCell>Batch</TableCell>
                     <TableCell>Movement</TableCell>
                     <TableCell>Remarks</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {(grn.items || []).map((it, i) => (
-                    <TableRow key={it._id || i} hover>
-                      <TableCell>{i + 1}</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
-                      <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
-                      <TableCell align="right">{it.orderedQty}</TableCell>
-                      <TableCell align="right">{it.invoiceQty}</TableCell>
-                      <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.receivedQty}</TableCell>
-                      <TableCell align="right" sx={{ color: it.shortQty > 0 ? '#b45309' : 'text.secondary' }}>{it.shortQty || 0}</TableCell>
-                      <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{it.pendingQty || 0}</TableCell>
-                      <TableCell>{it.batchNo || '—'}</TableCell>
-                      <TableCell><Typography variant="body2" color="text.secondary">{it.movementNumber || '—'}</Typography></TableCell>
-                      <TableCell><Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography></TableCell>
-                    </TableRow>
-                  ))}
+                  {(grn.items || []).map((it, i) => {
+                    // Legacy GRNs predate the persisted pendingBeforeGrn field — derive
+                    // it the same way the backend does so old records stay readable.
+                    const pendingBeforeGrn = it.pendingBeforeGrn ?? Math.max(0, (it.orderedQty || 0) - (it.previouslyReceivedQty || 0));
+                    return (
+                      <TableRow key={it._id || i} hover>
+                        <TableCell>{i + 1}</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
+                        <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
+                        <TableCell align="right">{it.orderedQty}</TableCell>
+                        <TableCell align="right">{it.previouslyReceivedQty || 0}</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700, color: pendingBeforeGrn > 0 ? '#b45309' : '#0f766e' }}>{pendingBeforeGrn}</TableCell>
+                        <TableCell align="right">{it.invoiceQty}</TableCell>
+                        <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.receivedQty}</TableCell>
+                        <TableCell align="right" sx={{ color: it.shortQty > 0 ? '#b45309' : 'text.secondary' }}>{it.shortQty || 0}</TableCell>
+                        <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{it.pendingQty || 0}</TableCell>
+                        <TableCell>{it.batchNo || '—'}</TableCell>
+                        <TableCell><Typography variant="body2" color="text.secondary">{it.movementNumber || '—'}</Typography></TableCell>
+                        <TableCell><Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography></TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableContainer>
@@ -300,6 +321,20 @@ const GrnDetail = () => {
           </Grid>
         )}
 
+        {/* MD Digital Approval & Signature */}
+        {isCompleted && (
+          <Grid item xs={12}>
+            <MdApprovalCard
+              documentType="GRN"
+              documentId={grn._id}
+              documentTitle={grn.grnNumber}
+              isMd={isMd}
+              onPreviewPdf={() => setPdfOpen(true)}
+              skip={grn.approvalStatus === 'NOT_REQUIRED'}
+            />
+          </Grid>
+        )}
+
         {/* Step 1.9 — Incoming QC */}
         {isCompleted && (
           <Grid item xs={12}>
@@ -309,7 +344,7 @@ const GrnDetail = () => {
                   <ClipboardCheck size={18} /> Incoming QC
                 </Typography>
                 <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  {grn.qcStatus === 'PENDING' && (
+                  {grn.qcStatus === 'PENDING' && grn.approvalStatus === 'MD_APPROVED' && (
                     <Button size="small" variant="contained" startIcon={<ClipboardCheck size={14} />} onClick={() => setQcFormOpen(true)}>Create QC</Button>
                   )}
                   {grn.qcId && (

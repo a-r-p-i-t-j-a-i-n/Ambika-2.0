@@ -52,11 +52,12 @@ const grnItemSchema = new Schema({
 
   orderedQty:            { type: Number, default: 0, min: 0 }, // PO line qty
   previouslyReceivedQty: { type: Number, default: 0, min: 0 }, // before this GRN
+  pendingBeforeGrn:      { type: Number, default: 0, min: 0 }, // orderedQty - previouslyReceivedQty (read-only, PO-derived)
   invoiceQty:            { type: Number, default: 0, min: 0 }, // vendor invoice/challan qty
   receivedQty:           { type: Number, required: true, min: 0 }, // physically received now
   shortQty:              { type: Number, default: 0 },         // invoiceQty - receivedQty
-  extraQty:              { type: Number, default: 0, min: 0 }, // received beyond pending
-  pendingQty:            { type: Number, default: 0, min: 0 }, // orderedQty - total received
+  extraQty:              { type: Number, default: 0, min: 0 }, // received beyond pendingBeforeGrn
+  pendingQty:            { type: Number, default: 0, min: 0 }, // orderedQty - total received (pending AFTER this GRN)
 
   rate:    { type: Number, default: 0, min: 0 }, // unit cost (PO/PI rate)
   amount:  { type: Number, default: 0, min: 0 }, // receivedQty × rate
@@ -123,6 +124,14 @@ const grnSchema = new Schema({
   // ── Documents ──
   grnPdfUrl:        { type: String, trim: true, default: '' },
   grnPdfFileName:   { type: String, trim: true, default: '' },
+
+  // ── MD Digital Approval (mirror of DocumentApproval — see modules/approvals) ──
+  approvalStatus: {
+    type: String,
+    enum: ['NOT_REQUIRED', 'READY_FOR_MD_APPROVAL', 'MD_APPROVED'],
+    default: 'NOT_REQUIRED',
+    index: true,
+  },
   challanDocument:  { type: grnDocumentSchema, default: () => ({}) },
   invoiceDocument:  { type: grnDocumentSchema, default: () => ({}) },
 

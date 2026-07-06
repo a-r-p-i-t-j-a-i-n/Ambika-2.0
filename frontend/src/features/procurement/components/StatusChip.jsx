@@ -45,6 +45,7 @@ const STATUS = {
   PENDING_APPROVAL:      ['Pending Approval', 'amber'],
   QUOTE_PENDING:         ['Quote Pending', 'amber'],
   PAYMENT_PENDING:       ['Payment Pending', 'amber'],
+  READY_FOR_MD_APPROVAL: ['Pending Approval', 'amber'],
 
   // ── Blue (approved / received) ──
   APPROVED:                  ['Approved', 'blue'],
@@ -72,6 +73,7 @@ const STATUS = {
   FULLY_PAID:            ['Fully Paid', 'green'],
   FULL_PAYMENT:          ['Full Payment', 'green'],
   MATCHED:               ['Matched', 'green'],
+  MD_APPROVED:           ['MD Approved', 'green'],
 
   // ── Teal (released) ──
   RELEASED:              ['Released', 'teal'],

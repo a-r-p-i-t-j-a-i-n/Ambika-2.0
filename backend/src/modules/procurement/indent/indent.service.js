@@ -5,7 +5,9 @@ import PurchaseIndent, {
   QUOTE_STEP_STATUS,
   QUOTATION_APPROVAL_STATUS,
   VENDOR_QUOTE_STATUS,
+  ITEM_APPROVAL_STATUS,
   buildItemDisplayNumber,
+  isItemApprovalEffective,
 } from './indent.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
@@ -100,35 +102,50 @@ const buildApprovedVendors = (vendors = []) => vendors.map((v) => {
 });
 
 // Step 1.2 — normalise item-wise quotation uploads (one entry per indent line
-// item, each with its own document list).
-const buildItemQuotations = (items = []) => items.map((it) => ({
-  itemId: it.itemId || undefined,
-  skuId: it.skuId || undefined,
-  skuCode: (it.skuCode || '').trim().toUpperCase(),
-  itemName: (it.itemName || '').trim(),
-  statusDone: it.statusDone === 'QUOTE_NOT_REQUIRED' ? 'QUOTE_NOT_REQUIRED' : 'YES',
-  quotationDocuments: (Array.isArray(it.quotationDocuments) ? it.quotationDocuments : [])
-    .filter((d) => d?.fileUrl)
-    .map(cleanFile),
-  actualAt: it.actualAt ? new Date(it.actualAt) : null,
-  remarks: (it.remarks || '').trim(),
-}));
+// item, each with its own document list, strictly keyed by itemId/skuCode/
+// itemName as submitted — no cross-item merging happens here).
+const buildItemQuotations = (items = []) => items.map((it) => {
+  const statusDone = it.statusDone === 'QUOTE_NOT_REQUIRED' ? 'QUOTE_NOT_REQUIRED' : 'YES';
+  return {
+    itemId: it.itemId || undefined,
+    skuId: it.skuId || undefined,
+    skuCode: (it.skuCode || '').trim().toUpperCase(),
+    itemName: (it.itemName || '').trim(),
+    statusDone,
+    // Quote Not Required items never carry quotation files — enforced here even
+    // if the client sent stale/mis-hydrated files for this row.
+    quotationDocuments: statusDone === 'QUOTE_NOT_REQUIRED'
+      ? []
+      : (Array.isArray(it.quotationDocuments) ? it.quotationDocuments : [])
+        .filter((d) => d?.fileUrl)
+        .map(cleanFile),
+    actualAt: it.actualAt ? new Date(it.actualAt) : null,
+    remarks: (it.remarks || '').trim(),
+  };
+});
 
 // Step 1.3 — normalise item-wise approved quotation uploads (one entry per
-// indent line item, each with its own approved-document list).
-const buildItemApprovedQuotations = (items = []) => items.map((it) => ({
-  itemId: it.itemId || undefined,
-  skuId: it.skuId || undefined,
-  skuCode: (it.skuCode || '').trim().toUpperCase(),
-  itemName: (it.itemName || '').trim(),
+// indent line item, each with its own approved-document list, strictly keyed
+// by itemId/skuCode/itemName as submitted — no cross-item merging happens here).
+const buildItemApprovedQuotations = (items = []) => items.map((it) => {
   // Carried from Step 1.2: YES needs a file; QUOTATION_NOT_APPROVED / QUOTE_NOT_REQUIRED don't.
-  statusDone: ['QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED'].includes(it.statusDone) ? it.statusDone : 'YES',
-  approvedQuotationDocuments: (Array.isArray(it.approvedQuotationDocuments) ? it.approvedQuotationDocuments : [])
-    .filter((d) => d?.fileUrl)
-    .map(cleanFile),
-  actualAt: it.actualAt ? new Date(it.actualAt) : null,
-  remarks: (it.remarks || '').trim(),
-}));
+  const statusDone = ['QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED'].includes(it.statusDone) ? it.statusDone : 'YES';
+  return {
+    itemId: it.itemId || undefined,
+    skuId: it.skuId || undefined,
+    skuCode: (it.skuCode || '').trim().toUpperCase(),
+    itemName: (it.itemName || '').trim(),
+    statusDone,
+    // Quote Not Required items never carry approved files — same defense-in-depth as Step 1.2.
+    approvedQuotationDocuments: statusDone === 'QUOTE_NOT_REQUIRED'
+      ? []
+      : (Array.isArray(it.approvedQuotationDocuments) ? it.approvedQuotationDocuments : [])
+        .filter((d) => d?.fileUrl)
+        .map(cleanFile),
+    actualAt: it.actualAt ? new Date(it.actualAt) : null,
+    remarks: (it.remarks || '').trim(),
+  };
+});
 
 // Normalise an incoming payload into the canonical items[] shape. Falls back to
 // the legacy single-product fields so older clients keep working.
@@ -177,6 +194,24 @@ const decorateItemDisplayNumbers = (indent) => {
   stampRows(indent.quoteComparativeStep?.itemQuotations);
   stampRows(indent.quotationApprovalStep?.itemApprovedQuotations);
   return indent;
+};
+
+// Approval qty rule: Approved Qty always mirrors Revised Qty — the server is
+// authoritative here, so any `approvedQuantity` sent by the client is ignored
+// (prevents a frontend bypass). If Revised Qty is blank/0, default to the
+// requested quantity. Revised Qty must be > 0 and cannot exceed the requested
+// quantity (no over-approval allowance currently exists in this flow).
+const resolveApprovedQty = (revisedInput, requestedQty, itemLabel) => {
+  const requested = num(requestedQty);
+  const revised = num(revisedInput) > 0 ? num(revisedInput) : requested;
+  const label = itemLabel ? ` for "${itemLabel}"` : '';
+  if (revised <= 0) {
+    throw new AppError(`Revised quantity must be greater than 0${label}`, 400);
+  }
+  if (revised > requested) {
+    throw new AppError(`Revised quantity cannot exceed the requested quantity (${requested})${label}`, 400);
+  }
+  return revised;
 };
 
 // Keep the legacy single-product fields + aggregates in sync with items[] so
@@ -310,38 +345,78 @@ export const indentService = {
     if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
       throw new AppError('Indent is not awaiting approval', 400);
     }
-    // Apply per-item approved/revised quantities.
+    const now = new Date();
+    let approvedCount = 0;
+    let rejectedCount = 0;
+    // Apply per-item decisions — Approved Qty always mirrors Revised Qty
+    // (resolveApprovedQty), so any approvedQuantity in the payload is ignored.
+    // Items not mentioned in the payload default to APPROVED (unchanged from
+    // the prior all-or-nothing behavior).
     if (Array.isArray(data.items) && data.items.length) {
       data.items.forEach((row, i) => {
         const target = (row._id && indent.items.id?.(row._id)) || indent.items[i];
-        if (target) {
-          target.revisedQuantity = num(row.revisedQuantity);
-          target.approvedQuantity = num(row.approvedQuantity);
+        if (!target) return;
+        if (row.approvalStatus === ITEM_APPROVAL_STATUS.REJECTED) {
+          if (!row.rejectionReason?.trim()) {
+            throw new AppError(`Rejection reason is required for "${target.itemName}"`, 400);
+          }
+          target.approvalStatus = ITEM_APPROVAL_STATUS.REJECTED;
+          target.rejectionReason = row.rejectionReason.trim();
+          target.revisedQuantity = 0;
+          target.approvedQuantity = 0;
+          rejectedCount += 1;
+        } else {
+          const approvedQty = resolveApprovedQty(row.revisedQuantity, target.quantity, target.itemName);
+          target.revisedQuantity = approvedQty;
+          target.approvedQuantity = approvedQty;
+          target.approvalStatus = ITEM_APPROVAL_STATUS.APPROVED;
+          target.rejectionReason = '';
+          approvedCount += 1;
         }
+        target.approvedAt = now;
+        target.approvedBy = user?.name || '';
       });
-    } else if (data.approvedQuantity != null && indent.items[0]) {
-      // Legacy single-product approval.
-      indent.items[0].revisedQuantity = num(data.revisedQuantity);
-      indent.items[0].approvedQuantity = num(data.approvedQuantity);
+    } else if (indent.items[0]) {
+      // Legacy single-product approval — no per-item rejection UI for this shape.
+      const approvedQty = resolveApprovedQty(data.revisedQuantity, indent.items[0].quantity, indent.items[0].itemName);
+      indent.items[0].revisedQuantity = approvedQty;
+      indent.items[0].approvedQuantity = approvedQty;
+      indent.items[0].approvalStatus = ITEM_APPROVAL_STATUS.APPROVED;
+      indent.items[0].rejectionReason = '';
+      indent.items[0].approvedAt = now;
+      indent.items[0].approvedBy = user?.name || '';
+      approvedCount += 1;
     }
     mirrorLegacy(indent); // refresh aggregate approved/revised quantities
 
-    indent.approvalStatus = INDENT_APPROVAL_STATUS.APPROVED;
     indent.approval = {
       approvedBy: data.approvedBy || user?.name || '',
       approvedById: user?._id,
-      approvedAt: new Date(),
+      approvedAt: now,
       remarks: data.remarks || '',
     };
-    // Advance the workflow: approved → quote pending.
-    indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_PENDING;
-    indent.quoteStep = {
-      ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
-      status: QUOTE_STEP_STATUS.PENDING,
-      plannedAt: indent.quoteStep?.plannedAt || new Date(),
-    };
+    if (approvedCount > 0) {
+      // At least one item approved — advance the workflow: approved → quote pending.
+      indent.approvalStatus = INDENT_APPROVAL_STATUS.APPROVED;
+      indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_PENDING;
+      indent.quoteStep = {
+        ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
+        status: QUOTE_STEP_STATUS.PENDING,
+        plannedAt: indent.quoteStep?.plannedAt || now,
+      };
+    } else {
+      // Every item was rejected — the indent itself is rejected and closed.
+      indent.approvalStatus = INDENT_APPROVAL_STATUS.REJECTED;
+      indent.overallStatus = INDENT_OVERALL_STATUS.CLOSED;
+    }
     indent.updatedBy = user?._id;
-    indent.activityTimeline.push({ action: 'APPROVE', description: `Indent approved (total qty ${indent.approvedQuantity})`, actorId: user?._id });
+    indent.activityTimeline.push({
+      action: approvedCount > 0 ? 'APPROVE' : 'REJECT',
+      description: rejectedCount > 0
+        ? `Indent approved (${approvedCount} approved, ${rejectedCount} rejected)`
+        : `Indent approved (total qty ${indent.approvedQuantity})`,
+      actorId: user?._id,
+    });
     return indent.save();
   },
 
@@ -350,12 +425,22 @@ export const indentService = {
     if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
       throw new AppError('Indent is not awaiting approval', 400);
     }
+    const now = new Date();
+    (indent.items || []).forEach((it) => {
+      it.approvalStatus = ITEM_APPROVAL_STATUS.REJECTED;
+      it.rejectionReason = data.remarks?.trim() || 'Indent rejected';
+      it.revisedQuantity = 0;
+      it.approvedQuantity = 0;
+      it.approvedAt = now;
+      it.approvedBy = user?.name || '';
+    });
+    mirrorLegacy(indent);
     indent.approvalStatus = INDENT_APPROVAL_STATUS.REJECTED;
     indent.overallStatus = INDENT_OVERALL_STATUS.CLOSED;
     indent.approval = {
       approvedBy: data.approvedBy || user?.name || '',
       approvedById: user?._id,
-      approvedAt: new Date(),
+      approvedAt: now,
       remarks: data.remarks || '',
     };
     indent.updatedBy = user?._id;
@@ -376,39 +461,74 @@ export const indentService = {
           throw new AppError('Only indents awaiting approval can be approved', 400);
         }
 
-        // Apply per-item approved/revised quantities (match by item _id, else index).
+        // Apply per-item decisions (match by item _id, else index) — Approved
+        // Qty always mirrors Revised Qty, ignoring any approvedQuantity the
+        // client sent. Items not mentioned default to APPROVED.
+        const now = new Date();
+        let approvedCount = 0;
+        let rejectedCount = 0;
         if (Array.isArray(row.items) && row.items.length) {
           row.items.forEach((r, i) => {
             const key = r.itemId || r._id;
             const target = (key && indent.items.id?.(key)) || indent.items[i];
-            if (target) {
-              target.revisedQuantity = num(r.revisedQuantity);
-              target.approvedQuantity = num(r.approvedQuantity);
+            if (!target) return;
+            if (r.approvalStatus === ITEM_APPROVAL_STATUS.REJECTED) {
+              if (!r.rejectionReason?.trim()) {
+                throw new AppError(`Rejection reason is required for "${target.itemName}"`, 400);
+              }
+              target.approvalStatus = ITEM_APPROVAL_STATUS.REJECTED;
+              target.rejectionReason = r.rejectionReason.trim();
+              target.revisedQuantity = 0;
+              target.approvedQuantity = 0;
+              rejectedCount += 1;
+            } else {
+              const approvedQty = resolveApprovedQty(r.revisedQuantity, target.quantity, target.itemName);
+              target.revisedQuantity = approvedQty;
+              target.approvedQuantity = approvedQty;
+              target.approvalStatus = ITEM_APPROVAL_STATUS.APPROVED;
+              target.rejectionReason = '';
+              approvedCount += 1;
             }
+            target.approvedAt = now;
+            target.approvedBy = user?.name || '';
           });
+        } else {
+          // No item-wise payload — mirror the legacy all-approved behavior.
+          (indent.items || []).forEach((it) => {
+            it.approvalStatus = ITEM_APPROVAL_STATUS.APPROVED;
+            it.approvedAt = now;
+            it.approvedBy = user?.name || '';
+          });
+          approvedCount = (indent.items || []).length;
         }
         mirrorLegacy(indent); // refresh aggregate approved/revised quantities
 
-        // Rule: total approved quantity must be greater than 0.
-        if (num(indent.approvedQuantity) <= 0) {
-          throw new AppError('Approved quantity must be greater than 0', 400);
-        }
-
-        indent.approvalStatus = INDENT_APPROVAL_STATUS.APPROVED;
         indent.approval = {
           approvedBy: row.approvedBy || user?.name || '',
           approvedById: user?._id,
-          approvedAt: new Date(),
+          approvedAt: now,
           remarks: row.remarks || '',
         };
-        indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_PENDING;
-        indent.quoteStep = {
-          ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
-          status: QUOTE_STEP_STATUS.PENDING,
-          plannedAt: indent.quoteStep?.plannedAt || new Date(),
-        };
+        if (approvedCount > 0) {
+          indent.approvalStatus = INDENT_APPROVAL_STATUS.APPROVED;
+          indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_PENDING;
+          indent.quoteStep = {
+            ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
+            status: QUOTE_STEP_STATUS.PENDING,
+            plannedAt: indent.quoteStep?.plannedAt || now,
+          };
+        } else {
+          indent.approvalStatus = INDENT_APPROVAL_STATUS.REJECTED;
+          indent.overallStatus = INDENT_OVERALL_STATUS.CLOSED;
+        }
         indent.updatedBy = user?._id;
-        indent.activityTimeline.push({ action: 'APPROVE', description: 'Approved via bulk approval', actorId: user?._id });
+        indent.activityTimeline.push({
+          action: approvedCount > 0 ? 'APPROVE' : 'REJECT',
+          description: rejectedCount > 0
+            ? `Bulk approval (${approvedCount} approved, ${rejectedCount} rejected)`
+            : 'Approved via bulk approval',
+          actorId: user?._id,
+        });
         await indent.save();
 
         const items = indent.items || [];
@@ -426,6 +546,8 @@ export const indentService = {
           approvedQty: num(indent.approvedQuantity),
           approvalStatus: indent.approvalStatus,
           overallStatus: indent.overallStatus,
+          approvedItemCount: approvedCount,
+          rejectedItemCount: rejectedCount,
         });
       } catch (err) {
         result.failed.push({ indentId: row.indentId, message: err.message });
@@ -445,12 +567,22 @@ export const indentService = {
         if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
           throw new AppError('Only indents awaiting approval can be rejected', 400);
         }
+        const now = new Date();
+        (indent.items || []).forEach((it) => {
+          it.approvalStatus = ITEM_APPROVAL_STATUS.REJECTED;
+          it.rejectionReason = data.remarks?.trim() || 'Rejected via bulk reject';
+          it.revisedQuantity = 0;
+          it.approvedQuantity = 0;
+          it.approvedAt = now;
+          it.approvedBy = user?.name || '';
+        });
+        mirrorLegacy(indent);
         indent.approvalStatus = INDENT_APPROVAL_STATUS.REJECTED;
         indent.overallStatus = INDENT_OVERALL_STATUS.CLOSED;
         indent.approval = {
           approvedBy: data.approvedBy || user?.name || '',
           approvedById: user?._id,
-          approvedAt: new Date(),
+          approvedAt: now,
           remarks: data.remarks || '',
         };
         indent.updatedBy = user?._id;
@@ -509,9 +641,17 @@ export const indentService = {
     const multiVendor = vendors.length > 0;
     const upload = data.quotationUploaded || {};
 
-    // Item-wise quotation uploads — one entry per indent line item.
-    const itemQuotations = Array.isArray(data.itemQuotations) && data.itemQuotations.length
-      ? buildItemQuotations(data.itemQuotations)
+    // Item-wise quotation uploads — one entry per indent line item. Rejected
+    // items (Step 1.1) are dropped even if a stale client submits one — they
+    // must never reach Step 1.2/1.3/PO.
+    const eligibleItemIds = new Set(
+      (indent.items || []).filter((it) => isItemApprovalEffective(indent, it)).map((it) => String(it._id)),
+    );
+    const incomingItemQuotations = Array.isArray(data.itemQuotations)
+      ? data.itemQuotations.filter((q) => !q.itemId || eligibleItemIds.has(String(q.itemId)))
+      : [];
+    const itemQuotations = incomingItemQuotations.length
+      ? buildItemQuotations(incomingItemQuotations)
       : [];
     const hasItemQuotations = itemQuotations.length > 0;
     // Aggregate all item-wise files so the legacy quotationDocuments[] field

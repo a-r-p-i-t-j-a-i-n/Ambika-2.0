@@ -15,6 +15,8 @@ import {
   updatePoSchema,
   approvePoSchema,
   releasePoSchema,
+  bulkReleasePoSchema,
+  releasePreviewSchema,
   cancelPoSchema,
   piNotRequiredSchema,
   poQuerySchema,
@@ -40,6 +42,14 @@ router.get('/stats', c.getStats);
 // Global approved-item picker (all PO-creatable indents) for the New PO form's
 // Approved Item(s) dropdown. Declared before '/:id' so it isn't shadowed.
 router.get('/approved-items', c.getAllApprovedItems);
+
+// Bulk release multiple approved, not-yet-released POs — declared before
+// '/:id' routes so it isn't shadowed.
+router.post('/bulk-release', validate(bulkReleasePoSchema), c.bulkRelease);
+
+// Read-only preview of the recipients/subject/attachment a bulk release would
+// send — no DB writes, no emails sent. Declared before '/:id' for the same reason.
+router.post('/release-preview', validate(releasePreviewSchema), c.getReleasePreview);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)

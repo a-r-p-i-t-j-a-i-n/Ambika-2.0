@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField,
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, Send, Ban, Banknote, Building2, FileText, ReceiptText,
-  FileSpreadsheet, Wallet, Info, Download,
+  FileSpreadsheet, Wallet, Info, Download, Eye,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -22,12 +23,14 @@ import { VoucherStatusChip, VoucherTypeChip, fmtINR, fmtDate } from './voucherMe
 import { fileHref } from '../indents/indentMeta';
 import StatusChip from '../components/StatusChip';
 import VoucherFormDialog from './VoucherFormDialog';
+import VoucherPdfPreview from './VoucherPdfPreview';
 import TallyEntryFormDialog from '../tally-entry/TallyEntryFormDialog';
 import { TallyStatusChip, CHECKLIST_TOTAL, checklistProgress } from '../tally-entry/tallyMeta';
 import FinalPaymentFormDialog from '../final-payments/FinalPaymentFormDialog';
 import { PaymentStatusChip } from '../final-payments/paymentMeta';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import MdApprovalCard from '../approvals/MdApprovalCard';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -49,9 +52,11 @@ const VoucherDetail = () => {
   const { data, isLoading } = useGetVoucherByIdQuery(id);
   const v = data?.data;
   const wfSteps = resolveWorkflowSteps({ voucher: v });
+  const isMd = useSelector((s) => s.auth.isRoot);
 
   const [formOpen, setFormOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
 
   const [postVoucher, { isLoading: posting }] = usePostVoucherMutation();
   const [cancelVoucher, { isLoading: cancelling }] = useCancelVoucherMutation();
@@ -83,6 +88,9 @@ const VoucherDetail = () => {
 
   const isDraft = v.voucherStatus === 'DRAFT';
   const isExpense = v.voucherType === 'EXPENSE';
+  // MD-signed vouchers are locked — editing/cancelling/posting is blocked here
+  // (mirrors the backend guard in voucher.service.js).
+  const isLocked = v.approvalStatus === 'MD_APPROVED';
 
   const doDownloadPdf = async () => {
     try {
@@ -128,11 +136,12 @@ const VoucherDetail = () => {
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button variant="outlined" startIcon={pdfLoading ? <CircularProgress size={16} /> : <Download size={16} />} onClick={doDownloadPdf} disabled={pdfLoading}>PDF</Button>
+          <Button variant="outlined" startIcon={<Eye size={16} />} onClick={() => setPdfPreviewOpen(true)}>{isLocked ? 'View Signed PDF' : 'Preview PDF'}</Button>
+          <Button variant="outlined" startIcon={pdfLoading ? <CircularProgress size={16} /> : <Download size={16} />} onClick={doDownloadPdf} disabled={pdfLoading}>Download PDF</Button>
           {v.invoiceId && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${v.invoiceId}`)}>View Invoice</Button>}
-          {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {isDraft && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={() => setCancelOpen(true)}>Cancel</Button>}
-          {isDraft && <Button variant="contained" color="success" startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />} onClick={doApprove} disabled={posting}>Post Voucher</Button>}
+          {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
+          {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={() => setCancelOpen(true)}>Cancel</Button>}
+          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />} onClick={doApprove} disabled={posting}>Post Voucher</Button>}
         </Box>
       </Box>
 
@@ -215,6 +224,18 @@ const VoucherDetail = () => {
           </SectionCard>
         </Grid>
 
+        {/* MD Digital Approval & Signature */}
+        <Grid item xs={12}>
+          <MdApprovalCard
+            documentType="VOUCHER"
+            documentId={v._id}
+            documentTitle={v.voucherNumber}
+            isMd={isMd}
+            onPreviewPdf={() => setPdfPreviewOpen(true)}
+            skip={v.approvalStatus === 'NOT_REQUIRED'}
+          />
+        </Grid>
+
         {/* Step 1.12 — Purchase Entry in Tally */}
         <Grid item xs={12} md={6}>
           <SectionCard icon={<FileSpreadsheet size={18} />} title="Purchase Entry in Tally (1.12)">
@@ -231,9 +252,12 @@ const VoucherDetail = () => {
             ) : (
               <Box>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                  {posted ? 'No Tally Entry yet. Record the purchase entry to enable final payment.' : 'Post the voucher first to enable a Tally Entry.'}
+                  {!posted ? 'Post the voucher first to enable a Tally Entry.'
+                    : v.approvalStatus !== 'MD_APPROVED' ? 'Awaiting MD Approval before a Tally Entry can be raised.'
+                    : 'No Tally Entry yet. Record the purchase entry to enable final payment.'}
                 </Typography>
-                <Button size="small" variant="contained" startIcon={<FileSpreadsheet size={15} />} disabled={!posted} onClick={() => setTallyFormOpen(true)}>Create Tally Entry</Button>
+                <Button size="small" variant="contained" startIcon={<FileSpreadsheet size={15} />}
+                  disabled={!posted || v.approvalStatus !== 'MD_APPROVED'} onClick={() => setTallyFormOpen(true)}>Create Tally Entry</Button>
               </Box>
             )}
           </SectionCard>
@@ -278,6 +302,7 @@ const VoucherDetail = () => {
       </Grid>
 
       <VoucherFormDialog open={formOpen} voucher={v} onClose={() => setFormOpen(false)} />
+      <VoucherPdfPreview open={pdfPreviewOpen} voucher={v} onClose={() => setPdfPreviewOpen(false)} />
       <TallyEntryFormDialog open={tallyFormOpen} presetVoucher={v} onClose={() => setTallyFormOpen(false)} />
       <FinalPaymentFormDialog open={paymentFormOpen} presetVoucher={v} onClose={() => setPaymentFormOpen(false)} />
 

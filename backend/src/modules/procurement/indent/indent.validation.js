@@ -6,6 +6,7 @@ import {
   QUOTE_STEP_STATUS,
   QUOTATION_APPROVAL_STATUS,
   VENDOR_QUOTE_STATUS,
+  ITEM_APPROVAL_STATUS,
 } from './indent.model.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
@@ -65,20 +66,30 @@ export const updateIndentSchema = Joi.object({
 }).min(1);
 
 // ── Approve ──────────────────────────────────────────────────
-// Per-item approved/revised quantities; legacy single scalar still accepted.
+// Revised Qty is the only quantity the client edits — Approved Qty always
+// mirrors it server-side (indentService.approve), so it's accepted here only
+// for backward compatibility with older clients and is otherwise ignored.
 export const approveIndentSchema = Joi.object({
   items: Joi.array().items(Joi.object({
     _id:              Joi.string().optional(),
     itemName:         Joi.string().trim().max(300).allow('', null),
     skuCode:          Joi.string().trim().max(60).allow('', null),
     revisedQuantity:  Joi.number().min(0).default(0),
-    approvedQuantity: Joi.number().min(0).required(),
+    approvedQuantity: Joi.number().min(0).default(0),
+    // Per-item decision — defaults to APPROVED so older clients that never send
+    // this field keep behaving exactly as before.
+    approvalStatus:   Joi.string().valid(...Object.values(ITEM_APPROVAL_STATUS)).default(ITEM_APPROVAL_STATUS.APPROVED),
+    rejectionReason:  Joi.string().trim().max(500).allow('', null)
+      .when('approvalStatus', { is: ITEM_APPROVAL_STATUS.REJECTED, then: Joi.string().trim().min(1).required().messages({
+        'string.empty': 'Rejection reason is required',
+        'any.required': 'Rejection reason is required',
+      }) }),
   })),
   revisedQuantity:  Joi.number().min(0),
   approvedQuantity: Joi.number().min(0),
   approvedBy:       Joi.string().trim().max(120).allow('', null),
   remarks:          Joi.string().trim().max(1000).allow('', null),
-}).or('items', 'approvedQuantity');
+}).or('items', 'revisedQuantity', 'approvedQuantity');
 
 // ── Reject ───────────────────────────────────────────────────
 export const rejectIndentSchema = Joi.object({
@@ -87,6 +98,8 @@ export const rejectIndentSchema = Joi.object({
 });
 
 // ── Bulk approve (multiple indents, item-wise quantities) ────
+// Same rule as single approve: Revised Qty is the only editable field —
+// approvedQuantity is accepted for backward compatibility but ignored server-side.
 export const bulkApproveSchema = Joi.object({
   indents: Joi.array().min(1).items(Joi.object({
     indentId: objectId.required(),
@@ -94,7 +107,13 @@ export const bulkApproveSchema = Joi.object({
       itemId:           objectId.allow('', null),
       _id:              Joi.string().optional(),
       revisedQuantity:  Joi.number().min(0).default(0),
-      approvedQuantity: Joi.number().min(0).required(),
+      approvedQuantity: Joi.number().min(0).default(0),
+      approvalStatus:   Joi.string().valid(...Object.values(ITEM_APPROVAL_STATUS)).default(ITEM_APPROVAL_STATUS.APPROVED),
+      rejectionReason:  Joi.string().trim().max(500).allow('', null)
+        .when('approvalStatus', { is: ITEM_APPROVAL_STATUS.REJECTED, then: Joi.string().trim().min(1).required().messages({
+          'string.empty': 'Rejection reason is required',
+          'any.required': 'Rejection reason is required',
+        }) }),
     })).default([]),
     remarks:    Joi.string().trim().max(1000).allow('', null),
     approvedBy: Joi.string().trim().max(120).allow('', null),

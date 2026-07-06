@@ -3,7 +3,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
   Box, Typography, CircularProgress, Chip, Checkbox, IconButton, MenuItem,
   Table, TableBody, TableCell, TableHead, TableRow, Collapse,
-  InputAdornment,
+  InputAdornment, ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
@@ -30,7 +30,12 @@ const productsSummary = (items = []) => {
   return items.length > 1 ? `${items[0].itemName} +${items.length - 1} more` : items[0].itemName;
 };
 
-// Map a fetched indent into an editable row (per-item revised/approved qty).
+// Approved Qty auto-syncs from Revised Qty; falls back to the requested
+// quantity when Revised Qty is left blank. Not tracked in state separately.
+const approvedQtyOf = (it) => (it.revisedQuantity === '' || it.revisedQuantity == null ? num(it.requestedQty) : num(it.revisedQuantity));
+
+// Map a fetched indent into an editable row (per-item revised qty only —
+// Approved Qty always mirrors it, see approvedQtyOf).
 const toRow = (ind) => {
   const items = (ind.items || []).map((it) => ({
     _id: it._id,
@@ -39,8 +44,9 @@ const toRow = (ind) => {
     unit: it.unit || 'Pcs',
     requestedQty: num(it.quantity),
     revisedQuantity: it.revisedQuantity ? num(it.revisedQuantity) : num(it.quantity),
-    approvedQuantity: it.approvedQuantity ? num(it.approvedQuantity) : num(it.quantity),
     remarks: it.remarks || '',
+    approvalStatus: 'APPROVED',
+    rejectionReason: '',
   }));
   return {
     _id: ind._id,
@@ -153,13 +159,38 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
 
   const handleApprove = async () => {
     if (!selectedRows.length) { enqueueSnackbar('Select at least one indent', { variant: 'warning' }); return; }
+    // Same rule as the single-approve dialog: Revised Qty must be > 0 and cannot
+    // exceed the requested quantity — only for items still marked Approved.
+    const invalidRow = selectedRows.find((r) => r.items.some((it) => {
+      if (it.approvalStatus === 'REJECTED') return false;
+      const approvedQty = approvedQtyOf(it);
+      return !(approvedQty > 0) || approvedQty > it.requestedQty;
+    }));
+    if (invalidRow) {
+      enqueueSnackbar(
+        `Fix the revised quantity for "${invalidRow.indentNumber}" — it must be greater than 0 and cannot exceed the requested quantity`,
+        { variant: 'warning' },
+      );
+      return;
+    }
+    const missingReasonRow = selectedRows.find((r) => r.items.some((it) => it.approvalStatus === 'REJECTED' && !it.rejectionReason.trim()));
+    if (missingReasonRow) {
+      enqueueSnackbar(`Rejection reason is required for every rejected item in "${missingReasonRow.indentNumber}"`, { variant: 'warning' });
+      return;
+    }
     const payload = {
       indents: selectedRows.map((r) => ({
         indentId: r._id,
         items: r.items.map((it) => ({
           itemId: it._id,
-          revisedQuantity: num(it.revisedQuantity),
-          approvedQuantity: num(it.approvedQuantity),
+          approvalStatus: it.approvalStatus,
+          ...(it.approvalStatus === 'REJECTED'
+            ? { rejectionReason: it.rejectionReason.trim(), revisedQuantity: 0, approvedQuantity: 0 }
+            : {
+              revisedQuantity: approvedQtyOf(it),
+              // Mirrors Revised Qty — the backend re-derives this itself either way.
+              approvedQuantity: approvedQtyOf(it),
+            }),
         })),
         remarks: r.remarks.trim(),
       })),
@@ -167,7 +198,13 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
     try {
       const res = await bulkApprove(payload).unwrap();
       const r = res?.data || {};
-      enqueueSnackbar(`${r.approvedCount || 0} indent(s) approved successfully`, { variant: 'success' });
+      const rejectedItems = (r.approved || []).reduce((s, a) => s + (a.rejectedItemCount || 0), 0);
+      enqueueSnackbar(
+        rejectedItems
+          ? `${r.approvedCount || 0} indent(s) processed (${rejectedItems} item(s) rejected)`
+          : `${r.approvedCount || 0} indent(s) approved successfully`,
+        { variant: 'success' },
+      );
       if (r.failed?.length) enqueueSnackbar(`${r.failed.length} indent(s) could not be approved`, { variant: 'warning' });
       // Snapshot the approved rows (with items) so we can launch Step 1.2 directly,
       // independent of the list refetch that follows.
@@ -193,8 +230,8 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
       skuCode: it.skuCode,
       unit: it.unit,
       quantity: num(it.requestedQty),
-      revisedQuantity: num(it.revisedQuantity),
-      approvedQuantity: num(it.approvedQuantity),
+      revisedQuantity: approvedQtyOf(it),
+      approvedQuantity: approvedQtyOf(it),
     }));
     const indentForQuote = {
       _id: a._id,
@@ -218,6 +255,8 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
       const r = res?.data || {};
       enqueueSnackbar(`${r.rejectedCount || 0} indent(s) rejected`, { variant: 'success' });
       if (r.failed?.length) enqueueSnackbar(`${r.failed.length} indent(s) could not be rejected`, { variant: 'warning' });
+      setRejectOpen(false);
+      setRejectReason('');
       onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Bulk reject failed', { variant: 'error' });
@@ -371,31 +410,48 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
                                       <TableCell sx={{ fontWeight: 700 }}>SKU</TableCell>
                                       <TableCell align="right" sx={{ fontWeight: 700 }}>Requested</TableCell>
                                       <TableCell sx={{ fontWeight: 700 }}>Unit</TableCell>
+                                      <TableCell align="center" sx={{ fontWeight: 700, width: 150 }}>Decision</TableCell>
                                       <TableCell align="right" sx={{ fontWeight: 700, width: 110 }}>Revised Qty</TableCell>
-                                      <TableCell align="right" sx={{ fontWeight: 700, width: 110 }}>Approved Qty</TableCell>
-                                      <TableCell sx={{ fontWeight: 700 }}>Item Remarks</TableCell>
+                                      <TableCell align="right" sx={{ fontWeight: 700, width: 110 }}>Approved Qty (auto)</TableCell>
+                                      <TableCell sx={{ fontWeight: 700, minWidth: 180 }}>Rejection Reason</TableCell>
                                     </TableRow>
                                   </TableHead>
                                   <TableBody>
-                                    {r.items.map((it, i) => (
-                                      <TableRow key={it._id || i}>
-                                        <TableCell>{it.itemName}</TableCell>
-                                        <TableCell>{it.skuCode || '—'}</TableCell>
-                                        <TableCell align="right">{it.requestedQty}</TableCell>
-                                        <TableCell>{it.unit}</TableCell>
-                                        <TableCell align="right">
-                                          <TextField size="small" type="number" value={it.revisedQuantity}
-                                            onChange={(e) => setItem(r._id, i, { revisedQuantity: e.target.value })}
-                                            inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={{ ...NO_SPIN, width: 90 }} />
-                                        </TableCell>
-                                        <TableCell align="right">
-                                          <TextField size="small" type="number" value={it.approvedQuantity}
-                                            onChange={(e) => setItem(r._id, i, { approvedQuantity: e.target.value })}
-                                            inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={{ ...NO_SPIN, width: 90 }} />
-                                        </TableCell>
-                                        <TableCell>{it.remarks || '—'}</TableCell>
-                                      </TableRow>
-                                    ))}
+                                    {r.items.map((it, i) => {
+                                      const isRejected = it.approvalStatus === 'REJECTED';
+                                      return (
+                                        <TableRow key={it._id || i} sx={isRejected ? { bgcolor: alpha('#dc2626', 0.04) } : undefined}>
+                                          <TableCell>{it.itemName}</TableCell>
+                                          <TableCell>{it.skuCode || '—'}</TableCell>
+                                          <TableCell align="right">{it.requestedQty}</TableCell>
+                                          <TableCell>{it.unit}</TableCell>
+                                          <TableCell align="center">
+                                            <ToggleButtonGroup size="small" exclusive value={it.approvalStatus}
+                                              onChange={(e, val) => val && setItem(r._id, i, { approvalStatus: val })}>
+                                              <ToggleButton value="APPROVED" color="success" sx={{ py: 0.1, px: 0.75, textTransform: 'none', fontSize: '0.65rem' }}>Approve</ToggleButton>
+                                              <ToggleButton value="REJECTED" color="error" sx={{ py: 0.1, px: 0.75, textTransform: 'none', fontSize: '0.65rem' }}>Reject</ToggleButton>
+                                            </ToggleButtonGroup>
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            <TextField size="small" type="number" value={it.revisedQuantity} disabled={isRejected}
+                                              onChange={(e) => setItem(r._id, i, { revisedQuantity: e.target.value })}
+                                              inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={{ ...NO_SPIN, width: 90 }} />
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            {/* Read-only — always mirrors Revised Qty, shown for transparency. */}
+                                            <TextField size="small" type="number" value={isRejected ? 0 : approvedQtyOf(it)} disabled
+                                              inputProps={{ style: { textAlign: 'right' } }} sx={{ ...NO_SPIN, width: 90 }} />
+                                          </TableCell>
+                                          <TableCell>
+                                            {isRejected ? (
+                                              <TextField size="small" fullWidth required placeholder="Reason…"
+                                                value={it.rejectionReason} onChange={(e) => setItem(r._id, i, { rejectionReason: e.target.value })}
+                                                error={!it.rejectionReason.trim()} />
+                                            ) : (it.remarks || '—')}
+                                          </TableCell>
+                                        </TableRow>
+                                      );
+                                    })}
                                   </TableBody>
                                 </Table>
                               </Box>

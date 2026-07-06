@@ -37,17 +37,19 @@ if (apiConfigured) {
   logger.warn('[mail] Email disabled — set BREVO_API_KEY (recommended) or SMTP_HOST/USER/PASS.');
 }
 
+const toRecipientList = (v) => String(v || '').split(',').map((e) => e.trim()).filter(Boolean).map((email) => ({ email }));
+
 // Send through Brevo's transactional HTTP API. Attachments are passed by URL
 // (Brevo fetches them) — our signed S3 links work directly.
-const toList = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((e) => String(e).trim()).filter(Boolean);
-
-const sendViaBrevoApi = async ({ to, cc, subject, text, html, attachments }) => {
-  const recipients = toList(to).map((email) => ({ email }));
-  const ccRecipients = toList(cc).map((email) => ({ email }));
+const sendViaBrevoApi = async ({ to, cc, bcc, subject, text, html, attachments }) => {
+  const recipients = toRecipientList(to);
+  const ccRecipients = toRecipientList(cc);
+  const bccRecipients = toRecipientList(bcc);
   const payload = {
     sender: { name: env.COMPANY_NAME, email: fromEmail },
     to: recipients,
     ...(ccRecipients.length ? { cc: ccRecipients } : {}),
+    ...(bccRecipients.length ? { bcc: bccRecipients } : {}),
     subject,
     htmlContent: html || (text ? `<pre>${text}</pre>` : ' '),
     ...(text ? { textContent: text } : {}),
@@ -102,19 +104,18 @@ export const resolveStoredAttachments = async (items = []) => {
 
 export const emailService = {
   resolveStoredAttachments,
-  async sendEmail({ to, cc, subject, text, html, attachments = [] }) {
+  async sendEmail({ to, cc, bcc, subject, text, html, attachments = [] }) {
     if (!mailConfigured) {
       throw new Error('Email is not configured on the server (set BREVO_API_KEY, or SMTP_HOST/USER/PASS).');
     }
-    const ccStr = toList(cc).join(', ');
     try {
       const info = apiConfigured
-        ? await sendViaBrevoApi({ to, cc, subject, text, html, attachments })
-        : await transporter.sendMail({ from: fromAddress, to, ...(ccStr ? { cc: ccStr } : {}), subject, text, html, attachments });
+        ? await sendViaBrevoApi({ to, cc, bcc, subject, text, html, attachments })
+        : await transporter.sendMail({ from: fromAddress, to, ...(cc ? { cc } : {}), ...(bcc ? { bcc } : {}), subject, text, html, attachments });
       const accepted = (info.accepted || []).join(', ') || 'none';
       const rejected = (info.rejected || []).join(', ') || 'none';
       // `response` carries the relay's reply, e.g. Brevo's "250 ... queued as <id>".
-      logger.info(`📧 Email "${subject}" → ${to}${ccStr ? ` (cc: ${ccStr})` : ''} | id=${info.messageId} | accepted=[${accepted}] rejected=[${rejected}] | relay="${(info.response || '').trim()}"`);
+      logger.info(`📧 Email "${subject}" → ${to}${cc ? ` cc=${cc}` : ''}${bcc ? ` bcc=${bcc}` : ''} | id=${info.messageId} | accepted=[${accepted}] rejected=[${rejected}] | relay="${(info.response || '').trim()}"`);
       if ((info.rejected || []).length) {
         logger.warn(`⚠️ [mail] Recipient(s) rejected by relay: ${rejected} — they will NOT receive the email.`);
       }

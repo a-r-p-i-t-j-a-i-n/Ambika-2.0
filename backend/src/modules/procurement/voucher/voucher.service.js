@@ -8,6 +8,8 @@ import { generatePurchaseVoucherNumber, generateExpenseVoucherNumber } from '../
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { buildVoucherPdfBuffer } from './voucher.pdf.js';
 import { logger } from '../../../utils/logger.js';
+import { registerApprovalDocument } from '../../approvals/approval.registry.js';
+import { approvalService } from '../../approvals/approval.service.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 
@@ -25,6 +27,32 @@ const findOrThrow = async (id) => {
   if (!v) throw new AppError('Voucher not found', 404);
   return v;
 };
+
+/** Resolve the company profile once, for the approval engine's PDF adapter. */
+const resolveCompanyForApproval = async () => {
+  try {
+    const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
+    const s = await CompanySettings.findOne().lean();
+    if (s) return { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, phone: s.companyPhone, email: s.companyEmail };
+  } catch { /* env fallback */ }
+  return {};
+};
+
+// Wire Voucher into the generic Digital Approval & Signature engine (see
+// modules/approvals) — the engine calls back into this adapter, it never
+// contains Voucher-specific logic itself.
+registerApprovalDocument('VOUCHER', {
+  model: VendorVoucher,
+  numberField: 'voucherNumber',
+  mirrorStatusField: 'approvalStatus',
+  pdfUrlField: 'voucherPdfUrl',
+  pdfFileNameField: 'voucherPdfFileName',
+  uploadFolder: 'vouchers',
+  buildPdfBuffer: async (v, opts) => {
+    const company = await resolveCompanyForApproval();
+    return buildVoucherPdfBuffer(v, company, opts?.signature || null);
+  },
+});
 
 export const voucherService = {
   async create(data, user) {
@@ -155,6 +183,11 @@ export const voucherService = {
 
   async update(id, data, user) {
     const v = await findOrThrow(id);
+    if (v.approvalStatus === 'MD_APPROVED') {
+      v.activityTimeline.push({ action: 'EDIT_BLOCKED', description: 'Edit blocked — voucher is MD-signed and locked', actorId: user?._id });
+      await v.save();
+      throw new AppError('This voucher has been digitally signed by the MD and is locked for editing', 400);
+    }
     if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) throw new AppError('Only draft vouchers can be edited', 400);
     // Never accept payment/status mutations here — those belong to Step 1.13.
     const { paidAmount, balanceAmount, voucherStatus, ...rest } = data;
@@ -200,6 +233,11 @@ export const voucherService = {
       } catch (err) { logger.error(`[voucher] invoice link failed for ${v.invoiceId}: ${err.message}`); }
     }
 
+    // Ready for MD Approval (non-fatal).
+    try {
+      await approvalService.ensureReady({ documentType: 'VOUCHER', documentId: v._id, documentNumber: v.voucherNumber }, user);
+    } catch (err) { logger.error(`[voucher] approval ensureReady failed for ${v.voucherNumber}: ${err.message}`); }
+
     return v;
   },
 
@@ -207,6 +245,13 @@ export const voucherService = {
   async generatePdf(id) {
     const v = await VendorVoucher.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
     if (!v) throw new AppError('Voucher not found', 404);
+
+    // MD-signed vouchers are locked — the signed PDF lives in DocumentApproval and
+    // is mirrored onto voucherPdfUrl/voucherPdfFileName by the approval engine.
+    // Never re-render an unsigned copy over it; just hand back what's stored.
+    if (v.approvalStatus === 'MD_APPROVED') {
+      return { voucherPdfUrl: v.voucherPdfUrl, voucherPdfFileName: v.voucherPdfFileName };
+    }
 
     let company = {};
     try {
@@ -236,6 +281,11 @@ export const voucherService = {
 
   async cancel(id, data, user) {
     const v = await findOrThrow(id);
+    if (v.approvalStatus === 'MD_APPROVED') {
+      v.activityTimeline.push({ action: 'EDIT_BLOCKED', description: 'Cancel blocked — voucher is MD-signed and locked', actorId: user?._id });
+      await v.save();
+      throw new AppError('This voucher has been digitally signed by the MD and cannot be cancelled', 400);
+    }
     if ([VOUCHER_STATUS.FULLY_PAID, VOUCHER_STATUS.PARTIALLY_PAID, VOUCHER_STATUS.POSTED].includes(v.voucherStatus)) {
       throw new AppError('A posted voucher cannot be cancelled', 400);
     }

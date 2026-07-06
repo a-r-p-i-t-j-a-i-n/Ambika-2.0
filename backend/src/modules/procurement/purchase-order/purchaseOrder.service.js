@@ -10,15 +10,16 @@ import VendorPurchaseOrder, {
   PO_ADVANCE_PAYMENT_STATUS,
 } from './purchaseOrder.model.js';
 import GoodsReceiptNote from '../grn/grn.model.js';
-import PurchaseIndent, { INDENT_OVERALL_STATUS, ITEM_PROCUREMENT_STATUS, buildItemDisplayNumber } from '../indent/indent.model.js';
+import PurchaseIndent, { INDENT_OVERALL_STATUS, ITEM_PROCUREMENT_STATUS, buildItemDisplayNumber, isItemApprovalEffective } from '../indent/indent.model.js';
 import Party from '../../clients/party.model.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
-import { generateVendorPoNumber } from '../../../utils/docNumberGenerator.js';
+import { generateVendorPoNumber, generateVendorPoDraftNumber } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import { pricingHistoryService } from '../../vendors/pricingHistory.service.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
+import { emailService } from '../../../services/email.service.js';
 import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
 
@@ -123,6 +124,78 @@ const resolveVendor = async (vendorId) => {
 };
 
 /**
+ * Resolve To/CC/BCC for a PO release email — prefers the Vendor/Party master's
+ * routing lists (toEmails/ccEmails/bccEmails), falling back to the PO's
+ * snapshotted vendorEmail when the vendor has none configured. `extraCc`/
+ * `extraBcc` (e.g. from a bulk-release request) are merged in and deduped.
+ */
+const resolvePoEmailRecipients = async (po, { extraCc = [], extraBcc = [] } = {}) => {
+  const vendor = await resolveVendor(po.vendorId).catch(() => null);
+  const dedupe = (list) => [...new Set((list || []).filter(Boolean).map((e) => String(e).trim().toLowerCase()))];
+  const to = dedupe(vendor?.toEmails?.length ? vendor.toEmails : (po.vendorEmail ? [po.vendorEmail] : []));
+  const cc = dedupe([...(vendor?.ccEmails || []), ...extraCc]);
+  const bcc = dedupe([...(vendor?.bccEmails || []), ...extraBcc]);
+  return { to, cc, bcc };
+};
+
+// Subject line for a PO release email — shared by the actual send and the
+// release-preview endpoint so the preview always matches what gets sent.
+const buildPoEmailSubject = (po) => `Purchase Order ${po.poNumber} — ${env.COMPANY_NAME || 'Ambika Global'}`;
+
+// Branded HTML email body for a PO release — mirrors the style used by the
+// dispatch-schedule / invoice emails elsewhere in the app.
+const buildPoEmailHtml = (po, message) => {
+  const bodyHtml = message
+    ? String(message).trim().replace(/\n/g, '<br/>')
+    : `<p>Dear ${po.vendorName || 'Vendor'},</p><p>Please find attached Purchase Order <b>${po.poNumber}</b> for your reference and processing.</p>`;
+  const docChip = po.poPdfFileName
+    ? `<tr><td style="padding:14px 24px 4px;font:600 13px Arial,Helvetica,sans-serif;color:#334155;">Attached documents</td></tr>`
+      + `<tr><td style="padding:0 24px 18px;">`
+      + `<span style="display:inline-block;margin:4px 6px 0 0;padding:5px 11px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;font:600 12px Arial,Helvetica,sans-serif;color:#0f172a;">📎 ${po.poPdfFileName}</span>`
+      + `</td></tr>`
+    : '';
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#0f172a;padding:20px 24px;">
+            <span style="font:700 18px Arial,Helvetica,sans-serif;color:#ffffff;letter-spacing:.3px;">${env.COMPANY_NAME || 'M/s AMBIKA GLOBAL'}</span>
+          </td></tr>
+          <tr><td style="padding:24px;font:400 14px/1.6 Arial,Helvetica,sans-serif;color:#1e293b;">${bodyHtml}</td></tr>
+          ${docChip ? `<tr><td><div style="border-top:1px solid #eef2f6;"></div></td></tr>${docChip}` : ''}
+          <tr><td style="background:#f8fafc;border-top:1px solid #eef2f6;padding:16px 24px;font:400 12px Arial,Helvetica,sans-serif;color:#94a3b8;">
+            This is a system-generated email from ${env.COMPANY_NAME || 'Ambika Global'}. Please do not reply to this message.
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>`;
+};
+
+/**
+ * Send the PO release email to the vendor. Throws on failure (no recipient,
+ * or the mail relay rejects) — callers decide whether that's fatal for their
+ * flow (single release: non-fatal; bulk release: fails just that one PO).
+ * Requires po.poPdfUrl to already be set for the PDF to ride along as a real
+ * attachment (falls back to a plain email with no attachment otherwise).
+ */
+const sendReleaseEmail = async (po, { message, extraCc = [], extraBcc = [] } = {}) => {
+  const { to, cc, bcc } = await resolvePoEmailRecipients(po, { extraCc, extraBcc });
+  if (!to.length) throw new AppError('Vendor has no email address on file', 400);
+  const attachments = po.poPdfUrl
+    ? await emailService.resolveStoredAttachments([{ filename: po.poPdfFileName || `${po.poNumber}.pdf`, url: po.poPdfUrl }])
+    : [];
+  await emailService.sendEmail({
+    to: to.join(', '),
+    cc: cc.length ? cc.join(', ') : undefined,
+    bcc: bcc.length ? bcc.join(', ') : undefined,
+    subject: buildPoEmailSubject(po),
+    html: buildPoEmailHtml(po, message),
+    attachments,
+  });
+  return { to, cc, bcc };
+};
+
+/**
  * Set of indent line-item _ids (as strings) that are APPROVED for PO creation.
  * Caller must have already confirmed the indent is in a PO-creatable state.
  *  - Per-item approvals present (Step 1.3 itemApprovedQuotations) → YES (approved)
@@ -137,16 +210,23 @@ const approvedItemIdSet = (indent) => {
   const notRequiredIds = (indent.quoteComparativeStep?.itemQuotations || [])
     .filter((q) => q.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId)
     .map((q) => String(q.itemId));
+  let set;
   if (iaq.length) {
-    const set = new Set(
+    set = new Set(
       iaq.filter((q) => ['YES', 'QUOTE_NOT_REQUIRED'].includes(q.statusDone) && q.itemId).map((q) => String(q.itemId)),
     );
     // Safety net for older records: include Step 1.2 not-required items even if
     // they were never carried into the Step 1.3 rows.
     notRequiredIds.forEach((id) => set.add(id));
-    return set;
+  } else {
+    set = new Set((indent.items || []).map((it) => String(it._id)));
   }
-  return new Set((indent.items || []).map((it) => String(it._id)));
+  // Item-level rejection at indent approval (Step 1.1) always wins — a rejected
+  // item never reaches PO eligibility regardless of Step 1.2/1.3 state.
+  const step1Approved = new Set(
+    (indent.items || []).filter((it) => isItemApprovalEffective(indent, it)).map((it) => String(it._id)),
+  );
+  return new Set([...set].filter((id) => step1Approved.has(id)));
 };
 
 /**
@@ -160,13 +240,17 @@ const activePoedItemIds = async (indentId, { excludePoId } = {}) => {
     isDeleted: { $ne: true },
     poStatus: { $ne: PO_STATUS.CANCELLED },
     ...(excludePoId ? { _id: { $ne: excludePoId } } : {}),
-  }).select('poNumber items.indentItemId items.skuCode').lean();
-  const ids = new Map();   // indentItemId(string) → poNumber
+  }).select('poNumber draftNumber items.indentItemId items.skuCode').lean();
+  const ids = new Map();   // indentItemId(string) → poNumber (or draftNumber pre-approval)
   const skus = new Map();  // skuCode(upper) → poNumber  (legacy fallback)
   for (const po of pos) {
+    // A draft PO still occupies the item — poNumber isn't assigned yet, so fall
+    // back to draftNumber (both are non-empty strings; either keeps the map
+    // entry truthy for the "already on an active PO" exclusion check below).
+    const ref = po.poNumber || po.draftNumber || 'DRAFT';
     for (const it of po.items || []) {
-      if (it.indentItemId) ids.set(String(it.indentItemId), po.poNumber);
-      else if (it.skuCode) skus.set(String(it.skuCode).toUpperCase(), po.poNumber);
+      if (it.indentItemId) ids.set(String(it.indentItemId), ref);
+      else if (it.skuCode) skus.set(String(it.skuCode).toUpperCase(), ref);
     }
   }
   return { ids, skus };
@@ -192,14 +276,17 @@ const rollupIndentStatus = (indent) => {
  *  - Item-level indents (no approvedVendors): stamp procurementStatus/poId/poNumber on
  *    the covered indent items and roll the overall status up from the item statuses.
  * Mutates and saves the passed mongoose indent document.
+ * `refNumber` is the PO's current reference (draftNumber at creation time —
+ * poNumber isn't assigned until approval; see syncIndentPoNumber below, which
+ * re-stamps the final poNumber once it exists).
  */
-const linkIndentToPo = async (indent, vendorId, po, poNumber, user) => {
+const linkIndentToPo = async (indent, vendorId, po, refNumber, user) => {
   const approvedVendors = indent.quotationApprovalStep?.approvedVendors || [];
   if (approvedVendors.length) {
     approvedVendors.forEach((av) => {
       if (String(av.vendorId) === String(vendorId) && !av.poId) {
         av.poId = po._id;
-        av.poNumber = poNumber;
+        av.poNumber = refNumber;
       }
     });
     const allLinked = approvedVendors.every((av) => !!av.poId);
@@ -216,18 +303,42 @@ const linkIndentToPo = async (indent, vendorId, po, poNumber, user) => {
       if (hit && it.procurementStatus !== ITEM_PROCUREMENT_STATUS.PO_CREATED) {
         it.procurementStatus = ITEM_PROCUREMENT_STATUS.PO_CREATED;
         it.poId = po._id;
-        it.poNumber = poNumber;
+        it.poNumber = refNumber;
       }
     });
     rollupIndentStatus(indent);
   }
   indent.activityTimeline.push({
     action: 'PO_CREATED',
-    description: `PO ${poNumber} created`,
+    description: `PO ${refNumber} created (draft — pending approval)`,
     actorId: user?._id,
   });
   indent.updatedBy = user?._id;
   await indent.save();
+};
+
+/**
+ * Re-stamp the final poNumber onto every indent this PO covers, replacing the
+ * draftNumber reference that was stamped at creation. Called once, right after
+ * approve() assigns po.poNumber. Non-fatal — the approval itself already stands.
+ */
+const syncIndentPoNumber = async (po, user) => {
+  const indentIds = (po.indentIds?.length ? po.indentIds : [po.indentId]).filter(Boolean);
+  if (!indentIds.length) return;
+  await PurchaseIndent.updateMany(
+    { _id: { $in: indentIds } },
+    { $set: { 'quotationApprovalStep.approvedVendors.$[v].poNumber': po.poNumber } },
+    { arrayFilters: [{ 'v.poId': po._id }] },
+  );
+  await PurchaseIndent.updateMany(
+    { _id: { $in: indentIds } },
+    { $set: { 'items.$[it].poNumber': po.poNumber } },
+    { arrayFilters: [{ 'it.poId': po._id }] },
+  );
+  await PurchaseIndent.updateMany(
+    { _id: { $in: indentIds } },
+    { $push: { activityTimeline: { action: 'PO_APPROVED', description: `PO ${po.poNumber} approved`, actorId: user?._id, timestamp: new Date() } } },
+  );
 };
 
 const findOrThrow = async (id) => {
@@ -713,10 +824,10 @@ export const purchaseOrderService = {
       ...(isMultiVendor ? { vendorId: data.vendorId } : {}),
       isDeleted: { $ne: true },
       poStatus: { $ne: PO_STATUS.CANCELLED },
-    }).select('poNumber poStatus vendorName').lean();
+    }).select('poNumber draftNumber poStatus vendorName').lean();
     if (activePo) {
       const scope = isMultiVendor ? `vendor ${activePo.vendorName || ''}`.trim() : `Indent ${indent.indentNumber}`;
-      throw new AppError(`${scope} already has an active PO (${activePo.poNumber}). Cancel it before creating a new one.`, 400);
+      throw new AppError(`${scope} already has an active PO (${activePo.poNumber || activePo.draftNumber}). Cancel it before creating a new one.`, 400);
     }
 
     const party = await resolveVendor(data.vendorId);
@@ -731,10 +842,12 @@ export const purchaseOrderService = {
     lines.forEach((l) => { l.indentId = indent._id; l.indentNumber = indent.indentNumber; });
     // Stamp the item-level display reference (Ind-50.1/26-27) from the indent.
     stampLineDisplayNumbers(lines, [indent]);
-    const poNumber = await generateVendorPoNumber(data.poDate || new Date());
+    // Draft-only reference — the final poNumber is assigned on approval so the
+    // sequence follows approval order, not draft-creation order.
+    const draftNumber = await generateVendorPoDraftNumber(data.poDate || new Date());
 
     const po = await VendorPurchaseOrder.create({
-      poNumber,
+      draftNumber,
       poFormatType,
       poDate: data.poDate || new Date(),
       indentId: indent._id,
@@ -753,21 +866,21 @@ export const purchaseOrderService = {
       releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
       poStatus: PO_STATUS.DRAFT,
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `PO created from ${indent.indentNumber}`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `PO created from ${indent.indentNumber} (draft ${draftNumber})`, actorId: user?._id }],
     });
 
     // Move the indent forward (linkage for future Follow-up / GRN). Non-fatal.
     try {
       const update = {
         $set: { overallStatus: INDENT_OVERALL_STATUS.PO_READY },
-        $push: { activityTimeline: { action: 'PO_CREATED', description: `PO ${poNumber} created`, actorId: user?._id, timestamp: new Date() } },
+        $push: { activityTimeline: { action: 'PO_CREATED', description: `PO ${draftNumber} created (draft — pending approval)`, actorId: user?._id, timestamp: new Date() } },
       };
       const arrayFilters = [];
       // Multi-vendor: stamp the PO linkage onto the matching approved vendor so
       // the indent reflects which vendor still needs a PO.
       if (isMultiVendor) {
         update.$set['quotationApprovalStep.approvedVendors.$[v].poId'] = po._id;
-        update.$set['quotationApprovalStep.approvedVendors.$[v].poNumber'] = poNumber;
+        update.$set['quotationApprovalStep.approvedVendors.$[v].poNumber'] = draftNumber;
         arrayFilters.push({ 'v.vendorId': party._id });
       } else {
         // Item-level grain: stamp procurement status on the indent items this PO
@@ -776,7 +889,7 @@ export const purchaseOrderService = {
         if (skus.length) {
           update.$set['items.$[it].procurementStatus'] = ITEM_PROCUREMENT_STATUS.PO_CREATED;
           update.$set['items.$[it].poId'] = po._id;
-          update.$set['items.$[it].poNumber'] = poNumber;
+          update.$set['items.$[it].poNumber'] = draftNumber;
           arrayFilters.push({ 'it.skuCode': { $in: skus } });
         }
       }
@@ -835,9 +948,9 @@ export const purchaseOrderService = {
           vendorId: party._id,
           isDeleted: { $ne: true },
           poStatus: { $ne: PO_STATUS.CANCELLED },
-        }).select('poNumber').lean();
+        }).select('poNumber draftNumber').lean();
         if (activePo) {
-          throw new AppError(`Indent ${ind.indentNumber} already has an active PO (${activePo.poNumber}) for this vendor. Cancel it before creating a new one.`, 400);
+          throw new AppError(`Indent ${ind.indentNumber} already has an active PO (${activePo.poNumber || activePo.draftNumber}) for this vendor. Cancel it before creating a new one.`, 400);
         }
       } else {
         const { ids: poedIds, skus: poedSkus } = await activePoedItemIds(ind._id);
@@ -863,10 +976,12 @@ export const purchaseOrderService = {
     stampLineDisplayNumbers(lines, indents);
 
     const orderedIndents = indentIds.map((id) => indentById.get(id)).filter(Boolean);
-    const poNumber = await generateVendorPoNumber(data.poDate || new Date());
+    // Draft-only reference — the final poNumber is assigned on approval so the
+    // sequence follows approval order, not draft-creation order.
+    const draftNumber = await generateVendorPoDraftNumber(data.poDate || new Date());
 
     const po = await VendorPurchaseOrder.create({
-      poNumber,
+      draftNumber,
       poFormatType,
       poDate: data.poDate || new Date(),
       indentId: orderedIndents[0]._id,
@@ -885,13 +1000,13 @@ export const purchaseOrderService = {
       releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
       poStatus: PO_STATUS.DRAFT,
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `PO created from ${orderedIndents.map((i) => i.indentNumber).join(', ')}`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `PO created from ${orderedIndents.map((i) => i.indentNumber).join(', ')} (draft ${draftNumber})`, actorId: user?._id }],
     });
 
     // Link every involved indent and recompute its status (non-fatal per indent).
     for (const ind of orderedIndents) {
       try {
-        await linkIndentToPo(ind, party._id, po, poNumber, user);
+        await linkIndentToPo(ind, party._id, po, draftNumber, user);
       } catch (err) { logger.error(`[po] multi-indent link failed for ${ind.indentNumber}: ${err.message}`); }
     }
 
@@ -960,7 +1075,7 @@ export const purchaseOrderService = {
       query,
     )
       .filter()
-      .search(['poNumber', 'indentNumber', 'vendorName'])
+      .search(['poNumber', 'draftNumber', 'indentNumber', 'vendorName'])
       .sort()
       .select()
       .paginate()
@@ -1028,22 +1143,57 @@ export const purchaseOrderService = {
   },
 
   async approve(id, data, user) {
-    const po = await findOrThrow(id);
-    if (po.approvalStatus !== PO_APPROVAL_STATUS.DRAFT) {
-      throw new AppError('Only draft purchase orders can be approved/rejected', 400);
-    }
     const approved = data.decision !== 'REJECTED';
-    po.approvalStatus = approved ? PO_APPROVAL_STATUS.APPROVED : PO_APPROVAL_STATUS.REJECTED;
-    po.poStatus = approved ? PO_STATUS.APPROVED : PO_STATUS.DRAFT;
-    po.approval = {
+    const approval = {
       decidedBy: user?.name || '',
       decidedById: user?._id,
       decidedAt: new Date(),
       remarks: data.remarks || '',
     };
-    po.updatedBy = user?._id;
-    po.activityTimeline.push({ action: approved ? 'APPROVE' : 'REJECT', description: `PO ${approved ? 'approved' : 'rejected'}`, actorId: user?._id });
-    return po.save();
+
+    // Atomically flip DRAFT → APPROVED/REJECTED, filtered on approvalStatus still
+    // being DRAFT. MongoDB applies findOneAndUpdate as a single atomic operation
+    // per document, so of two concurrent approve calls on the same PO only one can
+    // match-and-flip; the other's filter re-evaluates against the now-updated doc,
+    // finds no match, and falls through to the "not draft" error below — so only
+    // one caller ever proceeds to mint a poNumber.
+    const claimed = await VendorPurchaseOrder.findOneAndUpdate(
+      { _id: id, isDeleted: { $ne: true }, approvalStatus: PO_APPROVAL_STATUS.DRAFT },
+      {
+        $set: {
+          approvalStatus: approved ? PO_APPROVAL_STATUS.APPROVED : PO_APPROVAL_STATUS.REJECTED,
+          poStatus: approved ? PO_STATUS.APPROVED : PO_STATUS.DRAFT,
+          approval,
+          updatedBy: user?._id,
+        },
+      },
+      { new: true },
+    );
+    if (!claimed) {
+      const exists = await VendorPurchaseOrder.exists({ _id: id, isDeleted: { $ne: true } });
+      if (!exists) throw new AppError('Purchase Order not found', 404);
+      throw new AppError('Only draft purchase orders can be approved/rejected', 400);
+    }
+
+    // The final PO number is minted here, on approval — not at draft creation —
+    // so the sequence follows approval order (generateVendorPoNumber's counter
+    // increment is atomic, so concurrent approvals of different POs never collide).
+    if (approved && !claimed.poNumber) {
+      claimed.poNumber = await generateVendorPoNumber(claimed.poDate || new Date());
+    }
+    claimed.activityTimeline.push({
+      action: approved ? 'APPROVE' : 'REJECT',
+      description: approved ? `PO approved — assigned ${claimed.poNumber}` : 'PO rejected',
+      actorId: user?._id,
+    });
+    const saved = await claimed.save();
+
+    if (approved) {
+      try { await syncIndentPoNumber(saved, user); }
+      catch (err) { logger.error(`[po] indent poNumber sync failed for ${saved.poNumber}: ${err.message}`); }
+    }
+
+    return saved;
   },
 
   /** Generate the PO PDF, store to S3 (or local fallback) and persist its URL. */
@@ -1098,24 +1248,159 @@ export const purchaseOrderService = {
     if (leadDays > 0) {
       po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
     }
-    if (data.sendEmail) {
-      po.supplierEmailSent = true;
-      po.supplierEmailSentAt = new Date();
-    }
     if (data.supplierAcknowledgement) po.supplierAcknowledgement = data.supplierAcknowledgement;
     if (data.remarks) po.remarks = data.remarks;
     po.updatedBy = user?._id;
     po.activityTimeline.push({ action: 'RELEASE', description: 'PO released to vendor', actorId: user?._id });
     await po.save();
 
-    // Generate + store the PDF (non-fatal — release stands even if PDF fails).
+    // Generate + store the PDF (non-fatal — release stands even if PDF fails;
+    // the email below needs this URL to attach it, so it happens first).
     try {
       const { poPdfUrl, poPdfFileName } = await this.generatePdf(id);
       po.poPdfUrl = poPdfUrl;
       po.poPdfFileName = poPdfFileName;
     } catch (err) { logger.error(`[po] PDF generation failed for ${po.poNumber}: ${err.message}`); }
 
+    // Email the vendor (non-fatal — the release itself already stands either way).
+    if (data.sendEmail) {
+      try {
+        await sendReleaseEmail(po, { message: data.emailMessage, extraCc: data.ccEmails, extraBcc: data.bccEmails });
+        po.supplierEmailSent = true;
+        po.supplierEmailSentAt = new Date();
+        po.activityTimeline.push({ action: 'EMAIL_SENT', description: `PO email sent to ${po.vendorEmail || 'vendor'}`, actorId: user?._id });
+        await po.save();
+      } catch (err) {
+        logger.error(`[po] release email failed for ${po.poNumber}: ${err.message}`);
+        po.activityTimeline.push({ action: 'EMAIL_FAILED', description: `PO email failed: ${err.message}`, actorId: user?._id });
+        await po.save();
+      }
+    }
+
     return po;
+  },
+
+  /**
+   * Bulk-release multiple approved, not-yet-released POs to their vendors in
+   * one request (Step 1.4 — "Bulk Release PO"). Each PO is processed fully
+   * independently: PDF generation and the email send happen BEFORE the release
+   * status is flipped, so a PO that fails at any step leaves no partial writes
+   * behind (it stays exactly as eligible as it was, and can simply be retried).
+   * One PO's failure never stops the batch.
+   */
+  async bulkRelease(data, user) {
+    const poIds = [...new Set((data.poIds || []).map(String))];
+    const result = { total: poIds.length, released: 0, failedCount: 0, success: [], failed: [] };
+
+    for (const poId of poIds) {
+      let poNumberForError = '';
+      try {
+        const po = await VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } });
+        if (!po) throw new AppError('Purchase Order not found', 404);
+        poNumberForError = po.poNumber;
+
+        // Rule: only APPROVED + NOT_RELEASED POs can be released.
+        if (po.releaseStatus === PO_RELEASE_STATUS.RELEASED) {
+          throw new AppError('Already released', 400);
+        }
+        if (po.approvalStatus !== PO_APPROVAL_STATUS.APPROVED || po.poStatus !== PO_STATUS.APPROVED) {
+          throw new AppError('Invalid status — PO must be approved and awaiting release', 400);
+        }
+
+        // Vendor email must resolve before doing any work for this PO.
+        const { to, cc, bcc } = await resolvePoEmailRecipients(po, { extraCc: data.ccEmails, extraBcc: data.bccEmails });
+        if (!to.length) throw new AppError('Missing vendor email', 400);
+
+        // 1) Generate + attach the PDF if not already generated.
+        if (!po.poPdfUrl) {
+          try {
+            const { poPdfUrl, poPdfFileName } = await this.generatePdf(poId);
+            po.poPdfUrl = poPdfUrl;
+            po.poPdfFileName = poPdfFileName;
+          } catch (err) {
+            throw new AppError(`PDF generation failed: ${err.message}`, 500);
+          }
+        }
+
+        // 2) Send the PO email to the vendor.
+        try {
+          await emailService.sendEmail({
+            to: to.join(', '),
+            cc: cc.length ? cc.join(', ') : undefined,
+            bcc: bcc.length ? bcc.join(', ') : undefined,
+            subject: buildPoEmailSubject(po),
+            html: buildPoEmailHtml(po, data.emailMessage),
+            attachments: await emailService.resolveStoredAttachments([{ filename: po.poPdfFileName || `${po.poNumber}.pdf`, url: po.poPdfUrl }]),
+          });
+        } catch (err) {
+          throw new AppError(`Email failed: ${err.message}`, 502);
+        }
+
+        // 3-7) Only now flip the release status — every prerequisite succeeded.
+        po.releaseStatus = PO_RELEASE_STATUS.RELEASED;
+        po.poStatus = PO_STATUS.RELEASED_TO_VENDOR;
+        po.releasedBy = user?.name || '';
+        po.releasedById = user?._id;
+        po.releasedAt = new Date();
+        po.followUpStatus = PO_FOLLOWUP_STATUS.PENDING;
+        const leadDays = parseLeadDays(po.leadTime);
+        if (leadDays > 0) {
+          po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
+        }
+        po.supplierEmailSent = true;
+        po.supplierEmailSentAt = new Date();
+        po.updatedBy = user?._id;
+        po.activityTimeline.push({ action: 'RELEASE', description: 'PO released to vendor (bulk release)', actorId: user?._id });
+        po.activityTimeline.push({ action: 'EMAIL_SENT', description: `PO email sent to ${to.join(', ')}`, actorId: user?._id });
+        await po.save();
+
+        result.released += 1;
+        result.success.push({ poId: po._id, poNumber: po.poNumber, vendorName: po.vendorName, email: to.join(', ') });
+      } catch (err) {
+        result.failedCount += 1;
+        result.failed.push({ poId, poNumber: poNumberForError, reason: err.message });
+      }
+    }
+
+    return result;
+  },
+
+  /**
+   * Read-only preview of who a bulk-release will actually email, and what the
+   * subject/attachment will be — mirrors the exact recipient resolution and
+   * subject template `bulkRelease` uses, without sending anything or writing
+   * anything. Best-effort: a PO that no longer exists is silently skipped
+   * rather than failing the whole preview.
+   */
+  async getReleasePreview({ poIds, ccEmails = [], bccEmails = [] } = {}) {
+    const ids = [...new Set((poIds || []).map(String))];
+    const pos = await VendorPurchaseOrder.find({ _id: { $in: ids }, isDeleted: { $ne: true } }).lean();
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    const items = await Promise.all(pos.map(async (po) => {
+      const { to, cc, bcc } = await resolvePoEmailRecipients(po, { extraCc: ccEmails, extraBcc: bccEmails });
+      let emailStatus;
+      if (po.releaseStatus === PO_RELEASE_STATUS.RELEASED) emailStatus = 'ALREADY_RELEASED';
+      else if (!to.length) emailStatus = 'MISSING_RECIPIENT';
+      else if (to.some((e) => !emailRe.test(e))) emailStatus = 'INVALID_EMAIL';
+      else emailStatus = 'READY';
+
+      return {
+        poId: po._id,
+        poNumber: po.poNumber || po.draftNumber || '',
+        vendorId: po.vendorId,
+        vendorName: po.vendorName || '',
+        to,
+        cc,
+        bcc,
+        emailStatus,
+        subject: buildPoEmailSubject(po),
+        attachmentName: po.poPdfFileName || `${po.poNumber || po.draftNumber || 'PO'}.pdf`,
+        pdfReady: !!po.poPdfUrl,
+      };
+    }));
+
+    return { from: env.MAIL_FROM || env.COMPANY_NAME || '', items };
   },
 
   /**
@@ -1199,7 +1484,7 @@ export const purchaseOrderService = {
           });
           rollupIndentStatus(indent);
         }
-        indent.activityTimeline.push({ action: 'PO_CANCELLED', description: `PO ${po.poNumber} cancelled — items released`, actorId: user?._id });
+        indent.activityTimeline.push({ action: 'PO_CANCELLED', description: `PO ${po.poNumber || po.draftNumber} cancelled — items released`, actorId: user?._id });
         indent.updatedBy = user?._id;
         await indent.save();
       }
@@ -1240,13 +1525,16 @@ export const purchaseOrderService = {
       items,
     }, user);
 
-    // Stamp the revision linkage onto the freshly-created draft.
+    // Stamp the revision linkage onto the freshly-created draft. The cancelled
+    // source may itself have been cancelled before ever being approved, in which
+    // case it never got a final poNumber — fall back to its draftNumber.
+    const srcRef = src.poNumber || src.draftNumber;
     po.revisedFromPoId = src._id;
-    po.revisedFromPoNumber = src.poNumber;
+    po.revisedFromPoNumber = srcRef;
     po.revisionNo = (Number(src.revisionNo) || 0) + 1;
     po.activityTimeline.push({
       action: 'REVISE',
-      description: `Revised from ${src.poNumber} (revision ${po.revisionNo})`,
+      description: `Revised from ${srcRef} (revision ${po.revisionNo})`,
       actorId: user?._id,
     });
     await po.save();

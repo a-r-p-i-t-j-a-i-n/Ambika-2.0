@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
+  Box, Typography, Paper, TextField, InputAdornment, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Card, Tooltip,
   Autocomplete, FormControlLabel, Switch, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, CalendarClock,
+  Search, MoreVertical, Eye, Pencil, CheckCircle2, CalendarClock,
   PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
@@ -140,17 +140,15 @@ const FollowUpList = () => {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
-      {/* Header */}
+      {/* Header — tracking/management only; follow-ups are created and driven
+          from a Purchase Order's detail page (single "Continue Follow-up" action). */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
           <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Material Follow-ups</Typography>
           <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
-            Step 1.5 · Chase vendor deliveries until material is ready for GRN
+            Step 1.5 · Track every vendor delivery follow-up — open a Purchase Order to create or continue one
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditFu(null); setFormOpen(true); }}>
-          New Follow-up
-        </Button>
       </Box>
 
       {/* KPIs */}

@@ -27,6 +27,11 @@ export const tallyEntryService = {
     if (!POSTED_STATES.includes(v.voucherStatus)) {
       throw new AppError('Tally Entry can only be created from a posted voucher', 400);
     }
+    // MD Digital Approval gate: the voucher must be MD Approved before a Tally
+    // Entry (and, transitively, Final Payment) can proceed.
+    if (v.approvalStatus !== 'MD_APPROVED') {
+      throw new AppError('Voucher must be MD Approved before a Tally Entry can be created', 400);
+    }
     const existing = await PurchaseTallyEntry.findOne({
       voucherId: v._id, isDeleted: { $ne: true }, tallyEntryStatus: { $ne: TALLY_ENTRY_STATUS.CANCELLED },
     }).lean();

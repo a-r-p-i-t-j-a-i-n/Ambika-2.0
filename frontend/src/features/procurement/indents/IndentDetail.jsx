@@ -55,11 +55,11 @@ const itemsOf = (indent) => {
   return [];
 };
 
-const ITEM_COLS = '2fr 1fr 0.8fr 0.7fr 0.9fr 0.9fr 1.3fr';
+const ITEM_COLS = '1.8fr 1fr 0.8fr 0.7fr 0.9fr 0.9fr 0.9fr 1.2fr';
 const ItemsTable = ({ items, indentNumber }) => (
   <Box>
     <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: ITEM_COLS, gap: 1, px: 1, mb: 0.5 }}>
-      {['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Remarks'].map((h, i) => (
+      {['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Status', 'Remarks'].map((h, i) => (
         <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem', textAlign: ['Qty', 'Revised', 'Approved'].includes(h) ? 'right' : 'left' }}>{h}</Typography>
       ))}
     </Box>
@@ -78,6 +78,14 @@ const ItemsTable = ({ items, indentNumber }) => (
           <Typography variant="body2" color="text.secondary">{it.unit || '—'}</Typography>
           <Typography variant="body2" sx={{ textAlign: { md: 'right' } }}>{it.revisedQuantity || '—'}</Typography>
           <Typography variant="body2" sx={{ textAlign: { md: 'right' }, fontWeight: 700, color: '#0f766e' }}>{it.approvedQuantity || '—'}</Typography>
+          <Box sx={{ minWidth: 0 }}>
+            <StatusChip status={it.approvalStatus || 'PENDING'} />
+            {it.approvalStatus === 'REJECTED' && it.rejectionReason ? (
+              <Tooltip title={it.rejectionReason}>
+                <Typography variant="caption" color="error.main" noWrap sx={{ display: 'block', mt: 0.25 }}>{it.rejectionReason}</Typography>
+              </Tooltip>
+            ) : null}
+          </Box>
           <Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography>
         </Box>
       ))}

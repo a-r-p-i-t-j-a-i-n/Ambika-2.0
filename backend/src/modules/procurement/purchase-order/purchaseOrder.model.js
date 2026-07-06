@@ -117,7 +117,13 @@ const vendorPurchaseOrderSchema = new Schema({
   ...baseSchemaFields,
 
   // ── Header ──
-  poNumber: { type: String, unique: true, trim: true, index: true }, // auto: AGL/PO-001/26-27
+  // poNumber is assigned only on approval (generateVendorPoNumber) so the final
+  // sequence follows approval order, not draft-creation order — sparse because
+  // many DRAFT POs simultaneously have no poNumber yet.
+  poNumber: { type: String, unique: true, sparse: true, trim: true, index: true }, // auto: AGL/PO-001/26-27
+  // Temporary reference assigned at draft creation (generateVendorPoDraftNumber)
+  // — never consumes the final poNumber sequence.
+  draftNumber: { type: String, trim: true, default: '', index: true }, // e.g. DRAFT-001/26-27
   poDate:   { type: Date, default: Date.now },
 
   // PO format / layout. Existing records default to OTHER.

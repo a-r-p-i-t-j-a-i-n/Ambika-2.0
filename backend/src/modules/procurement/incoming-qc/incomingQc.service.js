@@ -192,6 +192,10 @@ export const incomingQcService = {
     if (!GRN_QC_ELIGIBLE.includes(grn.grnStatus) || grn.qcStatus !== GRN_QC_STATUS.PENDING) {
       throw new AppError('Incoming QC can only be created for a completed GRN with QC pending', 400);
     }
+    // MD Digital Approval gate: the GRN must be MD Approved before QC can start.
+    if (grn.approvalStatus !== 'MD_APPROVED') {
+      throw new AppError('GRN must be MD Approved before Incoming QC can be created', 400);
+    }
     const existing = await IncomingQC.findOne({ grnId: grn._id, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } }).lean();
     if (existing) throw new AppError(`A QC (${existing.qcNumber}) already exists for this GRN`, 400);
 
