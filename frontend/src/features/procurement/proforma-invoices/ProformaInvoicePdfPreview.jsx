@@ -3,11 +3,11 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, IconButton,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
-import { fileHref } from '../indents/indentMeta';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the uploaded PI document (PDF/image) with open/download. */
 const ProformaInvoicePdfPreview = ({ open, onClose, pi }) => {
-  const url = pi?.piDocument?.fileUrl ? fileHref(pi.piDocument.fileUrl) : '';
+  const url = pi?.piDocument?.fileUrl ? resolveFileUrl(pi.piDocument.fileUrl) : '';
   const isImage = /image\//i.test(pi?.piDocument?.fileType || '');
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth

@@ -21,6 +21,7 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { QcStatusChip, QcResultChip, QC_STATUSES, QC_RESULTS, fmtDate } from './qcMeta';
 import IncomingQCFormDialog from './IncomingQCFormDialog';
 import IncomingQCCompleteDialog from './IncomingQCCompleteDialog';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 const KpiCard = ({ icon, label, value, color }) => (
   <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
@@ -76,7 +77,7 @@ const IncomingQCList = () => {
   const onView = (r) => { navigate(`/procurement/incoming-qc/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditQc(r); setFormOpen(true); closeMenu(); };
   const onComplete = (r) => { setActiveQc(r); setCompleteOpen(true); closeMenu(); };
-  const onPdf = (r) => { window.open(r.qcPdfUrl, '_blank'); closeMenu(); };
+  const onPdf = (r) => { window.open(resolveFileUrl(r.qcPdfUrl), '_blank'); closeMenu(); };
   const onCancel = async (r) => {
     closeMenu();
     try { await cancelQc({ id: r._id }).unwrap(); enqueueSnackbar('QC cancelled', { variant: 'info' }); }

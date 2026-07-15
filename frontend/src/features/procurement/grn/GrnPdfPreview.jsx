@@ -3,10 +3,14 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, IconButton,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the generated GRN (Goods Receiving & Inspection Report) PDF. */
 const GrnPdfPreview = ({ open, onClose, grn }) => {
-  const url = grn?.grnPdfUrl || '';
+  // `grnPdfUrl` is an absolute URL baked at generation time — if the backend
+  // lacked SERVER_URL it points at localhost, so repair it against the current
+  // API origin (same fix already applied to PO/Voucher PDFs).
+  const url = resolveFileUrl(grn?.grnPdfUrl) || '';
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>

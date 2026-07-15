@@ -20,7 +20,7 @@ import {
   useGetFinalPaymentsByVoucherQuery,
 } from '../../../store/api/procurementApi';
 import { VoucherStatusChip, VoucherTypeChip, fmtINR, fmtDate } from './voucherMeta';
-import { fileHref } from '../indents/indentMeta';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 import StatusChip from '../components/StatusChip';
 import VoucherFormDialog from './VoucherFormDialog';
 import VoucherPdfPreview from './VoucherPdfPreview';
@@ -95,7 +95,7 @@ const VoucherDetail = () => {
   const doDownloadPdf = async () => {
     try {
       const url = (await generatePdf({ id: v._id }).unwrap())?.data?.voucherPdfUrl;
-      if (url) window.open(fileHref(url), '_blank', 'noopener');
+      if (url) window.open(resolveFileUrl(url), '_blank', 'noopener');
       else enqueueSnackbar('PDF not available', { variant: 'warning' });
     } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to generate PDF', { variant: 'error' }); }
   };
@@ -178,7 +178,7 @@ const VoucherDetail = () => {
                   <Grid item xs={6}><Field label="Due Date" value={fmtDate(v.dueDate)} /></Grid>
                   {v.invoiceDocument?.fileUrl && (
                     <Grid item xs={12}>
-                      <Button size="small" variant="outlined" startIcon={<FileText size={15} />} href={fileHref(v.invoiceDocument.fileUrl)} target="_blank" rel="noopener">View Invoice File</Button>
+                      <Button size="small" variant="outlined" startIcon={<FileText size={15} />} href={resolveFileUrl(v.invoiceDocument.fileUrl)} target="_blank" rel="noopener">View Invoice File</Button>
                     </Grid>
                   )}
                 </>

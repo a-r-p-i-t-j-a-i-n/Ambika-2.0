@@ -3,10 +3,13 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, IconButton,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the generated Incoming QC Report PDF. */
 const IncomingQCPdfPreview = ({ open, onClose, qc }) => {
-  const url = qc?.qcPdfUrl || '';
+  // `qcPdfUrl` is an absolute URL baked at generation time — repair against the
+  // current API origin (same fix already applied to PO/Voucher/GRN PDFs).
+  const url = resolveFileUrl(qc?.qcPdfUrl) || '';
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>
