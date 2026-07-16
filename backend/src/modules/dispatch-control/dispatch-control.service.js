@@ -757,14 +757,15 @@ export const dispatchControlService = {
   },
 
   async createActualDispatch(data, actor = null) {
-    // Strict contract: caller must either provide a phaseRef (linking this DC
-    // to a specific plan phase) OR explicitly flag isUnplanned. The Joi schema
-    // enforces this at the API edge; we re-check here for service-layer callers.
-    const isUnplanned = Boolean(data.isUnplanned);
+    // Phase attribution is AUTOMATIC. The operator just picks the order and the
+    // qty per SKU; if they don't hand us explicit phase(s) we auto-allocate that
+    // qty across the SKU's own plan phases earliest-first (with carry-forward) —
+    // so Plan-vs-Actual stays accurate without anyone choosing a phase. Explicit
+    // phaseRef(s) / isUnplanned are still honoured for legacy & special callers.
+    let isUnplanned = Boolean(data.isUnplanned);
     const multiPhase = Array.isArray(data.phaseRefs) && data.phaseRefs.length > 0;
-    if (!isUnplanned && !multiPhase && !data.phaseRef?.phaseId) {
-      throw new AppError('phaseRef.phaseId or phaseRefs is required unless isUnplanned is true', 422);
-    }
+    const singlePhase = !isUnplanned && !multiPhase && !!data.phaseRef?.phaseId;
+    const autoAllocate = !isUnplanned && !multiPhase && !singlePhase;
     // FMS sequential gate: can't record a dispatch until the prior steps are done.
     await o2dFmsService.assertActionAllowed({ soNumber: data.soNumber, action: 'ACTUAL_DISPATCH' });
 
@@ -774,41 +775,58 @@ export const dispatchControlService = {
       const order = await orderQ;
       if (!order) throw new AppError(`Sales Order ${data.soNumber} not found`, 404);
 
-      // Resolve and validate the phase(s) the operator picked.
+      // Resolve the phase(s) this DC counts against. In AUTO mode we target every
+      // non-cancelled phase on the order's schedule; applyActualToSchedule then
+      // fills each SKU's phases earliest-first. Explicit single/multi-phase and
+      // isUnplanned callers are handled as before.
       let resolvedPhaseRef = null;        // single, denormalised mirror (back-compat)
-      let resolvedPhaseRefs = [];         // all selected phases
+      let resolvedPhaseRefs = [];         // all phases this DC touches
       let selectedPhaseNos = [];          // phaseNo list driving the allocation
       if (!isUnplanned) {
         const schedQ = DispatchSchedule.findOne({ soNumber: order.soNumber }).sort({ createdAt: -1 });
         if (session) schedQ.session(session);
         const schedule = await schedQ;
-        if (!schedule) throw new AppError(`No dispatch plan found for ${order.soNumber}`, 404);
 
-        if (multiPhase) {
-          // Match by phaseNo (the cross-SKU group). Validate each exists & isn't cancelled.
-          const wanted = [...new Set(data.phaseRefs.map((r) => r.phaseNo).filter(Boolean))];
-          if (!wanted.length) throw new AppError('phaseRefs must include phaseNo', 422);
+        if (!schedule) {
+          // No plan at all — an auto dispatch simply records against the order and
+          // shows as unplanned in the analysis; an explicit-phase caller is an error.
+          if (autoAllocate) { isUnplanned = true; }
+          else throw new AppError(`No dispatch plan found for ${order.soNumber}`, 404);
+        } else if (singlePhase) {
+          const { item: schedItem, phase } = findPhaseById(schedule, data.phaseRef.phaseId);
+          if (!phase) throw new AppError(`Plan phase ${data.phaseRef.phaseId} not found on this order's schedule`, 404);
+          if (phase.status === 'CANCELLED') throw new AppError(`Phase ${phase.phaseNo} is cancelled — cannot dispatch against it`, 409);
+          resolvedPhaseRef = { scheduleId: schedule._id, itemId: schedItem._id, phaseId: phase._id, phaseNo: phase.phaseNo };
+          resolvedPhaseRefs = [resolvedPhaseRef];
+          selectedPhaseNos = [phase.phaseNo];
+        } else {
+          // multiPhase → the phases the caller listed; autoAllocate → ALL phases.
+          let wanted;
+          if (multiPhase) {
+            wanted = [...new Set(data.phaseRefs.map((r) => r.phaseNo).filter(Boolean))];
+            if (!wanted.length) throw new AppError('phaseRefs must include phaseNo', 422);
+          } else {
+            // Every distinct non-cancelled phaseNo across the schedule (order matters
+            // not — the allocator sorts each SKU's phases by planned date itself).
+            wanted = [...new Set(
+              schedule.items.flatMap((it) => (it.phases || [])
+                .filter((p) => p.status !== 'CANCELLED')
+                .map((p) => p.phaseNo)),
+            )].filter(Boolean);
+          }
           for (const pn of wanted) {
             const repItem = schedule.items.find((it) => (it.phases || []).some((p) => p.phaseNo === pn && p.status !== 'CANCELLED'));
-            if (!repItem) throw new AppError(`Plan phase ${pn} not found (or cancelled) on this order's schedule`, 404);
+            if (!repItem) {
+              if (multiPhase) throw new AppError(`Plan phase ${pn} not found (or cancelled) on this order's schedule`, 404);
+              continue;
+            }
             const repPhase = repItem.phases.find((p) => p.phaseNo === pn && p.status !== 'CANCELLED');
             resolvedPhaseRefs.push({ scheduleId: schedule._id, itemId: repItem._id, phaseId: repPhase._id, phaseNo: pn });
             selectedPhaseNos.push(pn);
           }
-          resolvedPhaseRef = resolvedPhaseRefs[0];
-        } else {
-          const { item: schedItem, phase } = findPhaseById(schedule, data.phaseRef.phaseId);
-          if (!phase) throw new AppError(`Plan phase ${data.phaseRef.phaseId} not found on this order's schedule`, 404);
-          if (phase.status === 'CANCELLED') throw new AppError(`Phase ${phase.phaseNo} is cancelled — cannot dispatch against it`, 409);
-
-          resolvedPhaseRef = {
-            scheduleId: schedule._id,
-            itemId:     schedItem._id,
-            phaseId:    phase._id,
-            phaseNo:    phase.phaseNo,
-          };
-          resolvedPhaseRefs = [resolvedPhaseRef];
-          selectedPhaseNos = [phase.phaseNo];
+          resolvedPhaseRef = resolvedPhaseRefs[0] || null;
+          // Auto dispatch on an order whose plan has no live phases → unplanned.
+          if (autoAllocate && !selectedPhaseNos.length) isUnplanned = true;
         }
       }
 

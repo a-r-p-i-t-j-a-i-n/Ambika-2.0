@@ -28,12 +28,17 @@ export function useReturnToTask() {
   // Which connected action-link this entry was for (a step can have several).
   // Carried back so the task marks exactly that link done.
   const fromAction = sp.get('fromAction');
+  // Which delivery challan (consignment) this entry was for — carried back so the
+  // task STAYS scoped to that one challan after the work is done (and shows its own
+  // date), instead of reverting to the whole order's aggregate view.
+  const fromDc = sp.get('dc');
   const active = !!(fromTask && fromStep);
 
   const returnToTask = () => {
     if (!active) return;
     const q = new URLSearchParams({ entryDone: '1' });
     if (fromAction) q.set('doneAction', fromAction);
+    if (fromDc) q.set('dc', fromDc);
     navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`);
   };
 

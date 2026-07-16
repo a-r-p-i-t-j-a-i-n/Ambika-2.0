@@ -12,17 +12,20 @@ export const salesInvoiceApi = baseApi.injectEndpoints({
       query: (id) => `/sales-invoices/${id}`,
       providesTags: (_r, _e, id) => [{ type: 'SalesInvoice', id }],
     }),
+    // Creating / updating / emailing an invoice changes a challan's downstream state
+    // (invoiced / emailed), so refresh the O2D consignment ledger + My Tasks too —
+    // otherwise the tracker shows a stale "Pending / Not done" for that consignment.
     createSalesInvoice: builder.mutation({
       query: (body) => ({ url: '/sales-invoices', method: 'POST', body }),
-      invalidatesTags: ['SalesInvoice'],
+      invalidatesTags: ['SalesInvoice', 'O2DProcess', 'O2DMyTasks'],
     }),
     updateSalesInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/sales-invoices/${id}`, method: 'PUT', body }),
-      invalidatesTags: (_r, _e, { id }) => ['SalesInvoice', { type: 'SalesInvoice', id }],
+      invalidatesTags: (_r, _e, { id }) => ['SalesInvoice', { type: 'SalesInvoice', id }, 'O2DProcess', 'O2DMyTasks'],
     }),
     sendSalesInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/sales-invoices/${id}/send`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['SalesInvoice', { type: 'SalesInvoice', id }],
+      invalidatesTags: (_r, _e, { id }) => ['SalesInvoice', { type: 'SalesInvoice', id }, 'O2DProcess', 'O2DMyTasks'],
     }),
   }),
 });

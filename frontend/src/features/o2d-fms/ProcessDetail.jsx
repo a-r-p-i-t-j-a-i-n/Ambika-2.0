@@ -3,9 +3,9 @@ import {
   Box, Paper, Stack, Typography, Chip, LinearProgress, Skeleton, alpha, Button, Avatar, Tooltip,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, IconButton,
   Table, TableBody, TableCell, TableHead, TableRow, ToggleButtonGroup, ToggleButton,
-  Accordion, AccordionSummary, AccordionDetails, Checkbox,
+  Accordion, AccordionSummary, AccordionDetails, Checkbox, Collapse,
 } from '@mui/material';
-import { ArrowLeft, CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2, Truck, Boxes, ReceiptText, IndianRupee, ArrowRight } from 'lucide-react';
+import { CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2, Truck, Boxes, ReceiptText, IndianRupee, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useGetProcessByIdQuery, usePlanOrderMutation, useGetConsignmentsQuery } from '../../store/api/o2dFmsApi';
 import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
@@ -14,6 +14,8 @@ import { usePermissions } from '../../hooks/usePermission';
 import StepDetailCard from './components/StepDetailCard';
 import PhaseTimeline from '../planning/components/PhaseTimeline';
 import { ACTION_LINKS, actionLinkMeta } from './actionLinks';
+import DispatchEntry from '../execution/DispatchEntry';
+import BackButton from '../../components/BackButton';
 
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 
@@ -192,7 +194,15 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
   );
 };
 
-const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+// Date-only values (dispatch / invoice / delivery dates) are stored at midnight
+// UTC — showing a time renders the +05:30 IST offset as a spurious "5:30 am", so
+// drop the time for those and keep it only for genuine timestamps.
+const fmt = (d) => {
+  if (!d) return '—';
+  const dt = new Date(d);
+  const dateOnly = dt.getUTCHours() === 0 && dt.getUTCMinutes() === 0 && dt.getUTCSeconds() === 0;
+  return dt.toLocaleString('en-IN', dateOnly ? { dateStyle: 'medium' } : { dateStyle: 'medium', timeStyle: 'short' });
+};
 
 const STATUS = {
   DONE:        { color: '#0f766e', label: 'Done' },
@@ -246,33 +256,51 @@ const DispatchPhasesPanel = ({ soNumber, dispatchStep, onPhaseClick }) => {
   const phasesTotal = prog.phasesTotal ?? new Set(phaseChips.map((p) => p.phaseNo)).size;
   const done = ['DONE', 'DELAYED'].includes(dispatchStep?.status);
   const accent = done ? '#0f766e' : '#1d4ed8';
+  // Phase timeline is HIDDEN by default — the one-line summary + bar below is enough
+  // at a glance; the doer clicks "Show phases" only when they want the P1/P2 tracking.
+  const [showPhases, setShowPhases] = useState(false);
 
   return (
-    <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
-      <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
-        <Truck size={18} color={accent} />
-        <Typography sx={{ fontWeight: 800 }}>Dispatch — phased</Typography>
+    <Paper sx={{ p: { xs: 1.5, md: 1.75 }, borderRadius: 2.5, mb: 1.5, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
+      <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 0.75 }}>
+        <Truck size={15} color={accent} />
+        <Typography sx={{ fontWeight: 800, fontSize: '0.88rem' }}>Dispatch — phased</Typography>
         <Chip size="small" label={done ? 'Fully dispatched' : 'In progress'}
-          sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
+          sx={{ height: 19, fontSize: '0.64rem', fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
         <Box sx={{ flex: 1 }} />
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>
           {num(prog.phasesDone ?? 0)} / {num(phasesTotal)} phase{phasesTotal === 1 ? '' : 's'} done
         </Typography>
       </Stack>
-      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-        <Typography variant="caption" color="text.secondary">
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.4 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
           <strong style={{ color: accent }}>{num(dispatched)}</strong> / {num(ordered)} pcs dispatched · {num(balance)} pending
         </Typography>
-        <Typography variant="caption" sx={{ fontWeight: 700 }}>{pct}%</Typography>
+        <Typography variant="caption" sx={{ fontWeight: 700, fontSize: '0.72rem' }}>{pct}%</Typography>
       </Stack>
       <LinearProgress variant="determinate" value={pct}
-        sx={{ height: 8, borderRadius: 4, mb: 1.5, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
-      {isFetching && !phaseChips.length ? (
-        <Skeleton variant="rounded" height={130} />
-      ) : phaseChips.length ? (
-        <PhaseTimeline phaseChips={phaseChips} onPhaseClick={onPhaseClick} />
+        sx={{ height: 6, borderRadius: 4, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
+
+      {/* Optional per-phase (P1/P2…) timeline — off by default to keep the tracker short. */}
+      {phaseChips.length > 0 ? (
+        <>
+          <Stack direction="row" justifyContent="center" sx={{ mt: 0.75 }}>
+            <Button size="small" variant="text" onClick={() => setShowPhases((v) => !v)}
+              startIcon={showPhases ? <EyeOff size={13} /> : <Eye size={13} />}
+              sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: accent, py: 0.25 }}>
+              {showPhases ? 'Hide phases' : `Show phases (${phasesTotal})`}
+            </Button>
+          </Stack>
+          <Collapse in={showPhases} unmountOnExit>
+            <Box sx={{ mt: 0.75 }}>
+              <PhaseTimeline phaseChips={phaseChips} onPhaseClick={onPhaseClick} />
+            </Box>
+          </Collapse>
+        </>
+      ) : isFetching ? (
+        <Skeleton variant="rounded" height={36} sx={{ mt: 1 }} />
       ) : (
-        <Typography variant="caption" color="text.secondary">No dispatch plan / phases created yet.</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75, fontSize: '0.7rem' }}>No dispatch plan / phases created yet.</Typography>
       )}
     </Paper>
   );
@@ -304,11 +332,11 @@ const ConsignmentsPanel = ({ processId }) => {
   const goPay = (c) => navigate(`/o2d/payments?part=receipt&dc=${encodeURIComponent(c.dcNumber || '')}`);
 
   return (
-    <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
-      <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1.25 }}>
-        <Boxes size={18} color={accent} />
-        <Typography sx={{ fontWeight: 800 }}>Consignments</Typography>
-        <Typography variant="caption" color="text.secondary">each challan’s invoice → eway → delivery → payment</Typography>
+    <Paper sx={{ p: { xs: 1.5, md: 1.75 }, borderRadius: 2.5, mb: 1.5, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
+      <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+        <Boxes size={15} color={accent} />
+        <Typography sx={{ fontWeight: 800, fontSize: '0.88rem' }}>Consignments</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>each challan’s invoice → eway → delivery → payment</Typography>
         <Box sx={{ flex: 1 }} />
         <Chip size="small" label={`${num(s.total)} consignment${s.total === 1 ? '' : 's'}`} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.1), color: accent }} />
         <Chip size="small" variant="outlined" icon={<ReceiptText size={11} />} label={`${num(s.invoicedDone)}/${num(s.total)} invoiced`} />
@@ -450,17 +478,11 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate,
   // jumps to that step's screen, passing BOTH ?so and ?dc so the target form auto-selects
   // THIS exact Delivery Challan (not just the order's newest one).
   const stagesFor = (c) => {
-    const link = (base, part) => {
-      const sp = new URLSearchParams();
-      if (part) sp.set('part', part);
-      if (soNumber) sp.set('so', soNumber);
-      if (c.dcNumber) sp.set('dc', c.dcNumber);
-      const qs = sp.toString();
-      return qs ? `${base}?${qs}` : base;
-    };
     const lg = (code) => c.log?.[code] || {};
     const stages = [
-      { code: '2.06', title: 'Actual Dispatch', done: true, sub: `${num(c.qty)} pcs`, subDate: c.dcDate ? fmt(c.dcDate) : null, onGo: () => navigate(link('/challans')), goLabel: 'View' },
+      // Open the task popup (What to do / who did it / link to the dispatch) scoped
+      // to THIS challan — like every other step — instead of jumping to /challans.
+      { code: '2.06', title: 'Actual Dispatch', done: true, sub: `${num(c.qty)} pcs`, subDate: c.dcDate ? fmt(c.dcDate) : null, onGo: openOrNav('2.06', c, '/challans'), goLabel: 'Open task' },
       { code: '2.07', title: 'Invoice & Eway', done: !!c.invoice?.has, sub: c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending', subDate: c.invoice?.date ? fmt(c.invoice.date) : null, onGo: openOrNav('2.07', c, '/o2d/invoice-entry'), goLabel: 'Open task' },
       { code: '2.08', title: 'Email Invoice',
         done: c.invoice?.emailStatus === 'SENT',
@@ -618,6 +640,7 @@ const ProcessDetail = () => {
   const [activeConsignment, setActiveConsignment] = useState(null); // scopes the open task to one DC
   const [pickStep, setPickStep] = useState(null); // step awaiting a "which consignment?" choice
   const [planOpen, setPlanOpen] = useState(false);
+  const [dispatchOpen, setDispatchOpen] = useState(false); // Record Actual Dispatch modal
   const [view, setView] = useState('table'); // table = scannable full view (default) | timeline
   const [selectedDcId, setSelectedDcId] = useState(null); // scope the views below to ONE consignment
 
@@ -662,14 +685,21 @@ const ProcessDetail = () => {
   }, {});
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate(-1)}>Back</Button>
-        {process && canManage && (
-          <Button variant="outlined" startIcon={<SlidersHorizontal size={16} />} onClick={() => setPlanOpen(true)}>
-            Update the plan
-          </Button>
-        )}
+    <Box sx={{ p: { xs: 1.5, md: 2 } }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" gap={1}>
+        <BackButton label="Back" variant="text" color="primary" />
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          {process && (
+            <Button variant="contained" color="success" startIcon={<Truck size={16} />} onClick={() => setDispatchOpen(true)}>
+              Record Dispatch
+            </Button>
+          )}
+          {process && canManage && (
+            <Button variant="outlined" startIcon={<SlidersHorizontal size={16} />} onClick={() => setPlanOpen(true)}>
+              Update the plan
+            </Button>
+          )}
+        </Stack>
       </Stack>
 
       {isLoading ? (
@@ -678,26 +708,26 @@ const ProcessDetail = () => {
         <Paper sx={{ p: 4, textAlign: 'center' }}>No O2D process found for this order.</Paper>
       ) : (
         <>
-          <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={2}>
+          <Paper sx={{ p: { xs: 1.5, md: 1.75 }, borderRadius: 2.5, mb: 1.5 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1.5}>
               <Box>
-                <Typography variant="h5" sx={{ fontWeight: 800 }}>{process.soNumber}</Typography>
-                <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                <Typography sx={{ fontWeight: 800, fontSize: '1.2rem', lineHeight: 1.2 }}>{process.soNumber}</Typography>
+                <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
                   {process.partyName} · PO {process.poNumber || '—'} · {process.uniqueO2DId || ''}
                 </Typography>
               </Box>
-              <Chip
+              <Chip size="small"
                 label={process.isCompleted ? 'Completed' : 'In Progress'}
                 color={process.isCompleted ? 'success' : 'primary'}
                 sx={{ fontWeight: 700 }}
               />
             </Stack>
-            <Box sx={{ mt: 2 }}>
-              <Stack direction="row" justifyContent="space-between" mb={0.5}>
-                <Typography variant="caption" sx={{ color: 'text.secondary' }}>{completed} / {steps.length} steps done</Typography>
-                <Typography variant="caption" sx={{ fontWeight: 700 }}>{pct}%</Typography>
+            <Box sx={{ mt: 1.25 }}>
+              <Stack direction="row" justifyContent="space-between" mb={0.4}>
+                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{completed} / {steps.length} steps done</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>{pct}%</Typography>
               </Stack>
-              <LinearProgress variant="determinate" value={pct} sx={{ height: 8, borderRadius: 4 }} />
+              <LinearProgress variant="determinate" value={pct} sx={{ height: 6, borderRadius: 4 }} />
             </Box>
           </Paper>
 
@@ -750,10 +780,13 @@ const ProcessDetail = () => {
 
           {/* ── Full view: every step at a glance — who / status / planned / actual / delay / checklist ── */}
           {view === 'table' && (
-            <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-              <Table size="small">
+            <Paper sx={{ borderRadius: 3, overflow: 'hidden', border: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small" stickyHeader sx={{ minWidth: 860,
+                '& td, & th': { borderColor: 'divider' },
+                '& tbody tr:hover': { bgcolor: alpha('#1d4ed8', 0.03) } }}>
                 <TableHead>
-                  <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
+                  <TableRow sx={{ '& th': { bgcolor: (t) => alpha('#1d4ed8', t.palette.mode === 'dark' ? 0.18 : 0.06), fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', whiteSpace: 'nowrap' } }}>
                     <TableCell sx={{ width: 40 }}>#</TableCell>
                     <TableCell>Step</TableCell>
                     <TableCell>Doer</TableCell>
@@ -817,6 +850,7 @@ const ProcessDetail = () => {
                   })}
                 </TableBody>
               </Table>
+              </Box>
             </Paper>
           )}
 
@@ -975,6 +1009,14 @@ const ProcessDetail = () => {
         steps={steps}
         users={usersRes?.data || []}
         onSaved={refetch}
+      />
+
+      {/* Record another Actual Dispatch straight from the FMS tracker — the order is
+          pre-selected, so a further consignment can be shipped without leaving. */}
+      <DispatchEntry
+        open={dispatchOpen}
+        onClose={() => { setDispatchOpen(false); refetch(); }}
+        presetSoNumber={process?.soNumber}
       />
     </Box>
   );

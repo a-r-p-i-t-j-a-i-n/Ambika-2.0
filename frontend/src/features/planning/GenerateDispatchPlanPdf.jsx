@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Chip,
   Table, TableBody, TableCell, TableHead, TableRow, alpha, useTheme, Skeleton,
+  ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import { FileText, Download, CalendarRange, PackageSearch, Zap, CheckCircle2, ArrowRight } from 'lucide-react';
 import dayjs from 'dayjs';
@@ -9,7 +10,7 @@ import { enqueueSnackbar } from 'notistack';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
-import { printDispatchPlan } from '../../utils/printDispatchPlan';
+import { printDispatchPlanByDate } from '../../utils/printDispatchPlan';
 import { useFmsGate, FmsGateBanner, FmsGateDialog } from '../o2d-fms/FmsGate';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
@@ -35,10 +36,12 @@ const GenerateDispatchPlanPdf = () => {
   // dispatch-plan step.
   const fromTask = params.get('fromTask');
   const fromStep = params.get('fromStep');
+  const fromAction = params.get('fromAction'); // which connected action this was for
   const soFromTask = params.get('so') || '';
   const cameFromTask = !!(fromTask && fromStep);
 
   const [order, setOrder] = useState(null);
+  const [audience, setAudience] = useState('client'); // 'client' | 'internal'
   const { data: ordersRes, isFetching: loadingOrders } = useGetOrdersQuery({ limit: 500, sort: '-orderDate' });
   const orders = useMemo(() => ordersRes?.data || [], [ordersRes]);
 
@@ -54,7 +57,10 @@ const GenerateDispatchPlanPdf = () => {
   // so the doer only reviews & submits — that's what records it in the FMS Tracker.
   const backToTask = () => {
     if (!cameFromTask) return;
-    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?entryDone=1`);
+    // Carry doneAction so the task marks THIS action done → it flips to "Do again".
+    const q = new URLSearchParams({ entryDone: '1' });
+    if (fromAction) q.set('doneAction', fromAction);
+    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`);
   };
 
   const soNumber = order?.soNumber || null;
@@ -95,7 +101,7 @@ const GenerateDispatchPlanPdf = () => {
       poNumber: schedule.poNumber || order?.poNumber || '',
       poDate: schedule.poDate || order?.poDate || null,
     };
-    const ok = printDispatchPlan(ctx);
+    const ok = printDispatchPlanByDate(ctx, { variant: audience });
     if (ok) enqueueSnackbar('Dispatch plan opened — print or Save as PDF from the new tab.', { variant: 'success' });
     return ok;
   };
@@ -176,6 +182,14 @@ const GenerateDispatchPlanPdf = () => {
               isOptionEqualToValue={(a, b) => a._id === b._id}
               renderInput={(p) => <TextField {...p} label="Select Sales Order / PO" placeholder="Search SO / PO / party…" size="small" />}
             />
+            <ToggleButtonGroup
+              size="small" exclusive value={audience}
+              onChange={(_, v) => v && setAudience(v)}
+              aria-label="PDF audience"
+            >
+              <ToggleButton value="client" sx={{ textTransform: 'none', fontWeight: 700, px: 1.5 }}>Client</ToggleButton>
+              <ToggleButton value="internal" sx={{ textTransform: 'none', fontWeight: 700, px: 1.5 }}>Internal</ToggleButton>
+            </ToggleButtonGroup>
             <Button
               variant="contained" startIcon={<Download size={16} />}
               onClick={handleDownload} disabled={!hasPlan || gate.blocked}
@@ -184,6 +198,9 @@ const GenerateDispatchPlanPdf = () => {
               Open / Download PDF
             </Button>
           </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            Same dispatch-plan template, two versions: <b>Client</b> — item names only (to share). &nbsp;·&nbsp; <b>Internal</b> — item names + SKU codes (to keep).
+          </Typography>
         </Paper>
 
         {/* States */}

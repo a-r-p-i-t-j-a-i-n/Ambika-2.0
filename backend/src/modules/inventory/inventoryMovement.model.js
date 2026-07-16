@@ -24,10 +24,12 @@ export const TXN_TYPE = {
   TRANSFER_OUT:  'TRANSFER_OUT',
   RETURN_OUT:    'RETURN_OUT',     // purchase return (future)
   QC_REJECT_OUT: 'QC_REJECT_OUT',  // QC rejection (future)
-  DISPATCH_OUT:  'DISPATCH_OUT',   // sales dispatch (future)
+  DISPATCH_OUT:  'DISPATCH_OUT',   // finished-goods sales dispatch (FG IMS)
   CONSUME_OUT:   'CONSUME_OUT',    // production consumption (future)
   CONVERT_OUT:   'CONVERT_OUT',    // RM coil consumed in a coil→circle conversion
   CONVERT_IN:    'CONVERT_IN',     // circles produced from a coil→circle conversion
+  PRODUCE_IN:    'PRODUCE_IN',     // finished goods produced (FG IMS — Daily Production Report)
+  SALES_RETURN_IN: 'SALES_RETURN_IN', // finished goods returned by a customer (FG IMS)
 };
 
 const inventoryMovementSchema = new Schema({

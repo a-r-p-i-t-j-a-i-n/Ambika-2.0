@@ -66,6 +66,23 @@ const RmImsStockOut        = lazyWithRetry(() => import('./features/rm-ims/RmIms
 const RmImsConversion      = lazyWithRetry(() => import('./features/rm-ims/RmImsConversion'));
 const RmImsReorder         = lazyWithRetry(() => import('./features/rm-ims/RmImsReorder'));
 const RmImsMovements       = lazyWithRetry(() => import('./features/rm-ims/RmImsMovements'));
+// FG IMS — Finished Goods inventory (Production In / Dispatch Out)
+const FgImsDashboard       = lazyWithRetry(() => import('./features/fg-ims/FgImsDashboard'));
+const FgImsStockList       = lazyWithRetry(() => import('./features/fg-ims/FgImsStockList'));
+const FgImsItemDetail      = lazyWithRetry(() => import('./features/fg-ims/FgImsItemDetail'));
+const FgImsProductionIn    = lazyWithRetry(() => import('./features/fg-ims/FgImsProductionIn'));
+const FgImsDispatchOut     = lazyWithRetry(() => import('./features/fg-ims/FgImsDispatchOut'));
+const FgImsPlanning        = lazyWithRetry(() => import('./features/fg-ims/FgImsPlanning'));
+const FgImsMovements       = lazyWithRetry(() => import('./features/fg-ims/FgImsMovements'));
+
+// PPC — DPR / OEE (shop-floor Daily Production Report + dashboards)
+const DprEntry             = lazyWithRetry(() => import('./features/ppc/dpr/DprEntry'));
+const DprRegister          = lazyWithRetry(() => import('./features/ppc/dpr/DprRegister'));
+const DprMachineDashboard  = lazyWithRetry(() => import('./features/ppc/dpr/MachineDashboard'));
+const DprProductionDashboard = lazyWithRetry(() => import('./features/ppc/dpr/ProductionDashboard'));
+const DprOperatorDashboard = lazyWithRetry(() => import('./features/ppc/dpr/OperatorDashboard'));
+const DprMisScoring        = lazyWithRetry(() => import('./features/ppc/dpr/DprMisScoring'));
+const DprMasters           = lazyWithRetry(() => import('./features/ppc/dpr/DprMasters'));
 const FmsProcessList       = lazyWithRetry(() => import('./features/o2d-fms/ProcessList'));
 const FmsProcessDetail     = lazyWithRetry(() => import('./features/o2d-fms/ProcessDetail'));
 const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsDashboard'));
@@ -163,6 +180,26 @@ function App() {
             <Route path="/rm-ims/conversion" element={<RmImsConversion />} />
             <Route path="/rm-ims/reorder" element={<RmImsReorder />} />
             <Route path="/rm-ims/movements" element={<RmImsMovements />} />
+
+            {/* FG IMS — Finished Goods inventory (Production In / Dispatch Out) */}
+            <Route path="/fg-ims" element={<FgImsDashboard />} />
+            <Route path="/fg-ims/stock" element={<FgImsStockList />} />
+            <Route path="/fg-ims/item/:skuId" element={<FgImsItemDetail />} />
+            <Route path="/fg-ims/production-in" element={<FgImsProductionIn />} />
+            <Route path="/fg-ims/dispatch-out" element={<FgImsDispatchOut />} />
+            <Route path="/fg-ims/planning" element={<FgImsPlanning />} />
+            <Route path="/fg-ims/movements" element={<FgImsMovements />} />
+
+            {/* PPC — DPR / OEE (shop-floor daily production report + dashboards) */}
+            <Route path="/ppc/dpr" element={<Navigate to="/ppc/dpr/register" replace />} />
+            <Route path="/ppc/dpr/register" element={<DprRegister />} />
+            <Route path="/ppc/dpr/new" element={<DprEntry />} />
+            <Route path="/ppc/dpr/:id/edit" element={<DprEntry />} />
+            <Route path="/ppc/dpr/machine" element={<DprMachineDashboard />} />
+            <Route path="/ppc/dpr/production" element={<DprProductionDashboard />} />
+            <Route path="/ppc/dpr/operator" element={<DprOperatorDashboard />} />
+            <Route path="/ppc/dpr/mis" element={<DprMisScoring />} />
+            <Route path="/ppc/dpr/masters" element={<DprMasters />} />
 
             <Route path="/challans/:id" element={<ChallanDetail />} />
             <Route path="/invoices" element={<InvoicesList />} />

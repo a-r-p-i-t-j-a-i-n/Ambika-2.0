@@ -3,18 +3,36 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, alpha, useTheme, ToggleButtonGroup, ToggleButton,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, InputAdornment, MenuItem, Chip, Tooltip,
+  Autocomplete, IconButton, Collapse, LinearProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Activity, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, Truck, Clock,
+  ChevronDown, ChevronRight, X, Package, CalendarCheck, FileText,
 } from 'lucide-react';
+import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend,
+} from 'recharts';
 import dayjs from 'dayjs';
 import { useGetPhaseMatrixQuery } from '../../store/api/dispatchControlApi';
+import BackButton from '../../components/BackButton';
 
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
+
+// Simple, self-consistent per-phase remaining (Planned − Actual, never negative) —
+// no "effective"/carry-forward jargon. Phase remainders still add up to the order
+// balance, so the totals reconcile.
+const remainingOf = (r) => Math.max(0, Number(r.plannedQty || 0) - Number(r.actualQty || 0));
+// The date the actual dispatch(es) happened — the latest shipment against the phase.
+const actualDateOf = (r) => {
+  const ds = (r.shipments || []).map((s) => s.date).filter(Boolean);
+  if (!ds.length) return '—';
+  const latest = ds.reduce((a, b) => (dayjs(b).isAfter(dayjs(a)) ? b : a));
+  return dd(latest);
+};
 
 const STATUS = {
   PLANNED:     { color: '#1d4ed8', label: 'Planned' },
@@ -32,15 +50,8 @@ const VIEWS = [
   { key: 'board', label: 'Board', icon: Columns3 },
 ];
 
-// Carry chip: short (+, red) carries forward; surplus (−, green).
-const Carry = ({ v }) => {
-  const n = Number(v || 0);
-  if (!n) return <Typography component="span" sx={{ color: 'text.disabled' }}>—</Typography>;
-  const short = n > 0;
-  return <Typography component="span" sx={{ fontWeight: 800, color: short ? '#be123c' : '#0f766e' }}>{short ? '+' : '−'}{num(Math.abs(n))}</Typography>;
-};
-
-// Sheet/Excel + cards reuse the same column definitions.
+// Sheet/Excel + cards reuse the same column definitions — kept deliberately simple:
+// what was planned (qty + date), what shipped (qty + date), what's left, status.
 const COLS = [
   { key: 'soNumber', label: 'Order' },
   { key: 'partyName', label: 'Client' },
@@ -48,15 +59,145 @@ const COLS = [
   { key: 'phaseNo', label: 'Phase' },
   { key: 'plannedDate', label: 'Plan Date', get: (r) => dd(r.plannedDate) },
   { key: 'plannedQty', label: 'Planned', num: true },
-  { key: 'carryInQty', label: 'Carry-in', num: true },
-  { key: 'effectivePlannedQty', label: 'Effective', num: true },
   { key: 'actualQty', label: 'Actual', num: true },
-  { key: 'pendingQty', label: 'Remaining', num: true },
-  { key: 'carryOutQty', label: 'Carries →', num: true },
-  { key: 'delayDays', label: 'Delay', get: (r) => (r.delayDays > 0 ? `${r.delayDays}d` : '—') },
-  { key: 'achievementPct', label: 'Done %', get: (r) => `${r.achievementPct || 0}%` },
+  { key: 'actualDate', label: 'Actual Date', get: (r) => actualDateOf(r) },
+  { key: 'remaining', label: 'Remaining', num: true, get: (r) => num(remainingOf(r)) },
   { key: 'status', label: 'Status', get: (r) => st(r.status).label },
 ];
+
+const Kpi = ({ label, value, color }) => (
+  <Box sx={{ flex: 1, minWidth: 90, textAlign: 'center', p: 1, borderRadius: 1.5, bgcolor: alpha(color, 0.07) }}>
+    <Typography sx={{ fontWeight: 800, fontSize: '1.1rem', color, lineHeight: 1.1 }}>{value}</Typography>
+    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'text.secondary' }}>{label}</Typography>
+  </Box>
+);
+
+const Metric = ({ label, value, color }) => (
+  <Box sx={{ textAlign: 'right', minWidth: 62 }}>
+    <Typography sx={{ fontWeight: 800, fontSize: '0.82rem', color }}>{value}</Typography>
+    <Typography sx={{ fontSize: '0.54rem', fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>{label}</Typography>
+  </Box>
+);
+
+// Planned-vs-Actual drill-down for ONE order: KPIs, a per-phase bar chart, and a
+// phase-by-phase breakdown where each phase expands to its actual dispatches
+// (challan qty · date · invoice) — so you see what was planned, and exactly what
+// shipped and when.
+const OrderFocusPanel = ({ soNumber, phases, onClear }) => {
+  const theme = useTheme();
+  const [openId, setOpenId] = useState(null);
+  const party = phases[0]?.partyName || '';
+  const po = phases[0]?.poNumber || '';
+  const planned = phases.reduce((s, r) => s + Number(r.plannedQty || 0), 0);
+  const actual = phases.reduce((s, r) => s + Number(r.actualQty || 0), 0);
+  const remaining = phases.reduce((s, r) => s + remainingOf(r), 0);
+  const pct = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : 0;
+  const chartData = phases.map((r) => ({
+    name: `${(r.skuName || '').split(' ')[0]} ${r.phaseNo}`,
+    Planned: Number(r.plannedQty || 0),
+    Actual: Number(r.actualQty || 0),
+  }));
+  const bySku = useMemo(() => {
+    const m = new Map();
+    phases.forEach((r) => { const k = `${r.skuName} (${r.skuCode})`; if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+    return [...m.entries()];
+  }, [phases]);
+
+  return (
+    <Paper variant="outlined" sx={{ borderRadius: 2.5, overflow: 'hidden' }}>
+      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ p: 1.5, bgcolor: alpha(BRAND, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
+        <Box sx={{ width: 36, height: 36, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.12), color: BRAND }}><Package size={18} /></Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 800, color: BRAND_DK }}>{soNumber}</Typography>
+          <Typography variant="caption" color="text.secondary">{party}{po ? ` · PO ${po}` : ''}</Typography>
+        </Box>
+        <Chip size="small" label={`${phases.length} phase${phases.length === 1 ? '' : 's'}`} sx={{ fontWeight: 700 }} />
+        <IconButton size="small" onClick={onClear} title="Back to all orders"><X size={18} /></IconButton>
+      </Stack>
+
+      <Box sx={{ p: 1.5 }}>
+        <Stack direction="row" spacing={1.25} sx={{ mb: 1.25, flexWrap: 'wrap', rowGap: 1 }}>
+          <Kpi label="Planned" value={num(planned)} color={BRAND_DK} />
+          <Kpi label="Dispatched" value={num(actual)} color="#0f766e" />
+          <Kpi label="Remaining" value={num(remaining)} color="#b45309" />
+          <Kpi label="Progress" value={`${pct}%`} color={BRAND} />
+        </Stack>
+        <LinearProgress variant="determinate" value={pct} sx={{ height: 8, borderRadius: 5, mb: 2, bgcolor: alpha(BRAND, 0.12), '& .MuiLinearProgress-bar': { bgcolor: '#0f766e' } }} />
+
+        <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>Planned vs Dispatched — by phase</Typography>
+        <Box sx={{ height: 250, mb: 1 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 6, right: 12, left: -12, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={alpha(theme.palette.text.primary, 0.08)} />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <RTooltip formatter={(v) => num(v)} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="Planned" fill={BRAND} radius={[4, 4, 0, 0]} maxBarSize={40} />
+              <Bar dataKey="Actual" fill="#0f766e" radius={[4, 4, 0, 0]} maxBarSize={40} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Box>
+
+        {bySku.map(([sku, prs]) => (
+          <Box key={sku} sx={{ mt: 1.5 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 0.5 }}>{sku}</Typography>
+            <Stack spacing={0.75}>
+              {prs.map((r) => {
+                const open = openId === r.id;
+                const rem = remainingOf(r);
+                const s = st(r.status);
+                const hasShip = (r.shipments || []).length > 0;
+                return (
+                  <Box key={r.id} sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 1.5, overflow: 'hidden' }}>
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ p: 1, cursor: hasShip ? 'pointer' : 'default', flexWrap: 'wrap', rowGap: 0.5 }}
+                      onClick={() => hasShip && setOpenId(open ? null : r.id)}>
+                      <Chip size="small" label={r.phaseNo} sx={{ fontWeight: 800, bgcolor: alpha(BRAND, 0.1), color: BRAND }} />
+                      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 118 }}>
+                        <CalendarCheck size={13} color={theme.palette.text.secondary} />
+                        <Typography variant="caption" color="text.secondary">Plan: {dd(r.plannedDate)}</Typography>
+                      </Stack>
+                      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 118 }}>
+                        <Truck size={13} color={hasShip ? '#0f766e' : theme.palette.text.disabled} />
+                        <Typography variant="caption" sx={{ fontWeight: hasShip ? 700 : 400, color: hasShip ? '#0f766e' : 'text.disabled' }}>
+                          Actual: {actualDateOf(r)}
+                        </Typography>
+                      </Stack>
+                      <Box sx={{ flex: 1 }} />
+                      <Metric label="Planned" value={num(r.plannedQty)} color={BRAND_DK} />
+                      <Metric label="Actual" value={num(r.actualQty)} color="#0f766e" />
+                      <Metric label="Remaining" value={rem > 0 ? num(rem) : '—'} color={rem > 0 ? '#b45309' : '#94a3b8'} />
+                      <Chip size="small" label={s.label} sx={{ fontWeight: 700, bgcolor: alpha(s.color, 0.1), color: s.color }} />
+                      {hasShip && (open ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                    </Stack>
+                    {hasShip && (
+                      <Collapse in={open} timeout={180} unmountOnExit>
+                        <Box sx={{ px: 1.25, pb: 1.25, pt: 0.5, bgcolor: alpha(theme.palette.text.primary, 0.02) }}>
+                          <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4 }}>Actual dispatches</Typography>
+                          <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                            {r.shipments.map((sh, i) => (
+                              <Stack key={i} direction="row" alignItems="center" spacing={1} sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: 'background.paper', border: `1px solid ${theme.palette.divider}` }}>
+                                <Truck size={13} color="#0f766e" />
+                                <Typography variant="caption" sx={{ fontWeight: 800, color: '#0f766e' }}>{num(sh.qty)} pcs</Typography>
+                                <Box sx={{ flex: 1 }} />
+                                <Typography variant="caption" color="text.secondary">{dd(sh.date)}</Typography>
+                                {sh.invoiceNo && <Chip size="small" icon={<FileText size={11} />} label={sh.invoiceNo} sx={{ height: 18, fontSize: '0.6rem', '& .MuiChip-icon': { ml: 0.5 } }} />}
+                              </Stack>
+                            ))}
+                          </Stack>
+                        </Box>
+                      </Collapse>
+                    )}
+                  </Box>
+                );
+              })}
+            </Stack>
+          </Box>
+        ))}
+      </Box>
+    </Paper>
+  );
+};
 
 const PlanVsActualMaster = () => {
   const theme = useTheme();
@@ -64,23 +205,38 @@ const PlanVsActualMaster = () => {
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [soFilter, setSoFilter] = useState(null);
+  const [poFilter, setPoFilter] = useState(null);
 
   const { data, isLoading, isFetching } = useGetPhaseMatrixQuery();
   const rawRows = useMemo(() => data?.data || [], [data]);
 
+  // Distinct Order (SO) and PO lists for the dropdown pickers.
+  const soOptions = useMemo(() => {
+    const m = new Map();
+    rawRows.forEach((r) => { if (r.soNumber && !m.has(r.soNumber)) m.set(r.soNumber, { soNumber: r.soNumber, partyName: r.partyName, poNumber: r.poNumber }); });
+    return [...m.values()].sort((a, b) => a.soNumber.localeCompare(b.soNumber));
+  }, [rawRows]);
+  const poOptions = useMemo(() => [...new Set(rawRows.map((r) => r.poNumber).filter(Boolean))].sort(), [rawRows]);
+
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rawRows.filter((r) => {
+      if (soFilter && r.soNumber !== soFilter) return false;
+      if (poFilter && r.poNumber !== poFilter) return false;
       if (statusFilter && r.status !== statusFilter) return false;
       if (q && !(`${r.soNumber} ${r.partyName} ${r.skuName} ${r.skuCode} ${r.phaseNo}`.toLowerCase().includes(q))) return false;
       return true;
     });
-  }, [rawRows, search, statusFilter]);
+  }, [rawRows, search, statusFilter, soFilter, poFilter]);
+
+  // When exactly one order is selected, show the rich drill-down for it.
+  const focusPhases = useMemo(() => (soFilter ? rows.slice() : []), [soFilter, rows]);
 
   const totals = useMemo(() => rows.reduce((a, r) => {
-    a.planned += Number(r.effectivePlannedQty || 0);
+    a.planned += Number(r.plannedQty || 0);
     a.actual += Number(r.actualQty || 0);
-    a.pending += Number(r.pendingQty || 0);
+    a.pending += remainingOf(r);
     if (r.delayDays > 0) a.delayed += 1;
     return a;
   }, { planned: 0, actual: 0, pending: 0, delayed: 0 }), [rows]);
@@ -93,19 +249,15 @@ const PlanVsActualMaster = () => {
     { field: 'skuName', headerName: 'SKU', minWidth: 160, flex: 1, valueGetter: (v, r) => `${r.skuName} (${r.skuCode})` },
     { field: 'phaseNo', headerName: 'Phase', width: 80, renderCell: (p) => <Chip size="small" label={p.value} sx={{ fontWeight: 800, bgcolor: alpha(BRAND, 0.08), color: BRAND }} /> },
     { field: 'plannedDate', headerName: 'Plan Date', width: 120, valueGetter: (v, r) => dd(r.plannedDate) },
-    { field: 'plannedQty', headerName: 'Planned', width: 95, type: 'number', valueGetter: (v, r) => Number(r.plannedQty || 0) },
-    { field: 'effectivePlannedQty', headerName: 'Effective', width: 100, type: 'number', valueGetter: (v, r) => Number(r.effectivePlannedQty || 0),
-      renderCell: (p) => <Typography variant="body2" fontWeight={700} color={p.row.carryInQty ? '#b45309' : 'inherit'}>{num(p.value)}</Typography> },
+    { field: 'plannedQty', headerName: 'Planned', width: 100, type: 'number', valueGetter: (v, r) => Number(r.plannedQty || 0),
+      renderCell: (p) => <Typography variant="body2" fontWeight={700}>{num(p.value)}</Typography> },
     { field: 'actualQty', headerName: 'Actual', width: 95, type: 'number', valueGetter: (v, r) => Number(r.actualQty || 0),
-      renderCell: (p) => <Typography variant="body2" fontWeight={800} color="#0f766e">{num(p.value)}</Typography> },
-    { field: 'pendingQty', headerName: 'Remaining', width: 100, type: 'number', valueGetter: (v, r) => Number(r.pendingQty || 0),
+      renderCell: (p) => <Typography variant="body2" fontWeight={800} color={p.value > 0 ? '#0f766e' : 'text.disabled'}>{num(p.value)}</Typography> },
+    { field: 'actualDate', headerName: 'Actual Date', width: 120, valueGetter: (v, r) => actualDateOf(r),
+      renderCell: (p) => <Typography variant="body2" color={p.value === '—' ? 'text.disabled' : 'text.primary'}>{p.value}</Typography> },
+    { field: 'remaining', headerName: 'Remaining', width: 105, type: 'number', valueGetter: (v, r) => remainingOf(r),
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color={p.value > 0 ? '#b45309' : 'text.disabled'}>{p.value > 0 ? num(p.value) : '—'}</Typography> },
-    { field: 'carryOutQty', headerName: 'Carries →', width: 100, type: 'number', valueGetter: (v, r) => Number(r.carryOutQty || 0), renderCell: (p) => <Carry v={p.value} /> },
-    { field: 'delayDays', headerName: 'Delay', width: 90, type: 'number', valueGetter: (v, r) => Number(r.delayDays || 0),
-      renderCell: (p) => (p.value > 0
-        ? <Chip size="small" icon={<Clock size={11} />} label={`${p.value}d`} sx={{ fontWeight: 800, bgcolor: alpha('#be123c', 0.1), color: '#be123c', '& .MuiChip-icon': { color: '#be123c' } }} />
-        : <Typography variant="body2" color="text.disabled">—</Typography>) },
-    { field: 'status', headerName: 'Status', width: 120, valueGetter: (v, r) => st(r.status).label,
+    { field: 'status', headerName: 'Status', width: 130, valueGetter: (v, r) => st(r.status).label,
       renderCell: (p) => <Chip size="small" label={p.value} sx={{ fontWeight: 800, bgcolor: alpha(st(p.row.status).color, 0.1), color: st(p.row.status).color }} /> },
   ];
 
@@ -114,13 +266,14 @@ const PlanVsActualMaster = () => {
       {/* Header + summary */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5} sx={{ mb: 2, px: 0.5, flexWrap: 'wrap', rowGap: 1 }}>
         <Stack direction="row" spacing={1.25} alignItems="center">
+          <BackButton iconOnly color="primary" sx={{ border: `1px solid ${alpha(BRAND, 0.25)}`, borderRadius: 2 }} />
           <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.1), color: BRAND, border: `1px solid ${alpha(BRAND, 0.2)}` }}>
             <Activity size={21} />
           </Box>
           <Box>
             <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.35rem' }, fontWeight: 800, color: BRAND_DK, lineHeight: 1.1 }}>Plan vs Actual</Typography>
             <Typography sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
-              Every phase: what was planned, what shipped &amp; when, what&apos;s left, the delay &amp; how it carries forward.
+              Every phase — what was planned, what actually shipped &amp; when, and what&apos;s still left.
             </Typography>
           </Box>
         </Stack>
@@ -142,8 +295,25 @@ const PlanVsActualMaster = () => {
       <Paper sx={{ borderRadius: 2.5, overflow: 'hidden', border: `1px solid ${theme.palette.divider}` }}>
         {/* Toolbar */}
         <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', rowGap: 1, borderBottom: `1px solid ${theme.palette.divider}` }}>
-          <TextField size="small" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search order / SKU / phase…"
-            sx={{ width: { xs: '100%', sm: 280 }, '& .MuiInputBase-root': { height: 34 } }}
+          <Autocomplete size="small" options={soOptions} value={soOptions.find((o) => o.soNumber === soFilter) || null}
+            onChange={(_e, v) => setSoFilter(v?.soNumber || null)}
+            getOptionLabel={(o) => o.soNumber || ''} isOptionEqualToValue={(a, b) => a.soNumber === b.soNumber}
+            sx={{ width: { xs: '100%', sm: 240 } }}
+            renderOption={(props, o) => (
+              <li {...props} key={o.soNumber}>
+                <Box><Typography variant="body2" fontWeight={700}>{o.soNumber}</Typography>
+                  <Typography variant="caption" color="text.secondary">{o.partyName}</Typography></Box>
+              </li>
+            )}
+            renderInput={(p) => <TextField {...p} placeholder="Select Order (SO)…"
+              InputProps={{ ...p.InputProps, startAdornment: <>{p.InputProps.startAdornment}</> }}
+              sx={{ '& .MuiInputBase-root': { minHeight: 34 } }} />} />
+          <Autocomplete size="small" options={poOptions} value={poFilter}
+            onChange={(_e, v) => setPoFilter(v || null)}
+            sx={{ width: { xs: '100%', sm: 160 } }}
+            renderInput={(p) => <TextField {...p} placeholder="PO…" sx={{ '& .MuiInputBase-root': { minHeight: 34 } }} />} />
+          <TextField size="small" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search SKU / phase…"
+            sx={{ width: { xs: '100%', sm: 200 }, '& .MuiInputBase-root': { height: 34 } }}
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={14} /></InputAdornment> }} />
           <TextField select size="small" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
             sx={{ width: 150, '& .MuiInputBase-root': { height: 34 } }}
@@ -162,8 +332,14 @@ const PlanVsActualMaster = () => {
           </ToggleButtonGroup>
         </Stack>
 
+        {/* ── Focused order drill-down (KPIs + chart + per-phase dispatches) ── */}
+        {soFilter && (
+          <Box sx={{ p: 1.5 }}>
+            <OrderFocusPanel soNumber={soFilter} phases={focusPhases} onClear={() => setSoFilter(null)} />
+          </Box>
+        )}
         {/* ── Table ── */}
-        {view === 'table' && (
+        {!soFilter && view === 'table' && (
           <Box sx={{ px: 1.5, pb: 1.5 }}>
             <DataGrid rows={rows} columns={gridColumns} getRowId={(r) => r.id} loading={isFetching || isLoading}
               autoHeight density="compact" onRowClick={(p) => goOrder(p.row)}
@@ -174,7 +350,7 @@ const PlanVsActualMaster = () => {
         )}
 
         {/* ── Excel / Sheet ── */}
-        {view === 'sheet' && (
+        {!soFilter && view === 'sheet' && (
           <Box sx={{ px: 1.5, pb: 1.5, overflowX: 'auto' }}>
             <Table size="small" sx={{ minWidth: 1200, '& td, & th': { border: `1px solid ${theme.palette.divider}`, fontSize: '0.76rem', px: 1, py: 0.55, whiteSpace: 'nowrap' } }}>
               <TableHead>
@@ -189,9 +365,7 @@ const PlanVsActualMaster = () => {
                     <TableCell sx={{ color: 'text.disabled' }}>{i + 1}</TableCell>
                     {COLS.map((c) => (
                       <TableCell key={c.key} align={c.num ? 'right' : 'left'}>
-                        {c.key === 'carryOutQty' ? <Carry v={r.carryOutQty} />
-                          : c.get ? c.get(r)
-                          : c.num ? num(r[c.key]) : (r[c.key] || '—')}
+                        {c.get ? c.get(r) : c.num ? num(r[c.key]) : (r[c.key] || '—')}
                       </TableCell>
                     ))}
                   </TableRow>
@@ -203,7 +377,7 @@ const PlanVsActualMaster = () => {
         )}
 
         {/* ── Cards ── */}
-        {view === 'cards' && (
+        {!soFilter && view === 'cards' && (
           <Box sx={{ p: 1.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 1.5 }}>
             {rows.map((r) => {
               const s = st(r.status);
@@ -222,9 +396,9 @@ const PlanVsActualMaster = () => {
                   </Stack>
                   <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap', rowGap: 0.5 }}>
                     {[
-                      { k: 'Plan', v: num(r.effectivePlannedQty), c: BRAND_DK },
+                      { k: 'Plan', v: num(r.plannedQty), c: BRAND_DK },
                       { k: 'Actual', v: num(r.actualQty), c: '#0f766e' },
-                      { k: 'Remain', v: num(r.pendingQty), c: r.pendingQty > 0 ? '#b45309' : '#64748b' },
+                      { k: 'Remain', v: num(remainingOf(r)), c: remainingOf(r) > 0 ? '#b45309' : '#64748b' },
                     ].map((x) => (
                       <Box key={x.k} sx={{ flex: 1, minWidth: 60, textAlign: 'center', p: 0.5, borderRadius: 1, bgcolor: alpha(x.c, 0.06) }}>
                         <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: x.c }}>{x.v}</Typography>
@@ -232,11 +406,6 @@ const PlanVsActualMaster = () => {
                       </Box>
                     ))}
                   </Stack>
-                  {Number(r.carryOutQty || 0) !== 0 && (
-                    <Typography sx={{ mt: 0.75, fontSize: '0.68rem', fontWeight: 700 }}>
-                      Carries forward: <Carry v={r.carryOutQty} />
-                    </Typography>
-                  )}
                   {(r.shipments || []).length > 0 && (
                     <Box sx={{ mt: 0.75, pt: 0.75, borderTop: `1px dashed ${theme.palette.divider}` }}>
                       <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', mb: 0.25 }}>Shipped</Typography>
@@ -256,7 +425,7 @@ const PlanVsActualMaster = () => {
         )}
 
         {/* ── Board (grouped by status) ── */}
-        {view === 'board' && (
+        {!soFilter && view === 'board' && (
           <Box sx={{ p: 1.5, display: 'flex', gap: 1.5, overflowX: 'auto' }}>
             {Object.keys(STATUS).map((sKey) => {
               const group = rows.filter((r) => r.status === sKey);
@@ -278,7 +447,7 @@ const PlanVsActualMaster = () => {
                         </Stack>
                         <Typography variant="caption" color="text.secondary" display="block" noWrap>{r.partyName} · {r.skuName}</Typography>
                         <Typography sx={{ fontSize: '0.7rem', mt: 0.5 }}>
-                          <b style={{ color: '#0f766e' }}>{num(r.actualQty)}</b> / {num(r.effectivePlannedQty)} · rem <b style={{ color: r.pendingQty > 0 ? '#b45309' : '#64748b' }}>{num(r.pendingQty)}</b> · {dd(r.plannedDate)}
+                          <b style={{ color: '#0f766e' }}>{num(r.actualQty)}</b> / {num(r.plannedQty)} · rem <b style={{ color: remainingOf(r) > 0 ? '#b45309' : '#64748b' }}>{num(remainingOf(r))}</b> · {dd(r.plannedDate)}
                         </Typography>
                       </Paper>
                     ))}

@@ -24,6 +24,7 @@ const C = {
 };
 
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
+const inr = (v) => `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const fmtDT = (d) => (d ? dayjs(d).format('DD MMM YYYY · hh:mm A') : '—');
 const fmtD = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
 
@@ -97,6 +98,7 @@ const JourneyNode = ({ node, last }) => {
 };
 
 const TABS = [
+  { key: 'order',    label: 'Order',          icon: Inbox },
   { key: 'plan',     label: 'Plan vs Actual', icon: ClipboardList },
   { key: 'phases',   label: 'Phases',         icon: Calendar },
   { key: 'dispatch', label: 'Dispatch History', icon: Truck },
@@ -117,7 +119,7 @@ const OrderDetails = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [dispatchOpen, setDispatchOpen] = useState(false);
 
-  const tab = TABS.some((t) => t.key === searchParams.get('tab')) ? searchParams.get('tab') : 'plan';
+  const tab = TABS.some((t) => t.key === searchParams.get('tab')) ? searchParams.get('tab') : 'order';
   const setTab = (t) => {
     const p = new URLSearchParams(searchParams);
     p.set('tab', t);
@@ -305,6 +307,66 @@ const OrderDetails = () => {
           </Tabs>
 
           <Box sx={{ p: { xs: 1.5, md: 2.5 } }}>
+            {/* ORDER — exactly what was received, item-wise */}
+            {tab === 'order' && (
+              order?.items?.length ? (() => {
+                const items = order.items;
+                const totOrdered = items.reduce((s, it) => s + Number(it.orderQty || 0), 0);
+                const totValue = items.reduce((s, it) => s + Number(it.orderQty || 0) * Number(it.rate || 0), 0);
+                const hasRate = items.some((it) => Number(it.rate) > 0);
+                return (
+                  <Box>
+                    <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap' }} useFlexGap>
+                      <Chip icon={<Boxes size={14} />} label={`${items.length} item${items.length === 1 ? '' : 's'}`}
+                        sx={{ fontWeight: 700, bgcolor: alpha(C.primary, 0.08), color: C.primaryDk }} />
+                      <Chip label={`Ordered: ${fmt(totOrdered)} pcs`} sx={{ fontWeight: 700, bgcolor: alpha(C.primary, 0.08), color: C.primaryDk }} />
+                      {order.poNumber && <Chip label={`PO ${order.poNumber}`} variant="outlined" sx={{ fontWeight: 700 }} />}
+                      {order.poDate && <Chip label={`PO date ${fmtD(order.poDate)}`} variant="outlined" sx={{ fontWeight: 700 }} />}
+                      {hasRate && <Chip label={`Order value: ${inr(totValue)}`} sx={{ fontWeight: 700, bgcolor: alpha(C.success, 0.1), color: C.success }} />}
+                    </Stack>
+                    <TableContainer sx={{ border: `1px solid ${C.line}`, borderRadius: 2 }}>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow sx={{ '& th': { fontSize: '0.66rem', fontWeight: 800, color: C.slate, textTransform: 'uppercase', bgcolor: C.surfaceAlt, letterSpacing: '0.05em' } }}>
+                            <TableCell>#</TableCell>
+                            <TableCell>Item</TableCell>
+                            <TableCell align="right">Ordered (pcs)</TableCell>
+                            <TableCell align="right">Rate (₹)</TableCell>
+                            <TableCell align="right">Value (₹)</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {items.map((it, i) => {
+                            const q = Number(it.orderQty || 0);
+                            const r = Number(it.rate || 0);
+                            return (
+                              <TableRow key={it._id || i} hover>
+                                <TableCell><Typography sx={{ fontSize: '0.78rem', color: C.faint }}>{i + 1}</Typography></TableCell>
+                                <TableCell>
+                                  <Typography sx={{ fontSize: '0.84rem', fontWeight: 700, color: C.ink }}>{it.skuName}</Typography>
+                                  <Typography sx={{ fontSize: '0.68rem', color: C.faint }}>{it.skuCode}{it.asnCode ? ` · ASN ${it.asnCode}` : ''}</Typography>
+                                </TableCell>
+                                <TableCell align="right"><Typography sx={{ fontSize: '0.88rem', fontWeight: 800, color: C.ink, fontVariantNumeric: 'tabular-nums' }}>{fmt(q)}</Typography></TableCell>
+                                <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', color: C.slate, fontVariantNumeric: 'tabular-nums' }}>{r ? inr(r) : '—'}</Typography></TableCell>
+                                <TableCell align="right"><Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: C.ink, fontVariantNumeric: 'tabular-nums' }}>{r ? inr(q * r) : '—'}</Typography></TableCell>
+                              </TableRow>
+                            );
+                          })}
+                          <TableRow sx={{ '& td': { borderTop: `2px solid ${C.line}`, bgcolor: C.surfaceAlt } }}>
+                            <TableCell />
+                            <TableCell><Typography sx={{ fontSize: '0.74rem', fontWeight: 800, color: C.ink, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Total</Typography></TableCell>
+                            <TableCell align="right"><Typography sx={{ fontSize: '0.88rem', fontWeight: 800, color: C.primaryDk, fontVariantNumeric: 'tabular-nums' }}>{fmt(totOrdered)}</Typography></TableCell>
+                            <TableCell />
+                            <TableCell align="right"><Typography sx={{ fontSize: '0.84rem', fontWeight: 800, color: hasRate ? C.success : C.faint, fontVariantNumeric: 'tabular-nums' }}>{hasRate ? inr(totValue) : '—'}</Typography></TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  </Box>
+                );
+              })() : <Empty icon={Inbox} text="This order has no item lines yet." />
+            )}
+
             {/* PLAN VS ACTUAL */}
             {tab === 'plan' && (
               comparison

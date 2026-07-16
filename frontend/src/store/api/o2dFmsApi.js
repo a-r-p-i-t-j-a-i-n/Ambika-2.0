@@ -102,7 +102,13 @@ export const o2dFmsApi = baseApi.injectEndpoints({
         method: 'PATCH',
         body: { actionKey, link },
       }),
-      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }, 'O2DMyTasks'],
+      // Also refresh the per-challan ledger (separately keyed as `consignments-<id>`),
+      // so a per-consignment action just done — invoice / email / POD / payment —
+      // flips that challan to done ("Do again · Done by … · time") instead of staying
+      // on the stale "Not done for this consignment yet" state.
+      invalidatesTags: (r, e, { id }) => [
+        { type: 'O2DProcess', id }, { type: 'O2DProcess', id: `consignments-${id}` }, 'O2DMyTasks',
+      ],
     }),
     answerVerification: builder.mutation({
       query: ({ id, stepCode, itemId, answer, remark }) => ({

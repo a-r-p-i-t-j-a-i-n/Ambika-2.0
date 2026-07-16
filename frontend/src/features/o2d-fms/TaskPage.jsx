@@ -55,10 +55,30 @@ const TaskPage = () => {
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 }, width: '100%', maxWidth: 1100 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate(-1)}>Back</Button>
-        <Button size="small" startIcon={<RefreshCw size={14} />} onClick={() => refetch()} disabled={isFetching}>Refresh</Button>
-      </Stack>
+      {/* Top header — Back + order identity + whole-order-flow + Refresh, all pinned together. */}
+      <Paper elevation={0} sx={{ p: { xs: 1, md: 1.25 }, borderRadius: 3, mb: 2, border: '1px solid', borderColor: 'divider' }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
+          <Stack direction="row" spacing={{ xs: 1, md: 1.5 }} alignItems="center" sx={{ minWidth: 0 }}>
+            <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate(-1)} sx={{ flexShrink: 0, fontWeight: 700 }}>Back</Button>
+            {process && (
+              <Box sx={{ minWidth: 0, borderLeft: '1px solid', borderColor: 'divider', pl: { xs: 1, md: 1.5 } }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.15 }} noWrap>{process.soNumber}</Typography>
+                <Typography variant="caption" color="text.secondary" noWrap display="block">
+                  {process.partyName}{process.poNumber ? ` · PO ${process.poNumber}` : ''}
+                </Typography>
+              </Box>
+            )}
+          </Stack>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0 }}>
+            {process && (
+              <Button variant="text" size="small" onClick={() => navigate(`/o2d-fms/process/${process._id}`)} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                View whole order flow →
+              </Button>
+            )}
+            <Button size="small" startIcon={<RefreshCw size={14} />} onClick={() => refetch()} disabled={isFetching}>Refresh</Button>
+          </Stack>
+        </Stack>
+      </Paper>
 
       {isLoading ? (
         <Skeleton variant="rounded" height={460} />
@@ -68,15 +88,6 @@ const TaskPage = () => {
         </Paper>
       ) : (
         <>
-          {/* Order context */}
-          <Paper sx={{ p: 2, borderRadius: 3, mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-            <Box>
-              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>{process.soNumber}</Typography>
-              <Typography variant="caption" color="text.secondary">{process.partyName} · PO {process.poNumber || '—'}</Typography>
-            </Box>
-            <Button variant="text" onClick={() => navigate(`/o2d-fms/process/${process._id}`)}>View whole order flow →</Button>
-          </Paper>
-
           {/* The full task — checklist, attachments, comments, complete (reused card, inline) */}
           <StepDetailCard
             asPage

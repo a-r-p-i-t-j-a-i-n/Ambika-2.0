@@ -184,6 +184,28 @@ const loadDefMap = async () => {
   return new Map(defs.map((d) => [d.stepCode, d]));
 };
 
+// Self-heal older direct-Sales-Order processes whose "Order Received"
+// (ORDER_INTAKE) step was recorded as SKIPPED — punching the order IN is the
+// received event, so it should read DONE. Runs once per process (no-op after).
+const healReceivedStep = async (process, defMap) => {
+  if (!process?.salesOrderId) return;
+  let changed = false;
+  const at = process.createdAt || new Date();
+  for (const s of process.steps || []) {
+    if (defMap.get(s.stepCode)?.triggerKey === 'ORDER_INTAKE' && s.status === O2D_STEP_STATUS.SKIPPED) {
+      s.status = O2D_STEP_STATUS.DONE;
+      s.startedAt = s.startedAt || at;
+      s.actual = s.actual || at;
+      s.planned = s.planned || at;
+      s.delayMins = 0;
+      if (!s.completedBy && process.createdBy) s.completedBy = process.createdBy;
+      (s.checklist || []).forEach((c) => { if (!c.done) { c.done = true; c.doneAt = at; if (process.createdBy) c.doneBy = process.createdBy; } });
+      changed = true;
+    }
+  }
+  if (changed) { try { await process.save(); } catch (e) { logger.warn(`[O2D-FMS] heal received-step failed: ${e.message}`); } }
+};
+
 // Optimistic-concurrency retry. The O2DProcess is one big document that several of
 // a doer's actions can hit at the same instant (e.g. on returning from a connected
 // screen the UI fires "action-done" AND auto-ticks the checklist). When two saves
@@ -287,16 +309,20 @@ const applyPhasedDispatch = async (process, step, defMap, actor) => {
 
   const idx = process.steps.findIndex((s) => s.stepCode === step.stepCode);
   const next = process.steps[idx + 1];
-  // Activate the next step so downstream can proceed per consignment — but only if
-  // it hasn't started yet, so we never drag the "current" pointer backwards.
+  // Activate the next step so downstream can proceed per consignment. We initialise
+  // it (startedAt / planned / current pointer) only the FIRST time it's reached —
+  // never dragging the pointer backwards — but RE-NOTIFY its doers on EVERY dispatch,
+  // because each new dispatch is a fresh delivery challan (consignment) they must
+  // invoice/email/track. That's what re-surfaces the task in their My Tasks again.
   const activateNext = async () => {
-    if (next && !next.startedAt) {
-      const nextDef = defMap.get(next.stepCode);
+    if (!next) return;
+    const nextDef = defMap.get(next.stepCode);
+    if (!next.startedAt) {
       if (!next.planned) next.planned = addMinutes(now, next.leadTimeMins ?? nextDef?.slaMinutes ?? 60);
       next.startedAt = now;
       process.currentStepCode = next.stepCode;
-      await notifyStepOwners(process, next);
     }
+    await notifyStepOwners(process, next);
   };
 
   if (summary.fullyDispatched) {
@@ -323,6 +349,30 @@ const applyPhasedDispatch = async (process, step, defMap, actor) => {
 
   await process.save();
   return enrichSteps(process, defMap);
+};
+
+// Post-dispatch steps that recur per delivery challan (their action key), and how
+// to tell whether a specific challan has already satisfied a given step. Used by
+// getMyTasks so a step still surfaces as an ACTIONABLE task while any challan is
+// pending it — even if the (shared) step was marked done for an earlier challan.
+const PER_CONSIGNMENT_ACTIONS = [
+  'INVOICE', 'INVOICE_ENTRY', 'INVOICE_EMAIL', 'POD', 'TRACK_DELIVERY',
+  'PAYMENT', 'PAYMENT_FOLLOWUP', 'PAYMENT_RECEIPT', 'TRANSPORT_BILL_RECEIVE', 'TRANSPORT_BILL_STATUS',
+];
+const stepActionKeysOf = (s) => (s?.actionLinks?.length ? s.actionLinks : (s?.actionLink ? [s.actionLink] : []));
+const consignmentStepDone = (actionKey, c) => {
+  switch (actionKey) {
+    case 'INVOICE': case 'INVOICE_ENTRY': return !!c.invoice?.has;
+    // SENT or attempted (emailSentAt stamped even on a FAILED SMTP send) — so a
+    // challan the doer has already emailed isn't re-surfaced in My Tasks forever.
+    case 'INVOICE_EMAIL': return c.invoice?.emailStatus === 'SENT' || !!c.invoice?.emailSentAt;
+    case 'POD': case 'TRACK_DELIVERY': return !!c.delivery?.delivered;
+    case 'PAYMENT_FOLLOWUP': return !!c.payment?.has;
+    case 'PAYMENT': case 'PAYMENT_RECEIPT': return !!c.payment?.confirmed;
+    case 'TRANSPORT_BILL_RECEIVE': return c.transport?.receiptStatus === 'DONE';
+    case 'TRANSPORT_BILL_STATUS': return c.transport?.paymentStatus === 'DONE';
+    default: return null; // not a per-consignment action
+  }
 };
 
 // ── Per-consignment split execution ────────────────────────────────────────
@@ -464,14 +514,18 @@ const applyConsignmentStep = async (process, step, def, defMap, actor) => {
 
   const idx = process.steps.findIndex((s) => s.stepCode === step.stepCode);
   const next = process.steps[idx + 1];
+  // Initialise the next step once, but re-notify its doers on EVERY consignment
+  // event — each newly-invoiced/-delivered challan is fresh work for the next step's
+  // doer, so their task must re-surface in My Tasks for that consignment too.
   const activateNext = async () => {
-    if (next && !next.startedAt) {
-      const nextDef = defMap.get(next.stepCode);
+    if (!next) return;
+    const nextDef = defMap.get(next.stepCode);
+    if (!next.startedAt) {
       if (!next.planned) next.planned = addMinutes(now, next.leadTimeMins ?? nextDef?.slaMinutes ?? 60);
       next.startedAt = now;
       process.currentStepCode = next.stepCode;
-      await notifyStepOwners(process, next);
     }
+    await notifyStepOwners(process, next);
   };
 
   if (gate.satisfied) {
@@ -591,11 +645,21 @@ export const o2dFmsService = {
       return null;
     }
 
-    // Direct Sales Order (no preceding intake): skip ORDER_INTAKE steps so they
-    // don't dangle forever, and start at the first remaining step.
+    // Direct Sales Order: the order being punched in IS the "Order Received"
+    // event, so mark ORDER_INTAKE step(s) DONE (not Skipped — that reads as "never
+    // happened" and confuses the desk), attributed to whoever created the order.
     const defMap = new Map(defs.map((d) => [d.stepCode, d]));
+    const receivedAt = order.receivedAt || order.createdAt || new Date();
     steps.forEach((s) => {
-      if (defMap.get(s.stepCode)?.triggerKey === 'ORDER_INTAKE') { s.status = O2D_STEP_STATUS.SKIPPED; s.startedAt = null; s.planned = null; }
+      if (defMap.get(s.stepCode)?.triggerKey === 'ORDER_INTAKE') {
+        s.status = O2D_STEP_STATUS.DONE;
+        s.startedAt = receivedAt;
+        s.actual = receivedAt;
+        s.planned = s.planned || receivedAt;
+        s.delayMins = 0;
+        if (order.createdBy) s.completedBy = order.createdBy;
+        (s.checklist || []).forEach((c) => { c.done = true; c.doneAt = receivedAt; if (order.createdBy) c.doneBy = order.createdBy; });
+      }
     });
     const firstPending = steps.find((s) => s.status === O2D_STEP_STATUS.PENDING);
     if (firstPending && !firstPending.startedAt) firstPending.startedAt = order.receivedAt || new Date();
@@ -677,6 +741,7 @@ export const o2dFmsService = {
       .populate('activityTimeline.actorId', 'name');
     if (!process) throw new AppError('O2D process not found', 404);
     const defMap = await loadDefMap();
+    await healReceivedStep(process, defMap);
     return enrichSteps(process, defMap);
   },
 
@@ -690,6 +755,7 @@ export const o2dFmsService = {
       .populate('activityTimeline.actorId', 'name');
     if (!process) return null;
     const defMap = await loadDefMap();
+    await healReceivedStep(process, defMap);
     return enrichSteps(process, defMap);
   },
 
@@ -1121,13 +1187,35 @@ export const o2dFmsService = {
 
     const tasks = [];
     for (const p of processes) {
+      // Per-consignment steps recur per delivery challan. If this order has any and
+      // isn't fully complete, compute its challan ledger once so we can tell whether a
+      // step still has a challan waiting on it (even if the shared step was marked done
+      // for an earlier challan). That keeps it surfacing as an actionable task.
+      const hasPerCons = !p.isCompleted
+        && (p.steps || []).some((s) => stepActionKeysOf(s).some((k) => PER_CONSIGNMENT_ACTIONS.includes(k)));
+      let consignments = null;
+      if (hasPerCons && p.soNumber) {
+        try { consignments = (await computeConsignments(p.soNumber, p.consignmentLog || [])).consignments; }
+        catch { consignments = null; }
+      }
+
       for (const s of p.steps) {
         const isOwner = stepDoerIds(s).includes(uid);
         const isBuddy = stepBuddyIds(s).includes(uid);
         if (!isOwner && !isBuddy) continue;
         const def = defMap.get(s.stepCode);
         const checklist = s.checklist || [];
-        const isDone = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED].includes(s.status);
+
+        // Is a delivery challan still pending THIS step? If so the task stays
+        // actionable for that challan, and links straight to it (?dc=), even after
+        // the shared step was marked done for an earlier challan.
+        const perKey = stepActionKeysOf(s).find((k) => PER_CONSIGNMENT_ACTIONS.includes(k));
+        const perList = (perKey && consignments?.length)
+          ? consignments.filter((c) => consignmentStepDone(perKey, c) === false) : [];
+        const pendingCons = perList[0] || null;
+
+        const status = pendingCons ? O2D_STEP_STATUS.IN_PROGRESS : s.status;
+        const isDone = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED].includes(status);
         tasks.push({
           processId: p._id,
           salesOrderId: p.salesOrderId,
@@ -1139,7 +1227,11 @@ export const o2dFmsService = {
           tool: def?.tool || null,
           description: s.instructions || def?.description || '',
           asBuddy: isBuddy && !isOwner,
-          status: s.status,
+          status,
+          // The pending challan this task should open on (My Tasks links via ?dc=).
+          dcNumber: pendingCons?.dcNumber || null,
+          pendingConsignments: perList.length,
+          consignmentTotal: (perKey && consignments) ? consignments.length : 0,
           requiresLink: s.requiresLink != null ? !!s.requiresLink : !!def?.requiresLink,
           requiresAttachment: !!def?.requiresAttachment,
           checklistTotal: checklist.length,

@@ -788,11 +788,17 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
             sx={{
               border: '1px solid', borderColor: 'divider', borderRadius: '12px', overflow: 'hidden',
               bgcolor: 'background.paper',
+              // Hide the native number spin-buttons (they clutter Qty/Price) and keep
+              // every field the same compact height so the row reads as one clean line.
+              '& input[type=number]': { MozAppearance: 'textfield' },
+              '& input[type=number]::-webkit-outer-spin-button, & input[type=number]::-webkit-inner-spin-button': { WebkitAppearance: 'none', margin: 0 },
+              '& .MuiOutlinedInput-root': { minHeight: 38 },
             }}
           >
             <Box sx={{
               display: 'grid',
               gridTemplateColumns: { xs: '1fr', md: '2fr 0.8fr 0.85fr 1.2fr 1.25fr 44px' },
+              gap: 1,
               px: 1.5, py: 1, bgcolor: alpha(theme.palette.primary.main, 0.04),
               borderBottom: '1px solid', borderColor: 'divider',
               fontSize: '0.7rem', fontWeight: 700,

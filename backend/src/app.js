@@ -23,6 +23,7 @@ import scheduleRoutes from './modules/schedule/schedule.routes.js';
 import challanRoutes  from './modules/challan/challan.routes.js';
 import fmsRoutes      from './modules/fms/fms.routes.js';
 import ppcRoutes      from './modules/ppc/ppc.routes.js';
+import dprRoutes      from './modules/ppc/dpr.routes.js';
 import dispatchControlRoutes from './modules/dispatch-control/dispatch-control.routes.js';
 import uploadRoutes from './common/uploads/upload.routes.js';
 import salesInvoiceRoutes from './modules/invoice/invoice.routes.js';
@@ -44,6 +45,7 @@ import advancePaymentRoutes from './modules/procurement/advance-payment/advanceP
 import inventoryRoutes from './modules/inventory/inventory.routes.js';
 import imsRoutes from './modules/inventory/ims.routes.js';
 import rmImsRoutes from './modules/inventory/rmIms.routes.js';
+import fgImsRoutes from './modules/inventory/fgIms.routes.js';
 import grnRoutes from './modules/procurement/grn/grn.routes.js';
 import serviceCompletionRoutes from './modules/procurement/service-completion/serviceCompletion.routes.js';
 import incomingQcRoutes from './modules/procurement/incoming-qc/incomingQc.routes.js';
@@ -128,6 +130,7 @@ app.use('/api/v1/schedules', scheduleRoutes);
 app.use('/api/v1/challans',  challanRoutes);
 app.use('/api/v1/fms',       fmsRoutes);
 app.use('/api/v1/ppc',       ppcRoutes);
+app.use('/api/v1/dpr',       dprRoutes); // DPR / OEE — shop-floor daily production report + dashboards
 app.use('/api/v1/dispatch-control', dispatchControlRoutes);
 app.use('/api/v1/uploads',          uploadRoutes);
 app.use('/api/v1/access-control',   accessControlRoutes);
@@ -147,6 +150,7 @@ app.use('/api/v1/procurement/advance-payments', advancePaymentRoutes); // Purcha
 app.use('/api/v1/inventory', inventoryRoutes); // Shared inventory stock-movement foundation
 app.use('/api/v1/ims', imsRoutes); // IMS — Packaging & Consumables inventory (built on the stock engine)
 app.use('/api/v1/rm-ims', rmImsRoutes); // RM IMS — Raw Material (Coil + Circle) inventory
+app.use('/api/v1/fg-ims', fgImsRoutes); // FG IMS — Finished Goods inventory (Production In / Dispatch Out)
 app.use('/api/v1/procurement/grns', grnRoutes); // Purchase FMS — Goods Receipt Notes (Step 1.8)
 app.use('/api/v1/procurement/service-completions', serviceCompletionRoutes); // Purchase FMS — Service Completion (Step 1.8A)
 app.use('/api/v1/procurement/incoming-qc', incomingQcRoutes); // Purchase FMS — Incoming QC (Step 1.9)

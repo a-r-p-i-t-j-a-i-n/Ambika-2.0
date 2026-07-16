@@ -33,6 +33,22 @@ export const invoiceService = {
     const exists = await Invoice.findOne({ invoiceNo: data.invoiceNo });
     if (exists) throw new AppError(`Invoice '${data.invoiceNo}' already exists`, 409);
 
+    // One invoice per delivery challan: if this DC already has a live (non-cancelled)
+    // invoice, block a duplicate — the caller must edit the existing one instead.
+    // (Step 2.7 was previously creatable again for an already-invoiced challan.)
+    if (data.dcId) {
+      const dcInvoice = await Invoice.findOne({
+        dcId: data.dcId,
+        status: { $ne: INVOICE_STATUS.CANCELLED },
+      }).select('invoiceNo').lean();
+      if (dcInvoice) {
+        throw new AppError(
+          `An invoice (${dcInvoice.invoiceNo}) already exists for this delivery challan. Open it to edit instead of creating a new one.`,
+          409,
+        );
+      }
+    }
+
     // Auto-fill context from the linked challan when one is chosen.
     if (data.dcId) {
       const dc = await DeliveryChallan.findById(data.dcId).lean();
@@ -88,6 +104,22 @@ export const invoiceService = {
     if (!inv) throw new AppError('Invoice not found', 404);
     if (data.invoiceUrls) data.invoiceUrl = data.invoiceUrls[0] || inv.invoiceUrl;
     if (data.ewayBillUrls) data.ewayBillUrl = data.ewayBillUrls[0] || inv.ewayBillUrl;
+    // The edit form sends status as 'Done'/'DONE'/'Cancelled' — map it to the invoice
+    // enum (like create does) so it never fails validation. "Done" just means
+    // "not cancelled": keep the invoice's live status (SENT/PAID/…) and only lift a
+    // PENDING/CANCELLED one to CREATED, so editing never downgrades a sent invoice.
+    if (data.status !== undefined) {
+      const s = String(data.status).toUpperCase();
+      if (s === 'CANCELLED') data.status = INVOICE_STATUS.CANCELLED;
+      else if (s === 'DONE' || s === 'YES') {
+        data.status = [INVOICE_STATUS.PENDING, INVOICE_STATUS.CANCELLED].includes(inv.status)
+          ? INVOICE_STATUS.CREATED : inv.status;
+      } else if (!Object.values(INVOICE_STATUS).includes(s)) {
+        delete data.status; // unknown value → leave the current status untouched
+      } else {
+        data.status = s;
+      }
+    }
     Object.assign(inv, data);
     await inv.save();
     return inv.toObject();

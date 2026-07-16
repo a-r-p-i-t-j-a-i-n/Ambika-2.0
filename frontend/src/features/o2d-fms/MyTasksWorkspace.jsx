@@ -38,10 +38,12 @@ const statusChip = (t) => {
   // Quantity-/consignment-gated step part-way through — still the doer's task.
   if (t.status === 'IN_PROGRESS') {
     const ep = t.executionProgress;
-    const label = t.dispatchProgress
-      ? `In progress · ${num(t.dispatchProgress.balanceQty)} left`
-      : ep ? `In progress · ${num(ep.done)}/${num(ep.total)} ${ep.label || ''}`.trim()
-      : 'In progress';
+    const label = t.dcNumber
+      ? (t.consignmentTotal > 1 ? `To do · ${t.pendingConsignments}/${t.consignmentTotal} challans` : `To do · ${t.dcNumber}`)
+      : t.dispatchProgress
+        ? `In progress · ${num(t.dispatchProgress.balanceQty)} left`
+        : ep ? `In progress · ${num(ep.done)}/${num(ep.total)} ${ep.label || ''}`.trim()
+          : 'In progress';
     return <Chip size="small" color="primary" label={label} />;
   }
   if (isDueSoon(t.planned)) return <Chip size="small" color="warning" variant="outlined" label="Due soon" />;
@@ -96,7 +98,12 @@ const MyTasksWorkspace = () => {
     buddy: tasks.filter((t) => t.asBuddy).length,
   };
 
-  const openTask = (t) => navigate(`/o2d-fms/task/${t.processId}/${encodeURIComponent(t.stepCode)}`);
+  // Open the task — for a per-consignment step still pending a challan, land straight
+  // on THAT delivery (?dc=) so the doer works the exact consignment their task is for.
+  const openTask = (t) => {
+    const q = t.dcNumber ? `?dc=${encodeURIComponent(t.dcNumber)}` : '';
+    navigate(`/o2d-fms/task/${t.processId}/${encodeURIComponent(t.stepCode)}${q}`);
+  };
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 } }}>
