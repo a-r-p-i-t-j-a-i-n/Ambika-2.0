@@ -11,6 +11,10 @@ const GrnPdfPreview = ({ open, onClose, grn }) => {
   // `localhost` URL that dies on the live site. resolveFileUrl re-points the link
   // (by S3 key) at the current API base so it always loads.
   const url = resolveFileUrl(grn?.grnPdfUrl);
+  // `grnPdfUrl` is an absolute URL baked at generation time — if the backend
+  // lacked SERVER_URL it points at localhost, so repair it against the current
+  // API origin (same fix already applied to PO/Voucher PDFs).
+  const url = resolveFileUrl(grn?.grnPdfUrl) || '';
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>

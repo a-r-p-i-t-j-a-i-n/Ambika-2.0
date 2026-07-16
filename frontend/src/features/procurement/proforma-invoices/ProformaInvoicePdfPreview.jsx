@@ -10,6 +10,7 @@ const ProformaInvoicePdfPreview = ({ open, onClose, pi }) => {
   // Resolve against the current API host (uses the S3 key when present) so a
   // dev-baked localhost URL doesn't break the preview on the live site.
   const url = pi?.piDocument ? resolveFileUrl(pi.piDocument) : '';
+  const url = pi?.piDocument?.fileUrl ? resolveFileUrl(pi.piDocument.fileUrl) : '';
   const isImage = /image\//i.test(pi?.piDocument?.fileType || '');
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth

@@ -21,6 +21,7 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { GrnStatusChip, GRN_STATUSES, fmtDate } from './grnMeta';
 import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 const KpiCard = ({ icon, label, value, color }) => (
   <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
@@ -76,7 +77,7 @@ const GrnList = () => {
   const onView = (r) => { navigate(`/procurement/grns/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditGrn(r); setFormOpen(true); closeMenu(); };
   const onComplete = (r) => { setActiveGrn(r); setCompleteOpen(true); closeMenu(); };
-  const onPdf = (r) => { window.open(r.grnPdfUrl, '_blank'); closeMenu(); };
+  const onPdf = (r) => { window.open(resolveFileUrl(r.grnPdfUrl), '_blank'); closeMenu(); };
   const onCancel = async (r) => {
     closeMenu();
     try { await cancelGrn({ id: r._id }).unwrap(); enqueueSnackbar('GRN cancelled', { variant: 'info' }); }
