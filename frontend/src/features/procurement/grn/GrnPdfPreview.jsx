@@ -7,13 +7,10 @@ import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the generated GRN (Goods Receiving & Inspection Report) PDF. */
 const GrnPdfPreview = ({ open, onClose, grn }) => {
-  // Never trust the stored host — GRNs generated off a dev machine bake a
-  // `localhost` URL that dies on the live site. resolveFileUrl re-points the link
-  // (by S3 key) at the current API base so it always loads.
-  const url = resolveFileUrl(grn?.grnPdfUrl);
-  // `grnPdfUrl` is an absolute URL baked at generation time — if the backend
-  // lacked SERVER_URL it points at localhost, so repair it against the current
-  // API origin (same fix already applied to PO/Voucher PDFs).
+  //  Never trust the stored host — `grnPdfUrl` is an absolute URL baked at generation
+  // time, so a GRN made off a dev machine (no SERVER_URL) points at localhost and
+  // dies on the live site. resolveFileUrl re-points it (by S3 key) at the current
+  // API base so it always loads (same fix as the PO/Voucher PDFs).
   const url = resolveFileUrl(grn?.grnPdfUrl) || '';
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>

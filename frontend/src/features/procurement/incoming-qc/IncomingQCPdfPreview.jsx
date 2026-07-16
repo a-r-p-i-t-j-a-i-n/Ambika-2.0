@@ -7,11 +7,8 @@ import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the generated Incoming QC Report PDF. */
 const IncomingQCPdfPreview = ({ open, onClose, qc }) => {
-  // Re-point the stored URL at the current API host — a baked-in localhost link
-  // (dev-generated) otherwise fails to load on the live site.
-  const url = resolveFileUrl(qc?.qcPdfUrl);
   // `qcPdfUrl` is an absolute URL baked at generation time — repair against the
-  // current API origin (same fix already applied to PO/Voucher/GRN PDFs).
+  // current API origin (same fix already applied to PO/Voucher/GRN PDFs) so it loads.
   const url = resolveFileUrl(qc?.qcPdfUrl) || '';
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>
