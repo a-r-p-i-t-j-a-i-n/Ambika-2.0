@@ -7,7 +7,7 @@ import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /** In-app preview of the generated GRN (Goods Receiving & Inspection Report) PDF. */
 const GrnPdfPreview = ({ open, onClose, grn }) => {
-  //  Never trust the stored host — `grnPdfUrl` is an absolute URL baked at generation
+  //   Never trust the stored host — `grnPdfUrl` is an absolute URL baked at generation
   // time, so a GRN made off a dev machine (no SERVER_URL) points at localhost and
   // dies on the live site. resolveFileUrl re-points it (by S3 key) at the current
   // API base so it always loads (same fix as the PO/Voucher PDFs).
