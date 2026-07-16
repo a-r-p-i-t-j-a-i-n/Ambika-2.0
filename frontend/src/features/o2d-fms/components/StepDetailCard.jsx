@@ -7,7 +7,7 @@ import {
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
-  ExternalLink, Truck, Boxes,
+  ExternalLink, Truck, Boxes, Workflow,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -18,7 +18,6 @@ import {
   useMarkActionDoneMutation, useGetConsignmentsQuery,
 } from '../../../store/api/o2dFmsApi';
 import { useGetScheduleQuery } from '../../../store/api/dispatchControlApi';
-import PhaseTimeline from '../../planning/components/PhaseTimeline';
 import { resolveActionLink, actionLinkMeta, resolveEntityLink } from '../actionLinks';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 
@@ -28,7 +27,15 @@ import { useSelector } from 'react-redux';
 import AttachmentList from '../../../components/AttachmentList';
 import VoiceRecorder from '../../../components/VoiceRecorder';
 
-const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+// Date-only values (dispatch/invoice/delivery dates) are stored at midnight UTC —
+// showing a time would render the +05:30 IST offset as a spurious "5:30 am", so we
+// drop the time for those and keep it only for genuine timestamps.
+const fmt = (d) => {
+  if (!d) return '—';
+  const dt = new Date(d);
+  const dateOnly = dt.getUTCHours() === 0 && dt.getUTCMinutes() === 0 && dt.getUTCSeconds() === 0;
+  return dt.toLocaleString('en-IN', dateOnly ? { dateStyle: 'medium' } : { dateStyle: 'medium', timeStyle: 'short' });
+};
 
 const STATUS_TONE = {
   DONE:        { color: '#0f766e', label: 'Completed' },
@@ -58,6 +65,47 @@ const inferActionDone = (key, proc) => {
   }
 };
 
+// When a task is scoped to ONE consignment (Delivery Challan), an action's
+// done-state must come from THAT challan — not the shared step-level progress.
+// So a fresh challan (e.g. DC-047) shows "Do it now" for a blank invoice, while a
+// challan that's already invoiced shows "Do again". Returns null for actions that
+// aren't per-consignment (→ fall back to the step-level state).
+const consignmentActionDone = (key, c) => {
+  if (!c) return null;
+  switch (key) {
+    case 'ACTUAL_DISPATCH': return true; // the challan itself IS the dispatch
+    case 'INVOICE':
+    case 'INVOICE_ENTRY': return !!c.invoice?.has;
+    // Emailed = SENT, or simply ATTEMPTED — emailSentAt is stamped on every send,
+    // including a FAILED SMTP attempt (common on localhost). So once the doer has
+    // emailed this challan they see "Do again · Done by … · time" (and can re-send),
+    // never a blank "Do it now" after the fact.
+    case 'INVOICE_EMAIL': return c.invoice?.emailStatus === 'SENT' || !!c.invoice?.emailSentAt;
+    case 'POD':
+    case 'TRACK_DELIVERY': return !!c.delivery?.delivered;
+    case 'PAYMENT_FOLLOWUP': return !!c.payment?.has;
+    case 'PAYMENT':
+    case 'PAYMENT_RECEIPT': return !!c.payment?.confirmed;
+    case 'TRANSPORT_BILL_RECEIVE': return c.transport?.receiptStatus === 'DONE';
+    case 'TRANSPORT_BILL_STATUS': return c.transport?.paymentStatus === 'DONE';
+    default: return null; // not a per-consignment action → use step-level
+  }
+};
+
+// Post-dispatch steps that recur per delivery challan — invoice → email → track →
+// pay → transport. Any step wired to one of these actions is worked one consignment
+// at a time (so the task/form scopes to a single challan via ?dc=).
+const PER_CONSIGNMENT_ACTIONS = [
+  'INVOICE', 'INVOICE_ENTRY', 'INVOICE_EMAIL', 'POD', 'TRACK_DELIVERY',
+  'PAYMENT', 'PAYMENT_FOLLOWUP', 'PAYMENT_RECEIPT', 'TRANSPORT_BILL_RECEIVE', 'TRANSPORT_BILL_STATUS',
+];
+const STAGE_DONE_WORD = {
+  INVOICE: 'invoiced', INVOICE_ENTRY: 'invoiced', INVOICE_EMAIL: 'emailed',
+  POD: 'delivered', TRACK_DELIVERY: 'delivered',
+  PAYMENT: 'paid', PAYMENT_RECEIPT: 'paid', PAYMENT_FOLLOWUP: 'followed up',
+  TRANSPORT_BILL_RECEIVE: 'transport received', TRANSPORT_BILL_STATUS: 'transport settled',
+};
+
 // Work out the business records this task is mapped to, so a watcher can jump
 // straight to them to verify: the order it belongs to (universal) plus the
 // specific record(s) this step produces/touches (challan, dispatch plan, invoice…).
@@ -71,11 +119,15 @@ const deriveLinks = (proc, step) => {
   const orderLink = ctx.orderId
     ? { label: `Sales Order${proc?.soNumber ? ` · ${proc.soNumber}` : ''}`, to: `/orders/${encodeURIComponent(String(ctx.orderId))}` }
     : (ctx.intakeId ? { label: 'Order Intake', to: `/order-intake?convert=${encodeURIComponent(String(ctx.intakeId))}` } : null);
-  // One record link per attached action, de-duped and minus the order itself.
+  // One record link per attached action, minus the order itself — and de-duped by
+  // destination so two action keys that point at the SAME page (e.g. DISPATCH_PLAN
+  // + DISPATCH_PLAN_PDF both open Dispatch Planning) collapse into a single button.
+  const seenTo = new Set();
   const recordLinks = stepActionKeys(step)
     .map((key) => { const r = resolveEntityLink(key, ctx); return r ? { key, ...r } : null; })
     .filter(Boolean)
-    .filter((r) => r.to !== orderLink?.to);
+    .filter((r) => r.to !== orderLink?.to)
+    .filter((r) => { if (seenTo.has(r.to)) return false; seenTo.add(r.to); return true; });
   return { ctx, orderLink, recordLinks };
 };
 
@@ -87,6 +139,17 @@ const MetaRow = ({ icon: Icon, label, value }) => (
       <Typography variant="body2" sx={{ fontWeight: 600 }}>{value || '—'}</Typography>
     </Box>
   </Stack>
+);
+
+// One tile in the "What to do" SOP header — a labelled Who / How / When fact.
+const SopTile = ({ icon: Icon, label, value }) => (
+  <Box sx={{ p: 0.75, borderRadius: 1.5, bgcolor: 'action.hover', display: 'flex', gap: 0.75, alignItems: 'flex-start' }}>
+    <Box sx={{ color: 'text.secondary', mt: '1px', flexShrink: 0 }}><Icon size={13} /></Box>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography sx={{ display: 'block', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, fontSize: '0.58rem' }}>{label}</Typography>
+      <Typography sx={{ fontWeight: 600, lineHeight: 1.2, wordBreak: 'break-word', fontSize: '0.8rem' }}>{value || '—'}</Typography>
+    </Box>
+  </Box>
 );
 
 // One Yes/No verification question. Picking "No" asks for a remark first.
@@ -156,7 +219,7 @@ const FormFieldRow = ({ item, disabled, onSave }) => {
  * + the task layer (checklist, comments, buddy). When opened from My Tasks the
  * passed `step` is partial, so we fetch the full process to hydrate checklist/comments.
  */
-const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false, consignment = null }) => {
+const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false, consignment: consignmentProp = null }) => {
   const myId = useSelector((s) => s.auth?.user?._id);
   const [link, setLink] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -197,10 +260,37 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     procRes?.data?.soNumber,
     { skip: !open || !procRes?.data?.soNumber || !isQtyGated },
   );
-  // Consignment-gated downstream step (Invoice / POD / Payment) → load the
-  // per-challan ledger so the card shows which consignment is still pending.
+  // Post-dispatch step (invoice / email / track / pay / transport) → load the
+  // per-challan ledger. Detected by the step's per-consignment action key, so even
+  // the non-gated ones (email / follow-up / transport) can scope to one challan.
   const isConsGated = !!(liveStep?.consignmentGated || liveStep?.executionProgress);
-  const { data: consRes } = useGetConsignmentsQuery(processId, { skip: !open || !processId || !isConsGated });
+  const stepKeys = stepActionKeys(liveStep);
+  const primaryActionKey = stepKeys[0] || liveStep?.triggerKey;
+  const isPerConsStep = !isQtyGated && (isConsGated || stepKeys.some((k) => PER_CONSIGNMENT_ACTIONS.includes(k)));
+  const { data: consRes } = useGetConsignmentsQuery(processId, { skip: !open || !processId || !isPerConsStep });
+
+  // Resolve WHICH consignment (delivery challan) this task is working on. A
+  // post-dispatch step opened as a doer's TASK PAGE focuses on ONE challan — the
+  // specific one named by ?dc=, else the next challan still PENDING for THIS step,
+  // else the most-recent — instead of the whole order's book. So the doer sees just
+  // the delivery their task is for and opens a FRESH form for it (never the prior
+  // consignment's filled data). Explicit prop always wins; review popups (not
+  // asPage) stay unscoped so managers still see every consignment.
+  const consList = consRes?.data?.consignments || [];
+  // Is a specific challan already done for THIS step? Uses the per-challan status
+  // for the step's own action (invoiced / emailed / delivered / paid / transport…).
+  const isStageDoneFor = (c) => { const d = consignmentActionDone(primaryActionKey, c); return d == null ? false : d; };
+  const dcScopeParam = searchParams.get('dc');
+  const consignment = consignmentProp
+    || (dcScopeParam ? consList.find((c) => c.dcNumber === dcScopeParam) : null)
+    || ((asPage && isPerConsStep && consList.length)
+      ? (consList.find((c) => !isStageDoneFor(c)) || consList[consList.length - 1])
+      : null);
+  // The challan currently in focus — used to carry the ?dc scope through to the
+  // connected form AND forward to the next step, so the whole chain stays per-challan.
+  const activeDc = consignment?.dcNumber || dcScopeParam || '';
+  const stageDoneWord = STAGE_DONE_WORD[primaryActionKey] || 'done';
+  const consComplete = consignment ? isStageDoneFor(consignment) : false;
 
   // Seed reassign multi-selects from the step's current doers/buddies.
   React.useEffect(() => {
@@ -253,6 +343,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   // Returning from a connected screen's "Do it now" (?doneAction=<key>) → record
   // that exact action as done on the step, capturing its record deep-link. The
   // step itself is NOT auto-completed (several actions may be attached).
+  // We record on EVERY return (not only the first) so a recurring action — like a
+  // 2nd/3rd actual dispatch on the qty-gated step — refreshes its "done-by / when"
+  // to the latest occurrence instead of freezing on the first dispatch's time.
+  // The ref still guards against re-firing within a single mount (no write loop).
   const actionDoneRef = React.useRef(null);
   React.useEffect(() => {
     const key = searchParams.get('doneAction');
@@ -261,7 +355,6 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     if (!ls) return;
     const marker = `${ls.stepCode}:${key}`;
     if (actionDoneRef.current === marker) return;
-    if ((ls.actionProgress || []).some((a) => a.key === key)) { actionDoneRef.current = marker; return; }
     const { recordLinks } = deriveLinks(procRes?.data, ls);
     const recLink = recordLinks.find((r) => r.key === key)?.to || null;
     actionDoneRef.current = marker;
@@ -340,7 +433,38 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       return { key, meta, to: resolveActionLink(key, ctxIds), prog, inferredDone, viewTo };
     })
     .filter(Boolean);
-  const actionsDone = actions.filter((a) => a.prog || a.inferredDone).length;
+  // On the quantity-gated dispatch step (2.06) every new dispatch spawns a NEW
+  // delivery challan that needs its OWN challan PDF — so "Generate Challan PDF" only
+  // counts as done when it was generated AFTER the latest dispatch. A PDF made for a
+  // prior challan is stale, so it's offered fresh again ("Do it now") for the new one.
+  const lastDispatchAt = isQtyGated
+    ? (actionProgress.find((a) => a.key === 'ACTUAL_DISPATCH')?.doneAt || null)
+    : null;
+  const isActionDone = (a) => {
+    const cd = consignment ? consignmentActionDone(a.key, consignment) : null;
+    if (cd != null) return cd;
+    if (isQtyGated && a.key === 'CHALLAN_PDF' && lastDispatchAt) {
+      return !!(a.prog?.doneAt && new Date(a.prog.doneAt) >= new Date(lastDispatchAt));
+    }
+    return !!a.prog || a.inferredDone;
+  };
+  const actionsDone = actions.filter(isActionDone).length;
+
+  // When the task is scoped to ONE consignment (challan), this step's "done by /
+  // when" must come from THAT challan's own record — each Delivery Challan is
+  // dispatched / invoiced / delivered / paid at its own time (logged per-challan
+  // in the DB) — not the shared step-level actionProgress. So a 3-dispatch order
+  // shows three different dispatch dates, one per consignment.
+  const consStepLog = consignment ? (consignment.log?.[liveStep.stepCode] || null) : null;
+  const consDoneBy = consStepLog?.doneByName || null;
+  // Prefer the per-challan log; else fall back to the challan's own dated record
+  // for that step (dispatch date, invoice date, email-sent, delivery date).
+  const consDoneAt = consStepLog?.doneAt || (consignment ? ({
+    '2.06': consignment.dcDate,
+    '2.07': consignment.invoice?.date,
+    '2.08': consignment.invoice?.emailSentAt,
+    '2.09': consignment.delivery?.date,
+  }[liveStep.stepCode] || null) : null);
 
   // Linked business records this task maps to — for anyone reviewing the step.
   const { orderLink, recordLinks } = deriveLinks(proc, liveStep);
@@ -349,13 +473,17 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const goAction = (a) => {
     if (!a?.to) return;
     const sep = a.to.includes('?') ? '&' : '?';
-    // When this task is opened for a specific consignment (multi-dispatch order),
-    // carry its DC so the connected form auto-selects that exact challan.
-    const dcPart = consignment?.dcNumber ? `&dc=${encodeURIComponent(consignment.dcNumber)}` : '';
+    // When this task is scoped to a specific challan, carry its DC so the connected
+    // form auto-selects that exact challan and opens fresh for it.
+    const dcPart = activeDc ? `&dc=${encodeURIComponent(activeDc)}` : '';
     navigate(`${a.to}${sep}fromTask=${processId}&fromStep=${encodeURIComponent(liveStep.stepCode)}&fromAction=${encodeURIComponent(a.key)}${dcPart}`);
   };
-  // Jump to another step's task page in this same order.
-  const goToStep = (code) => navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(code)}`);
+  // Jump to another step's task page in this same order — carrying the challan scope
+  // forward, so moving 2.07 → 2.08 → 2.09 stays on the SAME delivery challan.
+  const goToStep = (code) => {
+    const q = activeDc ? `?dc=${encodeURIComponent(activeDc)}` : '';
+    navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(code)}${q}`);
+  };
 
   const handleVerify = async (item, answer, vRemark) => {
     setError('');
@@ -424,10 +552,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   };
 
   const headerChips = (
-    <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
-      <Typography variant="h6" sx={{ fontWeight: 700 }}>{liveStep.taskTitle || liveStep.name}</Typography>
-      <Chip size="small" label={liveStep.stepCode} variant="outlined" />
-      <Chip size="small" label={tone.label} sx={{ bgcolor: alpha(tone.color, 0.12), color: tone.color, fontWeight: 600 }} />
+    <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap>
+      <Typography sx={{ fontWeight: 800, fontSize: '1.02rem', lineHeight: 1.25 }}>{liveStep.taskTitle || liveStep.name}</Typography>
+      <Chip size="small" label={liveStep.stepCode} variant="outlined" sx={{ height: 20, fontSize: '0.68rem' }} />
+      <Chip size="small" label={tone.label} sx={{ height: 20, fontSize: '0.68rem', bgcolor: alpha(tone.color, 0.12), color: tone.color, fontWeight: 700 }} />
     </Stack>
   );
   // Quantity-gated dispatch step can't be ticked done until every phase ships —
@@ -453,7 +581,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   ) : null;
 
   const body = (
-        <Stack spacing={2}>
+        <Stack spacing={1}>
           {/* ── Consignment context — shown when this task was opened for ONE specific
                 delivery challan of a multi-dispatch order, so it's unmistakable which
                 challan's work this is and every action deep-links to that DC. ── */}
@@ -472,59 +600,105 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               <Chip size="small" label="Actions apply to this challan" sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, bgcolor: alpha('#7c3aed', 0.1), color: '#6d28d9' }} />
             </Paper>
           )}
-          {/* ── Next step in the order's flow — always at the very top so the doer
-                can move straight on (Order Intake → Sales Order → Check Inventory →
-                Dispatch Planning → … → done). ── */}
-          {nextStep && (
-            <Paper variant="outlined" sx={{
-              p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
-              bgcolor: alpha('#1d4ed8', 0.06), borderColor: alpha('#1d4ed8', 0.35),
-            }}>
-              <Box sx={{ p: 0.7, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}>
-                <ArrowRight size={16} />
-              </Box>
-              <Box sx={{ flex: 1, minWidth: 200 }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {done ? 'Next step' : 'Up next'}
-                </Typography>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    {nextStep.stepCode} · {nextStep.taskTitle || nextStep.name}
-                  </Typography>
-                  {(STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING) && (
-                    <Chip size="small" label={(STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING).label}
-                      sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700,
-                        bgcolor: alpha((STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING).color, 0.12),
-                        color: (STATUS_TONE[nextStep.status] || STATUS_TONE.PENDING).color }} />
-                  )}
-                </Stack>
-              </Box>
-              <Button variant="contained" size="small" endIcon={<ArrowRight size={14} />}
-                onClick={() => goToStep(nextStep.stepCode)} sx={{ boxShadow: 'none', whiteSpace: 'nowrap' }}>
-                {['DONE', 'DELAYED'].includes(nextStep.status) ? 'Review next step' : 'Open next step'}
-              </Button>
-            </Paper>
-          )}
-          {flowComplete && done && (
-            <Paper variant="outlined" sx={{
-              p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
-              bgcolor: alpha('#0f766e', 0.06), borderColor: alpha('#0f766e', 0.35),
-            }}>
-              <CheckCircle2 size={18} color="#0f766e" />
-              <Typography variant="body2" sx={{ fontWeight: 700, color: '#115e59', flex: 1, minWidth: 180 }}>
-                This was the last step — the order’s O2D flow is complete. 🎉
+          {/* ── What to do — the SOP up front: the task itself, then Who / How / When.
+                This LEADS the popup so a non-technical doer immediately sees their job
+                (the "next step" pointer lives at the very bottom now). ── */}
+          <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, borderRadius: 2 }}>
+            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.6 }}>
+              <Box sx={{ p: 0.4, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8', display: 'flex' }}><ClipboardList size={13} /></Box>
+              <Typography variant="caption" sx={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', fontSize: '0.66rem' }}>What to do</Typography>
+            </Stack>
+            <Typography sx={{ fontWeight: 700, lineHeight: 1.3, mb: 1, fontSize: '0.9rem' }}>
+              {liveStep.instructions || liveStep.description || liveStep.name}
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 0.75 }}>
+              <SopTile icon={User} label="Who does it"
+                value={doerList.length ? doerList.map((u) => u.name || 'User').join(', ') : (liveStep.defaultOwnerRole || liveStep.ownerName || 'Unassigned')} />
+              <SopTile icon={Wrench} label="How (tool)" value={liveStep.tool || '—'} />
+              <SopTile icon={Clock} label="When"
+                value={liveStep.whenText || (liveStep.slaMinutes != null ? `Within ${liveStep.slaMinutes} min` : '—')} />
+            </Box>
+            {buddyList.length > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.6 }}>
+                Backup (buddy): {buddyList.map((u) => u.name || 'User').join(', ')}
               </Typography>
-              <Button variant="outlined" color="success" size="small"
-                onClick={() => proc?._id && navigate(`/o2d-fms/process/${proc._id}`)} sx={{ whiteSpace: 'nowrap' }}>
-                View whole order flow
-              </Button>
+            )}
+          </Paper>
+
+          {/* ── Do this task here — the WHERE/HOW, placed right under "What to do" so
+                a doer sees the task and its action button together, no scrolling. ── */}
+          {actions.length > 0 && (
+            <Paper variant="outlined" sx={{
+              p: 1.25, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.35),
+            }}>
+              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.75 }}>
+                <Box sx={{ p: 0.4, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}><Zap size={13} /></Box>
+                <Typography variant="caption" sx={{ fontWeight: 800, color: '#1e3a8a', fontSize: '0.72rem' }}>
+                  Do this task here{actions.length > 1 ? ` — ${actionsDone}/${actions.length} done` : ''}
+                </Typography>
+                {proc?.soNumber && <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.66rem' }}>· opens for {proc.soNumber}</Typography>}
+              </Stack>
+              <Stack spacing={0.75}>
+                {actions.map((a) => {
+                  // Scoped to ONE consignment → this action's done-state comes from
+                  // THAT challan, so a fresh challan opens a blank form ("Do it now")
+                  // and never shows the first challan's data.
+                  const aDone = isActionDone(a);
+                  // The step-level "View" link points at the FIRST challan's record —
+                  // hide it when scoped so it can't open the wrong consignment's data.
+                  const showView = aDone && a.viewTo && !consignment;
+                  return (
+                    <Stack key={a.key} direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap
+                      sx={{ px: 1, py: 0.75, borderRadius: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: aDone ? alpha('#0f766e', 0.35) : 'divider' }}>
+                      {aDone
+                        ? <CheckCircle2 size={15} color="#0f766e" style={{ flexShrink: 0 }} />
+                        : <ArrowRight size={15} color="#1d4ed8" style={{ flexShrink: 0 }} />}
+                      <Box sx={{ flex: 1, minWidth: 160 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 700, fontSize: '0.83rem', lineHeight: 1.25 }}>{a.meta.label}</Typography>
+                        {aDone ? (
+                          <Typography variant="caption" sx={{ color: '#0f766e', fontSize: '0.68rem', lineHeight: 1.2 }}>
+                            {(() => {
+                              // Scoped to a challan → use THAT challan's own done-by/date.
+                              const by = consDoneBy || a.prog?.doneByName;
+                              const at = consDoneAt || a.prog?.doneAt;
+                              return (by || at || a.prog || consStepLog)
+                                ? `Done${by ? ` by ${by}` : ''}${at ? ` · ${fmt(at)}` : ''}`
+                                : 'Done — this entry already exists in the system.';
+                            })()}
+                          </Typography>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem', lineHeight: 1.2 }}>
+                            {consignment ? 'Not done for this consignment yet — open it to record a fresh entry.' : 'Not done yet — do the work there; this gets recorded for you.'}
+                          </Typography>
+                        )}
+                      </Box>
+                      {showView && (
+                        <Button size="small" variant="text" color="success" endIcon={<ExternalLink size={13} />}
+                          onClick={() => openLink(a.viewTo)} sx={{ textTransform: 'none' }}>
+                          View
+                        </Button>
+                      )}
+                      {a.to && (
+                        <Button size="small" variant={aDone ? 'outlined' : 'contained'} endIcon={<ArrowRight size={14} />}
+                          onClick={() => goAction(a)} sx={{ whiteSpace: 'nowrap', boxShadow: 'none' }}>
+                          {aDone ? (consignment ? 'Open / edit' : 'Do again') : 'Do it now'}
+                        </Button>
+                      )}
+                    </Stack>
+                  );
+                })}
+              </Stack>
             </Paper>
           )}
-          {/* Shared step already completed by someone — make it explicit. */}
-          {done && (
+          {/* Completed banner. When scoped to ONE consignment, report THAT challan's
+              own status + date; otherwise the whole step's aggregate completion. */}
+          {(consignment ? consComplete : done) && (
             <Alert severity="success" icon={<CheckCircle2 size={18} />} sx={{ py: 0.5 }}>
-              Completed{liveStep.completedBy?.name ? ` by ${liveStep.completedBy.name}` : ''}{liveStep.actual ? ` · ${fmt(liveStep.actual)}` : ''}.
-              {' '}Nothing more to do on this step.
+              {consignment ? (
+                <>This delivery ({consignment.dcNumber}) is {stageDoneWord}{consDoneBy ? ` by ${consDoneBy}` : ''}{consDoneAt ? ` · ${fmt(consDoneAt)}` : ''}.</>
+              ) : (
+                <>Completed{liveStep.completedBy?.name ? ` by ${liveStep.completedBy.name}` : ''}{liveStep.actual ? ` · ${fmt(liveStep.actual)}` : ''}. Nothing more to do on this step.</>
+              )}
             </Alert>
           )}
           {/* Returned from the connected entry form — checklist auto-marked. */}
@@ -552,7 +726,6 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                 Completes only when every phase is dispatched (balance 0). ── */}
           {isQtyGated && (() => {
             const sched = schedRes?.data;
-            const phaseChips = sched?.phaseChips || [];
             const totals = sched?.totals || {};
             const prog = liveStep.dispatchProgress || {};
             const ordered = prog.orderedQty ?? totals.orderQty ?? 0;
@@ -561,21 +734,18 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             const pct = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
             const accent = done ? '#0f766e' : '#1d4ed8';
             return (
-              <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
                 <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
                   <Truck size={16} color={accent} />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>Phased dispatch</Typography>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800, fontSize: '0.78rem' }}>Dispatch progress</Typography>
                   <Chip size="small" label={done ? 'Fully dispatched' : 'In progress'} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
                   <Box sx={{ flex: 1 }} />
                   <Typography variant="caption" color="text.secondary">{num(dispatched)} / {num(ordered)} pcs · {num(balance)} pending</Typography>
                 </Stack>
-                <LinearProgress variant="determinate" value={pct} sx={{ height: 7, borderRadius: 4, mb: 1.25, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
-                {phaseChips.length
-                  ? <PhaseTimeline phaseChips={phaseChips} onPhaseClick={(p) => proc?.soNumber && navigate(`/dispatch-planning?so=${encodeURIComponent(proc.soNumber)}${p?.phaseNo ? `&phase=${encodeURIComponent(p.phaseNo)}` : ''}`)} />
-                  : <Typography variant="caption" color="text.secondary">No phases planned yet.</Typography>}
+                <LinearProgress variant="determinate" value={pct} sx={{ height: 7, borderRadius: 4, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
                 {!done && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-                    Completes automatically once every phase is dispatched (balance 0).
+                    Keep creating delivery challans until the full quantity is dispatched — this step then completes automatically.
                   </Typography>
                 )}
               </Paper>
@@ -585,22 +755,31 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           {/* ── Consignment-gated (Invoice / POD / Payment): per-challan status.
                 Completes only when every consignment is done. ── */}
           {isConsGated && (() => {
-            const cons = consRes?.data?.consignments || [];
+            const allCons = consRes?.data?.consignments || [];
             const sm = consRes?.data?.summary || {};
             const stage = ep?.kind || (liveStep.triggerKey); // INVOICE | POD | PAYMENT
             const accent = done ? '#0f766e' : '#7c3aed';
-            const doneCount = ep?.done ?? (stage === 'INVOICE' ? sm.invoicedDone : stage === 'POD' ? sm.deliveredDone : sm.paidDone) ?? 0;
-            const total = ep?.total ?? sm.total ?? cons.length;
             const isStageDone = (c) => stage === 'INVOICE' ? c.invoice?.has : stage === 'POD' ? c.delivery?.delivered : c.payment?.confirmed;
             const label = ep?.label || (stage === 'INVOICE' ? 'invoiced' : stage === 'POD' ? 'delivered' : 'paid');
+            const stageText = (c) => stage === 'INVOICE' ? (c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending')
+              : stage === 'POD' ? (c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'))
+              : (c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Following up' : 'Pending'));
+            // When this task was opened for ONE specific challan, show ONLY that
+            // challan — the doer is working this delivery, not reviewing the whole
+            // order's book. The full per-challan list is kept for the order-level view.
+            const scopedDc = consignment?.dcNumber;
+            const cons = scopedDc ? allCons.filter((c) => c.dcNumber === scopedDc) : allCons;
+            const doneCount = ep?.done ?? (stage === 'INVOICE' ? sm.invoicedDone : stage === 'POD' ? sm.deliveredDone : sm.paidDone) ?? 0;
+            const total = ep?.total ?? sm.total ?? allCons.length;
             return (
-              <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
                 <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.75 }}>
                   <Boxes size={16} color={accent} />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>Per-consignment</Typography>
-                  <Chip size="small" label={done ? `All ${label}` : 'In progress'} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800, fontSize: '0.78rem' }}>{scopedDc ? 'This delivery' : 'Per-consignment'}</Typography>
+                  <Chip size="small" label={scopedDc ? (cons[0] && isStageDone(cons[0]) ? stageText(cons[0]) : 'Pending') : (done ? `All ${label}` : 'In progress')}
+                    sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
                   <Box sx={{ flex: 1 }} />
-                  <Typography variant="caption" color="text.secondary">{num(doneCount)} / {num(total)} {label}</Typography>
+                  {!scopedDc && <Typography variant="caption" color="text.secondary">{num(doneCount)} / {num(total)} {label}</Typography>}
                 </Stack>
                 {cons.length ? (
                   <Stack spacing={0.5}>
@@ -610,89 +789,33 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                         <Typography variant="caption" sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700 }}>{c.dcNumber}</Typography>
                         <Typography variant="caption" color="text.secondary">· {c.phaseNo} · {num(c.qty)} pcs</Typography>
                         <Box sx={{ flex: 1 }} />
-                        <Typography variant="caption" sx={{ fontWeight: 700, color: isStageDone(c) ? '#0f766e' : 'text.disabled' }}>
-                          {stage === 'INVOICE' ? (c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending')
-                            : stage === 'POD' ? (c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending'))
-                            : (c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Following up' : 'Pending'))}
-                        </Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: isStageDone(c) ? '#0f766e' : 'text.disabled' }}>{stageText(c)}</Typography>
                       </Stack>
                     ))}
                   </Stack>
                 ) : <Typography variant="caption" color="text.secondary">No consignments (delivery challans) yet.</Typography>}
                 {!done && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-                    Recurs per challan — completes automatically once every consignment is {label}.
+                    {scopedDc
+                      ? `Do the work above and mark this delivery ${label}.`
+                      : `Recurs per challan — completes automatically once every consignment is ${label}.`}
                   </Typography>
                 )}
               </Paper>
             );
           })()}
 
-          {/* ── Do the real work → one "Do it now" per connected screen. Each tracks
-                its own done-status; none are mandatory to finish the step. ── */}
-          {actions.length > 0 && (
-            <Paper variant="outlined" sx={{
-              p: 1.5, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.35),
-            }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: actions.length ? 1 : 0 }}>
-                <Box sx={{ p: 0.7, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}><Zap size={16} /></Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1e3a8a' }}>
-                  Connected actions{actions.length > 1 ? ` — ${actionsDone}/${actions.length} done` : ''}
-                </Typography>
-                {proc?.soNumber && <Typography variant="caption" color="text.secondary">· opens for {proc.soNumber}</Typography>}
-              </Stack>
-              <Stack spacing={1}>
-                {actions.map((a) => {
-                  const aDone = !!a.prog || a.inferredDone;
-                  return (
-                    <Stack key={a.key} direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap
-                      sx={{ p: 1, borderRadius: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: aDone ? alpha('#0f766e', 0.35) : 'divider' }}>
-                      {aDone
-                        ? <CheckCircle2 size={16} color="#0f766e" style={{ flexShrink: 0 }} />
-                        : <ArrowRight size={16} color="#1d4ed8" style={{ flexShrink: 0 }} />}
-                      <Box sx={{ flex: 1, minWidth: 160 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{a.meta.label}</Typography>
-                        {aDone ? (
-                          <Typography variant="caption" sx={{ color: '#0f766e' }}>
-                            {a.prog
-                              ? `Done${a.prog.doneByName ? ` by ${a.prog.doneByName}` : ''}${a.prog.doneAt ? ` · ${fmt(a.prog.doneAt)}` : ''}`
-                              : 'Done — this entry already exists in the system.'}
-                          </Typography>
-                        ) : (
-                          <Typography variant="caption" color="text.secondary">Not done yet — do the work there; this gets recorded for you.</Typography>
-                        )}
-                      </Box>
-                      {aDone && a.viewTo && (
-                        <Button size="small" variant="text" color="success" endIcon={<ExternalLink size={13} />}
-                          onClick={() => openLink(a.viewTo)} sx={{ textTransform: 'none' }}>
-                          View
-                        </Button>
-                      )}
-                      {/* Always available — even after the step is Done — so the doer can
-                          re-open the screen to correct/re-do it (e.g. Not Delivered → Delivered,
-                          re-generate a PDF, re-record a dispatch). */}
-                      {a.to && (
-                        <Button size="small" variant={aDone ? 'outlined' : 'contained'} endIcon={<ArrowRight size={14} />}
-                          onClick={() => goAction(a)} sx={{ whiteSpace: 'nowrap', boxShadow: 'none' }}>
-                          {aDone ? 'Do again' : 'Do it now'}
-                        </Button>
-                      )}
-                    </Stack>
-                  );
-                })}
-              </Stack>
-            </Paper>
-          )}
+          {/* (Do this task here → moved up, directly under "What to do".) */}
 
           {/* ── Linked records → jump to the related entry to verify this task ── */}
           {(orderLink || recordLinks.length > 0) && (
             <Paper variant="outlined" sx={{
-              p: 1.5, borderRadius: 2, bgcolor: alpha('#0f766e', 0.05), borderColor: alpha('#0f766e', 0.35),
+              p: 1.25, borderRadius: 2, bgcolor: alpha('#0f766e', 0.05), borderColor: alpha('#0f766e', 0.35),
             }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                <Link2 size={16} color="#0f766e" />
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#115e59' }}>Linked records</Typography>
-                <Typography variant="caption" color="text.secondary">— open to check this task’s entry</Typography>
+              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.75 }}>
+                <Link2 size={14} color="#0f766e" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#115e59', fontSize: '0.78rem' }}>Linked records</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.66rem' }}>— open to check this task’s entry</Typography>
               </Stack>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 {recordLinks.map((r) => (
@@ -711,24 +834,14 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             </Paper>
           )}
 
-          {/* Who / What / How / When */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
-            <MetaRow icon={ClipboardList} label="What" value={liveStep.instructions || liveStep.description || liveStep.name} />
-            <MetaRow icon={User} label={doerList.length > 1 ? 'Doers' : 'Doer'}
-              value={doerList.length ? doerList.map((u) => u.name || 'User').join(', ') : (liveStep.defaultOwnerRole || 'Unassigned')} />
-            <MetaRow icon={Wrench} label="How (tool)" value={liveStep.tool} />
-            <MetaRow icon={Clock} label="When (SLA)" value={liveStep.slaMinutes != null ? `${liveStep.slaMinutes} min` : '—'} />
-          </Box>
-          {buddyList.length > 0 && (
-            <MetaRow icon={Users} label={buddyList.length > 1 ? 'Buddies (backup)' : 'Buddy (backup)'} value={buddyList.map((u) => u.name || 'User').join(', ')} />
-          )}
+          {/* (Who / What / How / When now leads the popup as the "What to do" card.) */}
 
           {/* Checklist */}
           {checklist.length > 0 && (
             <>
               <Divider />
               <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Checklist</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.78rem' }}>Checklist</Typography>
                 <Typography variant="caption" color={remaining ? 'warning.main' : 'success.main'}>
                   {checklist.length - remaining}/{checklist.length} done
                 </Typography>
@@ -760,7 +873,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Stack direction="row" spacing={1} alignItems="center">
                   <HelpCircle size={16} color="#7c3aed" />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Verification questions</Typography>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.78rem' }}>Verification questions</Typography>
                 </Stack>
                 <Typography variant="caption" color={unanswered ? 'warning.main' : 'success.main'}>
                   {verifications.length - unanswered}/{verifications.length} answered
@@ -780,7 +893,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               <Divider />
               <Stack direction="row" spacing={1} alignItems="center">
                 <FormInput size={16} color="#0369a1" />
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Data to record</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.78rem' }}>Data to record</Typography>
               </Stack>
               <Box>
                 {formFields.map((f) => (
@@ -958,6 +1071,52 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             </>
           )}
 
+          {/* ── What's next — at the very BOTTOM so the current task always leads.
+                Shown as a quiet footer pointer, never the first thing the doer sees. ── */}
+          {nextStep && (
+            <>
+              <Divider />
+              <Paper variant="outlined" sx={{
+                p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+                bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.3),
+              }}>
+                <Box sx={{ p: 0.6, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}>
+                  <ArrowRight size={15} />
+                </Box>
+                <Box sx={{ flex: 1, minWidth: 180 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {done ? 'Next step' : 'After this'}
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    {nextStep.stepCode} · {nextStep.taskTitle || nextStep.name}
+                  </Typography>
+                </Box>
+                <Button variant="outlined" size="small" endIcon={<ArrowRight size={14} />}
+                  onClick={() => goToStep(nextStep.stepCode)} sx={{ whiteSpace: 'nowrap' }}>
+                  {['DONE', 'DELAYED'].includes(nextStep.status) ? 'Review' : 'Open'}
+                </Button>
+              </Paper>
+            </>
+          )}
+          {flowComplete && done && (
+            <>
+              <Divider />
+              <Paper variant="outlined" sx={{
+                p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+                bgcolor: alpha('#0f766e', 0.06), borderColor: alpha('#0f766e', 0.35),
+              }}>
+                <CheckCircle2 size={18} color="#0f766e" />
+                <Typography variant="body2" sx={{ fontWeight: 700, color: '#115e59', flex: 1, minWidth: 180 }}>
+                  This was the last step — the order’s O2D flow is complete. 🎉
+                </Typography>
+                <Button variant="outlined" color="success" size="small"
+                  onClick={() => proc?._id && navigate(`/o2d-fms/process/${proc._id}`)} sx={{ whiteSpace: 'nowrap' }}>
+                  View whole order flow
+                </Button>
+              </Paper>
+            </>
+          )}
+
           {error && <Alert severity="error" sx={{ py: 0.5 }}>{error}</Alert>}
         </Stack>
   );
@@ -975,14 +1134,19 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   }
 
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ pr: 6 }}>
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="md" fullWidth
+      PaperProps={{ sx: { borderRadius: 3, maxHeight: 'calc(100% - 48px)' } }}>
+      <DialogTitle sx={{ pr: 6, py: 1.25, px: { xs: 2, md: 2.5 } }}>
         {headerChips}
-        {orderLabel && <Typography variant="caption" sx={{ color: 'text.secondary' }}>{orderLabel}</Typography>}
-        <IconButton onClick={() => onClose?.(false)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
+        {orderLabel && <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.72rem' }}>{orderLabel}</Typography>}
+        <IconButton onClick={() => onClose?.(false)} size="small" sx={{ position: 'absolute', right: 8, top: 8 }}><X size={17} /></IconButton>
       </DialogTitle>
-      <DialogContent dividers>{body}</DialogContent>
-      <DialogActions>
+      <DialogContent dividers sx={{ px: { xs: 1.5, md: 2 }, py: 1.5 }}>{body}</DialogContent>
+      <DialogActions sx={{ py: 1, px: 2 }}>
+        <Button size="small" startIcon={<Workflow size={15} />} sx={{ mr: 'auto', textTransform: 'none' }}
+          onClick={() => { onClose?.(false); navigate(`/o2d-fms/process/${processId}`); }}>
+          FMS Tracker
+        </Button>
         <Button onClick={() => onClose?.(false)}>Close</Button>
         {markDoneBtn}
       </DialogActions>

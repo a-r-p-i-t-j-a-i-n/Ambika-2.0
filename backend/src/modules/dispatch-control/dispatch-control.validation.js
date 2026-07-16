@@ -138,13 +138,15 @@ export const actualDispatchSchema = Joi.object({
   remark: optionalString,
   remarks: optionalString,
   status: optionalString,
-  // The dispatcher MUST pick a phase (single phaseRef OR multiple phaseRefs) OR
-  // explicitly flag the DC as unplanned.
+  // Phase attribution is now AUTOMATIC: when none of phaseRef / phaseRefs /
+  // isUnplanned is supplied, the service auto-allocates the dispatched qty across
+  // the order's plan phases earliest-first (with carry-forward). These remain
+  // accepted for the legacy / explicit-phase callers and back-compat.
   phaseRef: phaseRefSchema,
   phaseRefs: Joi.array().items(phaseRefMultiSchema),
   isUnplanned: Joi.boolean().default(false),
   items: Joi.array().items(dispatchItemSchema).min(1).required(),
-}).or('phaseRef', 'phaseRefs', 'isUnplanned');
+});
 
 export const soNumberParamSchema = Joi.object({
   soNumber: Joi.string().trim().required(),

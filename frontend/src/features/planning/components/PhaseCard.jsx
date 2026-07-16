@@ -3,7 +3,7 @@ import {
   Box, Paper, Typography, Stack, Chip, IconButton, Tooltip, TextField, Button,
   Collapse, alpha, useTheme, CircularProgress, Menu, MenuItem,
 } from '@mui/material';
-import { ChevronDown, ChevronUp, Edit3, Trash2, Save, X, MoreVertical, Wand2, ArrowDownRight } from 'lucide-react';
+import { ChevronDown, ChevronUp, Edit3, Trash2, Save, X, MoreVertical } from 'lucide-react';
 import dayjs from 'dayjs';
 
 const STATUS_STYLE = (theme, status) => ({
@@ -15,23 +15,6 @@ const STATUS_STYLE = (theme, status) => ({
 }[status] || { bg: alpha(theme.palette.primary.main, 0.08), fg: theme.palette.primary.main, label: status });
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN');
-
-// Render a small signed delta — "+50" red (short), "−50" green (surplus), "—" muted.
-const SignedDelta = ({ value, theme, dim = false }) => {
-  const n = Number(value || 0);
-  if (n === 0) return <Typography variant="caption" color="text.disabled" sx={{ fontVariantNumeric: 'tabular-nums' }}>—</Typography>;
-  const isShort = n > 0;
-  const color = dim ? theme.palette.text.secondary : (isShort ? theme.palette.error.main : theme.palette.success.main);
-  return (
-    <Typography
-      variant="body2"
-      sx={{ fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}
-      title={isShort ? 'Short — must be made up in next phase' : 'Surplus — can reduce next phase'}
-    >
-      {isShort ? '+' : '−'}{fmt(Math.abs(n))}
-    </Typography>
-  );
-};
 
 // A "phase" in the UI is the bucket of all per-SKU phases sharing the same phaseNo.
 const PhaseCard = ({
@@ -72,31 +55,17 @@ const PhaseCard = ({
     })));
   }, [items, plannedDate, status, editing]);
 
-  // Aggregate totals using *effective* numbers so the doer sees the carry-aware truth.
+  // Simple Plan vs Actual totals for this phase — no carry / effective.
   const totals = useMemo(() => items.reduce((acc, it) => {
-    acc.planned   += Number(it.phaseRow?.plannedQty || 0);
-    acc.carryIn   += Number(it.phaseRow?.carryInQty || 0);
-    acc.effective += Number(it.phaseRow?.effectivePlannedQty || 0);
-    acc.actual    += Number(it.phaseRow?.actualQty || 0);
-    acc.variance  += Number(it.phaseRow?.varianceQty || 0);
+    acc.planned += Number(it.phaseRow?.plannedQty || 0);
+    acc.actual  += Number(it.phaseRow?.actualQty || 0);
     return acc;
-  }, { planned: 0, carryIn: 0, effective: 0, actual: 0, variance: 0 }), [items]);
+  }, { planned: 0, actual: 0 }), [items]);
 
   const draftPlanned = useMemo(() => draftLines.reduce((s, l) => s + Number(l.plannedQty || 0), 0), [draftLines]);
 
   const updateDraftLine = (idx, plannedQty) => {
     setDraftLines((prev) => prev.map((l, i) => (i === idx ? { ...l, plannedQty } : l)));
-  };
-
-  // Auto-fill: fill plannedQty so this phase clears whatever short carry-in came in.
-  // If a SKU already has a carryIn of 50 (short), we suggest plannedQty=50; if surplus, we suggest 0.
-  const autoFillFromCarry = () => {
-    setDraftLines((prev) => prev.map((l, i) => {
-      const row = items[i].phaseRow;
-      const carry = Number(row?.carryInQty || 0);
-      // If carry-in is positive (short), plan to make it up; if negative (surplus), plan 0 (let surplus absorb).
-      return { ...l, plannedQty: Math.max(0, carry) };
-    }));
   };
 
   const handleSubmit = () => {
@@ -110,8 +79,7 @@ const PhaseCard = ({
     setEditing(false);
   };
 
-  const fulfilmentPct = totals.effective > 0 ? Math.round((totals.actual / totals.effective) * 100) : 0;
-  const hasCarry = totals.carryIn !== 0;
+  const fulfilmentPct = totals.planned > 0 ? Math.round((totals.actual / totals.planned) * 100) : 0;
 
   return (
     <Paper sx={{ borderRadius: '14px', overflow: 'hidden' }}>
@@ -144,25 +112,9 @@ const PhaseCard = ({
               sx={{ bgcolor: style.bg, color: style.fg, fontWeight: 700, border: `1px solid ${alpha(style.fg, 0.18)}` }}
             />
             <Chip size="small" variant="outlined" label={`${items.length} SKU${items.length > 1 ? 's' : ''}`} />
-            {hasCarry && (
-              <Tooltip arrow title={totals.carryIn > 0 ? `Brought ${fmt(totals.carryIn)} short qty into this phase` : `Brought ${fmt(Math.abs(totals.carryIn))} surplus qty into this phase`}>
-                <Chip
-                  size="small"
-                  icon={<ArrowDownRight size={11} />}
-                  label={`Carry-in ${totals.carryIn > 0 ? '+' : '−'}${fmt(Math.abs(totals.carryIn))}`}
-                  sx={{
-                    bgcolor: alpha(totals.carryIn > 0 ? theme.palette.error.main : theme.palette.success.main, 0.10),
-                    color: totals.carryIn > 0 ? 'error.main' : 'success.main',
-                    fontWeight: 700, height: 22,
-                  }}
-                />
-              </Tooltip>
-            )}
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
             Plan {fmt(totals.planned)}
-            {hasCarry && <> · Carry {totals.carryIn > 0 ? '+' : '−'}{fmt(Math.abs(totals.carryIn))}</>}
-            {' · '}<strong style={{ color: theme.palette.primary.main }}>Effective {fmt(totals.effective)}</strong>
             {' · Actual '}<strong style={{ color: theme.palette.success.main }}>{fmt(totals.actual)}</strong>
             {' · '}{fulfilmentPct}%
           </Typography>
@@ -208,11 +160,9 @@ const PhaseCard = ({
                   <option key={s} value={s}>{s}</option>
                 )}
               </TextField>
-              <Tooltip arrow title="Set plan to whatever was short-fall'd into this phase">
-                <Button size="small" variant="outlined" startIcon={<Wand2 size={13} />} onClick={autoFillFromCarry}>
-                  Fill from carry-in
-                </Button>
-              </Tooltip>
+              <Typography variant="caption" color="text.secondary">
+                Total plan: <strong style={{ color: theme.palette.primary.main }}>{fmt(draftPlanned)}</strong>
+              </Typography>
               <Box sx={{ flex: 1 }} />
               <Button size="small" startIcon={<X size={13} />} onClick={() => setEditing(false)}>Cancel</Button>
               <Button
@@ -227,15 +177,15 @@ const PhaseCard = ({
             </Stack>
           )}
 
-          {/* Per-SKU table — full carry-forward chain visible */}
+          {/* Per-SKU table — Order / Plan / Actual / Pending (no carry jargon) */}
           <Box sx={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(180px, 1.8fr) 0.8fr 0.8fr 1fr 0.95fr 0.95fr 0.95fr',
+            gridTemplateColumns: 'minmax(180px, 1.9fr) 0.9fr 1.1fr 0.9fr 0.9fr',
             gap: 0,
             border: '1px solid', borderColor: 'divider', borderRadius: '12px', overflow: 'hidden',
           }}>
             {/* Header */}
-            {['SKU', 'Order', 'Carry-in', 'Plan Qty', 'Effective', 'Actual', 'Carry-out'].map((h, i) => (
+            {['SKU', 'Order', 'Plan Qty', 'Actual', 'Pending'].map((h, i) => (
               <Box
                 key={h}
                 sx={{
@@ -250,12 +200,8 @@ const PhaseCard = ({
             {items.map((it, idx) => {
               const row = it.phaseRow || {};
               const enteredPlan = editing ? Number(draftLines[idx]?.plannedQty || 0) : Number(row.plannedQty || 0);
-              const carryIn = Number(row.carryInQty || 0);
-              const effective = Math.max(0, enteredPlan + carryIn);
               const actual = Number(row.actualQty || 0);
-              const carryOut = row.isClosed
-                ? (effective - actual)
-                : (editing ? null : Number(row.carryOutQty || 0));
+              const pending = Math.max(0, enteredPlan - actual);
               return (
                 <React.Fragment key={(it.scheduleItemId || idx) + (row.phaseId || idx)}>
                   <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', minWidth: 0 }}>
@@ -264,9 +210,6 @@ const PhaseCard = ({
                   </Box>
                   <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
                     {fmt(it.orderQty)}
-                  </Box>
-                  <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', textAlign: 'right' }}>
-                    <SignedDelta value={carryIn} theme={theme} />
                   </Box>
                   <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', textAlign: 'right' }}>
                     {editing ? (
@@ -287,24 +230,11 @@ const PhaseCard = ({
                       </Typography>
                     )}
                   </Box>
-                  <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', textAlign: 'right' }}>
-                    <Tooltip arrow title="Effective = Plan + Carry-in. This is what should actually ship this phase.">
-                      <Typography sx={{
-                        fontWeight: 800,
-                        fontVariantNumeric: 'tabular-nums',
-                        color: carryIn !== 0 ? 'warning.dark' : 'text.primary',
-                      }}>
-                        {fmt(effective)}
-                      </Typography>
-                    </Tooltip>
-                  </Box>
                   <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'success.main', fontWeight: 700 }}>
                     {fmt(row.actualQty)}
                   </Box>
-                  <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', textAlign: 'right' }}>
-                    {carryOut === null
-                      ? <Typography variant="caption" color="text.disabled">pending</Typography>
-                      : <SignedDelta value={carryOut} theme={theme} />}
+                  <Box sx={{ px: 1.25, py: 1, borderTop: '1px solid', borderColor: 'divider', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: pending > 0 ? 'warning.main' : 'success.main' }}>
+                    {pending > 0 ? fmt(pending) : '—'}
                   </Box>
                 </React.Fragment>
               );
@@ -318,9 +248,7 @@ const PhaseCard = ({
             border: `1px dashed ${alpha(theme.palette.info.main, 0.2)}`,
             fontSize: '0.74rem', color: 'text.secondary',
           }}>
-            <strong>How to read this:</strong> Plan + Carry-in = Effective (what must ship).
-            After dispatch, <span style={{ color: theme.palette.error.main, fontWeight: 700 }}>+short</span> rolls
-            into the next phase as carry-in. <span style={{ color: theme.palette.success.main, fontWeight: 700 }}>−surplus</span> reduces the next phase.
+            <strong>Plan</strong> is what to ship in this phase; <strong>Actual</strong> is what has been dispatched so far; <strong>Pending</strong> is what is still to go out for this phase.
           </Box>
         </Box>
       </Collapse>

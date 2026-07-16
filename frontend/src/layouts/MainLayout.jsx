@@ -10,7 +10,7 @@ import {
   IndianRupee, Calculator, FileSignature, FilePen, ClipboardCheck, FolderOpen, BarChart3, Tag,
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
   ReceiptText, Banknote, FileSpreadsheet, Wallet, Store,
-  Boxes, PackagePlus, PackageMinus, History, Layers, Recycle,
+  Boxes, PackagePlus, PackageMinus, History, Layers, Recycle, PackageCheck, Factory,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -26,6 +26,10 @@ import NotificationBell from '../features/notifications/NotificationBell';
 const EXPANDED_WIDTH = 268;
 const COLLAPSED_WIDTH = 76;
 
+// Drill down to the first navigable leaf path of a (possibly nested) nav item —
+// used by the collapsed rail, where nested dropdowns have no room to expand.
+const firstLeafPath = (item) => (item.children ? firstLeafPath(item.children[0]) : item.path);
+
 const navSections = [
   {
     title: 'Operations',
@@ -35,7 +39,7 @@ const navSections = [
     ],
   },
   {
-    title: 'Order to Dispatch',
+    title: '',
     items: [
       {
         text: 'O2D Pipeline',
@@ -60,43 +64,85 @@ const navSections = [
           { text: 'Transport Bill Payment Status (2.13)', icon: <FileSpreadsheet size={19} />, path: '/o2d/transport-bill?part=status', part: 'status' },
         ],
       },
-      { text: 'PPC Planning',   icon: <Package size={19} />,  path: '/ppc-planning' },
       // Hidden until complete — restore to re-expose:
       // { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
     ],
   },
-  // ── IMS section HIDDEN from the sidebar (deploy) — uncomment to re-expose.
-  //    Routes still exist; this only removes the nav group. ──
-  /*
+  /* ── IMS & PPC are hidden from the sidebar for the client (deploy). The routes
+     still work; uncomment these two sections to re-expose them in the nav. ──
   {
-    // IMS — Inventory. One group per inventory type.
-    title: 'IMS',
+    // Title-less section: the single "IMS" row is its own label. Click it to
+    // reveal the inventory types; each type expands to its own screens
+    // (a two-level dropdown: IMS → Consumables/RM/Finished Goods → navlinks).
+    title: '',
     items: [
       {
-        text: 'Packaging & Consumables IMS',
+        text: 'IMS',
         icon: <Boxes size={19} />,
-        path: '/ims',
         children: [
-          { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/ims' },
-          { text: 'Stock & Master Data',   icon: <Package size={19} />,         path: '/ims/stock' },
-          { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
-          { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
-          { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
-          { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
+          {
+            text: 'Consumables & Packaging',
+            icon: <Package size={19} />,
+            path: '/ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/ims' },
+              { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/ims/stock' },
+              { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
+              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
+              { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
+              { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
+            ],
+          },
+          {
+            text: 'Raw Material',
+            icon: <Layers size={19} />,
+            path: '/rm-ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
+              { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/rm-ims/stock' },
+              { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
+              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
+              { text: 'Coil → Circle Conversion', icon: <Recycle size={19} />,      path: '/rm-ims/conversion' },
+              { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
+              { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
+            ],
+          },
+          {
+            text: 'Finished Goods',
+            icon: <PackageCheck size={19} />,
+            path: '/fg-ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/fg-ims' },
+              { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/fg-ims/stock' },
+              { text: 'Production In (DPR)',   icon: <Factory size={19} />,         path: '/fg-ims/production-in' },
+              { text: 'Dispatch Out',          icon: <Truck size={19} />,           path: '/fg-ims/dispatch-out' },
+              { text: 'Production Plan',       icon: <ClipboardList size={19} />,   path: '/fg-ims/planning' },
+              { text: 'Movement History',      icon: <History size={19} />,         path: '/fg-ims/movements' },
+            ],
+          },
         ],
       },
+    ],
+  },
+  {
+    // Title-less section: the single "PPC" row is its own label. Production
+    // Planning & Control — the shop-floor DPR entry, the OEE dashboards derived
+    // from it, MIS scoring, and the routing/machine/die masters that feed them.
+    title: '',
+    items: [
       {
-        text: 'Raw Material IMS',
-        icon: <Layers size={19} />,
-        path: '/rm-ims',
+        text: 'PPC',
+        icon: <Factory size={19} />,
+        path: '/ppc/dpr/register',
         children: [
-          { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
-          { text: 'Stock & Master Data',   icon: <Package size={19} />,         path: '/rm-ims/stock' },
-          { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
-          { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
-          { text: 'Coil → Circle Conversion', icon: <Recycle size={19} />,      path: '/rm-ims/conversion' },
-          { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
-          { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
+          { text: 'DPR Register',          icon: <ClipboardList size={19} />,      path: '/ppc/dpr/register' },
+          { text: 'New DPR Entry',         icon: <FilePen size={19} />,            path: '/ppc/dpr/new' },
+          { text: 'Machine Dashboard',     icon: <Gauge size={19} />,              path: '/ppc/dpr/machine' },
+          { text: 'Production Dashboard',  icon: <BarChart3 size={19} />,          path: '/ppc/dpr/production' },
+          { text: 'Operator Efficiency',   icon: <Users size={19} />,              path: '/ppc/dpr/operator' },
+          { text: 'MIS Scoring',           icon: <Trophy size={19} />,             path: '/ppc/dpr/mis' },
+          { text: 'Production Plan',       icon: <Package size={19} />,            path: '/ppc-planning' },
+          { text: 'Masters',               icon: <SlidersHorizontal size={19} />,  path: '/ppc/dpr/masters' },
         ],
       },
     ],
@@ -196,6 +242,30 @@ const PAGE_TITLES = {
   '/o2d-fms/scores':         'MIS Scoring',
   '/o2d-fms/config':         'O2D FMS — Step Catalog',
   '/profile':                'My Profile',
+
+  // IMS families — deep paths listed before their base so startsWith resolves
+  // to the most specific title first.
+  '/ims/stock':              'Consumables & Packaging — Stock & Master',
+  '/ims/item':               'Consumables & Packaging — Item',
+  '/ims/stock-in':           'Consumables & Packaging — Stock In',
+  '/ims/stock-out':          'Consumables & Packaging — Stock Out',
+  '/ims/reorder':            'Consumables & Packaging — Reorder List',
+  '/ims/movements':          'Consumables & Packaging — Movements',
+  '/ims':                    'Consumables & Packaging IMS',
+  '/rm-ims/stock':           'Raw Material — Stock & Master',
+  '/rm-ims/stock-in':        'Raw Material — Stock In',
+  '/rm-ims/stock-out':       'Raw Material — Stock Out',
+  '/rm-ims/conversion':      'Raw Material — Coil → Circle Conversion',
+  '/rm-ims/reorder':         'Raw Material — Reorder List',
+  '/rm-ims/movements':       'Raw Material — Movements',
+  '/rm-ims':                 'Raw Material IMS',
+  '/fg-ims/stock':           'Finished Goods — Stock & Master',
+  '/fg-ims/item':            'Finished Goods — Item',
+  '/fg-ims/production-in':   'Finished Goods — Production In (DPR)',
+  '/fg-ims/dispatch-out':    'Finished Goods — Dispatch Out',
+  '/fg-ims/planning':        'Finished Goods — Production Plan',
+  '/fg-ims/movements':       'Finished Goods — Movements',
+  '/fg-ims':                 'Finished Goods IMS',
 };
 
 const MainLayout = () => {
@@ -251,7 +321,10 @@ const MainLayout = () => {
       fmsChildren.push({ text: 'Task Templates', icon: <ClipboardList size={19} />,     path: '/o2d-fms/templates' });
     }
 
-    const o2dSection = out.find((s) => s.title === 'Order to Dispatch');
+    // Find the O2D section by its content (the "O2D Pipeline" row), not its title
+    // — the title is intentionally blank, so a string match would silently fail
+    // and dump Tasks / O2D FMS into a stray section.
+    const o2dSection = out.find((s) => s.items.some((it) => it.text === 'O2D Pipeline'));
     // Insert directly under "O2D Pipeline", Tasks first then O2D FMS.
     const groupsToAdd = [];
     if (taskChildren.length > 0) {
@@ -338,11 +411,17 @@ const MainLayout = () => {
     return key ? PAGE_TITLES[key] : 'AGL ERP';
   }, [location.pathname, location.search]);
 
-  // A group is open if the user toggled it; otherwise it auto-opens whenever
-  // the active route lives under one of its children.
-  const isMenuOpen = (item) =>
-    openMenus[item.text] ??
-    item.children?.some((c) => location.pathname === c.path.split('?')[0]);
+  // Does the active route live anywhere inside this item's subtree? Recursive,
+  // so a parent like "IMS" opens when any nested screen under it is active.
+  const treeHasActive = (item) => {
+    if (item.children) return item.children.some(treeHasActive);
+    if (!item.path) return false;
+    const p = item.path.split('?')[0];
+    return location.pathname === p || (p !== '/' && location.pathname.startsWith(`${p}/`));
+  };
+  // A group is open if the user toggled it; otherwise it auto-opens whenever the
+  // active route lives under one of its (possibly nested) descendants.
+  const isMenuOpen = (item) => openMenus[item.text] ?? treeHasActive(item);
 
   // `mini` collapses the sidebar to icons only. The temporary (mobile)
   // drawer always renders the full version, so it is passed mini=false.
@@ -406,6 +485,98 @@ const MainLayout = () => {
         )}
       </ListItemButton>
     );
+
+    // Renders one nav entry — recursively, so a group can itself contain groups
+    // (e.g. IMS → Consumables / RM / Finished Goods → each type's screens).
+    const renderNavItem = (item, depth = 0) => {
+      const indent = depth > 0;
+
+      // ── Expandable group (may itself contain nested groups) ──
+      if (item.children) {
+        const groupActive = !!item.path && location.pathname === item.path;
+        const active = groupActive || treeHasActive(item);
+
+        // Collapsed rail: no room to expand — jump straight to the first leaf.
+        if (mini) {
+          return (
+            <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
+              <Tooltip title={item.text} placement="right" arrow>
+                <Box sx={{ width: '100%' }}>
+                  {leafButton(item, active, {
+                    onClick: () => { navigate(firstLeafPath(item)); if (isMobile) setMobileOpen(false); },
+                  })}
+                </Box>
+              </Tooltip>
+            </ListItem>
+          );
+        }
+
+        const open = isMenuOpen(item);
+        return (
+          <React.Fragment key={item.text}>
+            <ListItem disablePadding sx={{ mb: 0.25 }}>
+              <ListItemButton
+                onClick={() => setOpenMenus((m) => ({ ...m, [item.text]: !open }))}
+                sx={{
+                  borderRadius: 2, px: 1.25, pl: indent ? 2.75 : 1.25, py: indent ? 0.7 : 0.9,
+                  color: active ? 'primary.dark' : 'text.primary',
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: indent ? 30 : 34, justifyContent: 'center', color: active ? 'primary.main' : 'text.secondary' }}>
+                  {item.icon}
+                </ListItemIcon>
+                <ListItemText
+                  primary={item.text}
+                  primaryTypographyProps={{
+                    fontSize: indent ? '0.83rem' : '0.875rem',
+                    fontWeight: active ? 700 : 500,
+                    color: active ? 'primary.dark' : 'text.primary',
+                  }}
+                />
+                {open
+                  ? <ChevronDown size={15} color={theme.palette.text.secondary} />
+                  : <ChevronRight size={15} color={theme.palette.text.secondary} />}
+              </ListItemButton>
+            </ListItem>
+            <Collapse in={open} timeout={220} unmountOnExit>
+              <List disablePadding>
+                {item.children.map((child) => renderNavItem(child, depth + 1))}
+              </List>
+            </Collapse>
+          </React.Fragment>
+        );
+      }
+
+      // ── Plain leaf ──
+      // Pricing children share /pricing and disambiguate via the `stream` query
+      // param; payment/transport steps share a pathname and use `part`; all other
+      // leaves match by path (top-level uses a prefix, nested uses exact).
+      const childPath = item.path.split('?')[0];
+      const stream = new URLSearchParams(location.search).get('stream');
+      const childPart = new URLSearchParams(location.search).get('part');
+      const isSelected = item.stream
+        ? (location.pathname === childPath && (item.stream === 'RM_COST' ? stream === 'RM_COST' : stream !== 'RM_COST'))
+        : item.part
+          ? (location.pathname === childPath && childPart === item.part)
+          : depth === 0
+            ? location.pathname.startsWith(item.path)
+            : location.pathname === childPath;
+
+      if (mini) {
+        return (
+          <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
+            <Tooltip title={item.text} placement="right" arrow>
+              <Box sx={{ width: '100%' }}>{leafButton(item, isSelected)}</Box>
+            </Tooltip>
+          </ListItem>
+        );
+      }
+      return (
+        <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
+          {leafButton(item, isSelected, { indent })}
+        </ListItem>
+      );
+    };
 
     return (
     <Box
@@ -481,94 +652,7 @@ const MainLayout = () => {
               </Typography>
             ) : null}
             <List disablePadding>
-              {section.items.map((item) => {
-                // ── Expandable group (e.g. Pricing Hub → Selling / RM Cost) ──
-                if (item.children) {
-                  const groupActive = location.pathname === item.path;
-
-                  // Collapsed rail: no room for a dropdown — the parent icon
-                  // jumps straight to its first child.
-                  if (mini) {
-                    return (
-                      <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
-                        <Tooltip title={item.text} placement="right" arrow>
-                          <Box sx={{ width: '100%' }}>
-                            {leafButton(item, groupActive, {
-                              onClick: () => { navigate(item.children[0].path); if (isMobile) setMobileOpen(false); },
-                            })}
-                          </Box>
-                        </Tooltip>
-                      </ListItem>
-                    );
-                  }
-
-                  const open = isMenuOpen(item);
-                  const stream = new URLSearchParams(location.search).get('stream');
-                  return (
-                    <React.Fragment key={item.text}>
-                      <ListItem disablePadding sx={{ mb: 0.25 }}>
-                        <ListItemButton
-                          onClick={() => setOpenMenus((m) => ({ ...m, [item.text]: !open }))}
-                          sx={{
-                            borderRadius: 2, px: 1.25, py: 0.9,
-                            color: groupActive ? 'primary.dark' : 'text.primary',
-                          }}
-                        >
-                          <ListItemIcon sx={{ minWidth: 34, justifyContent: 'center', color: groupActive ? 'primary.main' : 'text.secondary' }}>
-                            {item.icon}
-                          </ListItemIcon>
-                          <ListItemText
-                            primary={item.text}
-                            primaryTypographyProps={{
-                              fontSize: '0.875rem',
-                              fontWeight: groupActive ? 700 : 500,
-                              color: groupActive ? 'primary.dark' : 'text.primary',
-                            }}
-                          />
-                          {open
-                            ? <ChevronDown size={15} color={theme.palette.text.secondary} />
-                            : <ChevronRight size={15} color={theme.palette.text.secondary} />}
-                        </ListItemButton>
-                      </ListItem>
-                      <Collapse in={open} timeout="auto" unmountOnExit>
-                        <List disablePadding>
-                          {item.children.map((child) => {
-                            // Pricing children share /pricing and disambiguate via the
-                            // `stream` query param; all other children match by path.
-                            const childPath = child.path.split('?')[0];
-                            // Children that share a pathname (payments / transport-bill steps)
-                            // disambiguate via the `part` query param, like pricing's `stream`.
-                            const childPart = new URLSearchParams(location.search).get('part');
-                            const childSelected = child.stream
-                              ? (location.pathname === item.path &&
-                                 (child.stream === 'RM_COST' ? stream === 'RM_COST' : stream !== 'RM_COST'))
-                              : child.part
-                                ? (location.pathname === childPath && childPart === child.part)
-                                : location.pathname === childPath;
-                            return (
-                              <ListItem key={child.text} disablePadding sx={{ mb: 0.25 }}>
-                                {leafButton(child, childSelected, { indent: true })}
-                              </ListItem>
-                            );
-                          })}
-                        </List>
-                      </Collapse>
-                    </React.Fragment>
-                  );
-                }
-
-                // ── Plain leaf item ──
-                const isSelected = location.pathname.startsWith(item.path);
-                return (
-                  <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
-                    {mini ? (
-                      <Tooltip title={item.text} placement="right" arrow>
-                        <Box sx={{ width: '100%' }}>{leafButton(item, isSelected)}</Box>
-                      </Tooltip>
-                    ) : leafButton(item, isSelected)}
-                  </ListItem>
-                );
-              })}
+              {section.items.map((item) => renderNavItem(item, 0))}
             </List>
           </Box>
         ))}

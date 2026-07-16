@@ -75,7 +75,9 @@ const OrdersList = () => {
   const [searchTerm, setSearchTerm] = useState(searchParams.get('so') || '');
   const [statusFilter, setStatusFilter] = useState('');
   const [partyFilter, setPartyFilter] = useState(null);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  // Arriving with ?new=1 (e.g. "New Sales Order" from the FMS Tracker) opens the
+  // punch-in drawer straight away. Initialised from the param — no effect, no loop.
+  const [isCreateOpen, setIsCreateOpen] = useState(searchParams.get('new') === '1');
   const [editOrder, setEditOrder] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);

@@ -49,6 +49,8 @@ export const baseApi = createApi({
     'Grn', 'GrnStats', 'InventoryStock', 'InventoryMovement',
     'ImsOverview', 'ImsDashboard', 'ImsPolicy', 'ImsMovement',
     'RmOverview', 'RmDashboard', 'RmPolicy', 'RmMovement', 'RmConversion',
+    'FgOverview', 'FgDashboard', 'FgPolicy', 'FgMovement',
+    'Dpr', 'DprBoard', 'DprMaster',
     'ServiceCompletion', 'ServiceCompletionStats',
     'IncomingQc', 'IncomingQcStats',
     'VendorInvoice', 'VendorInvoiceStats', 'Voucher', 'VoucherStats',

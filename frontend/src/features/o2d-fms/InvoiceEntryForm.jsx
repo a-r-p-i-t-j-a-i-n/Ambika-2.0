@@ -2,13 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Chip, MenuItem,
-  alpha, useTheme, CircularProgress, IconButton, Divider, Link, Tooltip,
+  alpha, useTheme, CircularProgress, IconButton, Divider, Link, Tooltip, Alert,
 } from '@mui/material';
-import { ReceiptText, Upload, X, Save, Paperclip, FileCheck2, Eye } from 'lucide-react';
+import { ReceiptText, Upload, X, Save, Paperclip, FileCheck2, Eye, Pencil, ShieldCheck } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
-import { useCreateSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
+import { useGetTransportersQuery } from '../../store/api/transporterApi';
+import { useCreateSalesInvoiceMutation, useGetSalesInvoicesQuery, useUpdateSalesInvoiceMutation } from '../../store/api/salesInvoiceApi';
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
@@ -18,7 +19,7 @@ const TRANSPORT_TYPES = ['Freight Paid', 'To Pay', 'Party Vehicle'];
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.xlsx,.xls,.doc,.docx';
 
 // A reusable multi-file upload field → returns [{ fileName, url }] via onChange.
-const UploadField = ({ label, max, files, onChange, folder = 'invoices' }) => {
+const UploadField = ({ label, max, files, onChange, folder = 'invoices', readOnly = false }) => {
   const theme = useTheme();
   const [upload, { isLoading }] = useUploadFileMutation();
 
@@ -47,10 +48,12 @@ const UploadField = ({ label, max, files, onChange, folder = 'invoices' }) => {
         <Typography sx={{ fontSize: '0.78rem', fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           {label} <span style={{ fontWeight: 500 }}>· up to {max}</span>
         </Typography>
-        <Button component="label" size="small" startIcon={isLoading ? <CircularProgress size={13} /> : <Upload size={13} />} disabled={isLoading || files.length >= max}>
-          Add
-          <input type="file" hidden multiple accept={ACCEPT} onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
-        </Button>
+        {!readOnly && (
+          <Button component="label" size="small" startIcon={isLoading ? <CircularProgress size={13} /> : <Upload size={13} />} disabled={isLoading || files.length >= max}>
+            Add
+            <input type="file" hidden multiple accept={ACCEPT} onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+          </Button>
+        )}
       </Stack>
       {files.length === 0 ? (
         <Typography variant="caption" color="text.disabled">No files yet</Typography>
@@ -62,7 +65,7 @@ const UploadField = ({ label, max, files, onChange, folder = 'invoices' }) => {
               <Link href={resolveFileUrl(f.url)} target="_blank" rel="noopener" underline="hover"
                 sx={{ flex: 1, fontSize: '0.78rem', color: 'text.primary', cursor: 'pointer' }} noWrap>{f.fileName}</Link>
               <Tooltip title="Preview"><IconButton size="small" onClick={() => window.open(resolveFileUrl(f.url), '_blank', 'noopener')}><Eye size={13} /></IconButton></Tooltip>
-              <Tooltip title="Remove"><IconButton size="small" onClick={() => onChange(files.filter((_, j) => j !== i))}><X size={13} /></IconButton></Tooltip>
+              {!readOnly && <Tooltip title="Remove"><IconButton size="small" onClick={() => onChange(files.filter((_, j) => j !== i))}><X size={13} /></IconButton></Tooltip>}
             </Stack>
           ))}
         </Stack>
@@ -82,7 +85,15 @@ const InvoiceEntryForm = () => {
   const theme = useTheme();
   const { data: challansRes } = useGetChallansQuery({ limit: 300, sort: '-dcDate' });
   const challans = useMemo(() => challansRes?.data || [], [challansRes]);
+
+  // Transporter master → the Transporter Name dropdown (active partners only).
+  const { data: transportersRes } = useGetTransportersQuery({ limit: 1000, sort: 'name' });
+  const transporterOptions = useMemo(
+    () => (transportersRes?.data || []).filter((t) => t.isActive !== false),
+    [transportersRes],
+  );
   const [createInvoice, { isLoading: saving }] = useCreateSalesInvoiceMutation();
+  const [updateInvoice, { isLoading: updating }] = useUpdateSalesInvoiceMutation();
   const { finishToTask } = useReturnToTask();
   const [searchParams] = useSearchParams();
   const soParam = searchParams.get('so') || '';
@@ -90,6 +101,10 @@ const InvoiceEntryForm = () => {
   const [gateOpen, setGateOpen] = useState(false);
 
   const [dc, setDc] = useState(null);
+  // An already-saved invoice for the selected challan → view/edit instead of re-create.
+  const [existingId, setExistingId] = useState(null);
+  const [editMode, setEditMode] = useState(false);
+  const loadedInvoiceIdRef = useRef(null);
   const gate = useFmsGate({ soNumber: dc?.soNumber || soParam, action: 'INVOICE_ENTRY' });
   const [form, setForm] = useState({
     status: 'Done', invoiceNo: '', invoiceDate: dayjs().format('YYYY-MM-DD'),
@@ -98,6 +113,65 @@ const InvoiceEntryForm = () => {
   const [invoiceFiles, setInvoiceFiles] = useState([]);
   const [ewayFiles, setEwayFiles] = useState([]);
   const [pdirFiles, setPdirFiles] = useState([]);
+
+  // Look up whether the selected challan already has a (live) invoice.
+  const dcId = dc?._id;
+  const { data: existingRes } = useGetSalesInvoicesQuery({ dcId, limit: 5 }, { skip: !dcId });
+  const existingInvoice = useMemo(() => {
+    if (!dcId) return null;
+    return (existingRes?.data || []).find(
+      (inv) => String(inv.dcId?._id || inv.dcId) === String(dcId) && inv.status !== 'CANCELLED',
+    ) || null;
+  }, [existingRes, dcId]);
+
+  // All live invoices for this SO → so an SO-scoped open lands on the challan that
+  // still NEEDS invoicing (the pending consignment), never one already invoiced.
+  const { data: soInvRes } = useGetSalesInvoicesQuery({ soNumber: soParam, limit: 100 }, { skip: !soParam });
+  const invoicedDcIds = useMemo(
+    () => new Set((soInvRes?.data || [])
+      .filter((i) => i.status !== 'CANCELLED')
+      .map((i) => String(i.dcId?._id || i.dcId))),
+    [soInvRes],
+  );
+
+  const locked = !!existingId && !editMode;
+  const busy = saving || updating;
+
+  // Derive a readable file name from a stored URL/key.
+  const nameFromUrl = (url, i) => {
+    try { return decodeURIComponent(String(url).split('?')[0].split('/').pop()) || `File ${i + 1}`; }
+    catch { return `File ${i + 1}`; }
+  };
+  const urlsToFiles = (urls) => (urls || []).map((url, i) => ({ url, fileName: nameFromUrl(url, i) }));
+
+  // Load an existing invoice into the form (view mode) so the user sees the saved
+  // details instead of a blank re-creation form.
+  const loadInvoiceIntoForm = (inv) => {
+    setExistingId(inv._id);
+    setEditMode(false);
+    setForm({
+      status: inv.status === 'CANCELLED' ? 'Cancelled' : 'Done',
+      invoiceNo: inv.invoiceNo || '',
+      invoiceDate: inv.invoiceDate ? dayjs(inv.invoiceDate).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+      invoiceAmount: inv.invoiceAmount ?? '',
+      transportType: inv.transportType || 'Freight Paid',
+      transporterName: inv.transporterName || '',
+      lrNo: inv.lrNo || '',
+      remarks: inv.remarks || '',
+    });
+    setInvoiceFiles(urlsToFiles(inv.invoiceUrls));
+    setEwayFiles(urlsToFiles(inv.ewayBillUrls));
+    setPdirFiles(urlsToFiles(inv.pdirUrls));
+  };
+
+  // When the selected challan turns out to already have an invoice, load it once.
+  useEffect(() => {
+    if (existingInvoice && loadedInvoiceIdRef.current !== existingInvoice._id) {
+      loadedInvoiceIdRef.current = existingInvoice._id;
+      loadInvoiceIntoForm(existingInvoice);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingInvoice]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -112,16 +186,26 @@ const InvoiceEntryForm = () => {
     return m;
   }, [challans]);
 
-  // Pull dispatch details captured in Actual Dispatch onto the invoice form.
+  // Pull dispatch details captured in Actual Dispatch onto a fresh invoice form.
+  // Any prior existing-invoice state is cleared first (so switching challans never
+  // carries the previous invoice's amount/files over); the useEffect then reloads
+  // a saved invoice if the newly-picked challan already has one.
   const onPickDc = (v) => {
     setDc(v);
-    if (v) setForm((f) => ({
-      ...f,
-      invoiceNo: v.invoiceNo || f.invoiceNo,
-      transporterName: v.transporterName || f.transporterName || '',
-      transportType: v.dispatchedThrough || f.transportType,
-      lrNo: f.lrNo || v.lrNo || '',
-    }));
+    setExistingId(null);
+    setEditMode(false);
+    loadedInvoiceIdRef.current = null;
+    setInvoiceFiles([]); setEwayFiles([]); setPdirFiles([]);
+    setForm({
+      status: 'Done',
+      invoiceNo: v?.invoiceNo || '',
+      invoiceDate: dayjs().format('YYYY-MM-DD'),
+      invoiceAmount: '',
+      transportType: v?.dispatchedThrough || 'Freight Paid',
+      transporterName: v?.transporterName || '',
+      lrNo: v?.lrNo || '',
+      remarks: '',
+    });
   };
 
   // Choosing an invoice number auto-selects its challan and fetches its details.
@@ -132,46 +216,74 @@ const InvoiceEntryForm = () => {
     else setForm((f) => ({ ...f, invoiceNo: inv }));
   };
 
-  // Came from an FMS "Do it now" with ?so=… → auto-select that order's latest
-  // delivery challan so its party/SO/PO/transporter pre-fill (challans are
-  // already sorted -dcDate, so the first match is the newest).
+  // Came from an FMS "Do it now"/"Do again":
+  //  • ?dc=DC-xxx → select that exact challan.
+  //  • ?so=…      → the invoice step recurs per challan, so land on the challan
+  //    that is still PENDING (not yet invoiced). Only if every challan is already
+  //    invoiced do we fall back to the latest one. This prevents opening an
+  //    already-invoiced challan's locked/filled form when a fresh one is waiting.
   const presetRef = useRef(false);
   useEffect(() => {
     if (presetRef.current || dc || !challans.length || !(soParam || dcParam)) return;
-    const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
-      || (soParam && challans.find((c) => c.soNumber === soParam));
-    if (match) { presetRef.current = true; onPickDc(match); }
+    if (dcParam) {
+      const m = challans.find((c) => c.dcNumber === dcParam);
+      if (m) { presetRef.current = true; onPickDc(m); }
+      return;
+    }
+    if (soParam) {
+      if (soInvRes === undefined) return; // wait for the SO's invoice list to load
+      const soChallans = challans.filter((c) => c.soNumber === soParam);
+      if (!soChallans.length) return;
+      const pending = soChallans.find((c) => !invoicedDcIds.has(String(c._id)));
+      presetRef.current = true;
+      onPickDc(pending || soChallans[0]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soParam, dcParam, challans, dc]);
+  }, [soParam, dcParam, challans, dc, soInvRes, invoicedDcIds]);
 
   const reset = () => {
     setDc(null);
+    setExistingId(null);
+    setEditMode(false);
+    loadedInvoiceIdRef.current = null;
     setForm({ status: 'Done', invoiceNo: '', invoiceDate: dayjs().format('YYYY-MM-DD'), invoiceAmount: '', transportType: 'Freight Paid', transporterName: '', lrNo: '', remarks: '' });
     setInvoiceFiles([]); setEwayFiles([]); setPdirFiles([]);
   };
 
+  // Discard in-progress edits and return to the saved (view) state.
+  const cancelEdit = () => { if (existingInvoice) loadInvoiceIntoForm(existingInvoice); };
+
   const save = async () => {
     if (!dc) return enqueueSnackbar('Select a delivery challan first.', { variant: 'warning' });
     if (!form.invoiceNo.trim()) return enqueueSnackbar('Invoice No is required.', { variant: 'warning' });
+    const body = {
+      dcId: dc._id,
+      invoiceNo: form.invoiceNo.trim(),
+      invoiceDate: form.invoiceDate,
+      invoiceAmount: Number(form.invoiceAmount) || 0,
+      status: form.status === 'Cancelled' ? 'CANCELLED' : 'DONE',
+      transportType: form.transportType,
+      transporterName: form.transporterName,
+      lrNo: form.lrNo,
+      remarks: form.remarks,
+      invoiceUrls: invoiceFiles.map((f) => f.url),
+      ewayBillUrls: ewayFiles.map((f) => f.url),
+      pdirUrls: pdirFiles.map((f) => f.url),
+    };
     try {
-      const res = await createInvoice({
-        dcId: dc._id,
-        invoiceNo: form.invoiceNo.trim(),
-        invoiceDate: form.invoiceDate,
-        invoiceAmount: Number(form.invoiceAmount) || 0,
-        status: form.status === 'Cancelled' ? 'CANCELLED' : 'DONE',
-        transportType: form.transportType,
-        transporterName: form.transporterName,
-        lrNo: form.lrNo,
-        remarks: form.remarks,
-        invoiceUrls: invoiceFiles.map((f) => f.url),
-        ewayBillUrls: ewayFiles.map((f) => f.url),
-        pdirUrls: pdirFiles.map((f) => f.url),
-      }).unwrap();
-      enqueueSnackbar(`Invoice ${res.data.invoiceNo} saved.`, { variant: 'success' });
-      // Open the order's FMS task (checklist auto-marked); reset only if none.
-      const opened = await finishToTask({ soNumber: dc?.soNumber, action: 'INVOICE_ENTRY' });
-      if (!opened) reset();
+      if (existingId) {
+        // Edit-and-update the existing invoice — changes flow to the 2.8 email step.
+        const res = await updateInvoice({ id: existingId, ...body }).unwrap();
+        enqueueSnackbar(`Invoice ${res.data.invoiceNo} updated.`, { variant: 'success' });
+        setEditMode(false);
+        loadedInvoiceIdRef.current = null; // let the refetched invoice reload cleanly
+      } else {
+        const res = await createInvoice(body).unwrap();
+        enqueueSnackbar(`Invoice ${res.data.invoiceNo} saved.`, { variant: 'success' });
+        // Open the order's FMS task (checklist auto-marked); reset only if none.
+        const opened = await finishToTask({ soNumber: dc?.soNumber, action: 'INVOICE_ENTRY' });
+        if (!opened) reset();
+      }
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Could not save the invoice.', { variant: 'error' });
     }
@@ -214,17 +326,36 @@ const InvoiceEntryForm = () => {
           )}
         </Paper>
 
+        {/* Already-invoiced challan → show saved details, locked, with an Edit action. */}
+        {existingId && (
+          <Alert
+            severity={editMode ? 'warning' : 'info'}
+            icon={editMode ? <Pencil size={18} /> : <ShieldCheck size={18} />}
+            sx={{ mb: 2, borderRadius: 3, alignItems: 'center' }}
+            action={locked && (
+              <Button color="inherit" size="small" startIcon={<Pencil size={14} />} onClick={() => setEditMode(true)} sx={{ fontWeight: 700 }}>
+                Edit
+              </Button>
+            )}
+          >
+            {editMode
+              ? 'Editing the existing invoice for this challan — your changes will update it and carry into the email step (2.8).'
+              : `This delivery challan is already invoiced (${form.invoiceNo || existingInvoice?.invoiceNo || '—'}). The saved details are shown below and locked — click Edit to change them.`}
+          </Alert>
+        )}
+
         {/* Form fields */}
         <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
           <Stack spacing={2}>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField select label="Status" value={form.status} onChange={set('status')} size="small" sx={{ minWidth: 160 }}>
+              <TextField select label="Status" value={form.status} onChange={set('status')} size="small" sx={{ minWidth: 160 }} disabled={locked}>
                 <MenuItem value="Done">Done</MenuItem>
                 <MenuItem value="Cancelled">Cancelled</MenuItem>
               </TextField>
               <Autocomplete
                 freeSolo
                 fullWidth
+                disabled={locked}
                 options={invoiceNoOptions}
                 value={form.invoiceNo}
                 onChange={(_, val) => onPickInvoiceNo(val || '')}
@@ -234,19 +365,45 @@ const InvoiceEntryForm = () => {
                     placeholder="Select from actual dispatch / type" />
                 )}
               />
-              <TextField label="Invoice Date" type="date" value={form.invoiceDate} onChange={set('invoiceDate')} size="small" InputLabelProps={{ shrink: true }} sx={{ minWidth: 170 }} />
+              <TextField label="Invoice Date" type="date" value={form.invoiceDate} onChange={set('invoiceDate')} size="small" InputLabelProps={{ shrink: true }} sx={{ minWidth: 170 }} disabled={locked} />
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField label="Invoice Amount (₹)" type="number" value={form.invoiceAmount} onChange={set('invoiceAmount')} size="small" fullWidth />
-              <TextField select label="Type of Transportation" value={form.transportType} onChange={set('transportType')} size="small" fullWidth>
+              <TextField label="Invoice Amount (₹)" type="number" value={form.invoiceAmount} onChange={set('invoiceAmount')} size="small" fullWidth disabled={locked} />
+              <TextField select label="Type of Transportation" value={form.transportType} onChange={set('transportType')} size="small" fullWidth disabled={locked}>
                 {TRANSPORT_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
               </TextField>
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField label="Transporter Name" value={form.transporterName} onChange={set('transporterName')} size="small" fullWidth />
-              <TextField label="L.R. No" value={form.lrNo} onChange={set('lrNo')} size="small" fullWidth />
+              <Autocomplete
+                freeSolo
+                fullWidth
+                disabled={locked}
+                options={transporterOptions}
+                value={form.transporterName}
+                onChange={(_, val) => setForm((f) => ({ ...f, transporterName: typeof val === 'string' ? val : (val?.name || '') }))}
+                onInputChange={(_, val, reason) => { if (reason === 'input') setForm((f) => ({ ...f, transporterName: val })); }}
+                getOptionLabel={(o) => (typeof o === 'string' ? o : (o?.name || ''))}
+                isOptionEqualToValue={(o, val) => (typeof o === 'string' ? o : o?.name) === (typeof val === 'string' ? val : val?.name)}
+                renderOption={(props, o) => (
+                  <li {...props} key={o._id}>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{o.name}</Typography>
+                      {(o.contactPerson || o.phone || o.city) && (
+                        <Typography variant="caption" color="text.secondary">
+                          {[o.contactPerson, o.phone, o.city].filter(Boolean).join(' · ')}
+                        </Typography>
+                      )}
+                    </Box>
+                  </li>
+                )}
+                renderInput={(p) => (
+                  <TextField {...p} label="Transporter Name" size="small"
+                    placeholder="Select from transporter master / type" />
+                )}
+              />
+              <TextField label="L.R. No" value={form.lrNo} onChange={set('lrNo')} size="small" fullWidth disabled={locked} />
             </Stack>
-            <TextField label="Remarks (if any)" value={form.remarks} onChange={set('remarks')} size="small" fullWidth multiline minRows={2} />
+            <TextField label="Remarks (if any)" value={form.remarks} onChange={set('remarks')} size="small" fullWidth multiline minRows={2} disabled={locked} />
           </Stack>
         </Paper>
 
@@ -257,18 +414,29 @@ const InvoiceEntryForm = () => {
             <Typography sx={{ fontWeight: 800 }}>Attachments</Typography>
           </Stack>
           <Stack spacing={1.5}>
-            <UploadField label="Invoice" max={5} files={invoiceFiles} onChange={setInvoiceFiles} />
-            <UploadField label="Eway Bill" max={5} files={ewayFiles} onChange={setEwayFiles} />
-            <UploadField label="PDIR" max={10} files={pdirFiles} onChange={setPdirFiles} />
+            <UploadField label="Invoice" max={5} files={invoiceFiles} onChange={setInvoiceFiles} readOnly={locked} />
+            <UploadField label="Eway Bill" max={5} files={ewayFiles} onChange={setEwayFiles} readOnly={locked} />
+            <UploadField label="PDIR" max={10} files={pdirFiles} onChange={setPdirFiles} readOnly={locked} />
           </Stack>
         </Paper>
 
         <Divider sx={{ mb: 2 }} />
         <Stack direction="row" spacing={1.5} justifyContent="flex-end">
           <Button onClick={reset} sx={{ fontWeight: 700, color: 'text.secondary' }}>Clear</Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={saving || gate.blocked} onClick={save} sx={{ fontWeight: 700, px: 3 }}>
-            {saving ? 'Saving…' : 'Save Invoice'}
-          </Button>
+          {locked ? (
+            <Button variant="contained" startIcon={<Pencil size={16} />} onClick={() => setEditMode(true)} sx={{ fontWeight: 700, px: 3 }}>
+              Edit Invoice
+            </Button>
+          ) : (
+            <>
+              {existingId && editMode && (
+                <Button onClick={cancelEdit} sx={{ fontWeight: 700, color: 'text.secondary' }}>Cancel</Button>
+              )}
+              <Button variant="contained" startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} disabled={busy || gate.blocked} onClick={save} sx={{ fontWeight: 700, px: 3 }}>
+                {busy ? 'Saving…' : existingId ? 'Update Invoice' : 'Save Invoice'}
+              </Button>
+            </>
+          )}
         </Stack>
       </Box>
       <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />

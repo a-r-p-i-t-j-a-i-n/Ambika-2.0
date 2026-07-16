@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Box, Paper, Stack, Typography, Chip, Tooltip, alpha, useTheme, LinearProgress } from '@mui/material';
-import { Activity, CheckCircle2, AlertCircle, ArrowRightCircle, ArrowDownRight, Clock } from 'lucide-react';
+import { Activity, CheckCircle2, AlertCircle, ArrowRightCircle, Clock } from 'lucide-react';
 import dayjs from 'dayjs';
 
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
@@ -12,36 +12,13 @@ const RISK_LABEL = {
   BALANCE_NOT_PLANNED: 'Unplanned balance',
 };
 
-// Render a small carry chip — red+ for short, green− for surplus.
-const CarryChip = ({ value, theme, prefix = '' }) => {
-  const n = Number(value || 0);
-  if (n === 0) return null;
-  const isShort = n > 0;
-  const color = isShort ? theme.palette.error.main : theme.palette.success.main;
-  return (
-    <Chip
-      size="small"
-      icon={<ArrowDownRight size={10} />}
-      label={`${prefix}${isShort ? '+' : '−'}${fmt(Math.abs(n))}`}
-      sx={{
-        height: 18, fontSize: '0.6rem', fontWeight: 800,
-        bgcolor: alpha(color, 0.10), color,
-        '& .MuiChip-icon': { color, marginLeft: '4px' },
-      }}
-    />
-  );
-};
-
-// One phase block in the per-SKU chain: Plan + Carry-in → Effective vs Actual → Carry-out.
+// One phase block in the per-SKU chain — Plan vs Actual only (no carry / effective).
 const PhaseBlock = ({ phase, theme }) => {
   const planned   = Number(phase.plannedQty || 0);
-  const carryIn   = Number(phase.carryInQty || 0);
-  const effective = Number(phase.effectivePlannedQty || (planned + carryIn));
   const actual    = Number(phase.actualQty || 0);
-  const carryOut  = Number(phase.carryOutQty || 0);
   const delayDays = Number(phase.delayDays || 0);
   const shipments = phase.actualDispatches || [];
-  const pct = effective > 0 ? Math.min(100, Math.round((actual / effective) * 100)) : 0;
+  const pct = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : 0;
   const tone = pct >= 100 ? theme.palette.success.main
              : actual > 0 ? theme.palette.warning.main
              : theme.palette.primary.main;
@@ -51,8 +28,7 @@ const PhaseBlock = ({ phase, theme }) => {
       title={(
         <Box>
           <Typography variant="caption" fontWeight={800}>{phase.phaseNo} · {dayjs(phase.plannedDate).format('DD MMM YYYY')}{delayDays > 0 && ` · ${delayDays}d late`}</Typography><br/>
-          <Typography variant="caption">Plan {fmt(planned)}{carryIn !== 0 && ` (carry-in ${carryIn > 0 ? '+' : '−'}${fmt(Math.abs(carryIn))})`} → Effective {fmt(effective)}</Typography><br/>
-          <Typography variant="caption">Actual {fmt(actual)} → Carry-out {carryOut > 0 ? '+' : carryOut < 0 ? '−' : ''}{fmt(Math.abs(carryOut))}</Typography>
+          <Typography variant="caption">Plan {fmt(planned)} · Actual {fmt(actual)}</Typography>
           {shipments.length > 0 && <><br/><Typography variant="caption" fontWeight={700}>Shipped:</Typography></>}
           {shipments.map((d, i) => (
             <React.Fragment key={i}>
@@ -68,26 +44,20 @@ const PhaseBlock = ({ phase, theme }) => {
         border: '1px solid', borderColor: alpha(delayDays > 0 ? theme.palette.error.main : tone, 0.3),
         bgcolor: alpha(tone, 0.05),
       }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.25 }}>
-          <Typography variant="caption" sx={{ fontWeight: 800, color: tone, fontSize: '0.62rem', letterSpacing: '0.06em' }}>
-            {phase.phaseNo} · {pct}%
-          </Typography>
-          {carryIn !== 0 && <CarryChip value={carryIn} theme={theme} />}
-        </Stack>
+        <Typography variant="caption" sx={{ fontWeight: 800, color: tone, fontSize: '0.62rem', letterSpacing: '0.06em' }}>
+          {phase.phaseNo} · {pct}%
+        </Typography>
         <Typography variant="body2" sx={{ fontWeight: 800, color: 'text.primary', fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
-          {fmt(actual)} <Typography component="span" variant="caption" color="text.secondary"> / {fmt(effective)}</Typography>
+          {fmt(actual)} <Typography component="span" variant="caption" color="text.secondary"> / {fmt(planned)}</Typography>
         </Typography>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.25 }}>
-          <Stack direction="row" spacing={0.5} alignItems="center">
-            <Typography variant="caption" color="text.secondary">
-              {phase.plannedDate ? dayjs(phase.plannedDate).format('DD MMM') : ''}
-            </Typography>
-            {delayDays > 0 && (
-              <Chip size="small" icon={<Clock size={9} />} label={`${delayDays}d late`}
-                sx={{ height: 16, fontSize: '0.55rem', fontWeight: 800, bgcolor: alpha(theme.palette.error.main, 0.10), color: 'error.main', '& .MuiChip-icon': { color: theme.palette.error.main, ml: '3px' } }} />
-            )}
-          </Stack>
-          {carryOut !== 0 && <CarryChip value={carryOut} theme={theme} />}
+          <Typography variant="caption" color="text.secondary">
+            {phase.plannedDate ? dayjs(phase.plannedDate).format('DD MMM') : ''}
+          </Typography>
+          {delayDays > 0 && (
+            <Chip size="small" icon={<Clock size={9} />} label={`${delayDays}d late`}
+              sx={{ height: 16, fontSize: '0.55rem', fontWeight: 800, bgcolor: alpha(theme.palette.error.main, 0.10), color: 'error.main', '& .MuiChip-icon': { color: theme.palette.error.main, ml: '3px' } }} />
+          )}
         </Stack>
       </Box>
     </Tooltip>
@@ -156,7 +126,6 @@ const PlanVsActualPanel = ({ comparison }) => {
           {rows.map((row) => {
             const pct = row.orderQty > 0 ? Math.min(100, (row.actualQty / row.orderQty) * 100) : 0;
             const fulfilled = row.balanceQty === 0;
-            const runningCarry = Number(row.runningCarryQty || 0);
             return (
               <Box key={row.orderItemId || row.skuCode} sx={{
                 p: 1.5, borderRadius: '12px',
@@ -168,20 +137,6 @@ const PlanVsActualPanel = ({ comparison }) => {
                     <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
                       <Typography variant="body2" fontWeight={800} noWrap>{row.skuName}</Typography>
                       {fulfilled && <CheckCircle2 size={12} color={theme.palette.success.main} />}
-                      {runningCarry !== 0 && (
-                        <Tooltip arrow title={runningCarry > 0 ? `Currently short by ${fmt(runningCarry)} — must be made up in the next phase` : `Currently surplus by ${fmt(Math.abs(runningCarry))} — next phase can be reduced`}>
-                          <Chip
-                            size="small"
-                            icon={<ArrowDownRight size={11} />}
-                            label={`Carry-forward ${runningCarry > 0 ? '+' : '−'}${fmt(Math.abs(runningCarry))}`}
-                            sx={{
-                              height: 20, fontSize: '0.62rem', fontWeight: 800,
-                              bgcolor: alpha(runningCarry > 0 ? theme.palette.error.main : theme.palette.success.main, 0.10),
-                              color: runningCarry > 0 ? 'error.main' : 'success.main',
-                            }}
-                          />
-                        </Tooltip>
-                      )}
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
                       {row.skuCode} · Order {fmt(row.orderQty)} · Plan {fmt(row.plannedQty)} · Actual {fmt(row.actualQty)} · Balance <strong>{fmt(row.balanceQty)}</strong>

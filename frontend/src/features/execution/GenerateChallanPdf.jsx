@@ -34,6 +34,9 @@ const GenerateChallanPdf = () => {
   // FMS task context — set when the doer arrived here via "Do it now" on step 2.06.
   const fromTask = params.get('fromTask');
   const fromStep = params.get('fromStep');
+  // Which connected action-link this entry was for — carried back so the task
+  // marks exactly THIS action done and flips it to "Do again".
+  const fromAction = params.get('fromAction');
   const soFromTask = params.get('so') || '';
   const cameFromTask = !!(fromTask && fromStep);
 
@@ -79,7 +82,10 @@ const GenerateChallanPdf = () => {
   // challan show up "done by X" in the FMS Tracker and Master FMS.
   const backToTask = () => {
     if (!cameFromTask) return;
-    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?entryDone=1`);
+    // Carry doneAction so the task marks THIS action done → it flips to "Do again".
+    const q = new URLSearchParams({ entryDone: '1' });
+    if (fromAction) q.set('doneAction', fromAction);
+    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`);
   };
 
   // Auto-open the challan PDF once, for the order we came from. The latest DC for

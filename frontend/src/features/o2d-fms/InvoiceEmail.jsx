@@ -1,9 +1,9 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, Chip, alpha, useTheme,
-  CircularProgress, Divider, Link, Box, Checkbox, IconButton,
+  CircularProgress, Divider, Link, Box, Checkbox, IconButton, Alert,
 } from '@mui/material';
-import { Mail, Send, Paperclip, FileText, ShieldCheck, ClipboardList, CheckCircle2, UploadCloud, X } from 'lucide-react';
+import { Mail, Send, Paperclip, FileText, ShieldCheck, ClipboardList, CheckCircle2, UploadCloud, X, Boxes, AlertTriangle } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useSearchParams } from 'react-router-dom';
@@ -64,6 +64,7 @@ const InvoiceEmail = () => {
   const { finishToTask } = useReturnToTask();
   const [searchParams] = useSearchParams();
   const soParam = searchParams.get('so') || '';
+  const dcParam = searchParams.get('dc') || '';
 
   const [uploadFile] = useUploadFileMutation();
   const [inv, setInv] = useState(null);
@@ -112,13 +113,31 @@ const InvoiceEmail = () => {
     finally { setUploading(false); }
   };
 
-  // Came from an FMS "Do it now" with ?so=… → auto-select that order's invoice.
+  // Came from an FMS "Do it now": ?dc=DC-xxx → email THAT challan's OWN invoice.
+  // Every delivery challan has its own invoice, so when the task is scoped to a
+  // challan we select ONLY that challan's invoice and MUST NOT fall back to the
+  // order's first invoice — doing so would email the wrong challan's invoice (e.g.
+  // DC-054's for a DC-055 task). If the challan has no invoice yet (2.7 not done for
+  // it) we leave it unselected and flag it, rather than pick the wrong one.
+  const dcEq = (a, b) => String(a || '').trim() === String(b || '').trim();
   useEffect(() => {
-    if (inv || !soParam || !invoices.length) return;
-    const match = invoices.find((i) => i.soNumber === soParam);
-    if (match) setInv(match);
+    if (inv || !invoices.length) return;
+    if (dcParam) {
+      const match = invoices.find((i) => dcEq(i.dcNumber, dcParam));
+      if (match) setInv(match);
+      return; // scoped to ONE challan — never fall back to another invoice
+    }
+    if (soParam) {
+      const match = invoices.find((i) => i.soNumber === soParam);
+      if (match) setInv(match);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soParam, invoices]);
+  }, [soParam, dcParam, invoices]);
+
+  // Guards for the challan-scoped case: no invoice exists for this challan yet, or
+  // the picked invoice belongs to a DIFFERENT challan than the task is for.
+  const dcHasNoInvoice = !!dcParam && invoices.length > 0 && !invoices.some((i) => dcEq(i.dcNumber, dcParam));
+  const dcMismatch = !!dcParam && !!inv && !dcEq(inv.dcNumber, dcParam);
 
   useEffect(() => {
     if (!inv) return;
@@ -166,24 +185,47 @@ const InvoiceEmail = () => {
       } else {
         enqueueSnackbar(`Email could not be sent (${st}). Check SMTP settings.`, { variant: 'warning' });
       }
-      setTimeout(() => finishToTask({ soNumber: inv.soNumber, action: 'INVOICE_EMAIL' }), 800);
     } catch (e) {
       enqueueSnackbar(e?.data?.message || 'Failed to send.', { variant: 'error' });
+    } finally {
+      // Return to the task like every other step — whether the mail sent or failed —
+      // so the doer lands back on the checklist to review & Mark Done (or retry).
+      setTimeout(() => finishToTask({ soNumber: inv.soNumber, action: 'INVOICE_EMAIL' }), 700);
     }
   };
 
   return (
     <O2dStepShell icon={Mail} step="Step 2.8" title="Email Invoice & Eway Bill" subtitle="Pick an invoice — its full details & attachments load for preview, then send to the client." gate={gate}>
-      {/* Invoice number picker */}
+      {/* Invoice number picker. When the task is scoped to a delivery challan, the
+          list is restricted to THAT challan's own invoice so a different challan's
+          invoice can never be picked/emailed by mistake. */}
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+        {dcParam && (
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1.25 }}>
+            <Box sx={{ p: 0.5, borderRadius: 1.5, bgcolor: alpha('#7c3aed', 0.12), color: '#7c3aed', display: 'flex' }}><Boxes size={14} /></Box>
+            <Typography variant="caption" sx={{ fontWeight: 800, color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Emailing invoice for this challan</Typography>
+            <Chip size="small" label={dcParam} sx={{ height: 20, fontWeight: 800, fontFamily: 'ui-monospace, monospace', bgcolor: alpha('#7c3aed', 0.1), color: '#6d28d9' }} />
+          </Stack>
+        )}
         <Autocomplete
-          options={invoices}
+          options={dcParam ? invoices.filter((i) => dcEq(i.dcNumber, dcParam)) : invoices}
           value={inv}
           onChange={(_, v) => setInv(v)}
           getOptionLabel={(o) => (o ? `${o.invoiceNo} — ${o.partyName} (${o.dcNumber || '—'})` : '')}
           isOptionEqualToValue={(a, b) => a._id === b._id}
+          noOptionsText={dcParam ? `No invoice found for ${dcParam}` : 'No invoices'}
           renderInput={(p) => <TextField {...p} label="Invoice Number" placeholder="Select an invoice number…" size="small" />}
         />
+        {dcHasNoInvoice && (
+          <Alert severity="warning" icon={<AlertTriangle size={18} />} sx={{ mt: 1.5, py: 0.5 }}>
+            No invoice exists for challan <b>{dcParam}</b> yet. Create it first in <b>Step 2.7 — Create Invoice &amp; Eway Bill</b> for this challan, then come back to email it.
+          </Alert>
+        )}
+        {dcMismatch && (
+          <Alert severity="error" icon={<AlertTriangle size={18} />} sx={{ mt: 1.5, py: 0.5 }}>
+            The selected invoice belongs to challan <b>{inv.dcNumber || '—'}</b>, not <b>{dcParam}</b>. Pick this challan's own invoice before sending.
+          </Alert>
+        )}
       </Paper>
 
       {inv && (
@@ -317,7 +359,7 @@ const InvoiceEmail = () => {
               <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1.5}>
                 <Chip size="small" variant="outlined" label="Sends to the “To” address via the configured SMTP relay" sx={{ fontSize: '0.62rem' }} />
                 <Button variant="contained" startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
-                  disabled={isLoading || gate.blocked} onClick={handleSend} sx={{ fontWeight: 700, px: 3 }}>
+                  disabled={isLoading || gate.blocked || dcMismatch} onClick={handleSend} sx={{ fontWeight: 700, px: 3 }}>
                   {isLoading ? 'Sending…' : 'Send Email'}
                 </Button>
               </Stack>

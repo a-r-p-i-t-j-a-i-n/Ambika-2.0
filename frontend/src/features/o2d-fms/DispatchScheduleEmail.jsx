@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, Chip, alpha, useTheme,
-  CircularProgress, Divider, Box, Table, TableBody, TableCell, TableHead, TableRow, Skeleton,
+  CircularProgress, Divider, Box, Table, TableBody, TableCell, TableHead, TableRow, Skeleton, Collapse,
 } from '@mui/material';
-import { Mail, Send, Paperclip, FileText, CheckCircle2, Download, CalendarRange, ArrowLeft } from 'lucide-react';
+import { Mail, Send, Paperclip, FileText, CheckCircle2, Download, CalendarRange, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -16,7 +16,7 @@ import { useGetPartiesQuery } from '../../store/api/partyApi';
 import { useUploadFileMutation, useAddStepAttachmentsMutation, useAddStepCommentMutation } from '../../store/api/o2dFmsApi';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
-import { printDispatchPlan } from '../../utils/printDispatchPlan';
+import { printDispatchPlanByDate } from '../../utils/printDispatchPlan';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const fmtDate = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -71,6 +71,7 @@ const DispatchScheduleEmail = () => {
   const [uploading, setUploading] = useState(false);
   const [sentInfo, setSentInfo] = useState(null);
   const [sending, setSending] = useState(false);
+  const [showPlan, setShowPlan] = useState(false); // plan is on-demand — email leads
   const fileRef = useRef(null);
 
   // Came from a task → auto-select the order it was raised for, once orders load.
@@ -133,8 +134,9 @@ const DispatchScheduleEmail = () => {
       poNumber: schedule.poNumber || order?.poNumber || '',
       poDate: schedule.poDate || order?.poDate || null,
     };
-    const ok = printDispatchPlan(ctx);
-    if (ok) enqueueSnackbar('Dispatch plan opened — print or Save as PDF, then attach it below if needed.', { variant: 'success' });
+    // Preview the CLIENT copy (names only) — the same version auto-attached to the email.
+    const ok = printDispatchPlanByDate(ctx, { variant: 'client' });
+    if (ok) enqueueSnackbar('Client dispatch plan opened — this is the copy attached to the email.', { variant: 'success' });
   };
 
   const uploadAndAttach = async (files) => {
@@ -252,59 +254,66 @@ const DispatchScheduleEmail = () => {
         </Paper>
       )}
 
-      {/* Plan preview */}
-      {hasPlan && (
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden', mb: 2 }}>
-          <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
-            <Box>
-              <Typography sx={{ fontWeight: 800 }}>{schedule.partyName || order?.partyName || '—'}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                {schedule.soNumber || order?.soNumber}{(schedule.poNumber || order?.poNumber) ? ` · PO ${schedule.poNumber || order?.poNumber}` : ''} · {(schedule.items || []).length} SKU(s)
-              </Typography>
-            </Box>
-            <Button variant="outlined" startIcon={<Download size={16} />} onClick={openPlanPdf} sx={{ whiteSpace: 'nowrap' }}>
-              Preview / Save plan PDF
-            </Button>
-          </Box>
-          <Box sx={{ overflowX: 'auto' }}>
-            <Table size="small" sx={{ minWidth: 640 }}>
-              <TableHead>
-                <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
-                  {['SKU', 'Balance', 'Phase', 'Planned Date', 'Planned Qty', 'Status'].map((h, i) => (
-                    <TableCell key={h} align={[1, 4].includes(i) ? 'right' : 'left'} sx={{ fontWeight: 800, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {phaseRows.map((r, i) => (
-                  <TableRow key={i} hover>
-                    {(r.first || !r.phase) ? (
-                      <>
-                        <TableCell rowSpan={r.phase ? (r.it.phases || []).length : 1}>
-                          <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: '0.78rem', color: theme.palette.primary.dark }}>{r.it.skuCode}</Typography>
-                          <Typography variant="caption" color="text.secondary">{r.it.skuName}</Typography>
-                        </TableCell>
-                        <TableCell align="right" rowSpan={r.phase ? (r.it.phases || []).length : 1} sx={{ fontWeight: 700 }}>{num(r.it.balanceQty)}</TableCell>
-                      </>
-                    ) : null}
-                    <TableCell>{r.phase ? <Chip size="small" label={r.phase.phaseNo} sx={{ fontWeight: 800, height: 20 }} /> : <Typography variant="caption" color="text.disabled">—</Typography>}</TableCell>
-                    <TableCell>{r.phase ? fmtDate(r.phase.plannedDate) : <Typography variant="caption" color="text.disabled">no plan</Typography>}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800 }}>{r.phase ? num(r.phase.plannedQty) : '—'}</TableCell>
-                    <TableCell>{r.phase ? <Chip size="small" color={STATUS_COLOR[r.phase.status] || 'default'} variant="outlined" label={r.phase.status} sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700 }} /> : null}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Box>
-        </Paper>
-      )}
-
-      {/* Email composer */}
+      {/* Email composer — leads the screen; the plan opens on demand via "View plan". */}
       {order && (
         <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-          <Stack sx={{ p: 2, bgcolor: alpha(theme.palette.primary.main, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}
+            sx={{ p: 2, bgcolor: alpha(theme.palette.primary.main, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
             <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: 'text.secondary' }}>EMAIL PREVIEW — sends the dispatch schedule to the client</Typography>
+            <Button size="small" variant={showPlan ? 'contained' : 'outlined'} disableElevation
+              startIcon={showPlan ? <EyeOff size={14} /> : <Eye size={14} />}
+              onClick={() => setShowPlan((v) => !v)} disabled={!hasPlan}
+              sx={{ fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>
+              {showPlan ? 'Hide plan' : 'View plan'}
+            </Button>
           </Stack>
+
+          {/* On-demand dispatch plan — hidden until the doer clicks "View plan". */}
+          <Collapse in={showPlan && hasPlan} unmountOnExit>
+            <Box sx={{ borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: alpha(theme.palette.primary.main, 0.02) }}>
+              <Box sx={{ p: 2, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+                <Box>
+                  <Typography sx={{ fontWeight: 800 }}>{schedule?.partyName || order?.partyName || '—'}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {schedule?.soNumber || order?.soNumber}{(schedule?.poNumber || order?.poNumber) ? ` · PO ${schedule?.poNumber || order?.poNumber}` : ''} · {(schedule?.items || []).length} SKU(s)
+                  </Typography>
+                </Box>
+                <Button variant="outlined" size="small" startIcon={<Download size={16} />} onClick={openPlanPdf} sx={{ whiteSpace: 'nowrap' }}>
+                  Preview / Save plan PDF
+                </Button>
+              </Box>
+              <Box sx={{ overflowX: 'auto' }}>
+                <Table size="small" sx={{ minWidth: 640 }}>
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
+                      {['SKU', 'Ordered', 'Phase', 'Planned Date', 'Planned Qty', 'Status'].map((h, i) => (
+                        <TableCell key={h} align={[1, 4].includes(i) ? 'right' : 'left'} sx={{ fontWeight: 800, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {phaseRows.map((r, i) => (
+                      <TableRow key={i} hover>
+                        {(r.first || !r.phase) ? (
+                          <>
+                            <TableCell rowSpan={r.phase ? (r.it.phases || []).length : 1}>
+                              <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: '0.78rem', color: theme.palette.primary.dark }}>{r.it.skuCode}</Typography>
+                              <Typography variant="caption" color="text.secondary">{r.it.skuName}</Typography>
+                            </TableCell>
+                            <TableCell align="right" rowSpan={r.phase ? (r.it.phases || []).length : 1} sx={{ fontWeight: 700 }}>{num(r.it.orderQty ?? r.it.balanceQty)}</TableCell>
+                          </>
+                        ) : null}
+                        <TableCell>{r.phase ? <Chip size="small" label={r.phase.phaseNo} sx={{ fontWeight: 800, height: 20 }} /> : <Typography variant="caption" color="text.disabled">—</Typography>}</TableCell>
+                        <TableCell>{r.phase ? fmtDate(r.phase.plannedDate) : <Typography variant="caption" color="text.disabled">no plan</Typography>}</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 800 }}>{r.phase ? num(r.phase.plannedQty) : '—'}</TableCell>
+                        <TableCell>{r.phase ? <Chip size="small" color={STATUS_COLOR[r.phase.status] || 'default'} variant="outlined" label={r.phase.status} sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700 }} /> : null}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            </Box>
+          </Collapse>
           {sentInfo && (
             <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2.5, py: 1, bgcolor: alpha(theme.palette.success.main, 0.08), borderBottom: `1px solid ${theme.palette.divider}`, flexWrap: 'wrap' }}>
               <CheckCircle2 size={15} color={theme.palette.success.dark} />

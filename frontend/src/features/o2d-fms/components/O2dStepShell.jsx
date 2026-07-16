@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 import { FmsGateBanner, FmsGateDialog } from '../FmsGate';
+import BackButton from '../../../components/BackButton';
 
 /**
  * Shared page shell for the O2D step-entry forms (2.5–2.13) — branded hero +
@@ -18,7 +19,8 @@ const O2dStepShell = ({ icon: Icon, step, title, subtitle, children, maxWidth = 
         color: '#fff', px: { xs: 2.5, md: 3.5 }, pt: { xs: 2.75, md: 3.25 }, pb: { xs: 3.5, md: 4.25 },
         background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
       }}>
-        <Stack direction="row" spacing={1.75} alignItems="center">
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <BackButton iconOnly sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.28)', borderRadius: 2, flexShrink: 0 }} />
           <Box sx={{ width: 42, height: 42, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0,
             background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
             {Icon ? <Icon size={20} color="#fff" /> : null}

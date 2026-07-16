@@ -71,7 +71,7 @@ const RiskRail = ({ comparison, onCarryForward }) => {
       {carryForwardRows.length > 0 && (
         <>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block', mb: 0.75, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            Carry-forward suggestion
+            Plan remaining balance
           </Typography>
           <Stack spacing={0.75}>
             {carryForwardRows.map((r) => (

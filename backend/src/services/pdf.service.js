@@ -72,100 +72,206 @@ const drawDeliveryChallan = (doc, dcData) => {
   doc.text(`For ${env.COMPANY_NAME || 'M/s Ambika Global'}`, { align: 'right' });
 };
 
-// ── Dispatch Plan ────────────────────────────────────────────────────────────
+// ── Dispatch Plan ("By Date" client copy) ────────────────────────────────────
 const planNum = (n) => Number(n || 0).toLocaleString('en-IN');
 const planDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-');
-const phaseSort = (p) => parseInt(String(p ?? '').replace(/\D/g, ''), 10) || 0;
+const planDateKey = (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'UNSCHEDULED');
 
-// Draws the dispatch plan. `data` is the getSchedule() shape: { order, items }.
+const NAVY = '#0b2545';
+const NAVY2 = '#16305a';
+const SOFT = '#eef2fb';
+const LINE = '#c9d2e2';
+const INK = '#1a2438';
+const MUTED = '#6a7690';
+
+const companyName = () => {
+  const raw = env.COMPANY_NAME || 'Ambika Global';
+  return /^m\/s/i.test(raw) ? raw : `M/s ${raw}`;
+};
+
+/**
+ * Draws the "By Date" dispatch plan — a TRANSPOSED grid: dispatch dates run down
+ * the rows, every SKU is a column across the top. This is the CLIENT copy, so it
+ * shows item NAMES only (no SKU codes). Matches the on-screen client PDF.
+ * `data` is the DispatchSchedule shape: { partyName, soNumber, poNumber, items }.
+ */
 const drawDispatchPlan = (doc, data) => {
   const order = data.order || data;
   const items = data.items || [];
-  const L = 50, R = 545; // page content bounds
+  const L = doc.page.margins.left;
+  const R = doc.page.width - doc.page.margins.right;
+  const W = R - L;
+  const bottom = doc.page.height - doc.page.margins.bottom;
 
-  // Letterhead
-  doc.font('Helvetica-Bold').fontSize(20).text(env.COMPANY_NAME || 'M/s Ambika Global', { align: 'center' });
-  doc.font('Helvetica').fontSize(9);
-  if (env.COMPANY_ADDRESS) doc.text(env.COMPANY_ADDRESS, { align: 'center' });
-  doc.text(`Phone: ${env.COMPANY_PHONE || '-'} | Email: ${env.COMPANY_EMAIL || '-'}`, { align: 'center' });
-  doc.moveDown(0.6);
-  doc.font('Helvetica-Bold').fontSize(15).text('DISPATCH PLAN', { align: 'center', underline: true });
-  doc.moveDown(0.8);
+  // ── Letterhead (centred, double rule) ──
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(22).text(companyName(), L, doc.page.margins.top, { align: 'center', width: W });
+  doc.fillColor(MUTED).font('Helvetica').fontSize(8.5);
+  if (env.COMPANY_ADDRESS) doc.text(env.COMPANY_ADDRESS, L, doc.y, { align: 'center', width: W });
+  doc.text(`Phone: ${env.COMPANY_PHONE || '-'}  |  Email: ${env.COMPANY_EMAIL || '-'}`, L, doc.y, { align: 'center', width: W });
+  let y = doc.y + 6;
+  doc.lineWidth(1.5).strokeColor(NAVY).moveTo(L, y).lineTo(R, y).stroke();
+  doc.lineWidth(0.6).moveTo(L, y + 3).lineTo(R, y + 3).stroke();
+  doc.lineWidth(1);
+  y += 15;
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(14).text('DISPATCH PLAN', L, y, { align: 'center', width: W, characterSpacing: 3 });
+  y = doc.y + 12;
 
-  // Meta
-  doc.font('Helvetica').fontSize(10);
-  doc.text(`Party: ${order.partyName || '-'}`, L, doc.y, { continued: true });
-  doc.text(`Date: ${planDate(new Date())}`, { align: 'right' });
-  doc.text(`SO No: ${order.soNumber || '-'}`, L, doc.y, { continued: true });
-  doc.text(`PO No: ${order.poNumber || '-'}`, { align: 'right' });
-  doc.moveDown(0.8);
+  // ── Meta band (Party | Sales Order | PO No | Plan Date) ──
+  const metaH = 32;
+  const metaW = W / 4;
+  const metaCells = [
+    ['PARTY', order.partyName || '-'],
+    ['SALES ORDER', order.soNumber || '-'],
+    ['PO NO', order.poNumber || '-'],
+    ['PLAN DATE', planDate(new Date())],
+  ];
+  doc.rect(L, y, W, metaH).strokeColor(LINE).lineWidth(1).stroke();
+  metaCells.forEach(([k, v], i) => {
+    const cx = L + i * metaW;
+    if (i > 0) doc.strokeColor(LINE).moveTo(cx, y).lineTo(cx, y + metaH).stroke();
+    doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(6.5).text(String(k), cx + 7, y + 6, { width: metaW - 12 });
+    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(9).text(String(v), cx + 7, y + 15, { width: metaW - 12, height: 12, ellipsis: true });
+  });
+  y += metaH + 14;
 
-  // Group every SKU phase by phase number.
-  const phaseMap = new Map();
+  // ── Intro + section title ──
+  doc.fillColor('#3a4560').font('Helvetica').fontSize(9)
+    .text('We plan to dispatch your order as per the item-wise schedule below. Each dispatch date is shown as a row against every item.', L, y, { width: W });
+  y = doc.y + 10;
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(9).text('PLANNED DISPATCH SCHEDULE (BY DATE)', L, y, { characterSpacing: 0.5 });
+  y = doc.y + 3;
+  doc.lineWidth(1.5).strokeColor(NAVY).moveTo(L, y).lineTo(R, y).stroke();
+  doc.lineWidth(1);
+  y += 8;
+
+  // ── Build the transposed model: columns = dispatch dates, rows = SKUs ──
+  const colMap = new Map();
   items.forEach((it) => (it.phases || []).forEach((ph) => {
-    const g = phaseMap.get(ph.phaseNo) || { phaseNo: ph.phaseNo, date: ph.plannedDate, rows: [], total: 0 };
-    if (ph.plannedDate && (!g.date || new Date(ph.plannedDate) < new Date(g.date))) g.date = ph.plannedDate;
-    g.rows.push({ skuCode: it.skuCode, skuName: it.skuName, qty: ph.plannedQty, status: ph.status });
-    g.total += Number(ph.plannedQty || 0);
-    phaseMap.set(ph.phaseNo, g);
+    const key = planDateKey(ph.plannedDate);
+    const c = colMap.get(key) || { key, date: ph.plannedDate || null };
+    if (!c.date && ph.plannedDate) c.date = ph.plannedDate;
+    colMap.set(key, c);
   }));
-  const phases = [...phaseMap.values()].sort((a, b) => phaseSort(a.phaseNo) - phaseSort(b.phaseNo));
+  const columns = [...colMap.values()].sort((a, b) => {
+    if (a.key === 'UNSCHEDULED') return 1;
+    if (b.key === 'UNSCHEDULED') return -1;
+    return new Date(a.date) - new Date(b.date);
+  });
+  let dn = 0;
+  columns.forEach((c) => { c.label = c.key === 'UNSCHEDULED' ? 'Unscheduled' : `Dispatch ${(dn += 1)}`; });
 
-  // Column layout — NO status column: this is a PLAN the client receives, so it
-  // must read as "on this date we will dispatch these items", never a dispatch state.
-  const cols = { ph: L, date: 100, sku: 210, qty: R - 90 };
-  const drawHeadRow = (y) => {
-    doc.font('Helvetica-Bold').fontSize(9);
-    doc.text('DISPATCH', cols.ph, y);
-    doc.text('PLANNED DATE', cols.date, y);
-    doc.text('ITEM', cols.sku, y);
-    doc.text('QTY', cols.qty, y, { width: 80, align: 'right' });
-    doc.moveTo(L, y + 13).lineTo(R, y + 13).stroke();
+  const rows = items.map((it) => {
+    const byCol = {};
+    let itemTotal = 0;
+    (it.phases || []).forEach((ph) => {
+      const key = planDateKey(ph.plannedDate);
+      byCol[key] = (byCol[key] || 0) + Number(ph.plannedQty || 0);
+      itemTotal += Number(ph.plannedQty || 0);
+    });
+    return { name: it.skuName || it.skuCode || '', byCol, itemTotal };
+  });
+  const colTotal = (key) => rows.reduce((s, r) => s + (r.byCol[key] || 0), 0);
+  const grand = rows.reduce((s, r) => s + r.itemTotal, 0);
+
+  if (!columns.length || !rows.length) {
+    doc.fillColor(MUTED).font('Helvetica-Oblique').fontSize(10).text('No planned dispatches in this schedule yet.', L, y, { width: W });
+    doc.fillColor('#000');
+    return;
+  }
+
+  // ── Table geometry ──
+  const dateW = 92;
+  const totalW = 64;
+  const skuCount = rows.length;
+  const skuW = (W - dateW - totalW) / skuCount;
+  const colX = (i) => L + dateW + i * skuW; // left x of SKU column i
+  const totalX = L + dateW + skuCount * skuW;
+
+  // Header height fits the longest wrapped SKU name.
+  doc.font('Helvetica-Bold').fontSize(7.5);
+  let nameH = 8;
+  rows.forEach((r) => { nameH = Math.max(nameH, doc.heightOfString(r.name, { width: skuW - 8, align: 'center' })); });
+  const headH = Math.max(24, nameH + 12);
+  const rowH = 26;
+  const footH = 22;
+
+  const drawHead = (yy) => {
+    doc.rect(L, yy, W, headH).fill(NAVY2);
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7.5);
+    doc.text('DISPATCH DATE', L + 6, yy + (headH - 8) / 2, { width: dateW - 10 });
+    rows.forEach((r, i) => doc.text(r.name, colX(i) + 4, yy + 6, { width: skuW - 8, align: 'center' }));
+    doc.text('TOTAL PER DATE', totalX + 4, yy + (headH - 16) / 2, { width: totalW - 8, align: 'center' });
+    doc.fillColor(INK);
+    return yy + headH;
   };
 
-  let y = doc.y;
-  drawHeadRow(y);
-  y += 20;
-  let grand = 0;
-  doc.font('Helvetica').fontSize(9.5);
-  phases.forEach((p) => {
-    grand += p.total;
-    p.rows.forEach((r, idx) => {
-      if (y > 760) { doc.addPage(); y = 60; drawHeadRow(y); y += 20; doc.font('Helvetica').fontSize(9.5); }
-      doc.text(idx === 0 ? String(p.phaseNo) : '', cols.ph, y);
-      doc.text(idx === 0 ? planDate(p.date) : '', cols.date, y);
-      doc.text(`${r.skuName || r.skuCode || ''}`, cols.sku, y, { width: cols.qty - cols.sku - 8 });
-      doc.text(planNum(r.qty), cols.qty, y, { width: 80, align: 'right' });
-      y += 18;
-    });
-    // Phase subtotal
+  // Vertical grid lines for one row band.
+  const drawVerticals = (yy, h) => {
+    doc.strokeColor(LINE).lineWidth(0.7);
+    doc.moveTo(L + dateW, yy).lineTo(L + dateW, yy + h).stroke();
+    for (let i = 1; i <= skuCount; i += 1) doc.moveTo(colX(i), yy).lineTo(colX(i), yy + h).stroke();
+    doc.lineWidth(1);
+  };
+
+  y = drawHead(y);
+
+  columns.forEach((col, ci) => {
+    if (y + rowH > bottom - 90) { doc.addPage(); y = doc.page.margins.top; y = drawHead(y); }
+    if (ci % 2 === 1) doc.rect(L, y, W, rowH).fill(SOFT);
+    doc.rect(L, y, W, rowH).strokeColor(LINE).lineWidth(0.7).stroke();
+    doc.lineWidth(1);
+    // Date + (Dispatch N)
+    const isUn = col.key === 'UNSCHEDULED';
+    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(9).text(isUn ? 'Unscheduled' : planDate(col.date), L + 6, y + 5, { width: dateW - 10 });
+    if (!isUn) doc.fillColor(MUTED).font('Helvetica').fontSize(7).text(`(${col.label})`, L + 6, y + 16, { width: dateW - 10 });
+    // Quantities
     doc.font('Helvetica-Bold').fontSize(9);
-    doc.moveTo(L, y - 3).lineTo(R, y - 3).stroke();
-    doc.text(`Phase ${p.phaseNo} total`, cols.sku, y);
-    doc.text(planNum(p.total), cols.qty, y, { width: 60, align: 'right' });
-    doc.font('Helvetica').fontSize(9.5);
-    y += 22;
+    rows.forEach((r, i) => {
+      const v = r.byCol[col.key] || 0;
+      doc.fillColor(v ? INK : '#b6c0d4').text(v ? planNum(v) : '-', colX(i) + 2, y + (rowH - 10) / 2, { width: skuW - 4, align: 'center' });
+    });
+    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(9).text(planNum(colTotal(col.key)), totalX + 2, y + (rowH - 10) / 2, { width: totalW - 4, align: 'center' });
+    drawVerticals(y, rowH);
+    y += rowH;
   });
-  if (!phases.length) { doc.font('Helvetica-Oblique').fontSize(10).text('No planned phases in this dispatch schedule.', L, y); y += 20; }
 
-  // Grand total
-  doc.moveTo(L, y).lineTo(R, y).stroke();
-  y += 8;
-  doc.font('Helvetica-Bold').fontSize(11);
-  doc.text('Total Planned Quantity', cols.sku, y);
-  doc.text(`${planNum(grand)} pcs`, cols.qty, y, { width: 100, align: 'right' });
+  // ── Total Per SKU row ──
+  if (y + footH > bottom - 80) { doc.addPage(); y = doc.page.margins.top; y = drawHead(y); }
+  doc.rect(L, y, W, footH).fill(SOFT);
+  doc.rect(L, y, W, footH).strokeColor(LINE).lineWidth(0.7).stroke();
+  doc.lineWidth(1);
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(8).text('TOTAL PER SKU', L + 6, y + 7, { width: dateW - 10 });
+  doc.fontSize(9);
+  rows.forEach((r, i) => doc.fillColor(NAVY).text(planNum(r.itemTotal), colX(i) + 2, y + 6, { width: skuW - 4, align: 'center' }));
+  doc.rect(totalX, y, totalW, footH).fill(NAVY);
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(9).text(planNum(grand), totalX + 2, y + 6, { width: totalW - 4, align: 'center' });
+  drawVerticals(y, footH);
+  y += footH + 14;
 
-  // Footer
-  doc.font('Helvetica').fontSize(8).fillColor('#666')
-    .text(`Generated by ${env.COMPANY_NAME || 'Ambika Global'} on ${planDate(new Date())} · Dispatch Planning Execution System`, L, 800, { align: 'center', width: R - L });
+  // ── Grand-total bar ──
+  const barH = 30;
+  if (y + barH > bottom - 30) { doc.addPage(); y = doc.page.margins.top; }
+  doc.rect(L, y, W, barH).fill(NAVY);
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(11).text('TOTAL PLANNED QUANTITY', L + 14, y + 10);
+  doc.fontSize(14).text(`${planNum(grand)} pcs`, R - 170, y + 8, { width: 156, align: 'right' });
+  y += barH + 12;
+
+  // ── Note + footer ──
+  doc.fillColor(MUTED).font('Helvetica').fontSize(8)
+    .text('This dispatch plan is indicative and subject to confirmation. Quantities and dates may be revised on mutual agreement.', L, y, { width: W });
+  doc.fillColor('#9aa4b8').font('Helvetica').fontSize(7.5)
+    .text(`Generated by ${companyName()} on ${planDate(new Date())} · Dispatch Planning Execution System`, L, bottom - 12, { align: 'center', width: W });
   doc.fillColor('#000');
 };
 
 export const pdfService = {
-  /** Generate the dispatch-plan PDF as an in-memory Buffer (for email attach). */
+  /** Generate the dispatch-plan PDF as an in-memory Buffer (for email attach).
+   *  Switches to landscape when there are many SKU columns so the transposed
+   *  "By Date" grid stays readable. */
   async generateDispatchPlanBuffer(scheduleData) {
     return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ margin: 50, size: 'A4' });
+      const skuCount = (scheduleData?.items || []).length;
+      const doc = new PDFDocument({ margin: 40, size: 'A4', layout: skuCount > 6 ? 'landscape' : 'portrait' });
       const chunks = [];
       doc.on('data', (c) => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
