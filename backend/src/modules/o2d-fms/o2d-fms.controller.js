@@ -88,6 +88,18 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('Checklist updated', process));
   }),
 
+  setConsignmentPayment: asyncHandler(async (req, res) => {
+    const consignments = await o2dFmsService.setConsignmentPayment(
+      req.params.id, req.body, req.user);
+    res.json(ApiResponse.ok('Payment status saved', consignments));
+  }),
+
+  setChecklistProof: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.setChecklistProof(
+      req.params.id, req.params.stepCode, req.params.itemId, req.body, req.user, isPriv(req));
+    res.json(ApiResponse.ok(req.body.clear ? 'Proof removed' : 'Proof attached', process));
+  }),
+
   answerVerification: asyncHandler(async (req, res) => {
     const process = await o2dFmsService.answerVerification(
       req.params.id, req.params.stepCode, req.params.itemId, req.body.answer, req.body.remark, req.user, isPriv(req));

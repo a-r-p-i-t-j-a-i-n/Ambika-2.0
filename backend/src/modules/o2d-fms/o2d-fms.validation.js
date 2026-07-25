@@ -99,6 +99,25 @@ export const taskTemplateSchema = Joi.object({
 export const taskTemplateUpdateSchema = taskTemplateSchema.fork(['name'], (s) => s.optional());
 
 export const checklistToggleSchema = Joi.object({ done: Joi.boolean().required() });
+
+// Step 2.11 — per-challan payment status (received / not received + amount).
+export const consignmentPaymentSchema = Joi.object({
+  dcId:           objectId,
+  dcNumber:       Joi.string().trim().max(60).allow('', null),
+  outcome:        Joi.string().valid('PENDING', 'NOT_RECEIVED', 'RECEIVED').required(),
+  receivedAmount: Joi.number().min(0).default(0),
+  note:           Joi.string().max(500).allow('', null),
+}).or('dcId', 'dcNumber');
+
+// Per-item proof: add an uploaded file OR a pasted link (items keep a LIST, so this
+// is additive), or pass removeId to drop one specific proof.
+export const checklistProofSchema = Joi.object({
+  fileName: Joi.string().trim().max(300).allow('', null),
+  fileUrl:  Joi.string().trim().max(2000).allow('', null),
+  fileKey:  Joi.string().trim().max(500).allow('', null),
+  link:     Joi.string().trim().max(2000).allow('', null),
+  removeId: objectId,
+}).or('fileUrl', 'link', 'removeId');
 export const commentSchema = Joi.object({ text: Joi.string().trim().min(1).max(2000).required() });
 
 export const verificationAnswerSchema = Joi.object({

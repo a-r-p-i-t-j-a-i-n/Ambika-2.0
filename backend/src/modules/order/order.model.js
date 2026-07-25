@@ -72,6 +72,23 @@ const salesOrderSchema = new mongoose.Schema({
     index: true,
   },
 
+  // ── Cancellation (status = CANCELLED) — kept as an audit trail so the reason
+  // the customer pulled the order, and who recorded it, is never lost. ──
+  cancelReason: { type: String, default: '', trim: true, maxlength: 500 },
+  cancelledAt:  { type: Date, default: null },
+  cancelledBy:  { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
+  // ── Amendment log — the customer revising a PO (e.g. Dome Jar 100 → 2000) is a
+  // normal event; each revision is appended here so the original order and every
+  // change (who / when / why) stay auditable. ──
+  revisionNo: { type: Number, default: 0 },
+  amendments: [new mongoose.Schema({
+    at:       { type: Date, default: Date.now },
+    byName:   { type: String, default: null },
+    reason:   { type: String, default: '', trim: true, maxlength: 500 },
+    changes:  [{ type: String }], // human-readable: "Dome Jar (DJ1500-204): 100 → 2000 pcs"
+  }, { _id: false })],
+
   items: [orderItemSchema],
 
   // ── O2D Workflow Steps (13 Steps) ───────────────────────
@@ -142,12 +159,18 @@ salesOrderSchema.pre('save', function (next) {
     this.totalBalanceQty    = this.items.reduce((s, i) => s + (i.balanceQty || 0), 0);
   }
 
-  // Auto-determine order status based on dispatch progress
-  if (this.totalOrderQty > 0 && this.totalBalanceQty <= 0) {
-    this.status = SO_STATUS.COMPLETED;
-  } else if (this.totalDispatchedQty > 0 && this.totalBalanceQty > 0) {
-    if (this.status === SO_STATUS.RECEIVED) {
-      this.status = SO_STATUS.IN_PROGRESS;
+  // Auto-determine order status based on dispatch progress.
+  // CANCELLED / SHORT_CLOSED are TERMINAL states a human deliberately set — the
+  // derived status must never override them (otherwise cancelling an order whose
+  // balance is 0 would silently flip it straight back to COMPLETED).
+  const terminalStatus = [SO_STATUS.CANCELLED, SO_STATUS.SHORT_CLOSED].includes(this.status);
+  if (!terminalStatus) {
+    if (this.totalOrderQty > 0 && this.totalBalanceQty <= 0) {
+      this.status = SO_STATUS.COMPLETED;
+    } else if (this.totalDispatchedQty > 0 && this.totalBalanceQty > 0) {
+      if (this.status === SO_STATUS.RECEIVED) {
+        this.status = SO_STATUS.IN_PROGRESS;
+      }
     }
   }
 

@@ -140,6 +140,13 @@ export const getSkuLookup = async (query = {}) => {
     filter.clientId = { $in: [null, undefined] };
   }
 
+  // Party-scoped picker (Sales Order punching) — show the SKUs LINKED to this
+  // client plus the universal/unlinked ones, but never another client's items.
+  // ($in with null also matches docs where clientId was never set.)
+  else if (query.clientId) {
+    filter.clientId = { $in: [query.clientId, null] };
+  }
+
   return Sku.find(filter)
     .select(
       'name code itemType category pcsPerBox weightPerPc weightPerBox unit aliases ' +

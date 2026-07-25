@@ -465,6 +465,11 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       payment: {
         has: !!pay, status: pay?.confirmation?.status || (pay ? 'PENDING' : null),
         confirmed: pay?.confirmation?.status === 'DONE', received: Number(pay?.confirmation?.receivedAmount || 0),
+        // Explicit doer-recorded outcome (PENDING | NOT_RECEIVED | RECEIVED) + note,
+        // so the task/tracker can show "Not received" as a real state, not a blank.
+        outcome: pay?.confirmation?.outcome || 'PENDING',
+        note: pay?.confirmation?.note || '',
+        receivedDate: pay?.confirmation?.receivedDate || null,
       },
       transport: { receiptStatus: tb?.receipt?.status || null, paymentStatus: tb?.payment?.status || null },
     };
@@ -827,6 +832,61 @@ export const o2dFmsService = {
       logger?.error?.(`[o2d-fms] recordConsignmentStep failed: ${err.message}`);
       return null;
     }
+  },
+
+  /**
+   * Step 2.11 — record/UPDATE this challan's payment status right on the task.
+   * A doer can immediately mark "Not received" (so the flow isn't stuck waiting for
+   * money), then come back later and flip it to "Received" + the amount. Everything
+   * lands on the challan's CLIENT_PAYMENT record (master data) and is auditable.
+   */
+  async setConsignmentPayment(processId, { dcId, dcNumber, outcome, receivedAmount, note }, actor) {
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    let resolvedDcId = dcId;
+    if (!resolvedDcId && dcNumber) {
+      const dc = await DeliveryChallan.findOne({ dcNumber }).select('_id').lean();
+      resolvedDcId = dc?._id || null;
+    }
+    if (!resolvedDcId) throw new AppError('Delivery challan not found for this payment.', 404);
+    const out = ['PENDING', 'NOT_RECEIVED', 'RECEIVED'].includes(outcome) ? outcome : 'PENDING';
+    const received = out === 'RECEIVED' ? Math.max(0, Number(receivedAmount || 0)) : 0;
+
+    // One CLIENT_PAYMENT row per challan — upsert so re-visiting just updates it.
+    let pay = await Payment.findOne({ dcId: resolvedDcId, type: PAYMENT_TYPE.CLIENT_PAYMENT });
+    if (!pay) {
+      pay = new Payment({
+        dcId: resolvedDcId, dcNumber: dcNumber || null,
+        partyName: process.partyName || null, type: PAYMENT_TYPE.CLIENT_PAYMENT,
+      });
+    }
+    pay.confirmation = {
+      ...(pay.confirmation || {}),
+      outcome: out,
+      receivedAmount: received,
+      receivedDate: out === 'RECEIVED' ? new Date() : null,
+      // The FMS step is "done" for this challan only when money is actually in.
+      status: out === 'RECEIVED' ? STEP_STATUS.DONE : STEP_STATUS.PENDING,
+      note: note || '',
+      actual: new Date(),
+      updatedByName: actor?.name || actor?.fullName || null,
+    };
+    await pay.save();
+
+    // Log who/when on the challan's 2.11 for the audit trail (DONE if received,
+    // otherwise a recorded "not received" acknowledgement kept as PENDING).
+    await this.recordConsignmentStep({
+      salesOrderId: process.salesOrderId, soNumber: process.soNumber,
+      dcId: resolvedDcId, dcNumber, stepCode: '2.11', actor,
+      status: out === 'RECEIVED' ? 'DONE' : STEP_STATUS.PENDING,
+    });
+    process.activityTimeline.push({
+      action: 'CONSIGNMENT_PROGRESS',
+      description: `2.11 · ${dcNumber || 'challan'} payment ${out === 'RECEIVED' ? `received ₹${received}` : out.toLowerCase().replace('_', ' ')}`,
+      actorId: actor?._id || null,
+    });
+    await process.save();
+    return computeConsignments(process.soNumber, process.consignmentLog || []);
   },
 
   // ── Doer actions ──────────────────────────────────────────────────────────
@@ -1205,18 +1265,7 @@ export const o2dFmsService = {
         if (!isOwner && !isBuddy) continue;
         const def = defMap.get(s.stepCode);
         const checklist = s.checklist || [];
-
-        // Is a delivery challan still pending THIS step? If so the task stays
-        // actionable for that challan, and links straight to it (?dc=), even after
-        // the shared step was marked done for an earlier challan.
-        const perKey = stepActionKeysOf(s).find((k) => PER_CONSIGNMENT_ACTIONS.includes(k));
-        const perList = (perKey && consignments?.length)
-          ? consignments.filter((c) => consignmentStepDone(perKey, c) === false) : [];
-        const pendingCons = perList[0] || null;
-
-        const status = pendingCons ? O2D_STEP_STATUS.IN_PROGRESS : s.status;
-        const isDone = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED].includes(status);
-        tasks.push({
+        const base = {
           processId: p._id,
           salesOrderId: p.salesOrderId,
           soNumber: p.soNumber,
@@ -1227,22 +1276,57 @@ export const o2dFmsService = {
           tool: def?.tool || null,
           description: s.instructions || def?.description || '',
           asBuddy: isBuddy && !isOwner,
-          status,
-          // The pending challan this task should open on (My Tasks links via ?dc=).
-          dcNumber: pendingCons?.dcNumber || null,
-          pendingConsignments: perList.length,
-          consignmentTotal: (perKey && consignments) ? consignments.length : 0,
           requiresLink: s.requiresLink != null ? !!s.requiresLink : !!def?.requiresLink,
           requiresAttachment: !!def?.requiresAttachment,
           checklistTotal: checklist.length,
-          checklistDone: checklist.filter((c) => c.done).length,
-          planned: s.planned,
-          completedAt: s.actual,
-          delayMins: s.delayMins || 0,
           dispatchProgress: s.dispatchProgress || null, // phased dispatch: "1,000 / 5,000"
           executionProgress: s.executionProgress || null, // consignment-gated: "2 / 3 invoiced"
-          isOverdue: !isDone && !!(s.planned && new Date(s.planned) < new Date()),
-        });
+          delayMins: s.delayMins || 0,
+        };
+
+        const perKey = stepActionKeysOf(s).find((k) => PER_CONSIGNMENT_ACTIONS.includes(k));
+
+        if (perKey && consignments?.length) {
+          // ── ONE ROW PER DELIVERY CHALLAN ──────────────────────────────────
+          // A post-dispatch step recurs per challan; each is a task in its own right,
+          // completed INDEPENDENTLY and OUT OF ORDER (a later dispatch can be delivered
+          // before an earlier one). So My Tasks lists each challan as its own row —
+          // scoped via ?dc — instead of one "2/2 challans" line the doer can't split.
+          for (const c of consignments) {
+            const perDone = consignmentStepDone(perKey, c) === true;
+            const status = perDone ? O2D_STEP_STATUS.DONE : O2D_STEP_STATUS.IN_PROGRESS;
+            const doneAt = c.log?.[s.stepCode]?.doneAt || null;
+            tasks.push({
+              ...base,
+              status,
+              dcNumber: c.dcNumber,
+              consignmentLabel: `${c.dcNumber}${c.phaseNo ? ` · ${c.phaseNo}` : ''}`,
+              consignmentQty: Number(c.qty || 0),
+              perConsignment: true,
+              consignmentTotal: consignments.length,
+              // No per-challan checklist storage — a challan's items read as done only
+              // once its stage is done (the action IS the per-challan completion).
+              checklistDone: perDone ? checklist.length : 0,
+              planned: s.planned,
+              completedAt: doneAt,
+              isOverdue: !perDone && !!(s.planned && new Date(s.planned) < new Date()),
+            });
+          }
+        } else {
+          // Spine / dispatch / non-recurring step — one row as before.
+          const status = s.status;
+          const isDone = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED].includes(status);
+          tasks.push({
+            ...base,
+            status,
+            dcNumber: null,
+            perConsignment: false,
+            checklistDone: checklist.filter((c) => c.done).length,
+            planned: s.planned,
+            completedAt: s.actual,
+            isOverdue: !isDone && !!(s.planned && new Date(s.planned) < new Date()),
+          });
+        }
       }
     }
     // Actionable first (pending / in-progress, most overdue), completed after.
@@ -1308,6 +1392,56 @@ export const o2dFmsService = {
       process.activityTimeline.push({
         action: done ? 'CHECKLIST_TICKED' : 'CHECKLIST_UNTICKED',
         description: `${stepCode} · ${item.text}`,
+        actorId: user?._id || null,
+      });
+      await process.save();
+      const defMap = await loadDefMap();
+      return enrichSteps(process, defMap);
+    });
+  },
+
+  /**
+   * Attach (or clear) the proof on ONE checklist item — an uploaded file or a
+   * pasted link. This is what backs each individual tick, so a completed step
+   * carries item-by-item evidence rather than one undifferentiated pile.
+   */
+  async setChecklistProof(processId, stepCode, itemId, { fileName, fileUrl, fileKey, link, removeId }, user, privileged = false) {
+    return withVersionRetry(async () => {
+      const process = await O2DProcess.findById(processId);
+      if (!process) throw new AppError('O2D process not found', 404);
+      const step = process.steps.find((s) => s.stepCode === stepCode);
+      if (!step) throw new AppError(`Step '${stepCode}' not found`, 404);
+      assertCanAct(step, user, privileged);
+      const item = step.checklist.id(itemId);
+      if (!item) throw new AppError('Checklist item not found', 404);
+      if (!Array.isArray(item.proofs)) item.proofs = [];
+
+      if (removeId) {
+        const before = item.proofs.length;
+        item.proofs = item.proofs.filter((p) => String(p._id) !== String(removeId));
+        if (item.proofs.length === before) throw new AppError('Proof not found', 404);
+        // Last piece of evidence withdrawn → the tick it backed can't stand any more,
+        // unless the whole step has already been signed off (don't rewrite history).
+        if (!item.proofs.length && item.done && !['DONE', 'DELAYED'].includes(step.status)) {
+          item.done = false;
+          item.doneBy = null; item.doneByName = null; item.doneAt = null;
+        }
+      } else {
+        if (!fileUrl && !link) throw new AppError('Attach a file or paste a link as proof.', 400);
+        // Additive: more documents can always be added to an item — including after
+        // it's been ticked or the step completed.
+        item.proofs.push({
+          fileName: fileName || null,
+          fileUrl: fileUrl || null,
+          fileKey: fileKey || null,
+          link: link || null,
+          at: new Date(),
+          byName: user?.name || null,
+        });
+      }
+      process.activityTimeline.push({
+        action: 'CHECKLIST_PROOF',
+        description: `${stepCode} · proof ${removeId ? 'removed from' : 'added to'} "${item.text}"`,
         actorId: user?._id || null,
       });
       await process.save();

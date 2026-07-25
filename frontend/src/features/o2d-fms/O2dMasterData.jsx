@@ -18,6 +18,7 @@ import { useGetChallansQuery, useGetSchedulesQuery } from '../../store/api/dispa
 import { useGetSalesInvoicesQuery } from '../../store/api/salesInvoiceApi';
 import { useGetPaymentsQuery, useGetTransportBillsQuery } from '../../store/api/o2dFulfillmentApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
+import { O2D } from './o2dTheme';
 import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
 import { actionLinkMeta, resolveEntityLink, TRIGGER_TO_ACTION } from './actionLinks';
 import { exportRowsToExcel, printTablePdf } from '../../utils/exportMasterData';
@@ -268,27 +269,34 @@ const LogLine = ({ icon: Icon, children }) => (
   </Stack>
 );
 
-/** Inline "connected records" chips shown in each row — click to open the record. */
+/** Connected records → ONE compact clickable link on a single line (extras collapse
+ *  to "+N"), so a row with many connected records can't grow tall or overlap. The
+ *  full list is always available in the row's "Log" detail. */
 const LinkChips = ({ links }) => {
   if (!links?.length) return <Typography variant="caption" color="text.disabled">—</Typography>;
+  const first = links[0];
+  const extra = links.length - 1;
   return (
-    <Stack direction="row" spacing={0.5} flexWrap="wrap" rowGap={0.5}>
-      {links.map((l) => (
-        <Tooltip key={l.key} title={l.doneByName ? `${l.doneByName}${l.doneAt ? ` · ${dd(l.doneAt)}` : ''}` : (l.to ? 'Open record' : 'Not done yet')}>
-          <span>
-            <Chip
-              size="small" label={l.label}
-              icon={<ExternalLink size={11} />}
-              clickable={!!l.to}
-              component={l.to ? RouterLink : 'div'}
-              to={l.to || undefined}
-              sx={{ height: 22, fontSize: '0.66rem', fontWeight: 600,
-                bgcolor: (t) => alpha(l.doneByName ? t.palette.success.main : t.palette.primary.main, 0.1),
-                '& .MuiChip-icon': { ml: '4px' } }}
-            />
-          </span>
+    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'nowrap', minWidth: 0 }}>
+      <Tooltip title={`${first.label}${first.doneByName ? ` · ${first.doneByName}${first.doneAt ? ` · ${dd(first.doneAt)}` : ''}` : (first.to ? ' · open record' : ' · not done yet')}`}>
+        {first.to ? (
+          <Link component={RouterLink} to={first.to}
+            sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, minWidth: 0, maxWidth: 170,
+              fontSize: '0.72rem', fontWeight: 700, textDecoration: 'none',
+              color: (t) => (first.doneByName ? t.palette.success.main : t.palette.primary.main),
+              '&:hover': { textDecoration: 'underline' } }}>
+            <ExternalLink size={11} style={{ flexShrink: 0 }} />
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{first.label}</Box>
+          </Link>
+        ) : (
+          <Typography variant="caption" noWrap sx={{ maxWidth: 170, color: 'text.secondary' }}>{first.label}</Typography>
+        )}
+      </Tooltip>
+      {extra > 0 && (
+        <Tooltip title={links.slice(1).map((l) => l.label).join(', ')}>
+          <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', flexShrink: 0 }}>+{extra}</Typography>
         </Tooltip>
-      ))}
+      )}
     </Stack>
   );
 };
@@ -300,7 +308,7 @@ const ConnectedCell = ({ step, proc }) => {
   const emails = step?.emailLog?.length || 0;
   if (!links.length && !atts && !emails) return <Typography variant="caption" color="text.disabled">—</Typography>;
   return (
-    <Stack direction="row" spacing={0.5} flexWrap="wrap" rowGap={0.5} alignItems="center">
+    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexWrap: 'nowrap', overflow: 'hidden', maxWidth: '100%' }}>
       <LinkChips links={links} />
       {atts > 0 && (
         <Tooltip title={`${atts} attachment${atts > 1 ? 's' : ''}`}>
@@ -700,26 +708,25 @@ const O2dMasterData = () => {
   const doPdf = () => printTablePdf({ title: activeTab?.label ? `O2D — ${activeTab.label}` : 'O2D Master Data', subtitle: filterSummary, columns, rows, displayVal });
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', overflowX: 'hidden', maxWidth: '100%' }}>
-      {/* Hero (compact) */}
-      <Box sx={{ color: '#fff', px: { xs: 2, md: 3 }, pt: { xs: 1.75, md: 2 }, pb: { xs: 2.5, md: 3 },
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)' }}>
-        <Stack direction="row" spacing={1.5} alignItems="center">
-          <Box sx={{ width: 36, height: 36, borderRadius: 2, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <Database size={18} color="#fff" />
+    <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas, overflowX: 'hidden', maxWidth: '100%' }}>
+      {/* Flush warm top bar */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <Box sx={{ width: 30, height: 30, borderRadius: '6px', display: 'grid', placeItems: 'center', bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand }}>
+            <Database size={16} />
           </Box>
-          <Box>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.05rem', md: '1.2rem' }, fontWeight: 800, lineHeight: 1.1 }}>O2D Master Data</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.72rem' }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ color: O2D.ink, fontSize: { xs: '1rem', md: '1.1rem' }, fontWeight: 800, lineHeight: 1.2 }}>O2D Master Data</Typography>
+            <Typography noWrap sx={{ color: O2D.sub, fontSize: '0.72rem' }}>
               Every step · who did what, when · connected records &amp; full audit log. One tab per O2D step.
             </Typography>
           </Box>
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -1.5, md: -1.75 }, position: 'relative', pb: 6, minWidth: 0, overflowX: 'hidden' }}>
+      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, pb: 6, minWidth: 0, overflowX: 'hidden' }}>
         {/* ── GLOBAL filters (apply to every step tab) + export ── */}
-        <Paper sx={{ borderRadius: 3, p: 1.25, mb: 1.5, border: `1px solid ${theme.palette.divider}` }}>
+        <Paper elevation={0} sx={{ borderRadius: '8px', p: 1, mb: 1.25, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
             <Chip label="FILTERS" size="small" sx={{ fontWeight: 800, letterSpacing: '0.06em', bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.dark' }} />
             <Autocomplete
@@ -759,14 +766,14 @@ const O2dMasterData = () => {
           </Typography>
         </Paper>
 
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
+        <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Tabs value={tab} onChange={(_, v) => switchTab(v)} variant="scrollable" scrollButtons="auto"
-            sx={{ borderBottom: `1px solid ${theme.palette.divider}`, minHeight: 36, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.72rem', minHeight: 36, py: 0.25, minWidth: 'auto', px: 1.5 } }}>
+            sx={{ borderBottom: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt, minHeight: 36, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.72rem', minHeight: 36, py: 0.25, minWidth: 'auto', px: 1.5 } }}>
             {TABS.map((t) => <Tab key={t.key} value={t.key} label={t.label} />)}
           </Tabs>
 
           {/* Compact toolbar: search · status · count · view */}
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', borderBottom: `1px solid ${theme.palette.divider}` }}>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', borderBottom: `1px solid ${O2D.line}` }}>
             <TextField
               size="small" value={search} onChange={(e) => setSearch(e.target.value)}
               placeholder="Search…"
@@ -805,7 +812,7 @@ const O2dMasterData = () => {
                 pageSizeOptions={[25, 50, 100]} disableRowSelectionOnClick
                 onCellClick={(p) => { if (p.field !== '__links' && p.field !== '__log') setLogRow(p.row); }}
                 sx={{ border: 0, cursor: 'pointer', maxWidth: '100%',
-                  '& .MuiDataGrid-columnHeaders': { bgcolor: alpha(theme.palette.primary.main, 0.04) } }}
+                  '& .MuiDataGrid-columnHeaders': { bgcolor: O2D.surfaceAlt, borderBottom: `1px solid ${O2D.line}` }, '& .MuiDataGrid-cell': { borderColor: O2D.lineSoft }, '& .MuiDataGrid-row:hover': { bgcolor: O2D.surfaceAlt } }}
               />
             </Box>
           )}
@@ -813,9 +820,9 @@ const O2dMasterData = () => {
           {/* ── Sheet view (dense spreadsheet) ── */}
           {view === 'sheet' && (
             <Box sx={{ px: 1.5, pb: 1.5, overflowX: 'auto' }}>
-              <Table size="small" sx={{ minWidth: 720, '& td, & th': { border: `1px solid ${theme.palette.divider}`, fontSize: '0.78rem', px: 1, py: 0.6, whiteSpace: 'nowrap' } }}>
+              <Table size="small" sx={{ minWidth: 720, '& td, & th': { border: `1px solid ${O2D.lineSoft}`, fontSize: '0.78rem', px: 1, py: 0.6, whiteSpace: 'nowrap' }, '& tbody tr:hover': { bgcolor: O2D.surfaceAlt } }}>
                 <TableHead>
-                  <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.06) }}>
+                  <TableRow sx={{ bgcolor: O2D.surfaceAlt, '& th': { fontWeight: 800, fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: O2D.sub } }}>
                     <TableCell sx={{ fontWeight: 800 }}>#</TableCell>
                     {columns.map((c) => <TableCell key={c.field} sx={{ fontWeight: 800 }}>{c.headerName}</TableCell>)}
                     <TableCell sx={{ fontWeight: 800 }}>Connected</TableCell>

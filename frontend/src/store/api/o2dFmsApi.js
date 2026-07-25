@@ -94,6 +94,26 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       },
       invalidatesTags: ['O2DMyTasks'],
     }),
+    // Step 2.11 — record/update a delivery challan's payment status.
+    setConsignmentPayment: builder.mutation({
+      query: ({ id, ...body }) => ({
+        url: `/o2d-fms/processes/${id}/consignment-payment`,
+        method: 'PATCH',
+        body,
+      }),
+      invalidatesTags: (r, e, { id }) => [
+        { type: 'O2DProcess', id }, { type: 'O2DProcess', id: `consignments-${id}` }, 'O2DMyTasks',
+      ],
+    }),
+    // Attach / clear the proof (file or link) on ONE checklist item.
+    setChecklistProof: builder.mutation({
+      query: ({ id, stepCode, itemId, ...body }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/checklist/${itemId}/proof`,
+        method: 'PATCH',
+        body,
+      }),
+      invalidatesTags: (r, e, { id }) => [{ type: 'O2DProcess', id }, 'O2DMyTasks'],
+    }),
     // Mark one of a step's connected action-links as done (after the doer finishes
     // that screen). Does not complete the step — several links can be attached.
     markActionDone: builder.mutation({
@@ -242,6 +262,8 @@ export const {
   useReorderStepDefinitionsMutation,
   useDeleteStepDefinitionMutation,
   useToggleChecklistItemMutation,
+  useSetChecklistProofMutation,
+  useSetConsignmentPaymentMutation,
   useMarkActionDoneMutation,
   useAnswerVerificationMutation,
   useFillFormFieldMutation,

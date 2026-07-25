@@ -4,11 +4,12 @@ import {
   Box, Paper, Stack, Typography, alpha, useTheme, ToggleButtonGroup, ToggleButton,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, InputAdornment, MenuItem, Chip, Tooltip,
   Autocomplete, IconButton, Collapse, LinearProgress,
+  Dialog, DialogTitle, DialogContent, DialogActions, Button, Divider,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Activity, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, Truck, Clock,
-  ChevronDown, ChevronRight, X, Package, CalendarCheck, FileText,
+  ChevronDown, ChevronRight, X, Package, CalendarCheck, FileText, ArrowLeft,
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend,
@@ -16,6 +17,7 @@ import {
 import dayjs from 'dayjs';
 import { useGetPhaseMatrixQuery } from '../../store/api/dispatchControlApi';
 import BackButton from '../../components/BackButton';
+import { O2D } from '../o2d-fms/o2dTheme';
 
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
@@ -93,7 +95,10 @@ const OrderFocusPanel = ({ soNumber, phases, onClear }) => {
   const remaining = phases.reduce((s, r) => s + remainingOf(r), 0);
   const pct = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : 0;
   const chartData = phases.map((r) => ({
-    name: `${(r.skuName || '').split(' ')[0]} ${r.phaseNo}`,
+    // Full SKU name + phase — the old label kept only the first word ("Value P1"),
+    // which made the bars impossible to tell apart.
+    name: `${r.skuName || '—'} · ${r.phaseNo}`,
+    skuCode: r.skuCode,
     Planned: Number(r.plannedQty || 0),
     Actual: Number(r.actualQty || 0),
   }));
@@ -104,8 +109,8 @@ const OrderFocusPanel = ({ soNumber, phases, onClear }) => {
   }, [phases]);
 
   return (
-    <Paper variant="outlined" sx={{ borderRadius: 2.5, overflow: 'hidden' }}>
-      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ p: 1.5, bgcolor: alpha(BRAND, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
+    <Paper variant="outlined" sx={{ borderRadius: '8px', overflow: 'hidden', borderColor: O2D.line, bgcolor: O2D.surface }}>
+      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ p: 1.25, bgcolor: O2D.surfaceAlt, borderBottom: `1px solid ${O2D.line}` }}>
         <Box sx={{ width: 36, height: 36, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.12), color: BRAND }}><Package size={18} /></Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography sx={{ fontWeight: 800, color: BRAND_DK }}>{soNumber}</Typography>
@@ -123,21 +128,6 @@ const OrderFocusPanel = ({ soNumber, phases, onClear }) => {
           <Kpi label="Progress" value={`${pct}%`} color={BRAND} />
         </Stack>
         <LinearProgress variant="determinate" value={pct} sx={{ height: 8, borderRadius: 5, mb: 2, bgcolor: alpha(BRAND, 0.12), '& .MuiLinearProgress-bar': { bgcolor: '#0f766e' } }} />
-
-        <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>Planned vs Dispatched — by phase</Typography>
-        <Box sx={{ height: 250, mb: 1 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 6, right: 12, left: -12, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={alpha(theme.palette.text.primary, 0.08)} />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <RTooltip formatter={(v) => num(v)} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="Planned" fill={BRAND} radius={[4, 4, 0, 0]} maxBarSize={40} />
-              <Bar dataKey="Actual" fill="#0f766e" radius={[4, 4, 0, 0]} maxBarSize={40} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Box>
 
         {bySku.map(([sku, prs]) => (
           <Box key={sku} sx={{ mt: 1.5 }}>
@@ -194,8 +184,127 @@ const OrderFocusPanel = ({ soNumber, phases, onClear }) => {
             </Stack>
           </Box>
         ))}
+
+        {/* Chart LAST — the per-phase detail above is what the doer reads first;
+            the graph is the visual summary underneath it. */}
+        <Box sx={{ mt: 2, pt: 1.5, borderTop: `1px solid ${O2D.line}` }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1, fontSize: '0.8rem' }}>Planned vs Dispatched — by SKU &amp; phase</Typography>
+          <Box sx={{ height: 300 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 6, right: 12, left: -12, bottom: 72 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={O2D.line} />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: O2D.sub }} interval={0} angle={-30} textAnchor="end" height={80} />
+                <YAxis tick={{ fontSize: 10, fill: O2D.sub }} />
+                <RTooltip
+                  formatter={(v) => num(v)}
+                  labelFormatter={(label, payload) => {
+                    const code = payload?.[0]?.payload?.skuCode;
+                    return code ? `${label}  (${code})` : label;
+                  }}
+                  contentStyle={{ borderRadius: 6, border: `1px solid ${O2D.line}`, fontSize: 12 }}
+                />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Planned" fill={BRAND} radius={[3, 3, 0, 0]} maxBarSize={34} />
+                <Bar dataKey="Actual" fill="#0f766e" radius={[3, 3, 0, 0]} maxBarSize={34} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Box>
+        </Box>
       </Box>
     </Paper>
+  );
+};
+
+// One phase, explained in plain words: what was planned, what actually shipped and
+// when (each delivery challan), and what's still left. Opening this instead of
+// navigating away keeps the user in context.
+const RowDetailDialog = ({ row, onClose, onOpenOrder }) => {
+  const theme = useTheme();
+  if (!row) return null;
+  const planned = Number(row.plannedQty || 0);
+  const actual = Number(row.actualQty || 0);
+  const remaining = remainingOf(row);
+  const over = Math.max(0, actual - planned);
+  const pct = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : (actual > 0 ? 100 : 0);
+  const s = st(row.status);
+  const shipments = (row.shipments || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+  // +ve = shipped after the plan date (late), -ve = early.
+  const driftDays = (d) => (row.plannedDate && d
+    ? dayjs(d).startOf('day').diff(dayjs(row.plannedDate).startOf('day'), 'day') : null);
+  const driftText = (n) => (n == null ? '' : n === 0 ? 'on the planned date' : n > 0 ? `${n} day${n === 1 ? '' : 's'} late` : `${Math.abs(n)} day${Math.abs(n) === 1 ? '' : 's'} early`);
+
+  return (
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <DialogTitle sx={{ pb: 1 }}>
+        <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
+          <Chip size="small" label={row.phaseNo} sx={{ fontWeight: 800, bgcolor: alpha(BRAND, 0.1), color: BRAND }} />
+          <Typography sx={{ fontWeight: 800, color: BRAND_DK }}>{row.soNumber}</Typography>
+          <Chip size="small" label={s.label} sx={{ fontWeight: 700, bgcolor: alpha(s.color, 0.12), color: s.color }} />
+        </Stack>
+        <Typography variant="caption" color="text.secondary">
+          {row.partyName} · {row.skuName} ({row.skuCode})
+        </Typography>
+      </DialogTitle>
+      <DialogContent dividers>
+        {/* Headline numbers */}
+        <Stack direction="row" spacing={1.25} sx={{ mb: 1.25, flexWrap: 'wrap', rowGap: 1 }}>
+          <Kpi label="Planned" value={num(planned)} color={BRAND_DK} />
+          <Kpi label="Shipped" value={num(actual)} color="#0f766e" />
+          <Kpi label={over > 0 ? 'Extra sent' : 'Remaining'} value={over > 0 ? `+${num(over)}` : num(remaining)} color={over > 0 ? '#b45309' : (remaining > 0 ? '#b45309' : '#64748b')} />
+        </Stack>
+        <LinearProgress variant="determinate" value={pct} sx={{ height: 8, borderRadius: 5, mb: 2, bgcolor: alpha(BRAND, 0.12), '& .MuiLinearProgress-bar': { bgcolor: '#0f766e' } }} />
+
+        {/* Plan */}
+        <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.5 }}>What was planned</Typography>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.5, mb: 1.75, p: 1.25, borderRadius: 1.5, border: `1px solid ${theme.palette.divider}` }}>
+          <CalendarCheck size={15} color={BRAND} />
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>{num(planned)} pcs</Typography>
+          <Typography variant="body2" color="text.secondary">· due {dd(row.plannedDate)}</Typography>
+        </Stack>
+
+        {/* Actual */}
+        <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.5 }}>What actually shipped</Typography>
+        {shipments.length === 0 ? (
+          <Box sx={{ mt: 0.5, p: 1.5, borderRadius: 1.5, border: `1px dashed ${theme.palette.divider}`, textAlign: 'center' }}>
+            <Typography variant="body2" color="text.secondary">Nothing shipped against this phase yet.</Typography>
+          </Box>
+        ) : (
+          <Stack spacing={0.75} sx={{ mt: 0.5 }}>
+            {shipments.map((sh, i) => {
+              const dr = driftDays(sh.date);
+              return (
+                <Stack key={i} direction="row" alignItems="center" spacing={1} sx={{ p: 1.25, borderRadius: 1.5, border: `1px solid ${theme.palette.divider}`, flexWrap: 'wrap', rowGap: 0.5 }}>
+                  <Truck size={15} color="#0f766e" />
+                  <Typography variant="body2" sx={{ fontWeight: 800, color: '#0f766e' }}>{num(sh.qty)} pcs</Typography>
+                  <Typography variant="body2" color="text.secondary">on {dd(sh.date)}</Typography>
+                  {dr != null && (
+                    <Chip size="small" label={driftText(dr)}
+                      sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700,
+                        bgcolor: alpha(dr > 0 ? '#be123c' : '#0f766e', 0.1), color: dr > 0 ? '#be123c' : '#0f766e' }} />
+                  )}
+                  <Box sx={{ flex: 1 }} />
+                  {sh.invoiceNo && <Chip size="small" icon={<FileText size={11} />} label={sh.invoiceNo} sx={{ height: 20, fontSize: '0.65rem' }} />}
+                </Stack>
+              );
+            })}
+          </Stack>
+        )}
+
+        {/* Plain-words summary */}
+        <Divider sx={{ my: 1.75 }} />
+        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+          {remaining > 0
+            ? <>Planned <b>{num(planned)}</b>, shipped <b>{num(actual)}</b> — <b style={{ color: '#b45309' }}>{num(remaining)} still to go</b> on this phase.</>
+            : over > 0
+              ? <>Planned <b>{num(planned)}</b>, shipped <b>{num(actual)}</b> — <b style={{ color: '#b45309' }}>{num(over)} extra</b>, covering a shortfall carried in from an earlier phase.</>
+              : <>Fully shipped — planned <b>{num(planned)}</b>, shipped <b>{num(actual)}</b>.</>}
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => onOpenOrder(row)} sx={{ mr: 'auto' }}>Open order</Button>
+        <Button onClick={onClose} variant="contained">Close</Button>
+      </DialogActions>
+    </Dialog>
   );
 };
 
@@ -207,6 +316,8 @@ const PlanVsActualMaster = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [soFilter, setSoFilter] = useState(null);
   const [poFilter, setPoFilter] = useState(null);
+  // Clicking a row explains that phase in place — it no longer navigates away.
+  const [detailRow, setDetailRow] = useState(null);
 
   const { data, isLoading, isFetching } = useGetPhaseMatrixQuery();
   const rawRows = useMemo(() => data?.data || [], [data]);
@@ -242,6 +353,7 @@ const PlanVsActualMaster = () => {
   }, { planned: 0, actual: 0, pending: 0, delayed: 0 }), [rows]);
 
   const goOrder = (r) => navigate(`/orders?so=${encodeURIComponent(r.soNumber)}`);
+  const openDetail = (r) => setDetailRow(r);
 
   const gridColumns = [
     { field: 'soNumber', headerName: 'Order', minWidth: 150, flex: 1, renderCell: (p) => <Typography variant="body2" fontWeight={800} color={BRAND}>{p.value}</Typography> },
@@ -255,23 +367,46 @@ const PlanVsActualMaster = () => {
       renderCell: (p) => <Typography variant="body2" fontWeight={800} color={p.value > 0 ? '#0f766e' : 'text.disabled'}>{num(p.value)}</Typography> },
     { field: 'actualDate', headerName: 'Actual Date', width: 120, valueGetter: (v, r) => actualDateOf(r),
       renderCell: (p) => <Typography variant="body2" color={p.value === '—' ? 'text.disabled' : 'text.primary'}>{p.value}</Typography> },
-    { field: 'remaining', headerName: 'Remaining', width: 105, type: 'number', valueGetter: (v, r) => remainingOf(r),
-      renderCell: (p) => <Typography variant="body2" fontWeight={700} color={p.value > 0 ? '#b45309' : 'text.disabled'}>{p.value > 0 ? num(p.value) : '—'}</Typography> },
+    { field: 'remaining', headerName: 'Remaining', width: 125, type: 'number', valueGetter: (v, r) => remainingOf(r),
+      renderCell: (p) => {
+        if (p.value > 0) return <Typography variant="body2" fontWeight={700} color="#b45309">{num(p.value)}</Typography>;
+        // Shipped MORE than this phase's own plan — it absorbed a shortfall carried
+        // in from an earlier phase (FIFO). Label it so the row reads correctly.
+        const extra = Math.max(0, Number(p.row.actualQty || 0) - Number(p.row.plannedQty || 0));
+        if (extra > 0) {
+          return (
+            <Tooltip arrow title="Shipped more than this phase's plan — it covered a shortfall carried in from an earlier phase.">
+              <Chip size="small" label={`+${num(extra)} extra`}
+                sx={{ height: 20, fontSize: '0.65rem', fontWeight: 800, bgcolor: alpha('#b45309', 0.12), color: '#b45309' }} />
+            </Tooltip>
+          );
+        }
+        return <Typography variant="body2" color="text.disabled">—</Typography>;
+      } },
     { field: 'status', headerName: 'Status', width: 130, valueGetter: (v, r) => st(r.status).label,
       renderCell: (p) => <Chip size="small" label={p.value} sx={{ fontWeight: 800, bgcolor: alpha(st(p.row.status).color, 0.1), color: st(p.row.status).color }} /> },
   ];
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
+    <Box sx={{ p: { xs: 1.25, sm: 1.75 }, minHeight: '100vh', bgcolor: O2D.canvas }}>
       {/* Header + summary */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5} sx={{ mb: 2, px: 0.5, flexWrap: 'wrap', rowGap: 1 }}>
         <Stack direction="row" spacing={1.25} alignItems="center">
-          <BackButton iconOnly color="primary" sx={{ border: `1px solid ${alpha(BRAND, 0.25)}`, borderRadius: 2 }} />
-          <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.1), color: BRAND, border: `1px solid ${alpha(BRAND, 0.2)}` }}>
-            <Activity size={21} />
+          {/* While an order is focused, Back returns to the Plan vs Actual list —
+              it must NOT jump to whatever page came before (e.g. Actual Dispatch). */}
+          {soFilter ? (
+            <IconButton size="small" onClick={() => setSoFilter(null)} title="Back to Plan vs Actual"
+              sx={{ border: `1px solid ${O2D.line}`, borderRadius: '6px', color: O2D.body }}>
+              <ArrowLeft size={18} />
+            </IconButton>
+          ) : (
+            <BackButton iconOnly color="primary" sx={{ border: `1px solid ${O2D.line}`, borderRadius: '6px' }} />
+          )}
+          <Box sx={{ width: 32, height: 32, borderRadius: '6px', display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.1), color: BRAND }}>
+            <Activity size={18} />
           </Box>
           <Box>
-            <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.35rem' }, fontWeight: 800, color: BRAND_DK, lineHeight: 1.1 }}>Plan vs Actual</Typography>
+            <Typography sx={{ fontSize: { xs: '1.05rem', sm: '1.15rem' }, fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>Plan vs Actual</Typography>
             <Typography sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
               Every phase — what was planned, what actually shipped &amp; when, and what&apos;s still left.
             </Typography>
@@ -342,7 +477,7 @@ const PlanVsActualMaster = () => {
         {!soFilter && view === 'table' && (
           <Box sx={{ px: 1.5, pb: 1.5 }}>
             <DataGrid rows={rows} columns={gridColumns} getRowId={(r) => r.id} loading={isFetching || isLoading}
-              autoHeight density="compact" onRowClick={(p) => goOrder(p.row)}
+              autoHeight density="compact" onRowClick={(p) => openDetail(p.row)}
               initialState={{ pagination: { paginationModel: { pageSize: 25 } } }} pageSizeOptions={[25, 50, 100]}
               disableRowSelectionOnClick
               sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' }, '& .MuiDataGrid-columnHeaders': { bgcolor: alpha(BRAND, 0.04) } }} />
@@ -361,7 +496,7 @@ const PlanVsActualMaster = () => {
               </TableHead>
               <TableBody>
                 {rows.map((r, i) => (
-                  <TableRow key={r.id} hover sx={{ cursor: 'pointer' }} onClick={() => goOrder(r)}>
+                  <TableRow key={r.id} hover sx={{ cursor: 'pointer' }} onClick={() => openDetail(r)}>
                     <TableCell sx={{ color: 'text.disabled' }}>{i + 1}</TableCell>
                     {COLS.map((c) => (
                       <TableCell key={c.key} align={c.num ? 'right' : 'left'}>
@@ -382,7 +517,7 @@ const PlanVsActualMaster = () => {
             {rows.map((r) => {
               const s = st(r.status);
               return (
-                <Paper key={r.id} variant="outlined" onClick={() => goOrder(r)} sx={{ p: 1.5, borderRadius: 2, cursor: 'pointer', borderLeft: `4px solid ${s.color}`, '&:hover': { boxShadow: 3 } }}>
+                <Paper key={r.id} variant="outlined" onClick={() => openDetail(r)} sx={{ p: 1.5, borderRadius: 2, cursor: 'pointer', borderLeft: `4px solid ${s.color}`, '&:hover': { boxShadow: 3 } }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
                     <Box sx={{ minWidth: 0 }}>
                       <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
@@ -440,7 +575,7 @@ const PlanVsActualMaster = () => {
                   </Stack>
                   <Stack spacing={1}>
                     {group.map((r) => (
-                      <Paper key={r.id} variant="outlined" onClick={() => goOrder(r)} sx={{ p: 1.25, borderRadius: 2, cursor: 'pointer', borderLeft: `3px solid ${s.color}` }}>
+                      <Paper key={r.id} variant="outlined" onClick={() => openDetail(r)} sx={{ p: 1.25, borderRadius: 2, cursor: 'pointer', borderLeft: `3px solid ${s.color}` }}>
                         <Stack direction="row" justifyContent="space-between" alignItems="center">
                           <Typography sx={{ fontWeight: 800, fontSize: '0.78rem', color: BRAND_DK }}>{r.soNumber} · {r.phaseNo}</Typography>
                           {r.delayDays > 0 && <Chip size="small" label={`${r.delayDays}d`} sx={{ height: 16, fontSize: '0.58rem', fontWeight: 800, bgcolor: alpha('#be123c', 0.1), color: '#be123c' }} />}
@@ -459,6 +594,13 @@ const PlanVsActualMaster = () => {
           </Box>
         )}
       </Paper>
+
+      {/* Row click → explain this phase in place (plan → actual → what's left). */}
+      <RowDetailDialog
+        row={detailRow}
+        onClose={() => setDetailRow(null)}
+        onOpenOrder={(r) => { setDetailRow(null); goOrder(r); }}
+      />
     </Box>
   );
 };

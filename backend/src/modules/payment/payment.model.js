@@ -32,6 +32,14 @@ const paymentSchema = new mongoose.Schema({
     receivedDate:     { type: Date },
     receivedAmount:   { type: Number, default: 0 },
     status:           { type: String, enum: Object.values(STEP_STATUS), default: STEP_STATUS.PENDING },
+    // Explicit per-challan payment OUTCOME the doer records on step 2.11:
+    //  PENDING       — not looked at yet
+    //  NOT_RECEIVED  — checked, money not in yet (recorded so the flow isn't stuck;
+    //                  the doer revisits later to flip it to RECEIVED + amount)
+    //  RECEIVED      — money in (with receivedAmount)
+    outcome:          { type: String, enum: ['PENDING', 'NOT_RECEIVED', 'RECEIVED'], default: 'PENDING' },
+    note:             { type: String, default: '', trim: true, maxlength: 500 },
+    updatedByName:    { type: String, default: null },
     link:             { type: String },
     timeDelay:        { type: String },
   },

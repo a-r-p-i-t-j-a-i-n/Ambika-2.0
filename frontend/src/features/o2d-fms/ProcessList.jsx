@@ -2,11 +2,12 @@ import React, { useMemo, useState, useEffect } from 'react';
 import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
   Chip, LinearProgress, TextField, MenuItem, Skeleton, Button, InputAdornment,
-  ToggleButtonGroup, ToggleButton, TablePagination,
+  TablePagination, alpha, Menu,
 } from '@mui/material';
-import { Search, ArrowRight, Workflow, CheckCircle2, Clock, AlertTriangle, SlidersHorizontal, X, Plus } from 'lucide-react';
+import { Search, ArrowRight, Workflow, CheckCircle2, Clock, AlertTriangle, X, Plus, CalendarRange } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
+import { O2D } from './o2dTheme';
 
 // Status pill styles — tinted background + matching text/icon colour per state.
 const STATUS_STYLES = {
@@ -43,6 +44,15 @@ const PROGRESS_OPTS = [
   { value: 'inprogress', label: 'In progress (1–99%)' },
   { value: 'completed', label: 'Completed (100%)' },
 ];
+// Status filter as ONE dropdown (was four toggle buttons). `render` is the compact
+// value shown when closed; Overdue is red so it stands out even collapsed.
+const STATUS_FILTERS = [
+  { value: 'all',       key: 'all',       label: 'All',         render: 'All' },
+  { value: 'active',    key: 'active',    label: 'In progress', render: 'In progress' },
+  { value: 'overdue',   key: 'overdue',   label: 'Overdue',     render: <span style={{ color: '#dc2626', fontWeight: 700 }}>Overdue</span> },
+  { value: 'completed', key: 'completed', label: 'Completed',   render: 'Completed' },
+];
+
 const SORT_OPTS = [
   { value: 'newest', label: 'Newest first' },
   { value: 'oldest', label: 'Oldest first' },
@@ -65,6 +75,7 @@ const ProcessList = () => {
   const [progress, setProgress] = useState('all');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [dateAnchor, setDateAnchor] = useState(null); // Created-range popover anchor
   const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -135,81 +146,97 @@ const ProcessList = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2} flexWrap="wrap" gap={1}>
-        <Box>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Workflow size={20} />
-            <Typography variant="h5" sx={{ fontWeight: 800 }}>FMS Tracker</Typography>
-          </Stack>
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>Every order's flow, end to end — filter to find exactly what you need.</Typography>
-        </Box>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ width: { xs: '100%', sm: 'auto' } }}>
+    <Box sx={{ bgcolor: O2D.canvas, minHeight: '100vh' }}>
+      {/* Flush top bar — title + search + New Sales Order, hard against the sidebar */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
+        <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap>
+          <Box sx={{ p: 0.5, borderRadius: '6px', bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand, display: 'flex', flexShrink: 0 }}><Workflow size={16} /></Box>
+          <Box sx={{ minWidth: 0, mr: 'auto' }}>
+            <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>FMS Tracker</Typography>
+            <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub }}>Every order's flow, end to end — filter to find what you need.</Typography>
+          </Box>
           <TextField
             size="small" placeholder="Search SO / PO / party…" value={search}
-            onChange={(e) => setSearch(e.target.value)} sx={{ flex: 1, minWidth: { xs: 0, sm: 240 } }}
-            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> }}
+            onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: { xs: '100%', sm: 240 } }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} /></InputAdornment> }}
           />
-          {/* A new FMS starts by punching in a Sales Order — quick link to do that. */}
-          <Button variant="contained" size="small" startIcon={<Plus size={15} />}
-            onClick={() => navigate('/orders?new=1')} sx={{ whiteSpace: 'nowrap', fontWeight: 700 }}>
+          <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />}
+            onClick={() => navigate('/orders?new=1')} sx={{ whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '6px', bgcolor: O2D.brand, flexShrink: 0 }}>
             New Sales Order
           </Button>
         </Stack>
-      </Stack>
+      </Box>
 
-      {/* ── Filters ── */}
-      <Paper sx={{ p: 1.5, borderRadius: 3, mb: 2 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.25 }}>
-          <SlidersHorizontal size={15} />
-          <Typography variant="caption" sx={{ fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'text.secondary' }}>Filters</Typography>
-          <Box sx={{ flex: 1 }} />
-          <Typography variant="caption" color="text.secondary">
-            Showing <b>{filtered.length}</b> of {rows.length} order(s)
+      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+      {/* ── Filters — ONE line: status + date-range collapsed into dropdowns ── */}
+      <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          {/* Status — single dropdown (was 4 tabs) */}
+          <TextField select size="small" label="Status" value={status} onChange={(e) => setStatus(e.target.value)} sx={{ minWidth: 150 }}
+            SelectProps={{ renderValue: (v) => (STATUS_FILTERS.find((o) => o.value === v) || {}).render }}>
+            {STATUS_FILTERS.map((o) => (
+              <MenuItem key={o.value} value={o.value}>{o.label} ({counts[o.key]})</MenuItem>
+            ))}
+          </TextField>
+
+          <TextField select size="small" label="Party" value={party} onChange={(e) => setParty(e.target.value)} sx={{ minWidth: 130, flex: 1 }}>
+            <MenuItem value="">All parties</MenuItem>
+            {partyOptions.map((p) => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" label="Current step" value={step} onChange={(e) => setStep(e.target.value)} sx={{ minWidth: 140, flex: 1 }}>
+            <MenuItem value="">All steps</MenuItem>
+            {stepOptions.map((s) => <MenuItem key={s.code} value={s.code}>{s.code} · {s.name}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" label="Progress" value={progress} onChange={(e) => setProgress(e.target.value)} sx={{ minWidth: 120, flex: 1 }}>
+            {PROGRESS_OPTS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+          </TextField>
+
+          {/* Created — a single button that opens a From/To range popover on click */}
+          <Button size="small" variant="outlined" startIcon={<CalendarRange size={14} />}
+            onClick={(e) => setDateAnchor(e.currentTarget)}
+            sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', borderRadius: '6px', borderColor: (from || to) ? O2D.brand : O2D.line, color: (from || to) ? O2D.brand : O2D.body, whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {from || to ? `${from ? fmtDate(from) : '…'} → ${to ? fmtDate(to) : '…'}` : 'Created: any'}
+          </Button>
+          <Menu anchorEl={dateAnchor} open={!!dateAnchor} onClose={() => setDateAnchor(null)}
+            slotProps={{ paper: { sx: { p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}` } } }}>
+            <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: O2D.faint, mb: 1 }}>Created between</Typography>
+            <Stack spacing={1.25} sx={{ minWidth: 200 }}>
+              <TextField size="small" type="date" label="From" value={from} onChange={(e) => setFrom(e.target.value)}
+                InputLabelProps={{ shrink: true }} inputProps={{ max: to || undefined }} fullWidth />
+              <TextField size="small" type="date" label="To" value={to} onChange={(e) => setTo(e.target.value)}
+                InputLabelProps={{ shrink: true }} inputProps={{ min: from || undefined }} fullWidth />
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button size="small" onClick={() => { setFrom(''); setTo(''); }} sx={{ textTransform: 'none' }}>Clear dates</Button>
+                <Button size="small" variant="contained" disableElevation onClick={() => setDateAnchor(null)} sx={{ textTransform: 'none', borderRadius: '6px' }}>Done</Button>
+              </Stack>
+            </Stack>
+          </Menu>
+
+          <TextField select size="small" label="Sort" value={sort} onChange={(e) => setSort(e.target.value)} sx={{ minWidth: 120, flex: 1 }}>
+            {SORT_OPTS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+          </TextField>
+
+          <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, whiteSpace: 'nowrap', ml: 'auto' }}>
+            <b>{filtered.length}</b> of {rows.length}
           </Typography>
           {activeFilters > 0 && (
-            <Button size="small" color="inherit" startIcon={<X size={13} />} onClick={clearAll} sx={{ textTransform: 'none', fontWeight: 700 }}>
+            <Button size="small" color="inherit" startIcon={<X size={12} />} onClick={clearAll}
+              sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', flexShrink: 0 }}>
               Clear ({activeFilters})
             </Button>
           )}
         </Stack>
-
-        <ToggleButtonGroup size="small" exclusive value={status} onChange={(_, v) => v && setStatus(v)} sx={{ mb: 1.25, flexWrap: 'wrap' }}>
-          <ToggleButton value="all" sx={{ textTransform: 'none' }}>All ({counts.all})</ToggleButton>
-          <ToggleButton value="active" sx={{ textTransform: 'none' }}>In progress ({counts.active})</ToggleButton>
-          <ToggleButton value="overdue" sx={{ textTransform: 'none', color: counts.overdue ? '#dc2626' : undefined }}>Overdue ({counts.overdue})</ToggleButton>
-          <ToggleButton value="completed" sx={{ textTransform: 'none' }}>Completed ({counts.completed})</ToggleButton>
-        </ToggleButtonGroup>
-
-        <Box sx={{
-          display: 'grid', gap: 1.25,
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', xl: 'repeat(6, 1fr)' },
-        }}>
-          <TextField select size="small" label="Party" value={party} onChange={(e) => setParty(e.target.value)} fullWidth>
-            <MenuItem value="">All parties</MenuItem>
-            {partyOptions.map((p) => <MenuItem key={p} value={p}>{p}</MenuItem>)}
-          </TextField>
-          <TextField select size="small" label="Current step" value={step} onChange={(e) => setStep(e.target.value)} fullWidth>
-            <MenuItem value="">All steps</MenuItem>
-            {stepOptions.map((s) => <MenuItem key={s.code} value={s.code}>{s.code} · {s.name}</MenuItem>)}
-          </TextField>
-          <TextField select size="small" label="Progress" value={progress} onChange={(e) => setProgress(e.target.value)} fullWidth>
-            {PROGRESS_OPTS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
-          </TextField>
-          <TextField size="small" type="date" label="Created from" value={from} onChange={(e) => setFrom(e.target.value)}
-            InputLabelProps={{ shrink: true }} inputProps={{ max: to || undefined }} fullWidth />
-          <TextField size="small" type="date" label="Created to" value={to} onChange={(e) => setTo(e.target.value)}
-            InputLabelProps={{ shrink: true }} inputProps={{ min: from || undefined }} fullWidth />
-          <TextField select size="small" label="Sort by" value={sort} onChange={(e) => setSort(e.target.value)} fullWidth>
-            {SORT_OPTS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
-          </TextField>
-        </Box>
       </Paper>
 
-      <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
+      <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
         <Box sx={{ overflowX: 'auto' }}>
           {isLoading ? <Skeleton variant="rounded" height={300} /> : (
-            <Table size="small" sx={{ minWidth: 860 }}>
+            <Table size="small" sx={{
+              minWidth: 860,
+              '& td, & th': { borderColor: O2D.lineSoft },
+              '& tbody tr:hover': { bgcolor: O2D.surfaceAlt },
+              '& thead th': { bgcolor: O2D.surfaceAlt, fontWeight: 800, fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: O2D.sub, borderBottom: `1px solid ${O2D.line}` },
+            }}>
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ minWidth: 190 }}>Order</TableCell><TableCell sx={{ minWidth: 150 }}>Current step</TableCell>
@@ -225,7 +252,18 @@ const ProcessList = () => {
                   const od = overdueCount(p.steps);
                   const cur = p.steps?.find((s) => s.stepCode === p.currentStepCode);
                   return (
-                    <TableRow key={p._id} hover>
+                    // The whole row opens the order — no separate "Open" button to hunt for.
+                    <TableRow
+                      key={p._id} hover
+                      onClick={() => navigate(`/o2d-fms/process/${p._id}`)}
+                      role="link" tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/o2d-fms/process/${p._id}`); } }}
+                      sx={{
+                        cursor: 'pointer',
+                        '&:hover .row-go': { opacity: 1, transform: 'translateX(0)' },
+                        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px' },
+                      }}
+                    >
                       <TableCell>
                         <Typography sx={{ fontWeight: 700 }}>{p.soNumber || '—'}</Typography>
                         <Typography variant="caption" color="text.secondary" noWrap display="block">
@@ -248,8 +286,14 @@ const ProcessList = () => {
                             : <StatusPill variant="progress" />}
                       </TableCell>
                       <TableCell><Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>{fmtDate(p.createdAt)}</Typography></TableCell>
-                      <TableCell align="right">
-                        <Button size="small" endIcon={<ArrowRight size={14} />} onClick={() => navigate(`/o2d-fms/process/${p._id}`)}>Open</Button>
+                      {/* Quiet affordance — slides in on hover so the row still reads as clickable */}
+                      <TableCell align="right" sx={{ width: 44 }}>
+                        <Box className="row-go" sx={{
+                          display: 'inline-flex', color: 'primary.main',
+                          opacity: 0, transform: 'translateX(-4px)', transition: 'opacity .15s, transform .15s',
+                        }}>
+                          <ArrowRight size={16} />
+                        </Box>
                       </TableCell>
                     </TableRow>
                   );
@@ -269,6 +313,7 @@ const ProcessList = () => {
           labelRowsPerPage="Orders per page:"
         />
       </Paper>
+      </Box>
     </Box>
   );
 };

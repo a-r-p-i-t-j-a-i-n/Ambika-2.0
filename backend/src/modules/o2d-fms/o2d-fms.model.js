@@ -124,6 +124,19 @@ const ChecklistItemSchema = new Schema({
   doneBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   doneByName: { type: String, default: null }, // denormalised for activity history
   doneAt: { type: Date, default: null },
+  // ── Per-item proof ────────────────────────────────────────────────────────
+  // Every checklist item carries its OWN evidence: uploaded files (screenshots,
+  // PDFs…) and/or pasted links (Gmail/Outlook thread, drive URL). It's a LIST —
+  // one item often needs several documents, and more can be added later (even
+  // after the item is ticked or the step signed off).
+  proofs: [new Schema({
+    fileName: { type: String, default: null },
+    fileUrl:  { type: String, default: null },
+    fileKey:  { type: String, default: null },
+    link:     { type: String, default: null },
+    at:       { type: Date,   default: Date.now },
+    byName:   { type: String, default: null },
+  }, { _id: true })],
 }, { _id: true });
 
 // ── Requirement types (beyond checklist) ────────────────────────────────────

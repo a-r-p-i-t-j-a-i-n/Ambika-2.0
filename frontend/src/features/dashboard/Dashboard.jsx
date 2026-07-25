@@ -28,12 +28,15 @@ import {
 dayjs.extend(relativeTime);
 
 // ─── Premium blue palette ──────────────────────────────────────────────────
+// Neutrals follow the client's WARM palette (o2dTheme); the status hues stay
+// saturated so they still pop against it.
 const C = {
-  ink: '#0b2545', body: '#1e3a8a', primary: '#1d4ed8', primaryDk: '#1e3a8a',
+  ink: '#1c1e21', body: '#3f4650', primary: '#1d4ed8', primaryDk: '#1e3a8a',
   primaryLt: '#3b82f6', success: '#0f766e', successLt: '#5eead4',
   warning: '#b45309', warningLt: '#fcd34d', error: '#be123c', errorLt: '#fda4af',
-  info: '#0369a1', indigo: '#5b6cff', slate: '#475a8a', faint: '#7d8fb3',
-  line: '#dbe4f3', lineSoft: '#eaf0fb', surface: '#ffffff', surfaceAlt: '#f5f8ff',
+  info: '#0369a1', indigo: '#5b6cff', slate: '#6b7280', faint: '#9ca3af',
+  line: '#e4e1d9', lineSoft: '#eeebe4', surface: '#ffffff', surfaceAlt: '#f7f6f2',
+  canvas: '#e9e7e1',
 };
 
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
@@ -62,9 +65,9 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, loading, onClick }) => 
   <Paper
     onClick={onClick}
     sx={{
-      p: 1.6, borderRadius: 2.5, height: '100%',
+      p: 1.4, borderRadius: '8px', height: '100%',
       border: `1px solid ${C.line}`,
-      background: 'linear-gradient(180deg,#ffffff 0%,#fbfcff 100%)',
+      bgcolor: C.surface,
       cursor: onClick ? 'pointer' : 'default',
       transition: 'transform .16s ease, box-shadow .16s ease, border-color .16s ease',
       position: 'relative', overflow: 'hidden',
@@ -110,7 +113,7 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, loading, onClick }) => 
 
 const Section = ({ children, sx, ...rest }) => (
   <Paper {...rest} sx={{
-    p: 2.25, borderRadius: 3, border: `1px solid ${C.line}`,
+    p: 1.75, borderRadius: '8px', border: `1px solid ${C.line}`,
     bgcolor: C.surface, boxShadow: '0 1px 2px rgba(30,58,138,0.04)', ...sx,
   }}>
     {children}
@@ -335,56 +338,49 @@ export default function Dashboard() {
   };
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
+    <Box sx={{ p: { xs: 1.25, sm: 1.75 }, minHeight: '100vh', bgcolor: C.canvas }}>
       {/* ── Header ─────────────────────────────────────────────── */}
       <Box sx={{
-        mb: 2, p: { xs: 2, sm: 2.5 }, borderRadius: 3, color: '#fff',
-        position: 'relative', overflow: 'hidden',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 50%, #1d4ed8 100%)',
-        boxShadow: '0 8px 22px rgba(30,58,138,0.18)',
+        mb: 1.5, px: { xs: 1.5, sm: 2 }, py: 1.25, borderRadius: '8px',
+        bgcolor: C.surface, border: `1px solid ${C.line}`,
+        display: 'flex', justifyContent: 'space-between',
+        alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 1.25,
       }}>
-        <Box aria-hidden sx={{
-          position: 'absolute', top: -70, right: -70, width: 240, height: 240, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(96,165,250,0.3) 0%, transparent 60%)',
-        }} />
-        <Box sx={{ position: 'relative', display: 'flex', justifyContent: 'space-between',
-          alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
-          <Box>
-            <Chip
-              icon={<Activity size={12} style={{ color: 'rgba(255,255,255,0.9)' }} />}
-              label="LIVE OPERATIONS"
-              sx={{
-                mb: 1, height: 22, color: '#fff', backgroundColor: 'rgba(255,255,255,0.14)',
-                border: '1px solid rgba(255,255,255,0.22)', fontWeight: 700, fontSize: '0.62rem',
-                letterSpacing: '0.12em', '& .MuiChip-icon': { color: '#fff', ml: 0.75 },
-              }}
-            />
-            <Typography sx={{ fontSize: { xs: '1.3rem', sm: '1.55rem' }, fontWeight: 800, letterSpacing: '-0.025em', lineHeight: 1.15 }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.25 }}>
+            <Typography sx={{ fontSize: { xs: '1.05rem', sm: '1.15rem' }, fontWeight: 800, color: C.ink, lineHeight: 1.2 }}>
               Master Dashboard
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.82rem', fontWeight: 500, mt: 0.25 }}>
-              Live command center for orders, dispatch &amp; purchase across the business.
-            </Typography>
-          </Box>
-          <Stack direction="row" spacing={1}>
-            {(selectedMonth || selectedClient) && (
-              <Button size="small" startIcon={<XCircle size={14} />} onClick={clearFilters}
-                sx={{ background: 'rgba(255,255,255,0.16)', color: '#fff', border: '1px solid rgba(255,255,255,0.22)', fontWeight: 700 }}>
-                Clear
-              </Button>
-            )}
-            <Button size="small" startIcon={<Radar size={14} />} onClick={() => navigate('/dispatch-control-tower')}
-              sx={{ background: 'rgba(255,255,255,0.16)', color: '#fff', border: '1px solid rgba(255,255,255,0.22)', fontWeight: 700 }}>
-              Control Tower
-            </Button>
+            <Chip
+              icon={<Activity size={11} />}
+              label="LIVE"
+              sx={{ height: 19, fontWeight: 800, fontSize: '0.58rem', letterSpacing: '0.1em', borderRadius: '4px',
+                bgcolor: alpha(C.success, 0.12), color: C.success, '& .MuiChip-icon': { color: C.success, ml: 0.5 } }}
+            />
           </Stack>
+          <Typography noWrap sx={{ color: C.slate, fontSize: '0.74rem' }}>
+            Live command center for orders, dispatch &amp; purchase across the business.
+          </Typography>
         </Box>
+        <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+          {(selectedMonth || selectedClient) && (
+            <Button size="small" startIcon={<XCircle size={14} />} onClick={clearFilters}
+              sx={{ fontWeight: 700, textTransform: 'none', borderRadius: '6px', color: C.slate }}>
+              Clear
+            </Button>
+          )}
+          <Button size="small" variant="contained" disableElevation startIcon={<Radar size={14} />}
+            onClick={() => navigate('/dispatch-control-tower')}
+            sx={{ fontWeight: 700, textTransform: 'none', borderRadius: '6px', bgcolor: C.primary, whiteSpace: 'nowrap' }}>
+            Control Tower
+          </Button>
+        </Stack>
       </Box>
 
       {/* ── Overdue alert strip ────────────────────────────────── */}
       {!isLoading && planHealth.overduePlanQty > 0 && (
         <Box sx={{
-          mb: 2, px: 2, py: 1.1, borderRadius: 2.5, display: 'flex', alignItems: 'center', gap: 1.25,
+          mb: 1.5, px: 1.75, py: 1, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: 1.25,
           bgcolor: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.25)}`,
         }}>
           <AlertTriangle size={16} color={C.error} />

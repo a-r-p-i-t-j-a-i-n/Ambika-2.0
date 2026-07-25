@@ -37,7 +37,7 @@ const PhaseTimeline = ({ phaseChips = [], onPhaseClick }) => {
 
   if (!phases.length) {
     return (
-      <Paper sx={{ p: 3, borderRadius: '14px', textAlign: 'center' }}>
+      <Paper sx={{ p: 3, borderRadius: '8px', textAlign: 'center' }}>
         <Stack direction="row" spacing={1} justifyContent="center" alignItems="center" color="text.secondary">
           <Calendar size={14} />
           <Typography variant="body2" color="text.secondary">
@@ -58,7 +58,7 @@ const PhaseTimeline = ({ phaseChips = [], onPhaseClick }) => {
   const range = `${dayjs(phases[0].plannedDate).format('DD MMM')} → ${dayjs(phases[phases.length - 1].plannedDate).format('DD MMM YYYY')}`;
 
   return (
-    <Paper sx={{ p: 2, borderRadius: '14px' }}>
+    <Paper sx={{ p: 2, borderRadius: '8px' }}>
       {/* Header + legend */}
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5} sx={{ mb: 1 }}>
         <Calendar size={14} color={theme.palette.primary.main} />

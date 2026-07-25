@@ -9,6 +9,8 @@ import { enqueueSnackbar } from 'notistack';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useFmsGate, FmsGateBanner, FmsGateDialog } from '../o2d-fms/FmsGate';
+import { O2D } from '../o2d-fms/o2dTheme';
+import BackButton from '../../components/BackButton';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
@@ -101,40 +103,34 @@ const GenerateChallanPdf = () => {
   }, [cameFromTask, isFetching, rows]);
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{
-        color: '#fff', px: { xs: 2.5, md: 3.5 }, pt: { xs: 2.75, md: 3.25 }, pb: { xs: 3.5, md: 4.25 },
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-      }}>
-        <Stack direction="row" spacing={1.75} alignItems="center">
-          <Box sx={{ width: 42, height: 42, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0,
-            background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <Truck size={20} color="#fff" />
+    <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas }}>
+      {/* Flush warm top bar — matches the O2D design system */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <BackButton iconOnly sx={{ color: O2D.body, border: `1px solid ${O2D.line}`, borderRadius: '6px', flexShrink: 0 }} />
+          <Box sx={{ width: 30, height: 30, borderRadius: '6px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand }}>
+            <Truck size={16} />
           </Box>
           <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1rem', md: '1.15rem' }, fontWeight: 800, letterSpacing: '-0.01em', lineHeight: 1.15 }}>
+            <Typography sx={{ color: O2D.ink, fontSize: { xs: '1rem', md: '1.1rem' }, fontWeight: 800, lineHeight: 1.2 }}>
               Generate Delivery Challan PDF
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.75rem', mt: 0.3 }}>
-              Pick an actual dispatch and generate its delivery challan — preview and download instantly.
+            <Typography noWrap sx={{ color: O2D.sub, fontSize: '0.72rem' }}>
+              Pick an actual dispatch and generate its delivery challan — preview & download.
             </Typography>
           </Box>
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -2.5, md: -3 }, position: 'relative', zIndex: 1, pb: 6, maxWidth: 1240, mx: 'auto' }}>
+      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, pb: 6, maxWidth: 1240, mx: 'auto' }}>
         {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Came from FMS step 2.06 — the challan PDF opens automatically; this banner
             brings the doer straight back to the step to submit. */}
         {cameFromTask && (
           <Paper elevation={0} sx={{
-            p: { xs: 1.25, md: 1.5 }, borderRadius: 2.5, mb: 2, display: 'flex', alignItems: 'center',
+            p: { xs: 1.25, md: 1.5 }, borderRadius: '8px', mb: 1.5, display: 'flex', alignItems: 'center',
             gap: 1.25, flexWrap: 'wrap',
-            // Solid card (NOT translucent) so the dark hero never bleeds through it.
-            bgcolor: 'background.paper',
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.3)}`,
-            boxShadow: '0 6px 20px rgba(30,58,138,0.08)',
+            bgcolor: O2D.surfaceAlt, border: `1px solid ${alpha(O2D.brand, 0.3)}`,
           }}>
             <Box sx={{ p: 0.85, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', display: 'flex', flexShrink: 0 }}>
               <Zap size={16} />
@@ -154,7 +150,7 @@ const GenerateChallanPdf = () => {
           </Paper>
         )}
 
-        <Paper sx={{ p: 1.5, borderRadius: 3, mb: 2 }}>
+        <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <TextField
             fullWidth size="small" value={search} onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by DC number, SO number or party…"
@@ -162,12 +158,12 @@ const GenerateChallanPdf = () => {
           />
         </Paper>
 
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
+        <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           {isFetching ? <Skeleton variant="rounded" height={320} /> : (
             <Box sx={{ overflowX: 'auto' }}>
-              <Table size="small" sx={{ minWidth: 820, '& td, & th': { fontSize: '0.76rem', py: 0.6, px: 1.25, borderColor: theme.palette.divider } }}>
+              <Table size="small" sx={{ minWidth: 820, '& td, & th': { fontSize: '0.76rem', py: 0.6, px: 1.25, borderColor: O2D.lineSoft }, '& tbody tr:hover': { bgcolor: O2D.surfaceAlt } }}>
                 <TableHead>
-                  <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
+                  <TableRow sx={{ bgcolor: O2D.surfaceAlt }}>
                     {['DC Number', 'Date', 'Party', 'SO / PO', 'Qty (pcs)', 'Boxes', 'Status'].map((h, i) => (
                       <TableCell key={h} align={[4, 5].includes(i) ? 'right' : 'left'} sx={{ fontWeight: 700, fontSize: '0.64rem !important', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'text.secondary', whiteSpace: 'nowrap' }}>{h}</TableCell>
                     ))}

@@ -25,7 +25,7 @@ export const orderController = {
   }),
 
   update: asyncHandler(async (req, res) => {
-    const order = await orderService.update(req.params.id, req.body);
+    const order = await orderService.update(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Sales Order updated', order));
   }),
 
