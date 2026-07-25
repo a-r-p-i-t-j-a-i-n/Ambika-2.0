@@ -2,25 +2,28 @@ import React, { useState, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Typography, Paper, Chip, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Skeleton, Button, IconButton, Stack, Tabs, Tab, alpha,
+  TableHead, TableRow, Skeleton, Button, IconButton, Stack, Tabs, Tab, alpha, Tooltip,
 } from '@mui/material';
 import {
   ArrowLeft, ExternalLink, CheckCircle2, Clock, Truck, Calendar,
   MapPin, Hash, User, CalendarPlus, Inbox, AlertTriangle, ChevronRight,
-  ClipboardList, FileText, Boxes,
+  ClipboardList, FileText, Boxes, Pencil, Ban, RotateCcw, History,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useGetOrderByIdQuery, useGetOrderScheduleQuery } from '../../store/api/orderApi';
 import { useGetOrderComparisonQuery, useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import PlanVsActualPanel from './components/PlanVsActualPanel';
 import DispatchEntry from '../execution/DispatchEntry';
+import OrderEntryDrawer from './OrderEntryDrawer';
+import CancelOrderDialog from './components/CancelOrderDialog';
 import { resolveFileUrl } from '../../utils/fileUrl';
 
+// Neutrals follow the client's WARM palette (o2dTheme); status hues stay saturated.
 const C = {
-  ink: '#0b2545', body: '#1e3a8a', primary: '#1d4ed8', primaryDk: '#1e3a8a',
+  ink: '#1c1e21', body: '#3f4650', primary: '#1d4ed8', primaryDk: '#1e3a8a',
   success: '#0f766e', warning: '#b45309', error: '#be123c', wip: '#5b6cff',
-  slate: '#475a8a', faint: '#7d8fb3', line: '#dbe4f3', lineSoft: '#eaf0fb',
-  surface: '#ffffff', surfaceAlt: '#f5f8ff',
+  slate: '#6b7280', faint: '#9ca3af', line: '#e4e1d9', lineSoft: '#eeebe4',
+  surface: '#ffffff', surfaceAlt: '#f7f6f2', canvas: '#e9e7e1',
 };
 
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
@@ -50,18 +53,28 @@ const StatusBadge = ({ value }) => {
   );
 };
 
+// Hero action button — compact and fixed-width-ish so a 14" header never wraps.
+const heroBtn = {
+  fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0, minWidth: 0,
+  px: 1.25, py: 0.4, fontSize: '0.75rem', boxShadow: 'none', textTransform: 'none',
+  borderRadius: '6px', color: C.body, background: C.surface,
+  border: `1px solid ${C.line}`,
+  '& .MuiButton-startIcon': { mr: 0.5 },
+  '&:hover': { background: C.surfaceAlt, borderColor: C.line },
+};
+
 const Kpi = ({ label, value, sub, color }) => (
   <Box sx={{
-    flex: '1 1 130px', minWidth: 120, px: 1.5, py: 1, borderRadius: 2,
-    bgcolor: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.16)',
+    flex: '1 1 96px', minWidth: 88, px: 1.1, py: 0.6, borderRadius: '6px',
+    bgcolor: C.surfaceAlt, border: `1px solid ${C.line}`,
   }}>
-    <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.7)' }}>
+    <Typography sx={{ fontSize: '0.55rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.faint }} noWrap>
       {label}
     </Typography>
-    <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: color || '#fff', lineHeight: 1.2 }}>
+    <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: color || C.ink, lineHeight: 1.2 }}>
       {value}
     </Typography>
-    {sub && <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.6)' }}>{sub}</Typography>}
+    {sub && <Typography sx={{ fontSize: '0.56rem', color: C.faint }} noWrap>{sub}</Typography>}
   </Box>
 );
 
@@ -118,6 +131,8 @@ const OrderDetails = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [dispatchOpen, setDispatchOpen] = useState(false);
+  const [amendOpen, setAmendOpen] = useState(false);      // revise qty / add-remove items
+  const [cancelMode, setCancelMode] = useState(null);     // 'cancel' | 'reopen' | null
 
   const tab = TABS.some((t) => t.key === searchParams.get('tab')) ? searchParams.get('tab') : 'order';
   const setTab = (t) => {
@@ -136,6 +151,7 @@ const OrderDetails = () => {
   const schedule = scheduleRes?.data?.[0];
   const comparison = comparisonRes?.data;
   const challans = challansRes?.data || [];
+  const isCancelled = order?.status === 'CANCELLED';
 
   // Roll phases up across all SKUs, keyed by phaseNo.
   const phaseRollup = useMemo(() => {
@@ -222,35 +238,65 @@ const OrderDetails = () => {
   if (!order) return <Box sx={{ p: 3 }}><Typography>Order not found.</Typography></Box>;
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: C.surfaceAlt, pb: 4 }}>
+    <Box sx={{ minHeight: '100vh', bgcolor: C.canvas, pb: 4 }}>
       {/* ── Hero ─────────────────────────────────────────────── */}
       <Box sx={{
-        background: `linear-gradient(135deg, ${C.ink} 0%, ${C.primaryDk} 55%, ${C.primary} 100%)`,
-        color: '#fff', px: { xs: 2, md: 3 }, pt: 2, pb: 2.5,
+        bgcolor: C.surface, borderBottom: `1px solid ${C.line}`,
+        px: { xs: 1.5, md: 2 }, pt: 1.25, pb: 1.25,
+        position: 'sticky', top: 0, zIndex: 5,
       }}>
-        <Stack direction="row" alignItems="center" spacing={1.25} sx={{ mb: 1.5 }}>
+        {/* One line, always. The SO number and the action buttons never wrap or
+            shrink; the party name absorbs the slack and ellipsises instead — so a
+            14" screen keeps the identity and every action on a single tidy row. */}
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.25, flexWrap: 'nowrap' }}>
           <IconButton size="small" onClick={() => navigate('/orders')}
-            sx={{ color: '#fff', bgcolor: 'rgba(255,255,255,0.12)' }}>
-            <ArrowLeft size={16} />
+            sx={{ color: C.body, border: `1px solid ${C.line}`, borderRadius: '6px', flexShrink: 0 }}>
+            <ArrowLeft size={15} />
           </IconButton>
-          <Typography sx={{ fontSize: { xs: '1.1rem', md: '1.35rem' }, fontWeight: 800 }}>
+          <Typography sx={{ fontSize: { xs: '1rem', md: '1.15rem' }, fontWeight: 800, color: C.ink, whiteSpace: 'nowrap', flexShrink: 0 }}>
             {order.soNumber}
           </Typography>
-          <StatusBadge value={order.status} />
-          <Typography sx={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.8)' }}>
+          <Box sx={{ flexShrink: 0 }}><StatusBadge value={order.status} /></Box>
+          <Typography noWrap sx={{ fontSize: '0.8rem', color: C.slate, flex: 1, minWidth: 0 }}>
             · {order.partyName}
           </Typography>
-          <Box sx={{ flex: 1 }} />
-          <Button size="small" variant="contained" startIcon={<CalendarPlus size={14} />}
-            onClick={() => navigate(`/dispatch-planning?so=${encodeURIComponent(order.soNumber)}`)}
-            sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
-            Plan Phases
-          </Button>
-          <Button size="small" variant="contained" startIcon={<Truck size={14} />}
-            onClick={() => setDispatchOpen(true)}
-            sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
-            Record Dispatch
-          </Button>
+          {/* A cancelled order is read-only: no planning / dispatching until it's
+              re-opened. Amend stays available on every live order — the customer
+              revising quantities (or adding an item) is normal business. */}
+          {isCancelled ? (
+            <Button size="small" variant="contained" startIcon={<RotateCcw size={13} />}
+              onClick={() => setCancelMode('reopen')} sx={heroBtn}>
+              Re-open
+            </Button>
+          ) : (
+            <>
+              <Tooltip title="Amend order — revise quantities, add or remove items">
+                <Button size="small" variant="contained" startIcon={<Pencil size={13} />}
+                  onClick={() => setAmendOpen(true)} sx={heroBtn}>
+                  Amend
+                </Button>
+              </Tooltip>
+              <Tooltip title="Plan dispatch phases">
+                <Button size="small" variant="contained" startIcon={<CalendarPlus size={13} />}
+                  onClick={() => navigate(`/dispatch-planning?so=${encodeURIComponent(order.soNumber)}`)} sx={heroBtn}>
+                  Plan
+                </Button>
+              </Tooltip>
+              <Tooltip title="Record an actual dispatch (creates a delivery challan)">
+                <Button size="small" variant="contained" startIcon={<Truck size={13} />}
+                  onClick={() => setDispatchOpen(true)} sx={heroBtn}>
+                  Dispatch
+                </Button>
+              </Tooltip>
+              <Tooltip title="Cancel this order">
+                <Button size="small" variant="contained" startIcon={<Ban size={13} />}
+                  onClick={() => setCancelMode('cancel')}
+                  sx={{ ...heroBtn, color: C.error, borderColor: alpha(C.error, 0.4), '&:hover': { background: alpha(C.error, 0.06), borderColor: C.error } }}>
+                  Cancel
+                </Button>
+              </Tooltip>
+            </>
+          )}
         </Stack>
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Kpi label="Ordered"    value={fmt(ordered)} />
@@ -264,6 +310,56 @@ const OrderDetails = () => {
       </Box>
 
       <Box sx={{ px: { xs: 1.5, md: 2.5 }, mt: 2 }}>
+        {/* ── Cancelled banner — why, when, and what was already shipped ─── */}
+        {isCancelled && (
+          <Paper sx={{ p: 1.75, borderRadius: 3, mb: 2,
+            border: `1px solid ${alpha(C.error, 0.35)}`, bgcolor: alpha(C.error, 0.05) }}>
+            <Stack direction="row" spacing={1.25} alignItems="flex-start">
+              <Box sx={{ p: 0.6, borderRadius: 1.5, bgcolor: alpha(C.error, 0.12), color: C.error, display: 'flex' }}><Ban size={16} /></Box>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography sx={{ fontSize: '0.85rem', fontWeight: 800, color: C.error }}>
+                  This order is cancelled{order.cancelledAt ? ` · ${fmtDT(order.cancelledAt)}` : ''}
+                </Typography>
+                {order.cancelReason && (
+                  <Typography sx={{ fontSize: '0.78rem', color: C.slate, mt: 0.25 }}>
+                    Reason: {order.cancelReason}
+                  </Typography>
+                )}
+                <Typography sx={{ fontSize: '0.72rem', color: C.faint, mt: 0.25 }}>
+                  Planning and dispatching are locked. {actual > 0
+                    ? `${fmt(actual)} pcs were already dispatched — those challans and invoices still stand.`
+                    : 'Nothing was dispatched.'} Re-open it to make it active again.
+                </Typography>
+              </Box>
+            </Stack>
+          </Paper>
+        )}
+
+        {/* ── Revision history — every amendment the customer asked for ─── */}
+        {(order.amendments || []).length > 0 && (
+          <Paper sx={{ p: 1.75, borderRadius: 3, mb: 2,
+            border: `1px solid ${alpha(C.warning, 0.3)}`, bgcolor: alpha(C.warning, 0.04) }}>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <History size={15} color={C.warning} />
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: C.warning }}>
+                Order revisions (Rev {order.revisionNo || order.amendments.length})
+              </Typography>
+            </Stack>
+            <Stack spacing={0.75}>
+              {[...order.amendments].reverse().map((a, i) => (
+                <Box key={i} sx={{ pl: 1, borderLeft: `2px solid ${alpha(C.warning, 0.4)}` }}>
+                  <Typography sx={{ fontSize: '0.72rem', color: C.faint }}>
+                    {fmtDT(a.at)}{a.byName ? ` · by ${a.byName}` : ''}{a.reason ? ` · ${a.reason}` : ''}
+                  </Typography>
+                  {(a.changes || []).map((c, j) => (
+                    <Typography key={j} sx={{ fontSize: '0.78rem', fontWeight: 700, color: C.ink }}>• {c}</Typography>
+                  ))}
+                </Box>
+              ))}
+            </Stack>
+          </Paper>
+        )}
+
         {/* ── Order Journey ──────────────────────────────────── */}
         <Paper sx={{ p: 2, borderRadius: 3, border: `1px solid ${C.line}`, mb: 2 }}>
           <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: C.slate, textTransform: 'uppercase', letterSpacing: '0.07em', mb: 1.5 }}>
@@ -544,6 +640,13 @@ const OrderDetails = () => {
       </Box>
 
       <DispatchEntry open={dispatchOpen} onClose={() => setDispatchOpen(false)} presetOrder={order} />
+      {/* Amend — the same full order form used to punch it, pre-filled. Change a
+          quantity (Dome Jar 100 → 2000), add or drop an item, then save. */}
+      <OrderEntryDrawer open={amendOpen} onClose={() => setAmendOpen(false)} order={order} />
+      <CancelOrderDialog
+        open={!!cancelMode} mode={cancelMode || 'cancel'}
+        order={order} onClose={() => setCancelMode(null)}
+      />
     </Box>
   );
 };

@@ -7,6 +7,22 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 const fmtDate = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '-');
 
+// Mirrors the on-screen shortener so the PDF reads exactly like the calendar:
+// drop legal suffixes and, if still long, keep the first word.
+const shortParty = (name) => {
+  const raw = String(name || '-').trim();
+  const cleaned = raw
+    .replace(/(pvt|private|ltd|limited|llp|inc|co|company|technologies|industries|enterprises|works)\.?/gi, '')
+    .replace(/[.,]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = cleaned.split(' ').filter(Boolean);
+  if (!words.length) return raw;
+  const two = words.slice(0, 2).join(' ');
+  return two.length > 14 ? words[0] : two;
+};
+const shortSo = (so) => String(so || '').replace(/^AGL\//, '').replace(/\/\d{2}-\d{2}$/, '');
+
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const TYPE = {
@@ -78,18 +94,32 @@ export function printDispatchCalendar({
     const key = day.format('YYYY-MM-DD');
     const list = byDate.get(key) || [];
     const inMonth = day.isSame(monthStart, 'month');
-    const chips = list.slice(0, 5).map((event) => {
+    const chips = list.slice(0, 2).map((event) => {
       const type = TYPE[event.eventType] || TYPE.scheduled;
+      const colour = event.isDelayed ? '#be123c' : type.color;
+      const isActual = event.eventType === 'actual';
       const qty = eventQty(event);
-      const delayedClass = event.isDelayed ? ' delayed' : '';
+      const skuLines = (event.skus || [])
+        .filter((sku) => Number(isActual ? sku.actualQty : sku.plannedQty) > 0)
+        .map((sku) => `
+          <div class="skuRow">
+            <span class="skuName">${esc(sku.skuName || '-')}</span>
+            <span class="skuQty">${num(isActual ? sku.actualQty : sku.plannedQty)}</span>
+          </div>`).join('');
       return `
-        <div class="chip${delayedClass}" style="border-left-color:${type.color}">
-          <span class="tag" style="color:${type.color}">${esc(type.short)}</span>
-          <span class="party">${esc(event.partyName || '-')}</span>
-          <span class="qty">${num(qty)}</span>
+        <div class="chip${event.isDelayed ? ' delayed' : ''}" style="border-left-color:${colour}">
+          <div class="chipHead">
+            <span class="party">${esc(shortParty(event.partyName))}</span>
+            <span class="tag" style="color:${colour}">${esc(type.short)}</span>
+            <span class="so">${esc(shortSo(event.soNumber))}</span>
+          </div>
+          ${skuLines}
+          <div class="tot" style="border-top-color:${colour}">
+            <span>TOTAL</span><span class="totQty" style="color:${colour}">${num(qty)} pcs</span>
+          </div>
         </div>`;
     }).join('');
-    const more = list.length > 5 ? `<div class="more">+${list.length - 5} more</div>` : '';
+    const more = list.length > 2 ? `<div class="more">+${list.length - 2} more</div>` : '';
     return `
       <td class="${inMonth ? '' : 'muted'}">
         <div class="date">${day.date()}</div>
@@ -102,31 +132,6 @@ export function printDispatchCalendar({
     `<tr>${calendarCells.slice(row * 7, (row + 1) * 7).join('')}</tr>`
   )).join('');
 
-  const detailRows = visibleEvents.length
-    ? visibleEvents.map((event, index) => {
-      const type = TYPE[event.eventType] || TYPE.scheduled;
-      const skuText = (event.skus || [])
-        .map((sku) => `${sku.skuCode || ''} ${sku.skuName || ''}`.trim())
-        .filter(Boolean)
-        .slice(0, 4)
-        .join(', ');
-      const moreSkus = (event.skus || []).length > 4 ? ` +${event.skus.length - 4} more` : '';
-      return `
-        <tr>
-          <td class="n">${index + 1}</td>
-          <td>${fmtDate(event.date)}</td>
-          <td><span class="type" style="color:${type.color};border-color:${type.color}">${esc(type.label)}</span></td>
-          <td>${esc(event.partyName || '-')}</td>
-          <td>${esc(event.soNumber || '-')}${event.poNumber ? `<br><span class="sub">PO ${esc(event.poNumber)}</span>` : ''}</td>
-          <td>${esc(event.phaseNo || '-')}</td>
-          <td>${esc(skuText || '-')}${moreSkus ? `<span class="sub">${esc(moreSkus)}</span>` : ''}</td>
-          <td class="num">${num(event.plannedQty)}</td>
-          <td class="num">${num(event.actualQty)}</td>
-          <td class="num">${num(event.pendingQty)}</td>
-          <td>${esc(eventStatus(event))}${event.delayDays > 0 ? `<br><span class="late">${event.delayDays}d late</span>` : ''}</td>
-        </tr>`;
-    }).join('')
-    : '<tr><td colspan="11" class="none">No dispatch entries match the current filters.</td></tr>';
 
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" />
@@ -134,44 +139,42 @@ export function printDispatchCalendar({
 <style>
   @page { size: A4 landscape; margin: 10mm; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #e5e7eb; color: #0f172a; font-family: Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { margin: 0; padding: 0; background: #e9e7e1; color: #1c1e21; font-family: Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body { padding-top: 48px; }
-  .print-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: #fff; border-bottom: 2px solid #0b2545; padding: 9px 16px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
-  .print-bar button { border: 0; border-radius: 4px; background: #1d4ed8; color: #fff; padding: 7px 14px; font-weight: 800; cursor: pointer; }
+  .print-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: #fff; border-bottom: 1px solid #e4e1d9; padding: 9px 16px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+  .print-bar button { border: 0; border-radius: 4px; background: #0b2545; color: #fff; padding: 7px 14px; font-weight: 800; cursor: pointer; }
   .print-bar button + button { margin-left: 8px; background: #fff; color: #0f172a; border: 1px solid #94a3b8; }
   .sheet { width: 297mm; max-width: 100%; min-height: 210mm; margin: 12px auto; background: #fff; padding: 11mm; }
-  .head { display: flex; justify-content: space-between; gap: 20px; border-bottom: 2px solid #1d4ed8; padding-bottom: 9px; }
-  h1 { margin: 0; color: #1e3a8a; font-size: 22px; line-height: 1.1; }
-  .company { color: #0b2545; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; margin-bottom: 3px; }
-  .filters { margin-top: 4px; color: #475569; font-size: 10.5px; }
-  .meta { text-align: right; color: #475569; font-size: 10px; white-space: nowrap; }
+  .lh { border-bottom: 2.5px solid #0b2545; padding-bottom: 8px; margin-bottom: 2px; }
+  .company { color: #0b2545; font-size: 30px; font-weight: 900; letter-spacing: 0.05em; line-height: 1.05; text-align: center; }
+  .title { text-align: center; color: #16305a; font-size: 13px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-top: 5px; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; padding-top: 7px; }
+  h1 { margin: 0; color: #16305a; font-size: 14px; font-weight: 800; line-height: 1.2; }
+  .filters { margin-top: 4px; color: #6b7280; font-size: 10.5px; }
+  .meta { text-align: right; color: #6b7280; font-size: 10px; white-space: nowrap; }
   .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin: 10px 0; }
-  .stat { border: 1px solid #cbd5e1; padding: 7px 9px; background: #f8fafc; }
-  .stat b { display: block; font-size: 15px; color: #0b2545; }
-  .stat span { display: block; margin-top: 1px; font-size: 8.5px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
+  .stat { border: 1px solid #e4e1d9; padding: 7px 9px; background: #f7f6f2; }
+  .stat b { display: block; font-size: 15px; color: #1c1e21; }
+  .stat span { display: block; margin-top: 1px; font-size: 8.5px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
   table { border-collapse: collapse; width: 100%; }
-  .calendar th { background: #eef2ff; color: #1e3a8a; border: 1px solid #aab8d4; font-size: 9px; padding: 5px; text-transform: uppercase; letter-spacing: 0.07em; }
-  .calendar td { width: 14.28%; height: 25mm; vertical-align: top; border: 1px solid #aab8d4; padding: 4px; }
-  .calendar td.muted { background: #f8fafc; color: #94a3b8; }
-  .date { font-size: 10px; font-weight: 800; color: #0f172a; margin-bottom: 3px; }
-  .chip { display: flex; align-items: center; gap: 3px; border-left: 3px solid #1d4ed8; background: #f8fafc; margin-bottom: 2px; padding: 2px 4px; min-height: 14px; overflow: hidden; }
+  .calendar th { background: #16305a; color: #fff; border: 1px solid #16305a; font-size: 9px; padding: 5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 800; }
+  .calendar td { width: 14.28%; height: 30mm; vertical-align: top; border: 1px solid #e4e1d9; padding: 3px; }
+  .calendar td.muted { background: #f7f6f2; color: #9ca3af; }
+  .date { font-size: 10px; font-weight: 800; color: #1c1e21; margin-bottom: 2px; }
+  .chip { border-left: 3px solid #1d4ed8; background: #f7f6f2; margin-bottom: 2px; padding: 2px 4px; overflow: hidden; }
   .chip.delayed { background: #fff1f2; }
-  .tag { font-size: 7px; font-weight: 900; flex: 0 0 auto; }
-  .party { font-size: 8.2px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; color: #334155; }
-  .qty { font-size: 8px; font-weight: 900; color: #0f172a; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-  .empty { color: #cbd5e1; font-size: 8px; margin-top: 8px; text-align: center; }
-  .more { color: #1d4ed8; font-size: 8px; font-weight: 800; margin-top: 2px; }
-  .section { margin: 12px 0 6px; font-size: 10px; color: #0b2545; font-weight: 900; letter-spacing: 0.09em; text-transform: uppercase; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; }
-  .details th { background: #eef2ff; color: #1e3a8a; border: 1px solid #cbd5e1; text-align: left; font-size: 8.5px; padding: 5px 6px; text-transform: uppercase; letter-spacing: 0.05em; }
-  .details td { border: 1px solid #e2e8f0; padding: 5px 6px; vertical-align: top; font-size: 9px; }
-  .details tr:nth-child(even) td { background: #f8fafc; }
-  .n { color: #94a3b8; width: 24px; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .type { border: 1px solid; border-radius: 999px; padding: 1px 5px; font-size: 8px; font-weight: 900; white-space: nowrap; }
-  .sub { color: #64748b; font-size: 8px; }
-  .late { color: #be123c; font-weight: 900; font-size: 8px; }
-  .none { text-align: center; color: #94a3b8; padding: 18px !important; }
-  .ft { margin-top: 10px; color: #94a3b8; text-align: center; font-size: 8px; border-top: 1px solid #e2e8f0; padding-top: 6px; }
+  .chipHead { display: flex; align-items: center; gap: 3px; }
+  .tag { font-size: 6.5px; font-weight: 900; flex: 0 0 auto; }
+  .so { font-size: 6.5px; font-weight: 700; color: #9ca3af; flex: 0 0 auto; }
+  .party { font-size: 8px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; color: #1c1e21; }
+  .skuRow { display: flex; align-items: center; gap: 4px; }
+  .skuName { font-size: 7px; color: #3f4650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+  .skuQty { font-size: 7px; font-weight: 800; color: #1c1e21; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .tot { display: flex; align-items: center; justify-content: space-between; margin-top: 1px; padding-top: 1px; border-top: 1px solid #cbd5e1; font-size: 6.5px; font-weight: 800; color: #9ca3af; letter-spacing: 0.05em; }
+  .totQty { font-size: 7.5px; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .empty { color: #cbd5e1; font-size: 7.5px; margin-top: 8px; text-align: center; }
+  .more { color: #0b2545; font-size: 8px; font-weight: 800; margin-top: 2px; }
+  .ft { margin-top: 10px; color: #9ca3af; text-align: center; font-size: 8px; border-top: 1px solid #e4e1d9; padding-top: 6px; }
   @media print {
     body { padding-top: 0; background: #fff; }
     .print-bar { display: none !important; }
@@ -184,10 +187,13 @@ export function printDispatchCalendar({
     <div><button onclick="window.print()">Print / Save PDF</button><button onclick="window.close()">Close</button></div>
   </div>
   <div class="sheet">
+    <div class="lh">
+      <div class="company">${esc(companyName)}</div>
+      <div class="title">Dispatch Planning Calendar</div>
+    </div>
     <div class="head">
       <div>
-        <div class="company">${esc(companyName)}</div>
-        <h1>Dispatch Calendar - ${esc(monthLabel)}</h1>
+        <h1>${esc(monthLabel)}</h1>
         <div class="filters">${esc(filterText)}</div>
       </div>
       <div class="meta"><strong>Generated</strong><br>${esc(generated)}<br>${visibleEvents.length} visible entry(s)</div>
@@ -202,16 +208,6 @@ export function printDispatchCalendar({
     <table class="calendar">
       <thead><tr>${WEEKDAYS.map((day) => `<th>${day}</th>`).join('')}</tr></thead>
       <tbody>${gridRows}</tbody>
-    </table>
-    <div class="section">Date-wise Dispatch Details</div>
-    <table class="details">
-      <thead>
-        <tr>
-          <th>#</th><th>Date</th><th>Type</th><th>Party</th><th>SO / PO</th><th>Phase</th>
-          <th>SKU</th><th class="num">Scheduled</th><th class="num">Actual</th><th class="num">Pending</th><th>Status</th>
-        </tr>
-      </thead>
-      <tbody>${detailRows}</tbody>
     </table>
     <div class="ft">Generated from Dispatch Planning Execution System</div>
   </div>

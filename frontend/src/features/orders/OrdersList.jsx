@@ -12,6 +12,7 @@ import OrderUpdateModal from './OrderUpdateModal';
 import OrderDetailDrawer from './OrderDetailDrawer';
 import TableSkeleton from '../../components/TableSkeleton';
 import dayjs from 'dayjs';
+import { O2D } from '../o2d-fms/o2dTheme';
 
 const BRAND = { primary: '#2563eb', success: '#059669', warning: '#d97706', error: '#dc2626', wip: '#7c3aed' };
 
@@ -27,14 +28,20 @@ const StatusBadge = ({ value }) => {
   const map = { RECEIVED: BRAND.warning, IN_PROGRESS: BRAND.primary, COMPLETED: BRAND.success, CANCELLED: BRAND.error, SHORT_CLOSED: '#64748b', PLANNING: BRAND.wip };
   const color = map[value] || '#64748b';
   return (
-    <Box sx={{ px: 1.5, py: 0.5, borderRadius: '8px', bgcolor: alpha(color, 0.08), color, fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
-      {value?.replace('_', ' ')}
+    // maxWidth + ellipsis so a long status ("SHORT CLOSED") can never spill out of
+    // the column and break the row — it degrades gracefully instead.
+    <Box sx={{
+      px: 0.75, py: 0.3, borderRadius: '4px', bgcolor: alpha(color, 0.1), color,
+      fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.02em', textTransform: 'uppercase',
+      whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
+    }}>
+      {value?.replace(/_/g, ' ')}
     </Box>
   );
 };
 
 const StatCard = ({ title, value, icon: Icon, color, loading }) => (
-  <Paper sx={{ p: 2, borderRadius: '14px', border: '1px solid #e2e8f0', boxShadow: 'none', flex: 1, transition: 'all 0.2s', '&:hover': { boxShadow: `0 4px 16px ${alpha(color, 0.12)}` } }}>
+  <Paper sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, boxShadow: 'none', flex: 1, transition: 'all 0.2s', '&:hover': { boxShadow: `0 4px 16px ${alpha(color, 0.12)}` } }}>
     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
       <Box>
         <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5 }}>{title}</Typography>
@@ -123,7 +130,7 @@ const OrdersList = () => {
   if (isLoading && !data) return <TableSkeleton columns={8} />;
 
   const columns = [
-    { field: 'soNumber', headerName: 'SO #', width: 150,
+    { field: 'soNumber', headerName: 'SO #', width: 118,
       renderCell: (p) => (
         <Typography variant="body2" fontWeight={700} color="primary.main" sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
           onClick={() => handleViewDetail(p.row)}>
@@ -131,38 +138,38 @@ const OrdersList = () => {
         </Typography>
       )
     },
-    { field: 'poNumber', headerName: 'PO #', width: 140,
+    { field: 'poNumber', headerName: 'PO #', width: 96,
       renderCell: (p) => <Typography variant="body2" color="text.secondary" fontWeight={500} fontSize="0.8rem">{p.value}</Typography>
     },
-    { field: 'partyName', headerName: 'CUSTOMER', flex: 1, minWidth: 180,
+    { field: 'partyName', headerName: 'CUSTOMER', flex: 1, minWidth: 128,
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap fontSize="0.8rem">{p.value}</Typography>
     },
-    { field: 'orderDate', headerName: 'DATE', width: 95,
+    { field: 'orderDate', headerName: 'DATE', width: 78,
       renderCell: (p) => <Typography variant="body2" color="text.secondary" fontWeight={500} fontSize="0.8rem">{dayjs(p.value).format('DD MMM YY')}</Typography>
     },
-    { field: 'items', headerName: 'SKUs', width: 60, align: 'center', headerAlign: 'center',
+    { field: 'items', headerName: 'SKUs', width: 48, align: 'center', headerAlign: 'center',
       renderCell: (p) => (
         <Box sx={{ px: 1, py: 0.3, borderRadius: '6px', bgcolor: alpha(BRAND.wip, 0.06), color: BRAND.wip, fontSize: '0.75rem', fontWeight: 700 }}>
           {p.value?.length || 0}
         </Box>
       )
     },
-    { field: 'totalOrderQty', headerName: 'ORDER QTY', width: 100, align: 'right', headerAlign: 'right',
+    { field: 'totalOrderQty', headerName: 'ORDER QTY', width: 82, align: 'right', headerAlign: 'right',
       renderCell: (p) => <Typography variant="body2" fontWeight={700} fontSize="0.8rem">{p.value?.toLocaleString('en-IN') || '0'}</Typography>
     },
-    { field: 'totalDispatchedQty', headerName: 'DISPATCHED', width: 100, align: 'right', headerAlign: 'right',
+    { field: 'totalDispatchedQty', headerName: 'DISPATCHED', width: 88, align: 'right', headerAlign: 'right',
       renderCell: (p) => <Typography variant="body2" fontWeight={600} fontSize="0.8rem" color={BRAND.success}>{p.value?.toLocaleString('en-IN') || '0'}</Typography>
     },
-    { field: 'totalBalanceQty', headerName: 'BALANCE', width: 90, align: 'right', headerAlign: 'right',
+    { field: 'totalBalanceQty', headerName: 'BALANCE', width: 80, align: 'right', headerAlign: 'right',
       renderCell: (p) => <Typography variant="body2" fontWeight={700} fontSize="0.8rem" color={p.value > 0 ? BRAND.error : BRAND.success}>{p.value?.toLocaleString('en-IN') || '0'}</Typography>
     },
-    { field: 'workflow', headerName: 'PROGRESS', width: 140, sortable: false,
+    { field: 'workflow', headerName: 'PROGRESS', width: 86, sortable: false,
       renderCell: (p) => <PipelineBar row={p.row} />
     },
-    { field: 'status', headerName: 'STATUS', width: 120,
+    { field: 'status', headerName: 'STATUS', width: 104,
       renderCell: (p) => <StatusBadge value={p.value} />
     },
-    { field: 'actions', headerName: '', width: canDelete ? 150 : 116, sortable: false, align: 'center',
+    { field: 'actions', headerName: '', width: canDelete ? 112 : 88, sortable: false, align: 'center',
       renderCell: (p) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
           <Tooltip title="Edit Order"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleEditOrder(p.row); }} sx={{ color: BRAND.primary }}><Edit3 size={14} /></IconButton></Tooltip>
@@ -177,7 +184,7 @@ const OrdersList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, p: { xs: 1.5, sm: 2 }, minHeight: '100vh', bgcolor: O2D.canvas }}>
       
       {/* ── Header ─────────────────────────────────────────── */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 2 }}>
@@ -209,7 +216,7 @@ const OrdersList = () => {
       </Box>
 
       {/* ── Filters Bar ────────────────────────────────────── */}
-      <Paper sx={{ borderRadius: '14px', p: 0, boxShadow: 'none', border: '1px solid #e2e8f0' }}>
+      <Paper sx={{ borderRadius: '8px', p: 0, boxShadow: 'none', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
         <Box sx={{ 
           display: 'flex', 
           flexDirection: { xs: 'column', md: 'row' },
@@ -217,7 +224,7 @@ const OrdersList = () => {
           justifyContent: 'space-between', 
           px: 1, 
           py: 1, 
-          borderBottom: '1px solid #f1f5f9',
+          borderBottom: `1px solid ${O2D.line}`,
           gap: 1.5
         }}>
           <Tabs 
@@ -271,6 +278,12 @@ const OrdersList = () => {
           sx={{
             border: 0,
             '& .MuiDataGrid-row': { cursor: 'pointer' },
+            // Warm greige header band + hairlines, matching the O2D palette.
+            '& .MuiDataGrid-columnHeaders': { bgcolor: O2D.surfaceAlt, borderBottom: `1px solid ${O2D.line}` },
+            '& .MuiDataGrid-columnHeaderTitle': { fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: O2D.sub },
+            '& .MuiDataGrid-cell': { borderColor: O2D.lineSoft },
+            '& .MuiDataGrid-row:hover': { bgcolor: O2D.surfaceAlt },
+            '& .MuiDataGrid-footerContainer': { borderTop: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt },
           }}
         />
       </Paper>

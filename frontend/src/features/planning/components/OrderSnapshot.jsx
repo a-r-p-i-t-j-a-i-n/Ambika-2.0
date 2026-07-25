@@ -3,21 +3,21 @@ import { Box, Paper, Typography, Stack, LinearProgress, Chip, alpha, useTheme } 
 import { Building2, Calendar, Truck, Hash } from 'lucide-react';
 import dayjs from 'dayjs';
 
+// Aligned KPI tile — square corners, fills its grid cell so the row stays even.
 const Kpi = ({ label, value, color }) => {
   const theme = useTheme();
   return (
     <Box sx={{
-      px: 1.5, py: 1, borderRadius: '10px',
-      bgcolor: alpha(color || theme.palette.primary.main, 0.06),
+      px: 1.25, py: 0.9, borderRadius: '6px',
+      bgcolor: alpha(color || theme.palette.primary.main, 0.05),
       border: '1px solid', borderColor: alpha(color || theme.palette.primary.main, 0.16),
-      minWidth: 110, flex: { xs: '1 1 45%', md: '0 0 auto' },
     }}>
       <Typography sx={{
-        fontSize: '0.62rem', fontWeight: 700, color: 'text.secondary',
-        textTransform: 'uppercase', letterSpacing: '0.08em',
+        fontSize: '0.58rem', fontWeight: 800, color: 'text.secondary',
+        textTransform: 'uppercase', letterSpacing: '0.06em',
       }}>{label}</Typography>
       <Typography sx={{
-        fontSize: '1.05rem', fontWeight: 800,
+        fontSize: '1.05rem', fontWeight: 800, lineHeight: 1.2,
         color: color || theme.palette.text.primary,
         fontVariantNumeric: 'tabular-nums',
       }}>{value}</Typography>
@@ -39,41 +39,34 @@ const OrderSnapshot = ({ schedule, comparison }) => {
     : Math.max(0, Number(totals.orderQty || 0) - Number(totals.plannedQty || 0));
 
   return (
-    <Paper sx={{ p: 2, borderRadius: '14px' }}>
-      <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        spacing={2}
-        alignItems={{ xs: 'flex-start', md: 'center' }}
-        justifyContent="space-between"
-      >
-        <Box sx={{ minWidth: 0 }}>
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
-            <Typography variant="h6" fontWeight={800} sx={{ color: 'text.primary' }} noWrap>
-              {order.soNumber || '—'}
-            </Typography>
-            <Chip size="small" label={order.status || 'NEW'} sx={{ fontWeight: 700 }} />
-            {riskCount > 0 && (
-              <Chip size="small" color="error" variant="outlined" label={`${riskCount} risk${riskCount > 1 ? 's' : ''}`} />
-            )}
-          </Stack>
-          <Stack direction="row" spacing={1.5} sx={{ mt: 0.5, color: 'text.secondary', fontSize: '0.8rem', flexWrap: 'wrap', rowGap: 0.5 }}>
-            <Stack direction="row" spacing={0.5} alignItems="center"><Building2 size={12} />{order.partyName || '—'}</Stack>
-            <Stack direction="row" spacing={0.5} alignItems="center"><Hash size={12} />PO {order.poNumber || '—'}</Stack>
-            <Stack direction="row" spacing={0.5} alignItems="center"><Calendar size={12} />{order.orderDate ? dayjs(order.orderDate).format('DD MMM YYYY') : '—'}</Stack>
-            {order.place && <Stack direction="row" spacing={0.5} alignItems="center"><Truck size={12} />{order.place}</Stack>}
-          </Stack>
-        </Box>
-
-        <Stack direction="row" spacing={1.25} flexWrap="wrap" rowGap={1}>
-          <Kpi label="Ordered"    value={Number(totals.orderQty || 0).toLocaleString('en-IN')} />
-          <Kpi label="Planned"    value={Number(totals.plannedQty || 0).toLocaleString('en-IN')} color={theme.palette.primary.main} />
-          <Kpi label="Unplanned"  value={Number(unplannedQty).toLocaleString('en-IN')} color={unplannedQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
-          <Kpi label="Dispatched" value={Number(totals.dispatchedQty || 0).toLocaleString('en-IN')} color={theme.palette.success.main} />
-          <Kpi label="Balance"    value={Number(totals.balanceQty || 0).toLocaleString('en-IN')} color={totals.balanceQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
-        </Stack>
+    <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', border: '1px solid', borderColor: 'divider' }}>
+      {/* Identity row */}
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5}>
+        <Typography variant="h6" fontWeight={800} sx={{ color: 'text.primary', fontSize: '1.05rem' }} noWrap>
+          {order.soNumber || '—'}
+        </Typography>
+        <Chip size="small" label={order.status || 'NEW'} sx={{ fontWeight: 700, height: 20, fontSize: '0.66rem', borderRadius: '4px' }} />
+        {riskCount > 0 && (
+          <Chip size="small" color="error" variant="outlined" label={`${riskCount} risk${riskCount > 1 ? 's' : ''}`} sx={{ height: 20, fontSize: '0.66rem', borderRadius: '4px' }} />
+        )}
+      </Stack>
+      <Stack direction="row" spacing={1.5} sx={{ mt: 0.5, color: 'text.secondary', fontSize: '0.78rem', flexWrap: 'wrap', rowGap: 0.5 }}>
+        <Stack direction="row" spacing={0.5} alignItems="center"><Building2 size={12} />{order.partyName || '—'}</Stack>
+        <Stack direction="row" spacing={0.5} alignItems="center"><Hash size={12} />PO {order.poNumber || '—'}</Stack>
+        <Stack direction="row" spacing={0.5} alignItems="center"><Calendar size={12} />{order.orderDate ? dayjs(order.orderDate).format('DD MMM YYYY') : '—'}</Stack>
+        {order.place && <Stack direction="row" spacing={0.5} alignItems="center"><Truck size={12} />{order.place}</Stack>}
       </Stack>
 
-      <Box sx={{ mt: 2 }}>
+      {/* KPI grid — always an even, aligned row (wraps cleanly on narrow widths) */}
+      <Box sx={{ mt: 1.5, display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1 }}>
+        <Kpi label="Ordered"    value={Number(totals.orderQty || 0).toLocaleString('en-IN')} />
+        <Kpi label="Planned"    value={Number(totals.plannedQty || 0).toLocaleString('en-IN')} color={theme.palette.primary.main} />
+        <Kpi label="Unplanned"  value={Number(unplannedQty).toLocaleString('en-IN')} color={unplannedQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
+        <Kpi label="Dispatched" value={Number(totals.dispatchedQty || 0).toLocaleString('en-IN')} color={theme.palette.success.main} />
+        <Kpi label="Balance"    value={Number(totals.balanceQty || 0).toLocaleString('en-IN')} color={totals.balanceQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
+      </Box>
+
+      <Box sx={{ mt: 1.75 }}>
         <Stack direction="row" spacing={2} justifyContent="space-between" sx={{ mb: 0.5 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
             Plan Coverage {coverage}% · Fulfilment {fulfilment}%

@@ -12,6 +12,7 @@ import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
 import { printDispatchPlanByDate } from '../../utils/printDispatchPlan';
 import { useFmsGate, FmsGateBanner, FmsGateDialog } from '../o2d-fms/FmsGate';
+import { O2D } from '../o2d-fms/o2dTheme';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const fmtDate = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -116,40 +117,34 @@ const GenerateDispatchPlanPdf = () => {
   }, [cameFromTask, hasPlan, loadingSched]);
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{
-        color: '#fff', px: { xs: 2.5, md: 3.5 }, pt: { xs: 2.75, md: 3.25 }, pb: { xs: 3.5, md: 4.25 },
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-      }}>
-        <Stack direction="row" spacing={1.75} alignItems="center">
-          <Box sx={{ width: 42, height: 42, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0,
-            background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <FileText size={20} color="#fff" />
+    <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas }}>
+      {/* Flush warm top bar — matches the O2D design system */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <Box sx={{ width: 30, height: 30, borderRadius: '6px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand }}>
+            <FileText size={16} />
           </Box>
           <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1rem', md: '1.15rem' }, fontWeight: 800, letterSpacing: '-0.01em', lineHeight: 1.15 }}>
+            <Typography sx={{ color: O2D.ink, fontSize: { xs: '1rem', md: '1.1rem' }, fontWeight: 800, lineHeight: 1.2 }}>
               Generate Dispatch Plan PDF
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.75rem', mt: 0.3 }}>
-              Pick an order — its dispatch schedule auto-fills. Preview and download a professional plan PDF.
+            <Typography noWrap sx={{ color: O2D.sub, fontSize: '0.72rem' }}>
+              Pick an order — its dispatch schedule auto-fills. Preview &amp; download a professional plan PDF.
             </Typography>
           </Box>
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -2.5, md: -3 }, position: 'relative', zIndex: 1, pb: 6, maxWidth: 1240, mx: 'auto' }}>
+      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, pb: 6, maxWidth: 1240, mx: 'auto' }}>
         {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Came from an FMS step — the plan PDF opens automatically; this banner
             brings the doer straight back to the step to submit. */}
         {cameFromTask && (
           <Paper elevation={0} sx={{
-            p: { xs: 1.25, md: 1.5 }, borderRadius: 2.5, mb: 2, display: 'flex', alignItems: 'center',
+            p: { xs: 1.25, md: 1.5 }, borderRadius: '8px', mb: 1.5, display: 'flex', alignItems: 'center',
             gap: 1.25, flexWrap: 'wrap',
-            // Solid card (NOT translucent) so the dark hero never bleeds through it.
-            bgcolor: 'background.paper',
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.3)}`,
-            boxShadow: '0 6px 20px rgba(30,58,138,0.08)',
+            bgcolor: O2D.surfaceAlt,
+            border: `1px solid ${alpha(O2D.brand, 0.3)}`,
           }}>
             <Box sx={{ p: 0.85, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.12), color: 'primary.main', display: 'flex', flexShrink: 0 }}>
               <Zap size={16} />
@@ -170,7 +165,7 @@ const GenerateDispatchPlanPdf = () => {
         )}
 
         {/* Order picker */}
-        <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+        <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
             <Autocomplete
               sx={{ flex: 1, minWidth: 300 }}
@@ -205,17 +200,17 @@ const GenerateDispatchPlanPdf = () => {
 
         {/* States */}
         {!order && (
-          <Paper sx={{ p: 6, textAlign: 'center', borderRadius: 3, color: 'text.disabled' }}>
+          <Paper elevation={0} sx={{ p: 6, textAlign: 'center', borderRadius: '8px', color: 'text.disabled', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
             <PackageSearch size={34} style={{ opacity: 0.4, marginBottom: 8 }} />
             <Typography sx={{ fontWeight: 700 }}>Choose an order to begin</Typography>
             <Typography sx={{ fontSize: '0.85rem' }}>Its dispatch plan will load here for preview & PDF export.</Typography>
           </Paper>
         )}
 
-        {order && loadingSched && <Skeleton variant="rounded" height={280} sx={{ borderRadius: 3 }} />}
+        {order && loadingSched && <Skeleton variant="rounded" height={280} sx={{ borderRadius: '8px' }} />}
 
         {order && !loadingSched && !hasPlan && (
-          <Paper sx={{ p: 5, textAlign: 'center', borderRadius: 3, color: 'text.secondary' }}>
+          <Paper elevation={0} sx={{ p: 5, textAlign: 'center', borderRadius: '8px', color: 'text.secondary', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
             <CalendarRange size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
             <Typography sx={{ fontWeight: 700 }}>No dispatch plan found for {order.soNumber}</Typography>
             <Typography sx={{ fontSize: '0.85rem' }}>
@@ -226,8 +221,8 @@ const GenerateDispatchPlanPdf = () => {
 
         {/* Preview */}
         {hasPlan && (
-          <Paper sx={{ borderRadius: 3, overflow: 'hidden', border: `1px solid ${theme.palette.divider}` }}>
-            <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+          <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+            <Box sx={{ px: 2, py: 1.25, borderBottom: `1px solid ${O2D.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
               <Box sx={{ minWidth: 0 }}>
                 <Typography sx={{ fontWeight: 800, fontSize: '0.95rem' }} noWrap>{schedule.partyName || order?.partyName || '—'}</Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
@@ -239,10 +234,10 @@ const GenerateDispatchPlanPdf = () => {
             <Box sx={{ overflowX: 'auto' }}>
               <Table size="small" sx={{
                 minWidth: 720,
-                '& td, & th': { fontSize: '0.76rem', py: 0.6, px: 1.25, borderColor: theme.palette.divider },
+                '& td, & th': { fontSize: '0.76rem', py: 0.6, px: 1.25, borderColor: O2D.lineSoft }, '& tbody tr:hover': { bgcolor: O2D.surfaceAlt },
               }}>
                 <TableHead>
-                  <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
+                  <TableRow sx={{ bgcolor: O2D.surfaceAlt }}>
                     {['Item', 'PO Qty', 'To Plan', 'Dispatch', 'Planned Date', 'Planned Qty'].map((h, i) => (
                       <TableCell key={h} align={[1, 2, 5].includes(i) ? 'right' : 'left'}
                         sx={{ fontWeight: 700, fontSize: '0.64rem !important', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'text.secondary', whiteSpace: 'nowrap' }}>{h}</TableCell>

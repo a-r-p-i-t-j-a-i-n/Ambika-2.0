@@ -26,6 +26,7 @@ import RiskRail from './components/RiskRail';
 import AddPhaseDialog from './components/AddPhaseDialog';
 import { useReturnToTask } from '../o2d-fms/useReturnToTask';
 import { useFmsGate, FmsGateDialog, FmsGateBanner } from '../o2d-fms/FmsGate';
+import { O2D } from '../o2d-fms/o2dTheme';
 
 // Group an item's phases by phaseNo so the UI shows one card per phase.
 const buildPhaseGroups = (schedule) => {
@@ -74,17 +75,16 @@ const buildPhaseGroups = (schedule) => {
 const EmptyState = () => {
   const theme = useTheme();
   return (
-    <Paper sx={{ p: 4, borderRadius: '14px', textAlign: 'center' }}>
+    <Paper elevation={0} sx={{ p: 4, borderRadius: '8px', textAlign: 'center', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
       <Box sx={{
-        width: 56, height: 56, borderRadius: '16px', mx: 'auto', mb: 1.5,
+        width: 44, height: 44, borderRadius: '8px', mx: 'auto', mb: 1.25,
         display: 'grid', placeItems: 'center',
-        bgcolor: alpha(theme.palette.primary.main, 0.08),
-        color: 'primary.main',
+        bgcolor: alpha(O2D.brand, 0.08), color: O2D.brand,
       }}>
-        <CalendarPlus size={26} />
+        <CalendarPlus size={22} />
       </Box>
-      <Typography variant="h6" fontWeight={800} color="text.primary">No order selected</Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+      <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink }}>No order selected</Typography>
+      <Typography sx={{ fontSize: '0.8rem', color: O2D.sub, mt: 0.5 }}>
         Pick a sales order from the search bar above to plan its dispatches.
       </Typography>
     </Paper>
@@ -218,43 +218,38 @@ const PlanWorkspace = () => {
   );
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 3 }, display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {/* Page header — branded toolbar card */}
-      <Paper
-        elevation={0}
+    <Box sx={{ bgcolor: O2D.canvas, minHeight: '100vh' }}>
+      {/* Flush top bar — sits hard against the sidebar/top with no gap, clean white
+          with a hairline rule (same language as the O2D task page). */}
+      <Box
         sx={{
-          p: { xs: 2, md: 2.5 },
-          borderRadius: '16px',
-          border: '1px solid',
-          borderColor: alpha(theme.palette.primary.main, 0.18),
-          background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.06)} 0%, ${alpha(theme.palette.primary.light, 0.04)} 100%)`,
+          position: 'sticky', top: 0, zIndex: 5,
+          bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`,
+          px: { xs: 1.5, md: 2 }, py: 1,
         }}
       >
         <Stack
           direction={{ xs: 'column', lg: 'row' }}
-          spacing={2}
+          spacing={1.25}
           useFlexGap
           flexWrap="wrap"
           justifyContent="space-between"
           alignItems={{ xs: 'flex-start', lg: 'center' }}
         >
-          {/* Title with icon badge — grows to fill free space so the subtitle wraps
-              as a normal line instead of collapsing into a word-per-line column. */}
-          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: { xs: 0, lg: 300 }, flex: { lg: '1 1 300px' } }}>
+          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0, flex: { lg: '1 1 260px' } }}>
             <Box sx={{
-              width: 46, height: 46, borderRadius: '14px', flexShrink: 0,
-              display: 'grid', placeItems: 'center', color: '#fff',
-              background: `linear-gradient(135deg, ${theme.palette.primary.main}, ${theme.palette.primary.dark})`,
-              boxShadow: `0 6px 16px ${alpha(theme.palette.primary.main, 0.35)}`,
+              width: 30, height: 30, borderRadius: '6px', flexShrink: 0,
+              display: 'grid', placeItems: 'center',
+              bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand,
             }}>
-              <CalendarPlus size={22} />
+              <CalendarPlus size={16} />
             </Box>
             <Box sx={{ minWidth: 0 }}>
-              <Typography noWrap sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'text.primary', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+              <Typography noWrap sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>
                 Dispatch Planning
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25, maxWidth: 560 }}>
-                Break a sales order into phased dispatches — each phase carries its own date &amp; per-SKU plan.
+              <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub }}>
+                Break a sales order into phased dispatches — each phase has its own date &amp; per-SKU plan.
               </Typography>
             </Box>
           </Stack>
@@ -282,7 +277,7 @@ const PlanWorkspace = () => {
                 <TextField
                   {...p}
                   placeholder="Search sales order…"
-                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: '12px', bgcolor: 'background.paper' } }}
+                  sx={{ '& .MuiOutlinedInput-root': { borderRadius: '6px', bgcolor: 'background.paper' } }}
                   InputProps={{ ...p.InputProps, startAdornment: <Search size={15} style={{ marginLeft: 4, marginRight: 6, opacity: 0.6 }} /> }}
                 />
               )}
@@ -297,43 +292,41 @@ const PlanWorkspace = () => {
                 </li>
               )}
             />
-            <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+            <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
               <Button
-                variant="outlined"
-                disableElevation
-                startIcon={<CalendarDays size={16} />}
+                size="small" variant="outlined" disableElevation
+                startIcon={<CalendarDays size={14} />}
                 onClick={() => navigate('/dispatch-planning/calendar')}
-                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2 }}
+                sx={{ borderRadius: '6px', whiteSpace: 'nowrap', px: 1.5, textTransform: 'none', fontWeight: 700 }}
               >
                 Calendar
               </Button>
               <Button
-                variant="contained"
-                disableElevation
-                startIcon={gate.blocked ? <Lock size={15} /> : <Plus size={16} />}
+                size="small" variant="contained" disableElevation
+                startIcon={gate.blocked ? <Lock size={13} /> : <Plus size={14} />}
                 onClick={tryAddPhase}
                 disabled={!soNumber || scheduleLoading}
-                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2, ...(gate.blocked ? { bgcolor: '#b45309', '&:hover': { bgcolor: '#92400e' } } : {}) }}
+                sx={{ borderRadius: '6px', whiteSpace: 'nowrap', px: 1.5, textTransform: 'none', fontWeight: 700, ...(gate.blocked ? { bgcolor: '#b45309', '&:hover': { bgcolor: '#92400e' } } : {}) }}
               >
                 Add Phase
               </Button>
               {/* Once planning is done, jump to this order's FMS task (checklist auto-marked). */}
               <Button
-                variant="outlined"
-                color="success"
-                disableElevation
-                startIcon={<ListChecks size={16} />}
+                size="small" variant="outlined" color="success" disableElevation
+                startIcon={<ListChecks size={14} />}
                 onClick={() => finishToTask({ soNumber })}
                 disabled={!soNumber}
-                sx={{ borderRadius: '12px', whiteSpace: 'nowrap', px: 2 }}
+                sx={{ borderRadius: '6px', whiteSpace: 'nowrap', px: 1.5, textTransform: 'none', fontWeight: 700 }}
               >
                 Done → FMS Task
               </Button>
             </Stack>
           </Stack>
         </Stack>
-      </Paper>
+      </Box>
 
+      {/* Body — the only place with page padding, so the bar above stays flush */}
+      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       {soNumber && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
 
       {!soNumber && <EmptyState />}
@@ -356,9 +349,9 @@ const PlanWorkspace = () => {
             />
 
             {phaseGroups.length === 0 ? (
-              <Paper sx={{ p: 4, borderRadius: '14px', textAlign: 'center' }}>
+              <Paper sx={{ p: 4, borderRadius: '8px', textAlign: 'center' }}>
                 <Box sx={{
-                  width: 48, height: 48, borderRadius: '14px', mx: 'auto', mb: 1.5,
+                  width: 48, height: 48, borderRadius: '8px', mx: 'auto', mb: 1.5,
                   display: 'grid', placeItems: 'center',
                   bgcolor: alpha(theme.palette.primary.main, 0.08),
                   color: 'primary.main',
@@ -403,7 +396,7 @@ const PlanWorkspace = () => {
                           direction="row" alignItems="center" justifyContent="space-between"
                           flexWrap="wrap" rowGap={0.5}
                           sx={{
-                            mb: 1, px: 1.5, py: 1, borderRadius: '10px',
+                            mb: 1, px: 1.5, py: 1, borderRadius: '6px',
                             bgcolor: alpha(theme.palette.primary.main, 0.06),
                             border: '1px solid', borderColor: alpha(theme.palette.primary.main, 0.16),
                           }}
@@ -433,6 +426,8 @@ const PlanWorkspace = () => {
           </Box>
         </Box>
       )}
+
+      </Box>
 
       <AddPhaseDialog
         open={addDialogOpen}

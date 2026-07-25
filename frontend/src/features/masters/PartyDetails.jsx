@@ -14,11 +14,13 @@ import { useGetPartyByIdQuery } from '../../store/api/partyApi';
 import { useGetSkusQuery } from '../../store/api/skuApi';
 import { alpha } from '@mui/material/styles';
 import PartyFormDrawer from './PartyFormDrawer';
+import PartySkusDrawer from './PartySkusDrawer';
 
 const PartyDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const [editOpen, setEditOpen] = useState(false);
+  const [skusOpen, setSkusOpen] = useState(false);
 
   const { data: partyRes, isLoading: partyLoading } = useGetPartyByIdQuery(id);
   const party = partyRes?.data; // API wraps the doc in { success, message, data }
@@ -274,7 +276,10 @@ const PartyDetails = () => {
                   <Typography variant="subtitle1" sx={{ ...sectionHeaderStyle, mb: 0 }}>
                     <Package size={18} /> Linked SKUs ({skusData?.meta?.total || 0})
                   </Typography>
-                  <Button size="small" variant="outlined" sx={{ borderRadius: '8px' }}>Manage SKUs</Button>
+                  <Button size="small" variant="outlined" startIcon={<Pencil size={13} />}
+                    onClick={() => setSkusOpen(true)} sx={{ borderRadius: '8px' }}>
+                    Manage SKUs
+                  </Button>
                 </Box>
                 <Grid container spacing={2}>
                   {skusData?.data?.map((sku) => (
@@ -295,6 +300,12 @@ const PartyDetails = () => {
                           <Box>
                             <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Weight</Typography>
                             <Typography variant="caption" fontWeight={700}>{sku.weightPerBox} Kgs</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Price</Typography>
+                            <Typography variant="caption" fontWeight={700} sx={{ color: sku.sellingPrice ? 'success.main' : 'text.disabled' }}>
+                              {sku.sellingPrice ? `₹ ${Number(sku.sellingPrice).toLocaleString('en-IN')}` : 'Not set'}
+                            </Typography>
                           </Box>
                         </Box>
                       </Paper>
@@ -352,6 +363,7 @@ const PartyDetails = () => {
       </Grid>
 
       <PartyFormDrawer open={editOpen} party={party} onClose={() => setEditOpen(false)} />
+      <PartySkusDrawer open={skusOpen} party={party} onClose={() => setSkusOpen(false)} />
     </Box>
   );
 };

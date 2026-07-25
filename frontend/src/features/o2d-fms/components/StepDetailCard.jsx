@@ -7,7 +7,7 @@ import {
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
-  ExternalLink, Truck, Boxes, Workflow,
+  ExternalLink, Truck, Boxes, Workflow, Maximize2, Circle,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -15,11 +15,15 @@ import {
   useAddStepCommentMutation, useGetProcessByIdQuery,
   useUploadFileMutation, useAddStepAttachmentsMutation, useRemoveStepAttachmentMutation,
   useAnswerVerificationMutation, useFillFormFieldMutation, useApproveStepMutation,
-  useMarkActionDoneMutation, useGetConsignmentsQuery,
+  useMarkActionDoneMutation, useGetConsignmentsQuery, useSetChecklistProofMutation,
 } from '../../../store/api/o2dFmsApi';
+import ProofChecklistItem, { hasProof } from './ProofChecklistItem';
 import { useGetScheduleQuery } from '../../../store/api/dispatchControlApi';
 import { resolveActionLink, actionLinkMeta, resolveEntityLink } from '../actionLinks';
 import { resolveFileUrl } from '../../../utils/fileUrl';
+import { O2D as OT, tokenOf, isDone, timingOf } from '../o2dTheme';
+
+const O2D_LINE = OT.line;
 
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 import { useListAccessUsersQuery } from '../../../store/api/accessControlApi';
@@ -219,8 +223,13 @@ const FormFieldRow = ({ item, disabled, onSave }) => {
  * + the task layer (checklist, comments, buddy). When opened from My Tasks the
  * passed `step` is partial, so we fetch the full process to hydrate checklist/comments.
  */
-const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false, consignment: consignmentProp = null }) => {
+const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false, consignment: consignmentProp = null, hideHeader = false, slimSop = false, hideLinked = false }) => {
   const myId = useSelector((s) => s.auth?.user?._id);
+  // The popup now mirrors the full page: a status hero + two columns (task left,
+  // who/when/refs right). So OUTSIDE the page (dialog), we also slim the body —
+  // moving the Who/How/When tiles, timing row and linked records into the sidebar.
+  const slim = slimSop || !asPage;
+  const hideLnk = hideLinked || !asPage;
   const [link, setLink] = useState('');
   const [remarks, setRemarks] = useState('');
   const [assignSel, setAssignSel] = useState([]); // selected doer ids (reassign)
@@ -232,11 +241,16 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const fileInputRef = React.useRef(null);
 
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Remembers that THIS step was just submitted from a form, so the confirmation
+  // banner survives after we strip the one-shot ?entryDone flag from the URL.
+  const [justSubmitted, setJustSubmitted] = useState(false);
   const [markActionDone] = useMarkActionDoneMutation();
   const [completeStep, { isLoading: completing }] = useCompleteStepMutation();
   const [assignStep, { isLoading: assigning }] = useAssignStepMutation();
   const [toggleItem] = useToggleChecklistItemMutation();
+  const [setChecklistProof] = useSetChecklistProofMutation();
+  const [proofBusyId, setProofBusyId] = useState(null);
   const [answerVerification] = useAnswerVerificationMutation();
   const [fillFormField] = useFillFormFieldMutation();
   const [approveStepMut, { isLoading: approving }] = useApproveStepMutation();
@@ -282,15 +296,25 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const isStageDoneFor = (c) => { const d = consignmentActionDone(primaryActionKey, c); return d == null ? false : d; };
   const dcScopeParam = searchParams.get('dc');
   const consignment = consignmentProp
-    || (dcScopeParam ? consList.find((c) => c.dcNumber === dcScopeParam) : null)
-    || ((asPage && isPerConsStep && consList.length)
-      ? (consList.find((c) => !isStageDoneFor(c)) || consList[consList.length - 1])
-      : null);
+    || (dcScopeParam
+      // Scoped by ?dc → resolve to THAT exact challan ONLY, never fall back to
+      // another. Falling back (e.g. while the ledger loads, or if a prior challan
+      // reads "not done") would silently switch the doer to the wrong delivery —
+      // exactly the "next step jumps to DC-058" bug. Null while loading is fine.
+      ? (consList.find((c) => c.dcNumber === dcScopeParam) || null)
+      : ((asPage && isPerConsStep && consList.length)
+        ? (consList.find((c) => !isStageDoneFor(c)) || consList[consList.length - 1])
+        : null));
   // The challan currently in focus — used to carry the ?dc scope through to the
   // connected form AND forward to the next step, so the whole chain stays per-challan.
   const activeDc = consignment?.dcNumber || dcScopeParam || '';
   const stageDoneWord = STAGE_DONE_WORD[primaryActionKey] || 'done';
   const consComplete = consignment ? isStageDoneFor(consignment) : false;
+  // A brand-new delivery challan hasn't done THIS step yet, even though the shared
+  // step (and its checklist) may already be "done" from a PREVIOUS challan. When
+  // scoped to such a challan we present the step FRESH — not the prior challan's
+  // ticks, proofs or "completed" — so each dispatch's downstream work starts clean.
+  const consFresh = !!consignment && isPerConsStep && !consComplete;
 
   // Seed reassign multi-selects from the step's current doers/buddies.
   React.useEffect(() => {
@@ -308,9 +332,26 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   React.useEffect(() => {
     if (!autoComplete || autoTickedRef.current) return;
     const ls = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
-    if (!ls || ['DONE', 'DELAYED'].includes(ls.status) || !(ls.checklist || []).length) return;
-    const pending = (ls.checklist || []).filter((c) => !c.done);
+    if (!ls) return;
     autoTickedRef.current = true;
+    // ?entryDone is a ONE-SHOT signal meaning "you just submitted the form for THIS
+    // step". Consume it immediately, otherwise it lingers in the URL and re-fires on
+    // the NEXT step (or on a refresh) — silently ticking a checklist the doer never
+    // filled and leaving them with a step that looks finished on its own.
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev);
+      p.delete('entryDone');
+      return p;
+    }, { replace: true });
+
+    if (['DONE', 'DELAYED'].includes(ls.status) || !(ls.checklist || []).length) return;
+    // Never auto-tick a step this user doesn't own — the entry wasn't theirs to make.
+    if (!canAct) return;
+    setJustSubmitted(true);
+    // When the step demands proof, only auto-tick items that already carry their own
+    // evidence — otherwise the return-from-form shortcut would bypass the proof gate.
+    const needsProof = !!ls.proof?.required;
+    const pending = (ls.checklist || []).filter((c) => !c.done && (!needsProof || hasProof(c)));
     if (!pending.length) return;
     (async () => {
       for (const item of pending) {
@@ -359,6 +400,13 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     const recLink = recordLinks.find((r) => r.key === key)?.to || null;
     actionDoneRef.current = marker;
     markActionDone({ id: processId, stepCode: ls.stepCode, actionKey: key, link: recLink || undefined }).catch(() => {});
+    // Consume the one-shot flag too, so a refresh (or moving to another step) can't
+    // re-stamp an action the doer didn't just perform.
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev);
+      p.delete('doneAction');
+      return p;
+    }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, processId, step?.stepCode, procRes?.data]);
 
@@ -375,9 +423,18 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const canAct = canActProp || isMine;
   const done = ['DONE', 'DELAYED'].includes(liveStep.status);
   const tone = STATUS_TONE[liveStep.status] || STATUS_TONE.PENDING;
+  // Hero + sidebar bits (dialog uses these to mirror the full page's editorial look).
+  const heroTk = tokenOf(liveStep.status);
+  const heroTiming = timingOf(liveStep);
+  const ownerName = (liveStep.assignees?.[0]?.name) || liveStep.assignedTo?.name
+    || liveStep.defaultOwnerRole || liveStep.ownerName || 'Unassigned';
   const checklist = liveStep.checklist || [];
   const comments = liveStep.comments || [];
-  const remaining = checklist.filter((c) => !c.done).length;
+  // On a fresh challan every item reads as not-yet-done (the shared ticks belong to
+  // a prior challan). `stepDone` likewise ignores a prior challan's completion so a
+  // new dispatch's downstream step stays actionable.
+  const remaining = consFresh ? checklist.length : checklist.filter((c) => !c.done).length;
+  const stepDone = ['DONE', 'DELAYED'].includes(liveStep.status) && !consFresh;
   const proc = procRes?.data;
 
   // ── Next step in this order's flow ──
@@ -399,7 +456,15 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const formFields = liveStep.formFields || [];
   const unanswered = verifications.filter((v) => !v.answer).length;
   const emptyFields = formFields.filter((f) => f.required && (f.value === null || f.value === undefined || f.value === ''));
-  const proofNeed = liveStep.proof?.required ? Math.max(0, (liveStep.proof.minCount || 1) - (liveStep.attachments || []).length) : 0;
+  // Does this step demand evidence? When it does, each checklist item must carry its
+  // OWN proof before it can be ticked (see handleToggle) — which in turn gates Mark Done.
+  const proofRequired = !!liveStep.proof?.required;
+  // Per-item proofs count toward the step's proof requirement, so a doer who has
+  // evidenced every item isn't asked for a second, step-level attachment as well.
+  const itemProofCount = checklist.filter((c) => hasProof(c)).length;
+  const proofNeed = proofRequired
+    ? Math.max(0, (liveStep.proof.minCount || 1) - ((liveStep.attachments || []).length + itemProofCount))
+    : 0;
   const approvalPending = !!liveStep.approval?.required && !liveStep.approval?.approvedBy;
   const iAmApprover = !!myId && (liveStep.approval?.approverIds || []).map((u) => String(u._id || u)).includes(String(myId));
 
@@ -523,9 +588,38 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   };
 
   const handleToggle = async (item) => {
+    // When the step demands proof, an item can only be ticked once it carries its
+    // own evidence (a file or a link) — that's what the tick is attesting to.
+    if (!item.done && proofRequired && !hasProof(item)) {
+      setError('Attach a file or paste a link on this item before ticking it.');
+      return;
+    }
+    setError('');
     try { await toggleItem({ id: processId, stepCode: liveStep.stepCode, itemId: item._id, done: !item.done }).unwrap(); }
     catch (e) { setError(e?.data?.message || 'Could not update checklist.'); }
   };
+
+  // ── Per-item proof: upload a file, save a link, or clear it ──
+  const runProof = async (item, payload, failMsg) => {
+    setProofBusyId(item._id); setError('');
+    try { await setChecklistProof({ id: processId, stepCode: liveStep.stepCode, itemId: item._id, ...payload }).unwrap(); }
+    catch (e) { setError(e?.data?.message || failMsg); }
+    finally { setProofBusyId(null); }
+  };
+  const handleItemAttach = async (item, file) => {
+    setProofBusyId(item._id); setError('');
+    try {
+      const res = await uploadFile({ file, folder: 'o2d-fms' }).unwrap();
+      const d = res.data || res;
+      await setChecklistProof({
+        id: processId, stepCode: liveStep.stepCode, itemId: item._id,
+        fileName: d.fileName || file.name, fileUrl: d.url, fileKey: d.key,
+      }).unwrap();
+    } catch (e) { setError(e?.data?.message || 'Could not attach the proof file.'); }
+    finally { setProofBusyId(null); }
+  };
+  const handleItemLink = (item, link) => runProof(item, { link }, 'Could not save the link.');
+  const handleItemClearProof = (item, proofId) => runProof(item, { removeId: proofId }, 'Could not remove the proof.');
 
   // Upload one or more files (or a recorded voice note) → attach to this step.
   const uploadAndAttach = async (fileList) => {
@@ -570,7 +664,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     && !(consSummary ? (consSummary.fullyDispatched && (ep ? consSummary[`all${ep.kind === 'INVOICE' ? 'Invoiced' : ep.kind === 'POD' ? 'Delivered' : 'Paid'}`] : false))
       : (ep && ep.total > 0 && ep.done >= ep.total && ep.fullyDispatched));
   const gatedBlocked = qtyGatedBlocked || consGatedBlocked;
-  const markDoneBtn = (!done && canAct) ? (
+  const markDoneBtn = (!stepDone && canAct) ? (
     <Tooltip title={gatedBlocked ? (qtyGatedBlocked ? 'Completes automatically once all phases are dispatched (balance 0).' : 'Completes automatically once every consignment is done.') : ''}>
       <span>
         <Button onClick={handleComplete} disabled={completing || checklistBlocks || gatedBlocked} variant="contained" startIcon={<CheckCircle2 size={16} />}>
@@ -587,7 +681,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                 challan's work this is and every action deep-links to that DC. ── */}
           {consignment?.dcNumber && (
             <Paper variant="outlined" sx={{
-              p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+              p: 1.25, borderRadius: 1.5,display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
               bgcolor: alpha('#7c3aed', 0.06), borderColor: alpha('#7c3aed', 0.35),
             }}>
               <Box sx={{ p: 0.6, borderRadius: 1.5, bgcolor: alpha('#7c3aed', 0.12), color: '#7c3aed', display: 'flex' }}><Boxes size={15} /></Box>
@@ -603,14 +697,17 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           {/* ── What to do — the SOP up front: the task itself, then Who / How / When.
                 This LEADS the popup so a non-technical doer immediately sees their job
                 (the "next step" pointer lives at the very bottom now). ── */}
-          <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, borderRadius: 2 }}>
+          <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, borderRadius: 1.5 }}>
             <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.6 }}>
               <Box sx={{ p: 0.4, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.1), color: '#1d4ed8', display: 'flex' }}><ClipboardList size={13} /></Box>
               <Typography variant="caption" sx={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', fontSize: '0.66rem' }}>What to do</Typography>
             </Stack>
-            <Typography sx={{ fontWeight: 700, lineHeight: 1.3, mb: 1, fontSize: '0.9rem' }}>
+            <Typography sx={{ fontWeight: 700, lineHeight: 1.3, mb: slim ? 0 : 1, fontSize: '0.9rem' }}>
               {liveStep.instructions || liveStep.description || liveStep.name}
             </Typography>
+            {/* slimSop → the Who / How / When + buddy live in the page's right sidebar,
+                so we drop them here to avoid showing the same thing twice. */}
+            {!slim && (
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 0.75 }}>
               <SopTile icon={User} label="Who does it"
                 value={doerList.length ? doerList.map((u) => u.name || 'User').join(', ') : (liveStep.defaultOwnerRole || liveStep.ownerName || 'Unassigned')} />
@@ -618,7 +715,8 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               <SopTile icon={Clock} label="When"
                 value={liveStep.whenText || (liveStep.slaMinutes != null ? `Within ${liveStep.slaMinutes} min` : '—')} />
             </Box>
-            {buddyList.length > 0 && (
+            )}
+            {!slim && buddyList.length > 0 && (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.6 }}>
                 Backup (buddy): {buddyList.map((u) => u.name || 'User').join(', ')}
               </Typography>
@@ -629,7 +727,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                 a doer sees the task and its action button together, no scrolling. ── */}
           {actions.length > 0 && (
             <Paper variant="outlined" sx={{
-              p: 1.25, borderRadius: 2, bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.35),
+              p: 1.25, borderRadius: 1.5,bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.35),
             }}>
               <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.75 }}>
                 <Box sx={{ p: 0.4, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}><Zap size={13} /></Box>
@@ -690,25 +788,27 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               </Stack>
             </Paper>
           )}
-          {/* Completed banner. When scoped to ONE consignment, report THAT challan's
-              own status + date; otherwise the whole step's aggregate completion. */}
+
+          {/* Completed — one slim line, not a big banner (the hero already shows the
+              status). Just a green tick + who/when so it's clear without eating space. */}
           {(consignment ? consComplete : done) && (
-            <Alert severity="success" icon={<CheckCircle2 size={18} />} sx={{ py: 0.5 }}>
-              {consignment ? (
-                <>This delivery ({consignment.dcNumber}) is {stageDoneWord}{consDoneBy ? ` by ${consDoneBy}` : ''}{consDoneAt ? ` · ${fmt(consDoneAt)}` : ''}.</>
-              ) : (
-                <>Completed{liveStep.completedBy?.name ? ` by ${liveStep.completedBy.name}` : ''}{liveStep.actual ? ` · ${fmt(liveStep.actual)}` : ''}. Nothing more to do on this step.</>
-              )}
-            </Alert>
+            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ color: '#15803d', px: 0.25 }}>
+              <CheckCircle2 size={14} style={{ flexShrink: 0 }} />
+              <Typography variant="caption" sx={{ fontWeight: 700, fontSize: '0.72rem' }}>
+                {consignment
+                  ? <>{consignment.dcNumber} {stageDoneWord}{consDoneBy ? ` · ${consDoneBy}` : ''}{consDoneAt ? ` · ${fmt(consDoneAt)}` : ''}</>
+                  : <>Completed{liveStep.completedBy?.name ? ` · ${liveStep.completedBy.name}` : ''}{liveStep.actual ? ` · ${fmt(liveStep.actual)}` : ''}</>}
+              </Typography>
+            </Stack>
           )}
           {/* Returned from the connected entry form — checklist auto-marked. */}
-          {autoComplete && !done && (
+          {justSubmitted && !done && (
             <Alert severity="info" icon={<CheckCircle2 size={18} />} sx={{ py: 0.5 }}>
               Entry submitted — checklist marked for you. Add any proof or comments, then <b>Mark Done</b>.
             </Alert>
           )}
           {isBuddyForMe && !isDoerForMe && (
-            <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, bgcolor: alpha('#7c3aed', 0.1), borderColor: alpha('#7c3aed', 0.4) }}>
+            <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 1.5,display: 'flex', alignItems: 'center', gap: 1.25, bgcolor: alpha('#7c3aed', 0.1), borderColor: alpha('#7c3aed', 0.4) }}>
               <Box sx={{ color: '#6d28d9', display: 'flex' }}><Users size={18} /></Box>
               <Box>
                 <Typography variant="body2" sx={{ fontWeight: 700, color: '#5b21b6' }}>You're the buddy (backup) on this step</Typography>
@@ -734,7 +834,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             const pct = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
             const accent = done ? '#0f766e' : '#1d4ed8';
             return (
-              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 1.5,bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
                 <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
                   <Truck size={16} color={accent} />
                   <Typography variant="subtitle2" sx={{ fontWeight: 800, fontSize: '0.78rem' }}>Dispatch progress</Typography>
@@ -753,8 +853,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           })()}
 
           {/* ── Consignment-gated (Invoice / POD / Payment): per-challan status.
-                Completes only when every consignment is done. ── */}
-          {isConsGated && (() => {
+                Only for the UNSCOPED order-level view (managers seeing every challan).
+                When the task is scoped to ONE delivery, the purple "This consignment"
+                chip up top already says which challan this is — so we drop this panel
+                to avoid showing the same delivery twice. ── */}
+          {isConsGated && !consignment && (() => {
             const allCons = consRes?.data?.consignments || [];
             const sm = consRes?.data?.summary || {};
             const stage = ep?.kind || (liveStep.triggerKey); // INVOICE | POD | PAYMENT
@@ -772,7 +875,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             const doneCount = ep?.done ?? (stage === 'INVOICE' ? sm.invoicedDone : stage === 'POD' ? sm.deliveredDone : sm.paidDone) ?? 0;
             const total = ep?.total ?? sm.total ?? allCons.length;
             return (
-              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 1.5,bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
                 <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.75 }}>
                   <Boxes size={16} color={accent} />
                   <Typography variant="subtitle2" sx={{ fontWeight: 800, fontSize: '0.78rem' }}>{scopedDc ? 'This delivery' : 'Per-consignment'}</Typography>
@@ -808,9 +911,9 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           {/* (Do this task here → moved up, directly under "What to do".) */}
 
           {/* ── Linked records → jump to the related entry to verify this task ── */}
-          {(orderLink || recordLinks.length > 0) && (
+          {(orderLink || recordLinks.length > 0) && !hideLnk && (
             <Paper variant="outlined" sx={{
-              p: 1.25, borderRadius: 2, bgcolor: alpha('#0f766e', 0.05), borderColor: alpha('#0f766e', 0.35),
+              p: 1.25, borderRadius: 1.5,bgcolor: alpha('#0f766e', 0.05), borderColor: alpha('#0f766e', 0.35),
             }}>
               <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.75 }}>
                 <Link2 size={14} color="#0f766e" />
@@ -841,27 +944,37 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <>
               <Divider />
               <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.78rem' }}>Checklist</Typography>
-                <Typography variant="caption" color={remaining ? 'warning.main' : 'success.main'}>
-                  {checklist.length - remaining}/{checklist.length} done
-                </Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.78rem' }}>Proof Checklist</Typography>
+                <Chip size="small" label={`${checklist.length - remaining} / ${checklist.length} done`}
+                  sx={{
+                    height: 20, fontSize: '0.66rem', fontWeight: 800, borderRadius: '4px',
+                    bgcolor: alpha(remaining ? '#1d4ed8' : '#15803d', 0.1),
+                    color: remaining ? '#1d4ed8' : '#15803d',
+                  }} />
               </Stack>
-              <LinearProgress variant="determinate" value={((checklist.length - remaining) / checklist.length) * 100} sx={{ height: 6, borderRadius: 3 }} />
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: -0.5, fontSize: '0.68rem' }}>
+                Each item has its own proof — attach a file or paste a link
+                {proofRequired ? ' before ticking it' : ''}. Mark Done unlocks once every item is complete.
+              </Typography>
+              <LinearProgress variant="determinate" value={((checklist.length - remaining) / checklist.length) * 100}
+                sx={{ height: 6, borderRadius: 3, bgcolor: alpha('#15803d', 0.1), '& .MuiLinearProgress-bar': { bgcolor: remaining === 0 ? '#15803d' : '#1d4ed8' } }} />
               <Box>
-                {checklist.map((item) => {
-                  const tip = item.done
-                    ? `Done${item.doneBy?.name ? ` by ${item.doneBy.name}` : ''}${item.doneAt ? ` · ${fmt(item.doneAt)}` : ''} — click to undo`
-                    : (done ? 'Step completed' : (canAct ? 'Click to mark done' : 'Read-only'));
-                  return (
-                    <Tooltip key={item._id} title={tip} placement="left" arrow>
-                      <FormControlLabel
-                        control={<Checkbox checked={!!item.done} disabled={done || !canAct} onChange={() => handleToggle(item)} size="small" />}
-                        label={<Typography variant="body2" sx={{ textDecoration: item.done ? 'line-through' : 'none', color: item.done ? 'text.secondary' : 'text.primary' }}>{item.text}</Typography>}
-                        sx={{ display: 'flex', mb: -0.5, alignItems: 'flex-start', cursor: done || !canAct ? 'default' : 'pointer' }}
-                      />
-                    </Tooltip>
-                  );
-                })}
+                {checklist.map((item) => (
+                  <ProofChecklistItem
+                    key={item._id}
+                    // Fresh challan → present the item blank (the tick + proofs on the
+                    // shared record belong to a previous delivery, not this one).
+                    item={consFresh ? { ...item, done: false, proofs: [] } : item}
+                    disabled={stepDone || !canAct}
+                    canAct={canAct}
+                    proofRequired={proofRequired}
+                    busy={proofBusyId === item._id}
+                    onToggle={() => handleToggle(item)}
+                    onAttach={(file) => handleItemAttach(item, file)}
+                    onLink={(url) => handleItemLink(item, url)}
+                    onClearProof={(proofId) => handleItemClearProof(item, proofId)}
+                  />
+                ))}
               </Box>
             </>
           )}
@@ -908,7 +1021,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <>
               <Divider />
               <Paper variant="outlined" sx={{
-                p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+                p: 1.25, borderRadius: 1.5,display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
                 bgcolor: alpha(approvalPending ? '#b45309' : '#0f766e', 0.05),
                 borderColor: alpha(approvalPending ? '#b45309' : '#0f766e', 0.35),
               }}>
@@ -937,13 +1050,18 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             </>
           )}
 
-          <Divider />
-          {/* Planned / Actual / Delay */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2 }}>
-            <MetaRow icon={Clock} label="Planned" value={fmt(liveStep.planned)} />
-            <MetaRow icon={CheckCircle2} label="Actual" value={fmt(liveStep.actual)} />
-            <MetaRow icon={AlertTriangle} label="Time delay" value={liveStep.delayMins ? `${liveStep.delayMins} min late` : (done ? 'On time' : '—')} />
-          </Box>
+          {/* Planned / Actual / Delay — hidden in page mode (slimSop): the Task page's
+              right sidebar already shows Timing, so we don't repeat it under the checklist. */}
+          {!slim && (
+            <>
+              <Divider />
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2 }}>
+                <MetaRow icon={Clock} label="Planned" value={fmt(liveStep.planned)} />
+                <MetaRow icon={CheckCircle2} label="Actual" value={fmt(liveStep.actual)} />
+                <MetaRow icon={AlertTriangle} label="Time delay" value={liveStep.delayMins ? `${liveStep.delayMins} min late` : (done ? 'On time' : '—')} />
+              </Box>
+            </>
+          )}
 
           {liveStep.link && (
             <Stack direction="row" spacing={1} alignItems="center">
@@ -960,7 +1078,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               )}
             </Stack>
           )}
-          {liveStep.completedBy?.name && (
+          {!slim && liveStep.completedBy?.name && (
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>Completed by {liveStep.completedBy.name}</Typography>
           )}
 
@@ -1039,7 +1157,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             </>
           )}
 
-          {!done && canManage && (
+          {/* Reassign is NOT shown on the full task page — changing who owns a step is a
+              planning action, and the tracker's "Update the plan" already does it for
+              every step in one place. Keeping it here too just clutters the doer's
+              screen with a control they shouldn't be using mid-task. */}
+          {!done && canManage && !asPage && (
             <>
               <Divider />
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Reassign — multiple doers & buddies allowed</Typography>
@@ -1072,12 +1194,13 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           )}
 
           {/* ── What's next — at the very BOTTOM so the current task always leads.
-                Shown as a quiet footer pointer, never the first thing the doer sees. ── */}
-          {nextStep && (
+                Shown as a quiet footer pointer, never the first thing the doer sees.
+                Skipped on the full page, which already ends with its own "Up next" bar. ── */}
+          {nextStep && !asPage && (
             <>
               <Divider />
               <Paper variant="outlined" sx={{
-                p: 1.25, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+                p: 1.25, borderRadius: 1.5,display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
                 bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.3),
               }}>
                 <Box sx={{ p: 0.6, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}>
@@ -1102,7 +1225,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <>
               <Divider />
               <Paper variant="outlined" sx={{
-                p: 1.5, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+                p: 1.5, borderRadius: 1.5,display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
                 bgcolor: alpha('#0f766e', 0.06), borderColor: alpha('#0f766e', 0.35),
               }}>
                 <CheckCircle2 size={18} color="#0f766e" />
@@ -1125,29 +1248,123 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   if (asPage) {
     return (
       <Box>
-        {headerChips}
-        {orderLabel && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{orderLabel}</Typography>}
-        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3, mt: 1.5 }}>{body}</Paper>
+        {/* hideHeader → the editorial Task page already shows the status + title in
+            its hero, so we skip the duplicate chips here and just render the body. */}
+        {!hideHeader && headerChips}
+        {!hideHeader && orderLabel && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{orderLabel}</Typography>}
+        <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderRadius: 1.5, mt: hideHeader ? 0 : 1.5, borderColor: O2D_LINE }}>{body}</Paper>
         {markDoneBtn && <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>{markDoneBtn}</Stack>}
       </Box>
     );
   }
 
+  // Small sidebar card (dialog) — mirrors the full page's right column.
+  const DlgCard = ({ label, children }) => (
+    <Box sx={{ borderRadius: '6px', border: `1px solid ${OT.line}`, bgcolor: OT.surfaceAlt, p: 1.25 }}>
+      <Typography sx={{ fontSize: '0.54rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', color: OT.faint, mb: 0.75 }}>{label}</Typography>
+      {children}
+    </Box>
+  );
+  const dTile = (lab, top, sub, col) => (
+    <Box sx={{ flex: 1, textAlign: 'center', px: 0.5, py: 0.5, borderRadius: '4px', border: `1px solid ${OT.line}`, bgcolor: OT.surface }}>
+      <Typography sx={{ fontSize: '0.5rem', fontWeight: 800, textTransform: 'uppercase', color: OT.faint }}>{lab}</Typography>
+      <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: col || OT.ink, lineHeight: 1.15 }}>{top}</Typography>
+      {sub ? <Typography sx={{ fontSize: '0.56rem', color: OT.sub }}>{sub}</Typography> : null}
+    </Box>
+  );
+  const dDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—');
+
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="md" fullWidth
-      PaperProps={{ sx: { borderRadius: 3, maxHeight: 'calc(100% - 48px)' } }}>
-      <DialogTitle sx={{ pr: 6, py: 1.25, px: { xs: 2, md: 2.5 } }}>
-        {headerChips}
-        {orderLabel && <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.72rem' }}>{orderLabel}</Typography>}
-        <IconButton onClick={() => onClose?.(false)} size="small" sx={{ position: 'absolute', right: 8, top: 8 }}><X size={17} /></IconButton>
-      </DialogTitle>
-      <DialogContent dividers sx={{ px: { xs: 1.5, md: 2 }, py: 1.5 }}>{body}</DialogContent>
-      <DialogActions sx={{ py: 1, px: 2 }}>
-        <Button size="small" startIcon={<Workflow size={15} />} sx={{ mr: 'auto', textTransform: 'none' }}
+      PaperProps={{ sx: { borderRadius: '10px', maxHeight: 'calc(100% - 48px)', bgcolor: OT.canvas, overflow: 'hidden' } }}>
+      {/* ── Status hero — same editorial header as the full page ── */}
+      <Box sx={{ position: 'relative', overflow: 'hidden', bgcolor: done ? heroTk.tint : OT.surface, borderBottom: `1px solid ${OT.line}`, flexShrink: 0 }}>
+        <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, bgcolor: heroTk.ring }} />
+        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 9 }}>
+          <Typography sx={{ position: 'absolute', right: 66, top: 6, fontSize: '1.9rem', fontWeight: 900, color: alpha(heroTk.color, 0.1), lineHeight: 1, userSelect: 'none' }}>
+            {liveStep.stepCode}
+          </Typography>
+          <Chip size="small"
+            icon={<Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: heroTk.ring, ml: '6px' }} />}
+            label={heroTk.label}
+            sx={{ fontWeight: 800, fontSize: '0.6rem', letterSpacing: '0.04em', textTransform: 'uppercase', color: heroTk.color, bgcolor: heroTk.bg, height: 20, '& .MuiChip-icon': { color: heroTk.ring } }} />
+          <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: OT.ink, lineHeight: 1.2, mt: 0.5 }}>
+            {liveStep.taskTitle || liveStep.name}
+          </Typography>
+          <Typography sx={{ fontSize: '0.74rem', color: OT.sub, mt: 0.25 }}>
+            {orderLabel}
+            {done && <Box component="span" sx={{ color: heroTiming.color, fontWeight: 700 }}> · {heroTiming.text}</Box>}
+          </Typography>
+        </Box>
+        <Tooltip title="Open full screen">
+          <IconButton size="small" onClick={() => { onClose?.(false); navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(liveStep.stepCode)}${activeDc ? `?dc=${encodeURIComponent(activeDc)}` : ''}`); }}
+            sx={{ position: 'absolute', right: 38, top: 8, color: OT.sub }}><Maximize2 size={15} /></IconButton>
+        </Tooltip>
+        <IconButton onClick={() => onClose?.(false)} size="small" sx={{ position: 'absolute', right: 8, top: 8, color: OT.sub }}><X size={17} /></IconButton>
+      </Box>
+
+      <DialogContent dividers={false} sx={{ px: { xs: 1.25, md: 1.5 }, py: 1.5, bgcolor: OT.canvas, overflowY: 'auto' }}>
+        {/* Two columns: task LEFT, who / when / refs RIGHT — same as the page */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0,1fr) 260px' }, gap: 1.5, alignItems: 'start' }}>
+          <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, borderRadius: '6px', borderColor: OT.line, bgcolor: OT.surface, minWidth: 0 }}>{body}</Paper>
+
+          <Stack spacing={1.25}>
+            <DlgCard label="Order reference">
+              <Typography sx={{ fontWeight: 800, color: OT.brand, fontSize: '0.86rem', lineHeight: 1.2 }}>{proc?.soNumber || '—'}</Typography>
+              <Typography sx={{ fontSize: '0.74rem', color: OT.body, mt: 0.25 }}>{proc?.partyName}</Typography>
+              {proc?.poNumber && <Typography sx={{ fontSize: '0.68rem', color: OT.sub }}>PO {proc.poNumber}</Typography>}
+            </DlgCard>
+
+            <DlgCard label="Owner">
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Avatar sx={{ width: 28, height: 28, fontSize: '0.78rem', fontWeight: 800, bgcolor: alpha(OT.brand, 0.12), color: OT.brand }}>{(ownerName || '?').charAt(0).toUpperCase()}</Avatar>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', color: OT.ink }} noWrap>{ownerName}</Typography>
+                  <Typography sx={{ fontSize: '0.66rem', color: OT.sub }} noWrap>
+                    {liveStep.tool || 'Manual'}{liveStep.whenText ? ` · ${liveStep.whenText}` : (liveStep.slaMinutes != null ? ` · within ${liveStep.slaMinutes}m` : '')}
+                  </Typography>
+                </Box>
+              </Stack>
+              {buddyList.length > 0 && <Typography sx={{ fontSize: '0.64rem', color: OT.faint, mt: 0.6 }}>Backup: {buddyList.map((u) => u.name || 'User').join(', ')}</Typography>}
+            </DlgCard>
+
+            <DlgCard label="Timing">
+              <Stack direction="row" spacing={0.75}>
+                {dTile('Planned', dDate(liveStep.planned), null)}
+                {/* Scoped → THIS challan's own actual time, not the shared step's. */}
+                {dTile('Actual', dDate(consignment ? consDoneAt : liveStep.actual), null, (consignment ? consComplete : done) ? '#15803d' : undefined)}
+                {dTile('Delay', (consignment ? consComplete : done) ? (heroTiming.text.startsWith('Late') ? 'Late' : 'On time') : '—', null, (consignment ? consComplete : done) ? heroTiming.color : OT.faint)}
+              </Stack>
+            </DlgCard>
+
+            {(orderLink || recordLinks.length > 0) && (
+              <DlgCard label="Linked records">
+                <Stack spacing={0.5}>
+                  {recordLinks.map((r) => (
+                    <Button key={r.key} size="small" variant="outlined" fullWidth endIcon={<ExternalLink size={12} />}
+                      onClick={() => openLink(r.to)} sx={{ justifyContent: 'space-between', textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', borderColor: OT.line, color: OT.body, borderRadius: '4px' }}>
+                      {r.label}
+                    </Button>
+                  ))}
+                  {orderLink && (
+                    <Button size="small" variant="text" fullWidth endIcon={<ExternalLink size={12} />}
+                      onClick={() => openLink(orderLink.to)} sx={{ justifyContent: 'space-between', textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: OT.sub }}>
+                      {orderLink.label}
+                    </Button>
+                  )}
+                </Stack>
+              </DlgCard>
+            )}
+          </Stack>
+        </Box>
+      </DialogContent>
+
+      <DialogActions sx={{ py: 1, px: 2, borderTop: `1px solid ${OT.line}`, bgcolor: OT.surface }}>
+        <Button size="small" startIcon={<Workflow size={15} />} sx={{ mr: 'auto', textTransform: 'none', color: OT.sub }}
           onClick={() => { onClose?.(false); navigate(`/o2d-fms/process/${processId}`); }}>
           FMS Tracker
         </Button>
-        <Button onClick={() => onClose?.(false)}>Close</Button>
+        <Button onClick={() => onClose?.(false)} sx={{ textTransform: 'none', color: OT.body }}>Close</Button>
         {markDoneBtn}
       </DialogActions>
     </Dialog>

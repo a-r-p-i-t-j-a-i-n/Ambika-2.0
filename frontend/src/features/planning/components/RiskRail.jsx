@@ -22,7 +22,7 @@ const RiskRail = ({ comparison, onCarryForward }) => {
   const allClear = !flatRisks.length && !carryForwardRows.length;
 
   return (
-    <Paper sx={{ p: 2, borderRadius: '14px', position: 'sticky', top: 16 }}>
+    <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', border: '1px solid', borderColor: 'divider', position: 'sticky', top: 16 }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.25 }}>
         {allClear
           ? <ShieldCheck size={14} color={theme.palette.success.main} />
@@ -46,7 +46,7 @@ const RiskRail = ({ comparison, onCarryForward }) => {
             const Icon = meta.icon;
             return (
               <Box key={`${risk.type}-${i}`} sx={{
-                px: 1, py: 0.75, borderRadius: '10px',
+                px: 1, py: 0.75, borderRadius: '6px',
                 bgcolor: alpha(palette.main, 0.06),
                 border: '1px solid', borderColor: alpha(palette.main, 0.18),
               }}>
@@ -79,7 +79,7 @@ const RiskRail = ({ comparison, onCarryForward }) => {
                 <Box
                   onClick={() => onCarryForward?.(r)}
                   sx={{
-                    p: 1, borderRadius: '10px', cursor: 'pointer',
+                    p: 1, borderRadius: '6px', cursor: 'pointer',
                     bgcolor: alpha(theme.palette.primary.main, 0.04),
                     border: '1px dashed', borderColor: alpha(theme.palette.primary.main, 0.3),
                     transition: 'all 160ms',

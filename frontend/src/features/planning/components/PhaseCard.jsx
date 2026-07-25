@@ -82,7 +82,7 @@ const PhaseCard = ({
   const fulfilmentPct = totals.planned > 0 ? Math.round((totals.actual / totals.planned) * 100) : 0;
 
   return (
-    <Paper sx={{ borderRadius: '14px', overflow: 'hidden' }}>
+    <Paper sx={{ borderRadius: '8px', overflow: 'hidden' }}>
       {/* Header bar — click anywhere (except the action buttons) to expand. */}
       <Box
         onClick={() => { if (!editing) setOpen((v) => !v); }}
@@ -96,7 +96,7 @@ const PhaseCard = ({
         }}
       >
         <Box sx={{
-          width: 36, height: 36, borderRadius: '10px',
+          width: 36, height: 36, borderRadius: '6px',
           bgcolor: alpha(style.fg, 0.10), color: style.fg,
           display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: '0.85rem',
         }}>{phaseNo}</Box>
@@ -182,7 +182,7 @@ const PhaseCard = ({
             display: 'grid',
             gridTemplateColumns: 'minmax(180px, 1.9fr) 0.9fr 1.1fr 0.9fr 0.9fr',
             gap: 0,
-            border: '1px solid', borderColor: 'divider', borderRadius: '12px', overflow: 'hidden',
+            border: '1px solid', borderColor: 'divider', borderRadius: '6px', overflow: 'hidden',
           }}>
             {/* Header */}
             {['SKU', 'Order', 'Plan Qty', 'Actual', 'Pending'].map((h, i) => (
@@ -243,7 +243,7 @@ const PhaseCard = ({
 
           {/* Helper line for doers */}
           <Box sx={{
-            mt: 1.25, p: 1.25, borderRadius: '10px',
+            mt: 1.25, p: 1.25, borderRadius: '6px',
             bgcolor: alpha(theme.palette.info.main, 0.04),
             border: `1px dashed ${alpha(theme.palette.info.main, 0.2)}`,
             fontSize: '0.74rem', color: 'text.secondary',

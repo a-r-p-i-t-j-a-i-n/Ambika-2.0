@@ -3,6 +3,7 @@ import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { generateDocNumber, generateO2DId } from '../../utils/docNumberGenerator.js';
 import { getFiscalYear } from '../../utils/fiscalYear.js';
+import { SO_STATUS } from '../../config/constants.js';
 import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 import { partyService } from '../clients/party.service.js';
 import { logger } from '../../utils/logger.js';
@@ -105,12 +106,79 @@ export const orderService = {
   /**
    * Update an existing order.
    */
-  async update(id, data) {
+  async update(id, data, actor = null) {
     const order = await SalesOrder.findById(id);
     if (!order) throw new AppError('Sales Order not found', 404);
 
+    // ── Amending the items (e.g. customer revises Dome Jar 100 → 2000) ──
+    // The incoming list REPLACES order.items, so we must carry the already
+    // dispatched quantity across per SKU. Without this, an amend would reset
+    // dispatchedQty to 0 and wipe the real dispatch history (challans already
+    // shipped), corrupting balances, the tracker and every consignment.
+    if (data.items) {
+      const prevByKey = new Map();
+      (order.items || []).forEach((it) => {
+        if (it.skuId) prevByKey.set(String(it.skuId), it);
+        if (it.skuCode) prevByKey.set(`code:${String(it.skuCode).toLowerCase()}`, it);
+      });
+      const prevOf = (it) => prevByKey.get(String(it.skuId))
+        || prevByKey.get(`code:${String(it.skuCode || '').toLowerCase()}`)
+        || null;
+
+      // Human-readable diff for the amendment log (before we overwrite items).
+      const changes = [];
+      data.items.forEach((it) => {
+        const prev = prevOf(it);
+        const newQty = Number(it.orderQty || 0);
+        if (!prev) changes.push(`${it.skuName} (${it.skuCode}): added — ${newQty} pcs`);
+        else if (Number(prev.orderQty || 0) !== newQty) {
+          changes.push(`${it.skuName} (${it.skuCode}): ${Number(prev.orderQty || 0)} → ${newQty} pcs`);
+        }
+      });
+      (order.items || []).forEach((prev) => {
+        const stillThere = data.items.some((it) => (
+          String(it.skuId) === String(prev.skuId)
+          || String(it.skuCode || '').toLowerCase() === String(prev.skuCode || '').toLowerCase()
+        ));
+        if (!stillThere) changes.push(`${prev.skuName} (${prev.skuCode}): removed`);
+      });
+
+      data.items = data.items.map((it) => {
+        const prev = prevOf(it);
+        return {
+          ...it,
+          // Never trust an incoming dispatchedQty of 0 over what was really shipped.
+          dispatchedQty: Math.max(Number(it.dispatchedQty || 0), Number(prev?.dispatchedQty || 0)),
+        };
+      });
+
+      if (changes.length) {
+        order.revisionNo = Number(order.revisionNo || 0) + 1;
+        order.amendments.push({
+          at: new Date(),
+          byName: actor?.name || null,
+          reason: data.amendReason || '',
+          changes,
+        });
+      }
+    }
+
+    // ── Cancellation audit ──
+    if (data.status === SO_STATUS.CANCELLED && order.status !== SO_STATUS.CANCELLED) {
+      order.cancelledAt = new Date();
+      order.cancelledBy = actor?._id || null;
+      order.cancelReason = data.cancelReason || order.cancelReason || '';
+    }
+    // Re-opening a cancelled order clears the cancellation stamp.
+    if (data.status && data.status !== SO_STATUS.CANCELLED && order.status === SO_STATUS.CANCELLED) {
+      order.cancelledAt = null;
+      order.cancelledBy = null;
+      order.cancelReason = '';
+    }
+
     // Merge updates
     Object.keys(data).forEach((key) => {
+      if (key === 'amendReason') return; // log-only, not a stored field
       if (key === 'items' && data.items) {
         order.items = data.items;
       } else if (['poEntry', 'inventoryCheck', 'scheduling', 'emailSchedule'].includes(key)) {

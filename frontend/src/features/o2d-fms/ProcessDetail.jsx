@@ -16,6 +16,7 @@ import PhaseTimeline from '../planning/components/PhaseTimeline';
 import { ACTION_LINKS, actionLinkMeta } from './actionLinks';
 import DispatchEntry from '../execution/DispatchEntry';
 import BackButton from '../../components/BackButton';
+import { O2D } from './o2dTheme';
 
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 
@@ -242,8 +243,30 @@ const BOARD_COLS = [
 // timeline + an overall qty progress bar. Visible whenever the order has the
 // quantity-gated dispatch step, so the tracker reflects "done for phase 1, pending
 // for the rest" instead of one all-or-nothing tick.
-const DispatchPhasesPanel = ({ soNumber, dispatchStep, onPhaseClick }) => {
-  const { data, isFetching } = useGetScheduleQuery(soNumber, { skip: !soNumber });
+// One compact progress meter — label, figures, % and bar on two tight lines.
+const Meter = ({ label, sub, pct, color, right }) => (
+  <Box sx={{ minWidth: 0 }}>
+    <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.35 }}>
+      <Typography sx={{ fontSize: '0.58rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'text.secondary', flexShrink: 0 }}>{label}</Typography>
+      <Typography noWrap sx={{ fontSize: '0.72rem', color: 'text.secondary', minWidth: 0 }}>{sub}</Typography>
+      <Box sx={{ flex: 1 }} />
+      <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color, flexShrink: 0 }}>{pct}%</Typography>
+      {right}
+    </Stack>
+    <LinearProgress variant="determinate" value={pct}
+      sx={{ height: 5, borderRadius: 3, bgcolor: alpha(color, 0.12), '& .MuiLinearProgress-bar': { bgcolor: color } }} />
+  </Box>
+);
+
+/**
+ * Merged order header — identity, step progress and dispatch progress in ONE strip.
+ * These used to be two stacked cards, which cost a lot of vertical space for very
+ * little information; side-by-side meters say the same thing in about half the height,
+ * leaving more of the screen for the step table the user actually works in.
+ */
+const OrderHeaderPanel = ({ process, completed, total, pct, dispatchStep, onPhaseClick }) => {
+  const soNumber = process?.soNumber;
+  const { data, isFetching } = useGetScheduleQuery(soNumber, { skip: !soNumber || !dispatchStep });
   const sched = data?.data;
   const phaseChips = sched?.phaseChips || [];
   const totals = sched?.totals || {};
@@ -252,55 +275,58 @@ const DispatchPhasesPanel = ({ soNumber, dispatchStep, onPhaseClick }) => {
   const ordered    = prog.orderedQty ?? totals.orderQty ?? 0;
   const dispatched = prog.dispatchedQty ?? totals.actualQty ?? 0;
   const balance    = prog.balanceQty ?? Math.max(0, ordered - dispatched);
-  const pct        = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
+  const dpct       = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
   const phasesTotal = prog.phasesTotal ?? new Set(phaseChips.map((p) => p.phaseNo)).size;
-  const done = ['DONE', 'DELAYED'].includes(dispatchStep?.status);
-  const accent = done ? '#0f766e' : '#1d4ed8';
-  // Phase timeline is HIDDEN by default — the one-line summary + bar below is enough
-  // at a glance; the doer clicks "Show phases" only when they want the P1/P2 tracking.
+  const dDone = ['DONE', 'DELAYED'].includes(dispatchStep?.status);
+  const accent = dDone ? '#0f766e' : '#1d4ed8';
+  // Phase timeline stays hidden until asked for — the meter says enough at a glance.
   const [showPhases, setShowPhases] = useState(false);
 
   return (
-    <Paper sx={{ p: { xs: 1.5, md: 1.75 }, borderRadius: 2.5, mb: 1.5, border: '1px solid', borderColor: alpha(accent, 0.25) }}>
-      <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 0.75 }}>
-        <Truck size={15} color={accent} />
-        <Typography sx={{ fontWeight: 800, fontSize: '0.88rem' }}>Dispatch — phased</Typography>
-        <Chip size="small" label={done ? 'Fully dispatched' : 'In progress'}
-          sx={{ height: 19, fontSize: '0.64rem', fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
-        <Box sx={{ flex: 1 }} />
-        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>
-          {num(prog.phasesDone ?? 0)} / {num(phasesTotal)} phase{phasesTotal === 1 ? '' : 's'} done
+    <Paper elevation={0} sx={{ p: { xs: 1.25, md: 1.5 }, borderRadius: '8px', mb: 1.25, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+      {/* Identity — one line */}
+      <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+        <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: '#0b2545', lineHeight: 1.2 }}>{process.soNumber}</Typography>
+        <Chip size="small" label={process.isCompleted ? 'Completed' : 'In Progress'}
+          sx={{ height: 20, fontSize: '0.64rem', fontWeight: 800, borderRadius: '4px',
+            bgcolor: alpha(process.isCompleted ? '#15803d' : '#1d4ed8', 0.1),
+            color: process.isCompleted ? '#15803d' : '#1d4ed8' }} />
+        <Typography noWrap sx={{ fontSize: '0.76rem', color: 'text.secondary', minWidth: 0 }}>
+          {process.partyName}{process.poNumber ? ` · PO ${process.poNumber}` : ''}{process.uniqueO2DId ? ` · ${process.uniqueO2DId}` : ''}
         </Typography>
       </Stack>
-      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.4 }}>
-        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
-          <strong style={{ color: accent }}>{num(dispatched)}</strong> / {num(ordered)} pcs dispatched · {num(balance)} pending
-        </Typography>
-        <Typography variant="caption" sx={{ fontWeight: 700, fontSize: '0.72rem' }}>{pct}%</Typography>
-      </Stack>
-      <LinearProgress variant="determinate" value={pct}
-        sx={{ height: 6, borderRadius: 4, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
 
-      {/* Optional per-phase (P1/P2…) timeline — off by default to keep the tracker short. */}
-      {phaseChips.length > 0 ? (
-        <>
-          <Stack direction="row" justifyContent="center" sx={{ mt: 0.75 }}>
-            <Button size="small" variant="text" onClick={() => setShowPhases((v) => !v)}
-              startIcon={showPhases ? <EyeOff size={13} /> : <Eye size={13} />}
-              sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: accent, py: 0.25 }}>
-              {showPhases ? 'Hide phases' : `Show phases (${phasesTotal})`}
-            </Button>
-          </Stack>
+      {/* Two meters, side by side — half the height of the old stacked cards */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: dispatchStep ? '1fr 1fr' : '1fr' }, gap: { xs: 1, md: 2 } }}>
+        <Meter label="Steps" sub={`${completed} / ${total} done`} pct={pct} color="#1d4ed8" />
+        {dispatchStep && (
+          <Meter
+            label="Dispatch" pct={dpct} color={accent}
+            sub={`${num(dispatched)} / ${num(ordered)} pcs · ${num(balance)} pending · ${num(prog.phasesDone ?? 0)}/${num(phasesTotal)} phases`}
+            right={phaseChips.length > 0 ? (
+              <Button size="small" variant="text" onClick={() => setShowPhases((v) => !v)}
+                startIcon={showPhases ? <EyeOff size={12} /> : <Eye size={12} />}
+                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.66rem', color: accent, py: 0, px: 0.5, minWidth: 0, flexShrink: 0 }}>
+                {showPhases ? 'Hide' : 'Phases'}
+              </Button>
+            ) : null}
+          />
+        )}
+      </Box>
+
+      {/* Per-phase (P1/P2…) timeline — full width, only when asked for */}
+      {dispatchStep && (
+        phaseChips.length > 0 ? (
           <Collapse in={showPhases} unmountOnExit>
-            <Box sx={{ mt: 0.75 }}>
+            <Box sx={{ mt: 1 }}>
               <PhaseTimeline phaseChips={phaseChips} onPhaseClick={onPhaseClick} />
             </Box>
           </Collapse>
-        </>
-      ) : isFetching ? (
-        <Skeleton variant="rounded" height={36} sx={{ mt: 1 }} />
-      ) : (
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75, fontSize: '0.7rem' }}>No dispatch plan / phases created yet.</Typography>
+        ) : isFetching ? (
+          <Skeleton variant="rounded" height={28} sx={{ mt: 0.75 }} />
+        ) : (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75, fontSize: '0.68rem' }}>No dispatch plan / phases created yet.</Typography>
+        )
       )}
     </Paper>
   );
@@ -363,7 +389,7 @@ const ConsignmentsPanel = ({ processId }) => {
                   <TableCell><StagePill ok={c.invoice?.has} label={c.invoice?.has ? (c.invoice.invoiceNo || 'Invoiced') : 'Pending'} /></TableCell>
                   <TableCell><StagePill ok={c.eway?.has} label={c.eway?.has ? 'Eway ✓' : '—'} /></TableCell>
                   <TableCell><StagePill ok={c.delivery?.delivered} label={c.delivery?.delivered ? 'Delivered' : (c.delivery?.status || 'Pending')} /></TableCell>
-                  <TableCell><StagePill ok={c.payment?.confirmed} label={c.payment?.confirmed ? 'Paid' : (c.payment?.has ? 'Following up' : 'Pending')} /></TableCell>
+                  <TableCell><StagePill ok={c.payment?.confirmed} label={c.payment?.confirmed ? `Paid${c.payment?.received ? ` · ${num(c.payment.received)}` : ''}` : (c.payment?.outcome === 'NOT_RECEIVED' ? 'Not received' : (c.payment?.has ? 'Following up' : 'Pending'))} /></TableCell>
                   <TableCell align="right">
                     <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                       {!c.invoice?.has && <Tooltip title="Create invoice for this challan"><Button size="small" variant="text" onClick={() => goInvoice(c)} sx={{ minWidth: 0, px: 0.75, fontSize: '0.62rem' }}>Invoice</Button></Tooltip>}
@@ -685,7 +711,7 @@ const ProcessDetail = () => {
   }, {});
 
   return (
-    <Box sx={{ p: { xs: 1.5, md: 2 } }}>
+    <Box sx={{ p: { xs: 1.5, md: 2 }, bgcolor: O2D.canvas, minHeight: '100vh' }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" gap={1}>
         <BackButton label="Back" variant="text" color="primary" />
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -708,34 +734,15 @@ const ProcessDetail = () => {
         <Paper sx={{ p: 4, textAlign: 'center' }}>No O2D process found for this order.</Paper>
       ) : (
         <>
-          <Paper sx={{ p: { xs: 1.5, md: 1.75 }, borderRadius: 2.5, mb: 1.5 }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1.5}>
-              <Box>
-                <Typography sx={{ fontWeight: 800, fontSize: '1.2rem', lineHeight: 1.2 }}>{process.soNumber}</Typography>
-                <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
-                  {process.partyName} · PO {process.poNumber || '—'} · {process.uniqueO2DId || ''}
-                </Typography>
-              </Box>
-              <Chip size="small"
-                label={process.isCompleted ? 'Completed' : 'In Progress'}
-                color={process.isCompleted ? 'success' : 'primary'}
-                sx={{ fontWeight: 700 }}
-              />
-            </Stack>
-            <Box sx={{ mt: 1.25 }}>
-              <Stack direction="row" justifyContent="space-between" mb={0.4}>
-                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>{completed} / {steps.length} steps done</Typography>
-                <Typography variant="caption" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>{pct}%</Typography>
-              </Stack>
-              <LinearProgress variant="determinate" value={pct} sx={{ height: 6, borderRadius: 4 }} />
-            </Box>
-          </Paper>
-
-          {/* Phased/split dispatch — per-phase progress so the dispatch step isn't
-              shown "done" after only phase 1. */}
-          {dispatchStep && process.soNumber && (
-            <DispatchPhasesPanel soNumber={process.soNumber} dispatchStep={dispatchStep} onPhaseClick={openPlanForPhase} />
-          )}
+          {/* Identity + step progress + dispatch progress, merged into one strip. */}
+          <OrderHeaderPanel
+            process={process}
+            completed={completed}
+            total={steps.length}
+            pct={pct}
+            dispatchStep={dispatchStep}
+            onPhaseClick={openPlanForPhase}
+          />
 
           {/* Consignment Tracker — per-challan invoice/eway/delivery/payment status. */}
           {process.soNumber && <ConsignmentsPanel processId={id} />}
@@ -780,13 +787,13 @@ const ProcessDetail = () => {
 
           {/* ── Full view: every step at a glance — who / status / planned / actual / delay / checklist ── */}
           {view === 'table' && (
-            <Paper sx={{ borderRadius: 3, overflow: 'hidden', border: '1px solid', borderColor: 'divider' }}>
+            <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
               <Box sx={{ overflowX: 'auto' }}>
               <Table size="small" stickyHeader sx={{ minWidth: 860,
-                '& td, & th': { borderColor: 'divider' },
-                '& tbody tr:hover': { bgcolor: alpha('#1d4ed8', 0.03) } }}>
+                '& td, & th': { borderColor: O2D.lineSoft },
+                '& tbody tr:hover': { bgcolor: O2D.surfaceAlt } }}>
                 <TableHead>
-                  <TableRow sx={{ '& th': { bgcolor: (t) => alpha('#1d4ed8', t.palette.mode === 'dark' ? 0.18 : 0.06), fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', whiteSpace: 'nowrap' } }}>
+                  <TableRow sx={{ '& th': { bgcolor: O2D.surfaceAlt, fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'text.secondary', whiteSpace: 'nowrap' } }}>
                     <TableCell sx={{ width: 40 }}>#</TableCell>
                     <TableCell>Step</TableCell>
                     <TableCell>Doer</TableCell>

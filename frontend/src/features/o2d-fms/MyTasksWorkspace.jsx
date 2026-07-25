@@ -7,6 +7,7 @@ import {
 import { ClipboardList, AlertTriangle, Inbox, Search, ArrowUpDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetMyTasksQuery } from '../../store/api/o2dFmsApi';
+import { O2D } from './o2dTheme';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
@@ -38,8 +39,10 @@ const statusChip = (t) => {
   // Quantity-/consignment-gated step part-way through — still the doer's task.
   if (t.status === 'IN_PROGRESS') {
     const ep = t.executionProgress;
-    const label = t.dcNumber
-      ? (t.consignmentTotal > 1 ? `To do · ${t.pendingConsignments}/${t.consignmentTotal} challans` : `To do · ${t.dcNumber}`)
+    // Per-challan rows say "To do" for THIS delivery (the challan is shown in the
+    // task column); the whole-order steps keep their qty / consignment progress.
+    const label = t.perConsignment
+      ? 'To do'
       : t.dispatchProgress
         ? `In progress · ${num(t.dispatchProgress.balanceQty)} left`
         : ep ? `In progress · ${num(ep.done)}/${num(ep.total)} ${ep.label || ''}`.trim()
@@ -106,10 +109,10 @@ const MyTasksWorkspace = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
+    <Box sx={{ p: { xs: 1.5, md: 2 }, bgcolor: O2D.canvas, minHeight: '100vh' }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2} flexWrap="wrap" gap={1}>
         <Box>
-          <Typography variant="h5" sx={{ fontWeight: 800 }}>My Tasks</Typography>
+          <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: O2D.ink }}>My Tasks</Typography>
           <Typography variant="body2" sx={{ color: 'text.secondary' }}>
             Everything assigned to you — what to do, for which order, and by when.
           </Typography>
@@ -121,7 +124,7 @@ const MyTasksWorkspace = () => {
       </Stack>
 
       {!isLoading && tasks.length > 0 && (
-        <Paper sx={{ p: 1.25, borderRadius: 3, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', justifyContent: 'space-between' }}>
+        <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', justifyContent: 'space-between' }}>
           <ToggleButtonGroup size="small" value={filter} exclusive onChange={(_, v) => v && setFilter(v)} sx={{ flexWrap: 'wrap' }}>
             <ToggleButton value="actionable">To do ({counts.actionable})</ToggleButton>
             <ToggleButton value="overdue" sx={{ color: counts.overdue ? '#be123c' : undefined }}>Overdue ({counts.overdue})</ToggleButton>
@@ -153,22 +156,22 @@ const MyTasksWorkspace = () => {
       {isLoading ? (
         <Skeleton variant="rounded" height={360} />
       ) : tasks.length === 0 ? (
-        <Paper sx={{ p: 6, textAlign: 'center', borderRadius: 3 }}>
+        <Paper elevation={0} sx={{ p: 6, textAlign: 'center', borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Inbox size={40} style={{ opacity: 0.4 }} />
           <Typography variant="h6" sx={{ mt: 1 }}>You're all caught up</Typography>
           <Typography variant="body2" sx={{ color: 'text.secondary' }}>No steps are waiting on you right now.</Typography>
         </Paper>
       ) : filtered.length === 0 ? (
-        <Paper sx={{ p: 5, textAlign: 'center', borderRadius: 3, color: 'text.secondary' }}>
+        <Paper elevation={0} sx={{ p: 5, textAlign: 'center', borderRadius: '8px', color: 'text.secondary', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Search size={32} style={{ opacity: 0.4 }} />
           <Typography sx={{ mt: 1 }}>No tasks match your filters.</Typography>
           <Button size="small" sx={{ mt: 1 }} onClick={() => { setSearch(''); setFilter('all'); }}>Clear filters</Button>
         </Paper>
       ) : (
-        <Paper sx={{ borderRadius: 3, overflowX: 'auto' }}>
+        <Paper elevation={0} sx={{ borderRadius: '8px', overflowX: 'auto', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Table size="small" sx={{ minWidth: 860 }}>
             <TableHead>
-              <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
+              <TableRow sx={{ bgcolor: O2D.surfaceAlt, '& th': { borderColor: O2D.line, fontWeight: 800, fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: O2D.sub } }}>
                 <TableCell sx={{ width: 44 }}>#</TableCell>
                 <TableCell sx={{ width: 300 }}>Task</TableCell>
                 <TableCell>Order</TableCell>
@@ -180,7 +183,7 @@ const MyTasksWorkspace = () => {
             <TableBody>
               {paged.map((t, i) => (
                 <TableRow
-                  key={`${t.processId}-${t.stepCode}`}
+                  key={`${t.processId}-${t.stepCode}-${t.dcNumber || ''}`}
                   hover
                   onClick={() => openTask(t)}
                   sx={{
@@ -209,7 +212,15 @@ const MyTasksWorkspace = () => {
                     </Stack>
                   </TableCell>
                   <TableCell sx={{ maxWidth: 220 }}>
-                    <Typography variant="body2" noWrap>{t.soNumber}</Typography>
+                    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" noWrap>{t.soNumber}</Typography>
+                      {/* Per-challan row → show WHICH delivery this task is for, so two
+                          rows of the same step are told apart at a glance. */}
+                      {t.perConsignment && t.dcNumber && (
+                        <Chip size="small" label={t.consignmentLabel || t.dcNumber}
+                          sx={{ flexShrink: 0, height: 18, fontSize: '0.6rem', fontWeight: 700, fontFamily: 'ui-monospace, monospace', bgcolor: alpha('#7c3aed', 0.1), color: '#6d28d9' }} />
+                      )}
+                    </Stack>
                     <Typography variant="caption" color="text.secondary" noWrap display="block">{t.partyName}</Typography>
                   </TableCell>
                   <TableCell>{statusChip(t)}</TableCell>

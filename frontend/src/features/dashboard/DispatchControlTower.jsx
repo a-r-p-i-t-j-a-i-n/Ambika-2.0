@@ -25,13 +25,18 @@ const PHASE_STATUS = {
   CANCELLED:   { color: '#64748b', label: 'Cancelled' },
 };
 
+// Neutrals follow the client's WARM palette (o2dTheme); status hues stay saturated.
 const BRAND = {
   primary: '#2563eb',
   success: '#059669',
   warning: '#d97706',
   error: '#dc2626',
-  slate: '#64748b',
-  bg: '#f8fafc'
+  slate: '#6b7280',
+  ink: '#1c1e21',
+  line: '#e4e1d9',
+  lineSoft: '#eeebe4',
+  surfaceAlt: '#f7f6f2',
+  bg: '#e9e7e1',
 };
 
 const ORDER_STATUSES = ['RECEIVED', 'PLANNING', 'IN_PROGRESS', 'COMPLETED', 'SHORT_CLOSED', 'CANCELLED'];
@@ -77,13 +82,13 @@ const StatusChip = ({ status }) => {
 // ── Compact real-data KPI card ──────────────────────────────────────
 const StatCard = ({ label, value, sub, icon: Icon, color, bar, loading }) => (
   <Paper sx={{
-    p: 1.75, borderRadius: '14px', border: '1px solid #e2e8f0', height: '100%',
+    p: 1.5, borderRadius: '8px', border: `1px solid ${BRAND.line}`, height: '100%',
     bgcolor: '#fff', transition: 'transform .16s ease, box-shadow .16s ease',
     '&:hover': { transform: 'translateY(-2px)', boxShadow: `0 10px 24px ${alpha(color, 0.14)}` },
   }}>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.85 }}>
       <Box sx={{
-        width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
+        width: 30, height: 30, borderRadius: '6px', flexShrink: 0,
         display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color,
         border: `1px solid ${alpha(color, 0.18)}`,
       }}>
@@ -135,9 +140,9 @@ const Row = ({ order }) => {
     <React.Fragment>
       <TableRow sx={{ 
         '& > *': { borderBottom: 'unset' }, 
-        bgcolor: open ? '#f8faff' : '#fff',
+        bgcolor: open ? BRAND.surfaceAlt : '#fff',
         transition: 'background-color 0.2s',
-        '&:hover': { bgcolor: open ? '#f8faff' : '#fcfdfe' }
+        '&:hover': { bgcolor: BRAND.surfaceAlt }
       }}>
         <TableCell width={40}>
           <IconButton size="small" onClick={() => setOpen(!open)} sx={{ color: BRAND.primary }}>
@@ -203,7 +208,7 @@ const Row = ({ order }) => {
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box sx={{ 
               p: 4, bgcolor: '#fff', 
-              m: 2, mt: 0, borderRadius: '20px', 
+              m: 1.5, mt: 0, borderRadius: '8px', 
               border: '1px solid #eef2f6',
               boxShadow: '0 10px 30px rgba(0,0,0,0.03)'
             }}>
@@ -221,7 +226,7 @@ const Row = ({ order }) => {
                     size="small" 
                     variant="contained" 
                     onClick={() => navigate(`/orders/${order._id}`)} 
-                    sx={{ borderRadius: '10px', fontWeight: 800, bgcolor: BRAND.primary, boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)' }}
+                    sx={{ borderRadius: '6px', fontWeight: 800, textTransform: 'none', bgcolor: BRAND.primary, boxShadow: 'none' }}
                   >
                     Manage Order
                   </Button>
@@ -233,8 +238,8 @@ const Row = ({ order }) => {
                 {schedule?.items?.map((item, idx) => (
                   <Grid item xs={12} key={idx}>
                     <Paper sx={{ 
-                      p: 2.5, borderRadius: '16px', border: '1px solid #f1f5f9', 
-                      bgcolor: '#fcfdfe', '&:hover': { bgcolor: '#fff', borderColor: BRAND.primary }
+                      p: 2, borderRadius: '8px', border: `1px solid ${BRAND.line}`, 
+                      bgcolor: BRAND.surfaceAlt, '&:hover': { bgcolor: '#fff', borderColor: BRAND.primary }
                     }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2.5, alignItems: 'flex-start' }}>
                         <Box>
@@ -258,12 +263,12 @@ const Row = ({ order }) => {
                               <Box
                                 onClick={() => navigate(`/orders/${order._id}/phase/${phase.phaseNo}`)}
                                 sx={{
-                                  p: 1.5, borderRadius: '12px', border: '1px solid #f1f5f9',
+                                  p: 1.5, borderRadius: '6px', border: `1px solid ${BRAND.line}`,
                                   bgcolor: '#fff', position: 'relative', cursor: 'pointer',
                                   transition: 'transform 0.2s, box-shadow 0.2s',
                                   '&:hover': { transform: 'translateY(-4px)', boxShadow: `0 10px 22px ${alpha(BRAND.primary, 0.16)}`, borderColor: BRAND.primary },
                                   boxShadow: isLate ? `0 0 10px ${alpha(BRAND.error, 0.15)}` : 'none',
-                                  borderColor: isLate ? BRAND.error : '#f1f5f9',
+                                  borderColor: isLate ? BRAND.error : BRAND.line,
                                 }}>
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, alignItems: 'center' }}>
                                   <Typography variant="caption" fontWeight={900} color="text.secondary">{phase.phaseNo}</Typography>
@@ -308,7 +313,7 @@ const Row = ({ order }) => {
                                   </Box>
                                 </Box>
                                 
-                                <Box sx={{ bgcolor: '#f8fafc', p: 1, borderRadius: '8px' }}>
+                                <Box sx={{ bgcolor: BRAND.surfaceAlt, p: 1, borderRadius: '6px' }}>
                                   {phase.actualDispatches?.map((ad, adIdx) => (
                                     <Box key={adIdx} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: adIdx < phase.actualDispatches.length - 1 ? 0.5 : 0 }}>
                                       <Typography variant="caption" fontWeight={800} color={BRAND.success} sx={{ fontSize: '0.6rem' }}>{ad.qty}</Typography>
@@ -329,7 +334,7 @@ const Row = ({ order }) => {
                 ))}
                 {!schedule && (
                   <Grid item xs={12}>
-                    <Box sx={{ p: 6, textAlign: 'center', bgcolor: alpha(BRAND.primary, 0.02), borderRadius: '16px', border: '1px dashed #e2e8f0' }}>
+                    <Box sx={{ p: 6, textAlign: 'center', bgcolor: BRAND.surfaceAlt, borderRadius: '8px', border: `1px dashed ${BRAND.line}` }}>
                       <Clock size={40} color={BRAND.slate} style={{ opacity: 0.5, marginBottom: 12 }} />
                       <Typography variant="body1" fontWeight={700} color="text.secondary">No Active Dispatch Schedule Found</Typography>
                       <Typography variant="caption" color="text.secondary">Please create a dispatch plan for this order to see deep analytics.</Typography>
@@ -409,15 +414,18 @@ const DispatchControlTower = () => {
   ];
 
   return (
-    <Box sx={{ p: { xs: 2, md: 4 }, bgcolor: BRAND.bg, minHeight: '100vh' }}>
+    <Box sx={{ p: { xs: 1.5, md: 2 }, bgcolor: BRAND.bg, minHeight: '100vh' }}>
       
       {/* ── Header ─────────────────────────────────────────── */}
-      <Box sx={{ mb: 4 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-          <Typography variant="h4" fontWeight={900} color="#0b2545">Dispatch Control Tower</Typography>
-          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Box sx={{ mb: 1.5, px: { xs: 1.5, md: 2 }, py: 1.25, borderRadius: '8px', bgcolor: '#fff', border: `1px solid ${BRAND.line}` }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1.25 }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: BRAND.ink, lineHeight: 1.2 }}>Dispatch Control Tower</Typography>
+            <Typography noWrap sx={{ fontSize: '0.74rem', color: BRAND.slate }}>Centralized Planned vs Actual Monitoring Hub</Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
             <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, v) => v && setView(v)}
-              sx={{ bgcolor: '#fff', borderRadius: '10px', '& .MuiToggleButton-root': { px: 1.75, py: 0.75, textTransform: 'none', fontWeight: 800, border: '1px solid #e2e8f0' } }}>
+              sx={{ bgcolor: '#fff', borderRadius: '6px', '& .MuiToggleButton-root': { px: 1.25, py: 0.4, fontSize: '0.75rem', textTransform: 'none', fontWeight: 800, borderRadius: '6px', border: `1px solid ${BRAND.line}` } }}>
               <ToggleButton value="orders">By Order</ToggleButton>
               <ToggleButton value="phases">All Phases</ToggleButton>
             </ToggleButtonGroup>
@@ -427,21 +435,20 @@ const DispatchControlTower = () => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> }}
-              sx={{ width: 280, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: '10px' } }}
+              sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: '6px' } }}
             />
             <Badge color="error" badgeContent={activeFilters} invisible={activeFilters === 0} overlap="circular">
               <Button
                 variant={activeFilters ? 'contained' : 'outlined'}
                 startIcon={<Filter size={16} />}
                 onClick={(e) => setFilterAnchor(e.currentTarget)}
-                sx={{ borderRadius: '10px', px: 3, boxShadow: 'none', bgcolor: activeFilters ? BRAND.primary : '#fff' }}
+                sx={{ borderRadius: '6px', px: 2, textTransform: 'none', fontWeight: 700, boxShadow: 'none', bgcolor: activeFilters ? BRAND.primary : '#fff', borderColor: BRAND.line }}
               >
                 Filters
               </Button>
             </Badge>
           </Box>
         </Box>
-        <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>Centralized Planned vs Actual Monitoring Hub</Typography>
       </Box>
 
       {/* ── Active filter chips ────────────────────────────── */}
@@ -478,18 +485,18 @@ const DispatchControlTower = () => {
 
       {/* ── Main Comparison Table (By Order) ───────────────── */}
       {view === 'orders' && (
-      <TableContainer component={Paper} sx={{ borderRadius: '20px', border: '1px solid #e2e8f0', boxShadow: 'none', overflow: 'hidden' }}>
+      <TableContainer component={Paper} sx={{ borderRadius: '8px', border: `1px solid ${BRAND.line}`, boxShadow: 'none', overflow: 'hidden', '& td': { borderColor: BRAND.lineSoft } }}>
         <Table stickyHeader>
           <TableHead>
             <TableRow>
-              <TableCell sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>BIRD'S EYE VIEW</TableCell>
-              <TableCell sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>ORDER & CLIENT</TableCell>
-              <TableCell align="right" sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>TOTAL ORDER</TableCell>
-              <TableCell align="right" sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>PLANNED</TableCell>
-              <TableCell align="right" sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>ACTUAL DISPATCH</TableCell>
-              <TableCell align="right" sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>VARIANCE</TableCell>
-              <TableCell align="center" sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>ADHERENCE</TableCell>
-              <TableCell align="center" sx={{ bgcolor: '#f8fafc', fontWeight: 900, color: BRAND.slate, fontSize: '0.75rem' }}>STATUS</TableCell>
+              <TableCell sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>BIRD'S EYE VIEW</TableCell>
+              <TableCell sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>ORDER & CLIENT</TableCell>
+              <TableCell align="right" sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>TOTAL ORDER</TableCell>
+              <TableCell align="right" sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>PLANNED</TableCell>
+              <TableCell align="right" sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>ACTUAL DISPATCH</TableCell>
+              <TableCell align="right" sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>VARIANCE</TableCell>
+              <TableCell align="center" sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>ADHERENCE</TableCell>
+              <TableCell align="center" sx={{ bgcolor: BRAND.surfaceAlt, fontWeight: 800, color: BRAND.slate, fontSize: '0.66rem', letterSpacing: '0.04em', borderColor: BRAND.line, whiteSpace: 'nowrap' }}>STATUS</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>

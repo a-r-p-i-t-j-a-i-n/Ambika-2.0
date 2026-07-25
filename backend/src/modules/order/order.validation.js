@@ -56,6 +56,9 @@ export const updateOrderSchema = Joi.object({
   leadTimeDays:   Joi.number().integer().min(0),
   saleOrderLink:  Joi.string().allow('', null),
   remark:         Joi.string().allow('', null, '—'),
+  // Why the customer cancelled (stored) / why the order was revised (logged).
+  cancelReason:   Joi.string().max(500).allow('', null),
+  amendReason:    Joi.string().max(500).allow('', null),
   // Workflow step updates
   poEntry:        workflowStepJoi,
   inventoryCheck: workflowStepJoi,

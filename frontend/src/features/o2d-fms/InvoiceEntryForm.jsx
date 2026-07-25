@@ -14,6 +14,8 @@ import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate, FmsGateBanner, FmsGateDialog } from './FmsGate';
+import { O2D } from './o2dTheme';
+import BackButton from '../../components/BackButton';
 
 const TRANSPORT_TYPES = ['Freight Paid', 'To Pay', 'Party Vehicle'];
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.xlsx,.xls,.doc,.docx';
@@ -290,24 +292,24 @@ const InvoiceEntryForm = () => {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      <Box sx={{ color: '#fff', px: { xs: 2.5, md: 3.5 }, pt: { xs: 2.75, md: 3.25 }, pb: { xs: 3.5, md: 4.25 },
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)' }}>
-        <Stack direction="row" spacing={1.75} alignItems="center">
-          <Box sx={{ width: 42, height: 42, borderRadius: 2, display: 'grid', placeItems: 'center', flexShrink: 0, background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <ReceiptText size={20} color="#fff" />
+    <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas }}>
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <BackButton iconOnly sx={{ color: O2D.body, border: `1px solid ${O2D.line}`, borderRadius: '6px', flexShrink: 0 }} />
+          <Box sx={{ width: 30, height: 30, borderRadius: '6px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand }}>
+            <ReceiptText size={16} />
           </Box>
           <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1rem', md: '1.15rem' }, fontWeight: 800, letterSpacing: '-0.01em', lineHeight: 1.15 }}>Create Invoice &amp; Eway Bill</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.75rem', mt: 0.3 }}>Step 2.7 — record the tax invoice &amp; e-way bill for a dispatch.</Typography>
+            <Typography sx={{ color: O2D.ink, fontSize: { xs: '1rem', md: '1.1rem' }, fontWeight: 800, lineHeight: 1.2 }}>Create Invoice &amp; Eway Bill</Typography>
+            <Typography noWrap sx={{ color: O2D.sub, fontSize: '0.72rem' }}>Step 2.7 — record the tax invoice &amp; e-way bill for a dispatch.</Typography>
           </Box>
         </Stack>
       </Box>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -2.5, md: -3 }, position: 'relative', zIndex: 1, pb: 6, maxWidth: 1180, mx: 'auto' }}>
+      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, pb: 6, maxWidth: 1180, mx: 'auto' }}>
         {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
         {/* Challan picker + auto-filled context */}
-        <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+        <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Autocomplete
             options={challans}
             value={dc}
@@ -345,7 +347,7 @@ const InvoiceEntryForm = () => {
         )}
 
         {/* Form fields */}
-        <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
+        <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Stack spacing={2}>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField select label="Status" value={form.status} onChange={set('status')} size="small" sx={{ minWidth: 160 }} disabled={locked}>
@@ -408,7 +410,7 @@ const InvoiceEntryForm = () => {
         </Paper>
 
         {/* Attachments */}
-        <Paper sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
+        <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
             <FileCheck2 size={18} color={theme.palette.primary.main} />
             <Typography sx={{ fontWeight: 800 }}>Attachments</Typography>

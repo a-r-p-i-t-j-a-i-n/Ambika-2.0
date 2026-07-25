@@ -2,77 +2,7 @@ import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import env from '../config/env.js';
 
-// Shared drawing routine so the file and buffer generators stay identical.
-const drawDeliveryChallan = (doc, dcData) => {
-  // Header
-  doc.fontSize(20).text(env.COMPANY_NAME || 'M/s Ambika Global', { align: 'center', underline: true });
-  doc.fontSize(10).text(env.COMPANY_ADDRESS || '', { align: 'center' });
-  doc.text(`Phone: ${env.COMPANY_PHONE || ''} | Email: ${env.COMPANY_EMAIL || ''}`, { align: 'center' });
-  doc.moveDown();
-
-  doc.fontSize(16).text('DELIVERY CHALLAN', { align: 'center', underline: true });
-  doc.moveDown();
-
-  // DC details
-  doc.fontSize(11);
-  doc.text(`DC No: ${dcData.dcNumber || '-'}`, { continued: true });
-  doc.text(`Date: ${dcData.dcDate ? new Date(dcData.dcDate).toLocaleDateString('en-IN') : '-'}`, { align: 'right' });
-  doc.text(`SO No: ${dcData.soNumber || '-'}`, { continued: true });
-  doc.text(`PO No: ${dcData.poNumber || '-'}`, { align: 'right' });
-  if (dcData.vehicleNo || dcData.transporterName) {
-    doc.text(`Vehicle: ${dcData.vehicleNo || '-'}`, { continued: true });
-    doc.text(`Transporter: ${dcData.transporterName || '-'}`, { align: 'right' });
-  }
-  doc.moveDown();
-
-  // Party
-  doc.font('Helvetica-Bold').text('Bill To:', { underline: true });
-  doc.font('Helvetica').text(dcData.partyName || '');
-  if (dcData.deliveryAddress) doc.text(dcData.deliveryAddress);
-  doc.moveDown();
-
-  // Table header
-  const tableTop = doc.y;
-  doc.font('Helvetica-Bold').fontSize(10);
-  doc.text('Sr.', 50, tableTop);
-  doc.text('SKU Description', 80, tableTop);
-  doc.text('Qty (Pcs)', 350, tableTop, { width: 60, align: 'right' });
-  doc.text('Boxes', 420, tableTop, { width: 60, align: 'right' });
-  doc.text('Weight (Kg)', 490, tableTop, { width: 60, align: 'right' });
-  doc.moveTo(50, tableTop + 15).lineTo(550, tableTop + 15).stroke();
-
-  // Rows
-  doc.font('Helvetica');
-  let rowY = tableTop + 25;
-  (dcData.items || []).forEach((item, index) => {
-    doc.text(index + 1, 50, rowY);
-    doc.text(`${item.skuName || item.skuCode || ''}`, 80, rowY, { width: 260 });
-    doc.text(item.quantityPcs ?? 0, 350, rowY, { width: 60, align: 'right' });
-    doc.text(item.noOfBoxes ?? 0, 420, rowY, { width: 60, align: 'right' });
-    doc.text(Number(item.weightKg || 0).toFixed(2), 490, rowY, { width: 60, align: 'right' });
-    rowY += 20;
-  });
-
-  doc.moveTo(50, rowY).lineTo(550, rowY).stroke();
-  rowY += 10;
-
-  // Totals
-  doc.font('Helvetica-Bold');
-  doc.text('TOTAL', 80, rowY);
-  doc.text(dcData.totalQuantityPcs ?? 0, 350, rowY, { width: 60, align: 'right' });
-  doc.text(dcData.totalBoxes ?? 0, 420, rowY, { width: 60, align: 'right' });
-  doc.text(Number(dcData.totalWeightKg || 0).toFixed(2), 490, rowY, { width: 60, align: 'right' });
-
-  if (dcData.remark) { doc.moveDown(2); doc.font('Helvetica').fontSize(9).text(`Remarks: ${dcData.remark}`, 50); }
-
-  // Footer
-  doc.moveDown(4);
-  doc.font('Helvetica').fontSize(10);
-  doc.text("Receiver's Signature", 50, doc.y, { continued: true });
-  doc.text(`For ${env.COMPANY_NAME || 'M/s Ambika Global'}`, { align: 'right' });
-};
-
-// ── Dispatch Plan ("By Date" client copy) ────────────────────────────────────
+// ── Palette + helpers (shared by the challan + dispatch-plan templates) ──
 const planNum = (n) => Number(n || 0).toLocaleString('en-IN');
 const planDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-');
 const planDateKey = (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'UNSCHEDULED');
@@ -83,6 +13,151 @@ const SOFT = '#eef2fb';
 const LINE = '#c9d2e2';
 const INK = '#1a2438';
 const MUTED = '#6a7690';
+
+const companyDisplay = () => {
+  const raw = env.COMPANY_NAME || 'Ambika Global';
+  return /^m\/s/i.test(raw) ? raw : `M/s ${raw}`;
+};
+
+// Shared navy letterhead (big company name + double rule + centred title).
+// Returns the y position just below it.
+const drawNavyLetterhead = (doc, L, R, W, title) => {
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(28).text(companyDisplay(), L, doc.page.margins.top, { align: 'center', width: W });
+  doc.fillColor(MUTED).font('Helvetica').fontSize(8.5);
+  if (env.COMPANY_ADDRESS) doc.text(env.COMPANY_ADDRESS, L, doc.y, { align: 'center', width: W });
+  doc.text(`Phone: ${env.COMPANY_PHONE || '-'}  |  Email: ${env.COMPANY_EMAIL || '-'}`, L, doc.y, { align: 'center', width: W });
+  let y = doc.y + 6;
+  doc.lineWidth(1.5).strokeColor(NAVY).moveTo(L, y).lineTo(R, y).stroke();
+  doc.lineWidth(0.6).moveTo(L, y + 3).lineTo(R, y + 3).stroke();
+  doc.lineWidth(1);
+  y += 15;
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(14).text(title, L, y, { align: 'center', width: W, characterSpacing: 3 });
+  return doc.y + 12;
+};
+
+// A 4-cell meta band like the dispatch plan's (label above value).
+const drawMetaBand = (doc, L, W, y, cells) => {
+  const metaH = 32;
+  const metaW = W / cells.length;
+  doc.rect(L, y, W, metaH).strokeColor(LINE).lineWidth(1).stroke();
+  cells.forEach(([k, v], i) => {
+    const cx = L + i * metaW;
+    if (i > 0) doc.strokeColor(LINE).moveTo(cx, y).lineTo(cx, y + metaH).stroke();
+    doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(6.5).text(String(k), cx + 7, y + 6, { width: metaW - 12 });
+    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(9).text(String(v ?? '-'), cx + 7, y + 15, { width: metaW - 12, height: 12, ellipsis: true });
+  });
+  return y + metaH + 14;
+};
+
+/**
+ * Delivery Challan — same navy template as the Dispatch Plan the client approved:
+ * big company letterhead, meta bands, navy table with SKU rows, totals and a
+ * signature footer.
+ */
+const drawDeliveryChallan = (doc, dcData) => {
+  const L = doc.page.margins.left;
+  const R = doc.page.width - doc.page.margins.right;
+  const W = R - L;
+  const bottom = doc.page.height - doc.page.margins.bottom;
+
+  let y = drawNavyLetterhead(doc, L, R, W, 'DELIVERY CHALLAN');
+
+  // Meta band 1: DC No · Date · Sales Order · PO No
+  y = drawMetaBand(doc, L, W, y, [
+    ['DELIVERY CHALLAN NO', dcData.dcNumber || '-'],
+    ['DATE', dcData.dcDate ? planDate(dcData.dcDate) : '-'],
+    ['SALES ORDER', dcData.soNumber || '-'],
+    ['PO NO', dcData.poNumber || '-'],
+  ]);
+  // Meta band 2: Vehicle · Transporter · L.R. No (only if any is present)
+  if (dcData.vehicleNo || dcData.transporterName || dcData.lrNo) {
+    y = drawMetaBand(doc, L, W, y, [
+      ['VEHICLE NO', dcData.vehicleNo || '-'],
+      ['TRANSPORTER', dcData.transporterName || '-'],
+      ['L.R. NO', dcData.lrNo || '-'],
+    ]);
+  }
+
+  // Bill To
+  doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(6.5).text('DELIVER TO', L, y);
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(11).text(dcData.partyName || '-', L, doc.y + 1, { width: W });
+  if (dcData.deliveryAddress) doc.fillColor('#3a4560').font('Helvetica').fontSize(9).text(dcData.deliveryAddress, L, doc.y, { width: W });
+  y = doc.y + 12;
+
+  // Section title
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(9).text('DISPATCH DETAILS', L, y, { characterSpacing: 0.5 });
+  y = doc.y + 3;
+  doc.lineWidth(1.5).strokeColor(NAVY).moveTo(L, y).lineTo(R, y).stroke();
+  doc.lineWidth(1);
+  y += 8;
+
+  // Table geometry — Sr | SKU Description | Qty | Boxes | Weight
+  const srW = 30;
+  const qtyW = 78;
+  const boxW = 66;
+  const wtW = 82;
+  const descW = W - srW - qtyW - boxW - wtW;
+  const cols = [
+    { x: L, w: srW, label: 'SR', align: 'center' },
+    { x: L + srW, w: descW, label: 'SKU DESCRIPTION', align: 'left' },
+    { x: L + srW + descW, w: qtyW, label: 'QTY (PCS)', align: 'right' },
+    { x: L + srW + descW + qtyW, w: boxW, label: 'BOXES', align: 'right' },
+    { x: L + srW + descW + qtyW + boxW, w: wtW, label: 'WEIGHT (KG)', align: 'right' },
+  ];
+  const headH = 22;
+  const rowH = 22;
+
+  const drawHead = (yy) => {
+    doc.rect(L, yy, W, headH).fill(NAVY2);
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7.5);
+    cols.forEach((c) => doc.text(c.label, c.x + (c.align === 'right' ? 0 : 6), yy + 7, { width: c.w - (c.align === 'right' ? 6 : 12), align: c.align }));
+    doc.fillColor(INK);
+    return yy + headH;
+  };
+
+  y = drawHead(y);
+  const items = dcData.items || [];
+  doc.font('Helvetica').fontSize(8.5);
+  items.forEach((item, i) => {
+    if (y + rowH > bottom - 90) { doc.addPage(); y = drawHead(doc.page.margins.top); }
+    if (i % 2 === 1) doc.rect(L, y, W, rowH).fill(SOFT);
+    const vals = [
+      String(i + 1),
+      item.skuName || item.skuCode || '-',
+      planNum(item.quantityPcs ?? 0),
+      planNum(item.noOfBoxes ?? 0),
+      Number(item.weightKg || 0).toFixed(2),
+    ];
+    doc.fillColor(INK).font('Helvetica').fontSize(8.5);
+    cols.forEach((c, ci) => doc.text(vals[ci], c.x + (c.align === 'right' ? 0 : 6), y + 7, { width: c.w - (c.align === 'right' ? 6 : 12), align: c.align, ellipsis: true }));
+    doc.strokeColor(LINE).lineWidth(0.5).moveTo(L, y + rowH).lineTo(R, y + rowH).stroke();
+    y += rowH;
+  });
+
+  // Totals row (navy)
+  doc.rect(L, y, W, rowH + 2).fill(NAVY);
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(9);
+  doc.text('TOTAL', cols[1].x + 6, y + 7, { width: cols[1].w });
+  doc.text(planNum(dcData.totalQuantityPcs ?? 0), cols[2].x, y + 7, { width: cols[2].w - 6, align: 'right' });
+  doc.text(planNum(dcData.totalBoxes ?? 0), cols[3].x, y + 7, { width: cols[3].w - 6, align: 'right' });
+  doc.text(Number(dcData.totalWeightKg || 0).toFixed(2), cols[4].x, y + 7, { width: cols[4].w - 6, align: 'right' });
+  y += rowH + 14;
+
+  if (dcData.remark) {
+    doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(6.5).text('REMARKS', L, y);
+    doc.fillColor('#3a4560').font('Helvetica').fontSize(9).text(String(dcData.remark), L, doc.y + 1, { width: W });
+    y = doc.y + 10;
+  }
+
+  // Signature footer
+  const sigY = Math.max(y + 24, bottom - 60);
+  doc.fillColor(INK).font('Helvetica').fontSize(9);
+  doc.text("Receiver's Signature", L, sigY);
+  doc.fillColor(NAVY).font('Helvetica-Bold').text(`For ${companyDisplay()}`, R - 220, sigY, { width: 220, align: 'right' });
+  doc.fillColor('#000');
+};
+
+// ── Dispatch Plan ("By Date" client copy) ────────────────────────────────────
 
 const companyName = () => {
   const raw = env.COMPANY_NAME || 'Ambika Global';
@@ -104,7 +179,7 @@ const drawDispatchPlan = (doc, data) => {
   const bottom = doc.page.height - doc.page.margins.bottom;
 
   // ── Letterhead (centred, double rule) ──
-  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(22).text(companyName(), L, doc.page.margins.top, { align: 'center', width: W });
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(28).text(companyName(), L, doc.page.margins.top, { align: 'center', width: W });
   doc.fillColor(MUTED).font('Helvetica').fontSize(8.5);
   if (env.COMPANY_ADDRESS) doc.text(env.COMPANY_ADDRESS, L, doc.y, { align: 'center', width: W });
   doc.text(`Phone: ${env.COMPANY_PHONE || '-'}  |  Email: ${env.COMPANY_EMAIL || '-'}`, L, doc.y, { align: 'center', width: W });

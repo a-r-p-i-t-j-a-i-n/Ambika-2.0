@@ -214,11 +214,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   const isSubmitting = isCreating || isUpdatingOrder;
 
   const { data: partiesData } = useGetPartiesQuery({ limit: 250 });
-  // Sales orders sell finished goods only — restrict the SKU picker to FINISHED_GOOD
-  // items (raw materials, consumables, packing, circles are not directly sellable).
-  const { data: skusData }    = useGetSkuLookupQuery({ limit: 1000, itemType: 'FINISHED_GOOD' });
   const parties = useMemo(() => partiesData?.data || [], [partiesData]);
-  const skus    = useMemo(() => skusData?.data || [], [skusData]);
 
   const [form, setForm] = useState({
     poNumber: '',
@@ -242,6 +238,19 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   // on selection so we always have the full `orderedSkus` list (the parties list
   // query may be trimmed). This is the "grouping" maintained per party.
   const selectedPartyId = form.party?._id || null;
+
+  // Sales orders sell finished goods only — restrict the SKU picker to FINISHED_GOOD
+  // items (raw materials, consumables, packing, circles are not directly sellable).
+  // Once a party is chosen we also scope to THEIR linked SKUs (plus the universal,
+  // unlinked ones) — so whatever is maintained on that party's "Linked SKUs" is
+  // exactly what shows here, and another client's items never leak in.
+  const { data: skusData } = useGetSkuLookupQuery({
+    limit: 1000,
+    itemType: 'FINISHED_GOOD',
+    ...(selectedPartyId ? { clientId: selectedPartyId } : {}),
+  });
+  const skus = useMemo(() => skusData?.data || [], [skusData]);
+
   const { data: partyDetailRes, isFetching: partyDetailLoading } = useGetPartyByIdQuery(
     selectedPartyId, { skip: !selectedPartyId },
   );

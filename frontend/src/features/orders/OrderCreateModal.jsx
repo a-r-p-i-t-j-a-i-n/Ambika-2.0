@@ -24,11 +24,9 @@ const emptyItem = () => ({
 const OrderCreateModal = ({ open, onClose }) => {
   const [createOrderEntry, { isLoading: isCreating }] = useCreateOrderEntryMutation();
   const { data: partiesData } = useGetPartiesQuery({ limit: 200 });
-  const { data: skusData } = useGetSkuLookupQuery({ limit: 1000, itemType: 'FINISHED_GOOD' });
   const { enqueueSnackbar } = useSnackbar();
 
   const parties = partiesData?.data || [];
-  const skus = skusData?.data || [];
 
   const [form, setForm] = useState({
     poDate: dayjs().format('YYYY-MM-DD'),
@@ -42,6 +40,16 @@ const OrderCreateModal = ({ open, onClose }) => {
     orderDocument: '',
     leadTimeDays: 7,
   });
+
+  // Sales orders sell finished goods only. Once a party is chosen, scope the picker
+  // to THEIR linked SKUs (plus the universal, unlinked ones) so the items maintained
+  // on that party's "Linked SKUs" are exactly what shows when punching the order.
+  const { data: skusData } = useGetSkuLookupQuery({
+    limit: 1000,
+    itemType: 'FINISHED_GOOD',
+    ...(form.partyId ? { clientId: form.partyId } : {}),
+  });
+  const skus = skusData?.data || [];
 
   const [items, setItems] = useState([emptyItem()]);
 

@@ -15,6 +15,8 @@ import {
   taskTemplateSchema,
   taskTemplateUpdateSchema,
   checklistToggleSchema,
+  checklistProofSchema,
+  consignmentPaymentSchema,
   checklistParamSchema,
   markActionDoneSchema,
   gateQuerySchema,
@@ -101,6 +103,16 @@ router.patch('/processes/:id/steps/:stepCode/assign',
 router.patch('/processes/:id/steps/:stepCode/checklist/:itemId',
   requirePermission('o2dfms.view'),
   validate(checklistParamSchema, 'params'), validate(checklistToggleSchema), c.toggleChecklist);
+
+// Attach / clear the proof (file or link) on ONE checklist item.
+router.patch('/processes/:id/steps/:stepCode/checklist/:itemId/proof',
+  requirePermission('o2dfms.view'),
+  validate(checklistParamSchema, 'params'), validate(checklistProofSchema), c.setChecklistProof);
+
+// Step 2.11 — record/update a delivery challan's payment status (received / not received).
+router.patch('/processes/:id/consignment-payment',
+  requirePermission('o2dfms.view'),
+  validate(mongoIdParamSchema, 'params'), validate(consignmentPaymentSchema), c.setConsignmentPayment);
 
 // Mark one of a step's connected action-links as done (after finishing that screen).
 router.patch('/processes/:id/steps/:stepCode/action-done',
