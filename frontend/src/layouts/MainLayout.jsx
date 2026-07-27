@@ -68,6 +68,8 @@ const navSections = [
       // { text: 'Invoices & FMS', icon: <FileText size={19} />, path: '/invoices' },
     ],
   },
+  /* ── IMS is hidden from the sidebar for the client (deploy). The routes still
+     work; uncomment this whole section to re-expose it in the nav. ──
   {
     // Title-less section: the single "IMS" row is its own label. Click it to
     // reveal the inventory types; each type expands to its own screens
@@ -122,6 +124,7 @@ const navSections = [
       },
     ],
   },
+  */
   /* ── PPC is hidden from the sidebar for the client (deploy). The routes still
      work; uncomment this section to re-expose it in the nav. ──
   {

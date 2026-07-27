@@ -10,8 +10,24 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
+import { O2D } from './o2dTheme';
 
 const fmtD = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+
+// Shared tooltip look for the whole page — a clean warm-ink card with crisp white
+// text (MUI's default tooltip leaves the inner Typography dark, which reads muddy).
+const TIP_SLOT = {
+  tooltip: {
+    sx: {
+      bgcolor: O2D.ink, color: '#fff', px: 1.25, py: 1, borderRadius: '8px',
+      maxWidth: 260, boxShadow: '0 8px 26px rgba(28,30,33,0.30)',
+      '& .MuiTypography-root': { color: 'rgba(255,255,255,0.82)', lineHeight: 1.5 },
+      '& .tipHd': { color: '#fff', fontWeight: 800, letterSpacing: '0.01em' },
+      '& b': { color: '#fff', fontWeight: 700 },
+    },
+  },
+  arrow: { sx: { color: O2D.ink } },
+};
 
 // Step → display tone. Current = the step the order is waiting on right now.
 // IN_PROGRESS (quantity-gated dispatch part-way through its phases) shows blue
@@ -52,7 +68,7 @@ const stepStatusLabel = (s) => {
 
 const stepTip = (s) => (
   <Box>
-    <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>{s.stepCode} · {s.name}</Typography>
+    <Typography variant="caption" className="tipHd" sx={{ display: 'block', mb: 0.25 }}>{s.stepCode} · {s.name}</Typography>
     <Typography variant="caption" display="block">Status: {stepStatusLabel(s)}</Typography>
     {s.dispatchProgress && (
       <Typography variant="caption" display="block">
@@ -98,7 +114,7 @@ const PipelineRow = ({ p, navigate }) => {
           return (
             <React.Fragment key={s.stepCode}>
               {i > 0 && <Box sx={{ width: 14, height: 2, flexShrink: 0, bgcolor: alpha('#94a3b8', 0.5) }} />}
-              <Tooltip title={stepTip(s)} arrow>
+              <Tooltip title={stepTip(s)} arrow slotProps={TIP_SLOT}>
                 <Box
                   onClick={() => navigate(`/o2d-fms/task/${p._id}/${encodeURIComponent(s.stepCode)}`)}
                   sx={{
@@ -142,7 +158,7 @@ const MatrixView = ({ rows, navigate }) => {
             <TableCell sx={{ minWidth: 190, position: 'sticky', left: 0, bgcolor: '#eef3fd', zIndex: 2 }}>Order</TableCell>
             {columns.map((c) => (
               <TableCell key={c.stepCode} align="center" sx={{ px: 0.5 }}>
-                <Tooltip title={c.name} arrow><Typography variant="caption" sx={{ fontWeight: 700 }}>{c.stepCode}</Typography></Tooltip>
+                <Tooltip title={c.name} arrow slotProps={TIP_SLOT}><Typography variant="caption" sx={{ fontWeight: 700 }}>{c.stepCode}</Typography></Tooltip>
               </TableCell>
             ))}
             <TableCell align="center">%</TableCell>
@@ -164,7 +180,7 @@ const MatrixView = ({ rows, navigate }) => {
                   const tone = stepTone(s, p.currentStepCode);
                   return (
                     <TableCell key={c.stepCode} align="center" sx={{ px: 0.5, py: 0.75 }}>
-                      <Tooltip title={stepTip(s)} arrow>
+                      <Tooltip title={stepTip(s)} arrow slotProps={TIP_SLOT}>
                         <Box
                           onClick={() => navigate(`/o2d-fms/task/${p._id}/${encodeURIComponent(s.stepCode)}`)}
                           sx={{
@@ -355,7 +371,7 @@ const TimelineView = ({ rows, navigate }) => {
               const tone = stepTone(s, p.currentStepCode);
               const isCurrent = s.stepCode === p.currentStepCode && !['DONE', 'DELAYED'].includes(s.status);
               return (
-                <Tooltip key={s.stepCode} title={stepTip(s)} arrow>
+                <Tooltip key={s.stepCode} title={stepTip(s)} arrow slotProps={TIP_SLOT}>
                   <Box
                     onClick={() => navigate(`/o2d-fms/task/${p._id}/${encodeURIComponent(s.stepCode)}`)}
                     sx={{
