@@ -88,8 +88,6 @@ const PaymentSteps = () => {
           <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap' }} useFlexGap>
             <Chip size="small" label={`Party: ${inv.partyName || '—'}`} />
             <Chip size="small" label={`Amount: ₹${(inv.invoiceAmount || 0).toLocaleString('en-IN')}`} />
-            <Chip size="small" label={`Received: ₹${(inv.amountReceived || 0).toLocaleString('en-IN')}`} />
-            <Chip size="small" color={inv.balance > 0 ? 'warning' : 'success'} label={`Balance: ₹${(inv.balance || 0).toLocaleString('en-IN')}`} />
           </Stack>
         )}
       </Paper>

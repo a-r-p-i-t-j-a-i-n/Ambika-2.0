@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, Button, Chip, InputAdornment,
   Table, TableBody, TableCell, TableHead, TableRow, alpha, useTheme, Skeleton, CircularProgress,
+  Autocomplete,
 } from '@mui/material';
-import { Truck, Eye, Search, FileText, Zap, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Truck, Eye, Search, FileText, Zap, CheckCircle2, ArrowRight, Printer } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -11,6 +12,7 @@ import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useFmsGate, FmsGateBanner, FmsGateDialog } from '../o2d-fms/FmsGate';
 import { O2D } from '../o2d-fms/o2dTheme';
 import BackButton from '../../components/BackButton';
+import { printChallans } from '../../utils/printChallans';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
@@ -46,11 +48,43 @@ const GenerateChallanPdf = () => {
   const [search, setSearch] = useState(soFromTask);
   const { data, isFetching } = useGetChallansQuery({ limit: 200, sort: '-dcDate', search: search || undefined });
   const [busyId, setBusyId] = useState(null);
+  const [printing, setPrinting] = useState(false);
   // Gate (when arriving from the FMS step for a specific order).
   const gate = useFmsGate({ soNumber: soFromTask, action: 'CHALLAN_PDF' });
   const [gateOpen, setGateOpen] = useState(false);
 
   const rows = useMemo(() => data?.data || [], [data]);
+
+  // A full (unfiltered) list just to power the Sales Order dropdown — every SO that
+  // has at least one challan, most-recent first.
+  const { data: allData } = useGetChallansQuery({ limit: 500, sort: '-dcDate' });
+  const soOptions = useMemo(() => {
+    const seen = new Map(); // soNumber → party (for the option subtitle)
+    (allData?.data || []).forEach((c) => { if (c.soNumber && !seen.has(c.soNumber)) seen.set(c.soNumber, c.partyName || ''); });
+    return [...seen.entries()].map(([soNumber, partyName]) => ({ soNumber, partyName }));
+  }, [allData]);
+  // The SO currently chosen in the dropdown (drives the list filter + the batch print).
+  const [soSel, setSoSel] = useState(soFromTask || '');
+
+  // Batch print — pull the FULL challan record (items, address, totals) for every
+  // challan currently listed, then open a print sheet with TWO challans per A4 page.
+  const printAll = async () => {
+    if (!rows.length) { enqueueSnackbar('No challans to print — pick a sales order first.', { variant: 'info' }); return; }
+    setPrinting(true);
+    try {
+      const token = localStorage.getItem('token');
+      const full = await Promise.all(rows.map((r) => fetch(`${API_BASE}/challans/${r._id}`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((res) => (res.ok ? res.json() : null)).then((j) => j?.data || null).catch(() => null)));
+      const challans = full.filter(Boolean);
+      if (!challans.length) throw new Error('Could not load the challans to print.');
+      const ok = printChallans({ challans });
+      if (!ok) enqueueSnackbar('Allow pop-ups to open the print preview.', { variant: 'warning' });
+    } catch (e) {
+      enqueueSnackbar(e.message || 'Could not prepare the print.', { variant: 'error' });
+    } finally {
+      setPrinting(false);
+    }
+  };
 
   // Always-fresh preview: stream the PDF bytes (nothing saved) and open them in a
   // new tab — the browser's PDF viewer shows it and offers download.
@@ -151,11 +185,44 @@ const GenerateChallanPdf = () => {
         )}
 
         <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-          <TextField
-            fullWidth size="small" value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by DC number, SO number or party…"
-            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> }}
-          />
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ md: 'center' }}>
+            {/* Pick a Sales Order → the list narrows to that order's challans, and the
+                Print button batches them 2-per-A4-page. */}
+            <Autocomplete
+              size="small" sx={{ minWidth: 280, flex: 1 }}
+              options={soOptions}
+              value={soOptions.find((o) => o.soNumber === soSel) || null}
+              onChange={(_, v) => { setSoSel(v?.soNumber || ''); setSearch(v?.soNumber || ''); }}
+              getOptionLabel={(o) => o?.soNumber || ''}
+              isOptionEqualToValue={(a, b) => a.soNumber === b?.soNumber}
+              renderOption={(props, o) => (
+                <li {...props} key={o.soNumber}>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>{o.soNumber}</Typography>
+                    {o.partyName && <Typography variant="caption" color="text.secondary" noWrap>{o.partyName}</Typography>}
+                  </Box>
+                </li>
+              )}
+              renderInput={(p) => <TextField {...p} label="Sales Order" placeholder="Select an SO…" />}
+            />
+            <TextField
+              size="small" sx={{ flex: 1.4 }} value={search}
+              onChange={(e) => { setSearch(e.target.value); setSoSel(''); }}
+              placeholder="…or search by DC number, SO number or party"
+              InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> }}
+            />
+            <Button
+              variant="contained" disableElevation onClick={printAll}
+              disabled={printing || !rows.length}
+              startIcon={printing ? <CircularProgress size={14} color="inherit" /> : <Printer size={16} />}
+              sx={{ whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '7px', bgcolor: O2D.brand, '&:hover': { bgcolor: '#1a44bf' } }}
+            >
+              {printing ? 'Preparing…' : `Print${rows.length ? ` (${rows.length}) · 2/page` : ''}`}
+            </Button>
+          </Stack>
+          <Typography sx={{ mt: 0.75, fontSize: '0.68rem', color: O2D.sub }}>
+            Print lays two delivery challans on each A4 page (a 3rd flows to the next page). Colour / black-&-white and one-sided / both-sides are chosen in your browser's print dialog.
+          </Typography>
         </Paper>
 
         <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>

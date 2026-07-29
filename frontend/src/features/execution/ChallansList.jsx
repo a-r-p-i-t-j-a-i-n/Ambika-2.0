@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, Button, TextField, InputAdornment, IconButton,
@@ -14,6 +14,9 @@ import { resolveFileUrl } from '../../utils/fileUrl';
 import { O2D } from '../o2d-fms/o2dTheme';
 
 const STATUS_OPTS = ['CREATED', 'DISPATCHED', 'DELIVERED', 'CANCELLED'];
+// Stable empty array so the DataGrid never sees a fresh `rows` reference while the
+// challans query is still loading (a new [] each render can spin the grid).
+const EMPTY_ROWS = [];
 
 const STATUS_COLOR = (theme, value) => ({
   CREATED:    theme.palette.info.main,
@@ -75,7 +78,7 @@ const ChallansList = () => {
     sort: '-dcDate',
   });
 
-  const columns = [
+  const columns = useMemo(() => [
     {
       field: 'dcNumber', headerName: 'DC #', width: 160,
       renderCell: (p) => (
@@ -120,7 +123,8 @@ const ChallansList = () => {
         <Tooltip title="Open document"><IconButton size="small" onClick={(e) => { e.stopPropagation(); window.open(resolveFileUrl(p.value), '_blank'); }}><ExternalLink size={13} /></IconButton></Tooltip>
       ) : null,
     },
-  ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [theme]);
 
   return (
     <Box sx={{ p: { xs: 1.5, sm: 2 }, display: 'flex', flexDirection: 'column', gap: 1.5, bgcolor: O2D.canvas, minHeight: '100vh' }}>
@@ -178,7 +182,7 @@ const ChallansList = () => {
           </Typography>
         </Box>
         <DataGrid
-          rows={challansRes?.data || []}
+          rows={challansRes?.data || EMPTY_ROWS}
           columns={columns}
           getRowId={(row) => row._id}
           loading={isLoading}

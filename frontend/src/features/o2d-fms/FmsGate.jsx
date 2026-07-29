@@ -18,8 +18,17 @@ import { useGetFmsGateQuery } from '../../store/api/o2dFmsApi';
  *   <FmsGateDialog gate={gate} open={open} onClose={...} />
  */
 export const useFmsGate = ({ soNumber, salesOrderId, intakeId, action }) => {
-  const skip = !action || !(soNumber || salesOrderId || intakeId);
-  const params = { action, ...(salesOrderId ? { salesOrderId } : {}), ...(intakeId ? { intakeId } : {}), ...(soNumber ? { soNumber } : {}) };
+  // Coerce the identifiers to plain strings — a populated ref (object) would give a
+  // fresh query key each render and could thrash the gate — then memoize the params
+  // so the query subscription arg is referentially stable.
+  const soKey = soNumber != null && soNumber !== '' ? String(soNumber?._id || soNumber) : '';
+  const soId = salesOrderId != null ? String(salesOrderId?._id || salesOrderId) : '';
+  const inId = intakeId != null ? String(intakeId?._id || intakeId) : '';
+  const skip = !action || !(soKey || soId || inId);
+  const params = useMemo(
+    () => ({ action, ...(soId ? { salesOrderId: soId } : {}), ...(inId ? { intakeId: inId } : {}), ...(soKey ? { soNumber: soKey } : {}) }),
+    [action, soId, inId, soKey],
+  );
   const { data, isFetching } = useGetFmsGateQuery(params, { skip });
   const gate = data?.data || null;
   // Stable identity — so a consumer that lists `gate` in an effect's deps never

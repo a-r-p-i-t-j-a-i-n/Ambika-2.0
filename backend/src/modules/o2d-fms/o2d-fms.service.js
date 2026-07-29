@@ -910,9 +910,9 @@ export const o2dFmsService = {
     const defMap = await loadDefMap();
     const def = defMap.get(stepCode);
     if (!opts.bypassRequirements) {
-      // Quantity-gated (phased dispatch): can't be ticked done while qty is pending —
-      // it completes automatically once every phase is dispatched (balance 0).
-      if (isQuantityGated(def)) {
+      // Quantity-gated (phased dispatch): normally waits until every phase is
+      // dispatched, but a user clicking "Mark Done" (force) may complete it now.
+      if (isQuantityGated(def) && !payload.force) {
         const summary = await computeOrderDispatchSummary(process);
         if (!summary.fullyDispatched) {
           throw new AppError(
@@ -922,9 +922,9 @@ export const o2dFmsService = {
           );
         }
       }
-      // Consignment-gated (Invoice / POD / Payment): can't be ticked done until every
-      // consignment is processed — it auto-completes when the last one is.
-      if (isConsignmentGated(def)) {
+      // Consignment-gated (Invoice / POD / Payment): normally waits until every
+      // consignment is processed, but "Mark Done" (force) may complete it now.
+      if (isConsignmentGated(def) && !payload.force) {
         const { summary } = await computeConsignments(process.soNumber);
         const gate = consignmentGate(def.triggerKey, summary);
         if (!gate.satisfied) {

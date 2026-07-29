@@ -14,19 +14,32 @@ import { O2D } from './o2dTheme';
 
 const fmtD = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
-// Shared tooltip look for the whole page — a clean warm-ink card with crisp white
-// text (MUI's default tooltip leaves the inner Typography dark, which reads muddy).
+// Shared tooltip look for the whole page — a light, warm card (no black) with blue
+// text, matching the client's design system. A warm hairline + soft shadow makes it
+// read as its own panel on white.
 const TIP_SLOT = {
   tooltip: {
     sx: {
-      bgcolor: O2D.ink, color: '#fff', px: 1.25, py: 1, borderRadius: '8px',
-      maxWidth: 260, boxShadow: '0 8px 26px rgba(28,30,33,0.30)',
-      '& .MuiTypography-root': { color: 'rgba(255,255,255,0.82)', lineHeight: 1.5 },
-      '& .tipHd': { color: '#fff', fontWeight: 800, letterSpacing: '0.01em' },
-      '& b': { color: '#fff', fontWeight: 700 },
+      bgcolor: O2D.surface, color: O2D.brand, px: 1.25, py: 1, borderRadius: '8px',
+      maxWidth: 260, border: `1px solid ${O2D.line}`, boxShadow: '0 8px 26px rgba(28,30,33,0.16)',
+      '& .MuiTypography-root': { color: '#1e40af', lineHeight: 1.5 },
+      '& .tipHd': { color: O2D.brand, fontWeight: 800, letterSpacing: '0.01em' },
+      '& b': { color: O2D.brand, fontWeight: 700 },
     },
   },
-  arrow: { sx: { color: O2D.ink } },
+  arrow: {
+    sx: {
+      color: O2D.surface,
+      '&::before': { border: `1px solid ${O2D.line}` },
+    },
+  },
+};
+
+// Overdue chip — saturated red with WHITE text + icon so it stays legible and pops.
+const OVERDUE_CHIP = {
+  bgcolor: '#dc2626', color: '#fff', fontWeight: 800,
+  '& .MuiChip-icon': { color: '#fff' },
+  '& .MuiChip-label': { color: '#fff' },
 };
 
 // Step → display tone. Current = the step the order is waiting on right now.
@@ -100,7 +113,7 @@ const PipelineRow = ({ p, navigate }) => {
             <Typography variant="caption" color="text.secondary" noWrap display="block">{p.partyName}{p.poNumber ? ` · PO ${p.poNumber}` : ''}</Typography>
           </Box>
           <Chip size="small" variant="outlined" label={`${pct}%`} />
-          {od > 0 && <Chip size="small" color="error" icon={<AlertTriangle size={12} />} label={`${od} overdue`} />}
+          {od > 0 && <Chip size="small" icon={<AlertTriangle size={12} />} label={`${od} overdue`} sx={OVERDUE_CHIP} />}
           {p.isCompleted && <Chip size="small" color="success" label="Completed" />}
         </Stack>
         <Button size="small" endIcon={<ArrowRight size={14} />} onClick={() => navigate(`/o2d-fms/process/${p._id}`)}>Open</Button>
@@ -224,7 +237,7 @@ const CardsView = ({ rows, navigate }) => (
               {p.isCompleted
                 ? <Chip size="small" color="success" label="Completed" />
                 : od > 0
-                  ? <Chip size="small" color="error" icon={<AlertTriangle size={12} />} label={`${od} overdue`} />
+                  ? <Chip size="small" icon={<AlertTriangle size={12} />} label={`${od} overdue`} sx={OVERDUE_CHIP} />
                   : <Chip size="small" variant="outlined" color="primary" label="On track" />}
             </Stack>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1.25 }}>

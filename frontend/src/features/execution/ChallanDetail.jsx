@@ -22,11 +22,12 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 const DISPATCH_STATUSES = ['CREATED', 'DISPATCHED', 'DELIVERED', 'CANCELLED'];
 const TRANSPORT_TYPES = ['Freight Paid', 'To Pay', 'Party Vehicle'];
 
+// Warm "Editorial Clean" palette — neutrals are warm greige/khaki, status hues kept.
 const C = {
-  ink: '#0b2545', body: '#1e3a8a', primary: '#1d4ed8', primaryDk: '#1e3a8a',
-  success: '#0f766e', warning: '#b45309', error: '#be123c',
-  slate: '#475a8a', faint: '#7d8fb3', line: '#dbe4f3',
-  surface: '#ffffff', surfaceAlt: '#f5f8ff',
+  ink: '#1c1e21', body: '#3f4650', primary: '#1d4ed8', primaryDk: '#1a44bf',
+  success: '#15803d', warning: '#b45309', error: '#be123c',
+  slate: '#6b7280', faint: '#9ca3af', line: '#e4e1d9',
+  surface: '#ffffff', surfaceAlt: '#f7f6f2', canvas: '#e9e7e1', band: '#efece5',
 };
 
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
@@ -135,50 +136,52 @@ const ChallanDetail = () => {
 
   const statusColor = STATUS_COLOR[dc.status] || C.slate;
 
+  const headBtn = {
+    color: C.body, borderColor: C.line, textTransform: 'none', fontWeight: 700, borderRadius: '7px',
+    '&:hover': { borderColor: C.faint, bgcolor: C.surfaceAlt },
+  };
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: C.surfaceAlt, pb: 4 }}>
-      {/* ── Hero ─────────────────────────────────────────────── */}
+    <Box sx={{ minHeight: '100vh', bgcolor: C.canvas, pb: 4 }}>
+      {/* ── Header — flush warm white bar (was a navy gradient hero) ── */}
       <Box sx={{
-        background: `linear-gradient(135deg, ${C.ink} 0%, ${C.primaryDk} 55%, ${C.primary} 100%)`,
-        color: '#fff', px: { xs: 2, md: 3 }, pt: 2, pb: 2.5,
+        bgcolor: C.surface, borderBottom: `1px solid ${C.line}`,
+        px: { xs: 1.5, md: 2.5 }, py: 1.5, position: 'sticky', top: 0, zIndex: 5,
       }}>
         <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap>
           <IconButton size="small" onClick={() => navigate('/challans')}
-            sx={{ color: '#fff', bgcolor: 'rgba(255,255,255,0.12)' }}>
+            sx={{ color: C.body, border: `1px solid ${C.line}`, borderRadius: '7px' }}>
             <ArrowLeft size={16} />
           </IconButton>
-          <Box sx={{ width: 38, height: 38, borderRadius: 2, display: 'grid', placeItems: 'center',
-            background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <Truck size={19} color="#fff" />
+          <Box sx={{ width: 36, height: 36, borderRadius: '8px', display: 'grid', placeItems: 'center',
+            bgcolor: alpha(C.primary, 0.1), color: C.primary }}>
+            <Truck size={18} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography sx={{ fontSize: { xs: '1.1rem', md: '1.35rem' }, fontWeight: 800 }}>
+            <Typography sx={{ fontSize: { xs: '1.05rem', md: '1.25rem' }, fontWeight: 800, color: C.ink, lineHeight: 1.2 }}>
               {dc.dcNumber}
             </Typography>
-            <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.78)' }}>
+            <Typography sx={{ fontSize: '0.76rem', color: C.slate }}>
               Delivery Challan · {dc.partyName}
             </Typography>
           </Box>
           <Chip
             label={dc.status || 'CREATED'}
             size="small"
-            sx={{ bgcolor: alpha(statusColor, 0.25), color: '#fff', fontWeight: 800, fontSize: '0.66rem',
-              border: '1px solid rgba(255,255,255,0.3)' }}
+            sx={{ bgcolor: alpha(statusColor, 0.12), color: statusColor, fontWeight: 800, fontSize: '0.66rem', letterSpacing: '0.03em' }}
           />
           {!editing && (
-            <Button size="small" startIcon={<Pencil size={14} />} onClick={startEdit}
-              sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.25)' }}>
+            <Button size="small" variant="outlined" startIcon={<Pencil size={14} />} onClick={startEdit} sx={headBtn}>
               Edit
             </Button>
           )}
-          <Button size="small" variant="contained" startIcon={<Download size={14} />}
+          <Button size="small" variant="contained" disableElevation startIcon={<Download size={14} />}
             href={pdfHref || undefined} target="_blank" rel="noreferrer" disabled={!pdfHref}
-            sx={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', boxShadow: 'none' }}>
+            sx={{ fontWeight: 700, textTransform: 'none', borderRadius: '7px', bgcolor: C.primary, boxShadow: 'none', '&:hover': { bgcolor: C.primaryDk, boxShadow: 'none' } }}>
             Download
           </Button>
-          <Button size="small" startIcon={<RefreshCw size={14} />} disabled={generating || pdfLoading}
+          <Button size="small" variant="outlined" startIcon={<RefreshCw size={14} />} disabled={generating || pdfLoading}
             onClick={async () => { try { await generatePdf(id).unwrap(); } catch { /* non-fatal */ } loadPdf(); }}
-            sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.25)' }}>
+            sx={headBtn}>
             Regenerate
           </Button>
         </Stack>
@@ -186,7 +189,7 @@ const ChallanDetail = () => {
 
       <Box sx={{ px: { xs: 1.5, md: 2.5 }, mt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
         {/* ── Order + phase linkage ───────────────────────────── */}
-        <Paper sx={{ p: 2, borderRadius: 3, border: `1px solid ${C.line}` }}>
+        <Paper sx={{ p: 2, borderRadius: "10px", border: `1px solid ${C.line}` }}>
           <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap alignItems="center">
             <Field icon={Hash} label="Sales Order" value={dc.soNumber}
               onClick={dc.orderId ? () => navigate(`/orders/${dc.orderId}`) : undefined} />
@@ -210,7 +213,7 @@ const ChallanDetail = () => {
         </Paper>
 
         {/* ── When & How ──────────────────────────────────────── */}
-        <Paper sx={{ p: 2, borderRadius: 3, border: `1px solid ${C.line}` }}>
+        <Paper sx={{ p: 2, borderRadius: "10px", border: `1px solid ${C.line}` }}>
           <Stack direction="row" alignItems="center" sx={{ mb: 1.5 }}>
             <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: C.slate, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               When &amp; How
@@ -259,7 +262,7 @@ const ChallanDetail = () => {
         </Paper>
 
         {/* ── Items dispatched ────────────────────────────────── */}
-        <Paper sx={{ borderRadius: 3, border: `1px solid ${C.line}`, overflow: 'hidden' }}>
+        <Paper sx={{ borderRadius: "10px", border: `1px solid ${C.line}`, overflow: 'hidden' }}>
           <Box sx={{ p: 2, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 1 }}>
             <Boxes size={16} color={C.primary} />
             <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: C.ink }}>Items Dispatched</Typography>
@@ -316,14 +319,14 @@ const ChallanDetail = () => {
         </Paper>
 
         {dc.remark && !editing && (
-          <Paper sx={{ p: 2, borderRadius: 3, border: `1px solid ${C.line}` }}>
+          <Paper sx={{ p: 2, borderRadius: "10px", border: `1px solid ${C.line}` }}>
             <Typography sx={{ fontSize: '0.64rem', fontWeight: 800, color: C.faint, textTransform: 'uppercase' }}>Remark</Typography>
             <Typography sx={{ fontSize: '0.84rem', color: C.body }}>{dc.remark}</Typography>
           </Paper>
         )}
 
         {/* ── Delivery Challan PDF (shown last, after all dispatch details) ── */}
-        <Paper sx={{ borderRadius: 3, border: `1px solid ${C.line}`, overflow: 'hidden' }}>
+        <Paper sx={{ borderRadius: "10px", border: `1px solid ${C.line}`, overflow: 'hidden' }}>
           <Box sx={{ p: 2, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 1 }}>
             <FileSearch size={16} color={C.primary} />
             <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: C.ink }}>Delivery Challan PDF</Typography>

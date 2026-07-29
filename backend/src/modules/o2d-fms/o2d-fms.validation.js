@@ -21,6 +21,10 @@ export const completeStepSchema = Joi.object({
   link:        Joi.string().uri({ allowRelative: true }).allow('', null),
   remarks:     Joi.string().max(1000).allow('', null),
   attachments: Joi.array().items(attachmentJoi).default([]),
+  // The user clicked "Mark Done" — complete the step now even if it would normally
+  // wait to auto-complete (all phases dispatched / all consignments done). The
+  // checklist / verifications / proof / approval requirements are STILL enforced.
+  force:       Joi.boolean().default(false),
 });
 
 export const assignStepSchema = Joi.object({

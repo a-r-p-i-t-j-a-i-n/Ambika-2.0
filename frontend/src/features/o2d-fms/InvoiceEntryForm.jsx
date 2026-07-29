@@ -172,8 +172,10 @@ const InvoiceEntryForm = () => {
       loadedInvoiceIdRef.current = existingInvoice._id;
       loadInvoiceIntoForm(existingInvoice);
     }
+    // Depend on the invoice IDENTITY (a string), never the object — so a fresh query
+    // reference for the same invoice can never re-run this and re-loop the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingInvoice]);
+  }, [existingInvoice?._id]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -193,6 +195,9 @@ const InvoiceEntryForm = () => {
   // carries the previous invoice's amount/files over); the useEffect then reloads
   // a saved invoice if the newly-picked challan already has one.
   const onPickDc = (v) => {
+    // Idempotent — re-selecting the already-chosen challan must NOT re-fire all the
+    // resets (that redundant cascade is what can spiral into an update loop).
+    if (v && dc && String(v._id) === String(dc._id)) return;
     setDc(v);
     setExistingId(null);
     setEditMode(false);
@@ -240,8 +245,12 @@ const InvoiceEntryForm = () => {
       presetRef.current = true;
       onPickDc(pending || soChallans[0]);
     }
+    // Deps are stable primitives / query results only. We deliberately do NOT list
+    // `dc` or `invoicedDcIds` (a fresh Set each time it recomputes): presetRef already
+    // guards the one-shot pick, and keeping churny references out prevents any chance
+    // of this effect re-entering in a loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soParam, dcParam, challans, dc, soInvRes, invoicedDcIds]);
+  }, [challans, soParam, dcParam, soInvRes]);
 
   const reset = () => {
     setDc(null);

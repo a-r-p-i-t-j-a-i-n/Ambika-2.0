@@ -18,8 +18,23 @@ import { useCreateActualDispatchMutation } from '../../store/api/dispatchControl
 import { useReturnToTask } from '../o2d-fms/useReturnToTask';
 import { useFmsGate, FmsGateDialog, FmsGateBanner } from '../o2d-fms/FmsGate';
 import { useGetTransportersQuery, useCreateTransporterMutation } from '../../store/api/transporterApi';
+import { useGetPartiesQuery } from '../../store/api/partyApi';
 
 const TRANSPORT_MODES = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
+
+// Resolve a party's COMPLETE ship-to address from the party master, preferring the
+// full postal `address`, then a structured primary address, then the plain place.
+const partyFullAddress = (party) => {
+  if (!party) return '';
+  if (party.address && String(party.address).trim()) return String(party.address).trim();
+  const a = (party.addresses || [])[0];
+  if (a) {
+    const parts = [a.line1, a.line2, a.city, a.state, a.pin].map((x) => String(x || '').trim()).filter(Boolean);
+    if (parts.length) return parts.join(', ');
+  }
+  return String(party.location || '').trim();
+};
+const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const DC_THROUGH = ['Freight Paid', 'To Pay', 'Party Vehicle'];
 
 // Lets the Transporter picker offer "Add «typed name»" when no master match exists.
@@ -141,6 +156,26 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
   const [createTransporter, { isLoading: creatingTransporter }] = useCreateTransporterMutation();
   const [newTransporter, setNewTransporter] = useState(null);
 
+  // Party master → auto-fill the delivery address from the chosen order's party.
+  const { data: partiesRes } = useGetPartiesQuery({ limit: 500 }, { skip: !open });
+  const partyIndex = useMemo(() => {
+    const byId = new Map(); const byName = new Map();
+    (partiesRes?.data || []).forEach((p) => {
+      if (p._id) byId.set(String(p._id), p);
+      if (p.name) byName.set(normName(p.name), p);
+    });
+    return { byId, byName };
+  }, [partiesRes]);
+  const resolvePartyAddress = (order) => {
+    if (!order) return '';
+    const p = (order.partyId && partyIndex.byId.get(String(order.partyId)))
+      || partyIndex.byName.get(normName(order.partyName));
+    return partyFullAddress(p);
+  };
+  // Remembers the last value we auto-filled, so re-picking an order refreshes it
+  // but a hand-typed address is never overwritten.
+  const autoAddrRef = useRef('');
+
   const freshHeader = () => ({
     dcDate: dayjs().format('YYYY-MM-DD'),
     vehicleNo: '', transportMode: 'Road', transporterName: '', clientEmail: '',
@@ -165,6 +200,23 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
     if (match) setStep1Order(match);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, presetSoNumber, orders]);
+
+  // Auto-fill the delivery address from the selected order's party master. Only
+  // overwrites when the field is empty or still holds a prior auto-fill, so a
+  // manually typed address is preserved; re-picking a different party refreshes it.
+  useEffect(() => {
+    if (!open || !step1Order) return;
+    const addr = resolvePartyAddress(step1Order);
+    if (!addr) return;
+    setHeader((p) => {
+      if (!p) return p;
+      const current = String(p.deliveryAddress || '').trim();
+      if (current && current !== autoAddrRef.current) return p; // user edited — keep theirs
+      autoAddrRef.current = addr;
+      return { ...p, deliveryAddress: addr };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, step1Order, partyIndex]);
 
   // When the order changes, force a one-time rebuild for it.
   const pickOrder = (order) => {
@@ -424,8 +476,10 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
             </TextField>
             <TextField label="Client email (notify)" value={header.clientEmail} onChange={(e) => setHeader((p) => ({ ...p, clientEmail: e.target.value }))} />
             <TextField label="Delivery address" value={header.deliveryAddress} onChange={(e) => setHeader((p) => ({ ...p, deliveryAddress: e.target.value }))}
+              multiline minRows={2}
+              helperText="Auto-filled from the party master — edit if this dispatch ships elsewhere."
               sx={{ gridColumn: { xs: 'auto', sm: 'span 2' } }}
-              InputProps={{ startAdornment: <InputAdornment position="start"><MapPin size={13} /></InputAdornment> }} />
+              InputProps={{ startAdornment: <InputAdornment position="start" sx={{ alignSelf: 'flex-start', mt: 1.25 }}><MapPin size={13} /></InputAdornment> }} />
           </Box>
 
           {/* SKU loadout — plain: what's ordered, what's already gone, what's going now */}

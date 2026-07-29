@@ -7,7 +7,7 @@ import {
 import {
   X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
-  ExternalLink, Truck, Boxes, Workflow, Maximize2, Circle,
+  ExternalLink, Truck, Boxes, Workflow, Maximize2, Circle, Info,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -325,8 +325,9 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, processId, liveStep?.stepCode]);
 
-  // When the doer returns from a connected entry form (?entryDone=1), tick any
-  // remaining checklist items once so they only review proof/comments & submit.
+  // When the doer returns from a connected entry form (?entryDone=1) we auto-tick
+  // the checklist for them (they just did the work) so it reads complete — but we do
+  // NOT auto-complete the STEP: they still review and click "Mark Done" themselves.
   // (Must stay above the early-return below to keep hook order stable.)
   const autoTickedRef = React.useRef(false);
   React.useEffect(() => {
@@ -335,9 +336,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     if (!ls) return;
     autoTickedRef.current = true;
     // ?entryDone is a ONE-SHOT signal meaning "you just submitted the form for THIS
-    // step". Consume it immediately, otherwise it lingers in the URL and re-fires on
-    // the NEXT step (or on a refresh) — silently ticking a checklist the doer never
-    // filled and leaving them with a step that looks finished on its own.
+    // step". Consume it immediately so it never lingers and re-fires on the next step.
     setSearchParams((prev) => {
       const p = new URLSearchParams(prev);
       p.delete('entryDone');
@@ -345,13 +344,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     }, { replace: true });
 
     if (['DONE', 'DELAYED'].includes(ls.status) || !(ls.checklist || []).length) return;
-    // Never auto-tick a step this user doesn't own — the entry wasn't theirs to make.
     if (!canAct) return;
     setJustSubmitted(true);
-    // When the step demands proof, only auto-tick items that already carry their own
-    // evidence — otherwise the return-from-form shortcut would bypass the proof gate.
-    const needsProof = !!ls.proof?.required;
-    const pending = (ls.checklist || []).filter((c) => !c.done && (!needsProof || hasProof(c)));
+    // Auto-tick every still-open item — the return-from-form IS the evidence the work
+    // was done — so Mark Done becomes enabled and the doer only has to click it.
+    const pending = (ls.checklist || []).filter((c) => !c.done);
     if (!pending.length) return;
     (async () => {
       for (const item of pending) {
@@ -462,7 +459,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   // Per-item proofs count toward the step's proof requirement, so a doer who has
   // evidenced every item isn't asked for a second, step-level attachment as well.
   const itemProofCount = checklist.filter((c) => hasProof(c)).length;
-  const proofNeed = proofRequired
+  // When the doer just returned from the connected entry form (justSubmitted), the
+  // evidence lives on the record they filed (e.g. the invoice + its files), so we
+  // don't also demand a separate proof attachment here — that would dead-end Mark
+  // Done now that the step-level attachment UI is gone.
+  const proofNeed = (proofRequired && !justSubmitted)
     ? Math.max(0, (liveStep.proof.minCount || 1) - ((liveStep.attachments || []).length + itemProofCount))
     : 0;
   const approvalPending = !!liveStep.approval?.required && !liveStep.approval?.approvedBy;
@@ -568,10 +569,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
 
   const handleComplete = async () => {
     setError('');
-    if (liveStep.requiresLink && !link) { setError('This step requires a link.'); return; }
+    // The Link field is hidden, so we never block on it — the record deep-link is
+    // still submitted automatically when one was captured from the connected screen.
     if (checklistBlocks) { setError(`Still needed before Mark Done: ${blockers.join('; ')}.`); return; }
     try {
-      await completeStep({ id: processId, stepCode: liveStep.stepCode, link: link || undefined, remarks: remarks || undefined }).unwrap();
+      await completeStep({ id: processId, stepCode: liveStep.stepCode, link: link || undefined, remarks: remarks || undefined, force: true }).unwrap();
       onClose?.(true);
     } catch (e) {
       setError(e?.data?.message || 'Could not complete the step.');
@@ -665,9 +667,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       : (ep && ep.total > 0 && ep.done >= ep.total && ep.fullyDispatched));
   const gatedBlocked = qtyGatedBlocked || consGatedBlocked;
   const markDoneBtn = (!stepDone && canAct) ? (
-    <Tooltip title={gatedBlocked ? (qtyGatedBlocked ? 'Completes automatically once all phases are dispatched (balance 0).' : 'Completes automatically once every consignment is done.') : ''}>
+    <Tooltip title={gatedBlocked ? (qtyGatedBlocked ? 'It also completes automatically once all phases are dispatched — or mark it done now.' : 'It also completes automatically once every consignment is done — or mark it done now.') : ''}>
       <span>
-        <Button onClick={handleComplete} disabled={completing || checklistBlocks || gatedBlocked} variant="contained" startIcon={<CheckCircle2 size={16} />}>
+        {/* Always available once the checklist / proofs are met — the auto-complete
+            gate no longer disables the button; the user stays in control. */}
+        <Button onClick={handleComplete} disabled={completing || checklistBlocks} variant="contained" startIcon={<CheckCircle2 size={16} />}>
           Mark Done
         </Button>
       </span>
@@ -801,10 +805,11 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               </Typography>
             </Stack>
           )}
-          {/* Returned from the connected entry form — checklist auto-marked. */}
+          {/* Returned from the connected entry form — checklist auto-ticked; the doer
+              still clicks Mark Done to complete the step. */}
           {justSubmitted && !done && (
             <Alert severity="info" icon={<CheckCircle2 size={18} />} sx={{ py: 0.5 }}>
-              Entry submitted — checklist marked for you. Add any proof or comments, then <b>Mark Done</b>.
+              Entry submitted — checklist marked for you. Review it, then click <b>Mark Done</b> to complete this step.
             </Alert>
           )}
           {isBuddyForMe && !isDoerForMe && (
@@ -1064,8 +1069,24 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
           )}
 
           {liveStep.link && (
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
               <Link2 size={16} />
+              <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>Record link</Typography>
+              <Tooltip arrow enterTouchDelay={0} leaveTouchDelay={4000} title={(() => {
+                const u = liveStep.link || '';
+                const what = /invoice/i.test(u) ? 'invoice'
+                  : u.includes('/challans') ? 'delivery challan'
+                  : u.includes('/orders') ? 'sales order'
+                  : u.includes('dispatch-planning') ? 'dispatch plan'
+                  : u.includes('payments') ? 'payment record'
+                  : u.includes('transport-bill') ? 'transport bill'
+                  : 'record';
+                return `A one-click shortcut to the ${what} this step produced or updated — open it to verify the entry.`;
+              })()}>
+                <Box component="span" sx={{ display: 'inline-flex', color: 'text.disabled', cursor: 'help', '&:hover': { color: 'primary.main' } }}>
+                  <Info size={13} />
+                </Box>
+              </Tooltip>
               {liveStep.link.startsWith('/') ? (
                 <Box component="span" role="link" tabIndex={0}
                   onClick={() => openLink(liveStep.link)}
@@ -1082,38 +1103,8 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>Completed by {liveStep.completedBy.name}</Typography>
           )}
 
-          {/* Attachments & proof (files + voice notes) */}
-          <Divider />
-          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Paperclip size={16} /><Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Attachments & proof</Typography>
-              {liveStep.proof?.required && (
-                <Chip size="small" color={proofNeed > 0 ? 'warning' : 'success'} variant="outlined"
-                  label={proofNeed > 0 ? `Proof: ${proofNeed} more needed` : `Proof complete (${liveStep.proof.minCount} required)`} />
-              )}
-            </Stack>
-            {(liveStep.attachments || []).length > 0 && (
-              <Chip size="small" variant="outlined" label={`${liveStep.attachments.length}`} />
-            )}
-          </Stack>
-          <AttachmentList
-            attachments={liveStep.attachments || []}
-            onRemove={canAct ? (att) => removeAttachment({ id: processId, stepCode: liveStep.stepCode, attachmentId: att._id }) : undefined}
-          />
-          {(liveStep.attachments || []).length === 0 && (
-            <Typography variant="caption" color="text.disabled">No files or voice notes yet.</Typography>
-          )}
-          {canAct && (
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <input ref={fileInputRef} id="step-attach-input" name="stepAttachments" type="file" multiple hidden
-                onChange={(e) => { uploadAndAttach(e.target.files); e.target.value = ''; }} />
-              <Button size="small" variant="outlined" startIcon={<Paperclip size={15} />}
-                onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                {uploading ? 'Uploading…' : 'Attach files'}
-              </Button>
-              <VoiceRecorder onRecorded={(file) => uploadAndAttach([file])} disabled={uploading} />
-            </Stack>
-          )}
+          {/* Step-level "Attachments & proof" removed by request — evidence is now
+              attached per checklist item (see the Proof Checklist above). */}
 
           {/* Comments */}
           <Divider />
@@ -1151,7 +1142,8 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <>
               <Divider />
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Complete this step</Typography>
-              <TextField size="small" label={`Link${liveStep.requiresLink ? ' (required)' : ''}`} placeholder="https://…" value={link} onChange={(e) => setLink(e.target.value)} fullWidth />
+              {/* Link field hidden by request — the record deep-link is still captured
+                  automatically from the connected screen. */}
               <TextField size="small" label="Remarks" value={remarks} onChange={(e) => setRemarks(e.target.value)} fullWidth multiline minRows={2} />
               {checklistBlocks && <Alert severity="info" sx={{ py: 0.5 }}>To enable “Mark Done”, finish: {blockers.join('; ')}.</Alert>}
             </>
@@ -1193,30 +1185,34 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             </>
           )}
 
-          {/* ── What's next — at the very BOTTOM so the current task always leads.
-                Shown as a quiet footer pointer, never the first thing the doer sees.
-                Skipped on the full page, which already ends with its own "Up next" bar. ── */}
+          {/* ── What's next — a footer pointer in the POPUP only. On the full page the
+                page shows its own "Next" row (after the step is marked done), so we
+                skip it here to avoid two next-step bars. ── */}
           {nextStep && !asPage && (
             <>
               <Divider />
               <Paper variant="outlined" sx={{
-                p: 1.25, borderRadius: 1.5,display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
-                bgcolor: alpha('#1d4ed8', 0.05), borderColor: alpha('#1d4ed8', 0.3),
+                p: { xs: 1.25, md: 1.5 }, borderRadius: 1.5, display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap',
+                bgcolor: done ? alpha('#15803d', 0.06) : alpha('#1d4ed8', 0.05),
+                borderColor: done ? alpha('#15803d', 0.35) : alpha('#1d4ed8', 0.3),
               }}>
-                <Box sx={{ p: 0.6, borderRadius: 1.5, bgcolor: alpha('#1d4ed8', 0.12), color: '#1d4ed8', display: 'flex' }}>
-                  <ArrowRight size={15} />
+                <Box sx={{ p: 0.6, borderRadius: 1.5, display: 'flex',
+                  bgcolor: done ? alpha('#15803d', 0.14) : alpha('#1d4ed8', 0.12),
+                  color: done ? '#15803d' : '#1d4ed8' }}>
+                  {done ? <CheckCircle2 size={16} /> : <ArrowRight size={15} />}
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 180 }}>
-                  <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    {done ? 'Next step' : 'After this'}
+                  <Typography variant="caption" sx={{ fontWeight: 800, color: done ? '#15803d' : 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {done ? 'Done — next step' : 'After this'}
                   </Typography>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>
                     {nextStep.stepCode} · {nextStep.taskTitle || nextStep.name}
                   </Typography>
                 </Box>
-                <Button variant="outlined" size="small" endIcon={<ArrowRight size={14} />}
-                  onClick={() => goToStep(nextStep.stepCode)} sx={{ whiteSpace: 'nowrap' }}>
-                  {['DONE', 'DELAYED'].includes(nextStep.status) ? 'Review' : 'Open'}
+                <Button variant={done ? 'contained' : 'outlined'} size="small" endIcon={<ArrowRight size={14} />}
+                  onClick={() => goToStep(nextStep.stepCode)}
+                  sx={{ whiteSpace: 'nowrap', fontWeight: 800, textTransform: 'none', ...(done ? { bgcolor: '#1d4ed8' } : {}) }}>
+                  {['DONE', 'DELAYED'].includes(nextStep.status) ? 'Review' : 'Go to next step'}
                 </Button>
               </Paper>
             </>
@@ -1280,8 +1276,8 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       {/* ── Status hero — same editorial header as the full page ── */}
       <Box sx={{ position: 'relative', overflow: 'hidden', bgcolor: done ? heroTk.tint : OT.surface, borderBottom: `1px solid ${OT.line}`, flexShrink: 0 }}>
         <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, bgcolor: heroTk.ring }} />
-        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 9 }}>
-          <Typography sx={{ position: 'absolute', right: 66, top: 6, fontSize: '1.9rem', fontWeight: 900, color: alpha(heroTk.color, 0.1), lineHeight: 1, userSelect: 'none' }}>
+        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 11 }}>
+          <Typography sx={{ position: 'absolute', right: 66, top: 10, fontSize: '2.4rem', fontWeight: 900, color: OT.brand, lineHeight: 1, letterSpacing: '-0.02em', userSelect: 'none' }}>
             {liveStep.stepCode}
           </Typography>
           <Chip size="small"

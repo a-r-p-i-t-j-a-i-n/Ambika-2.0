@@ -655,6 +655,30 @@ const ConsignmentPickerDialog = ({ open, step, consignments = [], onPick, onClos
   </Dialog>
 );
 
+// Steps that recur PER delivery challan (everything after the shared spine 1.01–2.05).
+const POST_STEPS = ['2.06', '2.07', '2.08', '2.09', '2.10', '2.11', '2.12', '2.13'];
+// Is a post-dispatch step done FOR THIS challan (c) — read from its own ledger.
+const challanStepDone = (code, c) => {
+  if (!c) return null;
+  switch (code) {
+    case '2.06': return true; // this challan IS a dispatch
+    case '2.07': return !!c.invoice?.has;
+    case '2.08': return c.invoice?.emailStatus === 'SENT' || !!c.invoice?.emailSentAt;
+    case '2.09': return !!c.delivery?.delivered;
+    case '2.10': return !!c.payment?.has;
+    case '2.11': return !!c.payment?.confirmed;
+    case '2.12': return c.transport?.receiptStatus === 'DONE';
+    case '2.13': return c.transport?.paymentStatus === 'DONE';
+    default: return null;
+  }
+};
+// This challan's OWN actual time for a post-dispatch step.
+const challanActualOf = (code, c) => {
+  const logAt = c?.log?.[code]?.doneAt;
+  if (logAt) return logAt;
+  return ({ '2.06': c?.dcDate, '2.07': c?.invoice?.date, '2.08': c?.invoice?.emailSentAt, '2.09': c?.delivery?.date }[code]) || null;
+};
+
 const ProcessDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -675,6 +699,10 @@ const ProcessDetail = () => {
   // Consignments (one per Delivery Challan) — shared cache with ConsignmentsPanel.
   const { data: consRes } = useGetConsignmentsQuery(id, { skip: !id });
   const consignments = consRes?.data?.consignments || [];
+  // The challan currently chosen in the "View consignment" selector — when set, the
+  // Full view overlays THIS challan's own status/actual/done-by for steps 2.06–2.13
+  // (so a 2nd/3rd dispatch is shown in full, not hidden behind the first one).
+  const selectedCons = selectedDcId ? consignments.find((c) => String(c.dcId) === selectedDcId) : null;
 
   // Open a step. For a per-consignment step (dispatch + downstream invoice/POD/
   // payment/transport) on an order with MORE THAN ONE challan, first ask which
@@ -762,13 +790,13 @@ const ProcessDetail = () => {
                   return (
                     <Chip key={String(c.dcId)} size="small" clickable
                       label={`${c.dcNumber}${c.phaseNo ? ` · ${c.phaseNo}` : ''} · ${num(c.qty)} pcs`}
-                      onClick={() => { setSelectedDcId(String(c.dcId)); setView('split'); }}
+                      onClick={() => setSelectedDcId(on ? null : String(c.dcId))}
                       sx={{ fontWeight: 700, bgcolor: on ? '#7c3aed' : alpha('#7c3aed', 0.08), color: on ? '#fff' : '#6d28d9', border: `1px solid ${alpha('#7c3aed', on ? 0 : 0.3)}` }} />
                   );
                 })}
                 <Box sx={{ flex: 1 }} />
                 <Typography variant="caption" color="text.secondary">
-                  {selectedDcId ? 'Showing one consignment in the Split view' : 'Showing all consignments'}
+                  {selectedDcId ? 'Steps 2.06–2.13 below show this delivery challan' : 'Showing all consignments (2.06–2.13 = latest dispatch)'}
                 </Typography>
               </Stack>
             </Paper>
@@ -801,20 +829,27 @@ const ProcessDetail = () => {
                     <TableCell>Planned</TableCell>
                     <TableCell>Actual</TableCell>
                     <TableCell align="right">Delay</TableCell>
-                    <TableCell align="center">Checklist</TableCell>
                     <TableCell>Done by</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {steps.map((s, i) => {
-                    const tn = STATUS[s.status] || STATUS.PENDING;
-                    const isCurrent = s.stepCode === process.currentStepCode;
+                    // When a challan is picked, steps 2.06–2.13 show THAT challan's own
+                    // status / actual / done-by (not the shared/latest dispatch's).
+                    const scoped = selectedCons && POST_STEPS.includes(s.stepCode);
+                    const scDone = scoped ? challanStepDone(s.stepCode, selectedCons) === true : null;
+                    const effStatus = scoped ? (scDone ? 'DONE' : 'PENDING') : s.status;
+                    const effActual = scoped ? challanActualOf(s.stepCode, selectedCons) : s.actual;
+                    const effDoneBy = scoped ? (selectedCons.log?.[s.stepCode]?.doneByName || '—') : (s.completedBy?.name || '—');
+                    const tn = STATUS[effStatus] || STATUS.PENDING;
+                    const isCurrent = !scoped && s.stepCode === process.currentStepCode;
+                    const isOverdue = !scoped && s.isOverdue;
                     return (
-                      <TableRow key={s.stepCode} hover onClick={() => openStep(s)}
+                      <TableRow key={s.stepCode} hover onClick={() => (scoped ? openStepForConsignment(s.stepCode, selectedCons) : openStep(s))}
                         sx={{
                           cursor: 'pointer',
-                          bgcolor: s.isOverdue ? alpha('#be123c', 0.05) : isCurrent ? alpha('#1d4ed8', 0.04) : 'inherit',
-                          borderLeft: '3px solid', borderLeftColor: s.isOverdue ? '#be123c' : isCurrent ? '#1d4ed8' : 'transparent',
+                          bgcolor: isOverdue ? alpha('#be123c', 0.05) : isCurrent ? alpha('#1d4ed8', 0.04) : 'inherit',
+                          borderLeft: '3px solid', borderLeftColor: isOverdue ? '#be123c' : isCurrent ? '#1d4ed8' : 'transparent',
                         }}>
                         <TableCell>{i + 1}</TableCell>
                         <TableCell>
@@ -828,30 +863,21 @@ const ProcessDetail = () => {
                         </TableCell>
                         <TableCell>
                           <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
-                            <Chip size="small" label={s.isOverdue ? 'Overdue' : tn.label} sx={{ bgcolor: alpha(s.isOverdue ? '#be123c' : tn.color, 0.12), color: s.isOverdue ? '#be123c' : tn.color, fontWeight: 600 }} />
-                            {s.dispatchProgress && (
+                            <Chip size="small" label={isOverdue ? 'Overdue' : tn.label} sx={{ bgcolor: alpha(isOverdue ? '#be123c' : tn.color, 0.12), color: isOverdue ? '#be123c' : tn.color, fontWeight: 600 }} />
+                            {!scoped && s.dispatchProgress && (
                               <Tooltip title={`${num(s.dispatchProgress.dispatchedQty)} of ${num(s.dispatchProgress.orderedQty)} pcs dispatched`}>
                                 <Chip size="small" variant="outlined" icon={<Truck size={11} />} label={`${num(s.dispatchProgress.dispatchedQty)}/${num(s.dispatchProgress.orderedQty)}`} sx={{ fontWeight: 700 }} />
                               </Tooltip>
                             )}
-                          </Stack>
-                        </TableCell>
-                        <TableCell><Typography variant="caption">{fmt(s.planned)}</Typography></TableCell>
-                        <TableCell><Typography variant="caption">{fmt(s.actual)}</Typography></TableCell>
-                        <TableCell align="right">{s.delayMins > 0 ? <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 700 }}>+{s.delayMins}m</Typography> : <Typography variant="caption" color="text.secondary">—</Typography>}</TableCell>
-                        <TableCell align="center">
-                          <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center" flexWrap="wrap" useFlexGap>
-                            {s.checklistTotal > 0
-                              ? <Chip size="small" variant="outlined" color={s.checklistDone === s.checklistTotal ? 'success' : 'default'} label={`${s.checklistDone}/${s.checklistTotal}`} />
-                              : (!(s.actionLinksTotal > 0) && <Typography variant="caption" color="text.secondary">—</Typography>)}
-                            {s.actionLinksTotal > 0 && (
-                              <Chip size="small" variant="outlined" icon={<Link2 size={11} />}
-                                color={s.actionLinksDone >= s.actionLinksTotal ? 'success' : 'default'}
-                                label={`${s.actionLinksDone}/${s.actionLinksTotal}`} />
+                            {scoped && s.stepCode === '2.06' && (
+                              <Chip size="small" variant="outlined" icon={<Truck size={11} />} label={`${num(selectedCons.qty)} pcs`} sx={{ fontWeight: 700 }} />
                             )}
                           </Stack>
                         </TableCell>
-                        <TableCell><Typography variant="caption">{s.completedBy?.name || '—'}</Typography></TableCell>
+                        <TableCell><Typography variant="caption">{fmt(s.planned)}</Typography></TableCell>
+                        <TableCell><Typography variant="caption">{fmt(effActual)}</Typography></TableCell>
+                        <TableCell align="right">{!scoped && s.delayMins > 0 ? <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 700 }}>+{s.delayMins}m</Typography> : <Typography variant="caption" color="text.secondary">—</Typography>}</TableCell>
+                        <TableCell><Typography variant="caption">{effDoneBy}</Typography></TableCell>
                       </TableRow>
                     );
                   })}
