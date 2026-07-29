@@ -2,8 +2,8 @@ import React, { useRef, useState } from 'react';
 import {
   Box, Stack, Typography, Checkbox, Button, Chip, TextField, CircularProgress, alpha, Tooltip, Link,
 } from '@mui/material';
-import { Circle, CheckCircle2, Paperclip, Link2, X } from 'lucide-react';
-import { resolveFileUrl } from '../../../utils/fileUrl';
+import { Circle, CheckCircle2, Paperclip, Link2, X, Eye } from 'lucide-react';
+import FilePreviewDialog from './FilePreviewDialog';
 
 const GREEN = '#15803d';
 const LINE = '#e6ebf3';
@@ -30,6 +30,7 @@ const ProofChecklistItem = ({
 }) => {
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState('');
+  const [preview, setPreview] = useState(null); // { name, url } of the file being previewed
   const fileRef = useRef(null);
 
   const done = !!item.done;
@@ -96,18 +97,25 @@ const ProofChecklistItem = ({
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mb: 0.6 }}>
                 {proofs.map((p) => {
                   const isFile = !!p.fileUrl;
+                  // Files open the in-app preview (image/PDF inline); links open the
+                  // external thread/document in a new tab.
+                  const open = isFile
+                    ? () => setPreview({ name: p.fileName || 'Attachment', url: p.fileUrl })
+                    : undefined;
                   return (
-                    <Tooltip key={p._id} title={`${p.byName ? `Added by ${p.byName}` : 'Proof'} — click to open`} arrow>
+                    <Tooltip key={p._id} title={`${p.byName ? `Added by ${p.byName} — ` : ''}${isFile ? 'click to preview' : 'click to open'}`} arrow>
                       <Chip
                         size="small"
-                        icon={isFile ? <Paperclip size={12} /> : <Link2 size={12} />}
-                        label={(
+                        clickable={isFile}
+                        onClick={open}
+                        icon={isFile ? <Eye size={12} /> : <Link2 size={12} />}
+                        label={isFile ? (p.fileName || 'Attachment') : (
                           <Link
-                            href={isFile ? resolveFileUrl(p.fileUrl) : p.link}
+                            href={p.link}
                             target="_blank" rel="noopener noreferrer"
                             sx={{ fontSize: '0.68rem', fontWeight: 700, color: 'inherit', textDecoration: 'none' }}
                           >
-                            {isFile ? (p.fileName || 'Attachment') : shortUrl(p.link)}
+                            {shortUrl(p.link)}
                           </Link>
                         )}
                         onDelete={proofLocked ? undefined : () => onClearProof(p._id)}
@@ -115,6 +123,7 @@ const ProofChecklistItem = ({
                         sx={{
                           height: 22, borderRadius: '4px', fontWeight: 700, maxWidth: 260,
                           bgcolor: alpha(GREEN, 0.1), color: GREEN,
+                          '& .MuiChip-label': { fontSize: '0.68rem' },
                           '& .MuiChip-deleteIcon': { color: alpha(GREEN, 0.7), '&:hover': { color: GREEN } },
                         }}
                       />
@@ -172,6 +181,13 @@ const ProofChecklistItem = ({
           </Box>
         </Box>
       </Stack>
+
+      <FilePreviewDialog
+        open={!!preview}
+        name={preview?.name}
+        url={preview?.url}
+        onClose={() => setPreview(null)}
+      />
     </Box>
   );
 };

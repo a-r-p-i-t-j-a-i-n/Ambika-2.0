@@ -29,12 +29,20 @@ export const partyApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (result, error, { id }) => ['Party', { type: 'Party', id }],
     }),
+    deleteParty: builder.mutation({
+      query: (id) => ({
+        url: `/parties/${id}`,
+        method: 'DELETE', // soft-delete on the backend (sets isDeleted)
+      }),
+      invalidatesTags: (result, error, id) => ['Party', { type: 'Party', id }],
+    }),
   }),
 });
 
-export const { 
-  useGetPartiesQuery, 
+export const {
+  useGetPartiesQuery,
   useGetPartyByIdQuery,
-  useCreatePartyMutation, 
-  useUpdatePartyMutation 
+  useCreatePartyMutation,
+  useUpdatePartyMutation,
+  useDeletePartyMutation,
 } = partyApi;

@@ -42,7 +42,7 @@ const csvToArr = (s) =>
     .filter(Boolean);
 
 const blankForm = () => ({
-  code: '', name: '', contactPerson: '', phone: '', email: '', location: '',
+  code: '', name: '', contactPerson: '', phone: '', email: '', location: '', address: '',
   gstNo: '', panNo: '', gstRate: '', creditPeriodDays: 30, tdsRate: '',
   toEmails: '', ccEmails: '', bccEmails: '',
   suppliedProducts: [emptyProduct()],
@@ -79,7 +79,8 @@ const PartyFormDrawer = ({ open, onClose, party = null }) => {
         contactPerson: party.contactPerson || '',
         phone: party.phone || '',
         email: party.email || '',
-        location: party.location || party.address || '', // legacy `address` fallback
+        location: party.location || '', // "Place" (city/region)
+        address: party.address || '',   // full postal address (from the sheet)
         gstNo: party.gstNo || '',
         panNo: party.panNo || '',
         gstRate: party.gstRate ?? '',
@@ -153,6 +154,7 @@ const PartyFormDrawer = ({ open, onClose, party = null }) => {
       phone: form.phone.trim(),
       email: form.email.trim(),
       location: form.location.trim(),
+      address: form.address.trim(),
       gstNo: form.gstNo.trim(),
       panNo: form.panNo.trim(),
       gstRate: form.gstRate === '' ? 0 : Number(form.gstRate),
@@ -246,8 +248,15 @@ const PartyFormDrawer = ({ open, onClose, party = null }) => {
                 onChange={(e) => setField('email', e.target.value)} />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField label="Address / Location" fullWidth value={form.location}
-                onChange={(e) => setField('location', e.target.value)} multiline minRows={1} />
+              <TextField label="Place / City" fullWidth value={form.location}
+                onChange={(e) => setField('location', e.target.value)}
+                placeholder="e.g. Delhi" />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField label="Full Address" fullWidth value={form.address}
+                onChange={(e) => setField('address', e.target.value)}
+                multiline minRows={2}
+                placeholder="Complete postal address (street, area, city, state, PIN)" />
             </Grid>
           </Grid>
         </Paper>

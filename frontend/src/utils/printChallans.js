@@ -1,0 +1,142 @@
+import dayjs from 'dayjs';
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]));
+const num = (n) => Number(n || 0).toLocaleString('en-IN');
+const fmtDate = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
+
+// One delivery-challan block — a HALF-page card. Two of these stack on one A4 page.
+const challanBlock = (dc, companyName) => {
+  const items = dc.items || [];
+  const rows = items.map((it, i) => `
+    <tr${i % 2 ? ' class="alt"' : ''}>
+      <td class="c">${i + 1}</td>
+      <td>${esc(it.skuName || it.skuCode || '-')}${it.skuName && it.skuCode ? `<span class="code"> · ${esc(it.skuCode)}</span>` : ''}</td>
+      <td class="r">${num(it.quantityPcs)}</td>
+      <td class="r">${num(it.noOfBoxes)}</td>
+      <td class="r">${Number(it.weightKg || 0).toFixed(2)}</td>
+    </tr>`).join('');
+
+  const meta2 = (dc.vehicleNo || dc.transporterName || dc.invoiceNo)
+    ? `<div class="meta">
+         <div><span>Vehicle No</span>${esc(dc.vehicleNo || '-')}</div>
+         <div><span>Transporter</span>${esc(dc.transporterName || '-')}</div>
+         <div><span>Invoice No</span>${esc(dc.invoiceNo || '-')}</div>
+       </div>` : '';
+
+  return `
+  <section class="challan">
+    <div class="lh">${esc(companyName)}</div>
+    <div class="title">DELIVERY CHALLAN</div>
+    <div class="meta">
+      <div><span>DC No</span>${esc(dc.dcNumber || '-')}</div>
+      <div><span>Date</span>${fmtDate(dc.dcDate)}</div>
+      <div><span>Sales Order</span>${esc(dc.soNumber || '-')}</div>
+      <div><span>PO No</span>${esc(dc.poNumber || '-')}</div>
+    </div>
+    ${meta2}
+    <div class="to"><span>Deliver To</span><b>${esc(dc.partyName || '-')}</b>${dc.deliveryAddress ? ` — ${esc(dc.deliveryAddress)}` : ''}</div>
+    <table>
+      <thead>
+        <tr><th class="c">SR</th><th>SKU Description</th><th class="r">QTY (PCS)</th><th class="r">BOXES</th><th class="r">WEIGHT (KG)</th></tr>
+      </thead>
+      <tbody>
+        ${rows || '<tr><td colspan="5" class="empty">No items</td></tr>'}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2">TOTAL</td>
+          <td class="r">${num(dc.totalQuantityPcs)}</td>
+          <td class="r">${num(dc.totalBoxes)}</td>
+          <td class="r">${Number(dc.totalWeightKg || 0).toFixed(2)}</td>
+        </tr>
+      </tfoot>
+    </table>
+    ${dc.remark ? `<div class="remark"><span>Remarks</span>${esc(dc.remark)}</div>` : ''}
+    <div class="sign">
+      <div>Receiver's Signature</div>
+      <div class="right">For ${esc(companyName)}</div>
+    </div>
+  </section>`;
+};
+
+/**
+ * Open a print-ready A4 document with TWO delivery challans per page. A 3rd challan
+ * flows onto page 2, a 5th onto page 3, and so on. The browser's own print dialog
+ * then lets the user choose colour / black-&-white, one-sided / both-sides, etc.
+ */
+export function printChallans({ challans = [], companyName = 'M/s AMBIKA GLOBAL' } = {}) {
+  const list = (challans || []).filter(Boolean);
+  if (!list.length) return false;
+
+  // Group into pages of TWO.
+  const pages = [];
+  for (let i = 0; i < list.length; i += 2) pages.push(list.slice(i, i + 2));
+  const pagesHtml = pages.map((pair) => `
+    <div class="page">${pair.map((dc) => challanBlock(dc, companyName)).join('')}</div>`).join('');
+
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<title>Delivery Challans — print</title>
+<style>
+  @page { size: A4 portrait; margin: 9mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #e9e7e1; color: #1a2438; font-family: Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { padding-top: 46px; }
+  .bar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: #fff; border-bottom: 1px solid #c9d2e2; padding: 8px 16px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+  .bar button { border: 0; border-radius: 5px; background: #0b2545; color: #fff; padding: 7px 14px; font-weight: 800; cursor: pointer; }
+  .bar button + button { margin-left: 8px; background: #fff; color: #0f172a; border: 1px solid #94a3b8; }
+  .page { width: 192mm; margin: 8px auto; background: #fff; padding: 4mm; display: flex; flex-direction: column; gap: 6mm; }
+
+  .challan { border: 1px solid #0b2545; border-radius: 3px; padding: 6mm 6mm 5mm; }
+  .lh { text-align: center; color: #0b2545; font-size: 21px; font-weight: 900; letter-spacing: 0.04em; line-height: 1.05; }
+  .title { text-align: center; color: #16305a; font-size: 11px; font-weight: 800; letter-spacing: 0.22em; margin: 3px 0 7px; border-bottom: 2px solid #0b2545; padding-bottom: 6px; }
+  .meta { display: flex; border: 1px solid #c9d2e2; border-radius: 3px; margin-bottom: 5px; overflow: hidden; }
+  .meta > div { flex: 1; padding: 4px 8px; font-size: 10px; font-weight: 800; color: #0b2545; border-left: 1px solid #c9d2e2; }
+  .meta > div:first-child { border-left: 0; }
+  .meta > div span { display: block; font-size: 6.5px; font-weight: 800; color: #6a7690; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 1px; }
+  .to { font-size: 10px; color: #3a4560; margin: 4px 0 6px; }
+  .to span { display: inline-block; font-size: 6.5px; font-weight: 800; color: #6a7690; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px; }
+  .to b { color: #0b2545; }
+  table { border-collapse: collapse; width: 100%; }
+  th { background: #16305a; color: #fff; font-size: 7.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 4px 6px; text-align: left; }
+  td { font-size: 9px; padding: 3px 6px; border-bottom: 1px solid #e6ebf3; }
+  tr.alt td { background: #eef2fb; }
+  .c { text-align: center; }
+  .r { text-align: right; font-variant-numeric: tabular-nums; }
+  .code { color: #6a7690; font-size: 7.5px; }
+  .empty { text-align: center; color: #9aa6bd; padding: 8px; }
+  tfoot td { background: #0b2545; color: #fff; font-weight: 800; font-size: 9.5px; border: 0; }
+  .remark { font-size: 9px; color: #3a4560; margin-top: 5px; }
+  .remark span { font-size: 6.5px; font-weight: 800; color: #6a7690; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px; }
+  .sign { display: flex; justify-content: space-between; margin-top: 12px; font-size: 9.5px; color: #1a2438; }
+  .sign .right { color: #0b2545; font-weight: 800; }
+
+  @media print {
+    body { padding-top: 0; background: #fff; }
+    .bar { display: none !important; }
+    .page { width: auto; margin: 0; padding: 0; page-break-after: always; }
+    .page:last-child { page-break-after: auto; }
+    .challan { page-break-inside: avoid; }
+  }
+</style></head>
+<body>
+  <div class="bar">
+    <div><strong>${list.length} delivery challan(s)</strong> · 2 per A4 page — choose colour / both-sides in the print dialog.</div>
+    <div><button onclick="window.print()">Print / Save PDF</button><button onclick="window.close()">Close</button></div>
+  </div>
+  ${pagesHtml}
+  <script>setTimeout(function(){ try { window.focus(); } catch (e) {} }, 100);</script>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) {
+    alert('Pop-up blocked. Please allow pop-ups so the challan print preview can open.');
+    return false;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  return true;
+}

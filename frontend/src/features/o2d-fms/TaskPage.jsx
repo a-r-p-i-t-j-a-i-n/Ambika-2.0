@@ -16,6 +16,18 @@ const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium
 const dOnly = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—');
 const tOnly = (d) => (d ? new Date(d).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }) : '');
 
+// Light, warm tooltip with blue text (no black) — same look as the Master FMS rail.
+const RAIL_TIP = {
+  tooltip: {
+    sx: {
+      bgcolor: O2D.surface, color: O2D.brand, fontWeight: 800, fontSize: '0.72rem',
+      px: 1.1, py: 0.6, borderRadius: '7px', border: `1px solid ${O2D.line}`,
+      boxShadow: '0 8px 24px rgba(28,30,33,0.16)',
+    },
+  },
+  arrow: { sx: { color: O2D.surface, '&::before': { border: `1px solid ${O2D.line}` } } },
+};
+
 // One labelled card in the right sidebar.
 const SideCard = ({ label, children }) => (
   <Paper elevation={0} sx={{ borderRadius: 1.5, border: `1px solid ${O2D.line}`, p: 1.5, bgcolor: O2D.surfaceAlt }}>
@@ -52,14 +64,15 @@ const ACTIVITY = {
 // One step node on the full 13-step rail. Small by design — a done step is a green
 // tick, the step you're on gets a coloured ring, everything else is a muted dot.
 // Hover shows the full name; the step code always shows under the dot.
-const StepDot = ({ s, current, last }) => {
+const StepDot = ({ s, current, last, onOpen }) => {
   const tk = tokenOf(s.status);
   const done = isDone(s.status);
   return (
     <>
-      <Tooltip title={`${s.stepCode} · ${s.name}`} arrow>
-        <Stack alignItems="center" spacing={0.4} sx={{ flexShrink: 0, minWidth: 40, cursor: 'default' }}>
-          <Box sx={{
+      <Tooltip title={`${s.stepCode} · ${s.name}${onOpen ? ' — open' : ''}`} arrow slotProps={RAIL_TIP}>
+        <Stack alignItems="center" spacing={0.4} onClick={onOpen}
+          sx={{ flexShrink: 0, minWidth: 40, cursor: onOpen ? 'pointer' : 'default', '&:hover .stepDotCircle': onOpen ? { borderColor: tk.ring, transform: 'scale(1.08)' } : {} }}>
+          <Box className="stepDotCircle" sx={{
             // The step being viewed always shows as the current ring — even if it's
             // also "done" — so you can see where you are on the rail.
             width: current ? 24 : 20, height: current ? 24 : 20, borderRadius: '50%', display: 'grid', placeItems: 'center',
@@ -91,6 +104,12 @@ const TaskPage = () => {
 
   const process = data?.data;
   const step = process?.steps?.find((s) => s.stepCode === stepCode);
+
+  // "Just completed here" — set the moment Mark Done succeeds, so the Next row shows
+  // immediately even for a quantity-gated step whose status doesn't flip to DONE
+  // synchronously. Reset whenever we move to a different step.
+  const [justCompleted, setJustCompleted] = React.useState(false);
+  React.useEffect(() => { setJustCompleted(false); }, [stepCode, processId]);
 
   // Build the activity feed: timeline entries that mention this step + comments.
   const activity = React.useMemo(() => {
@@ -189,6 +208,13 @@ const TaskPage = () => {
   const actualAt = scopedChallan ? challanActualOf(stepCode, scopedChallan) : step?.actual;
   const actualBy = scopedChallan ? (scopedChallan.log?.[stepCode]?.doneByName || null) : (step?.completedBy?.name || null);
   const stepDone = scopedDone;
+  // "Actually complete" — mirrors exactly when the step card hides its Mark Done
+  // button: the STEP's own status is done AND (when scoped) this challan's step is
+  // done too. This is the right trigger for the Next row: it stays hidden while Mark
+  // Done is available (even if another challan already did this per-consignment step),
+  // and it shows again when you revisit a genuinely-finished step.
+  const stepReallyDone = !!step && isDone(step.status)
+    && (!scopedChallan || challanStepDone(stepCode, scopedChallan) === true);
   const timing = step ? timingOf(step) : null;
   const ownerName = step
     ? ((step.assignees?.[0]?.name) || step.assignedTo?.name || step.defaultOwnerRole || step.ownerName || 'Unassigned')
@@ -238,9 +264,9 @@ const TaskPage = () => {
             <Paper elevation={0} sx={{ position: 'relative', overflow: 'hidden', borderRadius: 1.5, border: `1px solid ${O2D.line}`, bgcolor: stepDone ? tk.tint : O2D.surface }}>
               {/* colour spine on the left edge = the state at a glance */}
               <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, bgcolor: tk.ring }} />
-              <Box sx={{ p: { xs: 1.25, md: 1.5 }, pl: { xs: 1.75, md: 2.25 }, pr: { xs: 7, md: 9 } }}>
-                {/* faded step code, watermark style */}
-                <Typography sx={{ position: 'absolute', right: 16, top: 8, fontSize: { xs: '1.7rem', md: '2.1rem' }, fontWeight: 900, color: alpha(tk.color, 0.11), lineHeight: 1, letterSpacing: '-0.02em', userSelect: 'none' }}>
+              <Box sx={{ p: { xs: 1.25, md: 1.5 }, pl: { xs: 1.75, md: 2.25 }, pr: { xs: 8, md: 11 } }}>
+                {/* step code — clear, bold, in blue so it reads at a glance */}
+                <Typography sx={{ position: 'absolute', right: 16, top: 10, fontSize: { xs: '2.1rem', md: '2.6rem' }, fontWeight: 900, color: O2D.brand, lineHeight: 1, letterSpacing: '-0.02em', userSelect: 'none' }}>
                   {step.stepCode}
                 </Typography>
                 <Chip
@@ -279,7 +305,8 @@ const TaskPage = () => {
                 </Stack>
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', overflowX: 'auto', pb: 0.5 }}>
                   {railSteps.map((s, i) => (
-                    <StepDot key={s.stepCode} s={s} current={s.stepCode === stepCode} last={i === railSteps.length - 1} />
+                    <StepDot key={s.stepCode} s={s} current={s.stepCode === stepCode} last={i === railSteps.length - 1}
+                      onOpen={s.stepCode === stepCode ? undefined : () => navigate(`/o2d-fms/task/${process._id}/${encodeURIComponent(s.stepCode)}${dcParam ? `?dc=${encodeURIComponent(dcParam)}` : ''}`)} />
                   ))}
                 </Box>
               </Paper>
@@ -297,7 +324,7 @@ const TaskPage = () => {
                   canAct={can('o2dfms.act') || isRoot}
                   canManage={can('o2dfms.manage') || isRoot}
                   autoComplete={entryDone}
-                  onClose={() => refetch()}
+                  onClose={(completed) => { if (completed) setJustCompleted(true); refetch(); }}
                 />
               </Box>
 
@@ -349,8 +376,12 @@ const TaskPage = () => {
               </Stack>
             </Box>
 
-            {/* ── Up next ─────────────────────────────────────────────────── */}
-            {nextStep && (
+            {/* ── Up next — shows when the step is genuinely finished (Mark Done gone),
+                  i.e. either you just clicked Mark Done here (justCompleted) OR you're
+                  revisiting a step that's actually complete (stepReallyDone). It stays
+                  hidden while Mark Done is still available — including per-consignment
+                  steps that merely read "done" from a different challan's progress. ── */}
+            {nextStep && (stepReallyDone || justCompleted) && (
               <Paper elevation={0} sx={{ borderRadius: 1.5, border: `1px solid ${O2D.line}`, p: { xs: 1.5, md: 2 }, display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: O2D.band }}>
                 <Box sx={{ textAlign: 'center', flexShrink: 0, pr: 1.5, borderRight: `1px solid ${O2D.line}` }}>
                   <Typography sx={{ fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: O2D.faint }}>Up next</Typography>
@@ -363,7 +394,7 @@ const TaskPage = () => {
                 <Button variant="contained" disableElevation endIcon={<ArrowRight size={15} />}
                   onClick={() => navigate(`/o2d-fms/task/${process._id}/${encodeURIComponent(nextStep.stepCode)}${dcParam ? `?dc=${encodeURIComponent(dcParam)}` : ''}`)}
                   sx={{ fontWeight: 800, whiteSpace: 'nowrap', borderRadius: 1, textTransform: 'none', bgcolor: O2D.brand }}>
-                  Go to step
+                  Next
                 </Button>
               </Paper>
             )}

@@ -18,7 +18,7 @@ import { useGetChallansQuery, useGetSchedulesQuery } from '../../store/api/dispa
 import { useGetSalesInvoicesQuery } from '../../store/api/salesInvoiceApi';
 import { useGetPaymentsQuery, useGetTransportBillsQuery } from '../../store/api/o2dFulfillmentApi';
 import { useGetPartiesQuery } from '../../store/api/partyApi';
-import { O2D } from './o2dTheme';
+import { O2D, tokenOf } from './o2dTheme';
 import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
 import { actionLinkMeta, resolveEntityLink, TRIGGER_TO_ACTION } from './actionLinks';
 import { exportRowsToExcel, printTablePdf } from '../../utils/exportMasterData';
@@ -341,23 +341,29 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
     </Box>
   );
 
+  const headTk = tokenOf(step?.status);
   return (
-    <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { width: { xs: '100%', sm: 440 }, p: 0 } }}>
-      {/* Header */}
-      <Box sx={{ px: 2, py: 1.75, color: '#fff', background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 100%)' }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-          <Box>
-            <Typography sx={{ fontSize: '0.68rem', opacity: 0.8, fontWeight: 700 }}>STEP {meta.code}</Typography>
-            <Typography sx={{ fontWeight: 800, fontSize: '1rem', lineHeight: 1.15 }}>{meta.name}</Typography>
-            <Typography sx={{ fontSize: '0.74rem', opacity: 0.85, mt: 0.25 }}>
-              {proc?.soNumber || proc?.uniqueO2DId || '—'}{proc?.partyName ? ` · ${proc.partyName}` : ''}
-            </Typography>
-          </Box>
-          <IconButton size="small" onClick={onClose} sx={{ color: '#fff' }}><X size={18} /></IconButton>
-        </Stack>
+    <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { width: { xs: '100%', sm: 440 }, p: 0, bgcolor: O2D.canvas } }}>
+      {/* Header — flush editorial: status spine + chip + faded step code (no navy) */}
+      <Box sx={{ position: 'relative', overflow: 'hidden', bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}` }}>
+        <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, bgcolor: headTk.ring }} />
+        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 6 }}>
+          <Typography sx={{ position: 'absolute', right: 44, top: 8, fontSize: '1.9rem', fontWeight: 900, color: O2D.brand, lineHeight: 1, userSelect: 'none', letterSpacing: '-0.02em' }}>
+            {meta.code}
+          </Typography>
+          <Chip size="small"
+            icon={<Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: headTk.ring, ml: '6px' }} />}
+            label={headTk.label}
+            sx={{ fontWeight: 800, fontSize: '0.6rem', letterSpacing: '0.04em', textTransform: 'uppercase', color: headTk.color, bgcolor: headTk.bg, height: 20, '& .MuiChip-icon': { color: headTk.ring } }} />
+          <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', lineHeight: 1.2, color: O2D.ink, mt: 0.5 }}>{meta.name}</Typography>
+          <Typography sx={{ fontSize: '0.74rem', color: O2D.sub, mt: 0.25 }}>
+            {proc?.soNumber || proc?.uniqueO2DId || '—'}{proc?.partyName ? ` · ${proc.partyName}` : ''}
+          </Typography>
+        </Box>
+        <IconButton size="small" onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8, color: O2D.sub }}><X size={17} /></IconButton>
       </Box>
 
-      <Box sx={{ p: 2, overflowY: 'auto' }}>
+      <Box sx={{ p: 2, overflowY: 'auto', flexGrow: 1, bgcolor: O2D.surface }}>
         {!proc && (
           <Typography variant="body2" color="text.disabled" sx={{ py: 2 }}>
             No FMS process record found for this row.
@@ -369,9 +375,8 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
             {/* Timeline */}
             <Section title="Status & Timing">
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5} sx={{ mb: 1 }}>
-                <Chip size="small" label={step?.status || 'PENDING'}
-                  sx={{ fontWeight: 700, bgcolor: (t) => alpha(
-                    step?.status === 'DONE' ? t.palette.success.main : step?.status === 'DELAYED' ? t.palette.error.main : t.palette.warning.main, 0.14) }} />
+                <Chip size="small" label={headTk.label}
+                  sx={{ fontWeight: 800, fontSize: '0.66rem', color: headTk.color, bgcolor: headTk.bg }} />
                 {humanDelay(step) !== '—' && (
                   <Chip size="small" label={humanDelay(step)}
                     color={humanDelay(step) === 'On time' ? 'success' : 'error'} variant="outlined" sx={{ fontWeight: 700 }} />

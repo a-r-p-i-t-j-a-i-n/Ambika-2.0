@@ -292,10 +292,14 @@ const DispatchCalendar = () => {
     return m;
   }, [events]);
 
-  // The 6-week grid (42 cells) covering this month.
+  // Only the weeks that contain THIS month's days (5 or 6 rows) — no extra trailing
+  // week of the next month. Cells that fall in the prev/next month are rendered
+  // blank below, so the calendar shows only the selected month's dates.
   const gridDays = useMemo(() => {
-    const start = cursor.startOf('month').day(0); // back to Sunday
-    return Array.from({ length: 42 }, (_, i) => start.add(i, 'day'));
+    const startOfMonth = cursor.startOf('month');
+    const start = startOfMonth.day(0); // back to the Sunday of the first week
+    const weeks = Math.ceil((startOfMonth.day() + cursor.daysInMonth()) / 7);
+    return Array.from({ length: weeks * 7 }, (_, i) => start.add(i, 'day'));
   }, [cursor]);
 
   // This-month roll-up for the header.
@@ -519,8 +523,18 @@ const DispatchCalendar = () => {
               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
                 {gridDays.map((day) => {
                   const key = day.format('YYYY-MM-DD');
-                  const list = eventsByDate.get(key) || [];
                   const inMonth = day.isSame(cursor, 'month');
+                  // Prev/next-month cells → blank (only the selected month is shown).
+                  if (!inMonth) {
+                    return (
+                      <Box key={key} sx={{
+                        minHeight: { xs: 72, md: 88 },
+                        borderRight: `1px solid ${GRID}`, borderBottom: `1px solid ${GRID}`,
+                        bgcolor: O2D.surfaceAlt,
+                      }} />
+                    );
+                  }
+                  const list = eventsByDate.get(key) || [];
                   const isToday = day.isSame(today, 'day');
                   const shown = list.slice(0, 2);
                   const more = list.length - shown.length;
