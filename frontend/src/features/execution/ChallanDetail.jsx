@@ -81,6 +81,7 @@ const ChallanDetail = () => {
       transportMode: dc.transportMode || 'Road',
       dispatchedThrough: dc.dispatchedThrough || 'Freight Paid',
       invoiceNo: dc.invoiceNo || '',
+      lrNo: dc.lrNo || '',
       deliveryAddress: dc.deliveryAddress || '',
       clientEmail: dc.clientEmail || '',
       status: dc.status || 'CREATED',
@@ -242,6 +243,7 @@ const ChallanDetail = () => {
                 {TRANSPORT_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
               </TextField>
               <TextField size="small" label="Invoice No" value={form.invoiceNo} onChange={setF('invoiceNo')} />
+              <TextField size="small" label="L.R. / Docket No" value={form.lrNo} onChange={setF('lrNo')} />
               <TextField size="small" label="Client Email" value={form.clientEmail} onChange={setF('clientEmail')} />
               <TextField size="small" label="Delivery Address" value={form.deliveryAddress} onChange={setF('deliveryAddress')} sx={{ gridColumn: { xs: '1', sm: '1 / -1' } }} />
               <TextField size="small" label="Remark" value={form.remark} onChange={setF('remark')} multiline minRows={2} sx={{ gridColumn: { xs: '1', sm: '1 / -1' } }} />
@@ -256,6 +258,7 @@ const ChallanDetail = () => {
               <Field icon={Truck} label="Transport Mode" value={dc.transportMode} />
               <Field icon={Package} label="Dispatched Through" value={dc.dispatchedThrough} />
               <Field icon={FileText} label="Invoice No" value={dc.invoiceNo} />
+              <Field icon={FileText} label="L.R. / Docket No" value={dc.lrNo} />
               <Field icon={MapPin} label="Delivery Address" value={dc.deliveryAddress} />
             </Stack>
           )}

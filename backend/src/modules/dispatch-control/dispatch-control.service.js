@@ -873,6 +873,7 @@ export const dispatchControlService = {
         transporterName: data.transporterName,
         clientEmail: data.clientEmail,
         invoiceNo: data.invoiceNo,
+        lrNo: data.lrNo,
         deliveryAddress: data.deliveryAddress,
         pdfUrl: data.pdfUrl,
         sendEmail: Boolean(data.sendEmail),

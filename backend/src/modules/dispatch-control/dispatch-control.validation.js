@@ -130,6 +130,7 @@ export const actualDispatchSchema = Joi.object({
   transporterName: optionalString,
   clientEmail: optionalString,
   invoiceNo: optionalString,
+  lrNo: optionalString,
   dispatchedThrough: optionalString,
   deliveryAddress: optionalString,
   pdfUrl: optionalString,

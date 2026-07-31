@@ -18,11 +18,12 @@ const challanBlock = (dc, companyName) => {
       <td class="r">${Number(it.weightKg || 0).toFixed(2)}</td>
     </tr>`).join('');
 
-  const meta2 = (dc.vehicleNo || dc.transporterName || dc.invoiceNo)
+  const meta2 = (dc.vehicleNo || dc.transporterName || dc.invoiceNo || dc.lrNo)
     ? `<div class="meta">
          <div><span>Vehicle No</span>${esc(dc.vehicleNo || '-')}</div>
          <div><span>Transporter</span>${esc(dc.transporterName || '-')}</div>
          <div><span>Invoice No</span>${esc(dc.invoiceNo || '-')}</div>
+         <div><span>L.R. No</span>${esc(dc.lrNo || '-')}</div>
        </div>` : '';
 
   return `

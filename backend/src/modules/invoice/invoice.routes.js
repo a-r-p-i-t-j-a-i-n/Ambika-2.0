@@ -88,7 +88,7 @@ export const invoiceService = {
 
   async getAll(query) {
     const features = new ApiFeatures(Invoice.find(), query)
-      .filter().search(['invoiceNo', 'dcNumber', 'partyName', 'poNumber']).sort().select().paginate()
+      .filter().search(['invoiceNo', 'dcNumber', 'partyName', 'poNumber', 'soNumber']).sort().select().paginate()
       .populateRefs([{ path: 'partyId', select: 'name code email' }]);
     return features.exec();
   },
