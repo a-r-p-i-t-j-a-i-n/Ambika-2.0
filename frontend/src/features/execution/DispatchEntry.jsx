@@ -179,7 +179,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
   const freshHeader = () => ({
     dcDate: dayjs().format('YYYY-MM-DD'),
     vehicleNo: '', transportMode: 'Road', transporterName: '', clientEmail: '',
-    invoiceNo: '', dispatchedThrough: 'Freight Paid', deliveryAddress: '', remark: '',
+    invoiceNo: '', lrNo: '', dispatchedThrough: 'Freight Paid', deliveryAddress: '', remark: '',
   });
 
   // Reset whenever the modal opens.
@@ -469,8 +469,12 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
                   InputProps={{ ...params.InputProps, startAdornment: <InputAdornment position="start"><Truck size={13} /></InputAdornment> }} />
               )}
             />
-            <TextField label="Invoice / LR" value={header.invoiceNo} onChange={(e) => setHeader((p) => ({ ...p, invoiceNo: e.target.value }))}
+            <TextField label="Invoice No" value={header.invoiceNo} onChange={(e) => setHeader((p) => ({ ...p, invoiceNo: e.target.value }))}
               InputProps={{ startAdornment: <InputAdornment position="start"><Hash size={13} /></InputAdornment> }} />
+            <TextField label="L.R. / Docket No" value={header.lrNo} onChange={(e) => setHeader((p) => ({ ...p, lrNo: e.target.value.toUpperCase() }))}
+              placeholder="Transporter's LR / docket no"
+              helperText="Lorry Receipt from the transporter — prints on the delivery challan."
+              InputProps={{ startAdornment: <InputAdornment position="start"><FileText size={13} /></InputAdornment> }} />
             <TextField select label="Freight terms" value={header.dispatchedThrough} onChange={(e) => setHeader((p) => ({ ...p, dispatchedThrough: e.target.value }))}>
               {DC_THROUGH.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
             </TextField>

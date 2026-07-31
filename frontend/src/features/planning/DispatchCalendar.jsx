@@ -136,6 +136,11 @@ const DispatchCalendar = () => {
       (s.items || []).forEach((item) => {
         (item.phases || []).forEach((ph) => {
           if (!ph.plannedDate) return;
+          // A CANCELLED phase is no longer a live plan — it's only kept in the data
+          // for audit (a rescheduled/removed phase that already had a dispatch is
+          // soft-cancelled, not deleted). Skip it so an edited plan doesn't show the
+          // OLD date as a second "planned" entry next to the updated one.
+          if (ph.status === 'CANCELLED') return;
           const plannedQty = Number(ph.plannedQty || 0);
           const actualQty = Number(ph.totalActualQty || 0);
           const pendingQty = Math.max(0, plannedQty - actualQty);
@@ -271,9 +276,19 @@ const DispatchCalendar = () => {
     const q = search.trim().toLowerCase();
     return calendarEvents.filter((e) => {
       if (partyFilter.length && !partyFilter.includes(e.partyName)) return false;
-      if (contentFilter === 'scheduled' && e.eventType !== 'scheduled') return false;
-      if (contentFilter === 'actual' && e.eventType !== 'actual') return false;
-      if (contentFilter === 'delayed' && !e.isDelayed) return false;
+      // The default / scheduled / delayed views are PLAN views — each phase shows
+      // ONCE, on its PLANNED date (the scheduled card already carries its dispatched
+      // qty + status). Actual-date cards appear only in the dedicated "Actual" view.
+      // This is why a plan rescheduled AFTER it was dispatched (e.g. plan moved
+      // 30 Jul → 27 Jul while the challan stays dated 30 Jul) now shows only on 27,
+      // instead of doubling up on both dates.
+      if (contentFilter === 'actual') {
+        if (e.eventType !== 'actual') return false;
+      } else {
+        if (e.eventType === 'actual') return false;
+        if (contentFilter === 'scheduled' && e.eventType !== 'scheduled') return false;
+        if (contentFilter === 'delayed' && !e.isDelayed) return false;
+      }
       if (statusFilter && e.status !== statusFilter) return false;
       if (q && !`${e.soNumber} ${e.poNumber || ''} ${e.partyName} ${e.phaseNo} ${e.typeLabel || ''} ${e.skus.map((s) => `${s.skuName} ${s.skuCode || ''} ${s.invoiceNo || ''}`).join(' ')}`.toLowerCase().includes(q)) return false;
       return true;

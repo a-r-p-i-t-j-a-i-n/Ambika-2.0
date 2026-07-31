@@ -37,6 +37,7 @@ const deliveryChallanSchema = new mongoose.Schema({
   transporterName:   { type: String },
   clientEmail:       { type: String },
   invoiceNo:         { type: String },
+  lrNo:              { type: String }, // Lorry Receipt / docket no from the transporter
   deliveryAddress:   { type: String },
 
   pdfUrl:  { type: String, default: null },

@@ -94,6 +94,15 @@ const StepDot = ({ s, current, last, onOpen }) => {
   );
 };
 
+// Tiny colour-key chip for the rail header — a filled dot + plain-English label, so
+// a client instantly reads "green = on time, orange = delayed" without being told.
+const RailKey = ({ color, label }) => (
+  <Stack direction="row" spacing={0.5} alignItems="center">
+    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>{label}</Typography>
+  </Stack>
+);
+
 const TaskPage = () => {
   const { processId, stepCode } = useParams();
   const navigate = useNavigate();
@@ -294,10 +303,16 @@ const TaskPage = () => {
             {/* ── Order journey rail — all 13 steps, current one ringed ────── */}
             {railSteps.length > 0 && (
               <Paper elevation={0} sx={{ borderRadius: 1.5, border: `1px solid ${O2D.line}`, px: { xs: 1.25, md: 1.75 }, py: 1.25, bgcolor: O2D.surfaceAlt }}>
-                <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1, flexWrap: 'wrap', rowGap: 0.5 }}>
                   <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: O2D.faint }}>
                     Order journey
                   </Typography>
+                  {/* Colour key — so a client reading the rail instantly knows what the
+                      green vs orange ticks mean, without needing to be told. */}
+                  <Stack direction="row" spacing={1.25} alignItems="center" sx={{ pl: 0.5 }}>
+                    <RailKey color={tokenOf('DONE').ring} label="On time" />
+                    <RailKey color={tokenOf('DELAYED').ring} label="Delayed" />
+                  </Stack>
                   <Box sx={{ flex: 1 }} />
                   <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: O2D.sub }}>
                     {doneCount}/{railSteps.length} steps done
