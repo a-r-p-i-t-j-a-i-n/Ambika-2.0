@@ -36,6 +36,24 @@ export async function generateDocNumber(docType, date = new Date()) {
 }
 
 /**
+ * PREVIEW the next document number WITHOUT consuming the sequence — read-only.
+ * Used to show "the DC number that will be created on submit" on entry forms.
+ * The real number is still assigned by generateDocNumber() at save time, so if
+ * another document is created in between, the actual number may differ by one.
+ * @param {'SALES_ORDER'|'DELIVERY_CHALLAN'|'TAX_INVOICE'|'O2D_TRACKER'} docType
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "AGL/DC-016/26-27"
+ */
+export async function peekDocNumber(docType, date = new Date()) {
+  const fy = getFiscalYear(date);
+  const prefix = DOC_PREFIX[docType];
+  const counterId = `${prefix}_${fy}`;
+  const counter = await Counter.findById(counterId).lean();
+  const next = (counter?.seq || 0) + 1;
+  return `${prefix}-${String(next).padStart(3, '0')}/${fy}`;
+}
+
+/**
  * Generate next Purchase Indent number (Purchase FMS).
  * Unpadded sequence, reset per fiscal year.
  * @param {Date} date — date to determine fiscal year

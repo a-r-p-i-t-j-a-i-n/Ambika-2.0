@@ -95,6 +95,8 @@ function openHtml(html) {
 export function printDispatchPlanByDate(schedule = {}, opts = {}) {
   const variant = opts.variant === 'internal' ? 'internal' : 'client';
   const isInternal = variant === 'internal';
+  // Optional period subtitle — set when the user exports a single month's plan.
+  const periodLabel = opts.periodLabel ? String(opts.periodLabel) : '';
   const m = buildPlanModel(schedule);
   const { company, brandName, today } = m;
   const s = schedule;
@@ -152,6 +154,7 @@ export function printDispatchPlanByDate(schedule = {}, opts = {}) {
   .title-wrap { text-align:center; margin:14px 0 4px; }
   .title-wrap h1 { margin:0; font-size:15px; letter-spacing:0.32em; font-weight:800; color:var(--navy); text-transform:uppercase; }
   .title-wrap .copytag { font-family:"Segoe UI",Arial,sans-serif; font-size:9px; letter-spacing:0.16em; text-transform:uppercase; color:#b45309; font-weight:800; margin-top:5px; }
+  .title-wrap .period { font-family:"Segoe UI",Arial,sans-serif; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--blue); font-weight:800; margin-top:5px; }
 
   .meta { font-family:"Segoe UI",Arial,sans-serif; width:100%; border-collapse:collapse; margin:16px 0 6px; }
   .meta td { border:1px solid var(--line); padding:8px 12px; font-size:11px; vertical-align:top; width:25%; }
@@ -206,7 +209,7 @@ export function printDispatchPlanByDate(schedule = {}, opts = {}) {
       ${company.address ? `<div class="sub">${esc(company.address)}</div>` : ''}
       ${company.phone ? `<div class="sub">Phone: ${esc(company.phone)}</div>` : ''}
     </div>
-    <div class="title-wrap"><h1>Dispatch Plan</h1>${isInternal ? '<div class="copytag">Internal Copy</div>' : ''}</div>
+    <div class="title-wrap"><h1>Dispatch Plan</h1>${periodLabel ? `<div class="period">${esc(periodLabel)}</div>` : ''}${isInternal ? '<div class="copytag">Internal Copy</div>' : ''}</div>
 
     <table class="meta">
       <tr>

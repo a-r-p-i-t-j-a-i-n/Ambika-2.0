@@ -97,6 +97,12 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (id) => `/challans/${id}`,
       providesTags: (_r, _e, id) => [{ type: 'Challan', id }],
     }),
+    // Read-only preview of the DC number a new dispatch (on `date`) would get.
+    getNextDcNumber: builder.query({
+      query: (params) => ({ url: '/challans/next-number', params }),
+      // Tie to Challan so creating a dispatch refreshes the previewed number.
+      providesTags: ['Challan'],
+    }),
     generateChallanPdf: builder.mutation({
       query: (id) => ({ url: `/challans/${id}/pdf`, method: 'POST' }),
       invalidatesTags: (_r, _e, id) => [{ type: 'Challan', id }, 'Challan'],
@@ -138,6 +144,7 @@ export const {
   useDeletePhaseMutation,
   useNormalizeSheetRowsMutation,
   useGetChallansQuery,
+  useGetNextDcNumberQuery,
   useGetSchedulesQuery,
   useGetChallanByIdQuery,
   useGenerateChallanPdfMutation,

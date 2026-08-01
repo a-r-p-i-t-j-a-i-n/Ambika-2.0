@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Chip,
   Table, TableBody, TableCell, TableHead, TableRow, alpha, useTheme, Skeleton,
-  ToggleButton, ToggleButtonGroup,
+  ToggleButton, ToggleButtonGroup, Popover, Checkbox, Divider, FormControlLabel,
 } from '@mui/material';
-import { FileText, Download, CalendarRange, PackageSearch, Zap, CheckCircle2, ArrowRight } from 'lucide-react';
+import { FileText, Download, CalendarRange, PackageSearch, Zap, CheckCircle2, ArrowRight, ChevronDown } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -43,6 +43,13 @@ const GenerateDispatchPlanPdf = () => {
 
   const [order, setOrder] = useState(null);
   const [audience, setAudience] = useState('client'); // 'client' | 'internal'
+  // Period scope for the export — a set of months (multi-select) OR a free date
+  // range. Empty months + empty range = the whole plan ("All months").
+  const [periodMode, setPeriodMode] = useState('months'); // 'months' | 'range'
+  const [selectedMonths, setSelectedMonths] = useState([]); // ['YYYY-MM', …] — empty = all
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  const [periodEl, setPeriodEl] = useState(null); // period Popover anchor
   const { data: ordersRes, isFetching: loadingOrders } = useGetOrdersQuery({ limit: 500, sort: '-orderDate' });
   const orders = useMemo(() => ordersRes?.data || [], [ordersRes]);
 
@@ -70,39 +77,118 @@ const GenerateDispatchPlanPdf = () => {
   const { data: schedRes, isFetching: loadingSched, isError } = useGetScheduleQuery(soNumber, { skip: !soNumber });
   const schedule = schedRes?.data || null;
 
+  // The month checkboxes ALWAYS list January–December (of every year the plan
+  // touches, else the current year), whether or not a month has dispatches — the
+  // client picks freely; an empty month just exports an empty plan. Each option
+  // also carries its planned-qty so months with a plan are marked.
+  const monthOptions = useMemo(() => {
+    const totals = new Map(); // 'YYYY-MM' → planned qty
+    let minYear = null; let maxYear = null;
+    (schedule?.items || []).forEach((it) => (it.phases || []).forEach((ph) => {
+      if (!ph.plannedDate) return;
+      const d = dayjs(ph.plannedDate);
+      const ym = d.format('YYYY-MM');
+      totals.set(ym, (totals.get(ym) || 0) + Number(ph.plannedQty || 0));
+      const y = d.year();
+      minYear = minYear === null ? y : Math.min(minYear, y);
+      maxYear = maxYear === null ? y : Math.max(maxYear, y);
+    }));
+    if (minYear === null) { minYear = dayjs().year(); maxYear = minYear; }
+    const out = [];
+    for (let y = minYear; y <= maxYear; y += 1) {
+      for (let mo = 0; mo < 12; mo += 1) {
+        const ym = `${y}-${String(mo + 1).padStart(2, '0')}`;
+        out.push({ value: ym, label: dayjs(`${ym}-01`).format('MMMM YYYY'), planned: totals.get(ym) || 0 });
+      }
+    }
+    return out;
+  }, [schedule]);
+
+  // A newly picked order resets the period scope back to the whole plan.
+  useEffect(() => { setPeriodMode('months'); setSelectedMonths([]); setRangeFrom(''); setRangeTo(''); }, [soNumber]);
+
+  // "All" = no month ticked AND no date bound → the entire plan.
+  const isAllScope = (periodMode === 'months' && selectedMonths.length === 0)
+    || (periodMode === 'range' && !rangeFrom && !rangeTo);
+
+  // The plan actually exported/previewed — the whole schedule, or only the phases
+  // that fall in the chosen months / date range. Items with nothing in scope are
+  // dropped so a scoped PDF shows only what ships in that window.
+  const filteredSchedule = useMemo(() => {
+    if (!schedule) return null;
+    if (isAllScope) return schedule;
+    const within = (plannedDate) => {
+      if (!plannedDate) return false;
+      const d = dayjs(plannedDate);
+      if (periodMode === 'range') {
+        if (rangeFrom && d.isBefore(dayjs(rangeFrom), 'day')) return false;
+        if (rangeTo && d.isAfter(dayjs(rangeTo), 'day')) return false;
+        return true;
+      }
+      return selectedMonths.includes(d.format('YYYY-MM'));
+    };
+    const items = (schedule.items || [])
+      .map((it) => ({ ...it, phases: (it.phases || []).filter((ph) => within(ph.plannedDate)) }))
+      .filter((it) => (it.phases || []).length > 0);
+    return { ...schedule, items };
+  }, [schedule, isAllScope, periodMode, rangeFrom, rangeTo, selectedMonths]);
+
+  // Human summary of the current scope — button label, preview chip, PDF subtitle.
+  const periodSummary = useMemo(() => {
+    if (isAllScope) return 'All months';
+    if (periodMode === 'range') {
+      const f = rangeFrom ? dayjs(rangeFrom).format('DD MMM YYYY') : 'Start';
+      const t = rangeTo ? dayjs(rangeTo).format('DD MMM YYYY') : 'End';
+      return `${f} – ${t}`;
+    }
+    if (selectedMonths.length === 1) return dayjs(`${selectedMonths[0]}-01`).format('MMMM YYYY');
+    return `${selectedMonths.length} months`;
+  }, [isAllScope, periodMode, rangeFrom, rangeTo, selectedMonths]);
+
+  const toggleMonth = (ym) => setSelectedMonths((prev) => (prev.includes(ym) ? prev.filter((m) => m !== ym) : [...prev, ym]));
+  const clearPeriod = () => { setSelectedMonths([]); setRangeFrom(''); setRangeTo(''); };
+
   const phaseRows = useMemo(() => {
     const rows = [];
-    (schedule?.items || []).forEach((it) => {
+    (filteredSchedule?.items || []).forEach((it) => {
       const phases = (it.phases || []).slice().sort((a, b) => (a.phaseNo > b.phaseNo ? 1 : -1));
       if (!phases.length) rows.push({ it, phase: null });
       else phases.forEach((ph, i) => rows.push({ it, phase: ph, first: i === 0 }));
     });
     return rows;
-  }, [schedule]);
+  }, [filteredSchedule]);
 
   const totalPlanned = useMemo(
-    () => (schedule?.items || []).reduce((s, it) => s + (it.phases || []).reduce((p, ph) => p + Number(ph.plannedQty || 0), 0), 0),
-    [schedule],
+    () => (filteredSchedule?.items || []).reduce((s, it) => s + (it.phases || []).reduce((p, ph) => p + Number(ph.plannedQty || 0), 0), 0),
+    [filteredSchedule],
   );
 
+  // The order has a plan at all (any month) vs. the current filter actually has rows.
   const hasPlan = schedule && (schedule.items || []).length > 0;
+  const hasFilteredPlan = filteredSchedule && (filteredSchedule.items || []).length > 0;
 
   const handleDownload = () => {
     if (gate.blocked) { setGateOpen(true); return; }
-    if (!hasPlan) {
-      enqueueSnackbar('No dispatch plan to export for this order yet.', { variant: 'warning' });
+    if (!hasFilteredPlan) {
+      enqueueSnackbar(isAllScope
+        ? 'No dispatch plan to export for this order yet.'
+        : `No dispatches planned for ${periodSummary}.`, { variant: 'warning' });
       return;
     }
     // The schedule's denormalised party/SO/PO can be blank — fall back to the
-    // selected order so the PDF header is always populated.
+    // selected order so the PDF header is always populated. We export the FILTERED
+    // schedule so a chosen period yields a scoped plan; "All months" is unchanged.
     const ctx = {
-      ...schedule,
-      partyName: schedule.partyName || order?.partyName || '',
-      soNumber: schedule.soNumber || order?.soNumber || '',
-      poNumber: schedule.poNumber || order?.poNumber || '',
-      poDate: schedule.poDate || order?.poDate || null,
+      ...filteredSchedule,
+      partyName: filteredSchedule.partyName || order?.partyName || '',
+      soNumber: filteredSchedule.soNumber || order?.soNumber || '',
+      poNumber: filteredSchedule.poNumber || order?.poNumber || '',
+      poDate: filteredSchedule.poDate || order?.poDate || null,
     };
-    const ok = printDispatchPlanByDate(ctx, { variant: audience });
+    const ok = printDispatchPlanByDate(ctx, {
+      variant: audience,
+      periodLabel: isAllScope ? '' : periodSummary,
+    });
     if (ok) enqueueSnackbar('Dispatch plan opened — print or Save as PDF from the new tab.', { variant: 'success' });
     return ok;
   };
@@ -168,7 +254,7 @@ const GenerateDispatchPlanPdf = () => {
         <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
             <Autocomplete
-              sx={{ flex: 1, minWidth: 300 }}
+              sx={{ flex: 1, minWidth: 260 }}
               options={orders}
               loading={loadingOrders}
               value={order}
@@ -177,6 +263,69 @@ const GenerateDispatchPlanPdf = () => {
               isOptionEqualToValue={(a, b) => a._id === b._id}
               renderInput={(p) => <TextField {...p} label="Select Sales Order / PO" placeholder="Search SO / PO / party…" size="small" />}
             />
+            {/* Period scope — export the whole plan, any set of months, or a custom
+                date range (e.g. share only August, or 17–31 Aug, with the party). */}
+            <Button
+              variant="outlined" size="small" onClick={(e) => setPeriodEl(e.currentTarget)} disabled={!hasPlan}
+              startIcon={<CalendarRange size={15} />} endIcon={<ChevronDown size={15} />}
+              sx={{ minWidth: 190, justifyContent: 'space-between', textTransform: 'none', fontWeight: 700,
+                color: O2D.body, borderColor: O2D.line, whiteSpace: 'nowrap', bgcolor: O2D.surface, '&:hover': { borderColor: O2D.line, bgcolor: O2D.surfaceAlt } }}
+            >
+              {periodSummary}
+            </Button>
+            <Popover
+              open={Boolean(periodEl)} anchorEl={periodEl} onClose={() => setPeriodEl(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+              PaperProps={{ sx: { p: 1.5, width: 300, borderRadius: '10px', border: `1px solid ${O2D.line}` } }}
+            >
+              <ToggleButtonGroup size="small" exclusive fullWidth value={periodMode} onChange={(_, v) => v && setPeriodMode(v)} sx={{ mb: 1.25 }}>
+                <ToggleButton value="months" sx={{ textTransform: 'none', fontWeight: 700 }}>By month</ToggleButton>
+                <ToggleButton value="range" sx={{ textTransform: 'none', fontWeight: 700 }}>Date range</ToggleButton>
+              </ToggleButtonGroup>
+
+              {periodMode === 'months' ? (
+                <Box>
+                  <FormControlLabel
+                    sx={{ ml: 0, display: 'flex' }}
+                    control={<Checkbox size="small" checked={selectedMonths.length === 0} onChange={() => setSelectedMonths([])} sx={{ py: 0.25 }} />}
+                    label={<Typography sx={{ fontSize: '0.82rem', fontWeight: 700 }}>All months</Typography>}
+                  />
+                  <Divider sx={{ my: 0.5 }} />
+                  <Box sx={{ maxHeight: 240, overflowY: 'auto' }}>
+                    {monthOptions.map((m) => (
+                      <FormControlLabel key={m.value}
+                        sx={{ ml: 0, mr: 0, width: '100%', '& .MuiFormControlLabel-label': { flex: 1 } }}
+                        control={<Checkbox size="small" checked={selectedMonths.includes(m.value)} onChange={() => toggleMonth(m.value)} sx={{ py: 0.25 }} />}
+                        label={(
+                          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ flex: 1 }}>
+                            <Typography sx={{ fontSize: '0.82rem', fontWeight: m.planned ? 700 : 400, color: m.planned ? O2D.ink : O2D.sub }}>{m.label}</Typography>
+                            {m.planned > 0
+                              ? <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{num(m.planned)} pcs</Typography>
+                              : <Typography sx={{ fontSize: '0.62rem', color: O2D.faint }}>—</Typography>}
+                          </Stack>
+                        )}
+                      />
+                    ))}
+                  </Box>
+                  <Typography sx={{ fontSize: '0.66rem', color: O2D.faint, mt: 0.5 }}>
+                    Tick any months (Jan–Dec). Months with a plan show their quantity; an empty month simply exports an empty plan — use “Date range” for an exact window.
+                  </Typography>
+                </Box>
+              ) : (
+                <Stack spacing={1.25}>
+                  <TextField size="small" type="date" label="From" InputLabelProps={{ shrink: true }} value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)} />
+                  <TextField size="small" type="date" label="To" InputLabelProps={{ shrink: true }} value={rangeTo} onChange={(e) => setRangeTo(e.target.value)} />
+                  <Typography sx={{ fontSize: '0.66rem', color: O2D.faint }}>Leave a field blank for open-ended (everything before / after).</Typography>
+                </Stack>
+              )}
+
+              <Divider sx={{ my: 1 }} />
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Button size="small" onClick={clearPeriod} sx={{ textTransform: 'none', fontWeight: 700 }}>Clear</Button>
+                <Button size="small" variant="contained" onClick={() => setPeriodEl(null)} sx={{ textTransform: 'none', fontWeight: 700 }}>Done</Button>
+              </Stack>
+            </Popover>
             <ToggleButtonGroup
               size="small" exclusive value={audience}
               onChange={(_, v) => v && setAudience(v)}
@@ -187,7 +336,7 @@ const GenerateDispatchPlanPdf = () => {
             </ToggleButtonGroup>
             <Button
               variant="contained" startIcon={<Download size={16} />}
-              onClick={handleDownload} disabled={!hasPlan || gate.blocked}
+              onClick={handleDownload} disabled={!hasFilteredPlan || gate.blocked}
               sx={{ fontWeight: 700, px: 3, whiteSpace: 'nowrap' }}
             >
               Open / Download PDF
@@ -195,6 +344,7 @@ const GenerateDispatchPlanPdf = () => {
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
             Same dispatch-plan template, two versions: <b>Client</b> — item names only (to share). &nbsp;·&nbsp; <b>Internal</b> — item names + SKU codes (to keep).
+            &nbsp;·&nbsp; Use <b>Period</b> to share a scope — one or more <b>months</b> or a custom <b>date range</b>; <b>All months</b> exports the full plan. The emailed copy always stays the full plan.
           </Typography>
         </Paper>
 
@@ -219,17 +369,31 @@ const GenerateDispatchPlanPdf = () => {
           </Paper>
         )}
 
+        {/* Scope chosen but nothing ships in it */}
+        {hasPlan && !hasFilteredPlan && (
+          <Paper elevation={0} sx={{ p: 5, textAlign: 'center', borderRadius: '8px', color: 'text.secondary', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+            <CalendarRange size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
+            <Typography sx={{ fontWeight: 700 }}>No dispatches planned for {periodSummary}</Typography>
+            <Typography sx={{ fontSize: '0.85rem' }}>Pick a different period, or choose “All months” to export the full plan.</Typography>
+          </Paper>
+        )}
+
         {/* Preview */}
-        {hasPlan && (
+        {hasFilteredPlan && (
           <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
             <Box sx={{ px: 2, py: 1.25, borderBottom: `1px solid ${O2D.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
               <Box sx={{ minWidth: 0 }}>
                 <Typography sx={{ fontWeight: 800, fontSize: '0.95rem' }} noWrap>{schedule.partyName || order?.partyName || '—'}</Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
-                  {schedule.soNumber || order?.soNumber || '—'}{(schedule.poNumber || order?.poNumber) ? ` · PO ${schedule.poNumber || order?.poNumber}` : ''} · {(schedule.items || []).length} SKU(s)
+                  {schedule.soNumber || order?.soNumber || '—'}{(schedule.poNumber || order?.poNumber) ? ` · PO ${schedule.poNumber || order?.poNumber}` : ''} · {(filteredSchedule.items || []).length} SKU(s)
                 </Typography>
               </Box>
-              <Chip size="small" label={`Total planned: ${num(totalPlanned)}`} sx={{ fontWeight: 700, fontSize: '0.72rem', bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} />
+              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                {!isAllScope && (
+                  <Chip size="small" icon={<CalendarRange size={13} />} label={periodSummary} sx={{ fontWeight: 700, fontSize: '0.72rem', bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand, '& .MuiChip-icon': { color: O2D.brand } }} />
+                )}
+                <Chip size="small" label={`Total planned: ${num(totalPlanned)}`} sx={{ fontWeight: 700, fontSize: '0.72rem', bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} />
+              </Stack>
             </Box>
             <Box sx={{ overflowX: 'auto' }}>
               <Table size="small" sx={{

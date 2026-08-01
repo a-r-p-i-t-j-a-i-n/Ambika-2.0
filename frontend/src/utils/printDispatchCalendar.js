@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { groupDayByParty } from './dispatchCalendarGrouping';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -52,7 +53,6 @@ export function printDispatchCalendar({
 } = {}) {
   const monthStart = dayjs(month).startOf('month');
   const monthLabel = monthStart.format('MMMM YYYY');
-  const generated = dayjs().format('DD MMM YYYY, hh:mm A');
   const visibleEvents = events
     .filter((event) => event?.dateKey && dayjs(event.dateKey).isSame(monthStart, 'month'))
     .sort((a, b) => (
@@ -68,38 +68,20 @@ export function printDispatchCalendar({
     byDate.set(event.dateKey, list);
   });
 
-  const scheduledEvents = visibleEvents.filter((event) => event.eventType !== 'actual');
-  const actualEvents = visibleEvents.filter((event) => event.eventType === 'actual');
-  const delayedEvents = visibleEvents.filter((event) => event.isDelayed);
-  const totals = {
-    entries: visibleEvents.length,
-    planned: scheduledEvents.reduce((sum, event) => sum + Number(event.plannedQty || 0), 0),
-    actual: actualEvents.length
-      ? actualEvents.reduce((sum, event) => sum + Number(event.actualQty || 0), 0)
-      : scheduledEvents.reduce((sum, event) => sum + Number(event.actualQty || 0), 0),
-    pending: scheduledEvents.reduce((sum, event) => sum + Number(event.pendingQty || 0), 0),
-    delayed: delayedEvents.length,
-  };
-
-  const filterText = [
-    `Content: ${filters.contentLabel || 'All dispatches'}`,
-    `Parties: ${filters.partyLabel || 'All parties'}`,
-    `Status: ${filters.statusLabel || 'All statuses'}`,
-    filters.search ? `Search: ${filters.search}` : null,
-  ].filter(Boolean).join(' | ');
-
   const gridStart = startOfPrintGrid(monthStart);
   const days = Array.from({ length: 42 }, (_, i) => gridStart.add(i, 'day'));
   const calendarCells = days.map((day) => {
     const key = day.format('YYYY-MM-DD');
     const list = byDate.get(key) || [];
+    // Same rule as the screen: one card PER PARTY (orders merged), items merged,
+    // and NO sales-order number on the print.
+    const groups = groupDayByParty(list);
     const inMonth = day.isSame(monthStart, 'month');
-    const chips = list.slice(0, 2).map((event) => {
-      const type = TYPE[event.eventType] || TYPE.scheduled;
-      const colour = event.isDelayed ? '#be123c' : type.color;
-      const isActual = event.eventType === 'actual';
-      const qty = eventQty(event);
-      const skuLines = (event.skus || [])
+    const chips = groups.slice(0, 2).map((g) => {
+      const type = TYPE[g.eventType] || TYPE.scheduled;
+      const colour = g.isDelayed ? '#be123c' : type.color;
+      const isActual = g.eventType === 'actual';
+      const skuLines = (g.skus || [])
         .filter((sku) => Number(isActual ? sku.actualQty : sku.plannedQty) > 0)
         .map((sku) => `
           <div class="skuRow">
@@ -107,19 +89,19 @@ export function printDispatchCalendar({
             <span class="skuQty">${num(isActual ? sku.actualQty : sku.plannedQty)}</span>
           </div>`).join('');
       return `
-        <div class="chip${event.isDelayed ? ' delayed' : ''}" style="border-left-color:${colour}">
+        <div class="chip${g.isDelayed ? ' delayed' : ''}" style="border-left-color:${colour}">
           <div class="chipHead">
-            <span class="party">${esc(shortParty(event.partyName))}</span>
+            <span class="party">${esc(shortParty(g.partyName))}</span>
             <span class="tag" style="color:${colour}">${esc(type.short)}</span>
-            <span class="so">${esc(shortSo(event.soNumber))}</span>
+            ${g.orderCount > 1 ? `<span class="so">&times;${g.orderCount}</span>` : ''}
           </div>
           ${skuLines}
           <div class="tot" style="border-top-color:${colour}">
-            <span>TOTAL</span><span class="totQty" style="color:${colour}">${num(qty)} pcs</span>
+            <span>TOTAL</span><span class="totQty" style="color:${colour}">${num(g.totalQty)} pcs</span>
           </div>
         </div>`;
     }).join('');
-    const more = list.length > 2 ? `<div class="more">+${list.length - 2} more</div>` : '';
+    const more = groups.length > 2 ? `<div class="more">+${groups.length - 2} more</div>` : '';
     return `
       <td class="${inMonth ? '' : 'muted'}">
         <div class="date">${day.date()}</div>
@@ -148,6 +130,8 @@ export function printDispatchCalendar({
   .lh { border-bottom: 2.5px solid #0b2545; padding-bottom: 8px; margin-bottom: 2px; }
   .company { color: #0b2545; font-size: 30px; font-weight: 900; letter-spacing: 0.05em; line-height: 1.05; text-align: center; }
   .title { text-align: center; color: #16305a; font-size: 13px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-top: 5px; }
+  .month { text-align: center; color: #1c1e21; font-size: 15px; font-weight: 800; letter-spacing: 0.04em; margin-top: 6px; }
+  .calendar { margin-top: 12px; }
   .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; padding-top: 7px; }
   h1 { margin: 0; color: #16305a; font-size: 14px; font-weight: 800; line-height: 1.2; }
   .filters { margin-top: 4px; color: #6b7280; font-size: 10.5px; }
@@ -190,20 +174,7 @@ export function printDispatchCalendar({
     <div class="lh">
       <div class="company">${esc(companyName)}</div>
       <div class="title">Dispatch Planning Calendar</div>
-    </div>
-    <div class="head">
-      <div>
-        <h1>${esc(monthLabel)}</h1>
-        <div class="filters">${esc(filterText)}</div>
-      </div>
-      <div class="meta"><strong>Generated</strong><br>${esc(generated)}<br>${visibleEvents.length} visible entry(s)</div>
-    </div>
-    <div class="stats">
-      <div class="stat"><b>${num(totals.entries)}</b><span>Entries</span></div>
-      <div class="stat"><b>${num(totals.planned)}</b><span>Scheduled Qty</span></div>
-      <div class="stat"><b>${num(totals.actual)}</b><span>Actual Qty</span></div>
-      <div class="stat"><b>${num(totals.pending)}</b><span>Pending Qty</span></div>
-      <div class="stat"><b>${num(totals.delayed)}</b><span>Delayed</span></div>
+      <div class="month">${esc(monthLabel)}</div>
     </div>
     <table class="calendar">
       <thead><tr>${WEEKDAYS.map((day) => `<th>${day}</th>`).join('')}</tr></thead>

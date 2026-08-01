@@ -3,7 +3,7 @@ import path from 'path';
 import DeliveryChallan from './challan.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
-import { generateDocNumber } from '../../utils/docNumberGenerator.js';
+import { generateDocNumber, peekDocNumber } from '../../utils/docNumberGenerator.js';
 import { orderService } from '../order/order.service.js';
 import asyncHandler from '../../middleware/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
@@ -122,6 +122,12 @@ export const challanController = {
   update:  asyncHandler(async (req, res) => { res.json(ApiResponse.ok('DC updated', await challanService.update(req.params.id, req.body))); }),
   remove:  asyncHandler(async (req, res) => { await challanService.remove(req.params.id); res.json(ApiResponse.ok('DC deleted')); }),
   generatePdf: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('PDF generated', await challanService.generatePdf(req.params.id))); }),
+  // Read-only preview of the DC number that a new dispatch on `date` would get.
+  nextNumber: asyncHandler(async (req, res) => {
+    const date = req.query.date ? new Date(req.query.date) : new Date();
+    const nextNumber = await peekDocNumber('DELIVERY_CHALLAN', Number.isNaN(date.getTime()) ? new Date() : date);
+    res.json(ApiResponse.ok('Next DC number', { nextNumber }));
+  }),
   // Inline, always-fresh preview — streams the PDF bytes, saves nothing.
   previewPdf: asyncHandler(async (req, res) => {
     const { buffer, fileName } = await challanService.renderBuffer(req.params.id);
@@ -134,6 +140,7 @@ export const challanController = {
 // ── Routes ──────────────────────────────────────────────────
 const router = Router();
 router.route('/').get(challanController.getAll).post(challanController.create);
+router.get('/next-number', challanController.nextNumber); // must precede '/:id'
 router.post('/:id/pdf', challanController.generatePdf);
 router.get('/:id/pdf/preview', challanController.previewPdf); // inline, no-save preview/download
 router.route('/:id').get(challanController.getById).put(challanController.update).delete(challanController.remove);

@@ -4,15 +4,17 @@ import {
   Box, Paper, Typography, Stack, Button, IconButton, Chip, alpha, useTheme,
   TextField, MenuItem, Dialog, DialogTitle, DialogContent, Divider, Tooltip,
   useMediaQuery, Skeleton, Popover, Checkbox, ListItemText,
+  ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import {
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Truck, Search, X, ArrowRight,
-  Package, Building2, Download,
+  Package, Building2, Download, LayoutGrid, List as ListIcon, ChevronRight as MoreIcon,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useGetSchedulesQuery } from '../../store/api/dispatchControlApi';
 import { printDispatchCalendar } from '../../utils/printDispatchCalendar';
+import { groupDayByParty } from '../../utils/dispatchCalendarGrouping';
 import { O2D } from '../o2d-fms/o2dTheme';
 
 dayjs.extend(isoWeek);
@@ -113,6 +115,7 @@ const DispatchCalendar = () => {
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const [cursor, setCursor] = useState(dayjs().startOf('month'));
+  const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'list'
   const [partyFilter, setPartyFilter] = useState([]);
   const [contentFilter, setContentFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('');
@@ -307,6 +310,26 @@ const DispatchCalendar = () => {
     return m;
   }, [events]);
 
+  // Merge each day by PARTY (same party = one card, regardless of SO/PO) and merge
+  // identical items inside it — this is what the calendar cells, the day dialog and
+  // the list view all render, so the client sees one clean "who + what + how much"
+  // per party per day.
+  const groupedByDate = useMemo(() => {
+    const m = new Map();
+    eventsByDate.forEach((list, dateKey) => m.set(dateKey, groupDayByParty(list)));
+    return m;
+  }, [eventsByDate]);
+
+  // Flat, date-sorted list of this month's party-groups — powers the List view.
+  const monthGroups = useMemo(() => {
+    const out = [];
+    [...groupedByDate.entries()]
+      .filter(([dateKey]) => dayjs(dateKey).isSame(cursor, 'month'))
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([dateKey, groups]) => out.push({ dateKey, groups }));
+    return out;
+  }, [groupedByDate, cursor]);
+
   // Only the weeks that contain THIS month's days (5 or 6 rows) — no extra trailing
   // week of the next month. Cells that fall in the prev/next month are rendered
   // blank below, so the calendar shows only the selected month's dates.
@@ -335,6 +358,7 @@ const DispatchCalendar = () => {
 
   const today = dayjs();
   const dayEvents = openDay ? (eventsByDate.get(openDay) || []) : [];
+  const dayGroups = openDay ? (groupedByDate.get(openDay) || []) : [];
   const dayScheduledQty = dayEvents
     .filter((e) => e.eventType !== 'actual')
     .reduce((sum, e) => sum + Number(e.plannedQty || 0), 0);
@@ -344,6 +368,7 @@ const DispatchCalendar = () => {
     : dayEvents.reduce((sum, e) => sum + Number(e.actualQty || 0), 0);
 
   const goPlan = (e) => navigate(`/dispatch-planning?so=${encodeURIComponent(e.soNumber)}&phase=${encodeURIComponent(e.phaseNo)}`);
+  const goPlanSo = (so) => navigate(`/dispatch-planning?so=${encodeURIComponent(so)}`);
   const partyLabel = partyFilter.length === 0
     ? 'All parties'
     : partyFilter.length === 1 ? partyFilter[0] : `${partyFilter.length} parties`;
@@ -457,6 +482,13 @@ const DispatchCalendar = () => {
             </Button>
           </Stack>
 
+          {/* Calendar ⇄ List view toggle — same data + filters, two ways to read it. */}
+          <ToggleButtonGroup size="small" exclusive value={viewMode} onChange={(_, v) => v && setViewMode(v)}
+            sx={{ ml: 0.5, '& .MuiToggleButton-root': { px: 1, py: 0.4, textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', color: O2D.body, borderColor: GRID, '&.Mui-selected': { bgcolor: alpha(BRAND, 0.12), color: BRAND_DK, '&:hover': { bgcolor: alpha(BRAND, 0.18) } } } }}>
+            <ToggleButton value="calendar"><LayoutGrid size={14} style={{ marginRight: 5 }} />Calendar</ToggleButton>
+            <ToggleButton value="list"><ListIcon size={14} style={{ marginRight: 5 }} />List</ToggleButton>
+          </ToggleButtonGroup>
+
           <Box sx={{ flex: 1 }} />
 
           <TextField
@@ -516,12 +548,83 @@ const DispatchCalendar = () => {
           ))}
           <Box sx={{ flex: 1 }} />
           <Typography sx={{ fontSize: '0.64rem', color: O2D.faint, whiteSpace: 'nowrap' }}>
-            Each event shows all SKUs and quantities
+            One card = one party's day · orders &amp; items merged
           </Typography>
         </Stack>
 
         {isLoading ? (
           <Box sx={{ p: 2 }}><Skeleton variant="rounded" height={460} /></Box>
+        ) : viewMode === 'list' ? (
+          /* ── List view — same filters, read top-to-bottom by date ── */
+          <Box sx={{ p: { xs: 1, sm: 1.5 } }}>
+            {monthGroups.length === 0 ? (
+              <Stack alignItems="center" sx={{ py: 6, color: 'text.disabled' }}>
+                <Truck size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
+                <Typography sx={{ fontSize: '0.85rem' }}>No dispatches match the current filters this month.</Typography>
+              </Stack>
+            ) : monthGroups.map(({ dateKey, groups }) => {
+              const d = dayjs(dateKey);
+              const isTodayRow = d.isSame(today, 'day');
+              const dayTotal = groups.reduce((s, g) => s + g.totalQty, 0);
+              return (
+                <Box key={dateKey} sx={{ mb: 1.75 }}>
+                  {/* Date header */}
+                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75, px: 0.25 }}>
+                    <Box sx={{ minWidth: 34, height: 34, px: 0.75, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: isTodayRow ? BRAND : alpha(BRAND, 0.08), color: isTodayRow ? '#fff' : BRAND_DK }}>
+                      <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, lineHeight: 1 }}>{d.date()}</Typography>
+                    </Box>
+                    <Box>
+                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.15 }}>{d.format('dddd')}</Typography>
+                      <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }}>{d.format('DD MMM YYYY')}</Typography>
+                    </Box>
+                    <Box sx={{ flex: 1 }} />
+                    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
+                      {groups.length} part{groups.length === 1 ? 'y' : 'ies'} · <span style={{ color: BRAND_DK }}>{num(dayTotal)} pcs</span>
+                    </Typography>
+                  </Stack>
+                  {/* Party rows — one per party, items merged */}
+                  <Stack spacing={0.75}>
+                    {groups.map((g) => {
+                      const m = eventMeta(g);
+                      const isActual = g.eventType === 'actual';
+                      const rows = (g.skus || []).filter((sk) => (isActual ? sk.actualQty : sk.plannedQty) > 0);
+                      return (
+                        <Paper key={g.id} variant="outlined" onClick={() => setOpenDay(dateKey)}
+                          sx={{ p: 1, borderRadius: '6px', borderColor: O2D.line, borderLeft: `4px solid ${m.color}`, cursor: 'pointer', transition: 'background .15s', '&:hover': { bgcolor: O2D.surfaceAlt } }}>
+                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: { sm: 200 }, flexShrink: 0 }}>
+                              <Building2 size={16} color={m.color} />
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography noWrap sx={{ fontSize: '0.82rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>{g.partyName}</Typography>
+                                <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
+                                  {g.orderCount} order{g.orderCount > 1 ? 's' : ''} · {isActual ? 'Actual' : 'Scheduled'}
+                                </Typography>
+                              </Box>
+                            </Stack>
+                            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5, flex: 1, minWidth: 0 }}>
+                              {rows.map((sk, i) => (
+                                <Chip key={i} size="small"
+                                  label={<span><b style={{ fontWeight: 700 }}>{sk.skuName}</b> · {num(isActual ? sk.actualQty : sk.plannedQty)}</span>}
+                                  sx={{ height: 22, fontSize: '0.66rem', fontWeight: 600, bgcolor: O2D.surfaceAlt, color: O2D.body, border: `1px solid ${GRID}`, '& .MuiChip-label': { px: 0.9 } }} />
+                              ))}
+                            </Stack>
+                            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0, justifyContent: { xs: 'space-between', sm: 'flex-end' } }}>
+                              <Chip size="small" label={m.label} sx={{ height: 20, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha(m.color, 0.1), color: m.color }} />
+                              {g.delayDays > 0 && <Chip size="small" label={`${g.delayDays}d late`} sx={{ height: 20, fontSize: '0.58rem', fontWeight: 800, bgcolor: alpha(STATUS.DELAYED.color, 0.1), color: STATUS.DELAYED.color }} />}
+                              <Box sx={{ textAlign: 'right', minWidth: 62 }}>
+                                <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: m.color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{num(g.totalQty)}</Typography>
+                                <Typography sx={{ fontSize: '0.56rem', fontWeight: 700, color: O2D.faint, letterSpacing: '0.05em' }}>PCS</Typography>
+                              </Box>
+                            </Stack>
+                          </Stack>
+                        </Paper>
+                      );
+                    })}
+                  </Stack>
+                </Box>
+              );
+            })}
+          </Box>
         ) : (
           <Box sx={{ overflowX: 'auto' }}>
             <Box sx={{ minWidth: 700 }}>
@@ -549,14 +652,14 @@ const DispatchCalendar = () => {
                       }} />
                     );
                   }
-                  const list = eventsByDate.get(key) || [];
+                  const groups = groupedByDate.get(key) || [];
                   const isToday = day.isSame(today, 'day');
-                  const shown = list.slice(0, 2);
-                  const more = list.length - shown.length;
+                  const shown = groups.slice(0, 2);
+                  const more = groups.length - shown.length;
                   return (
                     <Box
                       key={key}
-                      onClick={() => list.length && setOpenDay(key)}
+                      onClick={() => groups.length && setOpenDay(key)}
                       sx={{
                         // Rows grow to fit the item lines, but a day never shows more
                         // than 2 dispatches (the rest collapse to "+N more"), so the
@@ -565,9 +668,9 @@ const DispatchCalendar = () => {
                         borderRight: `1px solid ${GRID}`,
                         borderBottom: `1px solid ${GRID}`,
                         bgcolor: isToday ? alpha(BRAND, 0.06) : (inMonth ? O2D.surface : O2D.surfaceAlt),
-                        cursor: list.length ? 'pointer' : 'default',
+                        cursor: groups.length ? 'pointer' : 'default',
                         transition: 'background .15s',
-                        '&:hover': list.length ? { bgcolor: alpha(BRAND, 0.07) } : {},
+                        '&:hover': groups.length ? { bgcolor: alpha(BRAND, 0.07) } : {},
                       }}
                     >
                       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.4 }}>
@@ -579,39 +682,40 @@ const DispatchCalendar = () => {
                         }}>
                           {day.date()}
                         </Box>
-                        {list.length > 1 && (
+                        {groups.length > 1 && (
                           <Box sx={{
                             width: 15, height: 15, borderRadius: '50%', display: 'grid', placeItems: 'center',
                             fontSize: '0.54rem', fontWeight: 900, bgcolor: STATUS.IN_PROGRESS.color, color: '#fff',
-                          }}>{list.length}</Box>
+                          }}>{groups.length}</Box>
                         )}
                       </Stack>
 
-                      {/* Client's layout: short party name · status · SO, then every SKU
-                          with its quantity and the event total. Names are shortened so
-                          the item lines have room. */}
+                      {/* One card PER PARTY (orders merged), with each item merged into a
+                          single line and a party total. No SO number — the client reads
+                          this day-wise as "who + what + how much". */}
                       <Stack spacing={0.4}>
-                        {shown.map((e) => {
-                          const m = eventMeta(e);
-                          const isActual = e.eventType === 'actual';
-                          const qty = eventQty(e);
-                          const rows = (e.skus || []).filter((sk) => (isActual ? sk.actualQty : sk.plannedQty) > 0);
+                        {shown.map((g) => {
+                          const m = eventMeta(g);
+                          const isActual = g.eventType === 'actual';
+                          const rows = (g.skus || []).filter((sk) => (isActual ? sk.actualQty : sk.plannedQty) > 0);
                           return (
-                            <Tooltip key={e.id} title={`${e.partyName} · ${e.soNumber} · ${e.phaseNo} · ${num(qty)} pcs · ${e.typeLabel || m.label}`} disableInteractive>
+                            <Tooltip key={g.id} title={`${g.partyName} · ${g.orderCount} order${g.orderCount > 1 ? 's' : ''} · ${num(g.totalQty)} pcs · ${isActual ? 'Actual' : 'Scheduled'}`} disableInteractive>
                               <Box sx={{
                                 borderLeft: `3px solid ${m.color}`, bgcolor: alpha(m.color, 0.07),
                                 borderRadius: '3px', px: 0.5, py: 0.3,
                               }}>
                                 <Stack direction="row" alignItems="center" spacing={0.5}>
                                   <Typography noWrap sx={{ fontSize: '0.6rem', fontWeight: 800, color: O2D.ink, flex: 1, minWidth: 0, lineHeight: 1.3 }}>
-                                    {shortParty(e.partyName)}
+                                    {shortParty(g.partyName)}
                                   </Typography>
                                   <Typography sx={{ fontSize: '0.46rem', fontWeight: 900, color: m.color, flexShrink: 0 }}>
-                                    {(EVENT_TYPE[e.eventType]?.short || 'SCH')}
+                                    {isActual ? 'ACT' : 'SCH'}
                                   </Typography>
-                                  <Typography noWrap sx={{ fontSize: '0.46rem', fontWeight: 700, color: O2D.faint, flexShrink: 0 }}>
-                                    {String(e.soNumber || '').replace(/^AGL\//, '').replace(/\/\d{2}-\d{2}$/, '')}
-                                  </Typography>
+                                  {g.orderCount > 1 && (
+                                    <Typography sx={{ fontSize: '0.46rem', fontWeight: 800, color: O2D.faint, flexShrink: 0 }}>
+                                      ×{g.orderCount}
+                                    </Typography>
+                                  )}
                                 </Stack>
                                 {rows.map((sk, i) => (
                                   <Stack key={i} direction="row" alignItems="center" spacing={0.5}>
@@ -629,7 +733,7 @@ const DispatchCalendar = () => {
                                     Total
                                   </Typography>
                                   <Typography sx={{ fontSize: '0.56rem', fontWeight: 900, color: m.color, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                                    {num(qty)} pcs
+                                    {num(g.totalQty)} pcs
                                   </Typography>
                                 </Stack>
                               </Box>
@@ -637,9 +741,15 @@ const DispatchCalendar = () => {
                           );
                         })}
                         {more > 0 && (
-                          <Typography sx={{ fontSize: '0.54rem', fontWeight: 800, color: BRAND, pl: 0.5, lineHeight: 1.3 }}>
-                            +{more} more
-                          </Typography>
+                          <Box onClick={(ev) => { ev.stopPropagation(); setOpenDay(key); }}
+                            sx={{ mt: 0.1, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 0.25,
+                              px: 0.6, py: 0.15, borderRadius: '4px', cursor: 'pointer',
+                              bgcolor: alpha(BRAND, 0.1), color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.2) } }}>
+                            <Typography sx={{ fontSize: '0.54rem', fontWeight: 800, lineHeight: 1.3 }}>
+                              +{more} more {more === 1 ? 'party' : 'parties'}
+                            </Typography>
+                            <MoreIcon size={9} />
+                          </Box>
                         )}
                       </Stack>
                     </Box>
@@ -677,66 +787,74 @@ const DispatchCalendar = () => {
         </DialogTitle>
         <DialogContent dividers sx={{ p: 1.5 }}>
           <Stack spacing={1.25}>
-            {dayEvents.map((e) => {
-              const m = eventMeta(e);
-              const qty = eventQty(e);
-              const qtyLabel = e.eventType === 'actual' ? 'ACTUAL PCS' : 'SCHEDULED PCS';
+            {dayGroups.map((g) => {
+              const m = eventMeta(g);
+              const isActual = g.eventType === 'actual';
+              const qtyLabel = isActual ? 'ACTUAL PCS' : 'SCHEDULED PCS';
               return (
-                <Paper key={e.id} variant="outlined" sx={{ p: 1.5, borderRadius: '6px', borderColor: O2D.line, borderLeft: `4px solid ${m.color}` }}>
+                <Paper key={g.id} variant="outlined" sx={{ p: 1.5, borderRadius: '6px', borderColor: O2D.line, borderLeft: `4px solid ${m.color}` }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
                     <Box sx={{ minWidth: 0 }}>
-                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-                        <Chip size="small" label={e.typeLabel || EVENT_TYPE[e.eventType]?.label || 'Scheduled'} sx={{ height: 20, fontSize: '0.6rem', fontWeight: 800, bgcolor: alpha(EVENT_TYPE[e.eventType]?.color || m.color, 0.12), color: EVENT_TYPE[e.eventType]?.color || m.color }} />
-                        <Chip size="small" label={e.phaseNo} sx={{ height: 20, fontWeight: 800, bgcolor: alpha(m.color, 0.12), color: m.color }} />
-                        <Typography sx={{ fontWeight: 800, fontSize: '0.9rem' }}>{e.soNumber}</Typography>
-                        <Chip size="small" label={m.label} sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha(m.color, 0.1), color: m.color }} />
-                        {e.delayDays > 0 && <Chip size="small" label={`${e.delayDays}d late`} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 800, bgcolor: alpha(STATUS.DELAYED.color, 0.1), color: STATUS.DELAYED.color }} />}
+                      {/* Party first — this whole card IS the party's day. */}
+                      <Stack direction="row" spacing={0.6} alignItems="center" sx={{ minWidth: 0 }}>
+                        <Building2 size={15} color={m.color} />
+                        <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: O2D.ink }}>{g.partyName}</Typography>
                       </Stack>
-                      <Stack direction="row" spacing={0.6} alignItems="center" sx={{ mt: 0.5, color: 'text.secondary' }}>
-                        <Building2 size={13} />
-                        <Typography sx={{ fontSize: '0.78rem', fontWeight: 600 }}>{e.partyName}</Typography>
+                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5, mt: 0.6 }}>
+                        <Chip size="small" label={isActual ? 'Actual' : 'Scheduled'} sx={{ height: 20, fontSize: '0.6rem', fontWeight: 800, bgcolor: alpha(EVENT_TYPE[g.eventType]?.color || m.color, 0.12), color: EVENT_TYPE[g.eventType]?.color || m.color }} />
+                        <Chip size="small" label={m.label} sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha(m.color, 0.1), color: m.color }} />
+                        <Chip size="small" label={`${g.orderCount} order${g.orderCount > 1 ? 's' : ''}`} sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha(O2D.brand, 0.08), color: O2D.brand }} />
+                        {g.delayDays > 0 && <Chip size="small" label={`${g.delayDays}d late`} sx={{ height: 18, fontSize: '0.58rem', fontWeight: 800, bgcolor: alpha(STATUS.DELAYED.color, 0.1), color: STATUS.DELAYED.color }} />}
                       </Stack>
                     </Box>
                     <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
-                      <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: m.color }}>{num(qty)}</Typography>
+                      <Typography sx={{ fontWeight: 800, fontSize: '1.1rem', color: m.color }}>{num(g.totalQty)}</Typography>
                       <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: 'text.secondary', letterSpacing: '0.05em' }}>{qtyLabel}</Typography>
-                      {e.eventType !== 'actual' && e.actualQty > 0 && (
+                      {!isActual && g.actualQty > 0 && (
                         <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: STATUS.DISPATCHED.color, mt: 0.25 }}>
-                          {num(e.actualQty)} dispatched
+                          {num(g.actualQty)} dispatched
                         </Typography>
                       )}
-                      {e.eventType !== 'actual' && Number(e.pendingQty || 0) > 0 && (
-                        <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: e.isDelayed ? STATUS.DELAYED.color : '#b45309', mt: 0.25 }}>
-                          {num(e.pendingQty)} pending
+                      {!isActual && Number(g.pendingQty || 0) > 0 && (
+                        <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: g.isDelayed ? STATUS.DELAYED.color : '#b45309', mt: 0.25 }}>
+                          {num(g.pendingQty)} pending
                         </Typography>
                       )}
                     </Box>
                   </Stack>
 
                   <Divider sx={{ my: 1 }} />
+                  {/* Merged items — one line per item, quantities combined across the
+                      party's orders for this day. */}
                   <Stack spacing={0.5}>
-                    {e.skus.map((s, i) => (
+                    {g.skus.map((s, i) => (
                       <Stack key={i} direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
                         <Stack direction="row" spacing={0.6} alignItems="center" sx={{ minWidth: 0 }}>
                           <Package size={12} color={theme.palette.text.secondary} />
                           <Typography noWrap sx={{ fontSize: '0.74rem', fontWeight: 600 }}>{s.skuName}</Typography>
                         </Stack>
-                        <Typography sx={{ fontSize: '0.74rem', fontWeight: 700, flexShrink: 0 }}>
-                          {e.eventType === 'actual'
-                            ? `${num(s.actualQty)} actual${s.invoiceNo ? ` / ${s.invoiceNo}` : ''}`
-                            : `${num(s.plannedQty)}${s.actualQty > 0 ? ` / ${num(s.actualQty)}` : ''}`}
+                        <Typography sx={{ fontSize: '0.74rem', fontWeight: 700, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                          {isActual
+                            ? `${num(s.actualQty)} actual`
+                            : `${num(s.plannedQty)}${s.actualQty > 0 ? ` / ${num(s.actualQty)} done` : ''}`}
                         </Typography>
                       </Stack>
                     ))}
                   </Stack>
 
-                  <Button size="small" endIcon={<ArrowRight size={14} />} onClick={() => goPlan(e)} sx={{ mt: 1, fontWeight: 700 }}>
-                    Open in planning
-                  </Button>
+                  {/* Drill into the plan — one chip per order that fed this party's day. */}
+                  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mt: 1.25, flexWrap: 'wrap', rowGap: 0.5 }}>
+                    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: O2D.faint, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Open plan:</Typography>
+                    {g.soNumbers.map((so) => (
+                      <Chip key={so} size="small" clickable onClick={() => goPlanSo(so)}
+                        icon={<ArrowRight size={12} />} label={so}
+                        sx={{ height: 22, fontSize: '0.66rem', fontWeight: 700, bgcolor: alpha(O2D.brand, 0.08), color: O2D.brand, '& .MuiChip-icon': { color: O2D.brand } }} />
+                    ))}
+                  </Stack>
                 </Paper>
               );
             })}
-            {dayEvents.length === 0 && (
+            {dayGroups.length === 0 && (
               <Stack alignItems="center" sx={{ py: 4, color: 'text.disabled' }}>
                 <Truck size={32} style={{ opacity: 0.5, marginBottom: 8 }} />
                 <Typography sx={{ fontSize: '0.85rem' }}>No dispatch entries this day.</Typography>
