@@ -14,7 +14,7 @@ import { useSnackbar } from 'notistack';
 
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useGetSkuLookupQuery } from '../../store/api/skuApi';
-import { useCreateActualDispatchMutation } from '../../store/api/dispatchControlApi';
+import { useCreateActualDispatchMutation, useGetNextDcNumberQuery } from '../../store/api/dispatchControlApi';
 import { useReturnToTask } from '../o2d-fms/useReturnToTask';
 import { useFmsGate, FmsGateDialog, FmsGateBanner } from '../o2d-fms/FmsGate';
 import { useGetTransportersQuery, useCreateTransporterMutation } from '../../store/api/transporterApi';
@@ -145,6 +145,10 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
   const [gateOpen, setGateOpen] = useState(false);
 
   const [createActualDispatch, { isLoading: isSaving }] = useCreateActualDispatchMutation();
+  // Preview the exact DC number this dispatch will create (read-only peek, keyed to
+  // the chosen DC date's fiscal year). Refreshes automatically after any dispatch.
+  const { data: nextDcRes } = useGetNextDcNumberQuery({ date: header?.dcDate }, { skip: !open });
+  const nextDcNumber = nextDcRes?.data?.nextNumber || '';
   // Returns to the FMS task (entryDone + the connected action marked done) when
   // this modal was opened via a task's "Do it now"; falls back to the order's
   // active task otherwise.
@@ -381,6 +385,21 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
       {/* Scrollable body */}
       <Box sx={{ flex: 1, overflowY: 'auto', px: { xs: 1.5, sm: 3 }, py: 2.5 }}>
         {blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
+
+        {/* The exact Delivery Challan number this dispatch will create on submit —
+            compact one-liner so the operator always knows which DC they're raising. */}
+        <Paper elevation={0} sx={{
+          px: 1.5, py: 0.85, mb: 2, borderRadius: '10px', display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap',
+          border: '1px solid', borderColor: alpha(theme.palette.success.main, 0.4), bgcolor: alpha(theme.palette.success.main, 0.07),
+        }}>
+          <FileText size={16} style={{ color: theme.palette.success.dark, flexShrink: 0 }} />
+          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary' }}>
+            On submit, this Delivery Challan will be created:
+          </Typography>
+          <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: theme.palette.success.dark, fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.01em' }}>
+            {nextDcNumber || '…'}
+          </Typography>
+        </Paper>
 
         {/* Step 1 — Order */}
         <Paper sx={{ p: 2.5, borderRadius: '14px', mb: 2 }}>

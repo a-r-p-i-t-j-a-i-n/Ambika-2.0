@@ -344,7 +344,7 @@ export const getPriceMaster = async ({
   }
   if (andClauses.length) skuFilter.$and = andClauses;
   const skus = await SKU.find(skuFilter)
-    .select('_id code name itemType category sellingPrice rmCost gstRate marginFloor sellingPriceFrom rmCostFrom pricingRemarks')
+    .select('_id code name itemType category clientId sellingPrice rmCost gstRate marginFloor sellingPriceFrom rmCostFrom pricingRemarks')
     .lean();
 
   // 2) Fetch the most recent LIVE/SUPERSEDED revisions for these SKUs (capped at 2 per SKU).
@@ -408,6 +408,9 @@ export const getPriceMaster = async ({
       skuId:           sku._id,
       code:            sku.code,
       name:            sku.name,
+      // The client this finished good is linked to (via "Manage SKUs" per party) —
+      // powers the "Group by client" view on the Selling Price screen.
+      clientId:        sku.clientId ? String(sku.clientId) : null,
       itemType:        sku.itemType || 'FINISHED_GOOD',
       category:        sku.category,
       gstRate:         sku.gstRate,

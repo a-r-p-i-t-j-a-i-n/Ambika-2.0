@@ -3,12 +3,14 @@ import {
   Box, Typography, Stack, Chip, Button, TextField, InputAdornment,
   Paper, alpha, useTheme, IconButton, Tooltip,
   Popover, MenuItem, Divider, CircularProgress, Badge, Autocomplete,
+  Accordion, AccordionSummary, AccordionDetails,
 } from '@mui/material';
 import {
   IndianRupee, Search, Plus, RefreshCw, Sparkles, TriangleAlert,
   CircleDot, BadgeCheck, Hourglass, ArrowDownUp, SlidersHorizontal,
   Download, FileSpreadsheet, X, CalendarRange, UserCircle2,
   LayoutGrid, PackageCheck, Layers, Wrench, Boxes, ShoppingCart, Tag,
+  Building2, ChevronDown, Users,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
@@ -205,6 +207,37 @@ const PricingHub = () => {
     () => parties.filter((p) => partyIds.includes(String(p._id))),
     [parties, partyIds],
   );
+
+  // ── Group SKUs by client (party) — Selling Price / finished goods only ──
+  // Each party's `orderedSkus` says which finished goods it buys, so we bucket the
+  // price rows under each party (a SKU sold to two clients shows under both).
+  const [groupByParty, setGroupByParty] = useState(false);
+  const sellingView = effectivePriceType === 'SELLING';
+  const partyGroups = useMemo(() => {
+    if (!groupByParty || !sellingView) return null;
+    const used = new Set();
+    const groups = [...parties]
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+      .map((p) => {
+        const pid = String(p._id);
+        // A SKU belongs to this client if it's linked to it via "Manage SKUs"
+        // (row.clientId — the authoritative link, so newly-added items show up),
+        // OR it's in the party's ordered-SKU list (legacy sheet/order links).
+        const codes = new Set(
+          (p.orderedSkus || []).map((s) => String(s.skuCode || '').toUpperCase()).filter(Boolean),
+        );
+        const grpRows = rows.filter((r) => (
+          (r.clientId && String(r.clientId) === pid)
+          || (r.code && codes.has(String(r.code).toUpperCase()))
+        ));
+        grpRows.forEach((r) => used.add(String(r.skuId)));
+        return { id: pid, name: p.name, rows: grpRows };
+      })
+      .filter((g) => g.rows.length > 0);
+    const orphan = rows.filter((r) => !used.has(String(r.skuId)));
+    if (orphan.length) groups.push({ id: '__none__', name: 'Not linked to a client', rows: orphan });
+    return groups;
+  }, [groupByParty, sellingView, parties, rows]);
 
   const [triggerExport] = useLazyGetPricingExportQuery();
 
@@ -511,6 +544,25 @@ const PricingHub = () => {
                 </Typography>
               )}
             </Typography>
+
+            {/* Group finished-goods SKUs by the client that buys them. */}
+            {sellingView && (
+              <Chip
+                size="small"
+                icon={<Users size={13} style={{ marginLeft: 8 }} />}
+                label="Group by client"
+                onClick={() => setGroupByParty((v) => !v)}
+                sx={{
+                  height: 28, px: 0.75, fontWeight: 700, fontSize: '0.74rem',
+                  color: groupByParty ? '#fff' : theme.palette.primary.dark,
+                  bgcolor: groupByParty ? theme.palette.primary.main : alpha(theme.palette.primary.main, 0.08),
+                  border: `1px solid ${groupByParty ? theme.palette.primary.main : alpha(theme.palette.primary.main, 0.2)}`,
+                  '& .MuiChip-icon': { color: 'inherit' },
+                  cursor: 'pointer',
+                  '&:hover': { bgcolor: groupByParty ? theme.palette.primary.dark : alpha(theme.palette.primary.main, 0.16) },
+                }}
+              />
+            )}
           </Stack>
 
           {/* Row 2: Status filter chips — left-aligned, labelled */}
@@ -697,15 +749,61 @@ const PricingHub = () => {
           </Stack>
         )}
 
-        <PriceMasterTable
-          rows={rows}
-          isLoading={isFetching}
-          priceType={effectivePriceType}
-          itemType={itemType}
-          onRowClick={(row) => setDrawerSkuId(String(row.skuId))}
-          onRevise={(row) => { setRevisePresetSku(row); setReviseOpen(true); }}
-          canRevise={canRevise}
-        />
+        {groupByParty && partyGroups ? (
+          <Box sx={{ p: { xs: 1, sm: 1.5 } }}>
+            {partyGroups.length === 0 ? (
+              <Typography sx={{ p: 4, textAlign: 'center', color: 'text.disabled', fontWeight: 700 }}>
+                No client-linked SKUs match the current filters.
+              </Typography>
+            ) : partyGroups.map((g) => (
+              <Accordion
+                key={g.id}
+                defaultExpanded
+                disableGutters
+                elevation={0}
+                sx={{
+                  mb: 1, border: `1px solid ${theme.palette.divider}`, borderRadius: '10px !important',
+                  overflow: 'hidden', '&:before': { display: 'none' },
+                }}
+              >
+                <AccordionSummary
+                  expandIcon={<ChevronDown size={18} />}
+                  sx={{ bgcolor: alpha(theme.palette.primary.main, 0.04), minHeight: 46, '& .MuiAccordionSummary-content': { alignItems: 'center', gap: 1, my: 0.75 } }}
+                >
+                  <Box sx={{ width: 26, height: 26, borderRadius: '7px', display: 'grid', placeItems: 'center', bgcolor: alpha(theme.palette.primary.main, 0.12), color: theme.palette.primary.dark, flexShrink: 0 }}>
+                    <Building2 size={14} />
+                  </Box>
+                  <Typography sx={{ fontWeight: 800, fontSize: '0.86rem', color: g.id === '__none__' ? 'text.secondary' : 'text.primary' }}>
+                    {g.name}
+                  </Typography>
+                  <Chip size="small" label={`${g.rows.length} SKU${g.rows.length === 1 ? '' : 's'}`}
+                    sx={{ height: 20, fontSize: '0.66rem', fontWeight: 700, bgcolor: alpha(theme.palette.primary.main, 0.1), color: theme.palette.primary.dark }} />
+                </AccordionSummary>
+                <AccordionDetails sx={{ p: 0 }}>
+                  <PriceMasterTable
+                    rows={g.rows}
+                    isLoading={false}
+                    priceType={effectivePriceType}
+                    itemType={itemType}
+                    onRowClick={(row) => setDrawerSkuId(String(row.skuId))}
+                    onRevise={(row) => { setRevisePresetSku(row); setReviseOpen(true); }}
+                    canRevise={canRevise}
+                  />
+                </AccordionDetails>
+              </Accordion>
+            ))}
+          </Box>
+        ) : (
+          <PriceMasterTable
+            rows={rows}
+            isLoading={isFetching}
+            priceType={effectivePriceType}
+            itemType={itemType}
+            onRowClick={(row) => setDrawerSkuId(String(row.skuId))}
+            onRevise={(row) => { setRevisePresetSku(row); setReviseOpen(true); }}
+            canRevise={canRevise}
+          />
+        )}
       </Paper>
 
       {/* ── More-filters popover ──────────────────────────────────── */}

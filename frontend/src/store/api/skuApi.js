@@ -22,7 +22,7 @@ export const skuApi = baseApi.injectEndpoints({
         method: 'POST',
         body,
       }),
-      invalidatesTags: ['SKU'],
+      invalidatesTags: ['SKU', 'Pricing'],
     }),
     updateSku: builder.mutation({
       query: ({ id, ...body }) => ({
@@ -30,7 +30,7 @@ export const skuApi = baseApi.injectEndpoints({
         method: 'PATCH',
         body,
       }),
-      invalidatesTags: ['SKU'],
+      invalidatesTags: ['SKU', 'Pricing'],
     }),
     bulkUpsertSkus: builder.mutation({
       query: (body) => ({
@@ -38,14 +38,14 @@ export const skuApi = baseApi.injectEndpoints({
         method: 'POST',
         body,
       }),
-      invalidatesTags: ['SKU'],
+      invalidatesTags: ['SKU', 'Pricing'],
     }),
     deleteSku: builder.mutation({
       query: (id) => ({
         url: `/skus/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: ['SKU'],
+      invalidatesTags: ['SKU', 'Pricing'],
     }),
   }),
 });
