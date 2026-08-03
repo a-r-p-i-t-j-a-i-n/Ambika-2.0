@@ -4,16 +4,20 @@ import {
   Box, Paper, Typography, Stack, Button, IconButton, Chip, alpha, useTheme,
   TextField, MenuItem, Dialog, DialogTitle, DialogContent, Divider, Tooltip,
   useMediaQuery, Skeleton, Popover, Checkbox, ListItemText,
-  ToggleButton, ToggleButtonGroup,
+  ToggleButton, ToggleButtonGroup, CircularProgress, Menu, ListItemIcon,
 } from '@mui/material';
 import {
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Truck, Search, X, ArrowRight,
-  Package, Building2, Download, LayoutGrid, List as ListIcon, ChevronRight as MoreIcon,
+  Package, Building2, Download, FileDown, Eye, LayoutGrid, List as ListIcon, ChevronRight as MoreIcon,
 } from 'lucide-react';
+import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useGetSchedulesQuery } from '../../store/api/dispatchControlApi';
-import { printDispatchCalendar } from '../../utils/printDispatchCalendar';
+import {
+  printDispatchCalendar, printDispatchList,
+  downloadDispatchCalendarPdf, downloadDispatchListPdf,
+} from '../../utils/printDispatchCalendar';
 import { groupDayByParty } from '../../utils/dispatchCalendarGrouping';
 import { O2D } from '../o2d-fms/o2dTheme';
 
@@ -383,18 +387,37 @@ const DispatchCalendar = () => {
   const handlePartyChange = (value) => {
     setPartyFilter(typeof value === 'string' ? value.split(',') : value);
   };
+  // Export follows the active view: the Calendar tab uses the month grid,
+  // the List tab uses the same data as a date-wise list.
+  const exportPayload = () => ({
+    month: cursor.toISOString(),
+    events,
+    filters: {
+      contentLabel: CONTENT_FILTERS[contentFilter],
+      partyLabel,
+      statusLabel,
+      search: search.trim(),
+    },
+  });
+  // Export offers two routes off one button: preview in a tab, or save the file.
+  const [exportAnchor, setExportAnchor] = useState(null);
+  const [downloading, setDownloading] = useState(false);
   const handleExportPdf = () => {
-    const ok = printDispatchCalendar({
-      month: cursor.toISOString(),
-      events,
-      filters: {
-        contentLabel: CONTENT_FILTERS[contentFilter],
-        partyLabel,
-        statusLabel,
-        search: search.trim(),
-      },
-    });
-    return ok;
+    const print = viewMode === 'list' ? printDispatchList : printDispatchCalendar;
+    return print(exportPayload());
+  };
+  // Straight to a .pdf file — no print dialog. Rasterising a long month takes a
+  // moment, so the button shows a spinner while it runs.
+  const handleDownloadPdf = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const download = viewMode === 'list' ? downloadDispatchListPdf : downloadDispatchCalendarPdf;
+      const ok = await download(exportPayload());
+      if (ok) enqueueSnackbar('PDF downloaded.', { variant: 'success' });
+    } finally {
+      setDownloading(false);
+    }
   };
 
   return (
@@ -526,9 +549,44 @@ const DispatchCalendar = () => {
               Clear
             </Button>
           )}
-          <Button size="small" variant="contained" startIcon={<Download size={15} />} onClick={handleExportPdf} sx={{ height: 32, fontWeight: 800, whiteSpace: 'nowrap', textTransform: 'none', flexShrink: 0, borderRadius: '6px', px: 1.5 }}>
-            Export PDF
+          {/* One export entry point — asks download or preview. */}
+          <Button size="small" variant="contained" disabled={downloading}
+            startIcon={downloading ? <CircularProgress size={13} color="inherit" /> : <Download size={15} />}
+            endIcon={<ChevronDown size={13} />}
+            onClick={(e) => setExportAnchor(e.currentTarget)}
+            sx={{ height: 32, fontWeight: 800, whiteSpace: 'nowrap', textTransform: 'none', flexShrink: 0, borderRadius: '6px', px: 1.5 }}>
+            {downloading ? 'Preparing…' : 'Export PDF'}
           </Button>
+          <Menu
+            anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            slotProps={{ paper: { sx: { mt: 0.5, minWidth: 268, borderRadius: '8px', border: `1px solid ${GRID}` } } }}>
+            <Typography sx={{ px: 1.75, pt: 1, pb: 0.75, fontSize: '0.6rem', fontWeight: 800, color: O2D.faint, letterSpacing: '0.08em' }}>
+              {viewMode === 'list' ? 'LIST VIEW' : 'CALENDAR VIEW'} · {monthStats.entries} EVENT{monthStats.entries === 1 ? '' : 'S'}
+            </Typography>
+            <MenuItem onClick={() => { setExportAnchor(null); handleDownloadPdf(); }} sx={{ py: 0.9 }}>
+              <ListItemIcon sx={{ minWidth: 30, color: BRAND }}><FileDown size={16} /></ListItemIcon>
+              <ListItemText
+                primary="Download PDF"
+                secondary="Saves the file straight to your Downloads"
+                primaryTypographyProps={{ fontSize: '0.82rem', fontWeight: 800, color: NAVY }}
+                secondaryTypographyProps={{ fontSize: '0.66rem', color: O2D.sub }} />
+            </MenuItem>
+            <MenuItem onClick={() => { setExportAnchor(null); handleExportPdf(); }} sx={{ py: 0.9 }}>
+              <ListItemIcon sx={{ minWidth: 30, color: BRAND }}><Eye size={16} /></ListItemIcon>
+              <ListItemText
+                primary="Preview"
+                secondary="Opens a tab — print or save from there"
+                primaryTypographyProps={{ fontSize: '0.82rem', fontWeight: 800, color: NAVY }}
+                secondaryTypographyProps={{ fontSize: '0.66rem', color: O2D.sub }} />
+            </MenuItem>
+            {hasActiveFilters && (
+              <Typography sx={{ px: 1.75, pt: 0.5, pb: 1, fontSize: '0.64rem', color: O2D.sub, maxWidth: 268 }}>
+                Filters applied: <b style={{ color: BRAND_DK }}>{[CONTENT_FILTERS[contentFilter], partyLabel, statusLabel, search.trim() && `“${search.trim()}”`].filter(Boolean).join(' · ')}</b>
+              </Typography>
+            )}
+          </Menu>
         </Stack>
 
         {/* Legend */}
@@ -567,61 +625,120 @@ const DispatchCalendar = () => {
               const isTodayRow = d.isSame(today, 'day');
               const dayTotal = groups.reduce((s, g) => s + g.totalQty, 0);
               return (
-                <Box key={dateKey} sx={{ mb: 1.75 }}>
-                  {/* Date header */}
-                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75, px: 0.25 }}>
-                    <Box sx={{ minWidth: 34, height: 34, px: 0.75, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: isTodayRow ? BRAND : alpha(BRAND, 0.08), color: isTodayRow ? '#fff' : BRAND_DK }}>
-                      <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, lineHeight: 1 }}>{d.date()}</Typography>
-                    </Box>
-                    <Box>
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.15 }}>{d.format('dddd')}</Typography>
-                      <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }}>{d.format('DD MMM YYYY')}</Typography>
-                    </Box>
-                    <Box sx={{ flex: 1 }} />
-                    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
-                      {groups.length} part{groups.length === 1 ? 'y' : 'ies'} · <span style={{ color: BRAND_DK }}>{num(dayTotal)} pcs</span>
+                <Stack key={dateKey} direction="row" spacing={1.25} sx={{ mb: 2 }}>
+                  {/* Date rail sits OUTSIDE the card: big day numeral with the short
+                      month stacked under it, so the month reads without the full date. */}
+                  <Box sx={{ width: 52, flexShrink: 0, textAlign: 'right', pt: 1.25 }}>
+                    <Typography sx={{
+                      fontSize: '1.15rem', fontWeight: 800, lineHeight: 1.05,
+                      color: isTodayRow ? BRAND : NAVY, fontVariantNumeric: 'tabular-nums',
+                    }}>
+                      {d.format('DD')}
                     </Typography>
-                  </Stack>
-                  {/* Party rows — one per party, items merged */}
-                  <Stack spacing={0.75}>
-                    {groups.map((g) => {
-                      const m = eventMeta(g);
-                      const isActual = g.eventType === 'actual';
-                      const rows = (g.skus || []).filter((sk) => (isActual ? sk.actualQty : sk.plannedQty) > 0);
-                      return (
-                        <Paper key={g.id} variant="outlined" onClick={() => setOpenDay(dateKey)}
-                          sx={{ p: 1, borderRadius: '6px', borderColor: O2D.line, borderLeft: `4px solid ${m.color}`, cursor: 'pointer', transition: 'background .15s', '&:hover': { bgcolor: O2D.surfaceAlt } }}>
-                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
-                            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: { sm: 200 }, flexShrink: 0 }}>
-                              <Building2 size={16} color={m.color} />
-                              <Box sx={{ minWidth: 0 }}>
-                                <Typography noWrap sx={{ fontSize: '0.82rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>{g.partyName}</Typography>
-                                <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
-                                  {g.orderCount} order{g.orderCount > 1 ? 's' : ''} · {isActual ? 'Actual' : 'Scheduled'}
-                                </Typography>
-                              </Box>
-                            </Stack>
-                            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5, flex: 1, minWidth: 0 }}>
+                    {/* Month matches the day numeral's size so the rail reads as one unit. */}
+                    <Typography sx={{
+                      fontSize: '1.15rem', fontWeight: 800, letterSpacing: '0.01em', lineHeight: 1.15,
+                      color: isTodayRow ? BRAND : BRAND_DK,
+                    }}>
+                      {d.format('MMM').toUpperCase()}
+                    </Typography>
+                  </Box>
+
+                  <Paper variant="outlined" sx={{ flex: 1, minWidth: 0, borderRadius: '10px', borderColor: O2D.line, overflow: 'hidden' }}>
+                    {/* Status ribbon — one segment per party, so a day's mix of
+                        planned / in-progress / dispatched reads before any text. */}
+                    <Stack direction="row" sx={{ height: 3 }}>
+                      {groups.map((g) => <Box key={g.id} sx={{ flex: 1, bgcolor: eventMeta(g).color }} />)}
+                    </Stack>
+
+                    {/* Day header — weekday small, full date bold and larger beneath it. */}
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, pt: 1.25, pb: 1 }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: NAVY, lineHeight: 1.15 }}>{d.format('dddd')}</Typography>
+                        {/* Full date stays as the reference line, but smaller now that
+                            the rail carries the day + month. */}
+                        <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: BRAND_DK, letterSpacing: '0.04em', lineHeight: 1.3 }}>
+                          {d.format('DD MMM YYYY').toUpperCase()}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ flex: 1 }} />
+                      <Stack direction="row" alignItems="center" spacing={1.25}
+                        sx={{ px: 1.5, py: 0.6, borderRadius: '999px', border: `1px solid ${GRID}`, bgcolor: O2D.surface, flexShrink: 0 }}>
+                        <Box sx={{ textAlign: 'right' }}>
+                          <Typography sx={{ fontSize: '0.52rem', fontWeight: 800, color: O2D.faint, letterSpacing: '0.09em', lineHeight: 1.2 }}>DAY TOTAL</Typography>
+                          <Typography sx={{ fontSize: '0.88rem', fontWeight: 800, color: NAVY, lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>{num(dayTotal)} pcs</Typography>
+                        </Box>
+                        <Box sx={{ width: '1px', alignSelf: 'stretch', bgcolor: GRID }} />
+                        <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
+                          {groups.length} part{groups.length === 1 ? 'y' : 'ies'}
+                        </Typography>
+                      </Stack>
+                    </Stack>
+
+                    {/* One band per party — party block · SKU tiles · total panel. */}
+                    <Stack spacing={1} sx={{ px: 1.5, pb: 1.5 }}>
+                      {groups.map((g) => {
+                        const m = eventMeta(g);
+                        const isActual = g.eventType === 'actual';
+                        const rows = (g.skus || []).filter((sk) => (isActual ? sk.actualQty : sk.plannedQty) > 0);
+                        return (
+                          <Stack key={g.id} direction={{ xs: 'column', md: 'row' }} onClick={() => setOpenDay(dateKey)}
+                            sx={{
+                              borderRadius: '8px', overflow: 'hidden', cursor: 'pointer',
+                              border: `1px solid ${alpha(m.color, 0.22)}`,
+                              transition: 'box-shadow .15s',
+                              '&:hover': { boxShadow: `0 2px 10px ${alpha(m.color, 0.18)}` },
+                            }}>
+                            {/* Party block */}
+                            <Box sx={{
+                              width: { md: 168 }, flexShrink: 0, p: 1.25,
+                              bgcolor: alpha(m.color, 0.07), borderLeft: `4px solid ${m.color}`,
+                            }}>
+                              <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: NAVY, lineHeight: 1.2 }}>{g.partyName}</Typography>
+                              <Typography sx={{ fontSize: '0.6rem', color: O2D.sub, mb: 0.85 }}>
+                                {g.orderCount} order{g.orderCount > 1 ? 's' : ''} · {isActual ? 'Actual' : 'Scheduled'}
+                              </Typography>
+                              <Chip size="small" label={`${isActual ? '✓' : '●'} ${m.label}`}
+                                sx={{ height: 21, width: '100%', borderRadius: '4px', fontSize: '0.62rem', fontWeight: 800, bgcolor: m.color, color: '#fff', '& .MuiChip-label': { px: 0.75 } }} />
+                            </Box>
+
+                            {/* SKU tiles — the number is the hero, name above, unit below. */}
+                            <Stack direction="row" spacing={1} sx={{ flex: 1, minWidth: 0, p: 1.25, flexWrap: 'wrap', rowGap: 1 }}>
                               {rows.map((sk, i) => (
-                                <Chip key={i} size="small"
-                                  label={<span><b style={{ fontWeight: 700 }}>{sk.skuName}</b> · {num(isActual ? sk.actualQty : sk.plannedQty)}</span>}
-                                  sx={{ height: 22, fontSize: '0.66rem', fontWeight: 600, bgcolor: O2D.surfaceAlt, color: O2D.body, border: `1px solid ${GRID}`, '& .MuiChip-label': { px: 0.9 } }} />
+                                <Box key={i} sx={{
+                                  minWidth: 92, px: 1.25, py: 0.85, borderRadius: '8px',
+                                  bgcolor: alpha(m.color, 0.07), border: `1px solid ${alpha(m.color, 0.2)}`,
+                                }}>
+                                  <Typography noWrap sx={{ fontSize: '0.62rem', fontWeight: 700, color: O2D.body, mb: 0.35, maxWidth: 130 }}>{sk.skuName}</Typography>
+                                  <Typography sx={{ fontSize: '1.2rem', fontWeight: 800, color: m.color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                                    {num(isActual ? sk.actualQty : sk.plannedQty)}
+                                  </Typography>
+                                  <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, color: O2D.faint, mt: 0.15 }}>pcs</Typography>
+                                </Box>
                               ))}
                             </Stack>
-                            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0, justifyContent: { xs: 'space-between', sm: 'flex-end' } }}>
-                              <Chip size="small" label={m.label} sx={{ height: 20, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha(m.color, 0.1), color: m.color }} />
-                              {g.delayDays > 0 && <Chip size="small" label={`${g.delayDays}d late`} sx={{ height: 20, fontSize: '0.58rem', fontWeight: 800, bgcolor: alpha(STATUS.DELAYED.color, 0.1), color: STATUS.DELAYED.color }} />}
-                              <Box sx={{ textAlign: 'right', minWidth: 62 }}>
-                                <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: m.color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{num(g.totalQty)}</Typography>
-                                <Typography sx={{ fontSize: '0.56rem', fontWeight: 700, color: O2D.faint, letterSpacing: '0.05em' }}>PCS</Typography>
-                              </Box>
-                            </Stack>
+
+                            {/* Party total panel */}
+                            <Box sx={{
+                              width: { md: 132 }, flexShrink: 0, p: 1.25, bgcolor: alpha(m.color, 0.07),
+                              display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                              alignItems: { xs: 'flex-start', md: 'flex-end' },
+                            }}>
+                              <Typography sx={{ fontSize: '1.35rem', fontWeight: 800, color: m.color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                                {num(g.totalQty)}
+                              </Typography>
+                              <Typography sx={{ fontSize: '0.55rem', fontWeight: 800, color: O2D.faint, letterSpacing: '0.09em', mt: 0.25 }}>TOTAL PCS</Typography>
+                              {g.delayDays > 0 && (
+                                <Chip size="small" label={`${g.delayDays}d late`}
+                                  sx={{ mt: 0.6, height: 18, fontSize: '0.56rem', fontWeight: 800, bgcolor: alpha(STATUS.DELAYED.color, 0.12), color: STATUS.DELAYED.color }} />
+                              )}
+                            </Box>
                           </Stack>
-                        </Paper>
-                      );
-                    })}
-                  </Stack>
-                </Box>
+                        );
+                      })}
+                    </Stack>
+                  </Paper>
+                </Stack>
               );
             })}
           </Box>
