@@ -76,11 +76,25 @@ export default defineConfig({
         assetFileNames:  'assets/[name]-[hash][extname]',
 
         manualChunks: (id) => {
+          // Vite's preload helper is imported by the entry for every lazy route.
+          // Left unassigned it can land inside a lazy vendor chunk, which drags
+          // that whole chunk into the entry's static graph — pin it to vendor.
+          if (id.includes('vite/preload-helper')
+            || id.includes('vite/modulepreload-polyfill')) return 'vendor';
           if (!id.includes('node_modules')) return undefined;
 
           // Heavy, route-specific deps — loaded on demand by lazy() routes.
           if (id.includes('xlsx'))                 return 'vendor-xlsx';
           if (id.includes('@react-pdf'))           return 'vendor-pdf';
+          // Only pulled in when someone clicks Download on the dispatch
+          // calendar — keep it out of the shared vendor chunk.
+          if (id.includes('jspdf') ||
+              id.includes('html2canvas') ||
+              id.includes('core-js') ||
+              id.includes('fflate') ||
+              id.includes('canvg') ||
+              id.includes('rgbcolor') ||
+              id.includes('dompurify'))            return 'vendor-pdf-download';
           if (id.includes('recharts') ||
               id.includes('d3-'))                  return 'vendor-charts';
           if (id.includes('@mui/x-data-grid'))     return 'vendor-datagrid';
