@@ -42,13 +42,18 @@ const TransportBill = () => {
   // else the order's latest challan (?so).
   const soParam = params.get('so') || '';
   const dcParam = params.get('dc') || '';
-  const presetRef = useRef(false);
+  // Keyed on the so/dc TARGET, not a "already picked" flag: this route stays mounted
+  // when only the query string changes, so guarding on `dc` would keep showing the
+  // first consignment when the user opens a later one (?dc=DC-071 → ?dc=DC-073).
+  const presetRef = useRef('');
   useEffect(() => {
-    if (presetRef.current || dc || !challans.length) return;
+    const target = `${dcParam}|${soParam}`;
+    if (!dcParam && !soParam) return;
+    if (presetRef.current === target || !challans.length) return;
     const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
       || (soParam && challans.find((c) => c.soNumber === soParam));
-    if (match) { presetRef.current = true; setDc(match); }
-  }, [challans, soParam, dcParam, dc]);
+    if (match) { presetRef.current = target; setDc(match); }
+  }, [challans, soParam, dcParam]);
   const [rcvStatus, setRcvStatus] = useState('Done');
   const [attachment, setAttachment] = useState(null); // { fileName, url }
   const [payState, setPayState] = useState('Yes');

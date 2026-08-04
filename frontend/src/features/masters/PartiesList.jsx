@@ -4,12 +4,17 @@ import {
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, CircularProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Search, Plus, Pencil, Package, Trash2 } from 'lucide-react';
+import { Search, Plus, Pencil, Package, Trash2, Users } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import { useGetPartiesQuery, useDeletePartyMutation } from '../../store/api/partyApi';
 import PartyFormDrawer from './PartyFormDrawer';
+import {
+  O2D, BRAND, BRAND_DK, NAVY, DANGER,
+  Pill, Empty, CellText, PageHeading, NoRows,
+  gridSx, pageSx, panelSx, fieldSx, btnSx,
+} from './components/masterUi';
 
 const PartiesList = () => {
   const navigate = useNavigate();
@@ -42,30 +47,24 @@ const PartiesList = () => {
   };
 
   const columns = [
-    { field: 'code', headerName: 'CODE', width: 140,
-      renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography>
+    { field: 'code', headerName: 'Code', width: 145,
+      renderCell: (p) => <CellText mono weight={700} color={BRAND}>{p.value}</CellText>
     },
-    { field: 'name', headerName: 'PARTY NAME', flex: 1, minWidth: 250,
-      renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value}</Typography>
+    { field: 'name', headerName: 'Party name', flex: 1, minWidth: 250,
+      renderCell: (p) => <CellText weight={700} color={NAVY}>{p.value}</CellText>
     },
-    { field: 'location', headerName: 'LOCATION', width: 180,
-      renderCell: (p) => <Typography variant="body2" color="text.secondary" fontWeight={500}>{p.value || p.row.address || '-'}</Typography>
-    },
-    { field: 'creditPeriodDays', headerName: 'CREDIT PERIOD', width: 130, align: 'center', headerAlign: 'center',
+    { field: 'location', headerName: 'Location', width: 190,
       renderCell: (p) => (
-        <Box sx={{ px: 1.5, py: 0.5, borderRadius: '8px', bgcolor: alpha('#2563eb', 0.06), color: '#2563eb', fontSize: '0.75rem', fontWeight: 700 }}>
-          {p.value || 0} days
-        </Box>
+        (p.value || p.row.address) ? <CellText color={O2D.sub}>{p.value || p.row.address}</CellText> : <Empty />
       )
     },
-    { field: 'approxDays', headerName: 'APPROX DAYS', width: 130, align: 'center', headerAlign: 'center',
+    { field: 'creditPeriodDays', headerName: 'Credit period', width: 135, align: 'center', headerAlign: 'center',
+      renderCell: (p) => (p.value ? <Pill color={BRAND}>{p.value} days</Pill> : <Empty />)
+    },
+    { field: 'approxDays', headerName: 'Approx days', width: 135, align: 'center', headerAlign: 'center',
       renderCell: (p) => {
         const d = p.value || p.row.leadTimeDays || 0;
-        return d ? (
-          <Box sx={{ px: 1.5, py: 0.5, borderRadius: '8px', bgcolor: alpha('#7c3aed', 0.06), color: '#7c3aed', fontSize: '0.75rem', fontWeight: 700 }}>
-            {d} days
-          </Box>
-        ) : <Typography variant="caption" color="text.disabled">—</Typography>;
+        return d ? <Pill color="#7c3aed">{d} days</Pill> : <Empty />;
       }
     },
     { field: 'orderedSkus', headerName: 'SKUs', width: 110, align: 'center', headerAlign: 'center', sortable: false,
@@ -73,27 +72,28 @@ const PartiesList = () => {
         const ordered = Array.isArray(p.row.orderedSkus) ? p.row.orderedSkus.length : 0;
         const supplied = Array.isArray(p.row.suppliedProducts) ? p.row.suppliedProducts.length : 0;
         const n = ordered || supplied;
-        return n > 0 ? (
-          <Tooltip title={ordered ? `${ordered} ordered SKU(s)` : `${supplied} supplied product(s)`}>
-            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1.25, py: 0.5, borderRadius: '8px', bgcolor: alpha('#b45309', 0.08), color: '#b45309', fontSize: '0.72rem', fontWeight: 700 }}>
-              <Package size={13} /> {n}
-            </Box>
-          </Tooltip>
-        ) : <Typography variant="caption" color="text.disabled">—</Typography>;
+        if (!n) return <Empty />;
+        return (
+          <Pill color="#b45309" icon={<Package size={12} />}
+            title={ordered ? `${ordered} ordered SKU(s)` : `${supplied} supplied product(s)`}>
+            {n}
+          </Pill>
+        );
       }
     },
-    { field: '__actions', headerName: '', width: 104, align: 'center', headerAlign: 'center', sortable: false, filterable: false,
+    { field: '__actions', headerName: '', width: 100, align: 'center', headerAlign: 'center', sortable: false, filterable: false,
       renderCell: (p) => (
-        <Box sx={{ display: 'inline-flex', gap: 0.25 }}>
+        <Box sx={{ display: 'inline-flex', gap: 0.25, alignSelf: 'center' }}>
           <Tooltip title="Edit vendor / party">
-            <IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(p.row); }}>
-              <Pencil size={16} />
+            <IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(p.row); }}
+              sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}>
+              <Pencil size={15} />
             </IconButton>
           </Tooltip>
           <Tooltip title="Delete party">
             <IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p.row); }}
-              sx={{ color: '#b91c1c', '&:hover': { bgcolor: alpha('#b91c1c', 0.08) } }}>
-              <Trash2 size={16} />
+              sx={{ color: DANGER, '&:hover': { bgcolor: alpha(DANGER, 0.1) } }}>
+              <Trash2 size={15} />
             </IconButton>
           </Tooltip>
         </Box>
@@ -106,24 +106,24 @@ const PartiesList = () => {
   };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={pageSx}>
       {/* Header */}
-      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
-        <Box>
-          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 700, color: '#0b2545', letterSpacing: '-0.015em', lineHeight: 1.25 }}>Parties Master</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>Manage customer directory and credit terms</Typography>
-        </Box>
-        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center', gap: 1.5, width: { xs: '100%', md: 'auto' } }}>
-          <TextField size="small" placeholder="Search parties..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-            sx={{ width: { xs: '100%', sm: 260 }, '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }}
-            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }}
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 1.75 }}>
+        <PageHeading title="Parties Master" subtitle="Manage customer directory and credit terms" />
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center', gap: 1, width: { xs: '100%', md: 'auto' } }}>
+          <TextField size="small" placeholder="Search parties…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+            sx={{ ...fieldSx, width: { xs: '100%', sm: 260 } }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} color={O2D.faint} /></InputAdornment> }}
           />
-          <Button variant="contained" startIcon={<Plus size={16} />} onClick={openCreate} sx={{ width: { xs: '100%', sm: 'auto' } }}>Add Party</Button>
+          <Button variant="contained" startIcon={<Plus size={15} />} onClick={openCreate}
+            sx={{ ...btnSx, width: { xs: '100%', sm: 'auto' }, bgcolor: BRAND, '&:hover': { bgcolor: BRAND_DK } }}>
+            Add Party
+          </Button>
         </Box>
       </Box>
 
       {/* Data Grid */}
-      <Paper sx={{ flexGrow: 1, borderRadius: '16px', overflow: 'hidden' }}>
+      <Paper sx={panelSx}>
         <DataGrid
           rows={data?.data || []}
           columns={columns}
@@ -136,12 +136,16 @@ const PartiesList = () => {
           onRowClick={handleRowClick}
           pageSizeOptions={[10, 25, 50]}
           disableRowSelectionOnClick
-          rowHeight={48}
-          columnHeaderHeight={44}
-          sx={{
-            border: 0,
-            '& .MuiDataGrid-row': { cursor: 'pointer' }
+          disableColumnMenu
+          rowHeight={46}
+          columnHeaderHeight={42}
+          slots={{
+            noRowsOverlay: () => (
+              <NoRows icon={Users} title="No parties yet"
+                hint="Clear the search, or add a party to get started." />
+            ),
           }}
+          sx={{ ...gridSx, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
         />
       </Paper>
 

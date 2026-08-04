@@ -26,6 +26,13 @@ import RevisePriceDialog from './components/RevisePriceDialog';
 import PriceHistoryDrawer from './components/PriceHistoryDrawer';
 import { usePermissions } from '../../hooks/usePermission';
 import { exportPricingWorkbook } from '../../utils/exportPricingExcel';
+import { O2D } from '../o2d-fms/o2dTheme';
+
+// Same brand constants the O2D screens use, so Pricing reads as one product with
+// Dispatch / FMS / Masters rather than its own island.
+const BRAND = O2D.brand;      // #1d4ed8
+const BRAND_DK = '#1e3a8a';
+const NAVY = '#0b2545';
 
 // ── Item-kind navigation ──────────────────────────────────────────────
 // The Price Tracker's primary axis. RAW_MATERIAL / CONSUMABLE / PACKING are
@@ -41,40 +48,50 @@ const ITEM_KINDS = [
   { key: 'PACKING',       label: 'Packing',        icon: Boxes,        side: 'buy' },
 ];
 
-const KpiCard = ({ label, value, hint, color, icon: Icon, theme }) => (
-  <Paper sx={{
-    flex: '1 1 150px',
-    minWidth: 142,
-    p: 1.3,
-    borderRadius: 2,
-    background: 'linear-gradient(180deg, #ffffff 0%, #f7f9ff 100%)',
-    border: `1px solid ${theme.palette.divider}`,
-    position: 'relative', overflow: 'hidden',
-  }}>
-    <Stack direction="row" spacing={1} alignItems="center">
+/**
+ * One cell of the KPI strip.
+ *
+ * These were seven separate gradient cards that wrapped onto two rows on a
+ * laptop. They are now cells inside a single divided strip: same information,
+ * about half the vertical cost, and the numbers line up on one baseline so the
+ * row can be read across instead of card by card. `zero` greys a 0 out — a
+ * count of nothing shouldn't shout in red.
+ */
+const KpiCell = ({ label, value, color, icon: Icon, onClick, active }) => {
+  const zero = value === 0 || value === '0';
+  const tone = zero ? O2D.faint : color;
+  return (
+    <Box
+      onClick={onClick}
+      sx={{
+        flex: '1 1 0', minWidth: 132, px: 1.5, py: 1.1,
+        display: 'flex', alignItems: 'center', gap: 1,
+        cursor: onClick ? 'pointer' : 'default',
+        borderLeft: `1px solid ${O2D.line}`,
+        '&:first-of-type': { borderLeft: 0 },
+        bgcolor: active ? alpha(BRAND, 0.06) : 'transparent',
+        transition: 'background .12s',
+        '&:hover': onClick ? { bgcolor: alpha(BRAND, 0.05) } : null,
+      }}
+    >
       <Box sx={{
-        width: 26, height: 26, borderRadius: 1.25,
-        display: 'grid', placeItems: 'center', flexShrink: 0,
-        bgcolor: alpha(color, 0.10), color,
+        width: 26, height: 26, borderRadius: '6px', flexShrink: 0,
+        display: 'grid', placeItems: 'center',
+        bgcolor: alpha(tone, 0.1), color: tone,
       }}>
         <Icon size={14} />
       </Box>
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'text.secondary', lineHeight: 1.2 }}>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography noWrap sx={{ fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', color: O2D.sub, lineHeight: 1.3 }}>
           {label}
         </Typography>
-        <Stack direction="row" spacing={0.75} alignItems="baseline">
-          <Typography sx={{ fontWeight: 800, fontSize: '1.15rem', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums', color }}>
-            {value}
-          </Typography>
-          {hint && (
-            <Typography sx={{ fontSize: '0.62rem', color: 'text.disabled' }}>{hint}</Typography>
-          )}
-        </Stack>
+        <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums', color: zero ? O2D.sub : tone }}>
+          {value}
+        </Typography>
       </Box>
-    </Stack>
-  </Paper>
-);
+    </Box>
+  );
+};
 
 const STATUS_CHIPS = (theme) => ([
   { key: '',         label: 'All',       color: theme.palette.text.secondary, icon: ArrowDownUp, dot: null },
@@ -302,114 +319,98 @@ const PricingHub = () => {
   });
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* ── Hero ─────────────────────────────────────────────── */}
-      <Box sx={{
-        position: 'relative', overflow: 'hidden', color: '#ffffff',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 2.5, md: 3 }, pt: { xs: 2.5, md: 2.75 }, pb: { xs: 4, md: 4.5 },
-      }}>
-        <Box aria-hidden sx={{
-          position: 'absolute', width: 420, height: 420, borderRadius: '50%',
-          top: -160, right: -120,
-          background: 'radial-gradient(circle, rgba(96,165,250,0.32) 0%, rgba(96,165,250,0) 60%)',
-        }} />
-        <Box aria-hidden sx={{
-          position: 'absolute', width: 360, height: 360, borderRadius: '50%',
-          bottom: -160, left: -100,
-          background: 'radial-gradient(circle, rgba(91,108,255,0.30) 0%, rgba(91,108,255,0) 60%)',
-        }} />
-
-        <Stack direction="row" spacing={1.75} alignItems="center" sx={{ position: 'relative' }}>
+    <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas, p: { xs: 1.5, md: 2.25 }, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {/* ── Header ───────────────────────────────────────────────
+          Was a full-bleed gradient hero with two radial blobs, ~150px tall and
+          unlike every other O2D screen. Now a flat header on the canvas: the
+          page keeps its identity through the icon and title, and the ~90px it
+          gives back goes to the table. */}
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
+        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
           <Box sx={{
-            width: 40, height: 40, borderRadius: 2,
+            width: 38, height: 38, borderRadius: '8px', flexShrink: 0,
             display: 'grid', placeItems: 'center',
-            background: 'rgba(255,255,255,0.14)',
-            border: '1px solid rgba(255,255,255,0.22)',
-            backdropFilter: 'blur(8px)',
-            flexShrink: 0,
+            bgcolor: alpha(BRAND, 0.1), color: BRAND,
+            border: `1px solid ${alpha(BRAND, 0.2)}`,
           }}>
-            <IndianRupee size={20} strokeWidth={2.2} color="#ffffff" />
+            <IndianRupee size={19} strokeWidth={2.2} />
           </Box>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography sx={{ color: '#ffffff', fontSize: { xs: '1.15rem', md: '1.4rem' }, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ color: NAVY, fontSize: { xs: '1.15rem', md: '1.3rem' }, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.2 }}>
               Pricing Hub
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.78)', fontSize: '0.78rem', mt: 0.25, maxWidth: 640 }}>
+            <Typography sx={{ color: O2D.sub, fontSize: '0.78rem', mt: 0.2 }}>
               Current, previous &amp; full price history for every item — proof-attached and fully audited.
             </Typography>
           </Box>
-          <Stack direction="row" spacing={1}>
-            <Tooltip title="Refresh">
-              <IconButton onClick={refetch} sx={{ color: '#fff', bgcolor: 'rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.2)', color: '#fff' } }}>
-                <RefreshCw size={16} />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Download as Excel (3 sheets)">
-              <Button
-                variant="contained"
-                onClick={(e) => setExportAnchor(e.currentTarget)}
-                startIcon={isExporting ? <CircularProgress size={14} color="inherit" /> : <Download size={16} />}
-                disabled={isExporting}
-                sx={{
-                  fontWeight: 700,
-                  background: 'rgba(255,255,255,0.16)',
-                  border: '1px solid rgba(255,255,255,0.25)',
-                  color: '#fff',
-                  '&:hover': { background: 'rgba(255,255,255,0.24)' },
-                  boxShadow: 'none',
-                }}
-              >
-                Export
-              </Button>
-            </Tooltip>
-            {canRevise && (
-              <Button
-                variant="contained"
-                startIcon={<Plus size={16} />}
-                onClick={() => { setRevisePresetSku(null); setReviseOpen(true); }}
-                sx={{
-                  fontWeight: 700,
-                  background: 'rgba(255,255,255,0.16)',
-                  border: '1px solid rgba(255,255,255,0.25)',
-                  color: '#fff',
-                  '&:hover': { background: 'rgba(255,255,255,0.24)' },
-                  boxShadow: 'none',
-                }}
-              >
-                Revise Price
-              </Button>
-            )}
-          </Stack>
         </Stack>
-      </Box>
+        <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+          <Tooltip title="Refresh">
+            <IconButton onClick={refetch}
+              sx={{ width: 36, height: 36, borderRadius: '8px', color: O2D.sub, bgcolor: O2D.surface, border: `1px solid ${O2D.line}`, '&:hover': { color: BRAND, borderColor: alpha(BRAND, 0.4) } }}>
+              <RefreshCw size={15} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Download as Excel (3 sheets)">
+            <Button
+              variant="outlined"
+              onClick={(e) => setExportAnchor(e.currentTarget)}
+              startIcon={isExporting ? <CircularProgress size={14} /> : <Download size={15} />}
+              disabled={isExporting}
+              sx={{ height: 36, borderRadius: '8px', fontWeight: 800, fontSize: '0.82rem', textTransform: 'none', bgcolor: O2D.surface, color: BRAND_DK, borderColor: O2D.line, '&:hover': { borderColor: BRAND, bgcolor: alpha(BRAND, 0.04) } }}
+            >
+              Export
+            </Button>
+          </Tooltip>
+          {canRevise && (
+            <Button
+              variant="contained"
+              startIcon={<Plus size={15} />}
+              onClick={() => { setRevisePresetSku(null); setReviseOpen(true); }}
+              sx={{ height: 36, borderRadius: '8px', fontWeight: 800, fontSize: '0.82rem', textTransform: 'none', boxShadow: 'none', bgcolor: BRAND, '&:hover': { bgcolor: BRAND_DK, boxShadow: 'none' } }}
+            >
+              Revise Price
+            </Button>
+          )}
+        </Stack>
+      </Stack>
 
-      {/* ── KPI strip (overlapping the hero) ─────────────────── */}
-      <Box sx={{ mx: { xs: 1.5, md: 2.5 }, mt: { xs: -2.75, md: -3 }, position: 'relative' }}>
-        <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-          <KpiCard theme={theme} label="Total SKUs"        value={kpis.total ?? '—'}        icon={IndianRupee} color={theme.palette.primary.main} />
-          <KpiCard theme={theme} label="Changed this week" value={kpis.changedThisWeek ?? '—'} icon={Sparkles}   color={theme.palette.success.dark} />
-          <KpiCard theme={theme} label="Stable"            value={kpis.stable ?? '—'}        icon={BadgeCheck}  color={theme.palette.text.secondary} />
-          <KpiCard theme={theme} label="Stale > 60 days"   value={kpis.stale ?? '—'}         icon={Hourglass}   color={theme.palette.warning.dark} />
-          <KpiCard theme={theme} label="Unpriced"          value={kpis.unpriced ?? '—'}      icon={CircleDot}   color={theme.palette.error.dark} />
-          <KpiCard theme={theme} label="Pending approval"  value={kpis.pending ?? '—'}       icon={Hourglass}   color={theme.palette.warning.dark} />
-          <KpiCard theme={theme} label="Margin breach"     value={kpis.marginBreach ?? '—'}  icon={TriangleAlert} color={theme.palette.error.dark} />
+      {/* ── KPI strip — one divided row, and each cell is a filter ── */}
+      <Paper sx={{ borderRadius: '10px', border: `1px solid ${O2D.line}`, boxShadow: 'none', overflow: 'hidden', bgcolor: O2D.surface }}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap>
+          <KpiCell label="Total SKUs"        value={kpis.total ?? '—'}           icon={IndianRupee}   color={BRAND}
+            onClick={() => setStatus('')}         active={status === ''} />
+          <KpiCell label="Changed this week" value={kpis.changedThisWeek ?? '—'} icon={Sparkles}      color="#15803d"
+            onClick={() => setStatus('changed')}  active={status === 'changed'} />
+          <KpiCell label="Stable"            value={kpis.stable ?? '—'}          icon={BadgeCheck}    color={O2D.sub}
+            onClick={() => setStatus('stable')}   active={status === 'stable'} />
+          <KpiCell label="Stale > 60 days"   value={kpis.stale ?? '—'}           icon={Hourglass}     color="#b45309"
+            onClick={() => setStatus('stale')}    active={status === 'stale'} />
+          <KpiCell label="Unpriced"          value={kpis.unpriced ?? '—'}        icon={CircleDot}     color="#be123c"
+            onClick={() => setStatus('unpriced')} active={status === 'unpriced'} />
+          <KpiCell label="Pending approval"  value={kpis.pending ?? '—'}         icon={Hourglass}     color="#b45309"
+            onClick={() => setStatus('pending')}  active={status === 'pending'} />
+          <KpiCell label="Margin breach"     value={kpis.marginBreach ?? '—'}    icon={TriangleAlert} color="#be123c" />
         </Stack>
-      </Box>
+      </Paper>
 
       {/* ── Panel ────────────────────────────────────────────── */}
       <Paper sx={{
-        mx: { xs: 1.5, md: 2.5 }, mt: 2,
-        borderRadius: 3, overflow: 'hidden',
-        boxShadow: '0 10px 28px rgba(30, 58, 138, 0.07)',
+        flexGrow: 1, borderRadius: '10px', overflow: 'hidden',
+        border: `1px solid ${O2D.line}`, boxShadow: 'none', bgcolor: O2D.surface,
       }}>
         {/* Toolbar */}
         <Box sx={{ borderBottom: `1px solid ${theme.palette.divider}` }}>
-          {/* Row 0: Item-kind tabs — STEP 1, the primary navigation axis */}
-          <Box sx={{ px: 2, pt: 1.75, pb: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          {/* Row 0: Item-kind tabs — STEP 1, the primary navigation axis.
+              In selling scope this collapses to a single "Finished Goods" chip,
+              so the whole row was a labelled band with nothing to choose. The
+              stream indicator in Row 1 already says what you are looking at, so
+              the row is only rendered when there is an actual choice to make. */}
+          {ITEM_KINDS.filter((kind) => !sellingScope || kind.key === 'FINISHED_GOOD').length > 1 && (
+          <Box sx={{ px: 2, pt: 1.5, pb: 1.25, borderBottom: `1px solid ${O2D.line}` }}>
+            <Stack direction="row" spacing={0.85} alignItems="center" flexWrap="wrap" useFlexGap>
               <Typography sx={{
-                fontSize: '0.68rem', fontWeight: 800, color: 'text.disabled',
+                fontSize: '0.62rem', fontWeight: 800, color: O2D.faint,
                 letterSpacing: '0.08em', textTransform: 'uppercase', mr: 0.25,
               }}>
                 Kind
@@ -425,32 +426,32 @@ const PricingHub = () => {
                     key={kind.key || 'all'}
                     onClick={() => handleKindChange(kind.key)}
                     sx={{
-                      display: 'flex', alignItems: 'center', gap: 0.85,
+                      display: 'flex', alignItems: 'center', gap: 0.75,
                       flexShrink: 0, whiteSpace: 'nowrap',
-                      px: 1.4, py: 0.8, borderRadius: 2, cursor: 'pointer',
-                      border: `1.5px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
-                      bgcolor: selected ? theme.palette.primary.main : '#fff',
-                      color: selected ? '#fff' : theme.palette.text.primary,
-                      transition: 'all 0.15s ease',
-                      '&:hover': {
-                        borderColor: theme.palette.primary.main,
-                        transform: 'translateY(-1px)',
-                      },
+                      height: 32, px: 1.3, borderRadius: '8px', cursor: 'pointer',
+                      border: `1px solid ${selected ? BRAND : O2D.line}`,
+                      bgcolor: selected ? BRAND : O2D.surface,
+                      // No translateY: a row of chips that jumps under the cursor
+                      // makes the counts hard to compare while scanning.
+                      transition: 'background .15s, border-color .15s',
+                      '&:hover': selected
+                        ? { bgcolor: BRAND_DK }
+                        : { borderColor: alpha(BRAND, 0.45), bgcolor: alpha(BRAND, 0.04) },
                     }}
                   >
-                    <Icon size={15} color={selected ? '#ffffff' : theme.palette.text.secondary} />
+                    <Icon size={14} color={selected ? '#ffffff' : O2D.sub} />
                     <Typography sx={{
-                      fontSize: '0.8rem', fontWeight: 800, whiteSpace: 'nowrap',
-                      color: selected ? '#ffffff' : theme.palette.text.primary,
+                      fontSize: '0.78rem', fontWeight: 800, whiteSpace: 'nowrap',
+                      color: selected ? '#ffffff' : NAVY,
                     }}>
                       {kind.label}
                     </Typography>
                     <Box sx={{
-                      minWidth: 20, height: 18, px: 0.55, borderRadius: 0.75,
+                      minWidth: 20, height: 17, px: 0.55, borderRadius: '5px',
                       display: 'grid', placeItems: 'center',
-                      bgcolor: selected ? '#ffffff' : alpha(theme.palette.text.primary, 0.07),
-                      color: selected ? theme.palette.primary.dark : theme.palette.text.secondary,
-                      fontSize: '0.67rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+                      bgcolor: selected ? alpha('#ffffff', 0.22) : alpha(NAVY, 0.06),
+                      color: selected ? '#fff' : O2D.sub,
+                      fontSize: '0.65rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums',
                     }}>
                       {count}
                     </Box>
@@ -459,6 +460,7 @@ const PricingHub = () => {
               })}
             </Stack>
           </Box>
+          )}
 
           {/* Row 1: Price stream + Search + Result count */}
           <Stack
@@ -598,17 +600,15 @@ const PricingHub = () => {
                   }
                   label={c.label}
                   sx={{
-                    height: 28, px: 0.75, fontWeight: 700, fontSize: '0.74rem',
+                    height: 28, px: 0.75, borderRadius: '8px',
+                    fontWeight: 800, fontSize: '0.74rem',
                     color: selected ? '#fff' : c.color,
                     bgcolor: selected ? c.color : alpha(c.color, 0.08),
-                    border: `1px solid ${selected ? c.color : alpha(c.color, 0.18)}`,
+                    border: `1px solid ${selected ? c.color : alpha(c.color, 0.2)}`,
                     '& .MuiChip-icon': { color: 'inherit' },
                     cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                    '&:hover': {
-                      bgcolor: selected ? c.color : alpha(c.color, 0.16),
-                      transform: 'translateY(-1px)',
-                    },
+                    transition: 'background .15s, border-color .15s',
+                    '&:hover': { bgcolor: selected ? c.color : alpha(c.color, 0.16) },
                   }}
                 />
               );

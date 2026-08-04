@@ -5,7 +5,7 @@ import {
   Checkbox, FormControlLabel, LinearProgress, Avatar, Tooltip, Paper,
 } from '@mui/material';
 import {
-  X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
+  User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
   ExternalLink, Truck, Boxes, Workflow, Maximize2, Circle, Info,
 } from 'lucide-react';
@@ -1276,8 +1276,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       {/* ── Status hero — same editorial header as the full page ── */}
       <Box sx={{ position: 'relative', overflow: 'hidden', bgcolor: done ? heroTk.tint : OT.surface, borderBottom: `1px solid ${OT.line}`, flexShrink: 0 }}>
         <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, bgcolor: heroTk.ring }} />
-        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 11 }}>
-          <Typography sx={{ position: 'absolute', right: 66, top: 10, fontSize: '2.4rem', fontWeight: 900, color: OT.brand, lineHeight: 1, letterSpacing: '-0.02em', userSelect: 'none' }}>
+        {/* pr / step-code offset both pulled in now that the close ✕ is gone, so the
+            corner doesn't read as a gap. 54 keeps 10px clear of the 34px button. */}
+        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 9 }}>
+          <Typography sx={{ position: 'absolute', right: 54, top: 10, fontSize: '2.4rem', fontWeight: 900, color: OT.brand, lineHeight: 1, letterSpacing: '-0.02em', userSelect: 'none' }}>
             {liveStep.stepCode}
           </Typography>
           <Chip size="small"
@@ -1292,11 +1294,22 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             {done && <Box component="span" sx={{ color: heroTiming.color, fontWeight: 700 }}> · {heroTiming.text}</Box>}
           </Typography>
         </Box>
+        {/* Only ONE control up here — the dialog already has a Close button in the
+            footer, so a second dismiss affordance was redundant. Full-screen is the
+            one action that has nowhere else to live, so it gets the corner and is
+            sized to actually read as a button. */}
         <Tooltip title="Open full screen">
-          <IconButton size="small" onClick={() => { onClose?.(false); navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(liveStep.stepCode)}${activeDc ? `?dc=${encodeURIComponent(activeDc)}` : ''}`); }}
-            sx={{ position: 'absolute', right: 38, top: 8, color: OT.sub }}><Maximize2 size={15} /></IconButton>
+          <IconButton onClick={() => { onClose?.(false); navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(liveStep.stepCode)}${activeDc ? `?dc=${encodeURIComponent(activeDc)}` : ''}`); }}
+            aria-label="Open full screen"
+            sx={{
+              position: 'absolute', right: 10, top: 10,
+              width: 34, height: 34, borderRadius: '8px',
+              color: OT.brand,
+              bgcolor: alpha(OT.brand, 0.08),
+              border: `1px solid ${alpha(OT.brand, 0.22)}`,
+              '&:hover': { bgcolor: alpha(OT.brand, 0.16), borderColor: alpha(OT.brand, 0.4) },
+            }}><Maximize2 size={18} /></IconButton>
         </Tooltip>
-        <IconButton onClick={() => onClose?.(false)} size="small" sx={{ position: 'absolute', right: 8, top: 8, color: OT.sub }}><X size={17} /></IconButton>
       </Box>
 
       <DialogContent dividers={false} sx={{ px: { xs: 1.25, md: 1.5 }, py: 1.5, bgcolor: OT.canvas, overflowY: 'auto' }}>

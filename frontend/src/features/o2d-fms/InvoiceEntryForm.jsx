@@ -179,11 +179,18 @@ const InvoiceEntryForm = () => {
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  // Invoice numbers captured in Actual Dispatch (the challan) → the dropdown.
-  const invoiceNoOptions = useMemo(
-    () => [...new Set(challans.map((c) => c.invoiceNo).filter(Boolean))],
-    [challans],
-  );
+  // Suggestions for the Invoice No box.
+  // With a challan already chosen, the ONLY relevant suggestion is the number
+  // captured against THAT dispatch — listing every other challan's number invites
+  // picking one that belongs to a different consignment. With no challan chosen
+  // the full list still works as a finder ("I know the invoice, find its DC").
+  const invoiceNoOptions = useMemo(() => {
+    if (dc) return dc.invoiceNo ? [dc.invoiceNo] : [];
+    return [...new Set(challans.map((c) => c.invoiceNo).filter(Boolean))];
+  }, [dc, challans]);
+  const invoiceHint = dc?.invoiceNo
+    ? `Captured at dispatch: ${dc.invoiceNo} — keep it, or type a different number.`
+    : 'Type the tax invoice number, or pick one recorded at dispatch.';
   const challanByInvoiceNo = useMemo(() => {
     const m = new Map();
     challans.forEach((c) => { if (c.invoiceNo) m.set(c.invoiceNo, c); });
@@ -229,12 +236,20 @@ const InvoiceEntryForm = () => {
   //    that is still PENDING (not yet invoiced). Only if every challan is already
   //    invoiced do we fall back to the latest one. This prevents opening an
   //    already-invoiced challan's locked/filled form when a fresh one is waiting.
-  const presetRef = useRef(false);
+  // presetRef holds the so/dc TARGET already applied — not a plain "done" flag.
+  // This route stays mounted when only the query string changes (clicking a second
+  // consignment goes ?dc=DC-071 → ?dc=DC-073 on the same path), so a boolean would
+  // latch on the first challan and keep showing it for every later dispatch.
+  // Keying on the target re-arms the pick whenever the URL points somewhere new,
+  // while still firing only once per target so it never fights a manual selection.
+  const presetRef = useRef('');
   useEffect(() => {
-    if (presetRef.current || dc || !challans.length || !(soParam || dcParam)) return;
+    const target = `${dcParam}|${soParam}`;
+    if (!dcParam && !soParam) return;
+    if (presetRef.current === target || !challans.length) return;
     if (dcParam) {
       const m = challans.find((c) => c.dcNumber === dcParam);
-      if (m) { presetRef.current = true; onPickDc(m); }
+      if (m) { presetRef.current = target; onPickDc(m); }
       return;
     }
     if (soParam) {
@@ -242,13 +257,13 @@ const InvoiceEntryForm = () => {
       const soChallans = challans.filter((c) => c.soNumber === soParam);
       if (!soChallans.length) return;
       const pending = soChallans.find((c) => !invoicedDcIds.has(String(c._id)));
-      presetRef.current = true;
+      presetRef.current = target;
       onPickDc(pending || soChallans[0]);
     }
     // Deps are stable primitives / query results only. We deliberately do NOT list
     // `dc` or `invoicedDcIds` (a fresh Set each time it recomputes): presetRef already
-    // guards the one-shot pick, and keeping churny references out prevents any chance
-    // of this effect re-entering in a loop.
+    // guards the one-shot-per-target pick, and keeping churny references out prevents
+    // any chance of this effect re-entering in a loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [challans, soParam, dcParam, soInvRes]);
 
@@ -369,11 +384,23 @@ const InvoiceEntryForm = () => {
                 disabled={locked}
                 options={invoiceNoOptions}
                 value={form.invoiceNo}
-                onChange={(_, val) => onPickInvoiceNo(val || '')}
+                selectOnFocus
+                handleHomeEndKeys
+                clearOnBlur={false}
+                onChange={(_, val, reason) => {
+                  // ONLY an explicit pick from the list may re-target the challan.
+                  // Previously any committed value ran through onPickInvoiceNo, so
+                  // typing a number that happened to match another dispatch silently
+                  // swapped the whole form to that challan and discarded the entry.
+                  if (reason === 'selectOption') onPickInvoiceNo(val || '');
+                  else setForm((f) => ({ ...f, invoiceNo: String(val || '').trim() }));
+                }}
                 onInputChange={(_, val, reason) => { if (reason === 'input') setForm((f) => ({ ...f, invoiceNo: val })); }}
+                onBlur={() => setForm((f) => ({ ...f, invoiceNo: f.invoiceNo.trim() }))}
                 renderInput={(p) => (
                   <TextField {...p} label="Invoice No" size="small" required
-                    placeholder="Select from actual dispatch / type" />
+                    placeholder="e.g. INV/2026/0143"
+                    helperText={locked ? ' ' : invoiceHint} />
                 )}
               />
               <TextField label="Invoice Date" type="date" value={form.invoiceDate} onChange={set('invoiceDate')} size="small" InputLabelProps={{ shrink: true }} sx={{ minWidth: 170 }} disabled={locked} />

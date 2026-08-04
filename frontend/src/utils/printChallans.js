@@ -88,9 +88,14 @@ export function printChallans({ challans = [], companyName = 'M/s AMBIKA GLOBAL'
   .bar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: #fff; border-bottom: 1px solid #c9d2e2; padding: 8px 16px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
   .bar button { border: 0; border-radius: 5px; background: #0b2545; color: #fff; padding: 7px 14px; font-weight: 800; cursor: pointer; }
   .bar button + button { margin-left: 8px; background: #fff; color: #0f172a; border: 1px solid #94a3b8; }
-  .page { width: 192mm; margin: 8px auto; background: #fff; padding: 4mm; display: flex; flex-direction: column; gap: 6mm; }
+  /* A true A4 sheet on screen, so the preview matches the paper exactly. */
+  .page { width: 210mm; height: 297mm; margin: 8px auto; background: #fff; padding: 9mm; display: flex; flex-direction: column; gap: 6mm; }
 
-  .challan { border: 1px solid #0b2545; border-radius: 3px; padding: 6mm 6mm 5mm; }
+  /* Each challan is locked to HALF the page — not sized by its content. Two short
+     challans therefore fill the sheet instead of leaving a void at the bottom, and
+     a lone trailing challan still occupies only the top half rather than stretching. */
+  .challan { flex: 0 0 calc((100% - 6mm) / 2); display: flex; flex-direction: column; overflow: hidden;
+             border: 1px solid #0b2545; border-radius: 3px; padding: 6mm 6mm 5mm; }
   .lh { text-align: center; color: #0b2545; font-size: 21px; font-weight: 900; letter-spacing: 0.04em; line-height: 1.05; }
   .title { text-align: center; color: #16305a; font-size: 11px; font-weight: 800; letter-spacing: 0.22em; margin: 3px 0 7px; border-bottom: 2px solid #0b2545; padding-bottom: 6px; }
   .meta { display: flex; border: 1px solid #c9d2e2; border-radius: 3px; margin-bottom: 5px; overflow: hidden; }
@@ -111,20 +116,28 @@ export function printChallans({ challans = [], companyName = 'M/s AMBIKA GLOBAL'
   tfoot td { background: #0b2545; color: #fff; font-weight: 800; font-size: 9.5px; border: 0; }
   .remark { font-size: 9px; color: #3a4560; margin-top: 5px; }
   .remark span { font-size: 6.5px; font-weight: 800; color: #6a7690; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px; }
-  .sign { display: flex; justify-content: space-between; margin-top: 12px; font-size: 9.5px; color: #1a2438; }
+  /* margin-top:auto pins the signature line to the foot of its half — the slack in a
+     short challan sits between the totals and the signature, where it reads as
+     deliberate space for the receiver to sign. */
+  .sign { display: flex; justify-content: space-between; margin-top: auto; padding-top: 10px; font-size: 9.5px; color: #1a2438; }
   .sign .right { color: #0b2545; font-weight: 800; }
 
   @media print {
     body { padding-top: 0; background: #fff; }
     .bar { display: none !important; }
-    .page { width: auto; margin: 0; padding: 0; page-break-after: always; }
+    /* @page already reserves the 9mm margin, so the printed page box is 192 × 279mm.
+       277mm leaves 2mm of rounding slack — an exact 279 can tip into a blank page. */
+    .page { width: auto; height: 277mm; margin: 0; padding: 0; page-break-after: always; }
     .page:last-child { page-break-after: auto; }
     .challan { page-break-inside: avoid; }
   }
 </style></head>
 <body>
   <div class="bar">
-    <div><strong>${list.length} delivery challan(s)</strong> · 2 per A4 page — choose colour / both-sides in the print dialog.</div>
+    <div>
+      <strong>${list.length} delivery challan(s)</strong> · 2 per A4 page · ${pages.length} page${pages.length === 1 ? '' : 's'}
+      <span style="color:#6a7690">— in the print dialog set <b>Scale 100%</b>, <b>Margins: Default</b>, <b>Headers and footers OFF</b> and <b>Background graphics ON</b>.</span>
+    </div>
     <div><button onclick="window.print()">Print / Save PDF</button><button onclick="window.close()">Close</button></div>
   </div>
   ${pagesHtml}

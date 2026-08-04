@@ -11,6 +11,7 @@ import {
 import dayjs from 'dayjs';
 import { useListQuotesQuery } from '../../store/api/quoteApi';
 import { fmtINR, fmtINRCompact } from '../../utils/formatters';
+import { PageHero, pageSx, panelSx, primaryBtnSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const STATUS_META = (theme) => ({
   DRAFT:           { color: theme.palette.text.secondary, bg: alpha(theme.palette.text.secondary, 0.10), label: 'Draft',         icon: FileSignature },
@@ -120,54 +121,24 @@ const QuotesList = ({ initialStatus = '', lockStatus = false, title = 'Quotes' }
   ], [theme, statusMeta]);
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{
-        position: 'relative', overflow: 'hidden', color: '#fff',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 7 },
-      }}>
-        <Box aria-hidden sx={{ position: 'absolute', width: 420, height: 420, borderRadius: '50%', top: -160, right: -120, background: 'radial-gradient(circle, rgba(96,165,250,0.32) 0%, rgba(96,165,250,0) 60%)' }} />
-        <Stack direction="row" spacing={2.5} alignItems="center" sx={{ position: 'relative' }}>
-          <Box sx={{
-            width: 52, height: 52, borderRadius: 2.5,
-            display: 'grid', placeItems: 'center',
-            background: 'rgba(255,255,255,0.14)',
-            border: '1px solid rgba(255,255,255,0.22)',
-          }}>
-            <FileSignature size={26} color="#fff" />
-          </Box>
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
-              {title}
-            </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>
-              {isDraftsView
-                ? 'Work-in-progress quotes — open one to edit, share on WhatsApp / email, or send.'
-                : 'Saved snapshots from the calculator — prices frozen at the as-of date.'}
-            </Typography>
-          </Box>
-          <Button
-            variant="contained"
-            startIcon={<Calculator size={16} />}
-            onClick={() => navigate('/pricing/calculator')}
-            sx={{
-              fontWeight: 700,
-              background: 'rgba(255,255,255,0.16)',
-              border: '1px solid rgba(255,255,255,0.25)',
-              color: '#fff',
-              '&:hover': { background: 'rgba(255,255,255,0.24)' },
-              boxShadow: 'none',
-            }}
-          >
+    <Box sx={pageSx}>
+      <PageHero
+        icon={FileSignature}
+        title={title}
+        subtitle={isDraftsView
+          ? 'Work-in-progress quotes — open one to edit, share on WhatsApp / email, or send.'
+          : 'Saved snapshots from the calculator — prices frozen at the as-of date.'}
+        actions={(
+          <Button variant="contained" startIcon={<Calculator size={15} />}
+            onClick={() => navigate('/pricing/calculator')} sx={primaryBtnSx}>
             New from Calculator
           </Button>
-        </Stack>
-      </Box>
+        )}
+      />
 
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative' }}>
+      <Box sx={{ position: 'relative' }}>
         {!lockStatus && (
-        <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+        <Paper sx={{ p: 2, borderRadius: '10px', mb: 2 }}>
           <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
             {['', 'DRAFT', 'SENT', 'ACCEPTED', 'EXPIRED', 'CONVERTED_TO_SO'].map((s) => {
               const label = s === '' ? 'All' : (statusMeta[s]?.label || s);
@@ -194,7 +165,7 @@ const QuotesList = ({ initialStatus = '', lockStatus = false, title = 'Quotes' }
         </Paper>
         )}
 
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden', mb: 4 }}>
+        <Paper sx={{ borderRadius: '10px', overflow: 'hidden', mb: 4 }}>
           <DataGrid
             rows={rows}
             columns={columns}

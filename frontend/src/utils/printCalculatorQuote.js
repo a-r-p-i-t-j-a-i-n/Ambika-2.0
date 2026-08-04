@@ -40,7 +40,9 @@ export function printCalculatorQuote({
   grandTotal = 0,
   viewMode = 'with_gst',
 }) {
-  const includeGst = viewMode === 'with_gst' || viewMode === 'inclusive';
+  // 'inclusive' is a retired mode kept in this test only so a quote saved before
+  // it was removed still prints with its GST section instead of silently losing it.
+  const includeGst = viewMode !== 'basic';
   const today = dayjs().format('DD MMM YYYY');
 
   // Sum of the quantity column, shown as a footer total in the items table.
