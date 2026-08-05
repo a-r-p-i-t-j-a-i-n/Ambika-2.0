@@ -141,7 +141,7 @@ const FgImsDashboard = () => {
           </Panel>
         </Box>
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
+         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
           <Panel title={`Produce soon (${(d?.replenishList || []).length})`}>
             <Box sx={{ maxHeight: 280, overflowY: 'auto' }}>
               {(d?.replenishList || []).length === 0 ? (
