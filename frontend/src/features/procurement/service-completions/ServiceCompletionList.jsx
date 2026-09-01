@@ -66,7 +66,7 @@ const ServiceCompletionList = () => {
     try {
       await createQc({ serviceCompletionId: row._id }).unwrap();
       enqueueSnackbar('Service QC created', { variant: 'success' });
-      navigate('/procurement/incoming-qc');
+      navigate('/purchase-fms/incoming-qc');
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to create QC', { variant: 'error' });
     }
@@ -107,7 +107,7 @@ const ServiceCompletionList = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
       <Box>
-        <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Service Completions</Typography>
+        <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Service Completions (9)</Typography>
         <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>Step 1.8A · Internal service / repair / maintenance completion</Typography>
       </Box>
 

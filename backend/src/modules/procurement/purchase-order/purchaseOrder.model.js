@@ -99,6 +99,11 @@ const poItemSchema = new Schema({
   totalAmount:   { type: Number, default: 0, min: 0 },
 
   // JSL-format fields (additive — empty/zero for OTHER items).
+  // itemName for JSL is repurposed as the "Grade Width Finish" label (used across
+  // PO display); itemDescription preserves the real item description sourced from
+  // the indent, so GRN (and anything else needing the true description) doesn't
+  // have to parse it back out of that label.
+  itemDescription: { type: String, trim: true, default: '' },
   grade:           { type: String, trim: true, default: '' },
   width:           { type: String, trim: true, default: '' },
   finish:          { type: String, trim: true, default: '' },

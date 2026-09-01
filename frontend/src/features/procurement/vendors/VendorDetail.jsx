@@ -125,7 +125,7 @@ const VendorDetail = () => {
 
   return (
     <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
-      <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/vendors')} sx={{ mb: 1.5, fontWeight: 700 }}>
+      <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/vendor-details')} sx={{ mb: 1.5, fontWeight: 700 }}>
         Back to vendors
       </Button>
 

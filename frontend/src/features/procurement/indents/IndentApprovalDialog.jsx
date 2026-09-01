@@ -66,15 +66,15 @@ const IndentApprovalDialog = ({ open, onClose, indent }) => {
   const rejectedCount = rows.length - approvedCount;
 
   const handleApprove = async () => {
-    // Approved rows: Revised Qty must be > 0 and cannot exceed the requested
-    // quantity. Rejected rows: a reason is required instead.
+    // Approved rows: Revised Qty must be > 0 (it may be lower than, equal to,
+    // or greater than the requested quantity). Rejected rows: a reason is required instead.
     const invalidApproved = rows.find((r) => r.approvalStatus !== 'REJECTED' && (() => {
       const approvedQty = approvedQtyOf(r);
-      return !(approvedQty > 0) || approvedQty > Number(r.quantity);
+      return !(approvedQty > 0);
     })());
     if (invalidApproved) {
       enqueueSnackbar(
-        `Revised qty for "${invalidApproved.itemName}" must be greater than 0 and cannot exceed the requested quantity (${invalidApproved.quantity})`,
+        `Revised qty for "${invalidApproved.itemName}" must be greater than 0`,
         { variant: 'warning' },
       );
       return;

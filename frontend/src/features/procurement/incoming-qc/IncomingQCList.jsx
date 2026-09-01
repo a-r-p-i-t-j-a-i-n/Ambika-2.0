@@ -115,7 +115,7 @@ const IncomingQCList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Incoming QC</Typography>
+          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Incoming QC (10)</Typography>
           <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
             Step 1.9 · Inspect received material — rejected qty moves out of stock
           </Typography>

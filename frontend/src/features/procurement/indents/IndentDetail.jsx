@@ -178,7 +178,7 @@ const IndentDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Indent not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/indents')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/purchase-indents')}>Back to list</Button>
       </Box>
     );
   }
@@ -210,7 +210,7 @@ const IndentDetail = () => {
     || detailItems.some((it) => it.procurementStatus === 'PO_CREATED' || it.poId);
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
-  const goToPOs = () => navigate('/procurement/purchase-orders');
+  const goToPOs = () => navigate('/purchase-fms/purchase-orders');
   const nextStep = (() => {
     if (isDraft) {
       return { tone: 'info', title: 'Submit this indent for approval',
@@ -269,7 +269,7 @@ const IndentDetail = () => {
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       {/* Hero */}
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/indents')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+        <IconButton onClick={() => navigate('/purchase-fms/purchase-indents')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
           <ArrowLeft size={20} />
         </IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>

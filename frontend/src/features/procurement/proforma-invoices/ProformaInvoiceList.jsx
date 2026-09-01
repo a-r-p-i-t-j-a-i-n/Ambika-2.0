@@ -144,7 +144,7 @@ const ProformaInvoiceList = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>PI Forms</Typography>
+          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>PI Forms (6)</Typography>
           <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
             Step 1.6 · Proforma Invoice management — prerequisite for advance payment
           </Typography>

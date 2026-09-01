@@ -126,7 +126,7 @@ const VendorMaster = () => {
             <Store size={21} />
           </Box>
           <Box>
-            <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.35rem' }, fontWeight: 800, color: BRAND_DK, lineHeight: 1.1 }}>Master Vendor</Typography>
+            <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.35rem' }, fontWeight: 800, color: BRAND_DK, lineHeight: 1.1 }}>Master Vendor (2)</Typography>
             <Typography sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
               Every vendor with their products, rates, GST &amp; contact — grouped per vendor.
             </Typography>

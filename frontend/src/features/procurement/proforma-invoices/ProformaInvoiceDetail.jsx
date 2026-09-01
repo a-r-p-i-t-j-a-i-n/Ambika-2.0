@@ -62,7 +62,7 @@ const ProformaInvoiceDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Proforma Invoice not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/proforma-invoices')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/pi-forms')}>Back to list</Button>
       </Box>
     );
   }
@@ -79,7 +79,7 @@ const ProformaInvoiceDetail = () => {
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       {/* Hero */}
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/proforma-invoices')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+        <IconButton onClick={() => navigate('/purchase-fms/pi-forms')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
           <ArrowLeft size={20} />
         </IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>

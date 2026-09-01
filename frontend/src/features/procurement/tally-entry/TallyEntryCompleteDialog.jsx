@@ -20,8 +20,6 @@ const TallyEntryCompleteDialog = ({ open, onClose, entry }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [statusDone, setStatusDone] = useState('YES');
   const [checklist, setChecklist] = useState({});
-  const [tallyVoucherNumber, setTallyVoucherNumber] = useState('');
-  const [tallyLedgerName, setTallyLedgerName] = useState('');
   const [remarks, setRemarks] = useState('');
   const [complete, { isLoading }] = useCompleteTallyEntryMutation();
 
@@ -29,8 +27,6 @@ const TallyEntryCompleteDialog = ({ open, onClose, entry }) => {
     if (!open || !entry) return;
     setStatusDone(entry.statusDone === 'NO' ? 'YES' : (entry.statusDone || 'YES'));
     setChecklist(buildChecklist(entry));
-    setTallyVoucherNumber(entry.tallyVoucherNumber || '');
-    setTallyLedgerName(entry.tallyLedgerName || '');
     setRemarks(entry.remarks || '');
   }, [open, entry]);
 
@@ -42,10 +38,10 @@ const TallyEntryCompleteDialog = ({ open, onClose, entry }) => {
     if (statusDone === 'YES' && !allChecked) return enqueueSnackbar('Tick every checklist item to complete', { variant: 'warning' });
     if (statusDone === 'NO' && !remarks.trim()) return enqueueSnackbar('Remarks are required when status is "No"', { variant: 'warning' });
     try {
+      // Planned Date, Tally Voucher No. and Tally Ledger Name are server-derived
+      // from the source voucher at entry creation — not editable here.
       await complete({
         id: entry._id, statusDone, checklist,
-        tallyVoucherNumber: tallyVoucherNumber.trim() || undefined,
-        tallyLedgerName: tallyLedgerName.trim() || undefined,
         remarks: remarks.trim() || undefined,
       }).unwrap();
       enqueueSnackbar(statusDone === 'YES' ? 'Tally entry completed' : 'Saved — kept pending (status No)', { variant: statusDone === 'YES' ? 'success' : 'info' });
@@ -74,8 +70,8 @@ const TallyEntryCompleteDialog = ({ open, onClose, entry }) => {
         </Box>
 
         <Grid container spacing={1}>
-          <Grid item xs={6}><TextField fullWidth size="small" label="Tally Voucher No" value={tallyVoucherNumber} onChange={(e) => setTallyVoucherNumber(e.target.value)} /></Grid>
-          <Grid item xs={6}><TextField fullWidth size="small" label="Tally Ledger Name" value={tallyLedgerName} onChange={(e) => setTallyLedgerName(e.target.value)} /></Grid>
+          <Grid item xs={6}><TextField fullWidth size="small" label="Tally Voucher No" disabled value={entry?.tallyVoucherNumber || '—'} /></Grid>
+          <Grid item xs={6}><TextField fullWidth size="small" label="Tally Ledger Name" disabled value={entry?.tallyLedgerName || '—'} /></Grid>
         </Grid>
 
         <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mt: 2, mb: 0.5 }}>INVOICE CHECKLIST</Typography>

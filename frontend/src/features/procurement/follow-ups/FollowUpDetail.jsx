@@ -46,7 +46,7 @@ const FollowUpDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Follow-up not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/follow-ups')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/material-follow-ups')}>Back to list</Button>
       </Box>
     );
   }
@@ -66,7 +66,7 @@ const FollowUpDetail = () => {
       return { tone: 'success', title: 'Material ready — next: receive goods (GRN)',
         desc: 'Open the Purchase Order to create the Goods Receipt Note. If a PI/advance is required, settle it first; then receive the goods.',
         primary: fu.poId ? { label: 'Open Purchase Order', icon: <ShoppingBag size={16} />, onClick: goPO } : null,
-        secondary: { label: 'Go to GRNs', onClick: () => navigate('/procurement/grns') } };
+        secondary: { label: 'Go to GRNs', onClick: () => navigate('/purchase-fms/grn') } };
     }
     if (isActive) {
       return { tone: 'info', title: 'Next: record the follow-up & confirm material',
@@ -96,7 +96,7 @@ const FollowUpDetail = () => {
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       {/* Hero */}
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/follow-ups')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+        <IconButton onClick={() => navigate('/purchase-fms/material-follow-ups')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
           <ArrowLeft size={20} />
         </IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
