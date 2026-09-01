@@ -9,6 +9,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import { Store, Table as TableIcon, Rows3, Search, Package, Plus, X, Trash2, IndianRupee } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useGetVendorsQuery, useCreateVendorMutation } from '../../../store/api/vendorApi';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 
 const emptyRow = () => ({ productName: '', skuCode: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' });
 const emptyVendor = () => ({
@@ -118,7 +119,7 @@ const VendorMaster = () => {
   ];
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx }}>
       {/* Header */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5} sx={{ mb: 2, px: 0.5, flexWrap: 'wrap', rowGap: 1 }}>
         <Stack direction="row" spacing={1.25} alignItems="center">
@@ -126,8 +127,8 @@ const VendorMaster = () => {
             <Store size={21} />
           </Box>
           <Box>
-            <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.35rem' }, fontWeight: 800, color: BRAND_DK, lineHeight: 1.1 }}>Master Vendor</Typography>
-            <Typography sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
+            <Typography sx={pfmsTitleSx}>Master Vendor (2)</Typography>
+            <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
               Every vendor with their products, rates, GST &amp; contact — grouped per vendor.
             </Typography>
           </Box>
@@ -140,7 +141,7 @@ const VendorMaster = () => {
         </Stack>
       </Stack>
 
-      <Paper sx={{ borderRadius: 2.5, overflow: 'hidden', border: `1px solid ${theme.palette.divider}` }}>
+      <Paper sx={{ ...pfmsCardSx, overflow: 'hidden' }}>
         {/* Toolbar */}
         <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', rowGap: 1, borderBottom: `1px solid ${theme.palette.divider}` }}>
           <TextField
@@ -178,9 +179,9 @@ const VendorMaster = () => {
           <Box sx={{ px: 1.5, pb: 1.5, overflowX: 'auto' }}>
             <Table size="small" sx={{ minWidth: 1100, '& td, & th': { border: `1px solid ${theme.palette.divider}`, fontSize: '0.76rem', px: 1, py: 0.55, whiteSpace: 'nowrap' } }}>
               <TableHead>
-                <TableRow sx={{ bgcolor: alpha(BRAND, 0.06) }}>
-                  <TableCell sx={{ fontWeight: 800 }}>#</TableCell>
-                  {EXCEL_COLS.map((c) => <TableCell key={c} sx={{ fontWeight: 800 }}>{c}</TableCell>)}
+                <TableRow>
+                  <TableCell sx={pfmsTableHeadSx}>#</TableCell>
+                  {EXCEL_COLS.map((c) => <TableCell key={c} sx={pfmsTableHeadSx}>{c}</TableCell>)}
                 </TableRow>
               </TableHead>
               <TableBody>

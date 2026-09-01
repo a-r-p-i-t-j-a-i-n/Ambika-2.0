@@ -1,6 +1,7 @@
 import React, { Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
+import PurchaseFmsThemeScope from './features/procurement/PurchaseFmsThemeScope';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppLoader from './components/AppLoader';
 import RequirePermission from './components/RequirePermission';
@@ -116,6 +117,7 @@ const TallyEntryDetail     = lazyWithRetry(() => import('./features/procurement/
 const FinalPaymentList     = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentList'));
 const FinalPaymentDetail   = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentDetail'));
 const PurchaseMasterData   = lazyWithRetry(() => import('./features/procurement/PurchaseMasterData'));
+const PurchaseFmsHub       = lazyWithRetry(() => import('./features/procurement/PurchaseFmsHub'));
 const VendorMaster         = lazyWithRetry(() => import('./features/procurement/vendors/VendorMaster'));
 const VendorDetail         = lazyWithRetry(() => import('./features/procurement/vendors/VendorDetail'));
 
@@ -296,33 +298,40 @@ function App() {
             <Route path="/o2d-fms/scores" element={<RequirePermission slug="o2dfms.view" fallback="inline"><MisScoring /></RequirePermission>} />
             <Route path="/o2d-fms/scores/:userId" element={<RequirePermission slug="o2dfms.view" fallback="inline"><DoerProfile /></RequirePermission>} />
 
-            {/* Purchase FMS — Purchase Indents */}
-            <Route path="/procurement/indents" element={<IndentList />} />
-            <Route path="/procurement/indents/:id" element={<IndentDetail />} />
-            <Route path="/procurement/purchase-orders" element={<PurchaseOrderList />} />
-            <Route path="/procurement/purchase-orders/:id" element={<PurchaseOrderDetail />} />
-            <Route path="/procurement/follow-ups" element={<FollowUpList />} />
-            <Route path="/procurement/follow-ups/:id" element={<FollowUpDetail />} />
-            <Route path="/procurement/proforma-invoices" element={<ProformaInvoiceList />} />
-            <Route path="/procurement/proforma-invoices/:id" element={<ProformaInvoiceDetail />} />
-            <Route path="/procurement/advance-payments" element={<AdvancePaymentList />} />
+            {/* Purchase FMS — visually scoped to the O2D FMS design language */}
+            <Route element={<PurchaseFmsThemeScope />}>
+              {/* Purchase FMS — unified workflow page with step navigation */}
+              <Route path="/purchase-fms" element={<Navigate to="/purchase-fms/master-data" replace />} />
+              <Route path="/purchase-fms/:step" element={<PurchaseFmsHub />} />
 
-            <Route path="/procurement/grns" element={<GrnList />} />
-            <Route path="/procurement/grns/:id" element={<GrnDetail />} />
-            <Route path="/procurement/service-completions" element={<ServiceCompletionList />} />
-            <Route path="/procurement/incoming-qc" element={<IncomingQCList />} />
-            <Route path="/procurement/incoming-qc/:id" element={<IncomingQCDetail />} />
-            <Route path="/procurement/vendor-invoices" element={<VendorInvoiceList />} />
-            <Route path="/procurement/vendor-invoices/:id" element={<VendorInvoiceDetail />} />
-            <Route path="/procurement/vouchers" element={<VoucherList />} />
-            <Route path="/procurement/vouchers/:id" element={<VoucherDetail />} />
-            <Route path="/procurement/tally-entries" element={<TallyEntryList />} />
-            <Route path="/procurement/tally-entries/:id" element={<TallyEntryDetail />} />
-            <Route path="/procurement/final-payments" element={<FinalPaymentList />} />
-            <Route path="/procurement/final-payments/:id" element={<FinalPaymentDetail />} />
-            <Route path="/procurement/master-data" element={<PurchaseMasterData />} />
-            <Route path="/procurement/vendors" element={<VendorMaster />} />
-            <Route path="/procurement/vendors/:id" element={<VendorDetail />} />
+              {/* Purchase FMS — Purchase Indents */}
+              <Route path="/procurement/indents" element={<IndentList />} />
+              <Route path="/procurement/indents/:id" element={<IndentDetail />} />
+              <Route path="/procurement/purchase-orders" element={<PurchaseOrderList />} />
+              <Route path="/procurement/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+              <Route path="/procurement/follow-ups" element={<FollowUpList />} />
+              <Route path="/procurement/follow-ups/:id" element={<FollowUpDetail />} />
+              <Route path="/procurement/proforma-invoices" element={<ProformaInvoiceList />} />
+              <Route path="/procurement/proforma-invoices/:id" element={<ProformaInvoiceDetail />} />
+              <Route path="/procurement/advance-payments" element={<AdvancePaymentList />} />
+
+              <Route path="/procurement/grns" element={<GrnList />} />
+              <Route path="/procurement/grns/:id" element={<GrnDetail />} />
+              <Route path="/procurement/service-completions" element={<ServiceCompletionList />} />
+              <Route path="/procurement/incoming-qc" element={<IncomingQCList />} />
+              <Route path="/procurement/incoming-qc/:id" element={<IncomingQCDetail />} />
+              <Route path="/procurement/vendor-invoices" element={<VendorInvoiceList />} />
+              <Route path="/procurement/vendor-invoices/:id" element={<VendorInvoiceDetail />} />
+              <Route path="/procurement/vouchers" element={<VoucherList />} />
+              <Route path="/procurement/vouchers/:id" element={<VoucherDetail />} />
+              <Route path="/procurement/tally-entries" element={<TallyEntryList />} />
+              <Route path="/procurement/tally-entries/:id" element={<TallyEntryDetail />} />
+              <Route path="/procurement/final-payments" element={<FinalPaymentList />} />
+              <Route path="/procurement/final-payments/:id" element={<FinalPaymentDetail />} />
+              <Route path="/procurement/master-data" element={<PurchaseMasterData />} />
+              <Route path="/procurement/vendors" element={<VendorMaster />} />
+              <Route path="/procurement/vendors/:id" element={<VendorDetail />} />
+            </Route>
 
           </Route>
         </Route>

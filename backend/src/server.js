@@ -35,6 +35,14 @@ const startServer = async () => {
     startO2DEscalationJob();
   }
 
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error(`Port ${env.PORT} is already in use — another instance of this server is likely already running. Exiting.`);
+      process.exit(1);
+    }
+    throw err;
+  });
+
   server.listen(env.PORT, () => {
     logger.info(`🚀 DPES Server running in ${env.NODE_ENV} mode on port ${env.PORT}`);
     logger.info(`📡 API Base: http://localhost:${env.PORT}/api/v1`);

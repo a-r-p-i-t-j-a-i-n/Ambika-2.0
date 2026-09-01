@@ -23,6 +23,7 @@ import VendorInvoiceFormDialog from '../vendor-invoices/VendorInvoiceFormDialog'
 import { ReceiptText } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -32,7 +33,7 @@ const Field = ({ label, value }) => (
 );
 
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
     <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>{icon} {title}</Typography>
     {children}
   </Paper>
@@ -67,7 +68,7 @@ const IncomingQCDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Incoming QC not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/incoming-qc')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/incoming-qc')}>Back to list</Button>
       </Box>
     );
   }
@@ -98,7 +99,7 @@ const IncomingQCDetail = () => {
       return { tone: 'success', title: 'Vendor Invoice recorded — track payment & accounting',
         desc: 'The invoice exists. Follow it through advance/payment and voucher in Vendor Invoices.',
         primary: { label: 'View Invoice', icon: <ReceiptText size={16} />, onClick: () => navigate(`/procurement/vendor-invoices/${existingInvoice._id}`) },
-        secondary: { label: 'All Vendor Invoices', onClick: () => navigate('/procurement/vendor-invoices') } };
+        secondary: { label: 'All Vendor Invoices', onClick: () => navigate('/purchase-fms/vendor-invoices') } };
     }
     if (qc.qcStatus === 'FAILED') {
       return { tone: 'warn', title: 'QC failed — rejected quantity returned to stock',
@@ -115,13 +116,13 @@ const IncomingQCDetail = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/incoming-qc')} sx={{ bgcolor: '#fff', boxShadow: 1 }}><ArrowLeft size={20} /></IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><ClipboardCheck size={24} /></Box>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
+      <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <IconButton onClick={() => navigate('/purchase-fms/incoming-qc')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}><ArrowLeft size={20} /></IconButton>
+        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><ClipboardCheck size={24} /></Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{qc.qcNumber}</Typography>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{qc.qcNumber}</Typography>
             <QcStatusChip status={qc.qcStatus} />
             <QcResultChip result={qc.overallResult} />
           </Box>
@@ -144,10 +145,10 @@ const IncomingQCDetail = () => {
         const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
         return (
           <Paper elevation={0} sx={{
-            mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
+            mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
             display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
           }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: '#fff', color: t.fg, flexShrink: 0 }}>
+            <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
               <ArrowRight size={22} />
             </Box>
             <Box sx={{ minWidth: 220, flexGrow: 1 }}>

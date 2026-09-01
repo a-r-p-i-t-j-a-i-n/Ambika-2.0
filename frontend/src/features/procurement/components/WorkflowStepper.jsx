@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Typography } from '@mui/material';
 import { Check, X, AlertTriangle } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
+import { pfmsCardSx } from '../pfmsTheme';
 
 const STATE_COLOR = {
   completed: '#16a34a',
@@ -35,8 +36,7 @@ const WorkflowStepper = ({ steps = [], sx = {} }) => {
 
   return (
     <Box sx={{
-      bgcolor: '#fff', borderRadius: '16px', p: 2.5,
-      boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+      ...pfmsCardSx, p: 2.5,
       ...sx,
     }}>
       <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>

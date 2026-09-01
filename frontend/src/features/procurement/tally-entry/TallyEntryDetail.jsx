@@ -18,6 +18,7 @@ import TallyEntryFormDialog from './TallyEntryFormDialog';
 import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -26,7 +27,7 @@ const Field = ({ label, value }) => (
   </Box>
 );
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
     <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main', mb: 2 }}>{icon} {title}</Typography>
     {children}
   </Paper>
@@ -49,7 +50,7 @@ const TallyEntryDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Tally entry not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/tally-entries')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/tally-entries')}>Back to list</Button>
       </Box>
     );
   }
@@ -63,13 +64,13 @@ const TallyEntryDetail = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/tally-entries')} sx={{ bgcolor: '#fff', boxShadow: 1 }}><ArrowLeft size={20} /></IconButton>
+        <IconButton onClick={() => navigate('/purchase-fms/tally-entries')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}><ArrowLeft size={20} /></IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><FileSpreadsheet size={24} /></Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{t.entryNumber}</Typography>
+            <Typography variant="h5" fontWeight={800} sx={{ color: PFMS.ink }}>{t.entryNumber}</Typography>
             <TallyStatusChip status={t.tallyEntryStatus} />
             <Chip size="small" variant="outlined" label={`Done in Tally: ${t.statusDone}`} sx={{ fontWeight: 700 }} color={t.statusDone === 'YES' ? 'success' : 'warning'} />
           </Box>

@@ -8,6 +8,7 @@ import { useSnackbar } from 'notistack';
 import { useSignDocumentMutation } from '../../../store/api/procurementApi';
 import SignaturePad from './SignaturePad';
 import SignatureUpload from './SignatureUpload';
+import { PFMS } from '../pfmsTheme';
 
 const STEPS = ['Draw Signature', 'Confirmation'];
 const METHODS = { DRAW: 'DRAW', UPLOAD: 'UPLOAD' };
@@ -111,7 +112,7 @@ const SignDocumentDialog = ({ open, onClose, documentType, documentId, documentT
               </Box>
             </Alert>
             {signatureDataUrl && (
-              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '10px', p: 1.5, display: 'inline-block', bgcolor: '#f8fafc' }}>
+              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '10px', p: 1.5, display: 'inline-block', bgcolor: PFMS.surfaceAlt }}>
                 <img src={signatureDataUrl} alt="Your signature" style={{ height: 60, display: 'block' }} />
               </Box>
             )}

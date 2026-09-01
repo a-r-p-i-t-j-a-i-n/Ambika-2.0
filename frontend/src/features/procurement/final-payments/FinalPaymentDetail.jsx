@@ -16,6 +16,7 @@ import {
 import { fileHref } from '../indents/indentMeta';
 import { PaymentStatusChip, paymentModeLabel, fmtINR, fmtDate } from './paymentMeta';
 import PdfViewerModal from '../common/PdfViewerModal';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -24,7 +25,7 @@ const Field = ({ label, value }) => (
   </Box>
 );
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
     <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main', mb: 2 }}>{icon} {title}</Typography>
     {children}
   </Paper>
@@ -46,7 +47,7 @@ const FinalPaymentDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Payment not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/final-payments')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/final-payments')}>Back to list</Button>
       </Box>
     );
   }
@@ -73,13 +74,13 @@ const FinalPaymentDetail = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/final-payments')} sx={{ bgcolor: '#fff', boxShadow: 1 }}><ArrowLeft size={20} /></IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><Wallet size={24} /></Box>
+        <IconButton onClick={() => navigate('/purchase-fms/final-payments')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}><ArrowLeft size={20} /></IconButton>
+        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><Wallet size={24} /></Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{p.paymentNumber}</Typography>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{p.paymentNumber}</Typography>
             <PaymentStatusChip status={p.paymentStatus} />
           </Box>
           <Typography variant="body2" color="text.secondary">{p.vendorName} · Voucher {p.voucherNumber || '—'} · {fmtDate(p.paymentDate)}</Typography>

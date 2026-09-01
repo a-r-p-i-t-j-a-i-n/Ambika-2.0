@@ -8,6 +8,7 @@ import { useSnackbar } from 'notistack';
 import { useCreateAdvancePaymentMutation } from '../../../store/api/procurementApi';
 import { PAYMENT_STATUSES, PAYMENT_MODES, modeLabel, fmtINR } from './apMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import { PFMS } from '../pfmsTheme';
 
 /**
  * Step 1.7 — record an Advance Payment against a PI (Google-form fields).
@@ -90,7 +91,7 @@ const AdvancePaymentFormDialog = ({ open, onClose, pi }) => {
         {pi?.piNumber && <Typography component="span" sx={{ ml: 0.5, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{pi.piNumber}</Typography>}
       </DialogTitle>
       <DialogContent dividers>
-        <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9', display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+        <Box sx={{ mb: 2, p: 1.5, borderRadius: '8px', bgcolor: PFMS.surfaceAlt, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
           <Box>
             <Typography variant="caption" color="text.secondary" fontWeight={700}>VENDOR</Typography>
             <Typography variant="body2" fontWeight={700}>{pi?.vendorName || '—'}</Typography>

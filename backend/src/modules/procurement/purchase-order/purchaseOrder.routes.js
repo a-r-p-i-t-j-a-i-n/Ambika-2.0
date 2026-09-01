@@ -55,6 +55,7 @@ router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
   .patch(validate(mongoIdParamSchema, 'params'), validate(updatePoSchema), c.update);
 
+router.post('/:id/pdf', validate(mongoIdParamSchema, 'params'), c.generatePdf);
 router.post('/:id/approve', validate(mongoIdParamSchema, 'params'), validate(approvePoSchema), c.approve);
 router.post('/:id/release', validate(mongoIdParamSchema, 'params'), validate(releasePoSchema), c.release);
 router.post('/:id/cancel',  validate(mongoIdParamSchema, 'params'), validate(cancelPoSchema), c.cancel);

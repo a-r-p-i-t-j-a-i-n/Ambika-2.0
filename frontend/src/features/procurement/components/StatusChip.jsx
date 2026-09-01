@@ -15,7 +15,7 @@ import { Box } from '@mui/material';
 
 // Semantic tones — light tint bg + dark readable text.
 const TONES = {
-  neutral: { bg: '#eef2f6', fg: '#475569' }, // gray
+  neutral: { bg: '#e9eef5', fg: '#475569' }, // gray — matches O2D FMS's PENDING tone exactly
   amber:   { bg: '#fef3c7', fg: '#b45309' }, // amber (pending)
   blue:    { bg: '#dbeafe', fg: '#1d4ed8' }, // blue (approved)
   indigo:  { bg: '#e0e7ff', fg: '#4338ca' }, // indigo (in progress)

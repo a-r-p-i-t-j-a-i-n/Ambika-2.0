@@ -14,6 +14,7 @@ import {
 import { useGetSkuLookupQuery, useCreateSkuMutation } from '../../../store/api/skuApi';
 import { useGetEmployeesQuery } from '../../../store/api/authApi';
 import { UNITS, DEPARTMENTS, normalizeUnit } from './indentMeta';
+import { PFMS, pfmsCardSx } from '../pfmsTheme';
 
 // Purchase FMS rule: Finished Goods are sell-side only — never purchasable.
 const FG_BLOCKED = new Set(['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT']);
@@ -177,7 +178,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
 
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { borderRadius: { xs: 0, sm: '18px' }, display: 'flex', flexDirection: 'column', maxHeight: '92vh', overflow: 'hidden' } }}>
+      PaperProps={{ sx: { borderRadius: { xs: 0, sm: '8px' }, display: 'flex', flexDirection: 'column', maxHeight: '92vh', overflow: 'hidden' } }}>
       {/* Header */}
       <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
@@ -196,9 +197,9 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
       </Box>
 
       {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, bgcolor: '#f8fafc', display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, bgcolor: PFMS.canvas, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
         {/* Indent header */}
-        <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' }}>
+        <Paper elevation={0} sx={{ p: 2.5, ...pfmsCardSx }}>
           <Grid container spacing={2}>
             <Grid item xs={12} sm={5}>
               <Autocomplete
@@ -235,7 +236,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
         </Paper>
 
         {/* Items */}
-        <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' }}>
+        <Paper elevation={0} sx={{ p: 2.5, ...pfmsCardSx }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Typography sx={{ fontWeight: 700, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
               <ClipboardList size={18} /> Indent Items

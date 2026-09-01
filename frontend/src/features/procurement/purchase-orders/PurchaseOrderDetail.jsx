@@ -19,9 +19,11 @@ import {
   useGetProformaInvoicesByPoQuery,
 
   useGetGrnsByPoQuery,
+  useGeneratePurchaseOrderPdfMutation,
 
 } from '../../../store/api/procurementApi';
 import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtINR, fmtDate, poDisplayNumber } from './poMeta';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
@@ -52,7 +54,7 @@ const Field = ({ label, value }) => (
 );
 
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px', height: '100%', border: '1px solid', borderColor: 'divider' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3, height: '100%' }}>
     <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, fontWeight: 700, color: 'primary.main' }}>
       <Box component="span" sx={{ display: 'grid', placeItems: 'center', width: 30, height: 30, borderRadius: '9px', bgcolor: (t) => alpha(t.palette.primary.main, 0.08) }}>{icon}</Box>
       {title}
@@ -105,12 +107,14 @@ const PurchaseOrderDetail = () => {
   const { data, isLoading } = useGetPurchaseOrderQuery(id);
   const po = data?.data;
   const [cancelPo] = useCancelPurchaseOrderMutation();
+  const [generatePoPdf, { isLoading: pdfGenerating }] = useGeneratePurchaseOrderPdfMutation();
 
   const [formOpen, setFormOpen] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
+  const [previewPo, setPreviewPo] = useState(null);
   const [fuFormOpen, setFuFormOpen] = useState(false);
   const [fuDoneOpen, setFuDoneOpen] = useState(false);
   const [fuActiveTarget, setFuActiveTarget] = useState(null);
@@ -210,7 +214,7 @@ const PurchaseOrderDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Purchase Order not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/purchase-orders')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/purchase-orders')}>Back to list</Button>
       </Box>
     );
   }
@@ -351,11 +355,23 @@ const PurchaseOrderDetail = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // A DRAFT/APPROVED (not yet released) PO has no stored poPdfUrl — release()
+  // is the only place that generates one. Generate on demand here so Preview
+  // works at any stage, reusing the same generatePdf() release() itself calls.
+  const doPreviewPdf = async () => {
+    if (po.poPdfUrl) { setPreviewPo(po); setPdfOpen(true); return; }
+    try {
+      const res = await generatePoPdf({ id: po._id }).unwrap();
+      setPreviewPo({ ...po, poPdfUrl: res?.data?.poPdfUrl, poPdfFileName: res?.data?.poPdfFileName });
+      setPdfOpen(true);
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to generate PDF', { variant: 'error' }); }
+  };
+
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/purchase-orders')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+        <IconButton onClick={() => navigate('/purchase-fms/purchase-orders')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
           <ArrowLeft size={20} />
         </IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
@@ -363,7 +379,7 @@ const PurchaseOrderDetail = () => {
         </Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{poDisplayNumber(po)}</Typography>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{poDisplayNumber(po)}</Typography>
             <PoStatusChip status={po.poStatus} />
             <PoApprovalChip status={po.approvalStatus} />
             <PoReleaseChip status={po.releaseStatus} />
@@ -377,7 +393,7 @@ const PurchaseOrderDetail = () => {
           {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {isDraft && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
           {canRelease && <Button variant="contained" startIcon={<Send size={16} />} onClick={() => setReleaseOpen(true)}>Release to Supplier</Button>}
-          {po.poPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>PO PDF</Button>}
+          <Button variant="outlined" startIcon={pdfGenerating ? <CircularProgress size={16} /> : <FileDown size={16} />} onClick={doPreviewPdf} disabled={pdfGenerating}>{po.poPdfUrl ? 'PO PDF' : 'Preview PDF'}</Button>
           {canCancel && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
           {po.poStatus === 'CANCELLED' && (
             <Button variant="contained" startIcon={<RotateCcw size={16} />} onClick={() => setReviseOpen(true)}>Revise PO</Button>
@@ -389,7 +405,7 @@ const PurchaseOrderDetail = () => {
           back-and-forth navigation (backend gating rules are unchanged). */}
       {nextAction && (
         <Paper sx={{
-          mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid',
+          mb: 3, p: 2.5, borderRadius: '8px', border: '1px solid',
           borderColor: alpha(TONE_COLOR[nextAction.tone], 0.3),
           bgcolor: alpha(TONE_COLOR[nextAction.tone], 0.05),
         }}>
@@ -525,7 +541,7 @@ const PurchaseOrderDetail = () => {
         {/* Step 1.5 — Material Follow-up (only meaningful for released POs) */}
         {(po.poStatus === 'RELEASED_TO_VENDOR' || po.followUpStatus !== 'NOT_STARTED') && (
           <Grid item xs={12}>
-            <Paper sx={{ p: 3, borderRadius: '18px' }}>
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
                   <PhoneCall size={18} /> Material Follow-up
@@ -540,7 +556,7 @@ const PurchaseOrderDetail = () => {
                     </Button>
                   )}
                   <Button size="small" variant="outlined" startIcon={<Eye size={14} />}
-                    onClick={() => navigate('/procurement/follow-ups')}>
+                    onClick={() => navigate('/purchase-fms/material-follow-ups')}>
                     View Follow-ups
                   </Button>
                 </Box>
@@ -563,7 +579,7 @@ const PurchaseOrderDetail = () => {
         {/* Step 1.6 — Proforma Invoice */}
         {(po.poStatus === 'RELEASED_TO_VENDOR' || po.piStatus !== 'NOT_RECEIVED') && (
           <Grid item xs={12}>
-            <Paper sx={{ p: 3, borderRadius: '18px' }}>
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
                   <FileText size={18} /> Proforma Invoice
@@ -618,7 +634,7 @@ const PurchaseOrderDetail = () => {
         {/* Step 1.8 — Goods Receipt Notes */}
         {grnRelevant && (
           <Grid item xs={12}>
-            <Paper sx={{ p: 3, borderRadius: '18px' }}>
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
                   <PackageCheck size={18} /> Goods Receipt ({grns.length})
@@ -635,7 +651,7 @@ const PurchaseOrderDetail = () => {
                       {grnGate.primary.label}
                     </Button>
                   )}
-                  <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => navigate('/procurement/grns')}>
+                  <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => navigate('/purchase-fms/grn')}>
                     View GRNs
                   </Button>
                 </Box>
@@ -782,10 +798,10 @@ const PurchaseOrderDetail = () => {
       {/* Drawer + dialogs */}
       <PurchaseOrderFormDrawer open={formOpen} po={po} onClose={() => setFormOpen(false)} />
       <PurchaseOrderFormDrawer open={reviseOpen} reviseFrom={po}
-        onClose={(created) => { setReviseOpen(false); if (created) navigate('/procurement/purchase-orders'); }} />
+        onClose={(created) => { setReviseOpen(false); if (created) navigate('/purchase-fms/purchase-orders'); }} />
       <PurchaseOrderApprovalDialog open={approvalOpen} po={po} onClose={() => setApprovalOpen(false)} />
       <PurchaseOrderReleaseDialog open={releaseOpen} po={po} onClose={() => setReleaseOpen(false)} />
-      <PurchaseOrderPdfPreview open={pdfOpen} po={po} onClose={() => setPdfOpen(false)} />
+      <PurchaseOrderPdfPreview open={pdfOpen} po={previewPo || po} onClose={() => { setPdfOpen(false); setPreviewPo(null); }} />
       <FollowUpFormDrawer open={fuFormOpen} presetPo={po} onClose={() => setFuFormOpen(false)} />
       <FollowUpDoneDialog open={fuDoneOpen} followUp={fuActiveTarget}
         onClose={() => { setFuDoneOpen(false); setFuActiveTarget(null); }} />

@@ -13,6 +13,7 @@ import {
   useGetIncomingQcsQuery, useGetVendorInvoicesQuery, useGetVouchersQuery,
   useGetTallyEntriesQuery, useGetFinalPaymentsQuery,
 } from '../../store/api/procurementApi';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from './pfmsTheme';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -218,25 +219,22 @@ const PurchaseMasterData = () => {
   }, [rawRows, statusFilter, search, tab, columns]);
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{ color: '#fff', px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 7 },
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)' }}>
-        <Stack direction="row" spacing={2.5} alignItems="center">
-          <Box sx={{ width: 52, height: 52, borderRadius: 2.5, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)' }}>
-            <Database size={26} color="#fff" />
-          </Box>
-          <Box>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800 }}>Purchase Master Data</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>
-              Every procurement entry, step by step — vendor, amounts, dates &amp; status. One tab per Purchase FMS step.
-            </Typography>
-          </Box>
-        </Stack>
-      </Box>
+    <Box sx={{ ...pfmsPageSx }}>
+      {/* Header */}
+      <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 2 }}>
+        <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(PFMS.brand, 0.1), color: PFMS.brand, border: `1px solid ${alpha(PFMS.brand, 0.2)}` }}>
+          <Database size={21} />
+        </Box>
+        <Box>
+          <Typography sx={pfmsTitleSx}>Purchase Master Data (1)</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
+            Every procurement entry, step by step — vendor, amounts, dates &amp; status. One tab per Purchase FMS step.
+          </Typography>
+        </Box>
+      </Stack>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 6 }}>
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
+      <Box sx={{ pb: 6 }}>
+        <Paper sx={{ ...pfmsCardSx, overflow: 'hidden' }}>
           <Tabs value={tab} onChange={(_, v) => switchTab(v)} variant="scrollable" scrollButtons="auto"
             sx={{ borderBottom: `1px solid ${theme.palette.divider}`, minHeight: 40, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.78rem', minHeight: 40, py: 0.5 } }}>
             {TABS.map((t) => <Tab key={t.key} value={t.key} label={t.label} />)}
@@ -290,9 +288,9 @@ const PurchaseMasterData = () => {
             <Box sx={{ px: 1.5, pb: 1.5, overflowX: 'auto' }}>
               <Table size="small" sx={{ minWidth: 720, '& td, & th': { border: `1px solid ${theme.palette.divider}`, fontSize: '0.78rem', px: 1, py: 0.6, whiteSpace: 'nowrap' } }}>
                 <TableHead>
-                  <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.06) }}>
-                    <TableCell sx={{ fontWeight: 800 }}>#</TableCell>
-                    {columns.map((c) => <TableCell key={c.field} sx={{ fontWeight: 800 }}>{c.headerName}</TableCell>)}
+                  <TableRow>
+                    <TableCell sx={pfmsTableHeadSx}>#</TableCell>
+                    {columns.map((c) => <TableCell key={c.field} sx={pfmsTableHeadSx}>{c.headerName}</TableCell>)}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -312,7 +310,7 @@ const PurchaseMasterData = () => {
           {view === 'cards' && (
             <Box sx={{ p: 1.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 1.5 }}>
               {rows.map((row) => (
-                <Paper key={row._id} variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+                <Paper key={row._id} sx={{ ...pfmsCardSx, p: 1.5 }}>
                   <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: theme.palette.primary.dark, mb: 0.75 }}>
                     {displayVal(columns[0], row)}
                   </Typography>
@@ -346,7 +344,7 @@ const PurchaseMasterData = () => {
                     </Stack>
                     <Stack spacing={1}>
                       {groups[s].map((row) => (
-                        <Paper key={row._id} variant="outlined" sx={{ p: 1.25, borderRadius: 2 }}>
+                        <Paper key={row._id} sx={{ ...pfmsCardSx, p: 1.25 }}>
                           <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', color: theme.palette.primary.dark }}>{displayVal(columns[0], row)}</Typography>
                           {columns.slice(1, 4).map((c) => (
                             <Typography key={c.field} variant="caption" display="block" color="text.secondary">

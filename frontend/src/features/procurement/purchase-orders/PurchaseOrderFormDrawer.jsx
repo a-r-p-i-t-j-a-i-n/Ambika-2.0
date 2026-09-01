@@ -17,6 +17,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetVendorsQuery, useGetVendorByIdQuery } from '../../../store/api/vendorApi';
 import { fmtINR, poDisplayNumber } from './poMeta';
+import { PFMS, pfmsCardSx } from '../pfmsTheme';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import AddVendorForItemModal from './AddVendorForItemModal';
@@ -89,7 +90,7 @@ const jslLineCalc = (it) => {
   return { finalPrice, value };
 };
 
-const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' };
+const SECTION = { p: 2.5, ...pfmsCardSx };
 const OTHER_GRID = '1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px';
 const JSL_GRID = '1.1fr 0.7fr 0.9fr 0.8fr 0.6fr 0.85fr 0.85fr 0.9fr 0.9fr 0.8fr 0.85fr 36px';
 
@@ -287,7 +288,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       width:  spec.width || '1250',
       finish: spec.finish || '2B/ME',
       quantity: o.approvedQuantity || '',
-      unit: o.unit || match?.unit || 'Kgs',
+      // Prefer the Jindal vendor-catalog unit (the actual master data for JSL
+      // items) over the indent's unit — the indent's generic Unit dropdown
+      // (Pcs/Kg/Meter/...) doesn't cover JSL-specific units (Kgs/MT/Nos), so it
+      // silently normalizes those to "Pcs" at indent-creation time.
+      unit: match?.unit || o.unit || 'Kgs',
       baseRate: match ? (match.rate ?? 0) : 0,
       gstRate: JSL_GST,
       itemName: o.itemName || '',
@@ -577,6 +582,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     remarks: header.remarks.trim(),
     items: validItems.map((it) => (isJsl ? {
       grade: it.grade?.trim() || '', width: it.width?.trim() || '', finish: it.finish?.trim() || '',
+      itemName: it.itemName?.trim() || '',
       skuCode: it.skuCode?.trim() || '', skuId: it.skuId || undefined,
       indentId: it.indentId || undefined, indentNumber: it.indentNumber || '',
       indentItemId: it.indentItemId || undefined,
@@ -668,7 +674,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '18px' }, overflow: 'hidden' } }}>
+      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
       {/* Header */}
       <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
@@ -687,7 +693,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       </Box>
 
       {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: '#f8fafc' }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.canvas }}>
         {/* Source + vendor */}
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
@@ -944,7 +950,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                         <TextField size="small" type="number" placeholder="0" value={it.quantity}
                           onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                         <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
-                          {JSL_UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+                          {/* Always include the row's current unit even if it isn't one of the
+                              standard options — vendor-master unit spellings vary (e.g. "MT",
+                              "Kg"), and a value with no matching MenuItem would otherwise render
+                              blank, hiding a unit that was actually fetched correctly. */}
+                          {(JSL_UNITS.includes(it.unit) || !it.unit ? JSL_UNITS : [it.unit, ...JSL_UNITS]).map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                         </TextField>
                         <TextField size="small" type="number" placeholder="0.00" value={it.baseRate}
                           onChange={(e) => setItem(idx, { baseRate: e.target.value, manual: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />

@@ -318,13 +318,13 @@ export default function Dashboard() {
       kind: 'Purchase', icon: ShoppingBag, color: C.indigo,
       title: `${p.poNumber || 'PO'} · ${p.vendorName || ''}`,
       sub: `purchase order · ${inr(p.grandTotal)}`,
-      at: p.createdAt, to: '/procurement/purchase-orders',
+      at: p.createdAt, to: '/purchase-fms/purchase-orders',
     }));
     (recentGrns?.data || []).forEach((g) => items.push({
       kind: 'GRN', icon: PackageCheck, color: C.info,
       title: `${g.grnNumber || 'GRN'} · ${g.vendorName || ''}`,
       sub: 'goods received',
-      at: g.createdAt, to: '/procurement/grns',
+      at: g.createdAt, to: '/purchase-fms/grn',
     }));
     return items
       .filter((i) => i.at)

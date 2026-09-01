@@ -12,6 +12,7 @@ import {
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { PAYMENT_MODES, fmtINR } from './paymentMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import { PFMS } from '../pfmsTheme';
 
 const STATUS_OPTIONS = [
   { value: 'PART_PAYMENT', label: 'Part Payment' },
@@ -127,7 +128,7 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
   };
 
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: '16px' } }}>
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: '8px' } }}>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
         <Wallet size={20} /> Make Payment
       </DialogTitle>
@@ -161,7 +162,7 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
 
           {selectedVoucher && (
             <Grid item xs={12}>
-              <Box sx={{ p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+              <Box sx={{ p: 1.5, borderRadius: '10px', bgcolor: PFMS.surfaceAlt, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
                 <Typography variant="caption" color="text.secondary">Vendor <b>{selectedVoucher.vendorName}</b></Typography>
                 <Typography variant="caption" color="text.secondary">Net Payable <b>{fmtINR(selectedVoucher.netPayableAmount)}</b></Typography>
                 <Typography variant="caption" color="text.secondary">Balance <b>{fmtINR(balance)}</b></Typography>

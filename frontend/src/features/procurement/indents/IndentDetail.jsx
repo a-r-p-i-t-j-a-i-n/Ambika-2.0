@@ -15,6 +15,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { ApprovalChip, OverallChip, QuoteChip, QuotationChip, fileHref, itemRef } from './indentMeta';
 import StatusChip from '../components/StatusChip';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
@@ -32,7 +33,7 @@ const Field = ({ label, value }) => (
 );
 
 const SectionCard = ({ icon, title, action, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
       <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
         {icon} {title}
@@ -178,7 +179,7 @@ const IndentDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Indent not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/indents')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/purchase-indents')}>Back to list</Button>
       </Box>
     );
   }
@@ -210,7 +211,7 @@ const IndentDetail = () => {
     || detailItems.some((it) => it.procurementStatus === 'PO_CREATED' || it.poId);
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
-  const goToPOs = () => navigate('/procurement/purchase-orders');
+  const goToPOs = () => navigate('/purchase-fms/purchase-orders');
   const nextStep = (() => {
     if (isDraft) {
       return { tone: 'info', title: 'Submit this indent for approval',
@@ -266,18 +267,18 @@ const IndentDetail = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/indents')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+      <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <IconButton onClick={() => navigate('/purchase-fms/purchase-indents')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
           <ArrowLeft size={20} />
         </IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
+        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
           <ClipboardList size={24} />
         </Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            <Typography variant="h5" fontWeight={800}>{indent.indentNumber}</Typography>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{indent.indentNumber}</Typography>
             <ApprovalChip status={indent.approvalStatus} />
             {quoteSkipped ? (
               <>
@@ -309,10 +310,10 @@ const IndentDetail = () => {
         const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
         return (
           <Paper elevation={0} sx={{
-            mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
+            mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
             display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
           }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: '#fff', color: t.fg, flexShrink: 0 }}>
+            <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
               <ArrowRight size={22} />
             </Box>
             <Box sx={{ minWidth: 220, flexGrow: 1 }}>
@@ -334,7 +335,7 @@ const IndentDetail = () => {
         );
       })()}
 
-      <Grid container spacing={3}>
+      <Grid container spacing={2}>
         {/* Header + items */}
         <Grid item xs={12}>
           <SectionCard icon={<Hash size={18} />} title="Indent Details">

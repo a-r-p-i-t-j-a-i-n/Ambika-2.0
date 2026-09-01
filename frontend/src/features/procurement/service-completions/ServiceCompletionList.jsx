@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
-  Grid, Card, Chip,
+  Grid, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { alpha } from '@mui/material/styles';
@@ -13,6 +13,8 @@ import {
   useGetServiceCompletionStatsQuery,
   useCreateIncomingQcMutation,
 } from '../../../store/api/procurementApi';
+import PfmsKpiCard from '../components/PfmsKpiCard';
+import { pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
 
@@ -37,16 +39,6 @@ const QcChip = ({ value }) => {
   return <Chip size="small" label={c.label} sx={{ bgcolor: alpha(c.bg, 0.12), color: c.bg, fontWeight: 700 }} />;
 };
 
-const KpiCard = ({ icon, label, value, color }) => (
-  <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
-    <Box sx={{ width: 42, height: 42, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color }}>{icon}</Box>
-    <Box>
-      <Typography sx={{ fontSize: '1.35rem', fontWeight: 800, lineHeight: 1.1 }}>{value ?? 0}</Typography>
-      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>{label}</Typography>
-    </Box>
-  </Card>
-);
-
 const ServiceCompletionList = () => {
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
@@ -66,7 +58,7 @@ const ServiceCompletionList = () => {
     try {
       await createQc({ serviceCompletionId: row._id }).unwrap();
       enqueueSnackbar('Service QC created', { variant: 'success' });
-      navigate('/procurement/incoming-qc');
+      navigate('/purchase-fms/incoming-qc');
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to create QC', { variant: 'error' });
     }
@@ -105,20 +97,20 @@ const ServiceCompletionList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, ...pfmsPageSx }}>
       <Box>
-        <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Service Completions</Typography>
-        <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>Step 1.8A · Internal service / repair / maintenance completion</Typography>
+        <Typography sx={pfmsTitleSx}>Service Completions (9)</Typography>
+        <Typography sx={pfmsSubtitleSx}>Step 1.8A · Internal service / repair / maintenance completion</Typography>
       </Box>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={3}><KpiCard icon={<Wrench size={20} />} label="Total" value={stats.total} color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><KpiCard icon={<Clock size={20} />} label="Pending" value={stats.pending} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><KpiCard icon={<CheckCircle2 size={20} />} label="Completed" value={stats.completed} color="#16a34a" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><KpiCard icon={<ClipboardCheck size={20} />} label="QC Pending" value={stats.qcPending} color="#7c3aed" /></Grid>
+        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<Wrench size={20} />} label="Total" value={stats.total} color="#2563eb" /></Grid>
+        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<Clock size={20} />} label="Pending" value={stats.pending} color="#b45309" /></Grid>
+        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<CheckCircle2 size={20} />} label="Completed" value={stats.completed} color="#16a34a" /></Grid>
+        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<ClipboardCheck size={20} />} label="QC Pending" value={stats.qcPending} color="#0e7490" /></Grid>
       </Grid>
 
-      <Paper sx={{ p: 1.5, borderRadius: '14px', display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
+      <Paper sx={{ ...pfmsCardSx, p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
         <TextField size="small" placeholder="Search service completions…" value={search} onChange={(e) => setSearch(e.target.value)}
           sx={{ width: { xs: '100%', sm: 280 } }}
           InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }} />
@@ -130,7 +122,7 @@ const ServiceCompletionList = () => {
         </TextField>
       </Paper>
 
-      <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>
+      <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid
           rows={data?.data || []}
           columns={columns}

@@ -15,6 +15,7 @@ import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchContr
 import { fileHref } from '../indents/indentMeta';
 import { fmtINR } from './piMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import { PFMS, pfmsCardSx } from '../pfmsTheme';
 
 /**
  * Create / edit a Proforma Invoice (Step 1.6).
@@ -32,7 +33,7 @@ const lineCalc = (it) =>
 
 const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18 });
 
-const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' };
+const SECTION = { p: 2.5, ...pfmsCardSx };
 
 const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }) => {
   const { enqueueSnackbar } = useSnackbar();
@@ -163,7 +164,7 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
       </Box>
 
       {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: '#f8fafc' }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.canvas }}>
         {/* Header section */}
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
