@@ -4,6 +4,7 @@ import {
   IconButton, CircularProgress,
 } from '@mui/material';
 import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 /**
  * Simple, reusable in-app PDF viewer — renders a generated PDF (by URL) in an
@@ -12,7 +13,13 @@ import { X, Download, ExternalLink, FileX2 } from 'lucide-react';
  *
  * Props: open, onClose, url, title, fileName, loading
  */
-const PdfViewerModal = ({ open, onClose, url = '', title = 'Document', fileName, loading = false }) => (
+const PdfViewerModal = ({ open, onClose, url: rawUrl = '', title = 'Document', fileName, loading = false }) => {
+  // Stored PDF URLs are baked against whatever host generated them (often
+  // localhost, if the backend's SERVER_URL isn't set in that environment) —
+  // never trust it as-is, repair it against the current API origin the same
+  // way Voucher/PO PDF previews already do.
+  const url = resolveFileUrl(rawUrl) || '';
+  return (
   <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ sx: { height: '90vh' } }}>
     <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.5 }}>
       <span>{title}</span>
@@ -48,6 +55,7 @@ const PdfViewerModal = ({ open, onClose, url = '', title = 'Document', fileName,
       )}
     </DialogActions>
   </Dialog>
-);
+  );
+};
 
 export default PdfViewerModal;
