@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Paper, Stack, Typography, Autocomplete, TextField, Button, MenuItem, Chip, CircularProgress, Divider,
 } from '@mui/material';
@@ -27,11 +27,17 @@ const TrackDelivery = () => {
 
   // Came from a "Do it now" / consignment card → auto-select the challan: exact DC
   // (?dc) first, else the order's latest challan (?so).
+  // Keyed on the so/dc TARGET, not a "already picked" flag: this route stays mounted
+  // when only the query string changes, so guarding on `dc` would keep showing the
+  // first consignment when the user opens a later one (?dc=DC-071 → ?dc=DC-073).
+  const presetRef = useRef('');
   useEffect(() => {
-    if (dc || !challans.length || !(soParam || dcParam)) return;
+    const target = `${dcParam}|${soParam}`;
+    if (!dcParam && !soParam) return;
+    if (presetRef.current === target || !challans.length) return;
     const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
       || (soParam && challans.find((c) => c.soNumber === soParam));
-    if (match) setDc(match);
+    if (match) { presetRef.current = target; setDc(match); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [soParam, dcParam, challans]);
   const [status, setStatus] = useState('Delivered');

@@ -49,8 +49,9 @@ const StatCard = ({ icon: Icon, label, value, tint, color }) => (
 const InvoicesList = () => {
   const [searchParams] = useSearchParams();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  // Deep-link support: ?so=AGL/SO-… (from an FMS task) pre-filters to that order.
-  const [searchTerm, setSearchTerm] = useState(searchParams.get('so') || '');
+  // Deep-link support: ?so=AGL/SO-… (from an FMS task) pre-filters to that order;
+  // ?inv=INV-021 (from the FMS Step View) narrows to the one invoice of a challan.
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('inv') || searchParams.get('so') || '');
 
   // The factory's invoice book is small — pull the ledger once and filter/total
   // client-side so search is instant and the summary reflects EVERY matching row,

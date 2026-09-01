@@ -16,6 +16,7 @@ import {
   useRejectRevisionMutation,
 } from '../../store/api/pricingApi';
 import { fmtINR } from '../../utils/formatters';
+import { PageHero, pageSx, panelSx, primaryBtnSx, ghostBtnSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const initials = (name = '') =>
   name.split(/\s+/).filter(Boolean).map((s) => s[0]).slice(0, 2).join('').toUpperCase() || '?';
@@ -51,59 +52,28 @@ const ApprovalInbox = () => {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{
-        position: 'relative', overflow: 'hidden', color: '#fff',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 6 },
-      }}>
-        <Box aria-hidden sx={{ position: 'absolute', width: 420, height: 420, borderRadius: '50%', top: -160, right: -120, background: 'radial-gradient(circle, rgba(96,165,250,0.32) 0%, rgba(96,165,250,0) 60%)' }} />
-        <Stack direction="row" spacing={2} alignItems="center" sx={{ position: 'relative' }}>
-          <Box sx={{
-            width: 52, height: 52, borderRadius: 2.5,
-            display: 'grid', placeItems: 'center',
-            background: 'rgba(255,255,255,0.14)',
-            border: '1px solid rgba(255,255,255,0.22)',
-          }}>
-            <ClipboardCheck size={26} color="#fff" />
-          </Box>
-          <Box sx={{ flex: 1 }}>
-            <Stack direction="row" spacing={1.25} alignItems="center">
-              <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
-                Approval Inbox
-              </Typography>
-              <Chip
-                icon={<Crown size={13} style={{ marginLeft: 6 }} />}
-                label="MD"
-                size="small"
-                sx={{
-                  bgcolor: 'rgba(255,255,255,0.15)', color: '#fff', fontWeight: 700,
-                  border: '1px solid rgba(255,255,255,0.25)',
-                  '& .MuiChip-icon': { color: '#fff' },
-                }}
-              />
-            </Stack>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>
-              {rows.length === 0
-                ? 'All clear — no revisions awaiting your approval.'
-                : `${rows.length} revision${rows.length === 1 ? '' : 's'} awaiting your approval.`}
-            </Typography>
-          </Box>
-        </Stack>
-      </Box>
+    <Box sx={pageSx}>
+      <PageHero
+        icon={ClipboardCheck}
+        title="Approval Inbox"
+        subtitle={rows.length === 0
+          ? 'All clear — no revisions awaiting your approval.'
+          : `${rows.length} revision${rows.length === 1 ? '' : 's'} awaiting your approval.`}
+        badge={<Chip icon={<Crown size={12} style={{ marginLeft: 6 }} />} label="MD" size="small"
+          sx={{ height: 22, fontWeight: 800, fontSize: '0.68rem', color: BRAND_DK, bgcolor: alpha(BRAND, 0.1), border: `1px solid ${alpha(BRAND, 0.22)}`, '& .MuiChip-icon': { color: BRAND_DK } }} />}
+      />
 
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, mb: 4, position: 'relative' }}>
+      <Box sx={{ position: 'relative' }}>
         {isFetching && rows.length === 0 && (
           <Stack spacing={1.5}>
             {[...Array(3)].map((_, i) => (
-              <Skeleton key={i} variant="rectangular" height={148} sx={{ borderRadius: 3 }} />
+              <Skeleton key={i} variant="rectangular" height={148} sx={{ borderRadius: '10px' }} />
             ))}
           </Stack>
         )}
 
         {!isFetching && rows.length === 0 && (
-          <Paper sx={{ p: 6, textAlign: 'center', borderRadius: 3 }}>
+          <Paper sx={{ p: 6, textAlign: 'center', borderRadius: '10px' }}>
             <Box sx={{
               width: 72, height: 72, mx: 'auto', mb: 2, borderRadius: '50%',
               display: 'grid', placeItems: 'center',
@@ -125,7 +95,7 @@ const ApprovalInbox = () => {
             const flagged = r.flags?.negativeMargin || r.flags?.priceDecrease || r.flags?.overThreshold || r.flags?.farFutureDated;
             return (
               <Paper key={r._id} sx={{
-                p: 2.5, borderRadius: 3,
+                p: 2.5, borderRadius: '10px',
                 border: r.flags?.negativeMargin
                   ? `1px solid ${alpha(theme.palette.error.main, 0.35)}`
                   : `1px solid ${theme.palette.divider}`,
@@ -292,7 +262,7 @@ const ApprovalInbox = () => {
         </Stack>
       </Box>
 
-      <Dialog open={!!rejectFor} onClose={() => setRejectFor(null)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <Dialog open={!!rejectFor} onClose={() => setRejectFor(null)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: '10px' } }}>
         <DialogTitle sx={{ fontWeight: 800 }}>Reject revision</DialogTitle>
         <DialogContent sx={{ pt: 1 }}>
           <Typography sx={{ fontSize: '0.86rem', color: 'text.secondary', mb: 1.5 }}>

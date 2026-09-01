@@ -18,6 +18,7 @@ import { printCalculatorQuote } from '../../utils/printCalculatorQuote';
 import { fmtINR, fmtInt } from '../../utils/formatters';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePermissions } from '../../hooks/usePermission';
+import { PageHero, pageSx, panelSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 // priceTouched flag distinguishes auto-filled (from master) vs user override.
 // When false, the API call omits manualPrice so the server resolves from the
@@ -68,7 +69,11 @@ const TurnoverCalculator = () => {
   const [asOfDate, setAsOfDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [priceType, setPriceType] = useState('SELLING');
   const [itemType, setItemType] = useState('');   // filters the SKU picker
-  const [viewMode, setViewMode] = useState('with_gst'); // basic | with_gst | inclusive
+  // basic = no GST anywhere · with_gst = GST added on top of the entered prices.
+  // An "inclusive" mode used to sit alongside these, but it ran the identical
+  // maths as with_gst — same GST row, same grand total — so it offered the user
+  // a choice that changed nothing. Removed rather than left as a decoy.
+  const [viewMode, setViewMode] = useState('with_gst'); // basic | with_gst
   const [lines, setLines] = useState([blankLine(), blankLine(), blankLine()]);
   // Single, user-editable GST rate applied to the whole calculation.
   // Defaults to 18% (most common Indian slab); user can change to any number.
@@ -261,48 +266,25 @@ const TurnoverCalculator = () => {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }} onPaste={handlePaste}>
-      {/* Hero */}
-      <Box sx={{
-        position: 'relative', overflow: 'hidden', color: '#fff',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 7 },
-      }}>
-        <Box aria-hidden sx={{ position: 'absolute', width: 420, height: 420, borderRadius: '50%', top: -160, right: -120, background: 'radial-gradient(circle, rgba(96,165,250,0.32) 0%, rgba(96,165,250,0) 60%)' }} />
-        <Stack direction="row" spacing={2.5} alignItems="center" sx={{ position: 'relative' }}>
-          <Box sx={{
-            width: 52, height: 52, borderRadius: 2.5,
-            display: 'grid', placeItems: 'center',
-            background: 'rgba(255,255,255,0.14)',
-            border: '1px solid rgba(255,255,255,0.22)',
-          }}>
-            <Calculator size={26} color="#fff" />
-          </Box>
-          <Box sx={{ flex: 1 }}>
-            <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
-                Turnover Calculator
-              </Typography>
-              {editId && editQuoteRes?.data && (
-                <Chip
-                  label={`Editing draft ${editQuoteRes.data.quoteNumber}`}
-                  size="small"
-                  sx={{ fontWeight: 800, color: '#fff', bgcolor: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.3)' }}
-                />
-              )}
-            </Stack>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5, maxWidth: 720 }}>
-              {editId
-                ? 'Revising an existing draft — change lines, quantities or prices, then Update the draft or Update & Send.'
-                : 'Pick SKUs, enter quantities — prices auto-fill from the master as of the selected date. Manual overrides are flagged. Server-side math, ready to save as a quote.'}
-            </Typography>
-          </Box>
-        </Stack>
-      </Box>
+    <Box sx={pageSx} onPaste={handlePaste}>
+      <PageHero
+        icon={Calculator}
+        title="Turnover Calculator"
+        subtitle={editId
+          ? 'Revising an existing draft — change lines, quantities or prices, then Update the draft or Update & Send.'
+          : 'Pick SKUs, enter quantities — prices auto-fill from the master as of the selected date. Manual overrides are flagged. Server-side math, ready to save as a quote.'}
+        badge={editId && editQuoteRes?.data && (
+          <Chip
+            label={`Editing draft ${editQuoteRes.data.quoteNumber}`}
+            size="small"
+            sx={{ height: 22, fontWeight: 800, fontSize: '0.68rem', color: BRAND_DK, bgcolor: alpha(BRAND, 0.1), border: `1px solid ${alpha(BRAND, 0.22)}` }}
+          />
+        )}
+      />
 
-      <Box sx={{ px: { xs: 1.5, md: 2.5 }, mt: { xs: -3, md: -4 }, position: 'relative' }}>
+      <Box sx={{ position: 'relative' }}>
         {/* Top filters */}
-        <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+        <Paper sx={{ ...panelSx, p: 1.5, mb: 1.5 }}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
             <Autocomplete
               options={partiesRes?.data || []}
@@ -389,7 +371,7 @@ const TurnoverCalculator = () => {
         </Paper>
 
         {/* Lines table */}
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden', mb: 2 }}>
+        <Paper sx={{ borderRadius: '10px', overflow: 'hidden', mb: 2 }}>
           <Box sx={{
             display: 'grid',
             gridTemplateColumns: '40px minmax(280px, 2.4fr) 110px 130px 100px minmax(140px, 1fr) 40px',
@@ -650,7 +632,7 @@ const TurnoverCalculator = () => {
 
         {/* Totals */}
         <Paper sx={{
-          borderRadius: 3, p: 2.5, mb: 4,
+          borderRadius: '10px', p: 2.5, mb: 4,
           background: 'linear-gradient(180deg, #ffffff 0%, #f7f9ff 100%)',
         }}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
@@ -671,7 +653,6 @@ const TurnoverCalculator = () => {
             >
               <ToggleButton value="basic">Basic</ToggleButton>
               <ToggleButton value="with_gst">With GST</ToggleButton>
-              <ToggleButton value="inclusive">Inclusive</ToggleButton>
             </ToggleButtonGroup>
 
             <Box sx={{ flex: 1 }} />
@@ -683,7 +664,7 @@ const TurnoverCalculator = () => {
                   {fmtINR(totals.subtotal)}
                 </Typography>
               </Stack>
-              {(viewMode === 'with_gst' || viewMode === 'inclusive') && (
+              {viewMode === 'with_gst' && (
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
                   <Stack direction="row" spacing={1} alignItems="center">
                     <Typography sx={{ fontSize: '0.82rem', color: 'text.secondary' }}>GST</Typography>

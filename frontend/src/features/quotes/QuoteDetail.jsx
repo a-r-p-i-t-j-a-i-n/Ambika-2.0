@@ -19,6 +19,7 @@ import {
 } from '../../store/api/quoteApi';
 import { fmtINR, fmtInt } from '../../utils/formatters';
 import { usePermissions } from '../../hooks/usePermission';
+import { PageHero, pageSx, panelSx, btnSx, primaryBtnSx, ghostBtnSx, BRAND, BRAND_DK, NAVY, DANGER, O2D } from '../../components/pageKit';
 
 const STATUS_META = (theme) => ({
   DRAFT:           { color: theme.palette.text.secondary, bg: alpha(theme.palette.text.secondary, 0.10), label: 'Draft' },
@@ -126,8 +127,8 @@ const QuoteDetail = () => {
   if (isFetching || !q) {
     return (
       <Box sx={{ p: 4 }}>
-        <Skeleton variant="rectangular" height={200} sx={{ borderRadius: 3, mb: 2 }} />
-        <Skeleton variant="rectangular" height={400} sx={{ borderRadius: 3 }} />
+        <Skeleton variant="rectangular" height={200} sx={{ borderRadius: '10px', mb: 2 }} />
+        <Skeleton variant="rectangular" height={400} sx={{ borderRadius: '10px' }} />
       </Box>
     );
   }
@@ -150,62 +151,56 @@ const QuoteDetail = () => {
     : ['#', 'SKU', 'Qty', 'Unit ₹', 'Amount'];
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{
-        position: 'relative', overflow: 'hidden', color: '#fff',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 3, md: 5 }, pt: { xs: 3, md: 4 }, pb: { xs: 5, md: 6 },
-      }}>
-        <Box aria-hidden sx={{ position: 'absolute', width: 420, height: 420, borderRadius: '50%', top: -160, right: -120, background: 'radial-gradient(circle, rgba(96,165,250,0.32) 0%, rgba(96,165,250,0) 60%)' }} />
-        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ position: 'relative', mb: 2 }}>
-          <IconButton onClick={() => navigate('/quotes')} sx={{ color: '#fff', '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', color: '#fff' } }}>
-            <ArrowLeft size={18} />
-          </IconButton>
-          <Typography sx={{ color: 'rgba(255,255,255,0.78)', fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-            Quotation
-          </Typography>
-        </Stack>
+    <Box sx={pageSx}>
+      {/* Breadcrumb back-link — its own row so the quote number owns the title line. */}
+      <Stack direction="row" spacing={0.75} alignItems="center">
+        <IconButton onClick={() => navigate('/quotes')} size="small"
+          sx={{ color: O2D.sub, border: `1px solid ${O2D.line}`, borderRadius: '6px', bgcolor: O2D.surface, '&:hover': { color: BRAND, borderColor: alpha(BRAND, 0.4) } }}>
+          <ArrowLeft size={16} />
+        </IconButton>
+        <Typography sx={{ color: O2D.sub, fontSize: '0.68rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          Quotation
+        </Typography>
+      </Stack>
 
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ position: 'relative' }} alignItems={{ md: 'flex-end' }}>
-          <Box sx={{ flex: 1 }}>
-            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5, flexWrap: 'wrap' }}>
-              <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em', fontFamily: 'ui-monospace, monospace' }}>
-                {q.quoteNumber}
-              </Typography>
-              <Chip
-                label={m.label}
-                sx={{
-                  height: 28, fontWeight: 800, fontSize: '0.74rem',
-                  bgcolor: 'rgba(255,255,255,0.15)', color: '#fff',
-                  border: '1px solid rgba(255,255,255,0.25)',
-                }}
-              />
-            </Stack>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '1rem', fontWeight: 600 }}>
-              {q.partyName || '—'}{q.poReference ? ` · PO ${q.poReference}` : ''}
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'flex-end' }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.25, flexWrap: 'wrap' }}>
+            <Typography sx={{ color: NAVY, fontSize: { xs: '1.25rem', md: '1.5rem' }, fontWeight: 800, letterSpacing: '-0.02em', fontFamily: 'ui-monospace, monospace' }}>
+              {q.quoteNumber}
             </Typography>
-            <Stack direction="row" spacing={2} sx={{ mt: 1.5, color: 'rgba(255,255,255,0.7)', fontSize: '0.82rem', flexWrap: 'wrap' }}>
-              <span>As of {dayjs(q.asOfDate).format('DD MMM YYYY')}</span>
-              <span>·</span>
-              <span style={{ color: isExpired ? '#fca5a5' : '#fff' }}>
-                Valid until {dayjs(q.validUntil).format('DD MMM YYYY')} ({isExpired ? `expired ${Math.abs(daysLeft)}d ago` : `${daysLeft}d left`})
-              </span>
-            </Stack>
-          </Box>
+            <Chip
+              label={m.label}
+              size="small"
+              sx={{
+                height: 22, fontWeight: 800, fontSize: '0.68rem',
+                bgcolor: alpha(m.color || BRAND, 0.1), color: m.color || BRAND_DK,
+                border: `1px solid ${alpha(m.color || BRAND, 0.22)}`,
+              }}
+            />
+          </Stack>
+          <Typography sx={{ color: O2D.body, fontSize: '0.88rem', fontWeight: 700 }}>
+            {q.partyName || '—'}{q.poReference ? ` · PO ${q.poReference}` : ''}
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ mt: 0.5, color: O2D.sub, fontSize: '0.74rem', flexWrap: 'wrap' }}>
+            <span>As of {dayjs(q.asOfDate).format('DD MMM YYYY')}</span>
+            <span>·</span>
+            <span style={{ color: isExpired ? DANGER : O2D.sub, fontWeight: isExpired ? 800 : 400 }}>
+              Valid until {dayjs(q.validUntil).format('DD MMM YYYY')} ({isExpired ? `expired ${Math.abs(daysLeft)}d ago` : `${daysLeft}d left`})
+            </span>
+          </Stack>
+        </Box>
 
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            <Tooltip title="Open PDF in new tab">
-              <Button startIcon={<Download size={14} />} onClick={openPdf}
-                sx={{ fontWeight: 700, color: '#fff', border: '1px solid rgba(255,255,255,0.25)', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}>
-                View PDF
-              </Button>
-            </Tooltip>
-
-            <Button startIcon={<Share2 size={14} />} onClick={(e) => setShareAnchor(e.currentTarget)}
-              sx={{ fontWeight: 700, color: '#fff', border: '1px solid rgba(255,255,255,0.25)', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}>
-              Share
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Tooltip title="Open PDF in new tab">
+            <Button startIcon={<Download size={14} />} onClick={openPdf} variant="outlined" sx={ghostBtnSx}>
+              View PDF
             </Button>
+          </Tooltip>
+
+          <Button startIcon={<Share2 size={14} />} onClick={(e) => setShareAnchor(e.currentTarget)} variant="outlined" sx={ghostBtnSx}>
+            Share
+          </Button>
             <Menu anchorEl={shareAnchor} open={Boolean(shareAnchor)} onClose={() => setShareAnchor(null)}>
               <MenuItem onClick={() => shareVia('whatsapp')}>
                 <ListItemIcon><MessageCircle size={16} color="#25D366" /></ListItemIcon>
@@ -221,37 +216,40 @@ const QuoteDetail = () => {
               </MenuItem>
             </Menu>
 
-            {q.status === 'DRAFT' && can('quotes.edit') && (
-              <Button startIcon={<Pencil size={14} />} onClick={() => navigate(`/pricing/calculator?edit=${q._id}`)}
-                sx={{ fontWeight: 700, color: '#fff', border: '1px solid rgba(255,255,255,0.25)', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}>
-                Edit draft
-              </Button>
-            )}
-            {q.status === 'DRAFT' && (
-              <Button startIcon={<Send size={14} />} onClick={() => handleAction(sendQuote, 'Quote marked as sent')}
-                sx={{ fontWeight: 700, color: '#fff', bgcolor: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.25)', '&:hover': { bgcolor: 'rgba(255,255,255,0.24)' } }}>
-                Mark sent
-              </Button>
-            )}
-            {['SENT', 'DRAFT'].includes(q.status) && (
-              <Button startIcon={<CheckCircle2 size={14} />} onClick={() => handleAction(acceptQuote, 'Quote accepted')}
-                sx={{ fontWeight: 700, color: '#fff', bgcolor: alpha(theme.palette.success.main, 0.7), '&:hover': { bgcolor: theme.palette.success.main } }}>
-                Accept
-              </Button>
-            )}
-            {['SENT', 'DRAFT'].includes(q.status) && (
-              <Button startIcon={<ShieldOff size={14} />} onClick={handleReject}
-                sx={{ fontWeight: 700, color: '#fff', border: '1px solid rgba(252, 165, 165, 0.4)', '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.2) } }}>
-                Reject
-              </Button>
-            )}
-          </Stack>
+          {q.status === 'DRAFT' && can('quotes.edit') && (
+            <Button startIcon={<Pencil size={14} />} onClick={() => navigate(`/pricing/calculator?edit=${q._id}`)}
+              variant="outlined" sx={ghostBtnSx}>
+              Edit draft
+            </Button>
+          )}
+          {/* Mark sent is the expected next step on a draft, so it carries the
+              brand fill; Accept / Reject stay semantic green / red. */}
+          {q.status === 'DRAFT' && (
+            <Button startIcon={<Send size={14} />} onClick={() => handleAction(sendQuote, 'Quote marked as sent')}
+              variant="contained" sx={primaryBtnSx}>
+              Mark sent
+            </Button>
+          )}
+          {['SENT', 'DRAFT'].includes(q.status) && (
+            <Button startIcon={<CheckCircle2 size={14} />} onClick={() => handleAction(acceptQuote, 'Quote accepted')}
+              variant="contained"
+              sx={{ ...btnSx, bgcolor: '#15803d', '&:hover': { bgcolor: '#166534', boxShadow: 'none' } }}>
+              Accept
+            </Button>
+          )}
+          {['SENT', 'DRAFT'].includes(q.status) && (
+            <Button startIcon={<ShieldOff size={14} />} onClick={handleReject}
+              variant="outlined"
+              sx={{ ...btnSx, color: DANGER, borderColor: alpha(DANGER, 0.35), bgcolor: O2D.surface, '&:hover': { borderColor: DANGER, bgcolor: alpha(DANGER, 0.06) } }}>
+              Reject
+            </Button>
+          )}
         </Stack>
-      </Box>
+      </Stack>
 
       {/* Body */}
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -3, md: -4 }, position: 'relative' }}>
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden', mb: 2 }}>
+      <Box sx={{ position: 'relative' }}>
+        <Paper sx={{ ...panelSx, mb: 1.5 }}>
           <Box sx={{ overflowX: 'auto' }}>
           <Box sx={{ minWidth: TABLE_MIN_W }}>
           <Box sx={{
@@ -330,7 +328,7 @@ const QuoteDetail = () => {
           </Box>
         </Paper>
 
-        <Paper sx={{ p: 2.5, borderRadius: 3, mb: 4 }}>
+        <Paper sx={{ ...panelSx, p: 2.5, mb: 2 }}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={3}>
             <Box sx={{ flex: 1 }}>
               {q.notes && (

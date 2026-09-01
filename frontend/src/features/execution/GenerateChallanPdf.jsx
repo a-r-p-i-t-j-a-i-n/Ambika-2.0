@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, Button, Chip, InputAdornment,
   Table, TableBody, TableCell, TableHead, TableRow, alpha, useTheme, Skeleton, CircularProgress,
-  Autocomplete,
+  Autocomplete, Checkbox, Tooltip,
 } from '@mui/material';
 import { Truck, Eye, Search, FileText, Zap, CheckCircle2, ArrowRight, Printer } from 'lucide-react';
 import dayjs from 'dayjs';
@@ -13,6 +13,7 @@ import { useFmsGate, FmsGateBanner, FmsGateDialog } from '../o2d-fms/FmsGate';
 import { O2D } from '../o2d-fms/o2dTheme';
 import BackButton from '../../components/BackButton';
 import { printChallans } from '../../utils/printChallans';
+import { useGetCompanySettingsQuery } from '../../store/api/pricingApi';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
@@ -47,6 +48,10 @@ const GenerateChallanPdf = () => {
   // When opened from a task, scope the list to that order's challan(s) up front.
   const [search, setSearch] = useState(soFromTask);
   const { data, isFetching } = useGetChallansQuery({ limit: 200, sort: '-dcDate', search: search || undefined });
+  // Letterhead details for the print sheet, so it carries the same address /
+  // phone / email block the server-rendered Preview PDF does.
+  const { data: companyRes } = useGetCompanySettingsQuery();
+  const company = companyRes?.data || {};
   const [busyId, setBusyId] = useState(null);
   const [printing, setPrinting] = useState(false);
   // Gate (when arriving from the FMS step for a specific order).
@@ -66,18 +71,44 @@ const GenerateChallanPdf = () => {
   // The SO currently chosen in the dropdown (drives the list filter + the batch print).
   const [soSel, setSoSel] = useState(soFromTask || '');
 
+  // Which challans the batch print will include. Empty = "all currently listed",
+  // so the button keeps working untouched; ticking any row narrows it to exactly
+  // those. Previously Print always took every row in the list with no way to say
+  // "just this one of the three".
+  const [selected, setSelected] = useState(() => new Set());
+  const toggleRow = (id) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  // Any row leaving the list (filter change) must also leave the selection, or
+  // Print would silently include a challan the user can no longer see.
+  const visibleIds = useMemo(() => rows.map((r) => String(r._id)), [rows]);
+  const selectedVisible = useMemo(
+    () => visibleIds.filter((id) => selected.has(id)),
+    [visibleIds, selected],
+  );
+  const allChecked = visibleIds.length > 0 && selectedVisible.length === visibleIds.length;
+  const someChecked = selectedVisible.length > 0 && !allChecked;
+  const toggleAll = () => setSelected(allChecked ? new Set() : new Set(visibleIds));
+  // What Print will actually produce.
+  const printTargets = useMemo(
+    () => (selectedVisible.length ? rows.filter((r) => selected.has(String(r._id))) : rows),
+    [rows, selected, selectedVisible],
+  );
+
   // Batch print — pull the FULL challan record (items, address, totals) for every
-  // challan currently listed, then open a print sheet with TWO challans per A4 page.
+  // targeted challan, then open a print sheet with TWO challans per A4 page.
   const printAll = async () => {
-    if (!rows.length) { enqueueSnackbar('No challans to print — pick a sales order first.', { variant: 'info' }); return; }
+    if (!printTargets.length) { enqueueSnackbar('No challans to print — pick a sales order first.', { variant: 'info' }); return; }
     setPrinting(true);
     try {
       const token = localStorage.getItem('token');
-      const full = await Promise.all(rows.map((r) => fetch(`${API_BASE}/challans/${r._id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const full = await Promise.all(printTargets.map((r) => fetch(`${API_BASE}/challans/${r._id}`, { headers: { Authorization: `Bearer ${token}` } })
         .then((res) => (res.ok ? res.json() : null)).then((j) => j?.data || null).catch(() => null)));
       const challans = full.filter(Boolean);
       if (!challans.length) throw new Error('Could not load the challans to print.');
-      const ok = printChallans({ challans });
+      const ok = printChallans({ challans, company });
       if (!ok) enqueueSnackbar('Allow pop-ups to open the print preview.', { variant: 'warning' });
     } catch (e) {
       enqueueSnackbar(e.message || 'Could not prepare the print.', { variant: 'error' });
@@ -217,7 +248,11 @@ const GenerateChallanPdf = () => {
               startIcon={printing ? <CircularProgress size={14} color="inherit" /> : <Printer size={16} />}
               sx={{ whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '7px', bgcolor: O2D.brand, '&:hover': { bgcolor: '#1a44bf' } }}
             >
-              {printing ? 'Preparing…' : `Print${rows.length ? ` (${rows.length}) · 2/page` : ''}`}
+              {/* Count reflects what will actually print — the ticked rows, or the
+                  whole list when nothing is ticked — so it can't over-promise. */}
+              {printing
+                ? 'Preparing…'
+                : `Print${printTargets.length ? ` (${printTargets.length})` : ''}${selectedVisible.length ? ' selected' : ''}${printTargets.length ? ' · 2/page' : ''}`}
             </Button>
           </Stack>
           <Typography sx={{ mt: 0.75, fontSize: '0.68rem', color: O2D.sub }}>
@@ -231,6 +266,12 @@ const GenerateChallanPdf = () => {
               <Table size="small" sx={{ minWidth: 820, '& td, & th': { fontSize: '0.76rem', py: 0.6, px: 1.25, borderColor: O2D.lineSoft }, '& tbody tr:hover': { bgcolor: O2D.surfaceAlt } }}>
                 <TableHead>
                   <TableRow sx={{ bgcolor: O2D.surfaceAlt }}>
+                    {/* Tick rows to print just those; leave all clear to print the whole list. */}
+                    <TableCell padding="checkbox">
+                      <Tooltip title={allChecked ? 'Clear selection' : 'Select all listed'}>
+                        <Checkbox size="small" checked={allChecked} indeterminate={someChecked} onChange={toggleAll} />
+                      </Tooltip>
+                    </TableCell>
                     {['DC Number', 'Date', 'Party', 'SO / PO', 'Qty (pcs)', 'Boxes', 'Status'].map((h, i) => (
                       <TableCell key={h} align={[4, 5].includes(i) ? 'right' : 'left'} sx={{ fontWeight: 700, fontSize: '0.64rem !important', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'text.secondary', whiteSpace: 'nowrap' }}>{h}</TableCell>
                     ))}
@@ -239,14 +280,17 @@ const GenerateChallanPdf = () => {
                 </TableHead>
                 <TableBody>
                   {rows.length === 0 && (
-                    <TableRow><TableCell colSpan={8} sx={{ textAlign: 'center', py: 5, color: 'text.disabled' }}>
+                    <TableRow><TableCell colSpan={9} sx={{ textAlign: 'center', py: 5, color: 'text.disabled' }}>
                       <FileText size={28} style={{ opacity: 0.4 }} />
                       <Typography sx={{ fontWeight: 700, mt: 1 }}>No challans found</Typography>
                       <Typography variant="caption">Create an actual dispatch first, then generate its challan here.</Typography>
                     </TableCell></TableRow>
                   )}
                   {rows.map((dc) => (
-                    <TableRow key={dc._id} hover>
+                    <TableRow key={dc._id} hover selected={selected.has(String(dc._id))}>
+                      <TableCell padding="checkbox">
+                        <Checkbox size="small" checked={selected.has(String(dc._id))} onChange={() => toggleRow(String(dc._id))} />
+                      </TableCell>
                       <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: '0.72rem', color: theme.palette.primary.dark, whiteSpace: 'nowrap' }}>{dc.dcNumber}</TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>{fmtDate(dc.dcDate)}</TableCell>
                       <TableCell sx={{ maxWidth: 180 }}><Typography variant="body2" sx={{ fontSize: '0.76rem' }} noWrap title={dc.partyName}>{dc.partyName || '—'}</Typography></TableCell>

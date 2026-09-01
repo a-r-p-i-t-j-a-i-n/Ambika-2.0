@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
   Typography, IconButton, AppBar, Toolbar, useTheme, useMediaQuery,
@@ -87,7 +87,7 @@ const navSections = [
               { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/ims/stock' },
               { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
               { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
-              { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
+              { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
           },
@@ -100,8 +100,8 @@ const navSections = [
               { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/rm-ims/stock' },
               { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
               { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
-              { text: 'Coil → Circle Conversion', icon: <Recycle size={19} />,      path: '/rm-ims/conversion' },
-              { text: 'Reorder & Buying List', icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
+              { text: 'Cut Coils into Circles', icon: <Recycle size={19} />,        path: '/rm-ims/conversion' },
+              { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
               { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
             ],
           },
@@ -247,14 +247,14 @@ const PAGE_TITLES = {
   '/ims/item':               'Consumables & Packaging — Item',
   '/ims/stock-in':           'Consumables & Packaging — Stock In',
   '/ims/stock-out':          'Consumables & Packaging — Stock Out',
-  '/ims/reorder':            'Consumables & Packaging — Reorder List',
+  '/ims/reorder':            'Consumables & Packaging — Buying List',
   '/ims/movements':          'Consumables & Packaging — Movements',
   '/ims':                    'Consumables & Packaging IMS',
   '/rm-ims/stock':           'Raw Material — Stock & Master',
   '/rm-ims/stock-in':        'Raw Material — Stock In',
   '/rm-ims/stock-out':       'Raw Material — Stock Out',
-  '/rm-ims/conversion':      'Raw Material — Coil → Circle Conversion',
-  '/rm-ims/reorder':         'Raw Material — Reorder List',
+  '/rm-ims/conversion':      'Raw Material — Cut Coils into Circles',
+  '/rm-ims/reorder':         'Raw Material — Buying List',
   '/rm-ims/movements':       'Raw Material — Movements',
   '/rm-ims':                 'Raw Material IMS',
   '/fg-ims/stock':           'Finished Goods — Stock & Master',
@@ -384,13 +384,22 @@ const MainLayout = () => {
     return out;
   }, [user, can, canAny, isRoot, pendingCount]);
 
-  const handleDrawerToggle = () => setMobileOpen((v) => !v);
-  const handleLogout = () => {
+  // `useNavigate()` hands back a NEW function identity on every render of this
+  // subtree. Calling it directly from the sidebar would make every nav row's
+  // onClick unstable, which in turn makes the memoised drawer below rebuild on
+  // every render. Route through a ref so `go` is stable for the component's
+  // whole life while still calling the current navigate.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const go = useCallback((to) => navigateRef.current(to), []);
+
+  const handleDrawerToggle = useCallback(() => setMobileOpen((v) => !v), []);
+  const handleLogout = useCallback(() => {
     dispatch(logout());
     // Wipe all cached API data so the next user never sees the previous user's data.
     dispatch(baseApi.util.resetApiState());
-    navigate('/login');
-  };
+    navigateRef.current('/login');
+  }, [dispatch]);
 
   const initials = (user?.name || user?.email || 'U')
     .split(' ')
@@ -428,7 +437,7 @@ const MainLayout = () => {
     // an expandable group so they sit visually under their parent.
     const leafButton = (item, isSelected, { indent = false, onClick } = {}) => (
       <ListItemButton
-        onClick={onClick || (() => { navigate(item.path); if (isMobile) setMobileOpen(false); })}
+        onClick={onClick || (() => { go(item.path); if (isMobile) setMobileOpen(false); })}
         selected={isSelected}
         sx={{
           position: 'relative',
@@ -501,7 +510,7 @@ const MainLayout = () => {
               <Tooltip title={item.text} placement="right" arrow>
                 <Box sx={{ width: '100%' }}>
                   {leafButton(item, active, {
-                    onClick: () => { navigate(firstLeafPath(item)); if (isMobile) setMobileOpen(false); },
+                    onClick: () => { go(firstLeafPath(item)); if (isMobile) setMobileOpen(false); },
                   })}
                 </Box>
               </Tooltip>
@@ -536,7 +545,28 @@ const MainLayout = () => {
                   : <ChevronRight size={15} color={theme.palette.text.secondary} />}
               </ListItemButton>
             </ListItem>
-            <Collapse in={open} timeout={220} unmountOnExit>
+            {/* NO `unmountOnExit` here — it crashed the whole app.
+                react-transition-group's Transition runs this on every update:
+
+                  else if (props.unmountOnExit && state.status === EXITED)
+                    this.setState({ status: UNMOUNTED })
+
+                i.e. a *collapsed* group schedules a state update from
+                componentDidUpdate — during the layout phase. MainLayout
+                re-renders several times per navigation (the router hands
+                `useNavigate()` a new identity as the route settles, and the
+                lazy chunk and its queries each commit separately), and with
+                nine groups — three of them nested, so they remount into EXITED
+                whenever their parent re-enters — those updates compound past
+                React's 50-nested-update ceiling. React then aborts the render
+                with "Maximum update depth exceeded", which the RouteErrorBoundary
+                catches and turns into the full-screen "Something went wrong"
+                page. It fired on ANY navigation between two different nav
+                groups, which is why it looked random.
+
+                Without it the collapsed children simply stay mounted at height
+                0 — a few dozen cheap list rows, and the animation is unchanged. */}
+            <Collapse in={open} timeout={220}>
               <List disablePadding>
                 {item.children.map((child) => renderNavItem(child, depth + 1))}
               </List>
@@ -662,7 +692,7 @@ const MainLayout = () => {
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
             <Tooltip title={`${user?.name || 'Profile'} — view profile`} placement="right" arrow>
               <Avatar
-                onClick={() => { navigate('/profile'); if (isMobile) setMobileOpen(false); }}
+                onClick={() => { go('/profile'); if (isMobile) setMobileOpen(false); }}
                 sx={{
                   width: 38, height: 38, cursor: 'pointer',
                   background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
@@ -709,11 +739,11 @@ const MainLayout = () => {
               <Box
                 role="button"
                 tabIndex={0}
-                onClick={() => { navigate('/profile'); if (isMobile) setMobileOpen(false); }}
+                onClick={() => { go('/profile'); if (isMobile) setMobileOpen(false); }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    navigate('/profile');
+                    go('/profile');
                     if (isMobile) setMobileOpen(false);
                   }
                 }}
@@ -780,6 +810,28 @@ const MainLayout = () => {
     );
   };
 
+  // Build the sidebar once per meaningful change, not once per render.
+  //
+  // MainLayout re-renders several times for a single navigation — the router
+  // hands `useNavigate()` a fresh identity as the route settles, and the lazy
+  // route chunk plus its queries each land in their own commit. That is
+  // survivable on its own, but the sidebar holds nine animated <Collapse>
+  // groups, and a Collapse whose props change schedules a state update from
+  // componentDidUpdate. Rebuilding the whole tree on every one of those renders
+  // multiplied a handful of renders into enough nested updates to blow past
+  // React's ceiling, so ANY navigation between two different nav groups could
+  // abort with "Maximum update depth exceeded" and drop the user on the error
+  // screen. Memoising keeps the transitions still between real changes.
+  const mini = isMobile ? false : collapsed;
+  const drawerContent = useMemo(
+    // renderDrawerContent closes over exactly the values listed below (`go` and
+    // `handleLogout` are the stable wrappers created above), so re-invoking it
+    // only when one of them changes is complete — nothing goes stale.
+    () => renderDrawerContent(mini),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mini, isMobile, sections, location.pathname, location.search, openMenus, user, initials, go, handleLogout],
+  );
+
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
       {/* Mobile top bar */}
@@ -808,38 +860,41 @@ const MainLayout = () => {
         </Toolbar>
       </AppBar>
 
-      {/* Sidebar */}
+      {/* Sidebar — exactly ONE nav tree is mounted at a time.
+          Previously both drawers rendered at every breakpoint, the off-breakpoint
+          one merely hidden with `display: none` (and the mobile one held open by
+          `keepMounted`). That doubled the nav — including its nine <Collapse>
+          transitions — and the hidden copy can never measure a height, so its
+          transitions never settle. Switching in JS keeps the work to one tree. */}
       <Box component="nav" sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}>
-        <Drawer
-          variant="temporary"
-          open={mobileOpen}
-          onClose={handleDrawerToggle}
-          ModalProps={{ keepMounted: true }}
-          sx={{
-            display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: EXPANDED_WIDTH },
-          }}
-        >
-          {renderDrawerContent(false)}
-        </Drawer>
-        <Drawer
-          variant="permanent"
-          open
-          sx={{
-            display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: drawerWidth,
-              overflowX: 'hidden',
-              transition: theme.transitions.create('width', {
-                easing: theme.transitions.easing.sharp,
-                duration: theme.transitions.duration.shorter,
-              }),
-            },
-          }}
-        >
-          {renderDrawerContent(collapsed)}
-        </Drawer>
+        {isMobile ? (
+          <Drawer
+            variant="temporary"
+            open={mobileOpen}
+            onClose={handleDrawerToggle}
+            sx={{ '& .MuiDrawer-paper': { boxSizing: 'border-box', width: EXPANDED_WIDTH } }}
+          >
+            {drawerContent}
+          </Drawer>
+        ) : (
+          <Drawer
+            variant="permanent"
+            open
+            sx={{
+              '& .MuiDrawer-paper': {
+                boxSizing: 'border-box',
+                width: drawerWidth,
+                overflowX: 'hidden',
+                transition: theme.transitions.create('width', {
+                  easing: theme.transitions.easing.sharp,
+                  duration: theme.transitions.duration.shorter,
+                }),
+              },
+            }}
+          >
+            {drawerContent}
+          </Drawer>
+        )}
 
         {/* Collapse / expand toggle — sits on the sidebar's edge (desktop only) */}
         <Tooltip title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} placement="right" arrow>

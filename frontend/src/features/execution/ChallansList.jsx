@@ -49,7 +49,10 @@ const ChallansList = () => {
   // Came from an FMS "Do it now" (ACTUAL_DISPATCH) → auto-open the dispatch entry
   // pre-selected to that SO, so the doer only fills the loadout.
   const cameFromTask = !!(searchParams.get('fromTask') && searchParams.get('fromStep'));
-  const [searchTerm, setSearchTerm] = useState(soParam);
+  // ?dc=DC-047 (from the FMS Step View's "view this challan") narrows straight to
+  // that one consignment instead of the order's whole challan list.
+  const dcParam = searchParams.get('dc') || '';
+  const [searchTerm, setSearchTerm] = useState(dcParam || soParam);
   const [status, setStatus] = useState('');
   const [party, setParty] = useState('');
   const [from, setFrom] = useState('');

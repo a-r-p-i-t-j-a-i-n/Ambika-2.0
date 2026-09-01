@@ -143,6 +143,13 @@ const enrichSteps = (process, defMap) => {
   const obj = process.toObject ? process.toObject() : process;
   obj.steps = (obj.steps || []).map((s) => {
     const def = defMap.get(s.stepCode);
+    const storedActionLinks = s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : []);
+    // Existing processes were created before 2.06 carried its actual-dispatch
+    // action. Surface it alongside the challan-PDF action immediately, so every
+    // doer reaches the same task/checklist workflow without a data migration.
+    const actionLinks = (def?.triggerKey === 'ACTUAL_DISPATCH' && !storedActionLinks.includes('ACTUAL_DISPATCH'))
+      ? ['ACTUAL_DISPATCH', ...storedActionLinks]
+      : storedActionLinks;
     return {
       ...s,
       name:        def?.name || s.stepCode,
@@ -166,8 +173,8 @@ const enrichSteps = (process, defMap) => {
       checklistDone:  (s.checklist || []).filter((c) => c.done).length,
       // Normalise connected screens to an array (legacy single → [single]) and
       // count how many have been completed, for the "x/y actions done" summary.
-      actionLinks: (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : [])),
-      actionLinksTotal: (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : [])).length,
+      actionLinks,
+      actionLinksTotal: actionLinks.length,
       actionLinksDone: (s.actionProgress || []).length,
       isOverdue: s.status === O2D_STEP_STATUS.PENDING && s.planned && new Date(s.planned) < new Date(),
     };
@@ -453,6 +460,11 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       phaseNo,
       isUnplanned: !!c.isUnplanned,
       dcStatus: c.status,
+      // The generated delivery-challan PDF for THIS challan (challan.pdfUrl). Lets
+      // the tracker show step 2.06's PDF action per consignment — generated or not —
+      // instead of one shared step-level flag that would mark every challan done the
+      // moment the first PDF was made.
+      pdfUrl: c.pdfUrl || null,
       delivery: { delivered, status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'), date: c.deliveryDate || null },
       invoice: {
         has: !!inv, invoiceNo: inv?.invoiceNo || null, status: inv?.status || null, date: inv?.invoiceDate || null,

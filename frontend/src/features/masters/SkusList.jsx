@@ -18,8 +18,11 @@ import {
   useUpdateSkuMutation,
 } from '../../store/api/skuApi';
 import { usePermission } from '../../hooks/usePermission';
-
-const BRAND = { primary: '#2563eb', success: '#059669', warning: '#d97706', error: '#dc2626', wip: '#7c3aed' };
+import {
+  O2D, BRAND, BRAND_DK, NAVY, DANGER,
+  Pill, Empty, CellText, PageHeading, NoRows,
+  gridSx, pageSx, panelSx, fieldSx, btnSx,
+} from './components/masterUi';
 
 // Item-type metadata — labels, colours and the kind tabs.
 const TYPE_META = {
@@ -123,9 +126,9 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { width: { xs: '100%', sm: 520 }, display: 'flex', flexDirection: 'column' } }}>
-      <Box sx={{ p: 2.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0' }}>
+      <Box sx={{ p: 2.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${O2D.line}` }}>
         <Stack direction="row" spacing={1.3} alignItems="center">
-          <Box sx={{ p: 1, borderRadius: '10px', bgcolor: alpha(BRAND.primary, 0.08), display: 'flex', color: BRAND.primary }}>
+          <Box sx={{ p: 1, borderRadius: '10px', bgcolor: alpha(BRAND, 0.08), display: 'flex', color: BRAND }}>
             <PackagePlus size={20} />
           </Box>
           <Box>
@@ -168,7 +171,7 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
         <TextField label="Packing Details" value={form.packingDetails} onChange={(e) => updateField('packingDetails', e.target.value)} minRows={3} multiline fullWidth />
       </Box>
 
-      <Box sx={{ p: 2.5, borderTop: '1px solid #e2e8f0', display: 'flex', gap: 1.5, bgcolor: '#f8fafc' }}>
+      <Box sx={{ p: 2.5, borderTop: `1px solid ${O2D.line}`, display: 'flex', gap: 1.5, bgcolor: O2D.surfaceAlt }}>
         <Button variant="outlined" onClick={onClose} fullWidth>Cancel</Button>
         <Button variant="contained" onClick={handleSave} disabled={isSaving} startIcon={isSaving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} fullWidth>
           {sku?._id ? 'Save Changes' : 'Register SKU'}
@@ -230,46 +233,44 @@ const SkusList = () => {
   };
 
   const columns = [
-    { field: 'name', headerName: 'SKU ITEM NAME', flex: 1, minWidth: 220,
-      renderCell: (p) => <Typography variant="body2" fontWeight={800}>{p.value}</Typography>
+    { field: 'name', headerName: 'SKU item name', flex: 1, minWidth: 220,
+      renderCell: (p) => <CellText weight={700} color={NAVY}>{p.value}</CellText>
     },
-    { field: 'code', headerName: 'SKU CODE', width: 150,
-      renderCell: (p) => <Typography variant="body2" fontWeight={900} color="primary.main">{p.value}</Typography>
+    { field: 'code', headerName: 'SKU code', width: 165,
+      renderCell: (p) => <CellText mono weight={700} color={BRAND}>{p.value}</CellText>
     },
-    { field: 'itemType', headerName: 'TYPE', width: 140,
+    // width 150 (was 140) so "Finished Good" never wraps or clips inside its pill.
+    // Every type pill is held to one width so the column reads as a single set
+    // rather than a ragged edge — "Finished Good" measures ~95px, the widest of
+    // the five labels, so 104 clears it with room to spare on any font stack.
+    { field: 'itemType', headerName: 'Type', width: 150,
       renderCell: (p) => {
         const m = TYPE_META[p.value] || TYPE_META.FINISHED_GOOD;
-        return (
-          <Box sx={{ px: 1.2, py: 0.4, borderRadius: '8px', bgcolor: alpha(m.color, 0.1),
-            color: m.color, fontSize: '0.68rem', fontWeight: 800, border: `1px solid ${alpha(m.color, 0.2)}` }}>
-            {m.label}
-          </Box>
-        );
+        return <Pill color={m.color} minWidth={104}>{m.label}</Pill>;
       }
     },
-    { field: 'category', headerName: 'GROUP', width: 150,
+    { field: 'category', headerName: 'Group', width: 150,
+      renderCell: (p) => (p.value ? <CellText color={O2D.sub}>{p.value}</CellText> : <Empty />)
+    },
+    { field: 'pcsPerBox', headerName: 'Pcs/box', width: 100, align: 'center', headerAlign: 'center',
+      renderCell: (p) => (p.value ? <CellText weight={700} color={NAVY}>{p.value}</CellText> : <Empty />)
+    },
+    { field: 'unit', headerName: 'Unit', width: 92, align: 'center', headerAlign: 'center',
+      renderCell: (p) => <Pill color={O2D.sub}>{p.value || 'PCS'}</Pill>
+    },
+    { field: 'actions', headerName: '', width: canDelete ? 104 : 68, sortable: false, align: 'center', headerAlign: 'center',
       renderCell: (p) => (
-        <Typography variant="body2" fontWeight={600} color="text.secondary">{p.value || '—'}</Typography>
-      )
-    },
-    { field: 'pcsPerBox', headerName: 'PCS/BOX', width: 95, align: 'center', headerAlign: 'center',
-      renderCell: (p) => <Typography variant="body2" fontWeight={700}>{p.value || '-'}</Typography>
-    },
-    { field: 'unit', headerName: 'UNIT', width: 80, align: 'center', headerAlign: 'center',
-      renderCell: (p) => <Typography variant="body2" fontWeight={700} color="text.secondary">{p.value || 'PCS'}</Typography>
-    },
-    { field: 'actions', headerName: '', width: canDelete ? 110 : 70, sortable: false, align: 'center',
-      renderCell: (p) => (
-        <Stack direction="row" spacing={0.25}>
+        <Stack direction="row" spacing={0.25} sx={{ alignSelf: 'center' }}>
           <Tooltip title="Edit SKU">
-            <IconButton size="small" onClick={() => handleEdit(p.row)} sx={{ color: BRAND.primary }}>
+            <IconButton size="small" onClick={() => handleEdit(p.row)}
+              sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}>
               <Edit3 size={15} />
             </IconButton>
           </Tooltip>
           {canDelete && (
             <Tooltip title="Delete SKU">
               <IconButton size="small" onClick={() => setDeleteTarget(p.row)}
-                sx={{ color: BRAND.error, '&:hover': { bgcolor: alpha(BRAND.error, 0.08), color: BRAND.error } }}>
+                sx={{ color: DANGER, '&:hover': { bgcolor: alpha(DANGER, 0.1) } }}>
                 <Trash2 size={15} />
               </IconButton>
             </Tooltip>
@@ -280,32 +281,31 @@ const SkusList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={pageSx}>
       {/* Header */}
-      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
-        <Box>
-          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 800, color: '#0b2545', letterSpacing: '-0.015em' }}>SKU Master</Typography>
-          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>
-            All items — finished goods, raw material, consumables &amp; packing
-          </Typography>
-        </Box>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ width: { xs: '100%', md: 'auto' } }}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 1.75 }}>
+        <PageHeading title="SKU Master" subtitle="All items — finished goods, raw material, consumables & packing" />
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ width: { xs: '100%', md: 'auto' } }}>
           <TextField size="small" placeholder="Search SKU item or code" value={searchTerm}
             onChange={(e) => { setSearchTerm(e.target.value); setPaginationModel((p) => ({ ...p, page: 0 })); }}
-            sx={{ width: { xs: '100%', sm: 250 }, '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }}
-            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }}
+            sx={{ ...fieldSx, width: { xs: '100%', sm: 250 } }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} color={O2D.faint} /></InputAdornment> }}
           />
-          <Button variant="outlined" startIcon={isImporting ? <CircularProgress size={16} /> : <Upload size={16} />} disabled={isImporting} onClick={handleImportSheetItems} sx={{ bgcolor: '#fff', whiteSpace: 'nowrap' }}>
+          <Button variant="outlined" startIcon={isImporting ? <CircularProgress size={15} /> : <Upload size={15} />}
+            disabled={isImporting} onClick={handleImportSheetItems}
+            sx={{ ...btnSx, bgcolor: O2D.surface, color: BRAND_DK, borderColor: O2D.line, '&:hover': { borderColor: BRAND, bgcolor: alpha(BRAND, 0.04) } }}>
             Load Sheet SKUs
           </Button>
-          <Button variant="contained" startIcon={<Plus size={16} />} onClick={handleAdd} sx={{ whiteSpace: 'nowrap' }}>
+          <Button variant="contained" startIcon={<Plus size={15} />} onClick={handleAdd}
+            sx={{ ...btnSx, bgcolor: BRAND, '&:hover': { bgcolor: BRAND_DK } }}>
             Register SKU
           </Button>
         </Stack>
       </Box>
 
-      {/* Kind tabs */}
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+      {/* Kind tabs — segmented filter. No lift-on-hover: rows of chips that move
+          under the cursor make the toolbar feel unstable when scanning counts. */}
+      <Stack direction="row" spacing={0.85} flexWrap="wrap" useFlexGap>
         {SKU_KINDS.map((kind) => {
           const Icon = kind.icon;
           const selected = itemType === kind.key;
@@ -315,26 +315,24 @@ const SkusList = () => {
               key={kind.key || 'all'}
               onClick={() => handleKind(kind.key)}
               sx={{
-                display: 'flex', alignItems: 'center', gap: 0.85, flexShrink: 0,
-                px: 1.5, py: 0.85, borderRadius: 2, cursor: 'pointer',
-                border: `1.5px solid ${selected ? BRAND.primary : '#e2e8f0'}`,
-                bgcolor: selected ? BRAND.primary : '#fff',
-                color: selected ? '#fff' : '#475569',
-                transition: 'all 0.15s ease',
-                '&:hover': { borderColor: BRAND.primary, transform: 'translateY(-1px)' },
+                display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0,
+                height: 34, px: 1.35, borderRadius: '8px', cursor: 'pointer',
+                border: `1px solid ${selected ? BRAND : O2D.line}`,
+                bgcolor: selected ? BRAND : O2D.surface,
+                transition: 'background .15s, border-color .15s',
+                '&:hover': selected ? { bgcolor: BRAND_DK } : { borderColor: alpha(BRAND, 0.45), bgcolor: alpha(BRAND, 0.04) },
               }}
             >
-              <Icon size={15} color={selected ? '#ffffff' : '#64748b'} />
-              <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, whiteSpace: 'nowrap',
-                color: selected ? '#ffffff' : '#0b2545' }}>
+              <Icon size={14} color={selected ? '#ffffff' : O2D.sub} />
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 800, whiteSpace: 'nowrap', color: selected ? '#fff' : NAVY }}>
                 {kind.label}
               </Typography>
               <Box sx={{
-                minWidth: 22, height: 18, px: 0.6, borderRadius: 0.75,
+                minWidth: 20, height: 17, px: 0.55, borderRadius: '5px',
                 display: 'grid', placeItems: 'center',
-                bgcolor: selected ? 'rgba(255,255,255,0.24)' : alpha('#0b2545', 0.06),
-                color: selected ? '#fff' : '#475569',
-                fontSize: '0.68rem', fontWeight: 800,
+                bgcolor: selected ? alpha('#ffffff', 0.22) : alpha(NAVY, 0.06),
+                color: selected ? '#fff' : O2D.sub,
+                fontSize: '0.65rem', fontWeight: 800,
               }}>
                 {count}
               </Box>
@@ -343,7 +341,7 @@ const SkusList = () => {
         })}
       </Stack>
 
-      <Paper sx={{ flexGrow: 1, borderRadius: '14px', overflow: 'hidden', border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+      <Paper sx={panelSx}>
         <DataGrid
           rows={data?.data || []}
           columns={columns}
@@ -355,17 +353,16 @@ const SkusList = () => {
           onPaginationModelChange={setPaginationModel}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
-          rowHeight={48}
-          columnHeaderHeight={44}
+          disableColumnMenu
+          rowHeight={46}
+          columnHeaderHeight={42}
           slots={{
             noRowsOverlay: () => (
-              <Stack alignItems="center" justifyContent="center" sx={{ height: '100%', color: 'text.disabled', gap: 0.5 }}>
-                <Typography sx={{ fontWeight: 800 }}>No SKUs here</Typography>
-                <Typography sx={{ fontSize: '0.8rem' }}>Try another type, clear the search, or register a new SKU.</Typography>
-              </Stack>
+              <NoRows icon={PackagePlus} title="No SKUs here"
+                hint="Try another type, clear the search, or register a new SKU." />
             ),
           }}
-          sx={{ border: 0, '--DataGrid-overlayHeight': '220px' }}
+          sx={gridSx}
         />
       </Paper>
 
@@ -385,7 +382,7 @@ const SkusList = () => {
         PaperProps={{ sx: { borderRadius: 3 } }}
       >
         <DialogTitle sx={{ pt: 3, px: 3, pb: 1.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND.error, 0.1), color: BRAND.error }}>
+          <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(DANGER, 0.1), color: DANGER }}>
             <AlertTriangle size={20} />
           </Box>
           <Box>
@@ -397,8 +394,8 @@ const SkusList = () => {
         </DialogTitle>
         <DialogContent sx={{ px: 3 }}>
           {deleteTarget && (
-            <Box sx={{ p: 2, borderRadius: 2, bgcolor: alpha(BRAND.error, 0.04), border: `1px solid ${alpha(BRAND.error, 0.18)}` }}>
-              <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 900, fontSize: '0.95rem', color: BRAND.error }}>
+            <Box sx={{ p: 2, borderRadius: 2, bgcolor: alpha(DANGER, 0.04), border: `1px solid ${alpha(DANGER, 0.18)}` }}>
+              <Typography sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 900, fontSize: '0.95rem', color: DANGER }}>
                 {deleteTarget.code}
               </Typography>
               <Typography sx={{ fontWeight: 600, fontSize: '0.86rem' }}>{deleteTarget.name}</Typography>

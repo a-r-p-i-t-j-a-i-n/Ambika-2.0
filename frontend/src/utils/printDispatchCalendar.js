@@ -89,9 +89,18 @@ const CHROME_CSS = `
   .print-bar button { border: 0; border-radius: 4px; background: #0b2545; color: #fff; padding: 7px 14px; font-weight: 800; cursor: pointer; }
   .print-bar button + button { margin-left: 8px; background: #fff; color: #0f172a; border: 1px solid #94a3b8; }
   @media print {
-    body { padding-top: 0; background: #fff; }
+    /* !important, and emitted AFTER the sheet's own CSS in printSheet(): a sheet
+       rule of equal specificity coming later would otherwise keep its screen
+       min-height / margin / padding on paper and spill a blank second page. */
+    /* BOTH html and body — overriding body alone leaves the html canvas painted
+       #e9e7e1, which prints as a grey band below the sheet. */
+    html, body { padding-top: 0 !important; background: #fff !important; }
     .print-bar { display: none !important; }
-    .sheet { margin: 0; width: auto; min-height: 0; padding: 0; }
+    .sheet {
+      margin: 0 !important; width: auto !important;
+      min-height: 0 !important; height: auto !important; padding: 0 !important;
+    }
+    html, body { height: auto !important; }
   }
 `;
 
@@ -110,10 +119,14 @@ const openPrintWindow = (html) => {
 const printSheet = (sheet, docTitle) => openPrintWindow(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8" />
 <title>${esc(docTitle)} - ${esc(sheet.monthLabel)}</title>
-<style>${CHROME_CSS}${sheet.css}</style></head>
+${/* Sheet CSS first, chrome LAST — the print reset must be able to win. */ ''}
+<style>${sheet.css}${CHROME_CSS}</style></head>
 <body>
   <div class="print-bar">
-    <div><strong>${esc(docTitle)} Preview</strong> - choose Save as PDF in the print dialog.</div>
+    <div>
+      <strong>${esc(docTitle)} Preview</strong> - choose Save as PDF in the print dialog.
+      <span style="color:#6b7280">In the dialog set <b>Scale 100%</b>, <b>Margins: Default</b> and turn <b>Headers and footers OFF</b> - those settings decide whether it lands on one sheet.</span>
+    </div>
     <div><button onclick="window.print()">Print / Save PDF</button><button onclick="window.close()">Close</button></div>
   </div>
   <div class="sheet">${sheet.inner}</div>
@@ -136,7 +149,8 @@ const downloadSheet = async (sheet, fileName) => {
       import('jspdf'),
       import('html2canvas'),
     ]);
-    const canvas = await html2canvas(host.querySelector('.sheet'), {
+    const sheetEl = host.querySelector('.sheet');
+    const canvas = await html2canvas(sheetEl, {
       scale: 2,                    // 2x so small print stays crisp
       backgroundColor: '#ffffff',
       logging: false,
@@ -146,26 +160,63 @@ const downloadSheet = async (sheet, fileName) => {
     const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: sheet.orientation });
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
-    const imgH = (canvas.height * pageW) / canvas.width;
-    const img = canvas.toDataURL('image/jpeg', 0.92);
 
-    if (sheet.fitToPage && imgH > pageH) {
-      // Scale down to a single page, centred, aspect preserved.
-      const h = pageH;
+    if (sheet.fitToPage) {
+      // Single-page document (the month grid): shrink to fit, centred.
+      const imgH = (canvas.height * pageW) / canvas.width;
+      const h = Math.min(pageH, imgH);
       const w = (canvas.width * h) / canvas.height;
-      pdf.addImage(img, 'JPEG', (pageW - w) / 2, 0, w, h);
-    } else {
-      // Long sheets are paged by re-placing the same image at a negative offset.
-      pdf.addImage(img, 'JPEG', 0, 0, pageW, imgH);
-      let remaining = imgH - pageH;
-      let offset = 0;
-      while (remaining > 0) {
-        offset -= pageH;
-        pdf.addPage();
-        pdf.addImage(img, 'JPEG', 0, offset, pageW, imgH);
-        remaining -= pageH;
-      }
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', (pageW - w) / 2, 0, w, h);
+      pdf.save(fileName);
+      return true;
     }
+
+    // ── Multi-page: slice the source canvas, never the layout ────────────────
+    // The old approach re-placed one tall image at negative offsets, which cut
+    // straight through whatever sat on the boundary — hence half a day card at the
+    // foot of a page and the other half on the next. Instead, break only at the
+    // BOTTOM of a [data-block] element, then copy each slice into its own canvas.
+    const M = 8;                                        // mm margin on every page
+    const drawW = pageW - M * 2;
+    const pxPerCssPx = canvas.width / sheetEl.offsetWidth;
+    const mmPerPx = sheet.widthMm / canvas.width;        // mm of sheet per canvas px
+    const drawScale = drawW / sheet.widthMm;             // sheet mm → paper mm
+    const maxSlice = Math.floor((pageH - M * 2) / (mmPerPx * drawScale));
+
+    const blockEnds = [...sheetEl.querySelectorAll('[data-block]')]
+      .map((el) => (el.offsetTop - sheetEl.offsetTop + el.offsetHeight) * pxPerCssPx);
+
+    const cuts = [];
+    let top = 0;
+    while (canvas.height - top > maxSlice) {
+      const limit = top + maxSlice;
+      // Last block boundary that still fits on this page; if a single block is
+      // taller than a page there is nothing to snap to, so cut at the limit.
+      const snap = blockEnds.filter((e) => e > top && e <= limit).pop();
+      const cut = snap || limit;
+      cuts.push(cut);
+      top = cut;
+    }
+    cuts.push(canvas.height);
+
+    let from = 0;
+    cuts.forEach((to, i) => {
+      const sliceH = Math.max(1, Math.round(to - from));
+      const slice = document.createElement('canvas');
+      slice.width = canvas.width;
+      slice.height = sliceH;
+      const ctx = slice.getContext('2d');
+      // Paint white FIRST. An unpainted canvas is transparent, and JPEG has no
+      // alpha channel — transparent pixels encode as BLACK, which is where the
+      // black bar across the page break came from.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, slice.width, sliceH);
+      ctx.drawImage(canvas, 0, from, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+
+      if (i) pdf.addPage();
+      pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', M, M, drawW, sliceH * mmPerPx * drawScale);
+      from = to;
+    });
 
     pdf.save(fileName);
     return true;
@@ -205,7 +256,36 @@ function buildCalendarSheet({
   });
 
   const gridStart = startOfPrintGrid(monthStart);
-  const days = Array.from({ length: 42 }, (_, i) => gridStart.add(i, 'day'));
+  // Only the weeks this month actually spans (4–6), never a fixed 6. A month that
+  // needs five rows gets a whole row of height back instead of printing a blank week.
+  const weeks = Math.ceil((monthStart.endOf('month').diff(gridStart, 'day') + 1) / 7);
+  const days = Array.from({ length: weeks * 7 }, (_, i) => gridStart.add(i, 'day'));
+
+  // Row height is DERIVED, not fixed: the grid always fills the sheet whatever the
+  // week count, so a 5-week month gets taller cells instead of a band of dead space.
+  //   A4 landscape @ 8mm margins = 194mm tall; masthead + weekday bar + footer ≈ 26mm.
+  //   164 (not 168) leaves headroom for printer variance on top of the 0.97 print zoom.
+  const ROW_MM = Math.min(34, Math.max(20, 164 / weeks));
+
+  // ── Cell budget, in mm, measured from the CSS below (1px = 25.4/96 mm) ──
+  // Every cell is laid out against this arithmetic instead of a guessed cap, so
+  // nothing can ever be clipped by `overflow:hidden` and silently disappear.
+  const CELL_BUDGET = ROW_MM - 5.5;   // minus td padding + the date line
+  const CARD_CHROME = 7.1;            // party head + totals row + border/padding
+  const LINE_MM = 2.41;               // one SKU row
+  // A detailed card must also budget for its own "+N more items" line, which can
+  // appear on any card — omitting it is what made the first cut clip.
+  const CARD_FULL = CARD_CHROME + LINE_MM;
+
+  // Showing EVERY party matters more than showing each party's SKU breakdown, so
+  // degrade in that order: full detail → one summary line per party → "+N more".
+  const planCell = (n) => {
+    const lines = Math.floor((CELL_BUDGET / n - CARD_FULL) / LINE_MM);
+    if (lines >= 2) return { cards: n, lines: Math.min(lines, 6), compact: false };
+    const fit = Math.floor((CELL_BUDGET - CARD_CHROME * 0.4) / CARD_CHROME);
+    if (Math.floor(CELL_BUDGET / CARD_CHROME) >= n) return { cards: n, lines: 0, compact: true };
+    return { cards: Math.max(1, fit), lines: 0, compact: true }; // leaves room for "+N more"
+  };
   const calendarCells = days.map((day) => {
     const key = day.format('YYYY-MM-DD');
     const list = byDate.get(key) || [];
@@ -213,17 +293,25 @@ function buildCalendarSheet({
     // and NO sales-order number on the print.
     const groups = groupDayByParty(list);
     const inMonth = day.isSame(monthStart, 'month');
-    const chips = groups.slice(0, 2).map((g) => {
+    const plan = groups.length ? planCell(groups.length) : { cards: 0, lines: 0, compact: false };
+    const chips = groups.slice(0, plan.cards).map((g) => {
       const type = TYPE[g.eventType] || TYPE.scheduled;
       const colour = g.isDelayed ? '#be123c' : type.color;
       const isActual = g.eventType === 'actual';
-      const skuLines = (g.skus || [])
-        .filter((sku) => Number(isActual ? sku.actualQty : sku.plannedQty) > 0)
-        .map((sku) => `
+      const skus = (g.skus || []).filter((sku) => Number(isActual ? sku.actualQty : sku.plannedQty) > 0);
+
+      // Compact: party + total only. Used when the day has too many parties for a
+      // per-SKU breakdown to fit — every party still appears, which is the point.
+      const skuLines = plan.compact ? '' : (
+        skus.slice(0, plan.lines).map((sku) => `
           <div class="skuRow">
             <span class="skuName">${esc(sku.skuName || '-')}</span>
             <span class="skuQty">${num(isActual ? sku.actualQty : sku.plannedQty)}</span>
-          </div>`).join('');
+          </div>`).join('')
+        + (skus.length > plan.lines
+          ? `<div class="skuMore">+${skus.length - plan.lines} more item${skus.length - plan.lines === 1 ? '' : 's'}</div>`
+          : '')
+      );
       return `
         <div class="chip${g.isDelayed ? ' delayed' : ''}" style="border-left-color:${colour}">
           <div class="chipHead">
@@ -237,16 +325,20 @@ function buildCalendarSheet({
           </div>
         </div>`;
     }).join('');
-    const more = groups.length > 2 ? `<div class="more">+${groups.length - 2} more</div>` : '';
+    const hidden = groups.length - plan.cards;
+    const more = hidden > 0 ? `<div class="more">+${hidden} more</div>` : '';
+    // Days outside the month are visibly dead space: grey fill, faded date, and no
+    // "No dispatch" line — so the printed sheet reads as THIS month at a glance.
+    if (!inMonth) return `<td class="out"><div class="date">${day.date()}</div></td>`;
     return `
-      <td class="${inMonth ? '' : 'muted'}">
+      <td>
         <div class="date">${day.date()}</div>
         ${chips || '<div class="empty">No dispatch</div>'}
         ${more}
       </td>`;
   });
 
-  const gridRows = Array.from({ length: 6 }, (_, row) => (
+  const gridRows = Array.from({ length: weeks }, (_, row) => (
     `<tr>${calendarCells.slice(row * 7, (row + 1) * 7).join('')}</tr>`
   )).join('');
 
@@ -255,31 +347,44 @@ function buildCalendarSheet({
   /* Sized so all six week-rows + header + footer clear one A4 landscape page. */
   .sheet { width: 297mm; max-width: 100%; min-height: 210mm; margin: 12px auto; background: #fff; padding: 9mm; }
   .sheet.dl { margin: 0; min-height: 0; }
-  .lh { border-bottom: 2.5px solid #0b2545; padding-bottom: 6px; margin-bottom: 2px; }
-  .company { color: #0b2545; font-size: 25px; font-weight: 900; letter-spacing: 0.05em; line-height: 1.05; text-align: center; }
-  .title { text-align: center; color: #16305a; font-size: 11px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-top: 4px; }
-  .month { text-align: center; color: #0b2545; font-size: 13px; font-weight: 800; letter-spacing: 0.04em; margin-top: 4px; }
-  .filters { text-align: center; color: #6b7280; font-size: 9px; margin-top: 3px; }
-  .calendar { margin-top: 8px; border: 1.5px solid #16305a; }
+  /* Masthead is deliberately compact — every mm here is a mm the grid loses.
+     Company + document title share one line, month + filters share the next. */
+  .lh { border-bottom: 2px solid #0b2545; padding-bottom: 4px; margin-bottom: 0; }
+  .company { color: #0b2545; font-size: 19px; font-weight: 900; letter-spacing: 0.04em; line-height: 1.05; text-align: center; }
+  .title { text-align: center; color: #16305a; font-size: 8.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 2px; }
+  .month { text-align: center; color: #0b2545; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; margin-top: 2px; }
+  .filters { text-align: center; color: #6b7280; font-size: 8px; margin-top: 1px; }
+  .calendar { margin-top: 5px; border: 1.5px solid #16305a; }
   table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-  .calendar th { background: #16305a; color: #fff; border: 1px solid #16305a; font-size: 9px; padding: 4px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 800; }
-  .calendar td { width: 14.28%; height: 24mm; vertical-align: top; border: 1px solid #8ea0c2; padding: 3px; overflow: hidden; }
-  .calendar td.muted { background: #f2f4f8; color: #9ca3af; }
+  .calendar th { background: #16305a; color: #fff; border: 1px solid #16305a; font-size: 8px; padding: 3px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 800; }
+  .calendar td { width: 14.28%; height: ${ROW_MM.toFixed(1)}mm; vertical-align: top; border: 1px solid #8ea0c2; padding: 3px; overflow: hidden; }
+  /* Previous / next month — clearly dead space, and it survives a B&W photocopy. */
+  .calendar td.out { background: #dde4ee; }
+  .calendar td.out .date { color: #8b98ad; font-weight: 600; }
   .date { font-size: 10px; font-weight: 800; color: #0b2545; margin-bottom: 2px; }
   .chip { border: 1px solid #c3cddf; border-left: 3px solid #1d4ed8; background: #f4f7fc; margin-bottom: 2px; padding: 2px 4px; overflow: hidden; }
   .chip.delayed { background: #fff1f2; }
-  .chipHead { display: flex; align-items: center; gap: 3px; }
+  /* Explicit line-heights keep a card's height predictable, so the cell budget
+     above is arithmetic rather than a guess. */
+  .chipHead { display: flex; align-items: center; gap: 3px; line-height: 1.3; }
   .tag { font-size: 6.5px; font-weight: 900; flex: 0 0 auto; }
   .so { font-size: 6.5px; font-weight: 700; color: #9ca3af; flex: 0 0 auto; }
   .party { font-size: 8px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; color: #0b2545; }
-  .skuRow { display: flex; align-items: center; gap: 4px; }
+  .skuRow { display: flex; align-items: center; gap: 4px; line-height: 1.3; }
+  .skuMore { font-size: 6.5px; font-weight: 700; color: #6a7690; line-height: 1.3; }
   .skuName { font-size: 7px; color: #3f4650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
   .skuQty { font-size: 7px; font-weight: 800; color: #0b2545; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-  .tot { display: flex; align-items: center; justify-content: space-between; margin-top: 1px; padding-top: 1px; border-top: 1px solid #cbd5e1; font-size: 6.5px; font-weight: 800; color: #9ca3af; letter-spacing: 0.05em; }
+  .tot { display: flex; align-items: center; justify-content: space-between; margin-top: 1px; padding-top: 1px; border-top: 1px solid #cbd5e1; font-size: 6.5px; font-weight: 800; color: #9ca3af; letter-spacing: 0.05em; line-height: 1.3; }
   .totQty { font-size: 7.5px; font-weight: 900; font-variant-numeric: tabular-nums; }
   .empty { color: #cbd5e1; font-size: 7.5px; margin-top: 8px; text-align: center; }
   .more { color: #0b2545; font-size: 8px; font-weight: 800; margin-top: 2px; }
-  .ft { margin-top: 7px; color: #9ca3af; text-align: center; font-size: 8px; border-top: 1px solid #c3cddf; padding-top: 5px; }
+  .ft { margin-top: 5px; color: #9ca3af; text-align: center; font-size: 7.5px; border-top: 1px solid #c3cddf; padding-top: 4px; }
+  /* Belt and braces for the PRINT path (the download has fitToPage instead): if a
+     printer's non-printable margin is deeper than @page allows, shrink rather than
+     push the last week onto a second sheet. */
+  @media print {
+    .sheet { zoom: 0.97; }
+  }
 `;
 
   const inner = `
@@ -389,8 +494,9 @@ function buildListSheet({
         </div>`;
     }).join('');
 
+    // data-block marks a unit the PDF download must never cut through.
     return `
-      <div class="dayBlock">
+      <div class="dayBlock" data-block>
         <div class="dayNum">
           <div class="dnDay">${d.format('DD')}</div>
           <div class="dnMon">${esc(d.format('MMM').toUpperCase())}</div>
@@ -420,7 +526,9 @@ function buildListSheet({
   const css = `
   @page { size: A4 portrait; margin: 10mm; }
   .sheet { width: 210mm; max-width: 100%; min-height: 297mm; margin: 12px auto; background: #fff; padding: 11mm; }
-  .sheet.dl { margin: 0; min-height: 0; }
+  /* Download path: the PDF writer adds a uniform margin to EVERY page, so the
+     sheet must not carry its own — otherwise page 1 is double-inset. */
+  .sheet.dl { margin: 0; min-height: 0; padding: 0; }
   .lh { border-bottom: 2.5px solid #0b2545; padding-bottom: 8px; }
   .company { color: #0b2545; font-size: 26px; font-weight: 900; letter-spacing: 0.05em; line-height: 1.05; text-align: center; }
   .title { text-align: center; color: #16305a; font-size: 12px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-top: 5px; }

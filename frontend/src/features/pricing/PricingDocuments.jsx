@@ -12,6 +12,7 @@ import {
 import dayjs from 'dayjs';
 import { useGetPricingDocumentsQuery } from '../../store/api/pricingApi';
 import { fmtINR } from '../../utils/formatters';
+import { PageHero, pageSx, panelSx, fieldSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const CATEGORIES = [
   { key: '',           label: 'All',                 icon: FolderOpen, color: '#475569' },
@@ -61,41 +62,15 @@ const PricingDocuments = () => {
   const activeFilterCount = (from ? 1 : 0) + (to ? 1 : 0) + (uploader ? 1 : 0);
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{
-        position: 'relative', overflow: 'hidden', color: '#fff',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 6 },
-      }}>
-        <Box aria-hidden sx={{
-          position: 'absolute', width: 420, height: 420, borderRadius: '50%',
-          top: -160, right: -120,
-          background: 'radial-gradient(circle, rgba(96,165,250,0.32) 0%, rgba(96,165,250,0) 60%)',
-        }} />
-        <Stack direction="row" spacing={2.5} alignItems="center" sx={{ position: 'relative' }}>
-          <Box sx={{
-            width: 52, height: 52, borderRadius: 2.5,
-            display: 'grid', placeItems: 'center',
-            background: 'rgba(255,255,255,0.14)',
-            border: '1px solid rgba(255,255,255,0.22)',
-          }}>
-            <FolderOpen size={26} color="#fff" />
-          </Box>
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
-              Pricing Documents
-            </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5, maxWidth: 720 }}>
-              Every proof, quotation, email confirmation and RM-cost sheet attached
-              to a price revision — auto-organised by source.
-            </Typography>
-          </Box>
-        </Stack>
-      </Box>
+    <Box sx={pageSx}>
+      <PageHero
+        icon={FolderOpen}
+        title="Pricing Documents"
+        subtitle="Every proof, quotation, email confirmation and RM-cost sheet attached to a price revision — auto-organised by source."
+      />
 
-      <Box sx={{ px: { xs: 2, md: 4 }, mt: { xs: -2.5, md: -3.5 }, position: 'relative', pb: 5 }}>
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden', boxShadow: '0 10px 28px rgba(30, 58, 138, 0.08)' }}>
+      <Box sx={{ position: 'relative' }}>
+        <Paper sx={{ borderRadius: '10px', overflow: 'hidden', boxShadow: 'none', border: '1px solid ' + O2D.line }}>
           {/* Tabs */}
           <Tabs
             value={category}

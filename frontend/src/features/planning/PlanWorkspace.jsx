@@ -103,22 +103,39 @@ const PlanWorkspace = () => {
   const [viewMode, setViewMode] = useState('phases'); // 'phases' | 'monthly'
 
   const { data: ordersRes, isLoading: ordersLoading } = useGetOrdersQuery({ limit: 250, sort: '-orderDate' });
-  const orders = ordersRes?.data || [];
+  // Keep the list identity stable. An empty `[]` created during every render is
+  // especially dangerous when it feeds URL hydration effects and controlled MUI
+  // inputs at the same time.
+  const orders = useMemo(() => ordersRes?.data || [], [ordersRes?.data]);
+  const requestedSo = searchParams.get('so') || '';
 
   // Deep-link support: ?so=AGL/SO-002/25-26 → auto-select that order once loaded.
   useEffect(() => {
-    const so = searchParams.get('so');
-    if (!so || selectedOrder || !orders.length) return;
-    const match = orders.find((o) => o.soNumber === so);
-    if (match) setSelectedOrder(match);
-  }, [orders, searchParams, selectedOrder]);
+    if (!requestedSo || !orders.length) return;
+    const match = orders.find((o) => o.soNumber === requestedSo);
+    if (!match) return;
+    // React state must not be updated merely because RTK Query returned a fresh
+    // object for the same order. That feedback loop was the source of the
+    // "Maximum update depth exceeded" crash on deep-linked planning screens.
+    setSelectedOrder((current) => (
+      String(current?._id || '') === String(match._id || '') && current?.soNumber === match.soNumber
+        ? current
+        : match
+    ));
+  }, [orders, requestedSo]);
 
   const onSelectOrder = (val) => {
-    setSelectedOrder(val);
+    setSelectedOrder((current) => (
+      String(current?._id || '') === String(val?._id || '') && current?.soNumber === val?.soNumber
+        ? current
+        : val
+    ));
     // Preserve any fromTask/fromStep context (don't wipe the whole query).
     const next = new URLSearchParams(searchParams);
     if (val?.soNumber) next.set('so', val.soNumber); else next.delete('so');
-    setSearchParams(next, { replace: true });
+    // Do not issue a router update when the selected order is already reflected
+    // in the URL. It avoids a second render/update cycle from Autocomplete.
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
   };
 
   const soNumber = selectedOrder?.soNumber;
@@ -162,6 +179,7 @@ const PlanWorkspace = () => {
   // Deep-linked phase (?phase=P1) — opens that phase card automatically.
   const focusPhase = searchParams.get('phase');
   const focusPhaseInUrl = (phaseNo) => {
+    if (searchParams.get('phase') === phaseNo) return;
     const np = new URLSearchParams(searchParams);
     np.set('phase', phaseNo);
     setSearchParams(np, { replace: true });

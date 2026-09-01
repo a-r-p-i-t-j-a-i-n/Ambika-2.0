@@ -6,7 +6,7 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 //  new 
 // Default fallback for React.Suspense while a route chunk is downloading.
 // Renders inside the existing layout (full-height column) so navigation does
-// not jump.
+// not jump. now 
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AppLoader = ({ label = 'Loading workspace…' }) => (
@@ -18,7 +18,7 @@ const AppLoader = ({ label = 'Loading workspace…' }) => (
       alignItems: 'center',
       justifyContent: 'center',
       gap: 2,
-      color: '#1e3a8a',
+      color: '#1e3e94',
     }}
   >
     <Box

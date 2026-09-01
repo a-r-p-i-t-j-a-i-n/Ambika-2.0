@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, Divider, Button,
   Chip, Avatar, List, ListItem, ListItemText, ListItemIcon,
-  CircularProgress, IconButton, Tooltip,
+  CircularProgress, IconButton, Tooltip, Stack,
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
 } from '@mui/material';
 import {
@@ -15,6 +15,7 @@ import { useGetSkusQuery } from '../../store/api/skuApi';
 import { alpha } from '@mui/material/styles';
 import PartyFormDrawer from './PartyFormDrawer';
 import PartySkusDrawer from './PartySkusDrawer';
+import { pageSx, panelSx, primaryBtnSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const PartyDetails = () => {
   const { id } = useParams();
@@ -44,60 +45,87 @@ const PartyDetails = () => {
   }
 
   const sectionHeaderStyle = {
-    mb: 2, 
-    display: 'flex', 
-    alignItems: 'center', 
-    gap: 1.5,
-    color: 'primary.main',
-    fontWeight: 700
+    mb: 1.75,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 1,
+    color: BRAND_DK,
+    fontWeight: 800,
+    fontSize: '0.88rem',
+    letterSpacing: '-0.01em',
   };
 
+  // Label / value pair. The label was 0.75rem semibold uppercase and the value
+  // only 600 at body size, so the two lines carried nearly equal weight and the
+  // eye had to work out which was the answer. Label is now quieter and smaller,
+  // value darker and heavier.
   const infoLabelStyle = {
-    color: 'text.secondary',
-    fontSize: '0.75rem',
-    fontWeight: 600,
+    color: O2D.sub,
+    fontSize: '0.6rem',
+    fontWeight: 800,
+    letterSpacing: '0.07em',
     textTransform: 'uppercase',
-    mb: 0.5
+    mb: 0.25,
   };
 
   const infoValueStyle = {
-    fontWeight: 600,
-    color: 'text.primary'
+    fontWeight: 700,
+    fontSize: '0.86rem',
+    color: NAVY,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 0.75,
   };
 
+  // Status chip: brand-consistent tinted pill instead of MUI's solid success
+  // colour, which rendered as a heavy green block competing with the party name.
+  const statusTone = (party.status || 'ACTIVE') === 'ACTIVE'
+    ? { color: '#15803d', label: party.status || 'ACTIVE' }
+    : { color: O2D.sub, label: party.status };
+
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={pageSx}>
       {/* Top Header */}
-      <Box sx={{ mb: 4, display: 'flex', alignItems: 'center', gap: 2 }}>
-        <IconButton onClick={() => navigate('/parties')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
-          <ArrowLeft size={20} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+        <IconButton onClick={() => navigate('/parties')} size="small"
+          sx={{ width: 34, height: 34, borderRadius: '8px', flexShrink: 0, color: O2D.sub, bgcolor: O2D.surface, border: `1px solid ${O2D.line}`, '&:hover': { color: BRAND, borderColor: alpha(BRAND, 0.4) } }}>
+          <ArrowLeft size={17} />
         </IconButton>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 0.5 }}>
-            <Typography variant="h4" fontWeight={800} color="text.primary">
+        <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            {/* h4 (2.125rem) was larger than every other page title in the app. */}
+            <Typography sx={{ fontSize: { xs: '1.15rem', md: '1.3rem' }, fontWeight: 800, color: NAVY, letterSpacing: '-0.02em', lineHeight: 1.2 }}>
               {party.name}
             </Typography>
-            <Chip
-              label={party.status || 'ACTIVE'}
-              color={party.status === 'ACTIVE' ? 'success' : 'default'}
-              size="small"
-              sx={{ fontWeight: 700, borderRadius: '6px' }}
-            />
+            <Box sx={{
+              display: 'inline-flex', alignItems: 'center', height: 21, px: 1,
+              borderRadius: '6px', flexShrink: 0,
+              bgcolor: alpha(statusTone.color, 0.1),
+              border: `1px solid ${alpha(statusTone.color, 0.24)}`,
+              color: statusTone.color,
+              fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.05em', lineHeight: 1,
+            }}>
+              {statusTone.label}
+            </Box>
           </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Hash size={14} /> {party.code} • <MapPin size={14} /> {party.location || party.address || '—'}
-          </Typography>
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.2, color: O2D.sub, fontSize: '0.75rem', flexWrap: 'wrap' }}>
+            <Hash size={12} />
+            <Box component="span" sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700 }}>{party.code}</Box>
+            <Box component="span" sx={{ color: O2D.faint }}>·</Box>
+            <MapPin size={12} />
+            <Box component="span">{party.location || party.address || '—'}</Box>
+          </Stack>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
-        <Button variant="contained" startIcon={<Pencil size={16} />} onClick={() => setEditOpen(true)}>
+        <Button variant="contained" startIcon={<Pencil size={15} />} onClick={() => setEditOpen(true)} sx={primaryBtnSx}>
           Edit Vendor
         </Button>
       </Box>
 
-      <Grid container spacing={3}>
+      <Grid container spacing={1.5}>
         {/* Left Column - General Info */}
         <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+          <Paper sx={{ ...panelSx, p: 2 }}>
             <Typography variant="subtitle1" sx={sectionHeaderStyle}>
               <User size={18} /> General Information
             </Typography>
@@ -139,7 +167,7 @@ const PartyDetails = () => {
             </Box>
           </Paper>
 
-          <Paper sx={{ p: 3, mt: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+          <Paper sx={{ ...panelSx, p: 2, mt: 1.5 }}>
             <Typography variant="subtitle1" sx={sectionHeaderStyle}>
               <CreditCard size={18} /> Commercial Terms
             </Typography>
@@ -171,7 +199,7 @@ const PartyDetails = () => {
           <Grid container spacing={3}>
             {/* Address Section */}
             <Grid item xs={12}>
-              <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+              <Paper sx={{ ...panelSx, p: 2 }}>
                 <Typography variant="subtitle1" sx={sectionHeaderStyle}>
                   <MapPin size={18} /> Registered Addresses
                 </Typography>
@@ -196,7 +224,7 @@ const PartyDetails = () => {
 
             {/* Email Routing Section */}
             <Grid item xs={12}>
-              <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+              <Paper sx={{ ...panelSx, p: 2 }}>
                 <Typography variant="subtitle1" sx={sectionHeaderStyle}>
                   <Globe size={18} /> Specialized Email Routing (Dispatch)
                 </Typography>
@@ -228,7 +256,7 @@ const PartyDetails = () => {
 
             {/* Ordered SKUs (Sales) — imported from the Party Details sheet */}
             <Grid item xs={12}>
-              <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+              <Paper sx={{ ...panelSx, p: 2 }}>
                 <Typography variant="subtitle1" sx={sectionHeaderStyle}>
                   <Package size={18} /> Ordered SKUs ({party.orderedSkus?.length || 0}) — auto-fill on Sales Order
                 </Typography>
@@ -271,7 +299,7 @@ const PartyDetails = () => {
 
             {/* Linked SKUs Section */}
             <Grid item xs={12}>
-              <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+              <Paper sx={{ ...panelSx, p: 2 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                   <Typography variant="subtitle1" sx={{ ...sectionHeaderStyle, mb: 0 }}>
                     <Package size={18} /> Linked SKUs ({skusData?.meta?.total || 0})
@@ -317,7 +345,7 @@ const PartyDetails = () => {
 
             {/* Vendor Products Section (Purchase FMS) */}
             <Grid item xs={12}>
-              <Paper sx={{ p: 3, borderRadius: '20px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+              <Paper sx={{ ...panelSx, p: 2 }}>
                 <Typography variant="subtitle1" sx={{ ...sectionHeaderStyle, color: '#b45309' }}>
                   <Receipt size={18} /> Vendor Products ({party.suppliedProducts?.length || 0})
                 </Typography>

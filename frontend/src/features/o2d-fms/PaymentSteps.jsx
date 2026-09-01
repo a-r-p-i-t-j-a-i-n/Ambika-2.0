@@ -43,13 +43,18 @@ const PaymentSteps = () => {
   // prefer the exact challan (?dc = its DC number), else the order's invoice (?so).
   const soParam = params.get('so') || '';
   const dcParam = params.get('dc') || '';
-  const presetRef = useRef(false);
+  // Keyed on the so/dc TARGET, not a "already picked" flag: this route stays mounted
+  // when only the query string changes, so guarding on `inv` would keep showing the
+  // first consignment's invoice when the user opens a later one.
+  const presetRef = useRef('');
   useEffect(() => {
-    if (presetRef.current || inv || !invoices.length) return;
+    const target = `${dcParam}|${soParam}`;
+    if (!dcParam && !soParam) return;
+    if (presetRef.current === target || !invoices.length) return;
     const match = (dcParam && invoices.find((i) => i.dcNumber === dcParam))
       || (soParam && invoices.find((i) => i.soNumber === soParam));
-    if (match) { presetRef.current = true; setInv(match); }
-  }, [invoices, soParam, dcParam, inv]);
+    if (match) { presetRef.current = target; setInv(match); }
+  }, [invoices, soParam, dcParam]);
   const [fuStatus, setFuStatus] = useState('Yes');
   const [rcStatus, setRcStatus] = useState('Yes');
   const [rcDate, setRcDate] = useState(dayjs().format('YYYY-MM-DD'));

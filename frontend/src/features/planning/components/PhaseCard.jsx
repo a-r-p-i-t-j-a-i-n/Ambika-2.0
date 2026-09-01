@@ -16,6 +16,23 @@ const STATUS_STYLE = (theme, status) => ({
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN');
 
+const toDraftLines = (items) => items.map((it) => ({
+  orderItemId: it.orderItemId,
+  skuCode: it.skuCode,
+  skuName: it.skuName,
+  plannedQty: it.phaseRow?.plannedQty ?? 0,
+}));
+
+// Phase rows are rebuilt by the schedule grouping code. Compare their meaningful
+// fields before replacing local draft state, otherwise a harmless fresh array
+// identity can repeatedly schedule an update in controlled edit cards.
+const sameDraftLines = (a, b) => a.length === b.length && a.every((line, i) => (
+  line.orderItemId === b[i].orderItemId
+  && line.skuCode === b[i].skuCode
+  && line.skuName === b[i].skuName
+  && Number(line.plannedQty) === Number(b[i].plannedQty)
+));
+
 // A "phase" in the UI is the bucket of all per-SKU phases sharing the same phaseNo.
 const PhaseCard = ({
   phaseNo,
@@ -33,26 +50,19 @@ const PhaseCard = ({
   const [editing, setEditing] = useState(false);
   const [draftDate, setDraftDate] = useState(plannedDate ? dayjs(plannedDate).format('YYYY-MM-DD') : '');
   const [draftStatus, setDraftStatus] = useState(status || 'PLANNED');
-  const [draftLines, setDraftLines] = useState(() => items.map((it) => ({
-    orderItemId: it.orderItemId,
-    skuCode: it.skuCode,
-    skuName: it.skuName,
-    plannedQty: it.phaseRow?.plannedQty ?? 0,
-  })));
+  const [draftLines, setDraftLines] = useState(() => toDraftLines(items));
   const [menuAnchor, setMenuAnchor] = useState(null);
 
   // Open automatically when the page deep-links to this phase (?phase=P1).
   useEffect(() => { if (defaultOpen) setOpen(true); }, [defaultOpen]);
 
   useEffect(() => {
-    setDraftDate(plannedDate ? dayjs(plannedDate).format('YYYY-MM-DD') : '');
-    setDraftStatus(status || 'PLANNED');
-    setDraftLines(items.map((it) => ({
-      orderItemId: it.orderItemId,
-      skuCode: it.skuCode,
-      skuName: it.skuName,
-      plannedQty: it.phaseRow?.plannedQty ?? 0,
-    })));
+    const nextDate = plannedDate ? dayjs(plannedDate).format('YYYY-MM-DD') : '';
+    const nextStatus = status || 'PLANNED';
+    const nextLines = toDraftLines(items);
+    setDraftDate((current) => (current === nextDate ? current : nextDate));
+    setDraftStatus((current) => (current === nextStatus ? current : nextStatus));
+    setDraftLines((current) => (sameDraftLines(current, nextLines) ? current : nextLines));
   }, [items, plannedDate, status, editing]);
 
   // Simple Plan vs Actual totals for this phase — no carry / effective.

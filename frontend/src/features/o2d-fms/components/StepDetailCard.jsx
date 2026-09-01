@@ -5,7 +5,7 @@ import {
   Checkbox, FormControlLabel, LinearProgress, Avatar, Tooltip, Paper,
 } from '@mui/material';
 import {
-  X, User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
+  User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
   ExternalLink, Truck, Boxes, Workflow, Maximize2, Circle, Info,
 } from 'lucide-react';
@@ -60,7 +60,7 @@ const stepActionKeys = (step) => (step?.actionLinks?.length
 // markActionDone never fired. Only ONCE-PER-ORDER actions are inferred here;
 // per-consignment actions (invoice / dispatch / payment…) are intentionally
 // excluded so one consignment's record never marks another's action as done.
-const inferActionDone = (key, proc) => {
+export const inferActionDone = (key, proc) => {
   switch (key) {
     case 'ORDER_INTAKE': return !!(proc?.intakeId);
     case 'ORDER_ENTRY':
@@ -74,10 +74,14 @@ const inferActionDone = (key, proc) => {
 // So a fresh challan (e.g. DC-047) shows "Do it now" for a blank invoice, while a
 // challan that's already invoiced shows "Do again". Returns null for actions that
 // aren't per-consignment (→ fall back to the step-level state).
-const consignmentActionDone = (key, c) => {
+export const consignmentActionDone = (key, c) => {
   if (!c) return null;
   switch (key) {
     case 'ACTUAL_DISPATCH': return true; // the challan itself IS the dispatch
+    // Every dispatch needs its OWN challan PDF, and the challan stores the one that
+    // was generated for it — so a fresh challan asks for its PDF even when an
+    // earlier challan on the same order already has one.
+    case 'CHALLAN_PDF': return !!c.pdfUrl;
     case 'INVOICE':
     case 'INVOICE_ENTRY': return !!c.invoice?.has;
     // Emailed = SENT, or simply ATTEMPTED — emailSentAt is stamped on every send,
@@ -837,20 +841,32 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             const dispatched = prog.dispatchedQty ?? totals.actualQty ?? 0;
             const balance = prog.balanceQty ?? Math.max(0, ordered - dispatched);
             const pct = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
-            const accent = done ? '#0f766e' : '#1d4ed8';
+            // "Fully dispatched" must mean the QUANTITY is out, not that someone
+            // ticked the step. Mark Done carries a `force` escape hatch, so a step
+            // can be closed with a balance still pending — and this panel used to
+            // read that as "Fully dispatched" while printing "230 pending" beside it.
+            const fullyOut = ordered > 0 && balance <= 0;
+            const closedEarly = done && !fullyOut;
+            const accent = fullyOut ? '#0f766e' : closedEarly ? '#b45309' : '#1d4ed8';
             return (
               <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 1.5,bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
                 <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
                   <Truck size={16} color={accent} />
                   <Typography variant="subtitle2" sx={{ fontWeight: 800, fontSize: '0.78rem' }}>Dispatch progress</Typography>
-                  <Chip size="small" label={done ? 'Fully dispatched' : 'In progress'} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
+                  <Chip size="small"
+                    label={fullyOut ? 'Fully dispatched' : closedEarly ? `Closed early · ${num(balance)} pending` : 'In progress'}
+                    sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
                   <Box sx={{ flex: 1 }} />
                   <Typography variant="caption" color="text.secondary">{num(dispatched)} / {num(ordered)} pcs · {num(balance)} pending</Typography>
                 </Stack>
                 <LinearProgress variant="determinate" value={pct} sx={{ height: 7, borderRadius: 4, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
-                {!done && (
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-                    Keep creating delivery challans until the full quantity is dispatched — this step then completes automatically.
+                {!fullyOut && (
+                  <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: closedEarly ? '#92400e' : 'text.secondary' }}>
+                    {closedEarly
+                      // Closing the step early doesn't ship the balance — say so, or the
+                      // remaining quantity quietly falls off everyone's radar.
+                      ? `This step was marked done, but ${num(balance)} pcs are still to dispatch. Record another dispatch from the order's tracker to ship them.`
+                      : 'Keep creating delivery challans until the full quantity is dispatched — this step then completes automatically.'}
                   </Typography>
                 )}
               </Paper>
@@ -1276,8 +1292,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       {/* ── Status hero — same editorial header as the full page ── */}
       <Box sx={{ position: 'relative', overflow: 'hidden', bgcolor: done ? heroTk.tint : OT.surface, borderBottom: `1px solid ${OT.line}`, flexShrink: 0 }}>
         <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, bgcolor: heroTk.ring }} />
-        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 11 }}>
-          <Typography sx={{ position: 'absolute', right: 66, top: 10, fontSize: '2.4rem', fontWeight: 900, color: OT.brand, lineHeight: 1, letterSpacing: '-0.02em', userSelect: 'none' }}>
+        {/* pr / step-code offset both pulled in now that the close ✕ is gone, so the
+            corner doesn't read as a gap. 54 keeps 10px clear of the 34px button. */}
+        <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 9 }}>
+          <Typography sx={{ position: 'absolute', right: 54, top: 10, fontSize: '2.4rem', fontWeight: 900, color: OT.brand, lineHeight: 1, letterSpacing: '-0.02em', userSelect: 'none' }}>
             {liveStep.stepCode}
           </Typography>
           <Chip size="small"
@@ -1292,11 +1310,22 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             {done && <Box component="span" sx={{ color: heroTiming.color, fontWeight: 700 }}> · {heroTiming.text}</Box>}
           </Typography>
         </Box>
+        {/* Only ONE control up here — the dialog already has a Close button in the
+            footer, so a second dismiss affordance was redundant. Full-screen is the
+            one action that has nowhere else to live, so it gets the corner and is
+            sized to actually read as a button. */}
         <Tooltip title="Open full screen">
-          <IconButton size="small" onClick={() => { onClose?.(false); navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(liveStep.stepCode)}${activeDc ? `?dc=${encodeURIComponent(activeDc)}` : ''}`); }}
-            sx={{ position: 'absolute', right: 38, top: 8, color: OT.sub }}><Maximize2 size={15} /></IconButton>
+          <IconButton onClick={() => { onClose?.(false); navigate(`/o2d-fms/task/${processId}/${encodeURIComponent(liveStep.stepCode)}${activeDc ? `?dc=${encodeURIComponent(activeDc)}` : ''}`); }}
+            aria-label="Open full screen"
+            sx={{
+              position: 'absolute', right: 10, top: 10,
+              width: 34, height: 34, borderRadius: '8px',
+              color: OT.brand,
+              bgcolor: alpha(OT.brand, 0.08),
+              border: `1px solid ${alpha(OT.brand, 0.22)}`,
+              '&:hover': { bgcolor: alpha(OT.brand, 0.16), borderColor: alpha(OT.brand, 0.4) },
+            }}><Maximize2 size={18} /></IconButton>
         </Tooltip>
-        <IconButton onClick={() => onClose?.(false)} size="small" sx={{ position: 'absolute', right: 8, top: 8, color: OT.sub }}><X size={17} /></IconButton>
       </Box>
 
       <DialogContent dividers={false} sx={{ px: { xs: 1.25, md: 1.5 }, py: 1.5, bgcolor: OT.canvas, overflowY: 'auto' }}>

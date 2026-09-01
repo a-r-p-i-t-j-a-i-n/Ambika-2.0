@@ -1,0 +1,129 @@
+[
+  {
+    "_id": "6a689554f52cef2b330fd294",
+    "soNumber": "AGL/SO-089/26-27",
+    "poNumber": "test2354",
+    "partyId": "6a022288c7bef5d6c649fc87",
+    "partyName": "M. Y. Enginnering Works",
+    "orderId": "6a68897fbb23eb1d7dafcbe8",
+    "companyHeader": {
+      "name": "M/s AMBIKA GLOBAL"
+    },
+    "poDate": "2026-07-28T00:00:00.000Z",
+    "items": [
+      {
+        "skuId": "69fdc022c7bef5d6c649e170",
+        "skuName": "Galaxy 1.0 Ltr",
+        "skuCode": "GX1000-202",
+        "poQty": 500,
+        "dispatchedQty": 300,
+        "balanceQty": 200,
+        "phases": [
+          {
+            "phaseNo": "P1",
+            "plannedDate": "2026-08-06T00:00:00.000Z",
+            "plannedQty": 200,
+            "actualDispatches": [
+              {
+                "date": "2026-07-28T00:00:00.000Z",
+                "qty": 100,
+                "invoiceNo": "gretw s",
+                "invoiceDate": "2026-07-28T00:00:00.000Z",
+                "invoiceDoc": null
+              },
+              {
+                "date": "2026-07-29T00:00:00.000Z",
+                "qty": 100,
+                "invoiceNo": "test9087",
+                "invoiceDate": "2026-07-29T00:00:00.000Z",
+                "invoiceDoc": null
+              }
+            ],
+            "totalActualQty": 200,
+            "status": "DISPATCHED",
+            "notes": null,
+            "_id": "6a689554f52cef2b330fd297"
+          },
+          {
+            "phaseNo": "P2",
+            "plannedDate": "2026-08-27T00:00:00.000Z",
+            "plannedQty": 100,
+            "actualDispatches": [
+              {
+                "date": "2026-07-29T00:00:00.000Z",
+                "qty": 100,
+                "invoiceNo": "test9087",
+                "invoiceDate": "2026-07-29T00:00:00.000Z",
+                "invoiceDoc": null
+              }
+            ],
+            "totalActualQty": 100,
+            "status": "DISPATCHED",
+            "notes": null,
+            "_id": "6a689564f52cef2b330fd30f"
+          }
+        ],
+        "_id": "6a689554f52cef2b330fd295"
+      },
+      {
+        "skuId": "69fdc023c7bef5d6c649e173",
+        "skuName": "Taper Jar - Patti 1.5 Ltr",
+        "skuCode": "TP1500-202",
+        "poQty": 900,
+        "dispatchedQty": 500,
+        "balanceQty": 400,
+        "phases": [
+          {
+            "phaseNo": "P1",
+            "plannedDate": "2026-08-06T00:00:00.000Z",
+            "plannedQty": 300,
+            "actualDispatches": [
+              {
+                "date": "2026-07-28T00:00:00.000Z",
+                "qty": 199,
+                "invoiceNo": "gretw s",
+                "invoiceDate": "2026-07-28T00:00:00.000Z",
+                "invoiceDoc": null
+              },
+              {
+                "date": "2026-07-29T00:00:00.000Z",
+                "qty": 101,
+                "invoiceNo": "test9087",
+                "invoiceDate": "2026-07-29T00:00:00.000Z",
+                "invoiceDoc": null
+              }
+            ],
+            "totalActualQty": 300,
+            "status": "DISPATCHED",
+            "notes": null,
+            "_id": "6a689554f52cef2b330fd29a"
+          },
+          {
+            "phaseNo": "P2",
+            "plannedDate": "2026-08-27T00:00:00.000Z",
+            "plannedQty": 200,
+            "actualDispatches": [
+              {
+                "date": "2026-07-29T00:00:00.000Z",
+                "qty": 200,
+                "invoiceNo": "test9087",
+                "invoiceDate": "2026-07-29T00:00:00.000Z",
+                "invoiceDoc": null
+              }
+            ],
+            "totalActualQty": 200,
+            "status": "DISPATCHED",
+            "notes": null,
+            "_id": "6a689564f52cef2b330fd312"
+          }
+        ],
+        "_id": "6a689554f52cef2b330fd296"
+      }
+    ],
+    "pdfUrl": null,
+    "status": "ACTIVE",
+    "createdAt": "2026-07-28T11:41:08.691Z",
+    "updatedAt": "2026-07-29T06:44:43.977Z",
+    "__v": 3
+  }
+]

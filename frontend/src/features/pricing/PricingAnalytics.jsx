@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { useGetPricingAnalyticsQuery } from '../../store/api/pricingApi';
 import { fmtINR } from '../../utils/formatters';
+import { PageHero, pageSx, panelSx, fieldSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const BUY_SIDE_KINDS = ['RAW_MATERIAL', 'CONSUMABLE', 'PACKING'];
 const ITEM_KIND_OPTIONS = [
@@ -28,28 +29,33 @@ const KpiCard = ({ label, value, hint, color, icon: Icon, theme, trend }) => (
   <Paper sx={{
     flex: '1 1 200px',
     minWidth: 180,
-    p: 2,
-    borderRadius: 2.5,
-    background: 'linear-gradient(180deg, #ffffff 0%, #f7f9ff 100%)',
-    border: `1px solid ${theme.palette.divider}`,
+    p: 1.5,
+    borderRadius: '10px',
+    // Flat white, not a gradient — the tint read as a disabled state next to
+    // the real panels, and every other O2D surface is plain white.
+    bgcolor: O2D.surface,
+    border: `1px solid ${O2D.line}`,
+    boxShadow: 'none',
   }}>
     <Stack direction="row" spacing={1.25} alignItems="flex-start">
       <Box sx={{
-        width: 36, height: 36, borderRadius: 1.5,
+        width: 32, height: 32, borderRadius: '7px',
         display: 'grid', placeItems: 'center',
         bgcolor: alpha(color, 0.10), color,
       }}>
-        <Icon size={18} />
+        <Icon size={16} />
       </Box>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography sx={{
-          fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em',
-          textTransform: 'uppercase', color: 'text.secondary',
+          fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.07em',
+          textTransform: 'uppercase', color: O2D.sub, lineHeight: 1.3,
         }}>
           {label}
         </Typography>
+        {/* 1.5rem → 1.15rem: five of these side by side at 24px was shouting
+            louder than the charts they summarise. */}
         <Typography sx={{
-          fontWeight: 800, fontSize: '1.5rem', lineHeight: 1.1, mt: 0.25,
+          fontWeight: 800, fontSize: '1.15rem', lineHeight: 1.15, mt: 0.15,
           fontVariantNumeric: 'tabular-nums', color,
         }}>
           {value}
@@ -165,55 +171,18 @@ const PricingAnalytics = () => {
   })), [a]);
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Hero */}
-      <Box sx={{
-        position: 'relative', overflow: 'hidden', color: '#fff',
-        background: 'linear-gradient(135deg, #0b2545 0%, #1e3a8a 55%, #1d4ed8 100%)',
-        px: { xs: 3, md: 5 }, pt: { xs: 4, md: 5 }, pb: { xs: 5, md: 7 },
-      }}>
-        <Box aria-hidden sx={{
-          position: 'absolute', width: 420, height: 420, borderRadius: '50%',
-          top: -160, right: -120,
-          background: 'radial-gradient(circle, rgba(96,165,250,0.32) 0%, rgba(96,165,250,0) 60%)',
-        }} />
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }} sx={{ position: 'relative' }}>
-          <Stack direction="row" spacing={2.5} alignItems="center" sx={{ flex: 1 }}>
-            <Box sx={{
-              width: 52, height: 52, borderRadius: 2.5,
-              display: 'grid', placeItems: 'center',
-              background: 'rgba(255,255,255,0.14)',
-              border: '1px solid rgba(255,255,255,0.22)',
-            }}>
-              <BarChart3 size={26} color="#fff" />
-            </Box>
-            <Box>
-              <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800, letterSpacing: '-0.02em' }}>
-                Pricing Analytics
-              </Typography>
-              <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5, maxWidth: 720 }}>
-                Trend, frequency &amp; volatility — the numbers behind every customer negotiation.
-              </Typography>
-            </Box>
-          </Stack>
-
+    <Box sx={pageSx}>
+      <PageHero
+        icon={BarChart3}
+        title="Pricing Analytics"
+        subtitle="Trend, frequency & volatility — the numbers behind every customer negotiation."
+        actions={(
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <TextField
               select size="small" value={itemType}
               onChange={(e) => setItemType(e.target.value)}
-              sx={{ minWidth: 152 }}
-              SelectProps={{
-                displayEmpty: true,
-                sx: {
-                  bgcolor: 'rgba(255,255,255,0.16)',
-                  color: '#fff', borderRadius: 1.5,
-                  fontWeight: 700, fontSize: '0.78rem',
-                  '& .MuiSelect-icon': { color: '#fff' },
-                },
-              }}
-              InputProps={{
-                sx: { '& fieldset': { border: '1px solid rgba(255,255,255,0.25)' } },
-              }}
+              sx={{ ...fieldSx, minWidth: 152 }}
+              SelectProps={{ displayEmpty: true }}
             >
               {ITEM_KIND_OPTIONS.map((o) => (
                 <MenuItem key={o.value || 'all'} value={o.value}>{o.label}</MenuItem>
@@ -221,12 +190,11 @@ const PricingAnalytics = () => {
             </TextField>
 
             {isBuySide ? (
-              <Stack direction="row" spacing={0.75} alignItems="center" sx={{
-                px: 1.5, borderRadius: 1.5,
-                bgcolor: 'rgba(255,255,255,0.16)',
-                border: '1px solid rgba(255,255,255,0.25)',
+              <Stack direction="row" alignItems="center" sx={{
+                px: 1.5, height: 36, borderRadius: '8px',
+                bgcolor: alpha('#b45309', 0.09), border: `1px solid ${alpha('#b45309', 0.22)}`,
               }}>
-                <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: '#fff' }}>
+                <Typography sx={{ fontSize: '0.75rem', fontWeight: 800, color: '#b45309' }}>
                   Purchase Price
                 </Typography>
               </Stack>
@@ -235,15 +203,14 @@ const PricingAnalytics = () => {
                 exclusive size="small" value={priceType}
                 onChange={(_, v) => v && setPriceType(v)}
                 sx={{
-                  bgcolor: 'rgba(255,255,255,0.10)',
-                  p: 0.3, borderRadius: 1.5,
+                  height: 36,
                   '& .MuiToggleButton-root': {
-                    px: 1.5, py: 0.5, fontSize: '0.72rem', fontWeight: 700,
-                    border: 'none', borderRadius: '8px !important',
-                    color: 'rgba(255,255,255,0.7)', textTransform: 'none',
+                    px: 1.5, fontSize: '0.75rem', fontWeight: 800,
+                    border: `1px solid ${O2D.line}`, borderRadius: '8px',
+                    color: O2D.sub, textTransform: 'none', bgcolor: O2D.surface,
                     '&.Mui-selected': {
-                      bgcolor: '#fff', color: theme.palette.primary.dark,
-                      '&:hover': { bgcolor: '#fff' },
+                      bgcolor: alpha(BRAND, 0.1), color: BRAND_DK, borderColor: alpha(BRAND, 0.35),
+                      '&:hover': { bgcolor: alpha(BRAND, 0.16) },
                     },
                   },
                 }}
@@ -256,17 +223,7 @@ const PricingAnalytics = () => {
             <TextField
               select size="small" value={months}
               onChange={(e) => setMonths(Number(e.target.value))}
-              SelectProps={{
-                sx: {
-                  bgcolor: 'rgba(255,255,255,0.16)',
-                  color: '#fff', borderRadius: 1.5,
-                  fontWeight: 700, fontSize: '0.78rem',
-                  '& .MuiSelect-icon': { color: '#fff' },
-                },
-              }}
-              InputProps={{
-                sx: { '& fieldset': { border: '1px solid rgba(255,255,255,0.25)' } },
-              }}
+              sx={fieldSx}
             >
               <MenuItem value={3}>Last 3 months</MenuItem>
               <MenuItem value={6}>Last 6 months</MenuItem>
@@ -274,10 +231,10 @@ const PricingAnalytics = () => {
               <MenuItem value={24}>Last 24 months</MenuItem>
             </TextField>
           </Stack>
-        </Stack>
-      </Box>
+        )}
+      />
 
-      <Box sx={{ px: { xs: 1.5, md: 2.5 }, mt: { xs: -3, md: -4 }, position: 'relative', pb: 5 }}>
+      <Box sx={{ position: 'relative' }}>
         {/* KPIs */}
         <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap sx={{ mb: 2.5 }}>
           {isFetching && !a ? (
@@ -311,7 +268,7 @@ const PricingAnalytics = () => {
 
         {/* Charts: Index line + Revisions bar */}
         <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2.5} sx={{ mb: 2.5 }}>
-          <Paper sx={{ flex: 2, p: 2.5, borderRadius: 3, boxShadow: '0 10px 28px rgba(30,58,138,0.06)' }}>
+          <Paper sx={{ flex: 2, p: 2.5, borderRadius: '10px', border: '1px solid #e4e1d9', boxShadow: 'none' }}>
             <ChartHeader
               title={`Price Index (rebased 100 = ${monthly.find((m) => m.index)?.name || 'start'})`}
               subtitle={`Average ${streamWord} price per month`}
@@ -335,7 +292,7 @@ const PricingAnalytics = () => {
             </Box>
           </Paper>
 
-          <Paper sx={{ flex: 1, p: 2.5, borderRadius: 3, boxShadow: '0 10px 28px rgba(30,58,138,0.06)' }}>
+          <Paper sx={{ flex: 1, p: 2.5, borderRadius: '10px', border: '1px solid #e4e1d9', boxShadow: 'none' }}>
             <ChartHeader
               title="Revisions per month"
               subtitle="How active each month was"
@@ -359,7 +316,7 @@ const PricingAnalytics = () => {
         {/* Top movers + Heatmap */}
         <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2.5}>
           {/* Top Movers */}
-          <Paper sx={{ flex: 1, p: 2.5, borderRadius: 3, boxShadow: '0 10px 28px rgba(30,58,138,0.06)' }}>
+          <Paper sx={{ flex: 1, p: 2.5, borderRadius: '10px', border: '1px solid #e4e1d9', boxShadow: 'none' }}>
             <ChartHeader title="Top movers" subtitle={`Biggest cumulative changes in last ${a?.months || 12} months`} icon={TrendingUp} theme={theme} />
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <MoverList title="Increases" items={a?.topIncreases || []} color={theme.palette.error.dark} icon={ArrowUp} theme={theme} />
@@ -368,7 +325,7 @@ const PricingAnalytics = () => {
           </Paper>
 
           {/* Heatmap */}
-          <Paper sx={{ flex: 1.5, p: 2.5, borderRadius: 3, boxShadow: '0 10px 28px rgba(30,58,138,0.06)' }}>
+          <Paper sx={{ flex: 1.5, p: 2.5, borderRadius: '10px', border: '1px solid #e4e1d9', boxShadow: 'none' }}>
             <ChartHeader
               title="SKU × Month heatmap"
               subtitle="Red = price rose · Green = price fell · cell = avg % change that month"
