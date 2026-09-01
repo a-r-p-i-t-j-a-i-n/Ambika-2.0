@@ -39,17 +39,23 @@ export const tallyEntryService = {
 
     const entryNumber = await generateTallyEntryNumber(new Date());
 
+    // Planned Date, Tally Voucher No. and Tally Ledger Name are all derived
+    // from the source (posted, MD-approved) voucher rather than typed by the
+    // user: Tally Voucher No. is the same as the Bill Passing Voucher No.,
+    // Tally Ledger Name mirrors the voucher's Vendor Name, and Planned Date
+    // defaults to the date the voucher was posted (falling back to the
+    // voucher date if, for any reason, postedAt isn't set).
     const entry = await PurchaseTallyEntry.create({
       entryNumber,
       voucherId: v._id, voucherNumber: v.voucherNumber,
       invoiceId: v.invoiceId, invoiceNumber: v.invoiceNumber,
       poId: v.poId, poNumber: v.poNumber, grnId: v.grnId,
       vendorId: v.vendorId, vendorName: v.vendorName,
-      plannedAt: data.plannedAt || null,
+      plannedAt: v.postedAt || v.voucherDate || new Date(),
       statusDone: data.statusDone || STATUS_DONE.NO,
       checklist: data.checklist || {},
-      tallyVoucherNumber: data.tallyVoucherNumber || '',
-      tallyLedgerName: data.tallyLedgerName || '',
+      tallyVoucherNumber: v.voucherNumber,
+      tallyLedgerName: v.vendorName,
       remarks: data.remarks || '',
       tallyEntryStatus: TALLY_ENTRY_STATUS.PENDING,
       performedBy: user?._id || null,
@@ -96,7 +102,9 @@ export const tallyEntryService = {
   async update(id, data, user) {
     const t = await findOrThrow(id);
     if (t.tallyEntryStatus !== TALLY_ENTRY_STATUS.PENDING) throw new AppError('Only pending tally entries can be edited', 400);
-    const { checklist, ...rest } = data;
+    // plannedAt, tallyVoucherNumber and tallyLedgerName are system-derived from
+    // the source voucher at creation time and stay read-only thereafter.
+    const { checklist, plannedAt, tallyVoucherNumber, tallyLedgerName, ...rest } = data;
     Object.assign(t, rest);
     if (checklist) t.checklist = { ...t.checklist.toObject?.() ?? t.checklist, ...checklist };
     t.updatedBy = user?._id;

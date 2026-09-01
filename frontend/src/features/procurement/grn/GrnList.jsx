@@ -126,7 +126,7 @@ const GrnList = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Goods Receipt Notes</Typography>
+          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Goods Receipt Notes (8)</Typography>
           <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
             Step 1.8 · Receive material — completing a GRN posts stock to inventory
           </Typography>

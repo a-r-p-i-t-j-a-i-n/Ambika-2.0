@@ -12,14 +12,11 @@ import {
   useCompleteTallyEntryMutation,
 } from '../../../store/api/procurementApi';
 import { CHECKLIST_ITEMS } from './tallyMeta';
-import { fmtINR } from '../vouchers/voucherMeta';
+import { fmtINR, fmtDate } from '../vouchers/voucherMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
 const emptyChecklist = CHECKLIST_ITEMS.reduce((a, i) => ({ ...a, [i.key]: false }), {});
-const emptyForm = {
-  voucherId: '', statusDone: 'NO', plannedAt: '',
-  tallyVoucherNumber: '', tallyLedgerName: '', remarks: '',
-};
+const emptyForm = { voucherId: '', statusDone: 'NO', remarks: '' };
 
 // Vouchers eligible for a Tally Entry: posted and not already tally-completed.
 const ELIGIBLE = ['POSTED', 'PARTIALLY_PAID', 'FULLY_PAID', 'SHORT_CLOSED'];
@@ -55,11 +52,7 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
   useEffect(() => {
     if (!open) return;
     if (isEdit) {
-      setForm({
-        voucherId: entry.voucherId || '', statusDone: entry.statusDone || 'NO',
-        plannedAt: entry.plannedAt ? entry.plannedAt.slice(0, 10) : '',
-        tallyVoucherNumber: entry.tallyVoucherNumber || '', tallyLedgerName: entry.tallyLedgerName || '', remarks: entry.remarks || '',
-      });
+      setForm({ voucherId: entry.voucherId || '', statusDone: entry.statusDone || 'NO', remarks: entry.remarks || '' });
       setChecklist({ ...emptyChecklist, ...(entry.checklist || {}) });
     } else {
       setForm({ ...emptyForm, voucherId: presetVoucher?._id || '' });
@@ -84,12 +77,11 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
     if (markingDone && !CHECKLIST_ITEMS.every((i) => checklist[i.key])) {
       return enqueueSnackbar('Verify all checklist items to mark the Tally entry as done', { variant: 'warning' });
     }
+    // Planned Date, Tally Voucher No. and Tally Ledger Name are server-derived
+    // from the source voucher (see tallyEntry.service.js) — not sent from here.
     const payload = {
       statusDone: form.statusDone,
-      plannedAt: form.plannedAt || undefined,
       checklist,
-      tallyVoucherNumber: form.tallyVoucherNumber.trim() || undefined,
-      tallyLedgerName: form.tallyLedgerName.trim() || undefined,
       remarks: form.remarks.trim() || undefined,
     };
     try {
@@ -144,10 +136,20 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
               </ToggleButtonGroup>
             </Box>
           </Grid>
-          <Grid item xs={6}><DateInputDDMMYYYY fullWidth size="small" label="Planned Date" value={form.plannedAt} onChange={(val) => setForm((f) => ({ ...f, plannedAt: val }))} /></Grid>
-
-          <Grid item xs={6}><TextField fullWidth size="small" label="Tally Voucher No" value={form.tallyVoucherNumber} onChange={set('tallyVoucherNumber')} /></Grid>
-          <Grid item xs={6}><TextField fullWidth size="small" label="Tally Ledger Name" value={form.tallyLedgerName} onChange={set('tallyLedgerName')} /></Grid>
+          {/* Planned Date / Tally Voucher No. / Tally Ledger Name are all derived
+              server-side from the source voucher — read-only here, never typed. */}
+          <Grid item xs={6}>
+            <TextField fullWidth size="small" label="Planned Date" disabled
+              value={isEdit ? fmtDate(entry?.plannedAt) : fmtDate(selectedVoucher?.postedAt || selectedVoucher?.voucherDate) || '—'} />
+          </Grid>
+          <Grid item xs={6}>
+            <TextField fullWidth size="small" label="Tally Voucher No" disabled
+              value={isEdit ? (entry?.tallyVoucherNumber || '—') : (selectedVoucher?.voucherNumber || '—')} />
+          </Grid>
+          <Grid item xs={6}>
+            <TextField fullWidth size="small" label="Tally Ledger Name" disabled
+              value={isEdit ? (entry?.tallyLedgerName || '—') : (selectedVoucher?.vendorName || '—')} />
+          </Grid>
 
           <Grid item xs={12}><Divider sx={{ mt: 0.5 }}><Typography variant="caption" fontWeight={700} color="text.secondary">INVOICE CHECKLIST</Typography></Divider></Grid>
           {CHECKLIST_ITEMS.map((i) => (

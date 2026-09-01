@@ -159,16 +159,17 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
 
   const handleApprove = async () => {
     if (!selectedRows.length) { enqueueSnackbar('Select at least one indent', { variant: 'warning' }); return; }
-    // Same rule as the single-approve dialog: Revised Qty must be > 0 and cannot
-    // exceed the requested quantity — only for items still marked Approved.
+    // Same rule as the single-approve dialog: Revised Qty must be > 0 — only
+    // for items still marked Approved. It may be lower than, equal to, or
+    // greater than the requested quantity.
     const invalidRow = selectedRows.find((r) => r.items.some((it) => {
       if (it.approvalStatus === 'REJECTED') return false;
       const approvedQty = approvedQtyOf(it);
-      return !(approvedQty > 0) || approvedQty > it.requestedQty;
+      return !(approvedQty > 0);
     }));
     if (invalidRow) {
       enqueueSnackbar(
-        `Fix the revised quantity for "${invalidRow.indentNumber}" — it must be greater than 0 and cannot exceed the requested quantity`,
+        `Fix the revised quantity for "${invalidRow.indentNumber}" — it must be greater than 0`,
         { variant: 'warning' },
       );
       return;

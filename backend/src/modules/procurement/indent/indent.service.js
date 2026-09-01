@@ -199,17 +199,14 @@ const decorateItemDisplayNumbers = (indent) => {
 // Approval qty rule: Approved Qty always mirrors Revised Qty — the server is
 // authoritative here, so any `approvedQuantity` sent by the client is ignored
 // (prevents a frontend bypass). If Revised Qty is blank/0, default to the
-// requested quantity. Revised Qty must be > 0 and cannot exceed the requested
-// quantity (no over-approval allowance currently exists in this flow).
+// requested quantity. Revised Qty must be > 0; it may be lower than, equal
+// to, or greater than the requested quantity (over-approval is allowed).
 const resolveApprovedQty = (revisedInput, requestedQty, itemLabel) => {
   const requested = num(requestedQty);
   const revised = num(revisedInput) > 0 ? num(revisedInput) : requested;
   const label = itemLabel ? ` for "${itemLabel}"` : '';
   if (revised <= 0) {
     throw new AppError(`Revised quantity must be greater than 0${label}`, 400);
-  }
-  if (revised > requested) {
-    throw new AppError(`Revised quantity cannot exceed the requested quantity (${requested})${label}`, 400);
   }
   return revised;
 };

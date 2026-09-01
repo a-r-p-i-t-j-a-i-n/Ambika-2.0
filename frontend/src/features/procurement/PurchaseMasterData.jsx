@@ -227,7 +227,7 @@ const PurchaseMasterData = () => {
             <Database size={26} color="#fff" />
           </Box>
           <Box>
-            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800 }}>Purchase Master Data</Typography>
+            <Typography sx={{ color: '#fff', fontSize: { xs: '1.5rem', md: '2rem' }, fontWeight: 800 }}>Purchase Master Data (1)</Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.82)', fontSize: '0.95rem', mt: 0.5 }}>
               Every procurement entry, step by step — vendor, amounts, dates &amp; status. One tab per Purchase FMS step.
             </Typography>

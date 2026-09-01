@@ -15,6 +15,7 @@ import {
   useGetPurchaseOrdersQuery,
   useGetPurchaseOrderStatsQuery,
   useCancelPurchaseOrderMutation,
+  useGeneratePurchaseOrderPdfMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -75,6 +76,7 @@ const PurchaseOrderList = () => {
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
   const [cancelPo] = useCancelPurchaseOrderMutation();
+  const [generatePoPdf] = useGeneratePurchaseOrderPdfMutation();
 
   const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
   const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
@@ -84,7 +86,18 @@ const PurchaseOrderList = () => {
   const onRevise = (r) => { setEditPo(null); setReviseFromPo(r); setFormOpen(true); closeMenu(); };
   const onApprove = (r) => { setActivePo(r); setApprovalOpen(true); closeMenu(); };
   const onRelease = (r) => { setActivePo(r); setReleaseOpen(true); closeMenu(); };
-  const onPdf = (r) => { setActivePo(r); setPdfOpen(true); closeMenu(); };
+  // A DRAFT/APPROVED (not yet released) PO has no stored poPdfUrl — release()
+  // is the only place that generates one. Generate on demand here so Preview
+  // works at any stage, reusing the same generatePdf() release() itself calls.
+  const onPdf = async (r) => {
+    closeMenu();
+    if (r.poPdfUrl) { setActivePo(r); setPdfOpen(true); return; }
+    try {
+      const res = await generatePoPdf({ id: r._id }).unwrap();
+      setActivePo({ ...r, poPdfUrl: res?.data?.poPdfUrl, poPdfFileName: res?.data?.poPdfFileName });
+      setPdfOpen(true);
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to generate PDF', { variant: 'error' }); }
+  };
   const onCancel = async (r) => {
     closeMenu();
     try { await cancelPo({ id: r._id }).unwrap(); enqueueSnackbar('PO cancelled', { variant: 'info' }); }
@@ -100,9 +113,7 @@ const PurchaseOrderList = () => {
     if (r.approvalStatus === 'APPROVED' && r.releaseStatus !== 'RELEASED') {
       a.push({ key: 'release', label: 'Release to Supplier', icon: <Send size={16} />, fn: () => onRelease(r) });
     }
-    if (r.poPdfUrl) {
-      a.push({ key: 'pdf', label: 'Download PDF', icon: <FileDown size={16} />, fn: () => onPdf(r) });
-    }
+    a.push({ key: 'pdf', label: r.poPdfUrl ? 'Download PDF' : 'Preview PDF', icon: <FileDown size={16} />, fn: () => onPdf(r) });
     if (!['FULLY_RECEIVED', 'CLOSED', 'CANCELLED'].includes(r.poStatus)) {
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
     }
@@ -162,7 +173,7 @@ const PurchaseOrderList = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Purchase Orders</Typography>
+          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Purchase Orders (4)</Typography>
           <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
             Step 1.4 · Create PO &amp; release to supplier — only from approved quotations
           </Typography>

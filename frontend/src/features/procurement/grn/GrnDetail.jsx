@@ -68,7 +68,7 @@ const GrnDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">GRN not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/grns')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/grn')}>Back to list</Button>
       </Box>
     );
   }
@@ -113,7 +113,7 @@ const GrnDetail = () => {
     if (isCompleted && qcDone) {
       return { tone: 'success', title: 'QC complete — next: record the Vendor Invoice',
         desc: 'Capture the vendor’s tax invoice to proceed to payment & accounting.',
-        primary: { label: 'Go to Vendor Invoices', icon: <ReceiptText size={16} />, onClick: () => navigate('/procurement/vendor-invoices') },
+        primary: { label: 'Go to Vendor Invoices', icon: <ReceiptText size={16} />, onClick: () => navigate('/purchase-fms/vendor-invoices') },
         secondary: grn.qcId ? { label: 'View QC', onClick: () => navigate(`/procurement/incoming-qc/${grn.qcId}`) } : null };
     }
     return null;
@@ -128,7 +128,7 @@ const GrnDetail = () => {
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       {/* Hero */}
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/grns')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+        <IconButton onClick={() => navigate('/purchase-fms/grn')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
           <ArrowLeft size={20} />
         </IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
@@ -245,6 +245,7 @@ const GrnDetail = () => {
                     <TableCell align="right">Received</TableCell>
                     <TableCell align="right">Short</TableCell>
                     <TableCell align="right">Pending After GRN</TableCell>
+                    <TableCell>Item Status</TableCell>
                     <TableCell>Batch</TableCell>
                     <TableCell>Movement</TableCell>
                     <TableCell>Remarks</TableCell>
@@ -255,6 +256,14 @@ const GrnDetail = () => {
                     // Legacy GRNs predate the persisted pendingBeforeGrn field — derive
                     // it the same way the backend does so old records stay readable.
                     const pendingBeforeGrn = it.pendingBeforeGrn ?? Math.max(0, (it.orderedQty || 0) - (it.previouslyReceivedQty || 0));
+                    // Item-wise receipt status, derived from this line's own pending/extra
+                    // qty (never from the PO or GRN as a whole) — an item is only "Fully
+                    // Received" once ITS pending-after-GRN qty is zero.
+                    const itemStatus = (it.extraQty || 0) > 0
+                      ? { label: 'Extra Received', color: '#7c3aed' }
+                      : (it.pendingQty || 0) > 0
+                        ? { label: 'Partially Received', color: '#b45309' }
+                        : { label: 'Fully Received', color: '#0f766e' };
                     return (
                       <TableRow key={it._id || i} hover>
                         <TableCell>{i + 1}</TableCell>
@@ -267,6 +276,9 @@ const GrnDetail = () => {
                         <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.receivedQty}</TableCell>
                         <TableCell align="right" sx={{ color: it.shortQty > 0 ? '#b45309' : 'text.secondary' }}>{it.shortQty || 0}</TableCell>
                         <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{it.pendingQty || 0}</TableCell>
+                        <TableCell>
+                          <Chip size="small" label={itemStatus.label} sx={{ fontWeight: 700, color: itemStatus.color, bgcolor: alpha(itemStatus.color, 0.1) }} />
+                        </TableCell>
                         <TableCell>{it.batchNo || '—'}</TableCell>
                         <TableCell><Typography variant="body2" color="text.secondary">{it.movementNumber || '—'}</Typography></TableCell>
                         <TableCell><Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography></TableCell>

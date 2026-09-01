@@ -83,7 +83,7 @@ const AdvancePaymentList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
       {/* Header */}
       <Box>
-        <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Advance Payments</Typography>
+        <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Advance Payments (7)</Typography>
         <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
           Step 1.7 · Payments recorded against approved PIs — record from the PI detail page
         </Typography>

@@ -298,7 +298,10 @@ export const grnService = {
       .map((it) => {
         const pending = round2((it.quantity || 0) - (it.receivedQty || 0));
         return {
-          poItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
+          // JSL items store the true item description separately from itemName
+          // (which JSL repurposes as the "Grade Width Finish" label) — prefer it
+          // so the GRN shows the correct Item Description.
+          poItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemDescription || it.itemName, unit: it.unit,
           orderedQty: it.quantity, previouslyReceivedQty: it.receivedQty || 0,
           invoiceQty: pending, receivedQty: pending, rate: it.rate, batchNo: '', remarks: '',
         };

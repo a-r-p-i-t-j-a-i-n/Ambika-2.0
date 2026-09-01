@@ -287,7 +287,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       width:  spec.width || '1250',
       finish: spec.finish || '2B/ME',
       quantity: o.approvedQuantity || '',
-      unit: o.unit || match?.unit || 'Kgs',
+      // Prefer the Jindal vendor-catalog unit (the actual master data for JSL
+      // items) over the indent's unit — the indent's generic Unit dropdown
+      // (Pcs/Kg/Meter/...) doesn't cover JSL-specific units (Kgs/MT/Nos), so it
+      // silently normalizes those to "Pcs" at indent-creation time.
+      unit: match?.unit || o.unit || 'Kgs',
       baseRate: match ? (match.rate ?? 0) : 0,
       gstRate: JSL_GST,
       itemName: o.itemName || '',
@@ -577,6 +581,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     remarks: header.remarks.trim(),
     items: validItems.map((it) => (isJsl ? {
       grade: it.grade?.trim() || '', width: it.width?.trim() || '', finish: it.finish?.trim() || '',
+      itemName: it.itemName?.trim() || '',
       skuCode: it.skuCode?.trim() || '', skuId: it.skuId || undefined,
       indentId: it.indentId || undefined, indentNumber: it.indentNumber || '',
       indentItemId: it.indentItemId || undefined,
@@ -944,7 +949,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                         <TextField size="small" type="number" placeholder="0" value={it.quantity}
                           onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                         <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
-                          {JSL_UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+                          {/* Always include the row's current unit even if it isn't one of the
+                              standard options — vendor-master unit spellings vary (e.g. "MT",
+                              "Kg"), and a value with no matching MenuItem would otherwise render
+                              blank, hiding a unit that was actually fetched correctly. */}
+                          {(JSL_UNITS.includes(it.unit) || !it.unit ? JSL_UNITS : [it.unit, ...JSL_UNITS]).map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                         </TextField>
                         <TextField size="small" type="number" placeholder="0.00" value={it.baseRate}
                           onChange={(e) => setItem(idx, { baseRate: e.target.value, manual: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />

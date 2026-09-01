@@ -89,7 +89,9 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
     .map((it) => {
       const pending = round2((it.quantity || 0) - (it.receivedQty || 0));
       return {
-        poItemId: it._id, itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
+        // JSL items store the true item description in itemDescription (itemName
+        // there is the "Grade Width Finish" label) — prefer it for display.
+        poItemId: it._id, itemName: it.itemDescription || it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.quantity || 0, previouslyReceivedQty: it.receivedQty || 0,
         pendingBefore: pending, invoiceQty: pending, receivedQty: pending, rate: it.rate || 0, batchNo: '', remarks: '',
       };

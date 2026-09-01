@@ -68,6 +68,9 @@ const computeLines = (items = [], format = 'OTHER') => {
         indentItemDisplayNumber: it.indentItemDisplayNumber || '',
         // canonical fields (keep GRN/inventory working: rate=finalPrice, taxable=value)
         itemName: description,
+        // real item description (from the indent), kept separate from the Grade
+        // Width Finish label above so GRN can show the correct Item Description.
+        itemDescription: (it.itemName || '').trim(),
         skuCode: it.skuCode || '', skuId: it.skuId || undefined,
         quantity, unit: it.unit || 'Kgs', rate: finalPrice, gstRate: JSL_GST_RATE,
         taxableAmount: value, taxAmount, totalAmount: round2(value + taxAmount),
@@ -1283,10 +1286,13 @@ export const purchaseOrderService = {
   /**
    * Bulk-release multiple approved, not-yet-released POs to their vendors in
    * one request (Step 1.4 — "Bulk Release PO"). Each PO is processed fully
-   * independently: PDF generation and the email send happen BEFORE the release
-   * status is flipped, so a PO that fails at any step leaves no partial writes
-   * behind (it stays exactly as eligible as it was, and can simply be retried).
-   * One PO's failure never stops the batch.
+   * independently. The release status is flipped as soon as a PO's own
+   * eligibility is confirmed — PDF generation and the vendor email are
+   * best-effort side effects that can never block the release itself (same
+   * semantics as the single-PO release below), so a mail-transport outage or
+   * a vendor with no email on file can no longer make the entire batch fail
+   * while every PO stays stuck looking "eligible". One PO's failure never
+   * stops or affects any other PO in the batch.
    */
   async bulkRelease(data, user) {
     const poIds = [...new Set((data.poIds || []).map(String))];
@@ -1307,36 +1313,8 @@ export const purchaseOrderService = {
           throw new AppError('Invalid status — PO must be approved and awaiting release', 400);
         }
 
-        // Vendor email must resolve before doing any work for this PO.
-        const { to, cc, bcc } = await resolvePoEmailRecipients(po, { extraCc: data.ccEmails, extraBcc: data.bccEmails });
-        if (!to.length) throw new AppError('Missing vendor email', 400);
-
-        // 1) Generate + attach the PDF if not already generated.
-        if (!po.poPdfUrl) {
-          try {
-            const { poPdfUrl, poPdfFileName } = await this.generatePdf(poId);
-            po.poPdfUrl = poPdfUrl;
-            po.poPdfFileName = poPdfFileName;
-          } catch (err) {
-            throw new AppError(`PDF generation failed: ${err.message}`, 500);
-          }
-        }
-
-        // 2) Send the PO email to the vendor.
-        try {
-          await emailService.sendEmail({
-            to: to.join(', '),
-            cc: cc.length ? cc.join(', ') : undefined,
-            bcc: bcc.length ? bcc.join(', ') : undefined,
-            subject: buildPoEmailSubject(po),
-            html: buildPoEmailHtml(po, data.emailMessage),
-            attachments: await emailService.resolveStoredAttachments([{ filename: po.poPdfFileName || `${po.poNumber}.pdf`, url: po.poPdfUrl }]),
-          });
-        } catch (err) {
-          throw new AppError(`Email failed: ${err.message}`, 502);
-        }
-
-        // 3-7) Only now flip the release status — every prerequisite succeeded.
+        // 1) Flip the release status — this is the release, and it stands
+        // regardless of what happens with the PDF/email below.
         po.releaseStatus = PO_RELEASE_STATUS.RELEASED;
         po.poStatus = PO_STATUS.RELEASED_TO_VENDOR;
         po.releasedBy = user?.name || '';
@@ -1347,15 +1325,44 @@ export const purchaseOrderService = {
         if (leadDays > 0) {
           po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
         }
-        po.supplierEmailSent = true;
-        po.supplierEmailSentAt = new Date();
         po.updatedBy = user?._id;
         po.activityTimeline.push({ action: 'RELEASE', description: 'PO released to vendor (bulk release)', actorId: user?._id });
-        po.activityTimeline.push({ action: 'EMAIL_SENT', description: `PO email sent to ${to.join(', ')}`, actorId: user?._id });
+        await po.save();
+
+        // 2) Generate + store the PDF (non-fatal — release already stands).
+        try {
+          const { poPdfUrl, poPdfFileName } = await this.generatePdf(poId);
+          po.poPdfUrl = poPdfUrl;
+          po.poPdfFileName = poPdfFileName;
+        } catch (err) {
+          logger.error(`[po] bulk-release PDF generation failed for ${po.poNumber}: ${err.message}`);
+        }
+
+        // 3) Email the vendor (non-fatal — release already stands either way).
+        let emailedTo = '';
+        try {
+          const { to, cc, bcc } = await resolvePoEmailRecipients(po, { extraCc: data.ccEmails, extraBcc: data.bccEmails });
+          if (!to.length) throw new Error('Missing vendor email');
+          await emailService.sendEmail({
+            to: to.join(', '),
+            cc: cc.length ? cc.join(', ') : undefined,
+            bcc: bcc.length ? bcc.join(', ') : undefined,
+            subject: buildPoEmailSubject(po),
+            html: buildPoEmailHtml(po, data.emailMessage),
+            attachments: await emailService.resolveStoredAttachments([{ filename: po.poPdfFileName || `${po.poNumber}.pdf`, url: po.poPdfUrl }]),
+          });
+          emailedTo = to.join(', ');
+          po.supplierEmailSent = true;
+          po.supplierEmailSentAt = new Date();
+          po.activityTimeline.push({ action: 'EMAIL_SENT', description: `PO email sent to ${emailedTo}`, actorId: user?._id });
+        } catch (err) {
+          logger.error(`[po] bulk-release email failed for ${po.poNumber}: ${err.message}`);
+          po.activityTimeline.push({ action: 'EMAIL_FAILED', description: `PO email failed: ${err.message}`, actorId: user?._id });
+        }
         await po.save();
 
         result.released += 1;
-        result.success.push({ poId: po._id, poNumber: po.poNumber, vendorName: po.vendorName, email: to.join(', ') });
+        result.success.push({ poId: po._id, poNumber: po.poNumber, vendorName: po.vendorName, email: emailedTo });
       } catch (err) {
         result.failedCount += 1;
         result.failed.push({ poId, poNumber: poNumberForError, reason: err.message });

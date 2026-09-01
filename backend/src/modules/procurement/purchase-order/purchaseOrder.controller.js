@@ -43,6 +43,13 @@ export const purchaseOrderController = {
     res.send(buffer);
   }),
 
+  // Generate/refresh the PDF for a saved PO on demand (same generatePdf() the
+  // release flow already uses) — lets a PO be previewed before it's released.
+  generatePdf: asyncHandler(async (req, res) => {
+    const result = await purchaseOrderService.generatePdf(req.params.id);
+    res.json(ApiResponse.ok('Purchase order PDF generated', result));
+  }),
+
   update: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.update(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Purchase order updated', po));

@@ -124,6 +124,12 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/release`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
+    // Generate/refresh a saved PO's PDF on demand — same generatePdf() release()
+    // already uses, exposed so a PO can be previewed before it's released.
+    generatePurchaseOrderPdf: builder.mutation({
+      query: ({ id }) => ({ url: `/procurement/purchase-orders/${id}/pdf`, method: 'POST' }),
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', { type: 'PurchaseOrder', id }],
+    }),
     bulkReleasePurchaseOrders: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders/bulk-release', method: 'POST', body }),
       invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats'],
@@ -553,6 +559,7 @@ export const {
   useUpdatePurchaseOrderMutation,
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,
+  useGeneratePurchaseOrderPdfMutation,
   useBulkReleasePurchaseOrdersMutation,
   useGetPoReleasePreviewMutation,
   useCancelPurchaseOrderMutation,

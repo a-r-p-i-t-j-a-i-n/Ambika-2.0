@@ -97,6 +97,18 @@ const DateInputDDMMYYYY = ({
             ...rest,
           },
           field: { clearable: !required },
+          // These fields are frequently used inside scrollable dialogs (e.g. the
+          // per-item quotation tables). Popper's flip/overflow detection normally
+          // clips against the dialog's own scroll container, so a field sitting
+          // low in a long dialog gets a calendar that renders past the visible
+          // window instead of flipping above the field. Forcing the boundary to
+          // the actual browser viewport fixes that in every dialog at once.
+          popper: {
+            modifiers: [
+              { name: 'flip', enabled: true, options: { boundary: 'viewport', fallbackPlacements: ['top-start', 'top-end', 'bottom-start', 'bottom-end'] } },
+              { name: 'preventOverflow', enabled: true, options: { boundary: 'viewport', altAxis: true, padding: 8 } },
+            ],
+          },
         }}
       />
     </LocalizationProvider>

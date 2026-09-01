@@ -116,6 +116,7 @@ const TallyEntryDetail     = lazyWithRetry(() => import('./features/procurement/
 const FinalPaymentList     = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentList'));
 const FinalPaymentDetail   = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentDetail'));
 const PurchaseMasterData   = lazyWithRetry(() => import('./features/procurement/PurchaseMasterData'));
+const PurchaseFmsHub       = lazyWithRetry(() => import('./features/procurement/PurchaseFmsHub'));
 const VendorMaster         = lazyWithRetry(() => import('./features/procurement/vendors/VendorMaster'));
 const VendorDetail         = lazyWithRetry(() => import('./features/procurement/vendors/VendorDetail'));
 
@@ -295,6 +296,10 @@ function App() {
             <Route path="/o2d-fms/templates" element={<RequirePermission slug="o2dfms.config" fallback="inline"><FmsTaskTemplates /></RequirePermission>} />
             <Route path="/o2d-fms/scores" element={<RequirePermission slug="o2dfms.view" fallback="inline"><MisScoring /></RequirePermission>} />
             <Route path="/o2d-fms/scores/:userId" element={<RequirePermission slug="o2dfms.view" fallback="inline"><DoerProfile /></RequirePermission>} />
+
+            {/* Purchase FMS — unified workflow page with step navigation */}
+            <Route path="/purchase-fms" element={<Navigate to="/purchase-fms/master-data" replace />} />
+            <Route path="/purchase-fms/:step" element={<PurchaseFmsHub />} />
 
             {/* Purchase FMS — Purchase Indents */}
             <Route path="/procurement/indents" element={<IndentList />} />

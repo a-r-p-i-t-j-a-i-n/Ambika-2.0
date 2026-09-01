@@ -57,6 +57,7 @@ const VoucherDetail = () => {
   const [formOpen, setFormOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
+  const [previewVoucher, setPreviewVoucher] = useState(null);
 
   const [postVoucher, { isLoading: posting }] = usePostVoucherMutation();
   const [cancelVoucher, { isLoading: cancelling }] = useCancelVoucherMutation();
@@ -81,7 +82,7 @@ const VoucherDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Voucher not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/vouchers')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/payment-vouchers')}>Back to list</Button>
       </Box>
     );
   }
@@ -97,6 +98,26 @@ const VoucherDetail = () => {
       const url = (await generatePdf({ id: v._id }).unwrap())?.data?.voucherPdfUrl;
       if (url) window.open(resolveFileUrl(url), '_blank', 'noopener');
       else enqueueSnackbar('PDF not available', { variant: 'warning' });
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to generate PDF', { variant: 'error' }); }
+  };
+
+  // Preview must work before MD signature too. The voucher's own `voucherPdfUrl`
+  // is only populated once a PDF has actually been generated (via Download, or
+  // by the MD-signing step) — an unsigned voucher previewed for the first time
+  // would otherwise show "not available", which looks like preview requires a
+  // signature. Generating first (same call Download makes) fixes that; the
+  // backend's generatePdf is safe to call pre-signature — it never signs, never
+  // changes approval/financial state, and for an already MD-approved voucher it
+  // just returns the existing signed PDF untouched instead of re-rendering it.
+  const doPreviewPdf = async () => {
+    try {
+      const res = await generatePdf({ id: v._id }).unwrap();
+      setPreviewVoucher({
+        ...v,
+        voucherPdfUrl: res?.data?.voucherPdfUrl || v.voucherPdfUrl,
+        voucherPdfFileName: res?.data?.voucherPdfFileName || v.voucherPdfFileName,
+      });
+      setPdfPreviewOpen(true);
     } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to generate PDF', { variant: 'error' }); }
   };
 
@@ -120,7 +141,7 @@ const VoucherDetail = () => {
   return (
     <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/procurement/vouchers')} sx={{ bgcolor: '#fff', boxShadow: 1 }}><ArrowLeft size={20} /></IconButton>
+        <IconButton onClick={() => navigate('/purchase-fms/payment-vouchers')} sx={{ bgcolor: '#fff', boxShadow: 1 }}><ArrowLeft size={20} /></IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><Banknote size={24} /></Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
@@ -136,7 +157,7 @@ const VoucherDetail = () => {
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button variant="outlined" startIcon={<Eye size={16} />} onClick={() => setPdfPreviewOpen(true)}>{isLocked ? 'View Signed PDF' : 'Preview PDF'}</Button>
+          <Button variant="outlined" startIcon={pdfLoading ? <CircularProgress size={16} /> : <Eye size={16} />} onClick={doPreviewPdf} disabled={pdfLoading}>{isLocked ? 'View Signed PDF' : 'Preview PDF'}</Button>
           <Button variant="outlined" startIcon={pdfLoading ? <CircularProgress size={16} /> : <Download size={16} />} onClick={doDownloadPdf} disabled={pdfLoading}>Download PDF</Button>
           {v.invoiceId && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${v.invoiceId}`)}>View Invoice</Button>}
           {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
@@ -231,7 +252,7 @@ const VoucherDetail = () => {
             documentId={v._id}
             documentTitle={v.voucherNumber}
             isMd={isMd}
-            onPreviewPdf={() => setPdfPreviewOpen(true)}
+            onPreviewPdf={doPreviewPdf}
             skip={v.approvalStatus === 'NOT_REQUIRED'}
           />
         </Grid>
@@ -302,7 +323,7 @@ const VoucherDetail = () => {
       </Grid>
 
       <VoucherFormDialog open={formOpen} voucher={v} onClose={() => setFormOpen(false)} />
-      <VoucherPdfPreview open={pdfPreviewOpen} voucher={v} onClose={() => setPdfPreviewOpen(false)} />
+      <VoucherPdfPreview open={pdfPreviewOpen} voucher={previewVoucher || v} onClose={() => { setPdfPreviewOpen(false); setPreviewVoucher(null); }} />
       <TallyEntryFormDialog open={tallyFormOpen} presetVoucher={v} onClose={() => setTallyFormOpen(false)} />
       <FinalPaymentFormDialog open={paymentFormOpen} presetVoucher={v} onClose={() => setPaymentFormOpen(false)} />
 

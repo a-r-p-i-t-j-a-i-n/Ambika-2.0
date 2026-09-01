@@ -9,7 +9,7 @@ import {
   Users, UserCog, LogOut, CalendarPlus, CalendarDays, Radar, ChevronRight, ChevronLeft, ChevronDown, ShieldCheck,
   IndianRupee, Calculator, FileSignature, FilePen, ClipboardCheck, FolderOpen, BarChart3, Tag,
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
-  ReceiptText, Banknote, FileSpreadsheet, Wallet, Store,
+  ReceiptText, FileSpreadsheet,
   Boxes, PackagePlus, PackageMinus, History, Layers, Recycle, PackageCheck, Factory,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
@@ -149,31 +149,12 @@ const navSections = [
   },
   */
   {
-    // Title-less section: the single expandable row IS the label — click the
-    // chevron to reveal all 11 procurement screens.
+    // Title-less section: a single leaf row. All procurement screens now live
+    // behind one unified workflow page with its own step navigation — see
+    // PurchaseFmsHub — instead of a sidebar dropdown.
     title: '',
     items: [
-      {
-        text: 'Purchase FMS',
-        icon: <ShoppingCart size={19} />,
-        path: '/procurement',
-        children: [
-          { text: 'Master Data',         icon: <FileSpreadsheet size={19} />, path: '/procurement/master-data' },
-          { text: 'Vendor Details',      icon: <Store size={19} />,           path: '/procurement/vendors' },
-          { text: 'Purchase Indents',    icon: <ClipboardList size={19} />,   path: '/procurement/indents' },
-          { text: 'Purchase Orders',     icon: <ShoppingCart size={19} />,    path: '/procurement/purchase-orders' },
-          { text: 'Material Follow-ups', icon: <PhoneCall size={19} />,       path: '/procurement/follow-ups' },
-          { text: 'PI Forms',            icon: <FileText size={19} />,        path: '/procurement/proforma-invoices' },
-          { text: 'Advance Payments',    icon: <IndianRupee size={19} />,     path: '/procurement/advance-payments' },
-          { text: 'Goods Receipt (GRN)', icon: <Package size={19} />,         path: '/procurement/grns' },
-          { text: 'Service Completion',  icon: <FileSignature size={19} />,   path: '/procurement/service-completions' },
-          { text: 'Incoming QC',         icon: <ClipboardCheck size={19} />,  path: '/procurement/incoming-qc' },
-          { text: 'Vendor Invoices',     icon: <ReceiptText size={19} />,     path: '/procurement/vendor-invoices' },
-          { text: 'Payment Vouchers',    icon: <Banknote size={19} />,        path: '/procurement/vouchers' },
-          { text: 'Tally Entries',       icon: <FileSpreadsheet size={19} />, path: '/procurement/tally-entries' },
-          { text: 'Final Payments',      icon: <Wallet size={19} />,          path: '/procurement/final-payments' },
-        ],
-      },
+      { text: 'Purchase FMS', icon: <ShoppingCart size={19} />, path: '/purchase-fms' },
     ],
   },
   {
@@ -224,6 +205,23 @@ const PAGE_TITLES = {
   '/procurement/final-payments': 'Final Payments',
   '/procurement/master-data': 'Purchase Master Data',
   '/procurement/vendors': 'Master Vendor',
+
+  // Purchase FMS — unified workflow page (step navigation lives inside it)
+  '/purchase-fms/master-data':         'Purchase FMS — Master Data',
+  '/purchase-fms/vendor-details':      'Purchase FMS — Vendor Details',
+  '/purchase-fms/purchase-indents':    'Purchase FMS — Purchase Indents',
+  '/purchase-fms/purchase-orders':     'Purchase FMS — Purchase Orders',
+  '/purchase-fms/material-follow-ups': 'Purchase FMS — Material Follow-ups',
+  '/purchase-fms/pi-forms':            'Purchase FMS — PI Forms',
+  '/purchase-fms/advance-payments':    'Purchase FMS — Advance Payments',
+  '/purchase-fms/grn':                 'Purchase FMS — Goods Receipt (GRN)',
+  '/purchase-fms/service-completion':  'Purchase FMS — Service Completion',
+  '/purchase-fms/incoming-qc':         'Purchase FMS — Incoming QC',
+  '/purchase-fms/vendor-invoices':     'Purchase FMS — Vendor Invoices',
+  '/purchase-fms/payment-vouchers':    'Purchase FMS — Payment Vouchers',
+  '/purchase-fms/tally-entries':       'Purchase FMS — Tally Entries',
+  '/purchase-fms/final-payments':      'Purchase FMS — Final Payments',
+  '/purchase-fms':                     'Purchase FMS',
 
   '/employees':              'Employees',
   '/access-control':         'Access Control',
