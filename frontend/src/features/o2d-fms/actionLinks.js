@@ -11,7 +11,9 @@ export const ACTION_LINKS = [
   { key: 'ORDER_ENTRY',     label: 'Sales Order Entry (punch-in)',      route: '/orders?so={soNumber}' },
   { key: 'ORDER_DETAILS',   label: 'Order Details page',                route: '/orders/{orderId}' },
   { key: 'DISPATCH_PLAN',   label: 'Dispatch Planning',                 route: '/dispatch-planning?so={soNumber}' },
-  { key: 'PPC',             label: 'PPC Planning',                      route: '/ppc-planning' },
+  // `so` lets the PPC board tell the doer which order sent them there, and powers
+  // its "Done → back to task" return (step 2.03).
+  { key: 'PPC',             label: 'PPC Planning',                      route: '/ppc-planning?so={soNumber}' },
   { key: 'ACTUAL_DISPATCH', label: 'Actual Dispatch (challan)',         route: '/challans?so={soNumber}' },
   { key: 'INVOICE',         label: 'Invoicing',                         route: '/invoices?so={soNumber}' },
   { key: 'CONTROL_TOWER',   label: 'Dispatch Control Tower',            route: '/dispatch-control-tower' },

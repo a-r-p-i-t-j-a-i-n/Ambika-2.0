@@ -17,11 +17,15 @@ export const dispatchControlApi = baseApi.injectEndpoints({
     }),
     createDispatchPlan: builder.mutation({
       query: (body) => ({ url: '/dispatch-control/dispatch-plans', method: 'POST', body }),
-      invalidatesTags: ['Order', 'PPC', 'Comparison', 'DispatchDashboard', 'Schedule'],
+      // Step 2.04's row reads the plan's phases straight off the process.
+      invalidatesTags: ['Order', 'PPC', 'Comparison', 'DispatchDashboard', 'Schedule', 'O2DProcess'],
     }),
     createActualDispatch: builder.mutation({
       query: (body) => ({ url: '/dispatch-control/actual-dispatches', method: 'POST', body }),
-      invalidatesTags: ['Order', 'Challan', 'PPC', 'Comparison', 'DispatchDashboard', 'Schedule'],
+      // 'O2DProcess' covers the FMS tracker too: a new dispatch spawns a new delivery
+      // challan, and the Step View's 2.06–2.13 rows are one PER challan — so the new
+      // row (and its own 2.07→2.13 chain) must appear without a manual refresh.
+      invalidatesTags: ['Order', 'Challan', 'PPC', 'Comparison', 'DispatchDashboard', 'Schedule', 'O2DProcess', 'O2DMyTasks'],
     }),
     // Step 2.5 — email the dispatch schedule to the client via SMTP.
     emailDispatchSchedule: builder.mutation({

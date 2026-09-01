@@ -74,6 +74,9 @@ export const renderQuotePdf = asyncHandler(async (req, res) => {
     .head { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 2px solid #1d4ed8; }
     .head .brand { font-size: 20px; font-weight: 800; color: #1e3a8a; }
     .head .meta  { text-align: right; font-size: 11px; color: #475a8a; }
+    /* With the "QUOTATION" banner gone, the quote number carries the top-right
+       weight so the letterhead still reads as a balanced pair. */
+    .head .quote-no { font-size: 16px; font-weight: 800; color: #1e3a8a; letter-spacing: .02em; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 16px 0 4px; }
     .box  { padding: 10px 12px; border: 1px solid #dbe4f3; border-radius: 8px; background: #f7f9ff; }
     .box .label { font-size: 9.5px; letter-spacing: 0.08em; font-weight: 800; text-transform: uppercase; color: #64748b; }
@@ -122,8 +125,9 @@ export const renderQuotePdf = asyncHandler(async (req, res) => {
       ${settings.companyPhone ? `<div class="muted">${esc(settings.companyPhone)} · ${esc(settings.companyEmail || '')}</div>` : ''}
     </div>
     <div class="meta">
-      <div style="font-size: 20px; font-weight: 800; color: #1e3a8a;">QUOTATION</div>
-      <div style="margin-top: 4px;">${esc(quote.quoteNumber)}</div>
+      <!-- No "QUOTATION" banner: the quote number and its status already say what
+           this sheet is, and the letterhead is the company's, not a form title. -->
+      <div class="quote-no">${esc(quote.quoteNumber)}</div>
       <div class="pill pill-${quote.status.toLowerCase().replace('_', '-')}" style="margin-top: 6px;">${esc(quote.status)}</div>
     </div>
   </div>

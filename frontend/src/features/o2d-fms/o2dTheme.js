@@ -33,6 +33,21 @@ export const STATUS_TOKENS = {
   SKIPPED:     { color: '#64748b', bg: '#e9eef5', tint: '#f7f9fc', ring: '#cbd5e1', label: 'Skipped' },
 };
 
+// The O2D tooltip look — a light, warm popover with blue text, NOT the browser
+// default black slab. Every O2D surface uses this one so a hint always reads the
+// same: `<Tooltip arrow slotProps={O2D_TIP} …>`.
+export const O2D_TIP = {
+  tooltip: {
+    sx: {
+      bgcolor: O2D.surface, color: O2D.brand, fontWeight: 800, fontSize: '0.72rem',
+      px: 1.1, py: 0.6, borderRadius: '7px', border: `1px solid ${O2D.line}`,
+      boxShadow: '0 8px 24px rgba(28,30,33,0.16)',
+      maxWidth: 300,
+    },
+  },
+  arrow: { sx: { color: O2D.surface, '&::before': { border: `1px solid ${O2D.line}` } } },
+};
+
 export const tokenOf = (status) => STATUS_TOKENS[status] || STATUS_TOKENS.PENDING;
 export const isDone = (status) => status === 'DONE' || status === 'DELAYED';
 

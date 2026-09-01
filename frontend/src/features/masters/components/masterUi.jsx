@@ -20,13 +20,20 @@ export const DANGER = '#be123c';
  * plain block <Box> inside a DataGrid cell inherits the row's full height, which
  * is why the TYPE column read as tall stretched rectangles instead of chips.
  */
-export const Pill = ({ color = BRAND, icon = null, children, title }) => (
+/**
+ * `minWidth` makes a column of pills read as one set instead of a ragged edge:
+ * pass the width of the longest label in that column and every pill matches it,
+ * label centred. Without it the pill still hugs its text, so existing callers
+ * are unaffected. It is a floor, not a cap — an unexpectedly long label grows
+ * the pill rather than clipping it.
+ */
+export const Pill = ({ color = BRAND, icon = null, children, title, minWidth }) => (
   <Box
     title={title}
     sx={{
-      display: 'inline-flex', alignItems: 'center', gap: 0.5,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 0.5,
       alignSelf: 'center', flexShrink: 0,
-      height: 22, px: 1, borderRadius: '6px',
+      height: 22, px: 1, minWidth, borderRadius: '6px',
       bgcolor: alpha(color, 0.09),
       border: `1px solid ${alpha(color, 0.22)}`,
       color,

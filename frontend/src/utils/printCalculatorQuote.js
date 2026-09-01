@@ -19,6 +19,10 @@ const escape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[c]));
 
+// The company's name, printed identically everywhere. Only used when the settings
+// record hasn't loaded — the saved value from Company Settings always wins.
+const COMPANY_FALLBACK = 'M/s AMBIKA GLOBAL';
+
 const fmtINR = (n) => {
   if (n == null || Number.isNaN(Number(n))) return '—';
   return new Intl.NumberFormat('en-IN', {
@@ -122,7 +126,7 @@ export function printCalculatorQuote({
   <div class="sheet">
     <header>
       <div class="brand">
-        <h1>${escape(company.companyName || 'Ambika Global')}</h1>
+        <h1>${escape(company.companyName || COMPANY_FALLBACK)}</h1>
         <p>${escape(company.companyAddress || '')}</p>
         ${company.companyPhone ? `<p>Phone: ${escape(company.companyPhone)}</p>` : ''}
         ${company.companyEmail ? `<p>Email: ${escape(company.companyEmail)}</p>` : ''}
@@ -209,7 +213,7 @@ export function printCalculatorQuote({
         ${escape(company.quoteTerms || 'Prices indicative based on current master rates. Subject to change without notice. Delivery and payment terms to be confirmed in PO.')}
       </div>
       ${company.quoteValidityDays ? `<div>This quotation is valid for ${company.quoteValidityDays} days from the date of issue.</div>` : ''}
-      <div class="stamp">For ${escape(company.companyName || 'Ambika Global')} · Authorised Signatory</div>
+      <div class="stamp">For ${escape(company.companyName || COMPANY_FALLBACK)} · Authorised Signatory</div>
     </footer>
   </div>
 

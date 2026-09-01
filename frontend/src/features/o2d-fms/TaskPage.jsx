@@ -10,23 +10,15 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetProcessByIdQuery, useGetConsignmentsQuery } from '../../store/api/o2dFmsApi';
 import { usePermissions } from '../../hooks/usePermission';
 import StepDetailCard from './components/StepDetailCard';
-import { O2D, tokenOf, isDone, timingOf } from './o2dTheme';
+import { O2D, O2D_TIP, tokenOf, isDone, timingOf } from './o2dTheme';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const dOnly = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—');
 const tOnly = (d) => (d ? new Date(d).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }) : '');
 
-// Light, warm tooltip with blue text (no black) — same look as the Master FMS rail.
-const RAIL_TIP = {
-  tooltip: {
-    sx: {
-      bgcolor: O2D.surface, color: O2D.brand, fontWeight: 800, fontSize: '0.72rem',
-      px: 1.1, py: 0.6, borderRadius: '7px', border: `1px solid ${O2D.line}`,
-      boxShadow: '0 8px 24px rgba(28,30,33,0.16)',
-    },
-  },
-  arrow: { sx: { color: O2D.surface, '&::before': { border: `1px solid ${O2D.line}` } } },
-};
+// Light, warm tooltip with blue text (no black) — now shared from the theme so
+// every O2D surface hints the same way.
+const RAIL_TIP = O2D_TIP;
 
 // One labelled card in the right sidebar.
 const SideCard = ({ label, children }) => (

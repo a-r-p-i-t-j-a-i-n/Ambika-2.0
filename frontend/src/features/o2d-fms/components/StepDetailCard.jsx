@@ -60,7 +60,7 @@ const stepActionKeys = (step) => (step?.actionLinks?.length
 // markActionDone never fired. Only ONCE-PER-ORDER actions are inferred here;
 // per-consignment actions (invoice / dispatch / payment…) are intentionally
 // excluded so one consignment's record never marks another's action as done.
-const inferActionDone = (key, proc) => {
+export const inferActionDone = (key, proc) => {
   switch (key) {
     case 'ORDER_INTAKE': return !!(proc?.intakeId);
     case 'ORDER_ENTRY':
@@ -74,10 +74,14 @@ const inferActionDone = (key, proc) => {
 // So a fresh challan (e.g. DC-047) shows "Do it now" for a blank invoice, while a
 // challan that's already invoiced shows "Do again". Returns null for actions that
 // aren't per-consignment (→ fall back to the step-level state).
-const consignmentActionDone = (key, c) => {
+export const consignmentActionDone = (key, c) => {
   if (!c) return null;
   switch (key) {
     case 'ACTUAL_DISPATCH': return true; // the challan itself IS the dispatch
+    // Every dispatch needs its OWN challan PDF, and the challan stores the one that
+    // was generated for it — so a fresh challan asks for its PDF even when an
+    // earlier challan on the same order already has one.
+    case 'CHALLAN_PDF': return !!c.pdfUrl;
     case 'INVOICE':
     case 'INVOICE_ENTRY': return !!c.invoice?.has;
     // Emailed = SENT, or simply ATTEMPTED — emailSentAt is stamped on every send,
@@ -837,20 +841,32 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             const dispatched = prog.dispatchedQty ?? totals.actualQty ?? 0;
             const balance = prog.balanceQty ?? Math.max(0, ordered - dispatched);
             const pct = ordered > 0 ? Math.min(100, Math.round((dispatched / ordered) * 100)) : 0;
-            const accent = done ? '#0f766e' : '#1d4ed8';
+            // "Fully dispatched" must mean the QUANTITY is out, not that someone
+            // ticked the step. Mark Done carries a `force` escape hatch, so a step
+            // can be closed with a balance still pending — and this panel used to
+            // read that as "Fully dispatched" while printing "230 pending" beside it.
+            const fullyOut = ordered > 0 && balance <= 0;
+            const closedEarly = done && !fullyOut;
+            const accent = fullyOut ? '#0f766e' : closedEarly ? '#b45309' : '#1d4ed8';
             return (
               <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 1.5,bgcolor: alpha(accent, 0.04), borderColor: alpha(accent, 0.3) }}>
                 <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
                   <Truck size={16} color={accent} />
                   <Typography variant="subtitle2" sx={{ fontWeight: 800, fontSize: '0.78rem' }}>Dispatch progress</Typography>
-                  <Chip size="small" label={done ? 'Fully dispatched' : 'In progress'} sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
+                  <Chip size="small"
+                    label={fullyOut ? 'Fully dispatched' : closedEarly ? `Closed early · ${num(balance)} pending` : 'In progress'}
+                    sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
                   <Box sx={{ flex: 1 }} />
                   <Typography variant="caption" color="text.secondary">{num(dispatched)} / {num(ordered)} pcs · {num(balance)} pending</Typography>
                 </Stack>
                 <LinearProgress variant="determinate" value={pct} sx={{ height: 7, borderRadius: 4, bgcolor: alpha(accent, 0.12), '& .MuiLinearProgress-bar': { bgcolor: accent } }} />
-                {!done && (
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-                    Keep creating delivery challans until the full quantity is dispatched — this step then completes automatically.
+                {!fullyOut && (
+                  <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: closedEarly ? '#92400e' : 'text.secondary' }}>
+                    {closedEarly
+                      // Closing the step early doesn't ship the balance — say so, or the
+                      // remaining quantity quietly falls off everyone's radar.
+                      ? `This step was marked done, but ${num(balance)} pcs are still to dispatch. Record another dispatch from the order's tracker to ship them.`
+                      : 'Keep creating delivery challans until the full quantity is dispatched — this step then completes automatically.'}
                   </Typography>
                 )}
               </Paper>

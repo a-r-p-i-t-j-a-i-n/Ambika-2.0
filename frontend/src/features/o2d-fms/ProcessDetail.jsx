@@ -12,11 +12,13 @@ import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
 import { useListAccessUsersQuery } from '../../store/api/accessControlApi';
 import { usePermissions } from '../../hooks/usePermission';
 import StepDetailCard from './components/StepDetailCard';
+import StepView from './components/StepView';
 import PhaseTimeline from '../planning/components/PhaseTimeline';
 import { ACTION_LINKS, actionLinkMeta } from './actionLinks';
 import DispatchEntry from '../execution/DispatchEntry';
 import BackButton from '../../components/BackButton';
 import { O2D } from './o2dTheme';
+import { resolveFileUrl } from '../../utils/fileUrl';
 
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 
@@ -682,7 +684,9 @@ const challanActualOf = (code, c) => {
 const ProcessDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data, isLoading, refetch } = useGetProcessByIdQuery(id);
+  // Refetch on mount: the doer comes BACK here from a task / entry form, so the
+  // tracker must show what they just recorded, not the cache from before.
+  const { data, isLoading, refetch } = useGetProcessByIdQuery(id, { refetchOnMountOrArgChange: true });
   const { can, isRoot } = usePermissions();
   const canManage = can('o2dfms.manage') || isRoot;
   const { data: usersRes } = useListAccessUsersQuery(undefined, { skip: !canManage });
@@ -691,13 +695,14 @@ const ProcessDetail = () => {
   const [pickStep, setPickStep] = useState(null); // step awaiting a "which consignment?" choice
   const [planOpen, setPlanOpen] = useState(false);
   const [dispatchOpen, setDispatchOpen] = useState(false); // Record Actual Dispatch modal
-  const [view, setView] = useState('table'); // table = scannable full view (default) | timeline
+  const [view, setView] = useState('step'); // Step view is the order workspace default; other views stay available for analysis.
+  const [stepViewCode, setStepViewCode] = useState('1.01');
   const [selectedDcId, setSelectedDcId] = useState(null); // scope the views below to ONE consignment
 
   const process = data?.data;
   const steps = process?.steps || [];
   // Consignments (one per Delivery Challan) — shared cache with ConsignmentsPanel.
-  const { data: consRes } = useGetConsignmentsQuery(id, { skip: !id });
+  const { data: consRes } = useGetConsignmentsQuery(id, { skip: !id, refetchOnMountOrArgChange: true });
   const consignments = consRes?.data?.consignments || [];
   // The challan currently chosen in the "View consignment" selector — when set, the
   // Full view overlays THIS challan's own status/actual/done-by for steps 2.06–2.13
@@ -724,6 +729,22 @@ const ProcessDetail = () => {
     setActiveConsignment(cons || null);
     setActive(s);
     return true;
+  };
+  // Step View → the doer's REAL task page for that step — the very same screen My
+  // Tasks opens (checklist, proof, "Do it now" links, Mark done). The tracker must
+  // never deep-link into PPC / Dispatch Planning / Challans directly: that skips the
+  // checklist and the step is never recorded as done. `dcNumber` scopes the task to
+  // one delivery challan for the per-consignment steps (2.06–2.13).
+  const openStepTask = (stepCode, dcNumber) => {
+    const q = dcNumber ? `?dc=${encodeURIComponent(dcNumber)}` : '';
+    navigate(`/o2d-fms/task/${id}/${encodeURIComponent(stepCode)}${q}`);
+  };
+  // Open a produced record (sales order, dispatch plan, challan, invoice…) — an
+  // internal route through the router, an uploaded file in a new tab.
+  const openRecordLink = (to) => {
+    if (!to) return;
+    if (to.startsWith('/')) navigate(to);
+    else window.open(resolveFileUrl(to), '_blank', 'noopener,noreferrer');
   };
   const completed = steps.filter((s) => ['DONE', 'DELAYED'].includes(s.status)).length;
   const pct = steps.length ? Math.round((completed / steps.length) * 100) : 0;
@@ -802,9 +823,10 @@ const ProcessDetail = () => {
             </Paper>
           )}
 
-          {/* Four ways to read the same flow — MD picks whatever's clearest. */}
+          {/* Step view is the operational workspace; the other views remain available for analysis. */}
           <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1 }}>
             <ToggleButtonGroup size="small" value={view} exclusive onChange={(_, v) => v && setView(v)} sx={{ flexWrap: 'wrap' }}>
+              <ToggleButton value="step"><GitBranch size={15} style={{ marginRight: 6 }} /> Step</ToggleButton>
               <ToggleButton value="table"><TableIcon size={15} style={{ marginRight: 6 }} /> Full</ToggleButton>
               <ToggleButton value="sheet"><Columns3 size={15} style={{ marginRight: 6 }} /> Sheet</ToggleButton>
               <ToggleButton value="split"><Boxes size={15} style={{ marginRight: 6 }} /> Split</ToggleButton>
@@ -812,6 +834,23 @@ const ProcessDetail = () => {
               <ToggleButton value="timeline"><GitBranch size={15} style={{ marginRight: 6 }} /> Timeline</ToggleButton>
             </ToggleButtonGroup>
           </Stack>
+
+          {/* Left-to-right step rail + one focused, spreadsheet-like table. */}
+          {view === 'step' && (
+            <StepView
+              steps={steps}
+              process={process}
+              processId={id}
+              consignments={consignments}
+              summary={consRes?.data?.summary || {}}
+              selectedCode={stepViewCode}
+              onSelect={setStepViewCode}
+              onOpenTask={openStepTask}
+              onPeekStep={openStep}
+              onOpenLink={openRecordLink}
+              onRecordDispatch={() => setDispatchOpen(true)}
+            />
+          )}
 
           {/* ── Full view: every step at a glance — who / status / planned / actual / delay / checklist ── */}
           {view === 'table' && (

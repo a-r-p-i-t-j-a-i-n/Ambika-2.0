@@ -6,6 +6,7 @@
  */
 
 import mongoose from 'mongoose';
+import env from '../../config/env.js';
 
 const { Schema, model } = mongoose;
 
@@ -21,7 +22,11 @@ const CompanySettingsSchema = new Schema({
   quoteSeriesPrefix:         { type: String, default: 'Q' },
 
   // ── Branding (used by quote PDF) ─────────────────────────────────
-  companyName:               { type: String, default: 'Ambika Group' },
+  // One company name for the whole system — the same COMPANY_NAME the challan /
+  // invoice PDFs and the outgoing emails print. This module used to carry its own
+  // default ('Ambika Group'), which is not the company's name and only ever showed
+  // up on quotes.
+  companyName:               { type: String, default: () => env.COMPANY_NAME },
   companyAddress:            { type: String, default: '' },
   companyGstin:              { type: String, default: '' },
   companyPhone:              { type: String, default: '' },
@@ -32,9 +37,19 @@ const CompanySettingsSchema = new Schema({
   updatedBy:                 { type: Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
+// The wrong name this module used to default to. Any settings row created before
+// the fix has it PERSISTED, so a new schema default alone would never reach it.
+const LEGACY_WRONG_NAME = 'Ambika Group';
+
 CompanySettingsSchema.statics.getSingleton = async function () {
   let doc = await this.findOne({});
   if (!doc) doc = await this.create({});
+  // Self-heal the stale default in place. Only the known-bad value is replaced —
+  // a name someone actually typed in Settings is left exactly as they set it.
+  if (!doc.companyName || doc.companyName.trim() === LEGACY_WRONG_NAME) {
+    doc.companyName = env.COMPANY_NAME;
+    await doc.save();
+  }
   return doc;
 };
 

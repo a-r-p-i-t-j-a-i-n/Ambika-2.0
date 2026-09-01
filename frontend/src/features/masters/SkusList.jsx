@@ -240,10 +240,13 @@ const SkusList = () => {
       renderCell: (p) => <CellText mono weight={700} color={BRAND}>{p.value}</CellText>
     },
     // width 150 (was 140) so "Finished Good" never wraps or clips inside its pill.
+    // Every type pill is held to one width so the column reads as a single set
+    // rather than a ragged edge — "Finished Good" measures ~95px, the widest of
+    // the five labels, so 104 clears it with room to spare on any font stack.
     { field: 'itemType', headerName: 'Type', width: 150,
       renderCell: (p) => {
         const m = TYPE_META[p.value] || TYPE_META.FINISHED_GOOD;
-        return <Pill color={m.color}>{m.label}</Pill>;
+        return <Pill color={m.color} minWidth={104}>{m.label}</Pill>;
       }
     },
     { field: 'category', headerName: 'Group', width: 150,

@@ -8,10 +8,12 @@ import {
 import {
   Factory, ChevronLeft, ChevronRight, RefreshCw, Sparkles, Plus, ArrowRight,
   Settings2, ClipboardList, LayoutGrid, CheckCircle2, TriangleAlert, Clock,
-  PackageCheck, Boxes,
+  PackageCheck, Boxes, ListChecks,
 } from 'lucide-react';
 import dayjs from 'dayjs';
+import { useSearchParams } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
+import { useReturnToTask } from '../o2d-fms/useReturnToTask';
 import {
   useGetPpcBoardQuery, useGeneratePpcPlansMutation, useUpdatePpcPlanMutation,
   useSavePpcDailyEntryMutation, useMovePpcWipMutation,
@@ -77,6 +79,14 @@ const PPCPlanning = () => {
   const [entryDraft, setEntryDraft] = useState({});
   const [settingsRow, setSettingsRow] = useState(null);
   const [moveCtx, setMoveCtx] = useState(null);
+
+  // ── FMS step 2.03 (stock check / production feasibility) opens this screen from
+  // its task's "Do it now". Carry that context so the doer is never stranded here:
+  // they see WHICH order they came for, and one button takes them back to the task,
+  // where the checklist auto-ticks and they only Mark done.
+  const [searchParams] = useSearchParams();
+  const fmsSo = searchParams.get('so') || '';
+  const { active: fromFmsTask, finishToTask } = useReturnToTask();
 
   const year = period.year();
   const month = period.month() + 1;
@@ -197,6 +207,35 @@ const PPCPlanning = () => {
           <Kpi theme={theme} label="In WIP"      value={fmt(kpis.totalWip)}       icon={Boxes}         color={theme.palette.secondary.main} hint="on the floor" />
         </Stack>
       </Box>
+
+      {/* ── Came from an FMS task (step 2.03) ──────────────────── */}
+      {(fromFmsTask || fmsSo) && (
+        <Paper elevation={0} sx={{
+          mx: { xs: 1.5, md: 2.5 }, mt: 2, p: 1.4, borderRadius: 2,
+          border: `1px solid ${alpha(theme.palette.primary.main, 0.35)}`,
+          bgcolor: alpha(theme.palette.primary.main, 0.06),
+        }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} alignItems={{ sm: 'center' }}>
+            <ClipboardList size={18} color={theme.palette.primary.dark} style={{ flexShrink: 0 }} />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: theme.palette.primary.dark }}>
+                You&apos;re here for an FMS step{fmsSo ? ` — order ${fmsSo}` : ''}
+              </Typography>
+              <Typography sx={{ fontSize: '0.72rem', color: 'text.secondary' }}>
+                Check finished-goods stock and production feasibility, then go back to the task — its
+                checklist ticks itself and you only need to Mark done.
+              </Typography>
+            </Box>
+            <Button
+              size="small" variant="contained" startIcon={<ListChecks size={14} />}
+              onClick={() => finishToTask({ soNumber: fmsSo })}
+              sx={{ fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap', boxShadow: 'none' }}
+            >
+              Done → back to task
+            </Button>
+          </Stack>
+        </Paper>
+      )}
 
       {/* ── Panel ──────────────────────────────────────────────── */}
       <Paper sx={{ mx: { xs: 1.5, md: 2.5 }, mt: 2, mb: 3, borderRadius: 3, overflow: 'hidden' }}>

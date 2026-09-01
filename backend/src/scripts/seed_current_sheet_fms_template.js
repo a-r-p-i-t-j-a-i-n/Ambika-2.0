@@ -37,7 +37,10 @@ const STEP_CONFIG = {
   // Two connected screens: plan it in Dispatch Planning, then generate the PDF.
   '2.04': { actionLinks: ['DISPATCH_PLAN', 'DISPATCH_PLAN_PDF'], checklist: ['Create the dispatch schedule', 'Generate the dispatch plan PDF'] },
   '2.05': { actionLinks: ['EMAIL_DISPATCH_SCHEDULE'], checklist: ['Email the dispatch schedule to the client'] },
-  '2.06': { actionLinks: ['CHALLAN_PDF'],     checklist: ['Confirm final dispatch quantity', 'Create the delivery challan', 'Generate the challan PDF'] },
+  // Dispatch happens first; the challan PDF is then generated for that exact
+  // dispatch. Both actions live inside the same FMS task so the doer returns to
+  // the checklist instead of bypassing the workflow from the tracker.
+  '2.06': { actionLinks: ['ACTUAL_DISPATCH', 'CHALLAN_PDF'], checklist: ['Confirm final dispatch quantity', 'Create the delivery challan', 'Generate the challan PDF'] },
   '2.07': { actionLinks: ['INVOICE_ENTRY'],   checklist: ['Create the tax invoice in Tally', 'Generate the e-way bill', 'Attach invoice, e-way & PDIR'] },
   '2.08': { actionLinks: ['INVOICE_EMAIL'],   checklist: ['Email invoice & e-way bill to the client'] },
   '2.09': { actionLinks: ['TRACK_DELIVERY'],  checklist: ['Confirm delivery / POD', 'Record the delivery date'] },
