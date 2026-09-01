@@ -17,6 +17,7 @@ import { fileHref } from '../indents/indentMeta';
 import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel } from './grnMeta';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import { PFMS, pfmsCardSx } from '../pfmsTheme';
 
 const ACCEPT = '.pdf,image/*';
 
@@ -27,7 +28,7 @@ const ACCEPT = '.pdf,image/*';
  */
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' };
+const SECTION = { p: 2.5, ...pfmsCardSx };
 
 // Read-only qty display — the mobile-only caption keeps each stacked row legible
 // once the column headers (desktop-only) are hidden.
@@ -218,7 +219,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
 
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '18px' }, overflow: 'hidden' } }}>
+      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
       {/* Header */}
       <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
@@ -237,7 +238,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
       </Box>
 
       {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: '#f8fafc' }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.surfaceAlt }}>
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
             <FileText size={18} /> GRN Header

@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Card, Tooltip, Autocomplete,
+  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, FileDown,
   ReceiptText, Hourglass, BadgeCheck, Wallet, CheckCheck,
 } from 'lucide-react';
-import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import {
   useGetVendorInvoicesQuery,
@@ -19,16 +18,8 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { InvoiceStatusChip, INVOICE_STATUSES, fmtINR, fmtDate } from './invoiceMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
-
-const KpiCard = ({ icon, label, value, color, money }) => (
-  <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
-    <Box sx={{ width: 42, height: 42, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color }}>{icon}</Box>
-    <Box sx={{ minWidth: 0 }}>
-      <Typography sx={{ fontSize: money ? '1.05rem' : '1.35rem', fontWeight: 800, lineHeight: 1.1 }} noWrap>{money ? fmtINR(value) : (value ?? 0)}</Typography>
-      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>{label}</Typography>
-    </Box>
-  </Card>
-);
+import PfmsKpiCard from '../components/PfmsKpiCard';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
 
 const VendorInvoiceList = () => {
   const navigate = useNavigate();
@@ -97,26 +88,26 @@ const VendorInvoiceList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Vendor Invoices (11)</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>Step 1.10 · Invoice / Debit Note received — only after QC PASSED / PARTIAL</Typography>
+          <Typography sx={pfmsTitleSx}>Vendor Invoices (11)</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.10 · Invoice / Debit Note received — only after QC PASSED / PARTIAL</Typography>
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditInv(null); setFormOpen(true); }}>New Invoice</Button>
       </Box>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<ReceiptText size={20} />} label="Total"            value={stats.total}            color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<Hourglass size={20} />}   label="Pending Approval" value={stats.pendingApproval}  color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<BadgeCheck size={20} />}  label="Approved"         value={stats.approved}         color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<Wallet size={20} />}      label="Payment Pending"  value={stats.paymentPending}   color="#7c3aed" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<CheckCheck size={20} />}  label="Payment Done"     value={stats.paymentCompleted} color="#16a34a" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ReceiptText size={20} />} label="Total"            value={stats.total}            color="#2563eb" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending Approval" value={stats.pendingApproval}  color="#b45309" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Approved"         value={stats.approved}         color="#0f766e" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Wallet size={20} />}      label="Payment Pending"  value={stats.paymentPending}   color="#0e7490" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<CheckCheck size={20} />}  label="Payment Done"     value={stats.paymentCompleted} color="#16a34a" /></Grid>
       </Grid>
 
-      <Paper sx={{ p: 1.5, borderRadius: '14px', display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
+      <Paper sx={{ ...pfmsCardSx, p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
         <TextField size="small" placeholder="Search invoice / GRN / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
-          sx={{ width: { xs: '100%', sm: 240 } }} InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }} />
+          sx={{ width: { xs: '100%', sm: 240 } }} InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
         <Autocomplete size="small" sx={{ minWidth: 190 }} options={partiesRes?.data || []} value={vendorFilter}
           getOptionLabel={(o) => o?.name || ''} isOptionEqualToValue={(o, v) => o._id === v._id} onChange={(_e, v) => setVendorFilter(v)} renderInput={(params) => <TextField {...params} label="Vendor" />} />
         <TextField size="small" select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 170 }}>
@@ -127,7 +118,7 @@ const VendorInvoiceList = () => {
         <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
-      <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>
+      <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
           onRowClick={(p) => navigate(`/procurement/vendor-invoices/${p.id}`)} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick

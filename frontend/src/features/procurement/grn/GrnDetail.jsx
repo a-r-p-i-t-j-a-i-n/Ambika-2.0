@@ -26,6 +26,7 @@ import MdApprovalCard from '../approvals/MdApprovalCard';
 import { Eye, ClipboardCheck } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -35,7 +36,7 @@ const Field = ({ label, value }) => (
 );
 
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
     <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
       {icon} {title}
     </Typography>
@@ -125,18 +126,18 @@ const GrnDetail = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/purchase-fms/grn')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+      <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <IconButton onClick={() => navigate('/purchase-fms/grn')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
           <ArrowLeft size={20} />
         </IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
+        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
           <PackageCheck size={24} />
         </Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{grn.grnNumber}</Typography>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{grn.grnNumber}</Typography>
             {grn.uniqueId && <Chip size="small" variant="outlined" label={grn.uniqueId} sx={{ fontWeight: 700 }} />}
             <GrnStatusChip status={grn.grnStatus} />
             {grn.stockPosted && <QcStatusChip status={grn.qcStatus} />}
@@ -160,10 +161,10 @@ const GrnDetail = () => {
         const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
         return (
           <Paper elevation={0} sx={{
-            mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
+            mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
             display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
           }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: '#fff', color: t.fg, flexShrink: 0 }}>
+            <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
               <ArrowRight size={22} />
             </Box>
             <Box sx={{ minWidth: 220, flexGrow: 1 }}>
@@ -260,7 +261,7 @@ const GrnDetail = () => {
                     // qty (never from the PO or GRN as a whole) — an item is only "Fully
                     // Received" once ITS pending-after-GRN qty is zero.
                     const itemStatus = (it.extraQty || 0) > 0
-                      ? { label: 'Extra Received', color: '#7c3aed' }
+                      ? { label: 'Extra Received', color: '#c2410c' }
                       : (it.pendingQty || 0) > 0
                         ? { label: 'Partially Received', color: '#b45309' }
                         : { label: 'Fully Received', color: '#0f766e' };
@@ -350,7 +351,7 @@ const GrnDetail = () => {
         {/* Step 1.9 — Incoming QC */}
         {isCompleted && (
           <Grid item xs={12}>
-            <Paper sx={{ p: 3, borderRadius: '18px' }}>
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
                   <ClipboardCheck size={18} /> Incoming QC

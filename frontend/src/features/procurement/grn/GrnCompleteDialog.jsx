@@ -7,6 +7,7 @@ import { PackageCheck } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useCompleteGrnMutation } from '../../../store/api/procurementApi';
 import { fmtINR } from './grnMeta';
+import { PFMS } from '../pfmsTheme';
 
 /**
  * Complete a GRN: posts received quantities to stock (via inventoryService)
@@ -37,7 +38,7 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
         {grn?.grnNumber && <Typography component="span" sx={{ ml: 1, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{grn.grnNumber}</Typography>}
       </DialogTitle>
       <DialogContent dividers>
-        <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9' }}>
+        <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: PFMS.surfaceAlt }}>
           <Typography variant="body2" fontWeight={700}>{grn?.vendorName}</Typography>
           <Typography variant="caption" color="text.secondary">
             PO {grn?.poNumber || '—'} · {grn?.items?.length || 0} item(s) · qty {grn?.totalReceivedQty} · {fmtINR(grn?.totalValue)}

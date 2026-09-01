@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Card, Tooltip,
+  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip,
   Autocomplete, FormControlLabel, Switch, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -9,7 +9,6 @@ import {
   Search, MoreVertical, Eye, Pencil, CheckCircle2, CalendarClock,
   PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock,
 } from 'lucide-react';
-import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import {
   useGetFollowUpsQuery,
@@ -22,18 +21,8 @@ import FollowUpFormDrawer from './FollowUpFormDrawer';
 import FollowUpDoneDialog from './FollowUpDoneDialog';
 import FollowUpRescheduleDialog from './FollowUpRescheduleDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
-
-const KpiCard = ({ icon, label, value, color }) => (
-  <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
-    <Box sx={{ width: 42, height: 42, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color }}>
-      {icon}
-    </Box>
-    <Box>
-      <Typography sx={{ fontSize: '1.35rem', fontWeight: 800, lineHeight: 1.1, color: 'text.primary' }}>{value ?? 0}</Typography>
-      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>{label}</Typography>
-    </Box>
-  </Card>
-);
+import PfmsKpiCard from '../components/PfmsKpiCard';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
 
 const FollowUpList = () => {
   const navigate = useNavigate();
@@ -139,13 +128,13 @@ const FollowUpList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       {/* Header — tracking/management only; follow-ups are created and driven
           from a Purchase Order's detail page (single "Continue Follow-up" action). */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Material Follow-ups (5)</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
+          <Typography sx={pfmsTitleSx}>Material Follow-ups (5)</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
             Step 1.5 · Track every vendor delivery follow-up — open a Purchase Order to create or continue one
           </Typography>
         </Box>
@@ -153,18 +142,18 @@ const FollowUpList = () => {
 
       {/* KPIs */}
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<PhoneCall size={20} />}   label="Total Follow-ups" value={stats.total}       color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<Hourglass size={20} />}   label="Pending"          value={stats.pending}     color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<BadgeCheck size={20} />}  label="Done"             value={stats.done}        color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<AlarmClock size={20} />}  label="Delayed"          value={stats.delayed}     color="#be123c" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<PackageCheck size={20} />} label="Ready For GRN"   value={stats.readyForGrn} color="#16a34a" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PhoneCall size={20} />}   label="Total Follow-ups" value={stats.total}       color="#2563eb" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending"          value={stats.pending}     color="#b45309" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Done"             value={stats.done}        color="#0f766e" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<AlarmClock size={20} />}  label="Delayed"          value={stats.delayed}     color="#be123c" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Ready For GRN"   value={stats.readyForGrn} color="#16a34a" /></Grid>
       </Grid>
 
       {/* Filters */}
-      <Paper sx={{ p: 1.5, borderRadius: '14px', display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
+      <Paper sx={{ ...pfmsCardSx, p: 1, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
         <TextField size="small" placeholder="Search FU / PO / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
           sx={{ width: { xs: '100%', sm: 230 } }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }} />
+          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
         <Autocomplete
           size="small" sx={{ minWidth: 190 }}
           options={partiesRes?.data || []}
@@ -188,7 +177,7 @@ const FollowUpList = () => {
       </Paper>
 
       {/* Grid */}
-      <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>
+      <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid
           rows={data?.data || []}
           columns={columns}

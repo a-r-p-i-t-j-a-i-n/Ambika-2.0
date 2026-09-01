@@ -1,7 +1,6 @@
 import React from 'react';
 import { Chip } from '@mui/material';
-import { alpha } from '@mui/material/styles';
-import StatusChip from '../components/StatusChip';
+import StatusChip, { TONES } from '../components/StatusChip';
 
 /** Shared meta for Vendor Voucher screens (Purchase FMS Step 1.11). */
 
@@ -23,9 +22,10 @@ export const VoucherStatusChip = ({ status }) => <StatusChip status={status} />;
 
 export const VoucherTypeChip = ({ type }) => {
   const isExpense = type === 'EXPENSE';
+  const tone = isExpense ? TONES.orange : TONES.blue;
   return (
     <Chip size="small" label={isExpense ? 'EXP' : 'PUR'}
-      sx={{ fontWeight: 800, bgcolor: isExpense ? alpha('#7c3aed', 0.12) : alpha('#2563eb', 0.1), color: isExpense ? '#6d28d9' : '#1d4ed8' }} />
+      sx={{ fontWeight: 800, bgcolor: tone.bg, color: tone.fg }} />
   );
 };
 

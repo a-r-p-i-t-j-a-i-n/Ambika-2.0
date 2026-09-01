@@ -16,6 +16,7 @@ import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchContr
 import { fileHref } from '../indents/indentMeta';
 import { fmtINR } from './invoiceMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import { PFMS, pfmsCardSx } from '../pfmsTheme';
 
 /**
  * Create / edit a Vendor Invoice (Step 1.10). The user selects GRN No(s) — the
@@ -32,7 +33,7 @@ const qcStatusLabel = (s) => (s ? String(s).charAt(0).toUpperCase() + String(s).
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const num = (n) => Number(n) || 0;
 const ACCEPT = '.pdf,image/*';
-const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' };
+const SECTION = { p: 2.5, ...pfmsCardSx };
 const EDIT_SX = {
   '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: '8px' },
   '& .MuiOutlinedInput-notchedOutline': { borderColor: '#bcd0f5' },
@@ -221,7 +222,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
 
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '18px' }, overflow: 'hidden' } }}>
+      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
       <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -237,7 +238,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
       <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={(e) => upload(setDoc)(e)} />
       <input ref={dnFileRef} type="file" accept={ACCEPT} hidden onChange={(e) => upload(setDnDoc)(e)} />
 
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: '#f8fafc' }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.canvas }}>
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}><FileText size={18} /> Invoice Header</Typography>
           <Grid container spacing={2}>

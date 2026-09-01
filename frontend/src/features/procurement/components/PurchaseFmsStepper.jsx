@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Box, Typography, ButtonBase, useTheme, alpha } from '@mui/material';
+import { pfmsCardSx } from '../pfmsTheme';
 
 const CIRCLE = 30;
 const COMPLETED = '#16a34a';
@@ -19,11 +20,7 @@ const PurchaseFmsStepper = ({ steps, activeIndex, onStepClick }) => {
   return (
     <Box
       sx={{
-        bgcolor: 'background.paper',
-        border: '1px solid',
-        borderColor: 'divider',
-        borderRadius: 3,
-        boxShadow: '0 1px 2px rgba(30, 58, 138, 0.04)',
+        ...pfmsCardSx,
         px: { xs: 1.25, md: 2 },
         py: 1.5,
         overflowX: 'auto',

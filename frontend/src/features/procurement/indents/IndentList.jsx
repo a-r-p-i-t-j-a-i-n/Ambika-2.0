@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Card, Tooltip, Chip,
+  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, Send, CheckCircle2, CheckCheck,
   FileText, FileCheck2, ClipboardList, Hourglass, BadgeCheck, Quote, ExternalLink, ShoppingBag,
 } from 'lucide-react';
-import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import {
@@ -20,6 +19,9 @@ import {
   ApprovalChip, QuoteChip, QuotationChip, APPROVAL_STATUSES, DEPARTMENTS, fileHref, itemRef,
 } from './indentMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import PfmsKpiCard from '../components/PfmsKpiCard';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import { TONES } from '../components/StatusChip';
 import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
@@ -45,18 +47,6 @@ const itemsSummary = (row) => {
   const first = items[0]?.itemName || '—';
   return items.length > 1 ? `${first} +${items.length - 1} more` : first;
 };
-
-const KpiCard = ({ icon, label, value, color }) => (
-  <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
-    <Box sx={{ width: 42, height: 42, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color }}>
-      {icon}
-    </Box>
-    <Box>
-      <Typography sx={{ fontSize: '1.35rem', fontWeight: 800, lineHeight: 1.1, color: 'text.primary' }}>{value ?? 0}</Typography>
-      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>{label}</Typography>
-    </Box>
-  </Card>
-);
 
 const IndentList = () => {
   const navigate = useNavigate();
@@ -158,8 +148,8 @@ const IndentList = () => {
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'requestType', headerName: 'TYPE', width: 130, sortable: false,
       renderCell: (p) => (p.value === 'INTERNAL_SERVICE'
-        ? <Chip size="small" label="Service" sx={{ bgcolor: alpha('#7c3aed', 0.12), color: '#6d28d9', fontWeight: 700 }} />
-        : <Chip size="small" label="Material" sx={{ bgcolor: alpha('#2563eb', 0.1), color: '#1d4ed8', fontWeight: 700 }} />) },
+        ? <Chip size="small" label="Service" sx={{ bgcolor: TONES.teal.bg, color: TONES.teal.fg, fontWeight: 700 }} />
+        : <Chip size="small" label="Material" sx={{ bgcolor: TONES.blue.bg, color: TONES.blue.fg, fontWeight: 700 }} />) },
     { field: 'products', headerName: 'PRODUCTS', flex: 1, minWidth: 260, sortable: false,
       valueGetter: (_v, row) => itemsSummary(row),
       renderCell: (p) => {
@@ -246,12 +236,12 @@ const IndentList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Purchase Indents (3)</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>Raise, approve and track purchase requirements</Typography>
+          <Typography sx={pfmsTitleSx}>Purchase Indents (3)</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Raise, approve and track purchase requirements</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           <Button variant="outlined" color="success" startIcon={<CheckCheck size={16} />} onClick={() => setBulkOpen(true)}>
@@ -263,18 +253,18 @@ const IndentList = () => {
 
       {/* KPI cards */}
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<ClipboardList size={20} />} label="Total Indents"      value={stats.total}             color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<Hourglass size={20} />}     label="Pending Approval"   value={stats.pendingApproval}   color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<BadgeCheck size={20} />}    label="Approved"           value={stats.approved}          color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<Quote size={20} />}         label="Quote Pending"      value={stats.quotePending}      color="#7c3aed" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<FileCheck2 size={20} />}    label="Quotation Approved" value={stats.quotationApproved} color="#16a34a" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ClipboardList size={20} />} label="Total Indents"      value={stats.total}             color="#2563eb" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}     label="Pending Approval"   value={stats.pendingApproval}   color="#b45309" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}    label="Approved"           value={stats.approved}          color="#0f766e" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Quote size={20} />}         label="Quote Pending"      value={stats.quotePending}      color="#0e7490" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<FileCheck2 size={20} />}    label="Quotation Approved" value={stats.quotationApproved} color="#16a34a" /></Grid>
       </Grid>
 
       {/* Filters */}
-      <Paper sx={{ p: 1.5, borderRadius: '14px', display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
+      <Paper sx={{ ...pfmsCardSx, p: 1, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
         <TextField size="small" placeholder="Search indents…" value={search} onChange={(e) => setSearch(e.target.value)}
           sx={{ width: { xs: '100%', sm: 240 } }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }} />
+          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
         <TextField size="small" select label="Approval" value={approvalStatus} onChange={(e) => setApprovalStatus(e.target.value)} sx={{ minWidth: 160 }}>
           <MenuItem value="">All</MenuItem>
           {APPROVAL_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace('_', ' ')}</MenuItem>)}
@@ -288,7 +278,7 @@ const IndentList = () => {
       </Paper>
 
       {/* Grid */}
-      <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>
+      <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid
           rows={data?.data || []}
           columns={columns}

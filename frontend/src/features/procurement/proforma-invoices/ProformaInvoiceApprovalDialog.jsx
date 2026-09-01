@@ -10,6 +10,7 @@ import {
   useRejectProformaInvoiceMutation,
 } from '../../../store/api/procurementApi';
 import { fmtINR } from './piMeta';
+import { PFMS } from '../pfmsTheme';
 
 /** Approve / reject a PI. Approval requires the PI document (backend enforces). */
 const ProformaInvoiceApprovalDialog = ({ open, onClose, pi }) => {
@@ -50,7 +51,7 @@ const ProformaInvoiceApprovalDialog = ({ open, onClose, pi }) => {
         {pi?.piNumber && <Typography component="span" sx={{ ml: 1, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{pi.piNumber}</Typography>}
       </DialogTitle>
       <DialogContent dividers>
-        <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9' }}>
+        <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: PFMS.surfaceAlt }}>
           <Typography variant="body2" fontWeight={700}>{pi?.vendorName}</Typography>
           <Typography variant="caption" color="text.secondary">
             PO {pi?.poNumber || '—'} · {pi?.items?.length || 0} item(s) · {fmtINR(pi?.totalValue)}

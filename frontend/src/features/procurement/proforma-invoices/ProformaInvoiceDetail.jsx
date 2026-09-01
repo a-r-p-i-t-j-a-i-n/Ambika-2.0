@@ -21,6 +21,7 @@ import ProformaInvoiceApprovalDialog from './ProformaInvoiceApprovalDialog';
 import ProformaInvoicePdfPreview from './ProformaInvoicePdfPreview';
 import { PaymentStatusChip, modeLabel } from '../advance-payments/apMeta';
 import AdvancePaymentFormDialog from '../advance-payments/AdvancePaymentFormDialog';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -30,7 +31,7 @@ const Field = ({ label, value }) => (
 );
 
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
     <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
       {icon} {title}
     </Typography>
@@ -76,18 +77,18 @@ const ProformaInvoiceDetail = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/purchase-fms/pi-forms')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+      <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <IconButton onClick={() => navigate('/purchase-fms/pi-forms')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
           <ArrowLeft size={20} />
         </IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
+        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
           <ReceiptText size={24} />
         </Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{pi.piNumber}</Typography>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{pi.piNumber}</Typography>
             <Chip size="small" label={pi.uniqueCode} variant="outlined" sx={{ fontWeight: 700 }} />
             <PiStatusChip status={pi.piStatus} />
             <PiApprovalChip status={pi.approvalStatus} />

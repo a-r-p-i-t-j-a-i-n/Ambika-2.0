@@ -17,6 +17,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetVendorsQuery, useGetVendorByIdQuery } from '../../../store/api/vendorApi';
 import { fmtINR, poDisplayNumber } from './poMeta';
+import { PFMS, pfmsCardSx } from '../pfmsTheme';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import AddVendorForItemModal from './AddVendorForItemModal';
@@ -89,7 +90,7 @@ const jslLineCalc = (it) => {
   return { finalPrice, value };
 };
 
-const SECTION = { p: 2.5, borderRadius: '16px', border: '1px solid', borderColor: 'divider' };
+const SECTION = { p: 2.5, ...pfmsCardSx };
 const OTHER_GRID = '1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px';
 const JSL_GRID = '1.1fr 0.7fr 0.9fr 0.8fr 0.6fr 0.85fr 0.85fr 0.9fr 0.9fr 0.8fr 0.85fr 36px';
 
@@ -673,7 +674,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '18px' }, overflow: 'hidden' } }}>
+      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
       {/* Header */}
       <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
@@ -692,7 +693,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       </Box>
 
       {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: '#f8fafc' }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.canvas }}>
         {/* Source + vendor */}
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>

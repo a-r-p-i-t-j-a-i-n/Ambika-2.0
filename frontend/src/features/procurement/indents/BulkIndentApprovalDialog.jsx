@@ -16,6 +16,7 @@ import {
   useBulkRejectIndentsMutation,
 } from '../../../store/api/procurementApi';
 import { DEPARTMENTS } from './indentMeta';
+import { PFMS } from '../pfmsTheme';
 
 const NO_SPIN = {
   '& input[type=number]': { MozAppearance: 'textfield' },
@@ -288,12 +289,12 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Indent No</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Products</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Items</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Department</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Approved Qty</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Action</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Indent No</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Products</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Items</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Department</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Approved Qty</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Action</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -342,19 +343,19 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
-                    <TableCell padding="checkbox" sx={{ bgcolor: '#f8fafc' }}>
+                    <TableCell padding="checkbox" sx={{ bgcolor: PFMS.surfaceAlt }}>
                       <Checkbox indeterminate={someSelected} checked={allSelected} onChange={toggleAll} />
                     </TableCell>
-                    <TableCell sx={{ width: 36, bgcolor: '#f8fafc' }} />
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Indent No</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Created</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Raised By</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Dept</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Items</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Products</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Total Qty</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Status</TableCell>
-                    <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc', minWidth: 200 }}>Approval Remarks</TableCell>
+                    <TableCell sx={{ width: 36, bgcolor: PFMS.surfaceAlt }} />
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Indent No</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Created</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Raised By</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Dept</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Items</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Products</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Total Qty</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt }}>Status</TableCell>
+                    <TableCell sx={{ fontWeight: 700, bgcolor: PFMS.surfaceAlt, minWidth: 200 }}>Approval Remarks</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>

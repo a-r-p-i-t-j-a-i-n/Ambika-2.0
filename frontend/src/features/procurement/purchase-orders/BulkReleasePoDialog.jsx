@@ -15,6 +15,7 @@ import {
   useGetPoReleasePreviewMutation,
 } from '../../../store/api/procurementApi';
 import { poDisplayNumber } from './poMeta';
+import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
 
 const parseEmailList = (raw) => raw.split(',').map((e) => e.trim()).filter(Boolean);
 
@@ -318,15 +319,15 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
                 <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      <TableCell padding="checkbox" sx={{ bgcolor: '#f8fafc' }}>
+                      <TableCell padding="checkbox" sx={pfmsTableHeadSx}>
                         <Checkbox indeterminate={someSelected} checked={allSelected} onChange={toggleAll} />
                       </TableCell>
-                      <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>PO Number</TableCell>
-                      <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Vendor</TableCell>
-                      <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>To</TableCell>
-                      <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>CC</TableCell>
-                      <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>BCC</TableCell>
-                      <TableCell sx={{ fontWeight: 700, bgcolor: '#f8fafc' }}>Email Status</TableCell>
+                      <TableCell sx={pfmsTableHeadSx}>PO Number</TableCell>
+                      <TableCell sx={pfmsTableHeadSx}>Vendor</TableCell>
+                      <TableCell sx={pfmsTableHeadSx}>To</TableCell>
+                      <TableCell sx={pfmsTableHeadSx}>CC</TableCell>
+                      <TableCell sx={pfmsTableHeadSx}>BCC</TableCell>
+                      <TableCell sx={pfmsTableHeadSx}>Email Status</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -432,7 +433,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
             </Box>
 
             {/* Selection summary */}
-            <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', display: 'flex', gap: 3, flexWrap: 'wrap', bgcolor: '#f8fafc' }}>
+            <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', display: 'flex', gap: 3, flexWrap: 'wrap', bgcolor: PFMS.surfaceAlt }}>
               <Box><Typography variant="caption" color="text.secondary">Selected POs</Typography><Typography sx={{ fontWeight: 800 }}>{selected.size}</Typography></Box>
               <Box><Typography variant="caption" color="text.secondary">Recipients — To</Typography><Typography sx={{ fontWeight: 800 }}>{summary.to}</Typography></Box>
               <Box><Typography variant="caption" color="text.secondary">CC</Typography><Typography sx={{ fontWeight: 800 }}>{summary.cc}</Typography></Box>
