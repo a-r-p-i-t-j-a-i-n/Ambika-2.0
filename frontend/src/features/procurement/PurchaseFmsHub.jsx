@@ -4,6 +4,7 @@ import { useNavigate, useParams, Navigate } from 'react-router-dom';
 import { lazyWithRetry } from '../../utils/lazyWithRetry';
 import AppLoader from '../../components/AppLoader';
 import PurchaseFmsStepper from './components/PurchaseFmsStepper';
+import { PFMS } from './pfmsTheme';
 
 // Each step reuses the existing, fully-functional screen for that module —
 // same components, APIs, tables, forms, filters and actions as before. This
@@ -59,7 +60,7 @@ const PurchaseFmsHub = () => {
   return (
     <Box>
       <Box sx={{ px: { xs: 2, md: 3 }, pt: { xs: 2, md: 3 }, pb: 1.5 }}>
-        <Typography sx={{ fontSize: { xs: '1.2rem', md: '1.4rem' }, fontWeight: 800, color: 'text.primary' }}>
+        <Typography sx={{ fontSize: { xs: '1.2rem', md: '1.4rem' }, fontWeight: 800, color: PFMS.ink }}>
           Purchase FMS
         </Typography>
         <Typography sx={{ fontSize: '0.85rem', color: 'text.secondary', mt: 0.25 }}>

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useGetVendorByIdQuery, useUpdateVendorMutation, useGetVendorPricingHistoryQuery } from '../../../store/api/vendorApi';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 const SOURCE_LABEL = { VENDOR_MASTER: 'Vendor Master', PURCHASE_ORDER: 'Purchase Order' };
@@ -124,20 +125,20 @@ const VendorDetail = () => {
   if (!vendor) return <Box sx={{ p: 3 }}><Typography>Vendor not found.</Typography></Box>;
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/vendor-details')} sx={{ mb: 1.5, fontWeight: 700 }}>
         Back to vendors
       </Button>
 
       {/* Profile */}
-      <Paper sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2.5, border: `1px solid ${theme.palette.divider}`, mb: 2 }}>
+      <Paper sx={{ ...pfmsCardSx, p: { xs: 2, sm: 2.5 }, mb: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.5} sx={{ mb: 2 }}>
           <Stack direction="row" spacing={1.5} alignItems="center">
             <Box sx={{ width: 44, height: 44, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.1), color: BRAND, border: `1px solid ${alpha(BRAND, 0.2)}` }}>
               <Store size={22} />
             </Box>
             <Box>
-              <Typography sx={{ fontSize: '1.25rem', fontWeight: 800, color: BRAND_DK, lineHeight: 1.1 }}>{vendor.name}</Typography>
+              <Typography sx={{ fontSize: '1.25rem', fontWeight: 800, color: PFMS.ink, lineHeight: 1.1 }}>{vendor.name}</Typography>
               <Stack direction="row" spacing={1} sx={{ mt: 0.4 }}>
                 <Chip size="small" icon={<Package size={12} />} label={`${products.length} product${products.length === 1 ? '' : 's'}`} sx={{ fontWeight: 700, bgcolor: alpha(BRAND, 0.08), color: BRAND_DK }} />
                 {vendor.gstNo && <Chip size="small" label={vendor.gstNo} variant="outlined" sx={{ fontWeight: 700 }} />}
@@ -173,7 +174,7 @@ const VendorDetail = () => {
       </Paper>
 
       {/* Products */}
-      <Paper sx={{ borderRadius: 2.5, border: `1px solid ${theme.palette.divider}`, overflow: 'hidden' }}>
+      <Paper sx={{ ...pfmsCardSx, overflow: 'hidden' }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 2, py: 1.25, borderBottom: `1px solid ${theme.palette.divider}` }}>
           <Typography sx={{ fontWeight: 800, color: BRAND_DK }}>Supplied Products & Rates</Typography>
           <Button variant="contained" size="small" startIcon={<Plus size={15} />} onClick={() => setProdDialog({ mode: 'add', draft: { ...emptyProduct } })}>
@@ -314,7 +315,7 @@ const VendorDetail = () => {
                     <TableCell align="right">{h.oldGstRate !== h.newGstRate ? `${h.oldGstRate}→${h.newGstRate}` : `${h.newGstRate}`}%</TableCell>
                     <TableCell>
                       <Chip size="small" label={SOURCE_LABEL[h.source] || h.source}
-                        sx={{ fontWeight: 700, height: 20, bgcolor: h.source === 'PURCHASE_ORDER' ? alpha('#7c3aed', 0.12) : alpha(BRAND, 0.1), color: h.source === 'PURCHASE_ORDER' ? '#6d28d9' : BRAND_DK }} />
+                        sx={{ fontWeight: 700, height: 20, bgcolor: h.source === 'PURCHASE_ORDER' ? alpha('#0f766e', 0.12) : alpha(BRAND, 0.1), color: h.source === 'PURCHASE_ORDER' ? '#0f766e' : BRAND_DK }} />
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>{h.referenceNumber || (h.source === 'VENDOR_MASTER' ? 'Vendor Master' : '—')}</TableCell>
                     <TableCell sx={{ color: 'text.secondary' }}>{h.updatedBy?.name || h.updatedByName || '—'}</TableCell>

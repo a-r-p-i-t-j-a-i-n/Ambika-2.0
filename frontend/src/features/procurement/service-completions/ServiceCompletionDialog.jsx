@@ -91,7 +91,7 @@ const ServiceCompletionDialog = ({ open, onClose, indent }) => {
   };
 
   const FileRow = ({ file, onRemove }) => (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: '10px', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: '10px' }}>
       <FileText size={18} />
       <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0 }} noWrap title={file.fileName}>{file.fileName}</Typography>
       <Button size="small" startIcon={<ExternalLink size={14} />} href={fileHref(file.fileUrl)} target="_blank" rel="noopener">View</Button>

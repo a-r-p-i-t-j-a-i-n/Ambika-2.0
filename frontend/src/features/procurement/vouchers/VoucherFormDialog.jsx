@@ -154,7 +154,7 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
   );
 
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth={isExpense ? 'md' : 'sm'} fullWidth PaperProps={{ sx: { borderRadius: '16px' } }}>
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth={isExpense ? 'md' : 'sm'} fullWidth>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
         <Banknote size={20} /> {isEdit ? `Edit ${isExpense ? 'Expense' : 'Purchase'} Voucher` : 'New Voucher'}
       </DialogTitle>

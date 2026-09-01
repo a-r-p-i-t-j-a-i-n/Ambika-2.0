@@ -23,6 +23,7 @@ import {
 
 } from '../../../store/api/procurementApi';
 import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtINR, fmtDate, poDisplayNumber } from './poMeta';
+import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
@@ -53,7 +54,7 @@ const Field = ({ label, value }) => (
 );
 
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ p: 3, borderRadius: '18px', height: '100%', border: '1px solid', borderColor: 'divider' }}>
+  <Paper sx={{ ...pfmsCardSx, p: 3, height: '100%' }}>
     <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, fontWeight: 700, color: 'primary.main' }}>
       <Box component="span" sx={{ display: 'grid', placeItems: 'center', width: 30, height: 30, borderRadius: '9px', bgcolor: (t) => alpha(t.palette.primary.main, 0.08) }}>{icon}</Box>
       {title}
@@ -367,10 +368,10 @@ const PurchaseOrderDetail = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 4 }, bgcolor: '#f8fafc', minHeight: '100vh' }}>
+    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/purchase-fms/purchase-orders')} sx={{ bgcolor: '#fff', boxShadow: 1 }}>
+        <IconButton onClick={() => navigate('/purchase-fms/purchase-orders')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
           <ArrowLeft size={20} />
         </IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
@@ -378,7 +379,7 @@ const PurchaseOrderDetail = () => {
         </Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{poDisplayNumber(po)}</Typography>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{poDisplayNumber(po)}</Typography>
             <PoStatusChip status={po.poStatus} />
             <PoApprovalChip status={po.approvalStatus} />
             <PoReleaseChip status={po.releaseStatus} />
@@ -404,7 +405,7 @@ const PurchaseOrderDetail = () => {
           back-and-forth navigation (backend gating rules are unchanged). */}
       {nextAction && (
         <Paper sx={{
-          mb: 3, p: 2.5, borderRadius: '16px', border: '1px solid',
+          mb: 3, p: 2.5, borderRadius: '8px', border: '1px solid',
           borderColor: alpha(TONE_COLOR[nextAction.tone], 0.3),
           bgcolor: alpha(TONE_COLOR[nextAction.tone], 0.05),
         }}>
@@ -540,7 +541,7 @@ const PurchaseOrderDetail = () => {
         {/* Step 1.5 — Material Follow-up (only meaningful for released POs) */}
         {(po.poStatus === 'RELEASED_TO_VENDOR' || po.followUpStatus !== 'NOT_STARTED') && (
           <Grid item xs={12}>
-            <Paper sx={{ p: 3, borderRadius: '18px' }}>
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
                   <PhoneCall size={18} /> Material Follow-up
@@ -578,7 +579,7 @@ const PurchaseOrderDetail = () => {
         {/* Step 1.6 — Proforma Invoice */}
         {(po.poStatus === 'RELEASED_TO_VENDOR' || po.piStatus !== 'NOT_RECEIVED') && (
           <Grid item xs={12}>
-            <Paper sx={{ p: 3, borderRadius: '18px' }}>
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
                   <FileText size={18} /> Proforma Invoice
@@ -633,7 +634,7 @@ const PurchaseOrderDetail = () => {
         {/* Step 1.8 — Goods Receipt Notes */}
         {grnRelevant && (
           <Grid item xs={12}>
-            <Paper sx={{ p: 3, borderRadius: '18px' }}>
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
                   <PackageCheck size={18} /> Goods Receipt ({grns.length})

@@ -101,7 +101,7 @@ const TallyEntryFormDialog = ({ open, onClose, entry, presetVoucher }) => {
   };
 
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: '16px' } }}>
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
         <FileSpreadsheet size={20} /> {isEdit ? 'Edit Tally Entry' : 'New Tally Entry'}
       </DialogTitle>

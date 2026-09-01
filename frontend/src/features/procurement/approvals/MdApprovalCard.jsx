@@ -4,6 +4,7 @@ import { ShieldCheck, Eye, PenTool } from 'lucide-react';
 import { useGetApprovalQuery } from '../../../store/api/procurementApi';
 import { ApprovalStatusChip, fmtDate, fmtTime } from './approvalMeta';
 import SignDocumentDialog from './SignDocumentDialog';
+import { pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -34,7 +35,7 @@ const MdApprovalCard = ({ documentType, documentId, documentTitle, isMd, onPrevi
 
   if (isFetching && !approval) {
     return (
-      <Paper sx={{ p: 3, borderRadius: '18px', display: 'flex', justifyContent: 'center' }}>
+      <Paper sx={{ ...pfmsCardSx, p: 3, display: 'flex', justifyContent: 'center' }}>
         <CircularProgress size={22} />
       </Paper>
     );
@@ -44,7 +45,7 @@ const MdApprovalCard = ({ documentType, documentId, documentTitle, isMd, onPrevi
   const isApproved = approval.status === 'APPROVED';
 
   return (
-    <Paper sx={{ p: 3, borderRadius: '18px' }}>
+    <Paper sx={{ ...pfmsCardSx, p: 3 }}>
       <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
         <ShieldCheck size={18} /> MD Approval
       </Typography>

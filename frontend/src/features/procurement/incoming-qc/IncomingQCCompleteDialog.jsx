@@ -69,7 +69,7 @@ const IncomingQCCompleteDialog = ({ open, onClose, qc }) => {
         {isService ? (
           <>
             <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9', display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Wrench size={16} color="#7c3aed" />
+              <Wrench size={16} color="#0f766e" />
               <Typography variant="body2" fontWeight={700}>Service QC</Typography>
               <Chip size="small" label={qc?.serviceCompletionNumber || qc?.indentNumber || '—'} sx={{ fontWeight: 700 }} />
             </Box>

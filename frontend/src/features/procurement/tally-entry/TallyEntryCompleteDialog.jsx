@@ -50,7 +50,7 @@ const TallyEntryCompleteDialog = ({ open, onClose, entry }) => {
   };
 
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: '16px' } }}>
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
         <CheckCircle2 size={20} /> Complete Tally Entry
         {entry?.entryNumber && <Typography component="span" sx={{ ml: 1, color: 'text.secondary', fontWeight: 600, fontSize: '0.85rem' }}>{entry.entryNumber}</Typography>}

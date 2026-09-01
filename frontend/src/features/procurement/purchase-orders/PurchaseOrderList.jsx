@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Card, Tooltip, Autocomplete,
+  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, Send, FileDown,
   Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, RotateCcw, SendHorizontal,
 } from 'lucide-react';
-import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import {
@@ -26,18 +25,8 @@ import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import BulkReleasePoDialog from './BulkReleasePoDialog';
-
-const KpiCard = ({ icon, label, value, color }) => (
-  <Card sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderRadius: '14px' }}>
-    <Box sx={{ width: 42, height: 42, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.1), color }}>
-      {icon}
-    </Box>
-    <Box>
-      <Typography sx={{ fontSize: '1.35rem', fontWeight: 800, lineHeight: 1.1, color: 'text.primary' }}>{value ?? 0}</Typography>
-      <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>{label}</Typography>
-    </Box>
-  </Card>
-);
+import PfmsKpiCard from '../components/PfmsKpiCard';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
 
 const PurchaseOrderList = () => {
   const navigate = useNavigate();
@@ -169,12 +158,12 @@ const PurchaseOrderList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: { xs: 2, sm: 3 }, minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={{ fontSize: '1.25rem', fontWeight: 700, color: '#0b2545' }}>Purchase Orders (4)</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500 }}>
+          <Typography sx={pfmsTitleSx}>Purchase Orders (4)</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
             Step 1.4 · Create PO &amp; release to supplier — only from approved quotations
           </Typography>
         </Box>
@@ -190,18 +179,18 @@ const PurchaseOrderList = () => {
 
       {/* KPIs */}
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<ShoppingBag size={20} />}  label="Total POs"        value={stats.total}           color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<BadgeCheck size={20} />}   label="Approved"         value={stats.approved}        color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<Truck size={20} />}        label="Released"         value={stats.released}        color="#7c3aed" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<PackageOpen size={20} />}  label="Partial Received" value={stats.partialReceived} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KpiCard icon={<PackageCheck size={20} />} label="Fully Received"   value={stats.fullyReceived}   color="#16a34a" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ShoppingBag size={20} />}  label="Total POs"        value={stats.total}           color="#2563eb" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}   label="Approved"         value={stats.approved}        color="#0f766e" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Truck size={20} />}        label="Released"         value={stats.released}        color="#0f766e" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageOpen size={20} />}  label="Partial Received" value={stats.partialReceived} color="#b45309" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Fully Received"   value={stats.fullyReceived}   color="#16a34a" /></Grid>
       </Grid>
 
       {/* Filters */}
-      <Paper sx={{ p: 1.5, borderRadius: '14px', display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
+      <Paper sx={{ ...pfmsCardSx, p: 1, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
         <TextField size="small" placeholder="Search PO / indent / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
           sx={{ width: { xs: '100%', sm: 250 } }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color="#94a3b8" /></InputAdornment> }} />
+          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
         <Autocomplete
           size="small" sx={{ minWidth: 200 }}
           options={partiesRes?.data || []}
@@ -220,7 +209,7 @@ const PurchaseOrderList = () => {
       </Paper>
 
       {/* Grid */}
-      <Paper sx={{ flexGrow: 1, minHeight: 420, borderRadius: '16px', overflow: 'hidden' }}>
+      <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid
           rows={data?.data || []}
           columns={columns}

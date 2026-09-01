@@ -13,6 +13,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { FOLLOWUP_TYPES } from './fuMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import { PFMS } from '../pfmsTheme';
 
 /**
  * Create / edit a Material Follow-up (Step 1.5).
@@ -80,7 +81,7 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
 
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="sm" fullWidth
-      PaperProps={{ sx: { borderRadius: '18px', overflow: 'hidden' } }}>
+      PaperProps={{ sx: { borderRadius: '8px', overflow: 'hidden' } }}>
       {/* Header */}
       <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
@@ -99,7 +100,7 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
       </Box>
 
       {/* Body */}
-      <Box sx={{ p: 3, bgcolor: '#f8fafc' }}>
+      <Box sx={{ p: 3, bgcolor: PFMS.surfaceAlt }}>
         <Grid container spacing={2}>
           <Grid item xs={12}>
             {isEdit || presetPo ? (
@@ -155,7 +156,7 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
 
       {/* Footer */}
       <Divider />
-      <Box sx={{ p: 2, display: 'flex', justifyContent: 'flex-end', gap: 1.5, bgcolor: '#fff' }}>
+      <Box sx={{ p: 2, display: 'flex', justifyContent: 'flex-end', gap: 1.5, bgcolor: PFMS.surface }}>
         <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving}>Cancel</Button>
         <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
           onClick={handleSubmit} disabled={saving}>
