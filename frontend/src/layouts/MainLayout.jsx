@@ -30,7 +30,15 @@ const COLLAPSED_WIDTH = 76;
 // used by the collapsed rail, where nested dropdowns have no room to expand.
 const firstLeafPath = (item) => (item.children ? firstLeafPath(item.children[0]) : item.path);
 
-const navSections = [
+// ── Ambika 2.0 simplified sidebar ──────────────────────────────────────────
+// The client wants a minimal nav: FMS (O2D / Purchase), Master, Employees.
+// NOTHING was deleted — the complete 1.0 nav still lives in `navSectionsFull`
+// below, and the permission-driven groups (Tasks, O2D FMS, Pricing, Admin) are
+// gated behind this flag inside the `sections` memo. Flip to `true` to restore
+// the entire old sidebar in one move.
+const SHOW_FULL_NAV = false;
+
+const navSectionsFull = [
   {
     title: 'Operations',
     items: [
@@ -166,6 +174,36 @@ const navSections = [
   },
 ];
 
+// ── Ambika 2.0 sidebar — the only three entries the client asked for ───────
+// FMS expands to the two flows (O2D, Purchase); Master's contents are
+// provisional (SKU + Parties) until the client confirms the final list.
+const navSectionsSimple = [
+  {
+    title: '',
+    items: [
+      {
+        text: 'FMS',
+        icon: <Workflow size={19} />,
+        children: [
+          { text: 'O2D',      icon: <Truck size={19} />,        path: '/o2d-fms/processes' },
+          { text: 'Purchase', icon: <ShoppingCart size={19} />, path: '/purchase-fms' },
+        ],
+      },
+      {
+        text: 'Master',
+        icon: <FolderOpen size={19} />,
+        children: [
+          { text: 'SKU Master', icon: <Package size={19} />, path: '/skus' },
+          { text: 'Parties',    icon: <Users size={19} />,   path: '/parties' },
+        ],
+      },
+      { text: 'Employees', icon: <UserCog size={19} />, path: '/employees' },
+    ],
+  },
+];
+
+const navSections = SHOW_FULL_NAV ? navSectionsFull : navSectionsSimple;
+
 const PAGE_TITLES = {
   '/dashboard':              'Dispatch Intelligence Hub',
   '/dispatch-control-tower': 'Control Tower',
@@ -294,6 +332,11 @@ const MainLayout = () => {
     // Clone sections (and their item arrays) so we can splice without mutating
     // the static navSections definition.
     const out = navSections.map((s) => ({ ...s, items: [...s.items] }));
+
+    // Ambika 2.0: the permission-driven groups below (Tasks, O2D FMS, Pricing
+    // & Revenue, Access Control / Employees) are part of the FULL 1.0 nav and
+    // stay hidden until SHOW_FULL_NAV is flipped back on.
+    if (!SHOW_FULL_NAV) return out;
 
     // ── Tasks + O2D FMS — two sibling collapsible groups under "O2D Pipeline" ──
     // Tasks = the doer/oversight task lists; O2D FMS = the flow itself + config.
