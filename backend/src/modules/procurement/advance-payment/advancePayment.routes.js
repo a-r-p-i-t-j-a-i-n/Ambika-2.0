@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { advancePaymentController as c } from './advancePayment.controller.js';
 import {
@@ -24,6 +25,8 @@ router.route('/')
 router.get('/stats', c.getStats);
 router.get('/by-pi/:piId', validate(piIdParamSchema, 'params'), c.getByPi);
 
-router.get('/:id', validate(mongoIdParamSchema, 'params'), c.getById);
+router.route('/:id')
+  .get(validate(mongoIdParamSchema, 'params'), c.getById)
+  .delete(requirePermission('procurement.deleteAdvancePayment'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 export default router;

@@ -99,7 +99,7 @@ const ServiceCompletionList = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, ...pfmsPageSx }}>
       <Box>
-        <Typography sx={pfmsTitleSx}>Service Completions (9)</Typography>
+        <Typography sx={pfmsTitleSx}>Service Completions ({stats.total || 0})</Typography>
         <Typography sx={pfmsSubtitleSx}>Step 1.8A · Internal service / repair / maintenance completion</Typography>
       </Box>
 

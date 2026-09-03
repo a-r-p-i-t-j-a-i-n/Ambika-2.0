@@ -189,6 +189,18 @@ export const proformaInvoiceService = {
     return pi.save();
   },
 
+  async remove(id, user) {
+    const pi = await findOrThrow(id);
+    if (![PI_STATUS.DRAFT, PI_STATUS.RECEIVED].includes(pi.piStatus) || pi.approvalStatus === PI_APPROVAL_STATUS.APPROVED) {
+      throw new AppError('Only a draft or received PI (not yet approved) can be deleted', 400);
+    }
+    pi.isDeleted = true;
+    pi.deletedAt = new Date();
+    pi.deletedBy = user?._id;
+    pi.activityTimeline.push({ action: 'DELETE', description: 'Proforma invoice deleted', actorId: user?._id });
+    return pi.save();
+  },
+
   // Rules 5-6: approve (document mandatory) → ready for advance payment.
   async approve(id, data, user) {
     const pi = await findOrThrow(id);

@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { tallyEntryController as c } from './tallyEntry.controller.js';
 import {
@@ -28,7 +29,8 @@ router.get('/by-voucher/:voucherId', validate(voucherIdParamSchema, 'params'), c
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateTallyEntrySchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updateTallyEntrySchema), c.update)
+  .delete(requirePermission('procurement.deleteTallyEntry'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/complete', validate(mongoIdParamSchema, 'params'), validate(completeTallyEntrySchema), c.complete);
 router.post('/:id/cancel',   validate(mongoIdParamSchema, 'params'), validate(cancelTallyEntrySchema), c.cancel);

@@ -240,7 +240,7 @@ const IndentList = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Purchase Indents (3)</Typography>
+          <Typography sx={pfmsTitleSx}>Purchase Indents ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Raise, approve and track purchase requirements</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>

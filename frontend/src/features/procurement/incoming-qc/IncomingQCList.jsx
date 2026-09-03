@@ -106,7 +106,7 @@ const IncomingQCList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Incoming QC (10)</Typography>
+          <Typography sx={pfmsTitleSx}>Incoming QC ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
             Step 1.9 · Inspect received material — rejected qty moves out of stock
           </Typography>

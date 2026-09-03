@@ -162,7 +162,7 @@ const PurchaseOrderList = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Purchase Orders (4)</Typography>
+          <Typography sx={pfmsTitleSx}>Purchase Orders ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
             Step 1.4 · Create PO &amp; release to supplier — only from approved quotations
           </Typography>

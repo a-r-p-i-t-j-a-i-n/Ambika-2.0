@@ -301,7 +301,7 @@ function App() {
             {/* Purchase FMS — visually scoped to the O2D FMS design language */}
             <Route element={<PurchaseFmsThemeScope />}>
               {/* Purchase FMS — unified workflow page with step navigation */}
-              <Route path="/purchase-fms" element={<Navigate to="/purchase-fms/master-data" replace />} />
+              <Route path="/purchase-fms" element={<Navigate to="/purchase-fms/purchase-indents" replace />} />
               <Route path="/purchase-fms/:step" element={<PurchaseFmsHub />} />
 
               {/* Purchase FMS — Purchase Indents */}

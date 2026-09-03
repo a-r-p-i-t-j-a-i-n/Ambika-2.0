@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { followUpController as c } from './followUp.controller.js';
 import {
@@ -30,7 +31,8 @@ router.get('/by-po/:poId', validate(poIdParamSchema, 'params'), c.getByPo);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateFollowUpSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updateFollowUpSchema), c.update)
+  .delete(requirePermission('procurement.deleteFollowUp'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/mark-done',          validate(mongoIdParamSchema, 'params'), validate(markDoneSchema), c.markDone);
 router.post('/:id/reschedule',         validate(mongoIdParamSchema, 'params'), validate(rescheduleSchema), c.reschedule);

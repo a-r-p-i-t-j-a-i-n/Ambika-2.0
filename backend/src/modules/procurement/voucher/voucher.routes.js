@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { voucherController as c } from './voucher.controller.js';
 import {
@@ -28,7 +29,8 @@ router.get('/by-invoice/:invoiceId', validate(invoiceIdParamSchema, 'params'), c
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateVoucherSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updateVoucherSchema), c.update)
+  .delete(requirePermission('procurement.deleteVoucher'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/post',   validate(mongoIdParamSchema, 'params'), validate(postVoucherSchema), c.post);
 router.post('/:id/cancel', validate(mongoIdParamSchema, 'params'), validate(cancelVoucherSchema), c.cancel);

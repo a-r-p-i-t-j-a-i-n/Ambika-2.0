@@ -355,6 +355,18 @@ export const vendorInvoiceService = {
     return inv.save();
   },
 
+  async remove(id, user) {
+    const inv = await findOrThrow(id);
+    if (inv.invoiceStatus !== INVOICE_STATUS.DRAFT) {
+      throw new AppError('Only draft vendor invoices can be deleted', 400);
+    }
+    inv.isDeleted = true;
+    inv.deletedAt = new Date();
+    inv.deletedBy = user?._id;
+    inv.activityTimeline.push({ action: 'DELETE', description: 'Vendor invoice deleted', actorId: user?._id });
+    return inv.save();
+  },
+
   // Rule 3 & 6 & 7: document mandatory; approval → PAYMENT_PENDING.
   async approve(id, data, user) {
     const inv = await findOrThrow(id);

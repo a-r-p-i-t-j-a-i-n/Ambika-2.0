@@ -133,7 +133,7 @@ const ProformaInvoiceList = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>PI Forms (6)</Typography>
+          <Typography sx={pfmsTitleSx}>PI Forms ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
             Step 1.6 · Proforma Invoice management — prerequisite for advance payment
           </Typography>

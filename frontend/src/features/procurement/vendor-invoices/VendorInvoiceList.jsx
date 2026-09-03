@@ -91,7 +91,7 @@ const VendorInvoiceList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Vendor Invoices (11)</Typography>
+          <Typography sx={pfmsTitleSx}>Vendor Invoices ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.10 · Invoice / Debit Note received — only after QC PASSED / PARTIAL</Typography>
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditInv(null); setFormOpen(true); }}>New Invoice</Button>

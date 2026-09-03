@@ -1145,6 +1145,18 @@ export const purchaseOrderService = {
     return saved;
   },
 
+  async remove(id, user) {
+    const po = await findOrThrow(id);
+    if (po.approvalStatus !== PO_APPROVAL_STATUS.DRAFT) {
+      throw new AppError('Only draft purchase orders can be deleted', 400);
+    }
+    po.isDeleted = true;
+    po.deletedAt = new Date();
+    po.deletedBy = user?._id;
+    po.activityTimeline.push({ action: 'DELETE', description: 'Purchase order deleted', actorId: user?._id });
+    return po.save();
+  },
+
   async approve(id, data, user) {
     const approved = data.decision !== 'REJECTED';
     const approval = {

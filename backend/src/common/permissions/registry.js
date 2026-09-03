@@ -67,6 +67,17 @@ export const PERMISSIONS = Object.freeze({
   'procurement.approve':           { module: 'Procurement',    label: 'Approve procurement documents (PO / PI)',   risk: 'high' },
   'procurement.markPiNotRequired': { module: 'Procurement',    label: 'Mark a PO\'s PI as Not Required',            risk: 'high' },
   'procurement.invoiceExcess':     { module: 'Procurement',    label: 'Invoice more than the QC-accepted qty',     risk: 'high' },
+  'procurement.deleteIndent':          { module: 'Procurement', label: 'Delete a purchase indent',                risk: 'high' },
+  'procurement.deletePurchaseOrder':   { module: 'Procurement', label: 'Delete a purchase order',                 risk: 'high' },
+  'procurement.deleteFollowUp':        { module: 'Procurement', label: 'Delete a material follow-up',             risk: 'high' },
+  'procurement.deleteProformaInvoice': { module: 'Procurement', label: 'Delete a proforma invoice',               risk: 'high' },
+  'procurement.deleteAdvancePayment':  { module: 'Procurement', label: 'Delete an advance payment',               risk: 'high' },
+  'procurement.deleteGrn':             { module: 'Procurement', label: 'Delete a goods receipt note',             risk: 'high' },
+  'procurement.deleteIncomingQc':      { module: 'Procurement', label: 'Delete an incoming QC record',            risk: 'high' },
+  'procurement.deleteVendorInvoice':   { module: 'Procurement', label: 'Delete a vendor invoice',                 risk: 'high' },
+  'procurement.deleteVoucher':         { module: 'Procurement', label: 'Delete a payment voucher',                risk: 'high' },
+  'procurement.deleteTallyEntry':      { module: 'Procurement', label: 'Delete a tally entry',                    risk: 'high' },
+  'procurement.deleteFinalPayment':    { module: 'Procurement', label: 'Delete a final payment',                  risk: 'high' },
 
   // ── Access Control ──────────────────────────────────────────────
   'accessControl.manageUsers':   { module: 'Access Control', label: 'Manage users (invite, suspend, assign)',    risk: 'high' },

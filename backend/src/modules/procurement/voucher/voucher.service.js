@@ -204,6 +204,18 @@ export const voucherService = {
     return v.save();
   },
 
+  async remove(id, user) {
+    const v = await findOrThrow(id);
+    if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) {
+      throw new AppError('Only draft vouchers can be deleted', 400);
+    }
+    v.isDeleted = true;
+    v.deletedAt = new Date();
+    v.deletedBy = user?._id;
+    v.activityTimeline.push({ action: 'DELETE', description: 'Voucher deleted', actorId: user?._id });
+    return v.save();
+  },
+
   /**
    * Step 1.11 — voucher passing / approval ONLY. No payment is recorded here:
    * paidAmount stays 0, balance stays = net payable, and the invoice is NOT

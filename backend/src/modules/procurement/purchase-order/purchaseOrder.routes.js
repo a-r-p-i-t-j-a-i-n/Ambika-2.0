@@ -53,7 +53,8 @@ router.post('/release-preview', validate(releasePreviewSchema), c.getReleasePrev
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updatePoSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updatePoSchema), c.update)
+  .delete(requirePermission('procurement.deletePurchaseOrder'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/pdf', validate(mongoIdParamSchema, 'params'), c.generatePdf);
 router.post('/:id/approve', validate(mongoIdParamSchema, 'params'), validate(approvePoSchema), c.approve);

@@ -42,6 +42,11 @@ export const grnController = {
     res.json(ApiResponse.ok('GRN updated', grn));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const grn = await grnService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('GRN deleted', grn));
+  }),
+
   complete: asyncHandler(async (req, res) => {
     const grn = await grnService.complete(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('GRN completed — stock posted', grn));

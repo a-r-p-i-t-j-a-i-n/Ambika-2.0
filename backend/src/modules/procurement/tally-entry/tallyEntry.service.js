@@ -112,6 +112,18 @@ export const tallyEntryService = {
     return t.save();
   },
 
+  async remove(id, user) {
+    const t = await findOrThrow(id);
+    if (t.tallyEntryStatus !== TALLY_ENTRY_STATUS.PENDING) {
+      throw new AppError('Only pending tally entries can be deleted', 400);
+    }
+    t.isDeleted = true;
+    t.deletedAt = new Date();
+    t.deletedBy = user?._id;
+    t.activityTimeline.push({ action: 'DELETE', description: 'Tally entry deleted', actorId: user?._id });
+    return t.save();
+  },
+
   // Rules 4-7: complete requires statusDone=YES + all checklist items; if NO, stay PENDING (remarks required).
   async complete(id, data, user) {
     const t = await findOrThrow(id);

@@ -288,6 +288,18 @@ export const incomingQcService = {
     return qc.save();
   },
 
+  async remove(id, user) {
+    const qc = await findOrThrow(id);
+    if (![QC_STATUS.DRAFT, QC_STATUS.IN_PROGRESS].includes(qc.qcStatus)) {
+      throw new AppError('Only draft or in-progress QC records can be deleted', 400);
+    }
+    qc.isDeleted = true;
+    qc.deletedAt = new Date();
+    qc.deletedBy = user?._id;
+    qc.activityTimeline.push({ action: 'DELETE', description: 'Incoming QC deleted', actorId: user?._id });
+    return qc.save();
+  },
+
   /**
    * Complete QC: validate qty splits, derive result, move rejected qty OUT of
    * stock via inventoryService, update the GRN qcStatus, generate the report.

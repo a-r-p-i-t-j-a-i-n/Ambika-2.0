@@ -28,6 +28,11 @@ export const indentController = {
     res.json(ApiResponse.ok('Indent updated', indent));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const indent = await indentService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Indent deleted', indent));
+  }),
+
   submit: asyncHandler(async (req, res) => {
     const indent = await indentService.submit(req.params.id, req.user);
     res.json(ApiResponse.ok('Indent submitted for approval', indent));

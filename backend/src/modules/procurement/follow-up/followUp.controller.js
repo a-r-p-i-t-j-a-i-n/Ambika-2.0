@@ -33,6 +33,11 @@ export const followUpController = {
     res.json(ApiResponse.ok('Follow-up updated', fu));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const fu = await followUpService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Follow-up deleted', fu));
+  }),
+
   markDone: asyncHandler(async (req, res) => {
     const fu = await followUpService.markDone(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Follow-up marked done', fu));

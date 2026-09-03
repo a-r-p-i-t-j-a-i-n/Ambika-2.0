@@ -4,7 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
-import { attachUserPermissions } from '../../../middleware/permission.middleware.js';
+import { attachUserPermissions, requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { vendorInvoiceController as c } from './vendorInvoice.controller.js';
 import {
@@ -32,7 +32,8 @@ router.get('/by-qc/:qcId', validate(qcIdParamSchema, 'params'), c.getByQc);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateInvoiceSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updateInvoiceSchema), c.update)
+  .delete(requirePermission('procurement.deleteVendorInvoice'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/approve', validate(mongoIdParamSchema, 'params'), validate(approveInvoiceSchema), c.approve);
 router.post('/:id/reject',  validate(mongoIdParamSchema, 'params'), validate(rejectInvoiceSchema), c.reject);

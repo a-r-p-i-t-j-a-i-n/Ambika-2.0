@@ -2,18 +2,34 @@ import React, { useState, useMemo } from 'react';
 import {
   Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
-  TextField, MenuItem, InputAdornment,
+  TextField, MenuItem, InputAdornment, IconButton, Tooltip, Button,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search } from 'lucide-react';
+import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, Pencil, Trash2 } from 'lucide-react';
 import dayjs from 'dayjs';
+import { useSnackbar } from 'notistack';
+import { usePermissions } from '../../hooks/usePermission';
 import {
   useGetIndentsQuery, useGetPurchaseOrdersQuery, useGetFollowUpsQuery,
   useGetProformaInvoicesQuery, useGetAdvancePaymentsQuery, useGetGrnsQuery,
   useGetIncomingQcsQuery, useGetVendorInvoicesQuery, useGetVouchersQuery,
   useGetTallyEntriesQuery, useGetFinalPaymentsQuery,
+  useDeleteIndentMutation, useDeletePurchaseOrderMutation, useDeleteFollowUpMutation,
+  useDeleteProformaInvoiceMutation, useDeleteAdvancePaymentMutation, useDeleteGrnMutation,
+  useDeleteIncomingQcMutation, useDeleteVendorInvoiceMutation, useDeleteVoucherMutation,
+  useDeleteTallyEntryMutation, useDeleteFinalPaymentMutation,
 } from '../../store/api/procurementApi';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from './pfmsTheme';
+import IndentFormDrawer from './indents/IndentFormDrawer';
+import PurchaseOrderFormDrawer from './purchase-orders/PurchaseOrderFormDrawer';
+import FollowUpFormDrawer from './follow-ups/FollowUpFormDrawer';
+import ProformaInvoiceFormDrawer from './proforma-invoices/ProformaInvoiceFormDrawer';
+import GrnFormDialog from './grn/GrnFormDialog';
+import IncomingQCFormDialog from './incoming-qc/IncomingQCFormDialog';
+import VendorInvoiceFormDialog from './vendor-invoices/VendorInvoiceFormDialog';
+import VoucherFormDialog from './vouchers/VoucherFormDialog';
+import TallyEntryFormDialog from './tally-entry/TallyEntryFormDialog';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -144,6 +160,84 @@ const TABS = [
   { key: 'final',         label: 'Final Payments · 1.13' },
 ];
 
+// Once a record's own status shows this Purchase FMS step's work is done, it
+// belongs in the NEXT step's tab, not this one — hide it here. Only forward
+// progress is hidden; cancelled/rejected/failed dead-ends stay visible in
+// their current tab since there's no next-step tab for them to move to.
+const HIDE_WHEN_ADVANCED = {
+  indent:        { field: 'overallStatus',    hide: ['PARTIAL_PO_CREATED', 'PO_READY'] },
+  po:            { field: 'followUpStatus',   show: ['NOT_STARTED'] },
+  followup:      { field: 'followUpStatus',   hide: ['DONE', 'READY_FOR_GRN', 'CLOSED'] },
+  pi:            { field: 'piStatus',         hide: ['READY_FOR_ADVANCE_PAYMENT', 'PAYMENT_COMPLETED'] },
+  advance:       { field: 'paymentStatus',    hide: ['FULL_PAYMENT', 'SHORT_PAYMENT_COMPLETED'] },
+  grn:           { field: 'grnStatus',        hide: ['FULLY_RECEIVED'] },
+  qc:            { field: 'qcStatus',         hide: ['PASSED', 'FAILED'] },
+  vendorInvoice: { field: 'invoiceStatus',    hide: ['PAYMENT_PENDING', 'PAYMENT_COMPLETED'] },
+  voucher:       { field: 'voucherStatus',    hide: ['FULLY_PAID', 'SHORT_CLOSED'] },
+  tally:         { field: 'tallyEntryStatus', hide: ['COMPLETED'] },
+  final:         { field: 'paymentStatus',    hide: ['FULL_PAYMENT', 'SHORT_PAYMENT_COMPLETED'] },
+};
+const isStageActive = (tab, row) => {
+  const rule = HIDE_WHEN_ADVANCED[tab];
+  if (!rule) return true;
+  const v = row[rule.field];
+  return rule.show ? rule.show.includes(v) : !rule.hide.includes(v);
+};
+
+// Edit reuses each module's own existing drawer/dialog — same component, same
+// prop, same eligibility gate the module's own worklist page already uses.
+// AdvancePayment and FinalPayment have no edit UI wired anywhere in the app
+// today (both mutate posted money), so they're Delete-only here too.
+const EDIT_CONFIG = {
+  indent:        { Component: IndentFormDrawer,         prop: 'indent',  canEdit: (r) => r.approvalStatus === 'DRAFT' },
+  po:            { Component: PurchaseOrderFormDrawer,  prop: 'po',      canEdit: (r) => r.approvalStatus === 'DRAFT' },
+  followup:      { Component: FollowUpFormDrawer,       prop: 'followUp',canEdit: (r) => ['PENDING', 'RESCHEDULED'].includes(r.followUpStatus) },
+  pi:            { Component: ProformaInvoiceFormDrawer,prop: 'pi',      canEdit: (r) => ['DRAFT', 'RECEIVED'].includes(r.piStatus) && r.approvalStatus !== 'APPROVED' },
+  grn:           { Component: GrnFormDialog,            prop: 'grn',     canEdit: (r) => r.grnStatus === 'DRAFT' },
+  qc:            { Component: IncomingQCFormDialog,     prop: 'qc',      canEdit: (r) => ['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus) },
+  vendorInvoice: { Component: VendorInvoiceFormDialog,  prop: 'invoice', canEdit: (r) => ['DRAFT', 'RECEIVED', 'APPROVED', 'PAYMENT_PENDING'].includes(r.invoiceStatus) },
+  voucher:       { Component: VoucherFormDialog,        prop: 'voucher', canEdit: (r) => r.voucherStatus === 'DRAFT' },
+  tally:         { Component: TallyEntryFormDialog,     prop: 'entry',   canEdit: (r) => r.tallyEntryStatus === 'PENDING' },
+};
+
+// Delete is gated the same way the backend guards it — same status window as
+// Edit for the 9 standard modules. AdvancePayment can only delete the latest
+// payment against its PI (computed from the fetched rows, matching the
+// backend's LIFO guard); FinalPayment's delete reverses via the existing
+// cancel() flow server-side, so any row is offerable here.
+const CAN_DELETE = {
+  indent:        (r) => r.approvalStatus === 'DRAFT',
+  po:            (r) => r.approvalStatus === 'DRAFT',
+  followup:      (r) => ['PENDING', 'RESCHEDULED'].includes(r.followUpStatus),
+  pi:            (r) => ['DRAFT', 'RECEIVED'].includes(r.piStatus) && r.approvalStatus !== 'APPROVED',
+  grn:           (r) => r.grnStatus === 'DRAFT',
+  qc:            (r) => ['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus),
+  vendorInvoice: (r) => r.invoiceStatus === 'DRAFT',
+  voucher:       (r) => r.voucherStatus === 'DRAFT',
+  tally:         (r) => r.tallyEntryStatus === 'PENDING',
+  advance:       (r, ctx) => !!ctx?.latestAdvanceIds?.has(r._id),
+  final:         () => true,
+};
+
+const DELETE_PERMISSION = {
+  indent: 'procurement.deleteIndent', po: 'procurement.deletePurchaseOrder', followup: 'procurement.deleteFollowUp',
+  pi: 'procurement.deleteProformaInvoice', advance: 'procurement.deleteAdvancePayment', grn: 'procurement.deleteGrn',
+  qc: 'procurement.deleteIncomingQc', vendorInvoice: 'procurement.deleteVendorInvoice', voucher: 'procurement.deleteVoucher',
+  tally: 'procurement.deleteTallyEntry', final: 'procurement.deleteFinalPayment',
+};
+
+const RECORD_NUMBER_FIELD = {
+  indent: 'indentNumber', po: 'poNumber', followup: 'followUpNumber', pi: 'piNumber',
+  advance: 'paymentNumber', grn: 'grnNumber', qc: 'qcNumber', vendorInvoice: 'invoiceNumber',
+  voucher: 'voucherNumber', tally: 'entryNumber', final: 'paymentNumber',
+};
+
+const TAB_LABEL_SINGULAR = {
+  indent: 'Indent', po: 'Purchase order', followup: 'Follow-up', pi: 'Proforma invoice',
+  advance: 'Advance payment', grn: 'GRN', qc: 'QC record', vendorInvoice: 'Vendor invoice',
+  voucher: 'Voucher', tally: 'Tally entry', final: 'Final payment',
+};
+
 // Compute a column's display value for the non-grid views (sheet / cards / board).
 const displayVal = (c, row) => {
   const raw = c.valueGetter ? c.valueGetter(undefined, row) : row[c.field];
@@ -174,14 +268,23 @@ const VIEWS = [
 /**
  * Purchase Master Data — a per-step data view (one tab per Purchase FMS step),
  * mirroring the O2D Master Data page: every entry shown with its full columns
- * (vendor / amounts / dates / status). Switch Table / Sheet / Cards / Board. Read-only.
+ * (vendor / amounts / dates / status). Switch Table / Sheet / Cards / Board.
+ * Each tab only shows records still active at that step — one that has
+ * advanced to the next step (see HIDE_WHEN_ADVANCED) drops out here. The
+ * Table view's Action column offers Edit/Delete where the record's own
+ * status and the user's permissions allow it.
  */
 const PurchaseMasterData = () => {
   const theme = useTheme();
+  const { enqueueSnackbar } = useSnackbar();
+  const { can } = usePermissions();
   const [tab, setTab] = useState('indent');
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [editRow, setEditRow] = useState(null);   // { tab, row } | null
+  const [deleteRow, setDeleteRow] = useState(null); // { tab, row } | null
+  const [deleting, setDeleting] = useState(false);
 
   const switchTab = (t) => { setTab(t); setSearch(''); setStatusFilter(''); };
 
@@ -199,12 +302,45 @@ const PurchaseMasterData = () => {
   const tallyQ = useGetTallyEntriesQuery(P, { skip: tab !== 'tally' });
   const finalQ = useGetFinalPaymentsQuery(P, { skip: tab !== 'final' });
 
+  const [deleteIndent] = useDeleteIndentMutation();
+  const [deletePo] = useDeletePurchaseOrderMutation();
+  const [deleteFollowup] = useDeleteFollowUpMutation();
+  const [deletePi] = useDeleteProformaInvoiceMutation();
+  const [deleteAdvance] = useDeleteAdvancePaymentMutation();
+  const [deleteGrn] = useDeleteGrnMutation();
+  const [deleteQc] = useDeleteIncomingQcMutation();
+  const [deleteVendorInvoice] = useDeleteVendorInvoiceMutation();
+  const [deleteVoucher] = useDeleteVoucherMutation();
+  const [deleteTally] = useDeleteTallyEntryMutation();
+  const [deleteFinal] = useDeleteFinalPaymentMutation();
+  const deleteFns = {
+    indent: deleteIndent, po: deletePo, followup: deleteFollowup, pi: deletePi, advance: deleteAdvance,
+    grn: deleteGrn, qc: deleteQc, vendorInvoice: deleteVendorInvoice, voucher: deleteVoucher,
+    tally: deleteTally, final: deleteFinal,
+  };
+
   const current = {
     indent: indentQ, po: poQ, followup: followQ, pi: piQ, advance: advQ, grn: grnQ,
     qc: qcQ, vendorInvoice: viQ, voucher: vouQ, tally: tallyQ, final: finalQ,
   }[tab];
   const columns = COLUMNS[tab];
-  const rawRows = useMemo(() => current?.data?.data || [], [current]);
+  // Real DB rows for this tab, minus whatever has already advanced past this
+  // Purchase FMS step (see HIDE_WHEN_ADVANCED) — a pure function of fetched
+  // data, so it's correct after refresh and identical for every user.
+  const rawRows = useMemo(() => (current?.data?.data || []).filter((r) => isStageActive(tab, r)), [current, tab]);
+
+  // AdvancePayment can only delete its most-recently-created payment per PI
+  // (keeps the balance-reversal chain reversible in order) — computed from
+  // the same rows already on screen.
+  const latestAdvanceIds = useMemo(() => {
+    if (tab !== 'advance') return null;
+    const latestByPi = new Map();
+    rawRows.forEach((r) => {
+      const cur = latestByPi.get(r.piId);
+      if (!cur || new Date(r.createdAt) > new Date(cur.createdAt)) latestByPi.set(r.piId, r);
+    });
+    return new Set([...latestByPi.values()].map((r) => r._id));
+  }, [rawRows, tab]);
 
   // Distinct statuses present (for the status filter dropdown).
   const statuses = useMemo(() => [...new Set(rawRows.map((r) => statusOf(tab, r)).filter(Boolean))], [rawRows, tab]);
@@ -217,6 +353,53 @@ const PurchaseMasterData = () => {
     if (q) list = list.filter((r) => columns.some((c) => String(displayVal(c, r)).toLowerCase().includes(q)));
     return list;
   }, [rawRows, statusFilter, search, tab, columns]);
+
+  // Table-view-only column set: base columns + an Action column (Edit/Delete),
+  // gated per-row by each module's own eligibility rule.
+  const tableColumns = useMemo(() => {
+    const actionsCol = {
+      field: '__actions', headerName: 'Action', width: 84, sortable: false, filterable: false,
+      align: 'center', headerAlign: 'center',
+      renderCell: (params) => {
+        const row = params.row;
+        const editCfg = EDIT_CONFIG[tab];
+        const showEdit = !!editCfg?.canEdit(row);
+        const showDelete = can(DELETE_PERMISSION[tab]) && !!CAN_DELETE[tab]?.(row, { latestAdvanceIds });
+        if (!showEdit && !showDelete) return null;
+        return (
+          <Stack direction="row" spacing={0.25}>
+            {showEdit && (
+              <Tooltip title="Edit">
+                <IconButton size="small" onClick={() => setEditRow({ tab, row })}><Pencil size={14} /></IconButton>
+              </Tooltip>
+            )}
+            {showDelete && (
+              <Tooltip title="Delete">
+                <IconButton size="small" color="error" onClick={() => setDeleteRow({ tab, row })}><Trash2 size={14} /></IconButton>
+              </Tooltip>
+            )}
+          </Stack>
+        );
+      },
+    };
+    return [...columns, actionsCol];
+  }, [columns, tab, can, latestAdvanceIds]);
+
+  const closeEdit = () => setEditRow(null);
+
+  const handleConfirmDelete = async () => {
+    if (!deleteRow) return;
+    setDeleting(true);
+    try {
+      await deleteFns[deleteRow.tab](deleteRow.row._id).unwrap();
+      enqueueSnackbar(`${TAB_LABEL_SINGULAR[deleteRow.tab]} deleted`, { variant: 'success' });
+      setDeleteRow(null);
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Failed to delete', { variant: 'error' });
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <Box sx={{ ...pfmsPageSx }}>
@@ -274,7 +457,7 @@ const PurchaseMasterData = () => {
           {view === 'table' && (
             <Box sx={{ px: 1.5, pb: 1.5 }}>
               <DataGrid
-                rows={rows} columns={columns} getRowId={(r) => r._id} loading={current?.isFetching}
+                rows={rows} columns={tableColumns} getRowId={(r) => r._id} loading={current?.isFetching}
                 autoHeight density="compact"
                 initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
                 pageSizeOptions={[25, 50, 100]} disableRowSelectionOnClick
@@ -361,6 +544,30 @@ const PurchaseMasterData = () => {
           )}
         </Paper>
       </Box>
+
+      {/* Edit — reuses whichever module's own drawer/dialog this tab already uses */}
+      {editRow && EDIT_CONFIG[editRow.tab] && (() => {
+        const { Component, prop } = EDIT_CONFIG[editRow.tab];
+        return <Component open onClose={closeEdit} {...{ [prop]: editRow.row }} />;
+      })()}
+
+      {/* Delete confirmation */}
+      <Dialog open={!!deleteRow} onClose={() => (deleting ? null : setDeleteRow(null))} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Delete {deleteRow ? TAB_LABEL_SINGULAR[deleteRow.tab] : ''}?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will delete{' '}
+            <b>{deleteRow ? (deleteRow.row[RECORD_NUMBER_FIELD[deleteRow.tab]] || 'this record') : ''}</b>.
+            This action cannot be undone from here.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setDeleteRow(null)} disabled={deleting}>Cancel</Button>
+          <Button onClick={handleConfirmDelete} color="error" variant="contained" disabled={deleting}>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

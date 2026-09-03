@@ -5,12 +5,18 @@ import { lazyWithRetry } from '../../utils/lazyWithRetry';
 import AppLoader from '../../components/AppLoader';
 import PurchaseFmsStepper from './components/PurchaseFmsStepper';
 import { PFMS } from './pfmsTheme';
+import {
+  useGetIndentStatsQuery, useGetPurchaseOrderStatsQuery, useGetFollowUpStatsQuery,
+  useGetProformaInvoiceStatsQuery, useGetAdvancePaymentStatsQuery, useGetGrnStatsQuery,
+  useGetServiceCompletionStatsQuery, useGetIncomingQcStatsQuery, useGetVendorInvoiceStatsQuery,
+  useGetVoucherStatsQuery, useGetTallyEntryStatsQuery, useGetFinalPaymentStatsQuery,
+} from '../../store/api/procurementApi';
 
 // Each step reuses the existing, fully-functional screen for that module —
 // same components, APIs, tables, forms, filters and actions as before. This
 // hub only adds the shared header + step rail around them.
-const PurchaseMasterData    = lazyWithRetry(() => import('./PurchaseMasterData'));
-const VendorMaster          = lazyWithRetry(() => import('./vendors/VendorMaster'));
+// Master Data and Vendor Details moved to their own sidebar entries under
+// Purchase (see MainLayout) and are no longer part of this stepper.
 const IndentList            = lazyWithRetry(() => import('./indents/IndentList'));
 const PurchaseOrderList     = lazyWithRetry(() => import('./purchase-orders/PurchaseOrderList'));
 const FollowUpList          = lazyWithRetry(() => import('./follow-ups/FollowUpList'));
@@ -28,8 +34,6 @@ const FinalPaymentList      = lazyWithRetry(() => import('./final-payments/Final
 // screens (10-14) that already lived under the old sidebar dropdown — kept
 // reachable here so nothing that existed before becomes orphaned.
 export const PURCHASE_FMS_STEPS = [
-  { slug: 'master-data',         label: 'Master Data',         Component: PurchaseMasterData },
-  { slug: 'vendor-details',      label: 'Vendor Details',      Component: VendorMaster },
   { slug: 'purchase-indents',    label: 'Purchase Indents',    Component: IndentList },
   { slug: 'purchase-orders',     label: 'Purchase Orders',     Component: PurchaseOrderList },
   { slug: 'material-follow-ups', label: 'Material Follow-ups', Component: FollowUpList },
@@ -44,10 +48,45 @@ export const PURCHASE_FMS_STEPS = [
   { slug: 'final-payments',      label: 'Final Payments',      Component: FinalPaymentList },
 ];
 
+// Each step's own stats endpoint (already used by that step's KPI cards) —
+// fetched once here so the step rail can show a live total next to every
+// step, not just the active one. Lightweight aggregate queries, cached by
+// RTK Query, so this doesn't duplicate the row-level fetch each screen does.
+const useStepCounts = () => {
+  const { data: indentStats } = useGetIndentStatsQuery();
+  const { data: poStats } = useGetPurchaseOrderStatsQuery();
+  const { data: followUpStats } = useGetFollowUpStatsQuery();
+  const { data: piStats } = useGetProformaInvoiceStatsQuery();
+  const { data: advanceStats } = useGetAdvancePaymentStatsQuery();
+  const { data: grnStats } = useGetGrnStatsQuery();
+  const { data: serviceStats } = useGetServiceCompletionStatsQuery();
+  const { data: qcStats } = useGetIncomingQcStatsQuery();
+  const { data: invoiceStats } = useGetVendorInvoiceStatsQuery();
+  const { data: voucherStats } = useGetVoucherStatsQuery();
+  const { data: tallyStats } = useGetTallyEntryStatsQuery();
+  const { data: finalStats } = useGetFinalPaymentStatsQuery();
+
+  return {
+    'purchase-indents':    indentStats?.data?.total,
+    'purchase-orders':     poStats?.data?.total,
+    'material-follow-ups': followUpStats?.data?.total,
+    'pi-forms':            piStats?.data?.total,
+    'advance-payments':    advanceStats?.data?.totalPayments,
+    'grn':                 grnStats?.data?.total,
+    'service-completion':  serviceStats?.data?.total,
+    'incoming-qc':         qcStats?.data?.total,
+    'vendor-invoices':     invoiceStats?.data?.total,
+    'payment-vouchers':    voucherStats?.data?.total,
+    'tally-entries':       tallyStats?.data?.total,
+    'final-payments':      finalStats?.data?.total,
+  };
+};
+
 const PurchaseFmsHub = () => {
   const { step } = useParams();
   const navigate = useNavigate();
   const activeIndex = PURCHASE_FMS_STEPS.findIndex((s) => s.slug === step);
+  const counts = useStepCounts();
 
   // Unknown/missing step (e.g. a stale bookmark) — land on the first step
   // rather than rendering nothing.
@@ -72,6 +111,7 @@ const PurchaseFmsHub = () => {
         <PurchaseFmsStepper
           steps={PURCHASE_FMS_STEPS}
           activeIndex={activeIndex}
+          counts={counts}
           onStepClick={(slug) => navigate(`/purchase-fms/${slug}`)}
         />
       </Box>

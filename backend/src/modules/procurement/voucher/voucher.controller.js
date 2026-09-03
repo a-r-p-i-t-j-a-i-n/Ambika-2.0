@@ -33,6 +33,11 @@ export const voucherController = {
     res.json(ApiResponse.ok('Voucher updated', v));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const v = await voucherService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Voucher deleted', v));
+  }),
+
   post: asyncHandler(async (req, res) => {
     const v = await voucherService.post(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Voucher posted', v));

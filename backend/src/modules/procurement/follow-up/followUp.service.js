@@ -134,6 +134,18 @@ export const followUpService = {
     return fu.save();
   },
 
+  async remove(id, user) {
+    const fu = await findOrThrow(id);
+    if (![FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus)) {
+      throw new AppError('Only pending or rescheduled follow-ups can be deleted', 400);
+    }
+    fu.isDeleted = true;
+    fu.deletedAt = new Date();
+    fu.deletedBy = user?._id;
+    fu.activityTimeline.push({ action: 'DELETE', description: 'Follow-up deleted', actorId: user?._id });
+    return fu.save();
+  },
+
   // Rule 4: record a follow-up cycle.
   //
   // Outcome is driven by which date the user provides (mutually exclusive):

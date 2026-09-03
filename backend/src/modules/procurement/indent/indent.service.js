@@ -325,6 +325,18 @@ export const indentService = {
     return indent.save();
   },
 
+  async remove(id, user) {
+    const indent = await findOrThrow(id);
+    if (indent.approvalStatus !== INDENT_APPROVAL_STATUS.DRAFT) {
+      throw new AppError('Only draft indents can be deleted', 400);
+    }
+    indent.isDeleted = true;
+    indent.deletedAt = new Date();
+    indent.deletedBy = user?._id;
+    indent.activityTimeline.push({ action: 'DELETE', description: 'Indent deleted', actorId: user?._id });
+    return indent.save();
+  },
+
   async submit(id, user) {
     const indent = await findOrThrow(id);
     if (indent.approvalStatus !== INDENT_APPROVAL_STATUS.DRAFT) {

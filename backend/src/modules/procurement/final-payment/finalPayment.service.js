@@ -361,4 +361,19 @@ export const finalPaymentService = {
     }
     return p;
   },
+
+  // Delete reuses cancel()'s reversal (voucher balance + invoice re-open) so a
+  // payment that already posted money never leaves the books out of sync —
+  // then hides the record like every other soft-delete in this codebase.
+  async remove(id, user) {
+    let p = await findOrThrow(id);
+    if (p.paymentStatus !== FINAL_PAYMENT_STATUS.CANCELLED) {
+      p = await this.cancel(id, {}, user);
+    }
+    p.isDeleted = true;
+    p.deletedAt = new Date();
+    p.deletedBy = user?._id;
+    p.activityTimeline.push({ action: 'DELETE', description: 'Final payment deleted', actorId: user?._id });
+    return p.save();
+  },
 };

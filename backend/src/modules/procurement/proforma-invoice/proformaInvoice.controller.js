@@ -33,6 +33,11 @@ export const proformaInvoiceController = {
     res.json(ApiResponse.ok('Proforma invoice updated', pi));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const pi = await proformaInvoiceService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Proforma invoice deleted', pi));
+  }),
+
   approve: asyncHandler(async (req, res) => {
     const pi = await proformaInvoiceService.approve(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Proforma invoice approved — ready for advance payment', pi));

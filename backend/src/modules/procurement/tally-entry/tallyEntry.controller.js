@@ -33,6 +33,11 @@ export const tallyEntryController = {
     res.json(ApiResponse.ok('Tally entry updated', t));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const t = await tallyEntryService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Tally entry deleted', t));
+  }),
+
   complete: asyncHandler(async (req, res) => {
     const t = await tallyEntryService.complete(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Tally entry processed', t));

@@ -48,6 +48,11 @@ export const vendorInvoiceController = {
     res.json(ApiResponse.ok('Vendor invoice updated', inv));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const inv = await vendorInvoiceService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Vendor invoice deleted', inv));
+  }),
+
   approve: asyncHandler(async (req, res) => {
     const inv = await vendorInvoiceService.approve(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Vendor invoice approved', inv));

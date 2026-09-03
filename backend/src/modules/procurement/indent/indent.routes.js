@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { indentController as c } from './indent.controller.js';
 import {
@@ -35,7 +36,8 @@ router.post('/bulk-reject',  validate(bulkRejectSchema),  c.bulkReject);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateIndentSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updateIndentSchema), c.update)
+  .delete(requirePermission('procurement.deleteIndent'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/submit',             validate(mongoIdParamSchema, 'params'), c.submit);
 router.post('/:id/approve',            validate(mongoIdParamSchema, 'params'), validate(approveIndentSchema), c.approve);

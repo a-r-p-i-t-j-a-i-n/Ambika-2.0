@@ -33,6 +33,11 @@ export const incomingQcController = {
     res.json(ApiResponse.ok('Incoming QC updated', qc));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const qc = await incomingQcService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Incoming QC deleted', qc));
+  }),
+
   complete: asyncHandler(async (req, res) => {
     const qc = await incomingQcService.complete(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Incoming QC completed', qc));

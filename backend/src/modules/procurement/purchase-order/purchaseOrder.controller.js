@@ -55,6 +55,11 @@ export const purchaseOrderController = {
     res.json(ApiResponse.ok('Purchase order updated', po));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Purchase order deleted', po));
+  }),
+
   approve: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.approve(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok(`Purchase order ${req.body.decision === 'REJECTED' ? 'rejected' : 'approved'}`, po));

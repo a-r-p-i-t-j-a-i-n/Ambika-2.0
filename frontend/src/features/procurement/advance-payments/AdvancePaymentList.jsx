@@ -70,7 +70,7 @@ const AdvancePaymentList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, ...pfmsPageSx }}>
       {/* Header */}
       <Box>
-        <Typography sx={pfmsTitleSx}>Advance Payments (7)</Typography>
+        <Typography sx={pfmsTitleSx}>Advance Payments ({stats.totalPayments || 0})</Typography>
         <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
           Step 1.7 · Payments recorded against approved PIs — record from the PI detail page
         </Typography>

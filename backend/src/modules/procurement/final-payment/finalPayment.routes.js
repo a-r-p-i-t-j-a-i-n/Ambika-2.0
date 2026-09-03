@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { finalPaymentController as c } from './finalPayment.controller.js';
 import {
@@ -27,7 +28,8 @@ router.get('/by-voucher/:voucherId', validate(voucherIdParamSchema, 'params'), c
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateFinalPaymentSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updateFinalPaymentSchema), c.update)
+  .delete(requirePermission('procurement.deleteFinalPayment'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/cancel', validate(mongoIdParamSchema, 'params'), validate(cancelFinalPaymentSchema), c.cancel);
 router.post('/:id/pdf',    validate(mongoIdParamSchema, 'params'), c.generatePdf);

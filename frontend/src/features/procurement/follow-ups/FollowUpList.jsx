@@ -133,7 +133,7 @@ const FollowUpList = () => {
           from a Purchase Order's detail page (single "Continue Follow-up" action). */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Material Follow-ups (5)</Typography>
+          <Typography sx={pfmsTitleSx}>Material Follow-ups ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
             Step 1.5 · Track every vendor delivery follow-up — open a Purchase Order to create or continue one
           </Typography>

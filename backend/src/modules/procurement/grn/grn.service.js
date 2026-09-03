@@ -403,6 +403,18 @@ export const grnService = {
     return grn.save();
   },
 
+  async remove(id, user) {
+    const grn = await findOrThrow(id);
+    if (grn.grnStatus !== GRN_STATUS.DRAFT) {
+      throw new AppError('Only draft GRNs can be deleted', 400);
+    }
+    grn.isDeleted = true;
+    grn.deletedAt = new Date();
+    grn.deletedBy = user?._id;
+    grn.activityTimeline.push({ action: 'DELETE', description: 'GRN deleted', actorId: user?._id });
+    return grn.save();
+  },
+
   /**
    * Complete a GRN: post stock via inventoryService, update PO + PI quantities,
    * roll receipt status, generate the GRN PDF, and leave qcStatus PENDING for

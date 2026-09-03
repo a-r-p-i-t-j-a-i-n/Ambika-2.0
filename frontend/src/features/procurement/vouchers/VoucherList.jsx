@@ -80,7 +80,7 @@ const VoucherList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Payment Vouchers (12)</Typography>
+          <Typography sx={pfmsTitleSx}>Payment Vouchers ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.11 · Voucher processing — posting marks the invoice Accounts Ready</Typography>
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditVoucher(null); setFormOpen(true); }}>New Voucher</Button>

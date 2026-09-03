@@ -186,7 +186,15 @@ const navSectionsSimple = [
         icon: <Workflow size={19} />,
         children: [
           { text: 'O2D',      icon: <Truck size={19} />,        path: '/o2d-fms/processes' },
-          { text: 'Purchase', icon: <ShoppingCart size={19} />, path: '/purchase-fms' },
+          {
+            text: 'Purchase',
+            icon: <ShoppingCart size={19} />,
+            children: [
+              { text: 'Purchase FMS',   icon: <Workflow size={19} />, path: '/purchase-fms' },
+              { text: 'Master Data',    icon: <FileText size={19} />, path: '/procurement/master-data' },
+              { text: 'Vendor Details', icon: <Users size={19} />,    path: '/procurement/vendors' },
+            ],
+          },
         ],
       },
       {
@@ -245,8 +253,6 @@ const PAGE_TITLES = {
   '/procurement/vendors': 'Master Vendor',
 
   // Purchase FMS — unified workflow page (step navigation lives inside it)
-  '/purchase-fms/master-data':         'Purchase FMS — Master Data',
-  '/purchase-fms/vendor-details':      'Purchase FMS — Vendor Details',
   '/purchase-fms/purchase-indents':    'Purchase FMS — Purchase Indents',
   '/purchase-fms/purchase-orders':     'Purchase FMS — Purchase Orders',
   '/purchase-fms/material-follow-ups': 'Purchase FMS — Material Follow-ups',

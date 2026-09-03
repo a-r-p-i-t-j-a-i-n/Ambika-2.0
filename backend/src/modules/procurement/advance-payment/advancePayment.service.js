@@ -123,6 +123,53 @@ export const advancePaymentService = {
     return features.exec();
   },
 
+  /**
+   * Delete reverses whatever this payment posted onto the PI (using the
+   * `previousBalance` snapshot taken at posting time, not recomputation) and
+   * restores the PO's PI-status mirror if this payment had closed it. Only the
+   * most-recently-created payment for a PI may be deleted, keeping the
+   * previousBalance chain reversible in strict LIFO order. A CANCELLED entry
+   * never posted anything, so it just soft-deletes.
+   */
+  async remove(id, user) {
+    const payment = await AdvancePayment.findOne({ _id: id, isDeleted: { $ne: true } });
+    if (!payment) throw new AppError('Payment not found', 404);
+
+    const latest = await AdvancePayment.findOne({ piId: payment.piId, isDeleted: { $ne: true } }).sort('-createdAt');
+    if (!latest || String(latest._id) !== String(payment._id)) {
+      throw new AppError('Only the most recent payment for this PI can be deleted', 400);
+    }
+
+    if (payment.paymentStatus !== PAYMENT_STATUS.CANCELLED) {
+      const pi = await ProformaInvoice.findOne({ _id: payment.piId, isDeleted: { $ne: true } });
+      if (pi) {
+        const wasClosed = pi.piStatus === PI_STATUS.PAYMENT_COMPLETED;
+        const reversed = round2(payment.paidAmount);
+
+        pi.paidAmount = round2(Math.max(0, (pi.paidAmount || 0) - reversed));
+        pi.balanceAmount = round2(payment.previousBalance);
+        if (wasClosed) pi.piStatus = PI_STATUS.READY_FOR_ADVANCE_PAYMENT;
+        pi.updatedBy = user?._id;
+        pi.activityTimeline.push({
+          action: 'ADVANCE_PAYMENT_DELETED',
+          description: `${payment.paymentNumber} deleted — ₹${reversed} reversed`,
+          actorId: user?._id,
+        });
+        await pi.save();
+
+        if (wasClosed && pi.poId) {
+          await setPoPiStatus(pi.poId, { piStatus: PO_PI_STATUS.READY_FOR_ADVANCE_PAYMENT });
+        }
+      }
+    }
+
+    payment.isDeleted = true;
+    payment.deletedAt = new Date();
+    payment.deletedBy = user?._id;
+    payment.activityTimeline.push({ action: 'DELETE', description: 'Advance payment deleted', actorId: user?._id });
+    return payment.save();
+  },
+
   async getById(id) {
     const payment = await AdvancePayment.findOne({ _id: id, isDeleted: { $ne: true } })
       .populate('createdBy', 'name')

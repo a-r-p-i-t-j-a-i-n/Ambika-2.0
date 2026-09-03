@@ -27,4 +27,9 @@ export const advancePaymentController = {
     const payment = await advancePaymentService.create(req.body, req.user);
     res.status(201).json(ApiResponse.created('Advance payment recorded', payment));
   }),
+
+  remove: asyncHandler(async (req, res) => {
+    const payment = await advancePaymentService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Advance payment deleted', payment));
+  }),
 };

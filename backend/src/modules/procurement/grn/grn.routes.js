@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { grnController as c } from './grn.controller.js';
 import {
@@ -31,7 +32,8 @@ router.get('/by-po/:poId', validate(poIdParamSchema, 'params'), c.getByPo);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateGrnSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updateGrnSchema), c.update)
+  .delete(requirePermission('procurement.deleteGrn'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/complete', validate(mongoIdParamSchema, 'params'), validate(completeGrnSchema), c.complete);
 router.post('/:id/cancel',   validate(mongoIdParamSchema, 'params'), validate(cancelGrnSchema), c.cancel);

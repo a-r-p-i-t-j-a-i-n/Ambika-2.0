@@ -38,6 +38,11 @@ export const finalPaymentController = {
     res.json(ApiResponse.ok('Final payment cancelled', p));
   }),
 
+  remove: asyncHandler(async (req, res) => {
+    const p = await finalPaymentService.remove(req.params.id, req.user);
+    res.json(ApiResponse.ok('Final payment deleted', p));
+  }),
+
   generatePdf: asyncHandler(async (req, res) => {
     const out = await finalPaymentService.generatePdf(req.params.id);
     res.json(ApiResponse.ok('Payment receipt generated', out));

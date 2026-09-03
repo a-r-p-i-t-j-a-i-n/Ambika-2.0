@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { proformaInvoiceController as c } from './proformaInvoice.controller.js';
 import {
@@ -30,7 +31,8 @@ router.get('/by-po/:poId', validate(poIdParamSchema, 'params'), c.getByPo);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updatePiSchema), c.update);
+  .patch(validate(mongoIdParamSchema, 'params'), validate(updatePiSchema), c.update)
+  .delete(requirePermission('procurement.deleteProformaInvoice'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/approve', validate(mongoIdParamSchema, 'params'), validate(approvePiSchema), c.approve);
 router.post('/:id/reject',  validate(mongoIdParamSchema, 'params'), validate(rejectPiSchema), c.reject);

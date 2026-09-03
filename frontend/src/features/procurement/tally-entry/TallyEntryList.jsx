@@ -89,7 +89,7 @@ const TallyEntryList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Tally Entries (13)</Typography>
+          <Typography sx={pfmsTitleSx}>Tally Entries ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.12 · Purchase Entry in Tally — checklist verified, then payment</Typography>
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditEntry(null); setFormOpen(true); }}>New Tally Entry</Button>

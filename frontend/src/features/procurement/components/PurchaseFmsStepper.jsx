@@ -9,7 +9,7 @@ const COMPLETED = '#16a34a';
 // A step's visual state is purely positional (index vs. activeIndex) — steps
 // before the active one read as "completed", not as a record of actual data
 // completeness, since each step is an independent, reorderable screen.
-const PurchaseFmsStepper = ({ steps, activeIndex, onStepClick }) => {
+const PurchaseFmsStepper = ({ steps, activeIndex, onStepClick, counts }) => {
   const theme = useTheme();
   const activeRef = useRef(null);
 
@@ -89,6 +89,14 @@ const PurchaseFmsStepper = ({ steps, activeIndex, onStepClick }) => {
                   }}
                 >
                   {step.label}
+                  {counts?.[step.slug] != null && (
+                    <Box
+                      component="span"
+                      sx={{ ml: 0.5, fontWeight: 600, opacity: 0.65 }}
+                    >
+                      ({counts[step.slug]})
+                    </Box>
+                  )}
                 </Typography>
               </ButtonBase>
               {!isLast && (
