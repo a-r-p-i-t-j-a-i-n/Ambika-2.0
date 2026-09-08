@@ -53,13 +53,14 @@ const GenerateDispatchPlanPdf = () => {
   const { data: ordersRes, isFetching: loadingOrders } = useGetOrdersQuery({ limit: 500, sort: '-orderDate' });
   const orders = useMemo(() => ordersRes?.data || [], [ordersRes]);
 
-  // Came from a task → auto-select the order it was raised for, once orders load.
+  // ?so=… names the order (set by a task's "Do it now" AND by the Step Board's
+  // Plan PDF button) → auto-select it once orders load, however we got here.
   useEffect(() => {
-    if (!cameFromTask || order || !soFromTask || !orders.length) return;
+    if (order || !soFromTask || !orders.length) return;
     const match = orders.find((o) => o.soNumber === soFromTask);
     if (match) setOrder(match);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameFromTask, soFromTask, orders]);
+  }, [soFromTask, orders]);
 
   // Return to the FMS step that sent us here. ?entryDone=1 auto-ticks its checklist
   // so the doer only reviews & submits — that's what records it in the FMS Tracker.

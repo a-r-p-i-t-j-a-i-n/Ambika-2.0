@@ -32,7 +32,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
             Components={toastComponents}
           >
-            <BrowserRouter>
+            {/* Opt in to the v7 behaviors early — silences the console's
+                "React Router Future Flag" warnings and eases the v7 upgrade. */}
+            <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
               <App />
             </BrowserRouter>
           </SnackbarProvider>

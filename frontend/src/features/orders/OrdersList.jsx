@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Box, Typography, Paper, TextField, InputAdornment, Button, IconButton, Tooltip, Tabs, Tab, Autocomplete, Skeleton, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -113,6 +113,18 @@ const OrdersList = () => {
   };
 
   const { data, isLoading } = useGetOrdersQuery(queryParams);
+
+  // Deep-link support: ?edit=<orderId> (the O2D Step Board's Edit column) opens
+  // the edit drawer for that order once the list loads. Tracked per param value
+  // so a background refetch never re-opens the drawer after the user closes it.
+  const editParam = searchParams.get('edit');
+  const [handledEditParam, setHandledEditParam] = useState(null);
+  useEffect(() => {
+    if (!editParam || editParam === handledEditParam) return;
+    const target = (data?.data || []).find((o) => o._id === editParam);
+    if (target) { setEditOrder(target); setIsCreateOpen(true); setHandledEditParam(editParam); }
+  }, [editParam, handledEditParam, data]);
+
   const { data: statsRes, isLoading: statsLoading } = useGetOrderStatsQuery();
   const { data: partiesData } = useGetPartiesQuery({ limit: 200 });
 

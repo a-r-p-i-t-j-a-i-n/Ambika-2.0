@@ -30,7 +30,8 @@ export const orderApi = baseApi.injectEndpoints({
         method: 'POST',
         body,
       }),
-      invalidatesTags: ['Order'],
+      // Creating an order also spawns its O2D FMS process — refresh both.
+      invalidatesTags: ['Order', 'O2DProcess'],
     }),
     updateOrder: builder.mutation({
       query: ({ id, ...body }) => ({
@@ -38,14 +39,16 @@ export const orderApi = baseApi.injectEndpoints({
         method: 'PUT',
         body,
       }),
-      invalidatesTags: (result, error, { id }) => [{ type: 'Order', id }, 'Order'],
+      // O2DProcess included so the Step Board picks up edits (PO number etc.).
+      invalidatesTags: (result, error, { id }) => [{ type: 'Order', id }, 'Order', 'O2DProcess'],
     }),
     deleteOrder: builder.mutation({
       query: (id) => ({
         url: `/orders/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: ['Order'],
+      // Deleting an order cascades to its O2D FMS process server-side — refresh both.
+      invalidatesTags: ['Order', 'O2DProcess'],
     }),
     updateWorkflowStep: builder.mutation({
       query: ({ id, step, body }) => ({

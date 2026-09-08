@@ -360,16 +360,23 @@ const theme = createTheme({
       },
     },
     MuiTooltip: {
+      // Light card tooltips app-wide (client preference): white surface, blue
+      // text, soft border — never a dark bubble.
       styleOverrides: {
         tooltip: {
-          backgroundColor: BLUE.ink,
-          color: '#ffffff',
-          fontWeight: 500,
+          backgroundColor: BLUE.surface,
+          color: BLUE.body,
+          fontWeight: 600,
           fontSize: '0.72rem',
           borderRadius: 8,
           padding: '6px 10px',
+          border: `1px solid ${BLUE.line}`,
+          boxShadow: '0 8px 26px rgba(11, 37, 69, 0.16)',
         },
-        arrow: { color: BLUE.ink },
+        arrow: {
+          color: BLUE.surface,
+          '&::before': { border: `1px solid ${BLUE.line}` },
+        },
       },
     },
     MuiTab: {
