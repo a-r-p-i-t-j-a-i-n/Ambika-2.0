@@ -19,6 +19,7 @@ import {
 } from '../../store/api/quoteApi';
 import { fmtINR, fmtInt } from '../../utils/formatters';
 import { usePermissions } from '../../hooks/usePermission';
+import { useSmartBack } from '../../hooks/useSmartBack';
 import { PageHero, pageSx, panelSx, btnSx, primaryBtnSx, ghostBtnSx, BRAND, BRAND_DK, NAVY, DANGER, O2D } from '../../components/pageKit';
 
 const STATUS_META = (theme) => ({
@@ -33,6 +34,7 @@ const STATUS_META = (theme) => ({
 const QuoteDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/quotes');
   const theme = useTheme();
   const { data, isFetching } = useGetQuoteQuery(id);
   const [sendQuote] = useSendQuoteMutation();
@@ -154,7 +156,7 @@ const QuoteDetail = () => {
     <Box sx={pageSx}>
       {/* Breadcrumb back-link — its own row so the quote number owns the title line. */}
       <Stack direction="row" spacing={0.75} alignItems="center">
-        <IconButton onClick={() => navigate('/quotes')} size="small"
+        <IconButton onClick={goBack} size="small"
           sx={{ color: O2D.sub, border: `1px solid ${O2D.line}`, borderRadius: '6px', bgcolor: O2D.surface, '&:hover': { color: BRAND, borderColor: alpha(BRAND, 0.4) } }}>
           <ArrowLeft size={16} />
         </IconButton>

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme, Button, Autocomplete,
+  Box, Paper, Stack, Typography, Chip, alpha, useTheme, Button, Autocomplete,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, MenuItem, InputAdornment, Drawer, Divider, IconButton, Tooltip, Link,
 } from '@mui/material';
@@ -31,10 +31,12 @@ const col = (field, headerName, extra = {}) => ({ field, headerName, flex: 1, mi
 // ── Step catalog (ACTIVE fmsKey = CURRENT_SHEET) — every O2D step, in order.
 // `code` ties a tab to its FMS step so each row can show that step's audit + links.
 const STEP_META = {
-  intake:           { code: '1.01', name: 'Order Received' },
-  so:               { code: '2.02', name: 'PO Entry in Tally & Dispatch vs PO' },
+  // Client flow: 1.01 IS the sales-order punch-in ("Order Received"); 2.02 is
+  // the PO-vs-Tally check that follows it — a pure process step, no entity.
+  so:               { code: '1.01', name: 'Order Received (SO Punch-in)' },
+  poTally:          { code: '2.02', name: 'PO Recd Entry in Tally & Dispatch Vs PO' },
   inventory:        { code: '2.03', name: 'Check Inventory' },
-  plan:             { code: '2.04', name: 'Dispatch Scheduler & PDF' },
+  plan:             { code: '2.04', name: 'Create Dispatch Scheduler & Planning' },
   emailSchedule:    { code: '2.05', name: 'Email Dispatch Schedule' },
   dispatch:         { code: '2.06', name: 'Final Qty to be Dispatched (Challan)' },
   invoice:          { code: '2.07', name: 'Create Invoice & Eway Bill' },
@@ -48,7 +50,7 @@ const STEP_META = {
 
 // Tabs that have NO dedicated entity collection — their data & audit live purely
 // on the FMS process step (email / inventory / delivery-tracking steps).
-const PROC_TABS = ['inventory', 'emailSchedule', 'emailInvoice', 'trackDelivery'];
+const PROC_TABS = ['poTally', 'inventory', 'emailSchedule', 'emailInvoice', 'trackDelivery'];
 
 // The date each step is filtered on (its "when it happened" field).
 const dateOf = (tab, r) => {
@@ -149,6 +151,7 @@ const COLUMNS = {
     col('totalBalanceQty', 'Balance', { minWidth: 100, type: 'number', valueGetter: (v, r) => Number(r.totalBalanceQty || 0) }),
     col('status', 'Status', { minWidth: 120 }),
   ],
+  poTally: procCols,
   inventory: procCols,
   plan: [
     col('soNumber', 'SO Number', { minWidth: 150 }),
@@ -222,10 +225,10 @@ const COLUMNS = {
 };
 
 const TABS = [
-  { key: 'intake', label: 'Order Received · 1.01' },
-  { key: 'so', label: 'Sales Orders · 2.02' },
+  { key: 'so', label: 'Order Received · 1.01' },
+  { key: 'poTally', label: 'PO Entry in Tally · 2.02' },
   { key: 'inventory', label: 'Check Inventory · 2.03' },
-  { key: 'plan', label: 'Dispatch Plans · 2.04' },
+  { key: 'plan', label: 'Dispatch Scheduler & Planning · 2.04' },
   { key: 'emailSchedule', label: 'Email Schedule · 2.05' },
   { key: 'dispatch', label: 'Actual Dispatch · 2.06' },
   { key: 'invoice', label: 'Invoices · 2.07' },
@@ -559,7 +562,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
  */
 const O2dMasterData = () => {
   const theme = useTheme();
-  const [tab, setTab] = useState('intake');
+  const [tab, setTab] = useState('so'); // 1.01 Order Received — first step first
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -772,10 +775,44 @@ const O2dMasterData = () => {
         </Paper>
 
         <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-          <Tabs value={tab} onChange={(_, v) => switchTab(v)} variant="scrollable" scrollButtons="auto"
-            sx={{ borderBottom: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt, minHeight: 36, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none', fontSize: '0.72rem', minHeight: 36, py: 0.25, minWidth: 'auto', px: 1.5 } }}>
-            {TABS.map((t) => <Tab key={t.key} value={t.key} label={t.label} />)}
-          </Tabs>
+          {/* Step rail — the same card language as the O2D Step Board, so the
+              steps read as STEPS, not thin text tabs: bold code, name beneath,
+              blue card when active, light-blue lift on hover. */}
+          <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', px: 1.25, py: 1, borderBottom: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+            {TABS.map((t) => {
+              const meta = STEP_META[t.key] || {};
+              const active = tab === t.key;
+              return (
+                <Tooltip key={t.key} arrow title={`${meta.code || ''} · ${meta.name || t.label}`}>
+                  <Paper
+                    elevation={0} role="tab" tabIndex={0} aria-selected={active}
+                    onClick={() => switchTab(t.key)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchTab(t.key); } }}
+                    sx={{
+                      px: 1.5, py: 0.75, minWidth: 132, flexShrink: 0, cursor: 'pointer', borderRadius: '8px',
+                      border: `1.5px solid ${active ? O2D.brand : O2D.line}`,
+                      bgcolor: active ? alpha(O2D.brand, 0.06) : O2D.surface,
+                      transition: 'border-color .15s, background-color .15s, box-shadow .15s',
+                      '&:hover': {
+                        borderColor: O2D.brand,
+                        bgcolor: alpha(O2D.brand, 0.05),
+                        boxShadow: `0 2px 10px ${alpha(O2D.brand, 0.14)}`,
+                        '& .mdStepCode, & .mdStepName': { color: O2D.brand },
+                      },
+                      '&:focus-visible': { outline: `2px solid ${O2D.brand}`, outlineOffset: 1 },
+                    }}
+                  >
+                    <Typography className="mdStepCode" sx={{ fontSize: '0.8rem', fontWeight: 800, lineHeight: 1.2, color: active ? O2D.brand : O2D.ink, transition: 'color .15s' }}>
+                      {meta.code || ''}
+                    </Typography>
+                    <Typography noWrap className="mdStepName" sx={{ fontSize: '0.68rem', fontWeight: active ? 700 : 500, color: active ? O2D.brand : O2D.sub, maxWidth: 150, transition: 'color .15s' }}>
+                      {meta.name || t.label}
+                    </Typography>
+                  </Paper>
+                </Tooltip>
+              );
+            })}
+          </Box>
 
           {/* Compact toolbar: search · status · count · view */}
           <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', borderBottom: `1px solid ${O2D.line}` }}>

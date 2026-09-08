@@ -1,5 +1,6 @@
 import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSmartBack } from '../../hooks/useSmartBack';
 import {
   Box, Paper, Stack, Typography, alpha, Avatar, Grid, Skeleton, Chip, Button,
   Table, TableBody, TableCell, TableHead, TableRow,
@@ -47,6 +48,7 @@ const Panel = ({ title, children, height = 280 }) => (
 const DoerProfile = () => {
   const { userId } = useParams();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/o2d-fms/scores');
   const { data, isLoading } = useGetDoerProfileQuery(userId, { pollingInterval: 60_000 });
   const p = data?.data;
 
@@ -68,7 +70,7 @@ const DoerProfile = () => {
 
   return (
     <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
-      <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/o2d-fms/scores')} sx={{ mb: 1.5, fontWeight: 700 }}>
+      <Button startIcon={<ArrowLeft size={16} />} onClick={goBack} sx={{ mb: 1.5, fontWeight: 700 }}>
         Back to MIS Scoring
       </Button>
 

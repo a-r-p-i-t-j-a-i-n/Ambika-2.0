@@ -185,14 +185,20 @@ const navSectionsSimple = [
         text: 'FMS',
         icon: <Workflow size={19} />,
         children: [
-          { text: 'O2D',      icon: <Truck size={19} />,        path: '/o2d-fms/steps' },
+          {
+            text: 'O2D',
+            icon: <Truck size={19} />,
+            children: [
+              { text: 'O2D FMS',         icon: <Workflow size={19} />, path: '/o2d-fms/steps' },
+              { text: 'O2D Master Data', icon: <FileText size={19} />, path: '/o2d-fms/master-data' },
+            ],
+          },
           {
             text: 'Purchase',
             icon: <ShoppingCart size={19} />,
             children: [
               { text: 'Purchase FMS',   icon: <Workflow size={19} />, path: '/purchase-fms' },
               { text: 'Master Data',    icon: <FileText size={19} />, path: '/procurement/master-data' },
-              { text: 'Vendor Details', icon: <Users size={19} />,    path: '/procurement/vendors' },
             ],
           },
         ],
@@ -201,8 +207,10 @@ const navSectionsSimple = [
         text: 'Master',
         icon: <FolderOpen size={19} />,
         children: [
-          { text: 'SKU Master', icon: <Package size={19} />, path: '/skus' },
-          { text: 'Parties',    icon: <Users size={19} />,   path: '/parties' },
+          { text: 'SKU Master',         icon: <Package size={19} />, path: '/skus' },
+          { text: 'Parties',            icon: <Users size={19} />,   path: '/parties' },
+          { text: 'Vendor Details',     icon: <UserCog size={19} />, path: '/procurement/vendors' },
+          { text: 'Transporter Master', icon: <Truck size={19} />,   path: '/o2d-fms/transporters' },
         ],
       },
       { text: 'Employees', icon: <UserCog size={19} />, path: '/employees' },
