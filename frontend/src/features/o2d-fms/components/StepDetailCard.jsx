@@ -347,18 +347,34 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
       return p;
     }, { replace: true });
 
-    if (['DONE', 'DELAYED'].includes(ls.status) || !(ls.checklist || []).length) return;
+    if (['DONE', 'DELAYED'].includes(ls.status)) return;
     if (!canAct) return;
     setJustSubmitted(true);
-    // Auto-tick every still-open item — the return-from-form IS the evidence the work
-    // was done — so Mark Done becomes enabled and the doer only has to click it.
-    const pending = (ls.checklist || []).filter((c) => !c.done);
-    if (!pending.length) return;
     (async () => {
-      for (const item of pending) {
+      // 1) Auto-tick every still-open item — the return-from-form IS the
+      //    evidence the work was done.
+      for (const item of (ls.checklist || []).filter((c) => !c.done)) {
         try { await toggleItem({ id: processId, stepCode: ls.stepCode, itemId: item._id, done: true }).unwrap(); }
         catch { /* ignore individual failures */ }
       }
+      // 2) …then complete the step automatically when this was its ONLY (or
+      //    last) connected action — the doer already did the real work in the
+      //    form; making them come back to press Mark Done was pure ritual.
+      //    NO `force`: the server still enforces every genuine gate
+      //    (verifications, data fields, proof files, approval, and the
+      //    quantity/consignment gating for split orders) — a step that truly
+      //    needs more work simply stays open with the review banner.
+      const keys = stepActionKeys(ls);
+      const recorded = new Set((ls.actionProgress || []).map((a) => a.key));
+      const returning = searchParams.get('doneAction');
+      if (returning) recorded.add(returning);
+      const allActionsDone = keys.length <= 1 || keys.every((k) => recorded.has(k));
+      if (!allActionsDone) return;
+      const { recordLinks } = deriveLinks(procRes?.data, ls);
+      try {
+        await completeStep({ id: processId, stepCode: ls.stepCode, link: recordLinks[0]?.to || undefined }).unwrap();
+        onClose?.(true);
+      } catch { /* real requirements still open — the manual flow stands */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoComplete, processId, step?.stepCode, procRes?.data]);

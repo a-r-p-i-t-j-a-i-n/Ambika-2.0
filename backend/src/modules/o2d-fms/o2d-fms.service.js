@@ -155,6 +155,10 @@ const enrichSteps = (process, defMap) => {
       name:        def?.name || s.stepCode,
       description: def?.description || '',
       tool:        def?.tool || null,
+      // The sheet's "Who" / "When" header values — the Step Board shows them
+      // per step so the flow reads like the client's own sheet.
+      ownerName:   def?.ownerName || null,
+      whenText:    def?.whenText || null,
       slaMinutes:  def?.slaMinutes ?? null,
       phase:       def?.phase || null,
       sequence:    def?.sequence ?? 0,
@@ -741,11 +745,109 @@ export const o2dFmsService = {
   },
 
   async listProcesses(query) {
-    const features = new ApiFeatures(O2DProcess.find({ isDeleted: { $ne: true } }), query)
+    const features = new ApiFeatures(
+      O2DProcess.find({ isDeleted: { $ne: true } })
+        // Names only — the Step Board's "Who" / "done by" columns need them
+        // without a per-process round-trip.
+        .populate('steps.assignees', 'name')
+        .populate('steps.completedBy', 'name'),
+      query,
+    )
       .filter().search(['soNumber', 'poNumber', 'partyName', 'uniqueO2DId']).sort().paginate();
     const { docs, pagination } = await features.exec();
     const defMap = await loadDefMap();
     return { docs: docs.map((d) => enrichSteps(d, defMap)), pagination };
+  },
+
+  // One row per Delivery Challan across ALL orders — the Step Board's dispatch
+  // step reads like the client's sheet: each split dispatch is its own row with
+  // SKUs, qty, invoice figures, transporter and L.R. straight from the documents.
+  async listBoardConsignments() {
+    const challans = await DeliveryChallan.find({ isDeleted: { $ne: true } })
+      .select('dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate')
+      .populate('createdBy', 'name')
+      .sort({ dcDate: 1, createdAt: 1 })
+      .limit(2000)
+      .lean();
+    const dcIds = challans.map((ch) => ch._id);
+    const soNumbers = [...new Set(challans.map((ch) => ch.soNumber).filter(Boolean))];
+    const [invoices, payments, transportBills, procs] = await Promise.all([
+      Invoice.find({ dcId: { $in: dcIds } })
+        .select('dcId invoiceNo invoiceDate invoiceAmount amountReceived balance emailToClient invoiceUrls ewayBillUrls pdirUrls invoiceUrl ewayBillUrl')
+        .lean(),
+      Payment.find({ dcId: { $in: dcIds }, type: 'CLIENT_PAYMENT' })
+        .select('dcId confirmation followUp')
+        .lean(),
+      TransportBill.find({ dcId: { $in: dcIds } })
+        .select('dcId receipt payment')
+        .lean(),
+      // Per-challan who/when audit of steps 2.06–2.13 (the consignment log).
+      O2DProcess.find({ soNumber: { $in: soNumbers }, isDeleted: { $ne: true } })
+        .select('soNumber consignmentLog')
+        .lean(),
+    ]);
+    const invByDc = new Map(invoices.filter((iv) => iv.dcId).map((iv) => [String(iv.dcId), iv]));
+    const payByDc = new Map(payments.filter((pm) => pm.dcId).map((pm) => [String(pm.dcId), pm]));
+    const tbByDc = new Map(transportBills.filter((t) => t.dcId).map((t) => [String(t.dcId), t]));
+    const logByDc = new Map();
+    procs.forEach((pr) => (pr.consignmentLog || []).forEach((l) => {
+      const key = String(l.dcId);
+      const m = logByDc.get(key) || {};
+      m[l.stepCode] = { doneByName: l.doneByName || null, doneAt: l.doneAt || null, status: l.status || 'DONE' };
+      logByDc.set(key, m);
+    }));
+    return challans.map((ch) => {
+      const inv = invByDc.get(String(ch._id)) || null;
+      const pay = payByDc.get(String(ch._id)) || null;
+      const tb = tbByDc.get(String(ch._id)) || null;
+      const delivered = ch.deliveryStatus === 'Delivered' || ch.status === 'DELIVERED';
+      return {
+        dcId: ch._id,
+        dcNumber: ch.dcNumber,
+        soNumber: ch.soNumber || null,
+        poNumber: ch.poNumber || null,
+        partyName: ch.partyName || null,
+        dcDate: ch.dcDate || ch.createdAt || null,
+        createdByName: ch.createdBy?.name || null,
+        skuNames: (ch.items || []).map((i) => i.skuName).filter(Boolean),
+        skuQtys: (ch.items || []).map((i) => Number(i.quantityPcs || 0)),
+        totalQty: Number(ch.totalQuantityPcs || 0),
+        phaseNo: ch.isUnplanned
+          ? 'Unplanned'
+          : ([...new Set((ch.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || ch.phaseRef?.phaseNo || null),
+        transportType: ch.dispatchedThrough || null,
+        transporterName: ch.transporterName || null,
+        lrNo: ch.lrNo || null,
+        remark: ch.remark || null,
+        pdfUrl: ch.pdfUrl || null,
+        // Per-challan step audit (2.06–2.13): stepCode → { doneByName, doneAt, status }.
+        log: logByDc.get(String(ch._id)) || {},
+        delivery: { delivered, status: ch.deliveryStatus || (delivered ? 'Delivered' : 'Pending'), date: ch.deliveryDate || null },
+        invoice: inv ? {
+          invoiceNo: inv.invoiceNo || null,
+          date: inv.invoiceDate || null,
+          amount: Number(inv.invoiceAmount || 0),
+          received: Number(inv.amountReceived || 0),
+          balance: Number(inv.balance || 0),
+          emailStatus: inv.emailToClient?.emailStatus || null,
+          emailSentAt: inv.emailToClient?.actual || null,
+          // Step 2.07's attached documents (S3 links) — legacy singles folded in.
+          invoiceUrls:  inv.invoiceUrls?.length ? inv.invoiceUrls : (inv.invoiceUrl ? [inv.invoiceUrl] : []),
+          ewayBillUrls: inv.ewayBillUrls?.length ? inv.ewayBillUrls : (inv.ewayBillUrl ? [inv.ewayBillUrl] : []),
+          pdirUrls:     inv.pdirUrls || [],
+        } : null,
+        payment: pay ? {
+          confirmed: pay.confirmation?.status === 'DONE',
+          outcome: pay.confirmation?.outcome || 'PENDING',
+          received: Number(pay.confirmation?.receivedAmount || 0),
+          receivedDate: pay.confirmation?.receivedDate || null,
+          // Step 2.10 — follow-up outcome straight from the payment record.
+          followUpStatus: pay.followUp?.status || null,
+          followUpDate: pay.followUp?.actual || null,
+        } : null,
+        transport: tb ? { receiptStatus: tb.receipt?.status || null, paymentStatus: tb.payment?.status || null } : null,
+      };
+    });
   },
 
   async getProcessById(id) {

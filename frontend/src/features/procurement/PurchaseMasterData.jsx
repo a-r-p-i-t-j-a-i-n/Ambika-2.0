@@ -433,7 +433,7 @@ const PurchaseMasterData = () => {
             />
             <TextField
               select size="small" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-              sx={{ width: 160, '& .MuiInputBase-root': { height: 34 } }} displayEmpty
+              sx={{ width: 160, '& .MuiInputBase-root': { height: 34 } }}
               SelectProps={{ displayEmpty: true, renderValue: (v) => (v || 'All statuses') }}
             >
               <MenuItem value="">All statuses</MenuItem>

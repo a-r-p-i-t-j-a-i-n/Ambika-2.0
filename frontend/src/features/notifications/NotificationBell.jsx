@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   IconButton, Badge, Popover, Box, Stack, Typography, Button, Divider, alpha,
 } from '@mui/material';
@@ -28,6 +28,17 @@ const NotificationBell = () => {
   const count = countRes?.data?.count || 0;
   const items = listRes?.data || [];
 
+  // The layout renders TWO bells (sidebar + the mobile top bar, which is
+  // display:none on desktop). If the viewport crosses the breakpoint — or the
+  // drawer rebuilds — while the popover is open, the saved anchor element can
+  // become hidden or detached, and MUI then positions the popover against a
+  // zero-sized rect ("invalid anchorEl" / "popover too tall" warnings). Close
+  // it the moment its anchor stops being part of the visible layout.
+  const anchorVisible = !!anchor && anchor.isConnected && anchor.offsetParent !== null;
+  useEffect(() => {
+    if (anchor && !anchorVisible) setAnchor(null);
+  }, [anchor, anchorVisible]);
+
   const open = (n) => {
     if (!n.read) markRead(n._id);
     if (n.link) navigate(n.link);
@@ -40,10 +51,12 @@ const NotificationBell = () => {
         <Badge badgeContent={count} color="error" max={99}><Bell size={20} /></Badge>
       </IconButton>
       <Popover
-        open={!!anchor} anchorEl={anchor} onClose={() => setAnchor(null)}
+        open={anchorVisible} anchorEl={anchor} onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-        slotProps={{ paper: { sx: { width: 360, maxHeight: 460, borderRadius: 2 } } }}
+        // Height also capped to the viewport so a short laptop screen never
+        // clips the list (MUI's "popover is too tall" warning).
+        slotProps={{ paper: { sx: { width: 360, maxHeight: 'min(460px, calc(100vh - 96px))', borderRadius: 2 } } }}
       >
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 2, py: 1.5 }}>
           <Typography sx={{ fontWeight: 700 }}>Notifications</Typography>

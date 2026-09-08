@@ -202,6 +202,20 @@ export const orderService = {
       }
     }
 
+    // The O2D process denormalises poNumber/partyName at creation — keep its
+    // copy in step so the Step Board reflects an edit immediately. Non-fatal.
+    if (data.poNumber !== undefined || data.partyName !== undefined) {
+      try {
+        const { O2DProcess } = await import('../o2d-fms/o2d-fms.model.js');
+        await O2DProcess.updateOne(
+          { salesOrderId: order._id },
+          { $set: { poNumber: order.poNumber || null, partyName: order.partyName || undefined } },
+        );
+      } catch (err) {
+        logger.error(`[order.update] failed to sync O2D process copy for ${order.soNumber}: ${err.message}`);
+      }
+    }
+
     return order.toObject();
   },
 

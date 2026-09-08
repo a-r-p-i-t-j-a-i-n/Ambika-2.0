@@ -43,6 +43,12 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       query: (params) => ({ url: '/o2d-fms/processes', params }),
       providesTags: ['O2DProcess'],
     }),
+    // Step Board: one row per Delivery Challan across all orders — each split
+    // dispatch with its SKUs, qty, invoice figures, transporter and L.R.
+    getBoardConsignments: builder.query({
+      query: () => '/o2d-fms/board/consignments',
+      providesTags: ['O2DProcess', 'Challan'],
+    }),
     getProcessById: builder.query({
       query: (id) => `/o2d-fms/processes/${id}`,
       providesTags: (r, e, id) => [{ type: 'O2DProcess', id }],
@@ -251,6 +257,7 @@ export const {
   useGetMisScoresQuery,
   useGetDoerProfileQuery,
   useGetProcessesQuery,
+  useGetBoardConsignmentsQuery,
   useGetProcessByIdQuery,
   useGetConsignmentsQuery,
   useGetProcessByOrderQuery,

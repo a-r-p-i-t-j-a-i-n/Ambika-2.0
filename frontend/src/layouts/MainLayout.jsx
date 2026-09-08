@@ -185,7 +185,7 @@ const navSectionsSimple = [
         text: 'FMS',
         icon: <Workflow size={19} />,
         children: [
-          { text: 'O2D',      icon: <Truck size={19} />,        path: '/o2d-fms/processes' },
+          { text: 'O2D',      icon: <Truck size={19} />,        path: '/o2d-fms/steps' },
           {
             text: 'Purchase',
             icon: <ShoppingCart size={19} />,
@@ -275,6 +275,9 @@ const PAGE_TITLES = {
   '/pricing/documents':      'Pricing Documents',
   '/pricing/analytics':      'Pricing Analytics',
   '/quotes':                 'Quotes',
+  // Listed before the bare '/o2d-fms' key — the title lookup is a first-match
+  // startsWith scan, so the more specific path must come first.
+  '/o2d-fms/steps':          'O2D — Step Board',
   '/o2d-fms':                'O2D FMS — My Tasks',
   '/o2d-fms/master':         'O2D FMS — Master View',
   '/o2d-fms/master-data':    'O2D Master Data',

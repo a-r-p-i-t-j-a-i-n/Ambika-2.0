@@ -80,6 +80,10 @@ router.get('/mis-scores/:userId',
 router.get('/processes',
   requirePermission('o2dfms.view'), validate(listQuerySchema, 'query'), c.listProcesses);
 
+// Step Board: per-Delivery-Challan rows across all orders (split dispatches).
+router.get('/board/consignments',
+  requirePermission('o2dfms.view'), c.listBoardConsignments);
+
 router.get('/processes/by-order/:orderId',
   requirePermission('o2dfms.view'), c.getProcessByOrder);
 

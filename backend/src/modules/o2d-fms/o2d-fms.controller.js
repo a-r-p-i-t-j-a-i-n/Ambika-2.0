@@ -17,6 +17,12 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok('O2D process retrieved', process));
   }),
 
+  // Step Board: every Delivery Challan across all orders, with invoice figures.
+  listBoardConsignments: asyncHandler(async (req, res) => {
+    const rows = await o2dFmsService.listBoardConsignments();
+    res.json(ApiResponse.ok('Board consignments retrieved', rows));
+  }),
+
   getProcessByOrder: asyncHandler(async (req, res) => {
     const process = await o2dFmsService.getProcessByOrder(req.params.orderId);
     res.json(ApiResponse.ok('O2D process retrieved', process));
