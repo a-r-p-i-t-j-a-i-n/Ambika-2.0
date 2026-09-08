@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSmartBack } from '../../hooks/useSmartBack';
 import { useDispatch } from '../../hooks/DispatchContext';
 import { Box, Typography, Card, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Chip, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Stack, IconButton } from '@mui/material';
 import { ArrowLeft, Send } from 'lucide-react';
@@ -9,6 +10,7 @@ import dayjs from 'dayjs';
 export default function OrderDetailTimeline() {
   const { orderId } = useParams();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/dispatch-execution');
   const { state, getTimelineForOrder, submitExecution } = useDispatch();
   const { enqueueSnackbar } = useSnackbar();
   const timeline = getTimelineForOrder(orderId);
@@ -39,7 +41,7 @@ export default function OrderDetailTimeline() {
 
   return (
     <Box>
-      <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/dispatch-execution')} sx={{ mb: 2 }}>Back to Orders</Button>
+      <Button startIcon={<ArrowLeft size={16} />} onClick={goBack} sx={{ mb: 2 }}>Back to Orders</Button>
       <Typography variant="h4" fontWeight={800}>{order.id} - {order.customer}</Typography>
       <Typography variant="body2" color="text.secondary" mb={3}>Commitment: {order.totalQty.toLocaleString()} units</Typography>
 

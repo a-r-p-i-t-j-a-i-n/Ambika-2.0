@@ -17,6 +17,7 @@ import DispatchEntry from '../execution/DispatchEntry';
 import OrderEntryDrawer from './OrderEntryDrawer';
 import CancelOrderDialog from './components/CancelOrderDialog';
 import { resolveFileUrl } from '../../utils/fileUrl';
+import { useSmartBack } from '../../hooks/useSmartBack';
 
 // Neutrals follow the client's WARM palette (o2dTheme); status hues stay saturated.
 const C = {
@@ -129,6 +130,7 @@ const WORKFLOW_STEPS = [
 const OrderDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/orders');
   const [searchParams, setSearchParams] = useSearchParams();
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [amendOpen, setAmendOpen] = useState(false);      // revise qty / add-remove items
@@ -249,7 +251,9 @@ const OrderDetails = () => {
             shrink; the party name absorbs the slack and ellipsises instead — so a
             14" screen keeps the identity and every action on a single tidy row. */}
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.25, flexWrap: 'nowrap' }}>
-          <IconButton size="small" onClick={() => navigate('/orders')}
+          {/* Back = where the user actually came from (Step Board, task page…);
+              /orders only as the deep-link fallback. */}
+          <IconButton size="small" onClick={goBack}
             sx={{ color: C.body, border: `1px solid ${C.line}`, borderRadius: '6px', flexShrink: 0 }}>
             <ArrowLeft size={15} />
           </IconButton>

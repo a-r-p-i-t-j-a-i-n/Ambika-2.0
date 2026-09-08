@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import dayjs from 'dayjs';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSmartBack } from '../../hooks/useSmartBack';
 import { StatusChip, num, inr, TXN_LABEL, ROWS_PER_PAGE } from './fgImsMeta';
 import { useGetFgForecastQuery, useGetFgMovementsQuery, useGetFgHistoryQuery } from '../../store/api/fgImsApi';
 import FgPolicyDrawer from './FgPolicyDrawer';
@@ -319,6 +320,7 @@ const MovementHistory = ({ skuId }) => {
 const FgImsItemDetail = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/fg-ims/stock');
   const { skuId } = useParams();
   const [editSku, setEditSku] = useState(null);
   const [tab, setTab] = useState('history');
@@ -332,7 +334,7 @@ const FgImsItemDetail = () => {
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <Box sx={{ color: '#fff', px: { xs: 2, md: 4 }, pt: 3, pb: 5,
         background: 'linear-gradient(135deg, #064e3b 0%, #047857 55%, #059669 100%)' }}>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/fg-ims/stock')}
+        <Button startIcon={<ArrowLeft size={16} />} onClick={goBack}
           sx={{ color: 'rgba(255,255,255,0.9)', mb: 1.5 }}>Back to Stock</Button>
         {fcLoading && !sku ? <Skeleton variant="text" width={280} sx={{ bgcolor: 'rgba(255,255,255,0.2)' }} /> : (
           <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" useFlexGap>

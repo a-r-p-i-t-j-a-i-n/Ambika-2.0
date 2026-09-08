@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
   Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
 } from '@mui/material';
@@ -45,6 +46,7 @@ const SectionCard = ({ icon, title, action, children }) => (
 const VendorInvoiceDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/purchase-fms/vendor-invoices');
   const { data, isLoading } = useGetVendorInvoiceByIdQuery(id);
   const inv = data?.data;
   const wfSteps = resolveWorkflowSteps({ invoice: inv });
@@ -74,7 +76,7 @@ const VendorInvoiceDetail = () => {
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={() => navigate('/purchase-fms/vendor-invoices')} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}><ArrowLeft size={20} /></IconButton>
+        <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}><ArrowLeft size={20} /></IconButton>
         <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><ReceiptText size={24} /></Box>
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSmartBack } from '../../hooks/useSmartBack';
 import {
   Box, Typography, Paper, Chip, Stack, Button, IconButton, Skeleton,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, alpha,
@@ -65,6 +66,7 @@ const Field = ({ icon: Icon, label, value, onClick }) => (
 const ChallanDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/challans');
   const { data: res, isLoading } = useGetChallanByIdQuery(id);
   const [generatePdf, { isLoading: generating }] = useGenerateChallanPdfMutation();
   const [updateChallan, { isLoading: saving }] = useUpdateChallanMutation();
@@ -149,7 +151,7 @@ const ChallanDetail = () => {
         px: { xs: 1.5, md: 2.5 }, py: 1.5, position: 'sticky', top: 0, zIndex: 5,
       }}>
         <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap>
-          <IconButton size="small" onClick={() => navigate('/challans')}
+          <IconButton size="small" onClick={goBack}
             sx={{ color: C.body, border: `1px solid ${C.line}`, borderRadius: '7px' }}>
             <ArrowLeft size={16} />
           </IconButton>

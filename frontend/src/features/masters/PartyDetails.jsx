@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSmartBack } from '../../hooks/useSmartBack';
 import {
   Box, Typography, Paper, Grid, Divider, Button,
   Chip, Avatar, List, ListItem, ListItemText, ListItemIcon,
@@ -20,6 +21,7 @@ import { pageSx, panelSx, primaryBtnSx, BRAND, BRAND_DK, NAVY, O2D } from '../..
 const PartyDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/parties');
   const [editOpen, setEditOpen] = useState(false);
   const [skusOpen, setSkusOpen] = useState(false);
 
@@ -87,7 +89,7 @@ const PartyDetails = () => {
     <Box sx={pageSx}>
       {/* Top Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-        <IconButton onClick={() => navigate('/parties')} size="small"
+        <IconButton onClick={goBack} size="small"
           sx={{ width: 34, height: 34, borderRadius: '8px', flexShrink: 0, color: O2D.sub, bgcolor: O2D.surface, border: `1px solid ${O2D.line}`, '&:hover': { color: BRAND, borderColor: alpha(BRAND, 0.4) } }}>
           <ArrowLeft size={17} />
         </IconButton>

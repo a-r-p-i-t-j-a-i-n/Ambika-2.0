@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
   Box, Paper, Stack, Typography, alpha, useTheme, Button, IconButton, Chip,
   Table, TableBody, TableCell, TableHead, TableRow, Skeleton, Grid, Dialog, DialogTitle,
@@ -60,6 +61,7 @@ const emptyProduct = { productName: '', skuCode: '', unit: 'Pcs', rate: '', gstR
 const VendorDetail = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const goBack = useSmartBack('/procurement/vendors');
   const { id } = useParams();
   const { enqueueSnackbar } = useSnackbar();
 
@@ -126,7 +128,7 @@ const VendorDetail = () => {
 
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
-      <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/procurement/vendors')} sx={{ mb: 1.5, fontWeight: 700 }}>
+      <Button startIcon={<ArrowLeft size={16} />} onClick={goBack} sx={{ mb: 1.5, fontWeight: 700 }}>
         Back to vendors
       </Button>
 
