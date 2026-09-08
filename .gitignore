@@ -20,3 +20,9 @@ FRONTEND_API_USAGE.md
 FRONTEND_COMPONENT_STRUCTURE.md
 FRONTEND_ISSUES_AND_GAPS.md
 FMS_FRONTEND_MODULE_PLAN.md
+# SSH deploy keys — never commit
+*.pem
+*.key
+
+# Holds real production credentials — scp it to the server, never commit it
+deploy/server.env.template

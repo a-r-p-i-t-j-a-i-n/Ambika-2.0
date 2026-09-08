@@ -1,0 +1,103 @@
+name: CI
+
+# Runs on every PR and every push to main. Deliberately fast and advisory
+# where it has to be: this repo has no test suite, so CI's job is to catch
+# the things that actually break deploys today —
+#   • a frontend that no longer builds (the deploy builds it on the runner,
+#     so a broken build fails CD *after* it has already rsynced backend code);
+#   • a backend module that won't even parse or import;
+#   • a committed secret.
+#
+# Add real tests and this file is where they go.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend — lint & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'          # package.json engines: >=18.18 <21
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      # Advisory: the existing code has never been linted at --max-warnings=0,
+      # so a hard failure here would just block every PR on day one. Flip
+      # continue-on-error off once the backlog is clean.
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Build
+        working-directory: frontend
+        run: |
+          echo "VITE_API_URL=/api/v1" > .env.production
+          npm run build:prod
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
+
+  backend:
+    name: Backend — install & import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'          # package.json engines: 22.x
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install
+        working-directory: backend
+        run: npm ci --no-audit --no-fund
+
+      # app.js imports all 39 route modules, which in turn pull in every
+      # controller, service, model and validation schema. Importing it proves
+      # the whole graph parses and resolves — this is what catches a typo'd
+      # import path or a bad named export before it reaches the server.
+      #
+      # app.js is imported, NOT server.js: server.js connects to Mongo and
+      # binds a port on import, which CI has no business doing.
+      - name: Import the app graph
+        working-directory: backend
+        run: node --input-type=module -e "await import('./src/app.js'); console.log('app.js and all route modules imported cleanly');"
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A .pem and a live .env were both one `git add -A` away from being
+      # committed in this repo. This is the backstop for that.
+      - name: Fail on committed keys or env files
+        run: |
+          if git ls-files | grep -E '\.(pem|key|p12|pfx)$|(^|/)\.env($|\.)' ; then
+            echo "::error::A private key or .env file is tracked in git. Remove it and rotate the credentials."
+            exit 1
+          fi
+          echo "No key or env files tracked."

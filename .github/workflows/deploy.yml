@@ -1,31 +1,42 @@
 name: Deploy to EC2
 
-# CI/CD for Ambika Global (AGL) — deploys to the shared EC2 host.
-#   • Backend  → pm2 process "ambika-backend"  on :3006
-#   • Frontend → pm2 serve (static dist)        on :3008
+# CI/CD for Ambika Global (AGL) — deploys to the SHARED EC2 host 3.105.199.228.
 #
-# The frontend is built on the GitHub runner (offloads the work from the
-# small 2-core box) and the artifacts are rsynced over SSH. Backend source
-# is rsynced too, then `npm install` + `pm2 reload` run remotely.
+#   Backend  → pm2 process "ambika-backend" on 127.0.0.1:3006 (also reachable directly)
+#   Frontend → static dist served by nginx on :3005
+#   Access   → http://3.105.199.228:3005
 #
-# Runtime data on the box is preserved by rsync excludes: backend/.env,
-# backend/node_modules and backend/uploads are never touched by --delete.
+# ⚠️  THE BOX IS SHARED with 8 other tenants (jjerp, ld_erp, nashermiles, nia,
+#     rajputana, sparsh, surgenesis, theknowcart). Every step below is scoped
+#     to /home/ubuntu/ambika_2.0 and to our own pm2 process and nginx site.
+#     The single cross-tenant action is `systemctl reload nginx`, which is why
+#     `nginx -t` must pass FIRST — a reload with a bad config would take every
+#     other tenant down with us.
+#
+# The frontend is built on the GitHub runner (the box has ~1.6 GB RAM free
+# across 9 apps; a vite build there would risk OOM-ing a neighbour).
+#
+# Runtime data is preserved by rsync excludes: backend/.env, node_modules and
+# uploads are never touched by --delete.
 #
 # Required repo secrets:
-#   EC2_HOST      → public IP / DNS of the instance
-#   EC2_USER      → ssh user (ubuntu)
-#   EC2_SSH_KEY   → contents of the .pem private key
-#   VITE_API_URL  → baked into the frontend build (http://<host>:3006/api/v1)
+#   EC2_HOST     → 3.105.199.228
+#   EC2_USER     → ubuntu
+#   EC2_SSH_KEY  → contents of ERP-Projects-New.pem
+#   (VITE_API_URL is NOT a secret here — the frontend talks to nginx
+#    same-origin at /api/v1, so it is hardcoded below.)
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Never let two deploys race onto the box.
 concurrency:
   group: deploy-ec2
   cancel-in-progress: false
+
+env:
+  APP_DIR: /home/ubuntu/ambika_2.0
 
 jobs:
   deploy:
@@ -37,12 +48,17 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Build frontend
         working-directory: frontend
         run: |
-          echo "VITE_API_URL=${{ secrets.VITE_API_URL }}" > .env.production
+          # Same-origin: the browser calls /api/v1/... and nginx proxies it to
+          # 127.0.0.1:3006. No CORS, no mixed content, no baked-in IP to change
+          # when the box moves.
+          echo "VITE_API_URL=/api/v1" > .env.production
           npm ci
           npm run build:prod
 
@@ -53,39 +69,89 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
+      - name: Ensure target directories exist
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "mkdir -p ${{ env.APP_DIR }}/backend ${{ env.APP_DIR }}/frontend/dist ${{ env.APP_DIR }}/deploy"
+
       - name: Deploy backend source (preserve .env / node_modules / uploads)
         run: |
+          # The leading slashes on /.env and /uploads MATTER. An unanchored
+          # 'uploads' matches at ANY depth, which silently drops
+          # src/common/uploads/ — the upload routes app.js imports — and the
+          # backend then dies at boot with ERR_MODULE_NOT_FOUND. node_modules
+          # stays unanchored on purpose: nested ones should go too.
           rsync -az --delete \
             --exclude='node_modules' \
-            --exclude='.env' \
-            --exclude='uploads' \
+            --exclude='/.env' \
+            --exclude='/uploads' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            backend/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/ambika-global/backend/"
+            backend/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}/backend/"
 
       - name: Deploy frontend build
         run: |
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key" \
-            frontend/dist/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/ambika-global/frontend/dist/"
+            frontend/dist/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}/frontend/dist/"
 
-      - name: Install deps & reload services
+      - name: Deploy ops config (nginx site + pm2 ecosystem)
+        run: |
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            deploy/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}/deploy/"
+
+      - name: Guard — refuse to start without a .env
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" '
+            if [ ! -f '"${{ env.APP_DIR }}"'/backend/.env ]; then
+              echo "::error::'"${{ env.APP_DIR }}"'/backend/.env is missing."
+              echo "Copy deploy/server.env.template there once, by hand, then re-run."
+              exit 1
+            fi
+          '
+
+      - name: Install deps & start/reload backend
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" '
             set -e
-            cd /var/www/ambika-global/backend
+            cd '"${{ env.APP_DIR }}"'/backend
             npm install --omit=dev --no-audit --no-fund
-            pm2 reload ambika-backend --update-env
-            pm2 reload ambika-frontend
+            # startOrReload, not reload: the first deploy has no process yet.
+            pm2 startOrReload '"${{ env.APP_DIR }}"'/deploy/ecosystem.config.cjs --update-env
             pm2 save
-            echo "Deploy complete: $(pm2 pid ambika-backend) / $(pm2 pid ambika-frontend)"
           '
 
-      - name: Health check
+      - name: Install nginx site (validate before reloading — shared box!)
         run: |
-          for i in $(seq 1 10); do
-            code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://${{ secrets.EC2_HOST }}:3006/api/health" || echo 000)
-            echo "attempt $i -> $code"
-            [ "$code" = "200" ] && exit 0
-            sleep 5
-          done
-          echo "Backend health check did not return 200 (port may be closed in the security group; the deploy itself still ran)."
+          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" '
+            set -e
+            sudo cp '"${{ env.APP_DIR }}"'/deploy/nginx.conf /etc/nginx/sites-available/ambika
+            sudo ln -sf /etc/nginx/sites-available/ambika /etc/nginx/sites-enabled/ambika
+            # If this fails, every tenant on the box keeps running the old config.
+            if ! sudo nginx -t; then
+              echo "::error::nginx config test failed — unlinking and leaving nginx untouched."
+              sudo rm -f /etc/nginx/sites-enabled/ambika
+              exit 1
+            fi
+            sudo systemctl reload nginx
+          '
+
+      - name: Health check (from inside the box — 3006 is not open in the SG)
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" '
+            for i in $(seq 1 15); do
+              code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:3006/api/health || echo 000)
+              echo "attempt $i -> $code"
+              if [ "$code" = "200" ]; then
+                echo "Backend healthy."
+                # Prove nginx is actually serving the SPA + proxying the API.
+                echo "nginx :3005 -> $(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:3005/)"
+                echo "nginx api  -> $(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:3005/api/health)"
+                exit 0
+              fi
+              sleep 4
+            done
+            echo "::error::Backend did not become healthy. Last 40 log lines:"
+            pm2 logs ambika-backend --lines 40 --nostream || true
+            exit 1
+          '
