@@ -96,8 +96,14 @@ jobs:
       # committed in this repo. This is the backstop for that.
       - name: Fail on committed keys or env files
         run: |
-          if git ls-files | grep -E '\.(pem|key|p12|pfx)$|(^|/)\.env($|\.)' ; then
-            echo "::error::A private key or .env file is tracked in git. Remove it and rotate the credentials."
+          # Private keys, and real env files only. .env.example / .env.production
+          # / .env.template are committed on purpose here — .env.production holds
+          # nothing but VITE_API_URL=/api/v1, since the frontend talks to nginx
+          # same-origin. Anything else named .env* is a secret leak.
+          leaked=$(git ls-files | grep -E '\.(pem|key|p12|pfx)$|(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.(example|sample|template|production)$' || true)
+          if [ -n "$leaked" ]; then
+            echo "$leaked"
+            echo "::error::A private key or real .env file is tracked in git. Remove it and rotate the credentials."
             exit 1
           fi
-          echo "No key or env files tracked."
+          echo "No private keys or real env files tracked."

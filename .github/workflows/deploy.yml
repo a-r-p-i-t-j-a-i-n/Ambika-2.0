@@ -140,7 +140,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" '
             for i in $(seq 1 15); do
-              code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:3006/api/health || echo 000)
+              code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:3006/api/health || true)
               echo "attempt $i -> $code"
               if [ "$code" = "200" ]; then
                 echo "Backend healthy."
