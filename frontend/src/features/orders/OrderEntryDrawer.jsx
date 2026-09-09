@@ -17,6 +17,7 @@ import {
 } from '../../store/api/dispatchControlApi';
 import { useGetPartiesQuery, useGetPartyByIdQuery } from '../../store/api/partyApi';
 import { useGetOrdersByPartyQuery, useUpdateOrderMutation } from '../../store/api/orderApi';
+import { useGetPriceMasterQuery } from '../../store/api/pricingApi';
 import { useGetSkuLookupQuery } from '../../store/api/skuApi';
 import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
 
@@ -260,17 +261,42 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
     [partyDetail, selectedPartyId],
   );
 
+  // ── Approved prices from Pricing & Revenue (the pricing-history system) ──
+  // Powers the read-only "Master ₹" column AND is the PREFERRED prefill for a
+  // row's editable PO price; the party's last-purchase price is the fallback.
+  const { data: priceMasterRes } = useGetPriceMasterQuery({ priceType: 'SELLING' }, { skip: !open });
+  const masterPriceBySku = useMemo(() => {
+    const rows = priceMasterRes?.data?.rows || (Array.isArray(priceMasterRes?.data) ? priceMasterRes.data : []);
+    const m = new Map();
+    rows.forEach((r) => {
+      if (r.currentPrice == null) return;
+      if (r.skuId) m.set(String(r.skuId), Number(r.currentPrice));
+      if (r.code) m.set(`code:${String(r.code).toLowerCase()}`, Number(r.currentPrice));
+    });
+    return m;
+  }, [priceMasterRes]);
+  const masterPriceOf = (it) => {
+    const v = masterPriceBySku.get(String(it.skuId))
+      ?? masterPriceBySku.get(`code:${String(it.skuCode || '').toLowerCase()}`);
+    return v == null ? null : Number(v);
+  };
+
   // Turn a party's saved catalog into editable, blank-quantity line rows.
-  const catalogToItems = useCallback((catalog) => catalog.map((c, i) => ({
-    _tempId: `cat-${selectedPartyId}-${i}-${c.skuCode || c.skuName || 'row'}`,
-    skuId:   c.skuId || '',
-    skuName: c.skuName || '',
-    skuCode: c.skuCode || '',
-    orderQty: '',
-    rate: c.sellingPrice ? String(c.sellingPrice) : '',
-    asnCode: '',
-    remark: '',
-  })), [selectedPartyId]);
+  // PO price prefill: approved master price first, last-purchase price second.
+  const catalogToItems = useCallback((catalog) => catalog.map((c, i) => {
+    const mp = (c.skuId ? masterPriceBySku.get(String(c.skuId)) : undefined)
+      ?? (c.skuCode ? masterPriceBySku.get(`code:${String(c.skuCode).toLowerCase()}`) : undefined);
+    return {
+      _tempId: `cat-${selectedPartyId}-${i}-${c.skuCode || c.skuName || 'row'}`,
+      skuId:   c.skuId || '',
+      skuName: c.skuName || '',
+      skuCode: c.skuCode || '',
+      orderQty: '',
+      rate: mp != null ? String(mp) : (c.sellingPrice ? String(c.sellingPrice) : ''),
+      asnCode: '',
+      remark: '',
+    };
+  }), [selectedPartyId, masterPriceBySku]);
 
   // Index the catalog by skuId / skuCode so each row can surface its price history.
   const catalogIndex = useMemo(() => {
@@ -392,9 +418,18 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   }, [open, isEditMode, selectedPartyId, partyCatalog, items, filledPartyId, catalogToItems]);
 
   const handleSkuPick = (index, sku) => {
+    // Picking an SKU on a row with no price yet → prefill from the approved
+    // master price (Pricing & Revenue); the doer can still overtype it.
+    const mp = sku
+      ? (masterPriceBySku.get(String(sku._id)) ?? masterPriceBySku.get(`code:${String(sku.code || '').toLowerCase()}`))
+      : undefined;
     setItems((prev) => prev.map((it, i) => (
       i === index
-        ? { ...it, skuId: sku?._id || '', skuName: sku?.name || '', skuCode: sku?.code || '' }
+        ? {
+          ...it,
+          skuId: sku?._id || '', skuName: sku?.name || '', skuCode: sku?.code || '',
+          rate: it.rate || (mp != null ? String(mp) : it.rate),
+        }
         : it
     )));
   };
@@ -806,7 +841,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
           >
             <Box sx={{
               display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: '2fr 0.8fr 0.85fr 1.2fr 1.25fr 44px' },
+              gridTemplateColumns: { xs: '1fr', md: '2fr 0.75fr 0.8fr 1.1fr 0.95fr 1.05fr 44px' },
               gap: 1,
               px: 1.5, py: 1, bgcolor: alpha(theme.palette.primary.main, 0.04),
               borderBottom: '1px solid', borderColor: 'divider',
@@ -816,17 +851,22 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
               <Box>SKU</Box>
               <Box>Code</Box>
               <Box sx={{ textAlign: 'right' }}>Quantity *</Box>
-              <Box sx={{ textAlign: 'right' }}>Price ₹</Box>
+              <Box sx={{ textAlign: 'right' }}>PO Price ₹</Box>
+              <Box sx={{ textAlign: 'right' }}>Master ₹</Box>
               <Box>Remark</Box>
               <Box />
             </Box>
             {items.map((it, idx) => {
               const cat = rowCatalog(it);
               const history = (cat?.priceHistory || []).slice().sort((a, b) => new Date(b.at) - new Date(a.at));
+              // Awareness-only guard: a PO price BELOW the approved master price
+              // turns the field red with a warning — it never blocks submission.
+              const mpRow = masterPriceOf(it);
+              const belowMaster = mpRow != null && it.rate !== '' && Number(it.rate) < mpRow;
               return (
               <Box key={it._tempId} sx={{
                 display: 'grid',
-                gridTemplateColumns: { xs: '1fr', md: '2fr 0.8fr 0.85fr 1.2fr 1.25fr 44px' },
+                gridTemplateColumns: { xs: '1fr', md: '2fr 0.75fr 0.8fr 1.1fr 0.95fr 1.05fr 44px' },
                 gap: 1,
                 px: 1.5, py: 1, alignItems: 'center',
                 borderBottom: idx === items.length - 1 ? 0 : '1px solid',
@@ -864,14 +904,25 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                 <TextField
                   type="number"
                   size="small"
+                  error={belowMaster}
                   value={it.rate}
                   onChange={(e) => handleItemChange(idx, 'rate', e.target.value)}
                   inputProps={{ style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }}
                   placeholder="0"
                   InputProps={{
                     startAdornment: <InputAdornment position="start" sx={{ mr: 0.25 }}><IndianRupee size={12} /></InputAdornment>,
-                    endAdornment: history.length > 0 ? (
+                    endAdornment: (belowMaster || history.length > 0) ? (
                       <InputAdornment position="end">
+                        {belowMaster && (
+                          <Tooltip arrow placement="top" title={
+                            `You're entering ₹${Number(it.rate).toLocaleString('en-IN')} — LOWER than the master price ₹${mpRow.toLocaleString('en-IN')} from Pricing & Revenue. Kindly check (you can still submit).`
+                          }>
+                            <Box component="span" sx={{ display: 'inline-flex', cursor: 'help', color: 'error.main', mr: history.length > 0 ? 0.5 : 0 }}>
+                              <AlertCircle size={13} />
+                            </Box>
+                          </Tooltip>
+                        )}
+                        {history.length > 0 && (<>
                         <Tooltip arrow placement="top" title={(
                           <Box sx={{ py: 0.5 }}>
                             <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', mb: 0.5 }}>Price history</Typography>
@@ -887,10 +938,38 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                             <History size={13} />
                           </Box>
                         </Tooltip>
+                        </>)}
                       </InputAdornment>
                     ) : null,
                   }}
                 />
+                {/* Master ₹ — the approved price from Pricing & Revenue. Click
+                    it to copy into the editable PO price. */}
+                {(() => {
+                  const mp = masterPriceOf(it);
+                  const applied = mp != null && Number(it.rate) === mp;
+                  return (
+                    <Tooltip arrow placement="top" title={
+                      mp == null ? 'No approved price in Pricing & Revenue for this SKU'
+                        : applied ? 'PO price matches the master price'
+                          : 'Approved price from Pricing & Revenue — click to use it'
+                    }>
+                      <Box
+                        onClick={() => { if (mp != null) handleItemChange(idx, 'rate', String(mp)); }}
+                        sx={{
+                          textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', fontSize: '0.85rem',
+                          px: 1, py: 0.9, borderRadius: '8px',
+                          color: mp == null ? 'text.disabled' : applied ? 'success.main' : 'primary.main',
+                          bgcolor: mp == null ? 'transparent' : alpha(theme.palette.primary.main, 0.05),
+                          cursor: mp == null ? 'default' : 'pointer',
+                          '&:hover': mp == null ? {} : { bgcolor: alpha(theme.palette.primary.main, 0.12) },
+                        }}
+                      >
+                        {mp == null ? '—' : `₹${Number(mp).toLocaleString('en-IN')}`}
+                      </Box>
+                    </Tooltip>
+                  );
+                })()}
                 <TextField
                   size="small"
                   value={it.remark}
