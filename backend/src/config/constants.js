@@ -9,6 +9,7 @@ export const DOC_PREFIX = {
   TAX_INVOICE:      'AGL/TI',
   O2D_TRACKER:      'AGL-O2D',
   RM_CONVERSION:    'AGL/RMC',   // Raw-material coil→circle conversion
+  PRODUCTION_PLAN:  'AGL/PP',    // Party-wise production plan (order not required)
 };
 
 // ── Sales Order Statuses ────────────────────────────────────

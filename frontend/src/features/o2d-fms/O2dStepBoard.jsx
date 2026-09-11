@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
-import { useGetProcessesQuery, useGetBoardConsignmentsQuery, useCompleteStepMutation } from '../../store/api/o2dFmsApi';
+import { useGetProcessesQuery, useGetBoardConsignmentsQuery } from '../../store/api/o2dFmsApi';
 import { useDeleteOrderMutation } from '../../store/api/orderApi';
 import { usePermissions } from '../../hooks/usePermission';
 import { resolveActionLink, resolveEntityLink, actionLinkMeta } from './actionLinks';
@@ -84,7 +84,7 @@ const SHORT_ACTION_LABELS = {
   ORDER_INTAKE: 'Order Intake', ORDER_ENTRY: 'Order Entry', PPC: 'PPC Plan',
   DISPATCH_PLAN: 'Dispatch Planning', DISPATCH_PLAN_PDF: 'Plan PDF',
   EMAIL_DISPATCH_SCHEDULE: 'Email Schedule',
-  ACTUAL_DISPATCH: 'Actual Dispatch', CHALLAN_PDF: 'Challan PDF',
+  ACTUAL_DISPATCH: 'Dispatch Items', CHALLAN_PDF: 'Challan PDF',
   INVOICE_ENTRY: 'Invoice & Eway', INVOICE_EMAIL: 'Email Invoice',
   TRACK_DELIVERY: 'Track Delivery',
   PAYMENT_FOLLOWUP: 'Payment Follow-up', PAYMENT_RECEIPT: 'Receive Payment',
@@ -110,7 +110,12 @@ const boardKeysOf = (s) => stepKeysOf(s).filter((k) => !BOARD_HIDDEN_ACTIONS.inc
 const rowDoLinks = (p, s) => boardKeysOf(s)
   .map((key) => {
     const to = resolveActionLink(key, ctxOf(p));
-    return to ? { key, label: shortLabel(key), to } : null;
+    if (!to) return null;
+    if (key !== 'ACTUAL_DISPATCH') return { key, label: shortLabel(key), to };
+    const sep = to.includes('?') ? '&' : '?';
+    const taskStep = s.stepCode || '2.06';
+    const taskTo = `${to}${sep}fromTask=${encodeURIComponent(p._id)}&fromStep=${encodeURIComponent(taskStep)}&fromAction=ACTUAL_DISPATCH`;
+    return { key, label: shortLabel(key), to: taskTo };
   })
   .filter(Boolean);
 
@@ -486,17 +491,10 @@ const O2dStepBoard = () => {
   // Row being edited in the inline Excel-style popup ({ p, s, dc }).
   const [editRow, setEditRow] = useState(null);
 
-  // Steps with no screen to open (2.03 Check Inventory — a physical job) get a
-  // direct "Mark Done" button; the server still enforces any requirements.
-  const [completeStep, { isLoading: completing }] = useCompleteStepMutation();
-  const handleMarkDone = async (p) => {
-    try {
-      await completeStep({ id: p._id, stepCode: activeCode }).unwrap();
-      enqueueSnackbar(`${activeCode} marked done for ${p.soNumber}.`, { variant: 'success' });
-    } catch (err) {
-      enqueueSnackbar(err?.data?.message || 'Could not mark done — open the task page to finish its requirements.', { variant: 'error' });
-    }
-  };
+  // Steps with no screen to open (2.03 Check Inventory — a physical job):
+  // the action button opens the TASK PAGE, where the doer reviews everything,
+  // ticks the checklist deliberately, and clicks Mark Done — completion is a
+  // human judgment, never a silent one-click from the board.
 
   const openTask = (p) => navigate(`/o2d-fms/task/${p._id}/${encodeURIComponent(activeCode)}`);
   // Captured completion links may be external (drive URLs) — open those in a tab.
@@ -762,18 +760,19 @@ const O2dStepBoard = () => {
                           <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
                             {links.length === 0 ? (
                               (!dc && !rowDone) ? (
-                                // No screen to open (e.g. 2.03 Check Inventory —
-                                // a physical job): mark it done right here.
+                                // No connected screen (e.g. 2.03 Check Inventory):
+                                // open the TASK — review, tick the checklist,
+                                // then Mark Done there, deliberately.
                                 <Button
-                                  size="small" disableElevation variant="contained" disabled={completing}
-                                  startIcon={<CheckCircle2 size={13} />}
-                                  onClick={() => handleMarkDone(p)}
+                                  size="small" disableElevation variant="contained"
+                                  startIcon={<ClipboardList size={13} />}
+                                  onClick={() => openTask(p)}
                                   sx={{
                                     textTransform: 'none', fontWeight: 700, fontSize: '0.72rem',
                                     borderRadius: '6px', whiteSpace: 'nowrap', px: 1.1, py: 0.35, bgcolor: O2D.brand,
                                   }}
                                 >
-                                  Mark Done
+                                  Do Task
                                 </Button>
                               ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>
                             ) : links.map((a) => {

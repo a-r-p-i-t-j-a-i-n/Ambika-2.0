@@ -496,6 +496,10 @@ const SplitSheetView = ({ steps, processId, soNumber, currentStepCode, navigate,
     if (onOpenStep && onOpenStep(code, c)) return;
     const sp = new URLSearchParams();
     if (part) sp.set('part', part);
+    if (code === '2.06') {
+      sp.set('fromTask', processId);
+      sp.set('fromStep', code);
+    }
     if (soNumber) sp.set('so', soNumber);
     if (c.dcNumber) sp.set('dc', c.dcNumber);
     const qs = sp.toString();

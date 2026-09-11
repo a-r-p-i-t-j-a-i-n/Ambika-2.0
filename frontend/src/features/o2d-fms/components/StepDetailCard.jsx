@@ -69,6 +69,30 @@ export const inferActionDone = (key, proc) => {
   }
 };
 
+// The action button says the actual JOB, not a generic "Do it now" — doers
+// read "Create Dispatch Plan" / "Generate Delivery Challan" and know exactly
+// what the click will do. Unknown keys fall back to "Do it now".
+const ACTION_VERB = {
+  ORDER_INTAKE: 'Log Order',
+  ORDER_ENTRY: 'Punch Sales Order',
+  DISPATCH_PLAN: 'Create Dispatch Plan',
+  DISPATCH_PLAN_PDF: 'Generate Plan PDF',
+  EMAIL_DISPATCH_SCHEDULE: 'Email Schedule',
+  // The factory-side entry of WHAT is going out — dispatch language, not
+  // document language (the challan is its by-product).
+  ACTUAL_DISPATCH: 'Dispatch Items',
+  CHALLAN_PDF: 'Generate Challan PDF',
+  INVOICE: 'Create Invoice',
+  INVOICE_ENTRY: 'Create Invoice & Eway',
+  INVOICE_EMAIL: 'Email Invoice',
+  TRACK_DELIVERY: 'Update Delivery Status',
+  PAYMENT_FOLLOWUP: 'Record Follow-up',
+  PAYMENT_RECEIPT: 'Record Payment',
+  TRANSPORT_BILL_RECEIVE: 'Receive Transport Bill',
+  TRANSPORT_BILL_STATUS: 'Update Bill Payment',
+  PPC: 'Open PPC Plan',
+};
+
 // When a task is scoped to ONE consignment (Delivery Challan), an action's
 // done-state must come from THAT challan — not the shared step-level progress.
 // So a fresh challan (e.g. DC-047) shows "Do it now" for a blank invoice, while a
@@ -803,7 +827,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                       {a.to && (
                         <Button size="small" variant={aDone ? 'outlined' : 'contained'} endIcon={<ArrowRight size={14} />}
                           onClick={() => goAction(a)} sx={{ whiteSpace: 'nowrap', boxShadow: 'none' }}>
-                          {aDone ? (consignment ? 'Open / edit' : 'Do again') : 'Do it now'}
+                          {aDone ? (consignment ? 'Open / edit' : 'Do again') : (ACTION_VERB[a.key] || 'Do it now')}
                         </Button>
                       )}
                     </Stack>
@@ -869,8 +893,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                 <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
                   <Truck size={16} color={accent} />
                   <Typography variant="subtitle2" sx={{ fontWeight: 800, fontSize: '0.78rem' }}>Dispatch progress</Typography>
+                  {/* No "Closed early" wording — the client reads it as an error.
+                      The pending quantity alone says everything that matters. */}
                   <Chip size="small"
-                    label={fullyOut ? 'Fully dispatched' : closedEarly ? `Closed early · ${num(balance)} pending` : 'In progress'}
+                    label={fullyOut ? 'Fully dispatched' : closedEarly ? `${num(balance)} pcs pending` : 'In progress'}
                     sx={{ fontWeight: 700, bgcolor: alpha(accent, 0.12), color: accent }} />
                   <Box sx={{ flex: 1 }} />
                   <Typography variant="caption" color="text.secondary">{num(dispatched)} / {num(ordered)} pcs · {num(balance)} pending</Typography>

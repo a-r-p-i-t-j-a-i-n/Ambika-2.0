@@ -48,6 +48,9 @@ const STATUS_COLOR = {
   DISPATCHED: '#0f766e',
   DELAYED: '#be123c',
   CANCELLED: '#64748b',
+  // Production Plan reuses this engine and finishes at COMPLETED rather than
+  // DISPATCHED; same teal, so "done" reads identically on both sheets.
+  COMPLETED: '#0f766e',
 };
 
 // The active on-screen filters, printed under the month so an exported sheet
@@ -237,6 +240,11 @@ function buildCalendarSheet({
   events = [],
   filters = {},
   companyName = 'M/s AMBIKA GLOBAL',
+  // Titles are options, not constants, so any party×date×SKU calendar (Dispatch,
+  // Production Plan, …) prints through this one engine instead of forking it.
+  // Defaults keep the Dispatch output byte-identical.
+  title = 'Dispatch Planning Calendar',
+  footer = 'Generated from Dispatch Planning Execution System',
 } = {}) {
   const monthStart = dayjs(month).startOf('month');
   const monthLabel = monthStart.format('MMMM YYYY');
@@ -390,7 +398,7 @@ function buildCalendarSheet({
   const inner = `
     <div class="lh">
       <div class="company">${esc(companyName)}</div>
-      <div class="title">Dispatch Planning Calendar</div>
+      <div class="title">${esc(title)}</div>
       <div class="month">${esc(monthLabel)}</div>
       ${filterLine(filters) ? `<div class="filters">${filterLine(filters)}</div>` : ''}
     </div>
@@ -398,7 +406,7 @@ function buildCalendarSheet({
       <thead><tr>${WEEKDAYS.map((day) => `<th>${day}</th>`).join('')}</tr></thead>
       <tbody>${gridRows}</tbody>
     </table>
-    <div class="ft">Generated from Dispatch Planning Execution System</div>`;
+    <div class="ft">${esc(footer)}</div>`;
 
   // fitToPage: a month grid is a single-page document by definition — if a busy
   // month pushes it a few mm over, shrink to fit rather than spill onto page 2.
@@ -415,6 +423,16 @@ function buildListSheet({
   events = [],
   filters = {},
   companyName = 'M/s AMBIKA GLOBAL',
+  title = 'Dispatch Planning List',
+  footer = 'Generated from Dispatch Planning Execution System',
+  // The four header tiles. A production plan counts plans/produced/parties where
+  // dispatch counts events/actual/delayed, so the captions travel with the caller.
+  statLabels = ['Events', 'Planned pcs', 'Actual pcs', 'Delayed'],
+  // Values for those tiles are derived from the events below; pass any of
+  // { entries, planned, dispatched, delayed } to override one. A production plan
+  // has no "delayed" notion, so it supplies a party count for the 4th slot.
+  statValues = null,
+  emptyText = 'No dispatches match the current filters this month.',
 } = {}) {
   const monthStart = dayjs(month).startOf('month');
   const monthLabel = monthStart.format('MMMM YYYY');
@@ -431,6 +449,7 @@ function buildListSheet({
       ? actualRows.reduce((s, e) => s + Number(e.actualQty || 0), 0)
       : scheduled.reduce((s, e) => s + Number(e.actualQty || 0), 0),
     delayed: inMonth.filter((e) => e.isDelayed).length,
+    ...(statValues || {}),
   };
 
   const byDate = new Map();
@@ -582,23 +601,23 @@ function buildListSheet({
   const inner = `
     <div class="lh">
       <div class="company">${esc(companyName)}</div>
-      <div class="title">Dispatch Planning List</div>
+      <div class="title">${esc(title)}</div>
       <div class="month">${esc(monthLabel)}</div>
       ${filterLine(filters) ? `<div class="filters">${filterLine(filters)}</div>` : ''}
     </div>
     <div class="stats">
-      <div class="stat"><b>${num(stats.entries)}</b><span>Events</span></div>
-      <div class="stat"><b>${num(stats.planned)}</b><span>Planned pcs</span></div>
-      <div class="stat"><b>${num(stats.dispatched)}</b><span>Actual pcs</span></div>
-      <div class="stat"><b>${num(stats.delayed)}</b><span>Delayed</span></div>
+      <div class="stat"><b>${num(stats.entries)}</b><span>${esc(statLabels[0])}</span></div>
+      <div class="stat"><b>${num(stats.planned)}</b><span>${esc(statLabels[1])}</span></div>
+      <div class="stat"><b>${num(stats.dispatched)}</b><span>${esc(statLabels[2])}</span></div>
+      <div class="stat"><b>${num(stats.delayed)}</b><span>${esc(statLabels[3])}</span></div>
     </div>
-    ${body || '<div class="empty">No dispatches match the current filters this month.</div>'}
-    <div class="ft">Generated from Dispatch Planning Execution System &middot; ${esc(fmtDate(dayjs()))}</div>`;
+    ${body || `<div class="empty">${esc(emptyText)}</div>`}
+    <div class="ft">${esc(footer)} &middot; ${esc(fmtDate(dayjs()))}</div>`;
 
   return { monthLabel, css, inner, orientation: 'portrait', widthMm: 210 };
 }
 
-const fileNameFor = (kind, month) => `Dispatch-${kind}-${dayjs(month).format('MMM-YYYY')}.pdf`;
+const fileNameFor = (kind, month, stem = 'Dispatch') => `${stem}-${kind}-${dayjs(month).format('MMM-YYYY')}.pdf`;
 
 // ── Public API ───────────────────────────────────────────────────────────────
 export function printDispatchCalendar(opts = {}) {
@@ -615,4 +634,24 @@ export function downloadDispatchCalendarPdf(opts = {}) {
 
 export function downloadDispatchListPdf(opts = {}) {
   return downloadSheet(buildListSheet(opts), fileNameFor('List', opts.month));
+}
+
+// ── Generic entry points ─────────────────────────────────────────────────────
+// Same engine, caller-supplied titles: any screen whose data can be shaped into
+// the event contract (dateKey, partyName, plannedQty/actualQty, skus[]) prints
+// exactly like the Dispatch Calendar — preview, one-page grid and sliced list.
+export function printPlanCalendar(opts = {}) {
+  return printSheet(buildCalendarSheet(opts), opts.docTitle || 'Calendar');
+}
+
+export function printPlanList(opts = {}) {
+  return printSheet(buildListSheet(opts), opts.docTitle || 'List');
+}
+
+export function downloadPlanCalendarPdf(opts = {}) {
+  return downloadSheet(buildCalendarSheet(opts), fileNameFor('Calendar', opts.month, opts.fileStem));
+}
+
+export function downloadPlanListPdf(opts = {}) {
+  return downloadSheet(buildListSheet(opts), fileNameFor('List', opts.month, opts.fileStem));
 }
