@@ -24,6 +24,7 @@ import challanRoutes  from './modules/challan/challan.routes.js';
 import fmsRoutes      from './modules/fms/fms.routes.js';
 import ppcRoutes      from './modules/ppc/ppc.routes.js';
 import dprRoutes      from './modules/ppc/dpr.routes.js';
+import productionPlanRoutes from './modules/ppc/productionPlanEntry.routes.js';
 import dispatchControlRoutes from './modules/dispatch-control/dispatch-control.routes.js';
 import uploadRoutes from './common/uploads/upload.routes.js';
 import salesInvoiceRoutes from './modules/invoice/invoice.routes.js';
@@ -131,6 +132,7 @@ app.use('/api/v1/challans',  challanRoutes);
 app.use('/api/v1/fms',       fmsRoutes);
 app.use('/api/v1/ppc',       ppcRoutes);
 app.use('/api/v1/dpr',       dprRoutes); // DPR / OEE — shop-floor daily production report + dashboards
+app.use('/api/v1/production-plans', productionPlanRoutes); // Party-wise plans, order optional
 app.use('/api/v1/dispatch-control', dispatchControlRoutes);
 app.use('/api/v1/uploads',          uploadRoutes);
 app.use('/api/v1/access-control',   accessControlRoutes);

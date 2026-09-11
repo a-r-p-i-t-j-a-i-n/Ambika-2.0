@@ -28,6 +28,7 @@ const GenerateDispatchPlanPdf = lazyWithRetry(() => import('./features/planning/
 const DispatchCalendar     = lazyWithRetry(() => import('./features/planning/DispatchCalendar'));
 const PlanVsActualMaster   = lazyWithRetry(() => import('./features/planning/PlanVsActualMaster'));
 const PPCPlanning          = lazyWithRetry(() => import('./features/ppc/PPCPlanning'));
+const ProductionPlanCalendar = lazyWithRetry(() => import('./features/planning/ProductionPlanCalendar'));
 const ChallansList         = lazyWithRetry(() => import('./features/execution/ChallansList'));
 const GenerateChallanPdf   = lazyWithRetry(() => import('./features/execution/GenerateChallanPdf'));
 const ChallanDetail        = lazyWithRetry(() => import('./features/execution/ChallanDetail'));
@@ -157,6 +158,8 @@ function App() {
             <Route path="/dispatch-planning/plan-vs-actual" element={<PlanVsActualMaster />} />
             <Route path="/dispatch-planning/generate-pdf" element={<GenerateDispatchPlanPdf />} />
             <Route path="/ppc-planning" element={<PPCPlanning />} />
+            {/* Party-wise plan that does not need a PO — see production-plan-entry.model.js */}
+            <Route path="/production-planning" element={<ProductionPlanCalendar />} />
             <Route path="/challans" element={<ChallansList />} />
             <Route path="/challans/generate-pdf" element={<GenerateChallanPdf />} />
             <Route path="/o2d/invoice-entry" element={<RequirePermission slug="o2dfms.view" fallback="inline"><InvoiceEntryForm /></RequirePermission>} />

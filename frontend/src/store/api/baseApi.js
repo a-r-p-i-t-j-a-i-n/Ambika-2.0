@@ -56,6 +56,7 @@ export const baseApi = createApi({
     'VendorInvoice', 'VendorInvoiceStats', 'Voucher', 'VoucherStats',
     'TallyEntry', 'TallyEntryStats', 'FinalPayment', 'FinalPaymentStats',
     'Approval',
+    'ProductionPlan',
 
   ],
   endpoints: () => ({}),

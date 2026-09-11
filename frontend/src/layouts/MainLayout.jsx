@@ -181,6 +181,21 @@ const navSectionsSimple = [
   {
     title: '',
     items: [
+      // Planning answers "what SHOULD we do", FMS "are we doing it", Master
+      // "what do we do it with" — one question each, so nothing is ambiguous.
+      // Download/Email are buttons on their own screens, never nav rows.
+      {
+        text: 'Planning',
+        icon: <CalendarDays size={19} />,
+        // Plan vs Actual is deliberately NOT here — the client does not want it
+        // in the nav. Its route still works if opened directly.
+        // Flat while each area has one screen; regroup under Dispatch/Production
+        // sub-menus once either gains a second.
+        children: [
+          { text: 'Dispatch Calendar', icon: <Truck size={19} />,   path: '/dispatch-planning/calendar' },
+          { text: 'Production Plan',   icon: <Factory size={19} />, path: '/production-planning' },
+        ],
+      },
       {
         text: 'FMS',
         icon: <Workflow size={19} />,
@@ -229,6 +244,7 @@ const PAGE_TITLES = {
   '/dispatch-planning/plan-vs-actual': 'Plan vs Actual',
   '/dispatch-planning/generate-pdf': 'Generate Dispatch Plan PDF',
   '/ppc-planning':           'PPC Planning',
+  '/production-planning':    'Production Plan',
   '/challans':               'Actual Dispatch',
   '/challans/generate-pdf':  'Generate Challan PDF',
   '/o2d/invoice-entry':      'Create Invoice & Eway Bill',
