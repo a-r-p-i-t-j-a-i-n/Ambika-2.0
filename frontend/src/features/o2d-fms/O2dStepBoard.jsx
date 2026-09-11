@@ -110,7 +110,12 @@ const boardKeysOf = (s) => stepKeysOf(s).filter((k) => !BOARD_HIDDEN_ACTIONS.inc
 const rowDoLinks = (p, s) => boardKeysOf(s)
   .map((key) => {
     const to = resolveActionLink(key, ctxOf(p));
-    return to ? { key, label: shortLabel(key), to } : null;
+    if (!to) return null;
+    if (key !== 'ACTUAL_DISPATCH') return { key, label: shortLabel(key), to };
+    const sep = to.includes('?') ? '&' : '?';
+    const taskStep = s.stepCode || '2.06';
+    const taskTo = `${to}${sep}fromTask=${encodeURIComponent(p._id)}&fromStep=${encodeURIComponent(taskStep)}&fromAction=ACTUAL_DISPATCH`;
+    return { key, label: shortLabel(key), to: taskTo };
   })
   .filter(Boolean);
 
