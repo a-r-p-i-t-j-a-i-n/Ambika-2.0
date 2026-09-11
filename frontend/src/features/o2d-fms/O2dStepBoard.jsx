@@ -33,6 +33,7 @@ import { O2D } from './o2dTheme';
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 // The sheet tracks timestamps, not just dates — show both, compactly.
 const fmtDT = (d) => (d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
+const effectiveStepDate = (step, process) => step?.actual || step?.completedAt || step?.planned || process?.updatedAt || process?.createdAt || 0;
 
 // Minutes → the sheet's "Time Delay" feel: 1d 2h / 3h 25m / 12m.
 const fmtDelay = (mins) => {
@@ -449,9 +450,9 @@ const O2dStepBoard = () => {
       }
       list.push({ p, s, st });
     });
-    // Most urgent first: overdue → in progress → pending → done, newest inside each.
-    return list.sort((a, b) => (a.st.rank - b.st.rank)
-      || (new Date(b.p.createdAt || 0) - new Date(a.p.createdAt || 0)));
+    // Always show the latest activity first, regardless of status. This keeps
+    // every step consistent with the chronological FMS register.
+    return list.sort((a, b) => new Date(effectiveStepDate(b.s, b.p)) - new Date(effectiveStepDate(a.s, a.p)));
   }, [rows, activeCode, search, status, isPerDcStep, dcBySo]);
 
   // Dispatch step: expand each order into one row PER Delivery Challan (a split
@@ -463,7 +464,9 @@ const O2dStepBoard = () => {
     stepRows.forEach((r) => {
       const dcs = dcBySo.get(r.p.soNumber) || [];
       if (dcs.length === 0) out.push({ ...r, dc: null, splitIndex: 0, splitTotal: 0 });
-      else dcs.forEach((dc, i) => out.push({ ...r, dc, splitIndex: i + 1, splitTotal: dcs.length }));
+      else [...dcs]
+        .sort((a, b) => new Date(b.dcDate || 0) - new Date(a.dcDate || 0))
+        .forEach((dc, i) => out.push({ ...r, dc, splitIndex: i + 1, splitTotal: dcs.length }));
     });
     return out;
   }, [stepRows, dcBySo, isPerDcStep]);

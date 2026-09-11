@@ -683,7 +683,7 @@ const O2dMasterData = () => {
     if (statusFilter) list = list.filter((r) => statusOf(tab, r) === statusFilter);
     const q = search.trim().toLowerCase();
     if (q) list = list.filter((r) => columns.some((c) => String(displayVal(c, r)).toLowerCase().includes(q)));
-    return list;
+    return [...list].sort((a, b) => new Date(dateOf(tab, b) || 0) - new Date(dateOf(tab, a) || 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawRows, statusFilter, search, tab, columns, partyFilter, dateMode, monthVal, dayVal, fromVal, toVal]);
 
