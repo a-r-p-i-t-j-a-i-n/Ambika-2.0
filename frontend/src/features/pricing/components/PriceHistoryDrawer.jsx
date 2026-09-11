@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import { useGetSkuPriceHistoryQuery } from '../../../store/api/pricingApi';
 import { fmtINR, fmtFromNow } from '../../../utils/formatters';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 // Full local date + time, plus the exact ISO + "x ago" hint shown on hover.
 const DT_FORMAT = 'DD MMM YYYY · hh:mm A';
@@ -228,7 +229,7 @@ const PriceHistoryDrawer = ({ skuId, skuCode, skuName, priceType, priceLabel, op
                           size="small"
                           icon={<Paperclip size={11} style={{ marginLeft: 6 }} />}
                           label={r.attachmentName || 'Attached file'}
-                          onClick={() => window.open(r.attachmentUrl, '_blank')}
+                          onClick={() => window.open(resolveFileUrl(r.attachmentUrl), '_blank', 'noopener,noreferrer')}
                           sx={{
                             mt: 0.75, height: 22, fontWeight: 600, fontSize: '0.68rem',
                             color: theme.palette.primary.dark,

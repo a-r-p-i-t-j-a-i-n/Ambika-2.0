@@ -18,6 +18,7 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { InvoiceStatusChip, INVOICE_STATUSES, fmtINR, fmtDate } from './invoiceMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
 
@@ -51,7 +52,7 @@ const VendorInvoiceList = () => {
   const onView = (r) => { navigate(`/procurement/vendor-invoices/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditInv(r); setFormOpen(true); closeMenu(); };
   const onApprove = (r) => { setActiveInv(r); setApprovalOpen(true); closeMenu(); };
-  const onDoc = (r) => { window.open(r.invoiceDocument?.fileUrl, '_blank'); closeMenu(); };
+  const onDoc = (r) => { window.open(resolveFileUrl(r.invoiceDocument), '_blank', 'noopener,noreferrer'); closeMenu(); };
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];

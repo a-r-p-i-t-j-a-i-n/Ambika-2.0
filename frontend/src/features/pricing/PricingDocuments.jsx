@@ -12,6 +12,7 @@ import {
 import dayjs from 'dayjs';
 import { useGetPricingDocumentsQuery } from '../../store/api/pricingApi';
 import { fmtINR } from '../../utils/formatters';
+import { resolveFileUrl } from '../../utils/fileUrl';
 import { PageHero, pageSx, panelSx, fieldSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const CATEGORIES = [
@@ -56,7 +57,7 @@ const PricingDocuments = () => {
 
   const handleOpen = (item) => {
     if (isImagePreview(item) || isPdfPreview(item)) setPreview(item);
-    else window.open(item.attachmentUrl, '_blank');
+    else window.open(resolveFileUrl(item.attachmentUrl), '_blank', 'noopener,noreferrer');
   };
 
   const activeFilterCount = (from ? 1 : 0) + (to ? 1 : 0) + (uploader ? 1 : 0);
@@ -258,16 +259,16 @@ const PricingDocuments = () => {
                   {preview.skuCode} · {preview.skuName} · {dayjs(preview.createdAt).format('DD MMM YYYY · hh:mm A')}
                 </Typography>
               </Box>
-              <Tooltip title="Open in new tab"><IconButton onClick={() => window.open(preview.attachmentUrl, '_blank')}><ExternalLink size={14} /></IconButton></Tooltip>
-              <Tooltip title="Download"><IconButton component="a" href={preview.attachmentUrl} download={preview.attachmentName}><Download size={14} /></IconButton></Tooltip>
+              <Tooltip title="Open in new tab"><IconButton onClick={() => window.open(resolveFileUrl(preview.attachmentUrl), '_blank', 'noopener,noreferrer')}><ExternalLink size={14} /></IconButton></Tooltip>
+              <Tooltip title="Download"><IconButton component="a" href={resolveFileUrl(preview.attachmentUrl)} download={preview.attachmentName}><Download size={14} /></IconButton></Tooltip>
               <Tooltip title="Close"><IconButton onClick={() => setPreview(null)}><X size={14} /></IconButton></Tooltip>
             </Stack>
             <DialogContent sx={{ p: 0, bgcolor: '#0f172a', minHeight: 480, display: 'grid', placeItems: 'center' }}>
               {preview.fileType === 'IMAGE' ? (
-                <img src={preview.attachmentUrl} alt={preview.attachmentName} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
+                <img src={resolveFileUrl(preview.attachmentUrl)} alt={preview.attachmentName} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
               ) : (
                 <Box component="iframe"
-                  src={preview.attachmentUrl}
+                  src={resolveFileUrl(preview.attachmentUrl)}
                   title={preview.attachmentName}
                   sx={{ width: '100%', height: '70vh', border: 0 }}
                 />

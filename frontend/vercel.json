@@ -29,6 +29,8 @@
     }
   ],
   "rewrites": [
+    { "source": "/api/:path*", "destination": "http://32.236.114.49:3006/api/:path*" },
+    { "source": "/uploads/:path*", "destination": "http://32.236.114.49:3006/uploads/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

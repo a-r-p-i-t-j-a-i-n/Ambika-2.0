@@ -12,6 +12,7 @@ import { enqueueSnackbar } from 'notistack';
 import { useGetSkuLookupQuery } from '../../../store/api/skuApi';
 import { useSubmitRevisionMutation } from '../../../store/api/pricingApi';
 import { fmtINR } from '../../../utils/formatters';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 
 const REASON_PRESETS = [
   'Steel / raw material increase',
@@ -379,7 +380,7 @@ const RevisePriceDialog = ({ open, onClose, presetSku, defaultPriceType = 'SELLI
                     {form.attachmentName}
                   </Typography>
                   <Tooltip title="Preview attachment">
-                    <IconButton size="small" onClick={() => window.open(form.attachmentUrl, '_blank', 'noopener')}>
+                    <IconButton size="small" onClick={() => window.open(resolveFileUrl(form.attachmentUrl), '_blank', 'noopener,noreferrer')}>
                       <Eye size={14} />
                     </IconButton>
                   </Tooltip>
