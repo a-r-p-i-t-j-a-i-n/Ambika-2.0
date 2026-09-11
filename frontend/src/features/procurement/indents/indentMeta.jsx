@@ -38,12 +38,10 @@ export const isItemEligibleForQuote = (indent, item) => {
  * Resolve an uploaded file URL. Files are served from the API host root
  * (e.g. http://host/uploads/...), NOT under /api/v1.
  */
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
+import { resolveFileUrl } from '../../../utils/fileUrl';
+
 export const fileHref = (url) => {
-  if (!url) return '';
-  if (/^https?:\/\//i.test(url)) return url;
-  const origin = API_BASE.replace(/\/api\/v1\/?$/, '');
-  return `${origin}${url.startsWith('/') ? '' : '/'}${url}`;
+  return resolveFileUrl(url);
 };
 
 /**

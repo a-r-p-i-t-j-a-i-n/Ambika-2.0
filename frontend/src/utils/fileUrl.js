@@ -17,7 +17,16 @@
 const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1').replace(/\/+$/, '');
 const API_ORIGIN = API_BASE.replace(/\/api\/v1$/, ''); // '' when VITE_API_URL is relative (prod proxy)
 
-const proxyForKey = (key) => `${API_BASE}/uploads/file?key=${encodeURIComponent(key)}`;
+// Production builds are served behind the frontend's HTTPS reverse proxy. Use
+// that same-origin path for files so a stale backend IP in a stored URL or
+// deployment variable cannot send the browser to a dead HTTP gateway. Local
+// development keeps using the configured backend directly.
+const isLocalHost = typeof window !== 'undefined'
+  && ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+const FILE_API_BASE = isLocalHost ? API_BASE : '/api/v1';
+const FILE_API_ORIGIN = isLocalHost ? API_ORIGIN : '';
+
+const proxyForKey = (key) => `${FILE_API_BASE}/uploads/file?key=${encodeURIComponent(key)}`;
 
 export const resolveFileUrl = (att) => {
   if (!att) return '';
@@ -31,7 +40,7 @@ export const resolveFileUrl = (att) => {
   if (!url) return '';
 
   // Parse against a base so relative stored paths still resolve.
-  const base = API_ORIGIN || (typeof window !== 'undefined' ? window.location.origin : undefined);
+  const base = FILE_API_ORIGIN || (typeof window !== 'undefined' ? window.location.origin : undefined);
   let u;
   try { u = new URL(url, base); } catch { return url; }
 
@@ -42,7 +51,7 @@ export const resolveFileUrl = (att) => {
   // Static /uploads/<folder>/<file> → serve from the current origin (prod proxy
   // rewrites /uploads/*; dev hits the backend), never the baked-in host.
   const staticMatch = u.pathname.match(/\/uploads\/.+$/);
-  if (staticMatch) return `${API_ORIGIN}${staticMatch[0]}${u.search}`;
+  if (staticMatch) return `${FILE_API_ORIGIN}${staticMatch[0]}${u.search}`;
 
   // Any other absolute http link on an https page → upgrade to dodge mixed-content
   // (S3 and most CDNs serve https fine).

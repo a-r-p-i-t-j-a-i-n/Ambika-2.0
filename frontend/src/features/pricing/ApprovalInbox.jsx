@@ -16,6 +16,7 @@ import {
   useRejectRevisionMutation,
 } from '../../store/api/pricingApi';
 import { fmtINR } from '../../utils/formatters';
+import { resolveFileUrl } from '../../utils/fileUrl';
 import { PageHero, pageSx, panelSx, primaryBtnSx, ghostBtnSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const initials = (name = '') =>
@@ -203,7 +204,7 @@ const ApprovalInbox = () => {
                           size="small"
                           icon={<Paperclip size={11} style={{ marginLeft: 6 }} />}
                           label={r.attachmentName || 'Attached proof'}
-                          onClick={() => window.open(r.attachmentUrl, '_blank')}
+                          onClick={() => window.open(resolveFileUrl(r.attachmentUrl), '_blank', 'noopener,noreferrer')}
                           sx={{
                             height: 24, fontWeight: 600, fontSize: '0.72rem',
                             color: theme.palette.primary.dark,
