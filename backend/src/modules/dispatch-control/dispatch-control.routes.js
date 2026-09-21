@@ -32,6 +32,10 @@ router.post('/order-entry',                             validate(orderEntrySchem
 router.post('/dispatch-plans',                          validate(planDispatchSchema),  dispatchControlController.planDispatch);
 router.post('/actual-dispatches',                       validate(actualDispatchSchema),dispatchControlController.createActualDispatch);
 router.post('/email-schedule',                          validate(emailScheduleSchema), dispatchControlController.emailSchedule);
+router.get('/orders/:soNumber/inherit-production-plan',  dispatchControlController.previewInherit);
+router.post('/orders/:soNumber/inherit-production-plan', dispatchControlController.applyInherit);
+router.patch('/challans/:id/cancel',                     dispatchControlController.cancelChallan);
+router.patch('/challans/:id/restore',                    dispatchControlController.restoreChallan);
 router.post('/email-schedule/bulk-preview',              validate(bulkEmailPreviewSchema), dispatchControlController.bulkEmailPreview);
 router.post('/email-schedule/bulk',                      validate(bulkEmailScheduleSchema), dispatchControlController.bulkEmailSchedule);
 

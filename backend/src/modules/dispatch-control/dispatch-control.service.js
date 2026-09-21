@@ -16,6 +16,8 @@ import { challanService } from '../challan/challan.routes.js';
 import { emailService } from '../../services/email.service.js';
 import { pdfService } from '../../services/pdf.service.js';
 import env from '../../config/env.js';
+import { DC_STATUS } from '../../config/constants.js';
+import { productionPlanInheritService } from '../ppc/productionPlanInherit.service.js';
 
 const PLAN_LABEL_PREFIX = 'Dispatch Plan';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -364,6 +366,7 @@ const computePhaseDelay = (phase, today = startOfDay(new Date())) => {
   const planned = phase.plannedDate ? startOfDay(phase.plannedDate) : null;
   if (!planned) return { delayDays: 0, lastActualDate: null };
   const times = (phase.actualDispatches || [])
+    .filter((d) => !d.cancelled)
     .map((d) => new Date(d.date).getTime())
     .filter((t) => !Number.isNaN(t));
   const lastActual = times.length ? new Date(Math.max(...times)) : null;
@@ -422,6 +425,7 @@ const applyActualToSchedule = async ({ order, challan, phaseNos = [], isUnplanne
         phase.actualDispatches = [...(phase.actualDispatches || []), {
           date: challan.dcDate,
           qty: give,
+          dcNumber: challan.dcNumber,
           invoiceNo: challan.invoiceNo,
           invoiceDate: challan.dcDate,
           invoiceDoc: challan.pdfUrl,
@@ -445,7 +449,11 @@ const applyActualToSchedule = async ({ order, challan, phaseNos = [], isUnplanne
 };
 
 const getOrderActualsMap = async (soNumber) => {
-  const challans = await DeliveryChallan.find({ soNumber }).lean();
+  const all = await DeliveryChallan.find({ soNumber }).lean();
+  // A CANCELLED dispatch keeps its row for the audit trail but contributes
+  // nothing to actuals — that is the whole point of cancelling instead of
+  // deleting. Plan-vs-Actual, balances and fulfilment all read from here.
+  const challans = all.filter((c) => c.status !== DC_STATUS.CANCELLED);
   const actualsBySku = new Map();
 
   challans.forEach((challan) => {
@@ -548,9 +556,11 @@ const buildComparison = async (soNumber) => {
           // Per-phase shipment trail + delay (read-only, derived).
           delayDays: delay.delayDays,
           lastActualDate: delay.lastActualDate,
-          actualDispatches: (phase.actualDispatches || []).map((d) => ({
-            date: d.date, qty: Number(d.qty || 0), invoiceNo: d.invoiceNo || null,
-          })),
+          actualDispatches: (phase.actualDispatches || [])
+            .filter((d) => !d.cancelled)
+            .map((d) => ({
+              date: d.date, qty: Number(d.qty || 0), invoiceNo: d.invoiceNo || null,
+            })),
         };
       }),
       challans: actual?.challans || [],
@@ -758,6 +768,235 @@ export const dispatchControlService = {
     }
 
     return result;
+  },
+
+  /**
+   * Cancel a delivery challan (O2D step 2.06 onwards).
+   *
+   * A dispatch is never deleted — it is cancelled, so the row and its history
+   * survive while every quantity it contributed is reversed:
+   *   • the order item's dispatchedQty / balance / extraSent
+   *   • each plan phase's totalActualQty and its actualDispatches entry
+   *   • the PPC daily actual
+   * With the quantity back, Plan-vs-Actual stops counting it and the doer can
+   * raise a fresh dispatch against the same plan.
+   */
+  async cancelChallan(dcId, { reason } = {}, actor = null) {
+    const challan = await DeliveryChallan.findById(dcId);
+    if (!challan) throw new AppError('Delivery Challan not found', 404);
+    if (challan.status === DC_STATUS.CANCELLED) {
+      return { alreadyCancelled: true, dcNumber: challan.dcNumber };
+    }
+
+    const order = await SalesOrder.findOne({ soNumber: challan.soNumber });
+
+    // ── 1. Give the quantity back to the order lines ──────────────────────
+    if (order) {
+      for (const dcItem of challan.items || []) {
+        const orderItem = order.items.find((it) => (
+          String(it._id) === String(dcItem.orderItemId)
+          || normalizeKey(it.skuCode) === normalizeKey(dcItem.skuCode)
+          || normalizeKey(it.skuName) === normalizeKey(dcItem.skuName)
+        ));
+        if (!orderItem) continue;
+        const qty = Number(dcItem.quantityPcs || 0);
+        orderItem.dispatchedQty = Math.max(0, Number(orderItem.dispatchedQty || 0) - qty);
+        orderItem.balanceQty = Math.max(0, Number(orderItem.orderQty || 0) - Number(orderItem.dispatchedQty || 0));
+        orderItem.extraSentQty = Math.max(0, Number(orderItem.dispatchedQty || 0) - Number(orderItem.orderQty || 0));
+        // Negative actual = undo this dispatch's contribution to the PPC day.
+        try {
+          await upsertPpcDailyPlan({ order, orderItem, date: challan.dcDate, actualQty: -qty });
+        } catch (err) {
+          logger.error(`[dispatch] PPC reversal failed for ${challan.dcNumber}: ${err.message}`);
+        }
+      }
+      await order.save();
+    }
+
+    // ── 2. Pull the actuals back off the plan phases ──────────────────────
+    const snapshot = [];
+    const schedule = await DispatchSchedule.findOne({ soNumber: challan.soNumber }).sort({ createdAt: -1 });
+    if (schedule) {
+      for (const dcItem of challan.items || []) {
+        const scheduleItem = findScheduleItem(schedule, {
+          skuCode: dcItem.skuCode,
+          skuName: dcItem.skuName,
+        });
+        if (!scheduleItem) continue;
+
+        let reversed = 0;
+        (scheduleItem.phases || []).forEach((phase) => {
+          const mine = (phase.actualDispatches || []).filter((a) => a.dcNumber === challan.dcNumber && !a.cancelled);
+          if (!mine.length) return;
+          const qty = mine.reduce((sum, a) => sum + Number(a.qty || 0), 0);
+          // Flag, never delete — restore needs the row to put the qty back.
+          mine.forEach((a) => { a.cancelled = true; });
+          phase.totalActualQty = Math.max(0, Number(phase.totalActualQty || 0) - qty);
+          refreshPhaseLifecycle(phase);
+          reversed += qty;
+          snapshot.push({ skuCode: dcItem.skuCode, skuName: dcItem.skuName, phaseNo: phase.phaseNo, qty });
+        });
+
+        // Legacy rows carry no dcNumber. Claw the DC's quantity back from the
+        // phases holding actuals, earliest-first, and record exactly what was
+        // taken so a restore can reverse this heuristic precisely.
+        let outstanding = Number(dcItem.quantityPcs || 0) - reversed;
+        if (outstanding > 0) {
+          for (const phase of scheduleItem.phases || []) {
+            if (outstanding <= 0) break;
+            const have = Number(phase.totalActualQty || 0);
+            if (have <= 0) continue;
+            const take = Math.min(have, outstanding);
+            phase.totalActualQty = have - take;
+            outstanding -= take;
+            refreshPhaseLifecycle(phase);
+            snapshot.push({ skuCode: dcItem.skuCode, skuName: dcItem.skuName, phaseNo: phase.phaseNo, qty: take });
+          }
+        }
+
+        const orderItem = order?.items.find((it) => (
+          normalizeKey(it.skuCode) === normalizeKey(scheduleItem.skuCode)
+          || normalizeKey(it.skuName) === normalizeKey(scheduleItem.skuName)
+        ));
+        recalculateScheduleItem(scheduleItem, orderItem);
+      }
+      await schedule.save();
+    }
+
+    // ── 3. Mark the challan itself ────────────────────────────────────────
+    challan.statusBeforeCancel = challan.status || DC_STATUS.DISPATCHED;
+    challan.cancelSnapshot = snapshot;
+    challan.status = DC_STATUS.CANCELLED;
+    challan.deliveryStatus = 'Cancelled';
+    challan.cancelledAt = new Date();
+    challan.cancelledBy = actor?._id || actor?.id || null;
+    challan.cancelledByName = actor?.name || actor?.email || null;
+    challan.cancelReason = reason || null;
+    await challan.save();
+
+    // ── 4. Stamp every downstream step for THIS consignment as cancelled, so
+    //       2.06 → 2.13 all read cancelled instead of pending work. Non-fatal.
+    try {
+      await o2dFmsService.cancelConsignmentSteps({
+        soNumber: challan.soNumber,
+        dcId: challan._id,
+        dcNumber: challan.dcNumber,
+        actor,
+      });
+    } catch (err) {
+      logger.error(`[dispatch] consignment cancel log failed for ${challan.dcNumber}: ${err.message}`);
+    }
+
+    await writeAudit({
+      entityName: 'DeliveryChallan',
+      entityId: challan._id,
+      action: 'CANCEL_DISPATCH',
+      oldValue: { status: 'DISPATCHED', dcNumber: challan.dcNumber },
+      newValue: { status: 'CANCELLED', dcNumber: challan.dcNumber, reason: reason || null },
+      actor,
+    }).catch(() => {});
+
+    return { dcNumber: challan.dcNumber, soNumber: challan.soNumber, status: challan.status };
+  },
+
+  /**
+   * Restore a cancelled delivery challan — the exact inverse of cancelChallan.
+   *
+   * Everything the cancellation reversed is added back: the order line's
+   * dispatched quantity, each plan phase's actual (from the snapshot recorded at
+   * cancel time, so the allocation lands exactly where it was), the PPC day, and
+   * the downstream 2.06-2.13 step states.
+   */
+  async restoreChallan(dcId, actor = null) {
+    const challan = await DeliveryChallan.findById(dcId);
+    if (!challan) throw new AppError('Delivery Challan not found', 404);
+    if (challan.status !== DC_STATUS.CANCELLED) {
+      return { alreadyActive: true, dcNumber: challan.dcNumber };
+    }
+
+    const order = await SalesOrder.findOne({ soNumber: challan.soNumber });
+
+    // ── 1. Take the quantity back off the order lines ────────────────────
+    if (order) {
+      for (const dcItem of challan.items || []) {
+        const orderItem = order.items.find((it) => (
+          String(it._id) === String(dcItem.orderItemId)
+          || normalizeKey(it.skuCode) === normalizeKey(dcItem.skuCode)
+          || normalizeKey(it.skuName) === normalizeKey(dcItem.skuName)
+        ));
+        if (!orderItem) continue;
+        const qty = Number(dcItem.quantityPcs || 0);
+        orderItem.dispatchedQty = Number(orderItem.dispatchedQty || 0) + qty;
+        orderItem.balanceQty = Math.max(0, Number(orderItem.orderQty || 0) - Number(orderItem.dispatchedQty || 0));
+        orderItem.extraSentQty = Math.max(0, Number(orderItem.dispatchedQty || 0) - Number(orderItem.orderQty || 0));
+        try {
+          await upsertPpcDailyPlan({ order, orderItem, date: challan.dcDate, actualQty: qty });
+        } catch (err) {
+          logger.error(`[dispatch] PPC restore failed for ${challan.dcNumber}: ${err.message}`);
+        }
+      }
+      await order.save();
+    }
+
+    // ── 2. Put the actuals back on the phases they came off ──────────────
+    const schedule = await DispatchSchedule.findOne({ soNumber: challan.soNumber }).sort({ createdAt: -1 });
+    if (schedule) {
+      (challan.cancelSnapshot || []).forEach((snap) => {
+        const scheduleItem = findScheduleItem(schedule, { skuCode: snap.skuCode, skuName: snap.skuName });
+        if (!scheduleItem) return;
+        const phase = (scheduleItem.phases || []).find((ph) => ph.phaseNo === snap.phaseNo);
+        if (!phase) return;
+        phase.totalActualQty = Number(phase.totalActualQty || 0) + Number(snap.qty || 0);
+        (phase.actualDispatches || []).forEach((a) => {
+          if (a.dcNumber === challan.dcNumber) a.cancelled = false;
+        });
+        refreshPhaseLifecycle(phase);
+      });
+
+      for (const dcItem of challan.items || []) {
+        const scheduleItem = findScheduleItem(schedule, { skuCode: dcItem.skuCode, skuName: dcItem.skuName });
+        if (!scheduleItem) continue;
+        const orderItem = order?.items.find((it) => (
+          normalizeKey(it.skuCode) === normalizeKey(scheduleItem.skuCode)
+          || normalizeKey(it.skuName) === normalizeKey(scheduleItem.skuName)
+        ));
+        recalculateScheduleItem(scheduleItem, orderItem);
+      }
+      await schedule.save();
+    }
+
+    // ── 3. Un-mark the challan ───────────────────────────────────────────
+    const wasDelivered = challan.statusBeforeCancel === DC_STATUS.DELIVERED;
+    challan.status = challan.statusBeforeCancel || DC_STATUS.DISPATCHED;
+    challan.deliveryStatus = wasDelivered ? 'Delivered' : null;
+    challan.cancelledAt = null;
+    challan.cancelledBy = null;
+    challan.cancelledByName = null;
+    challan.cancelReason = null;
+    challan.cancelSnapshot = [];
+    challan.statusBeforeCancel = null;
+    await challan.save();
+
+    // ── 4. Clear the cancelled stamps on 2.06-2.13 ───────────────────────
+    try {
+      await o2dFmsService.clearConsignmentCancellation({
+        soNumber: challan.soNumber,
+        dcId: challan._id,
+      });
+    } catch (err) {
+      logger.error(`[dispatch] consignment restore log failed for ${challan.dcNumber}: ${err.message}`);
+    }
+
+    await writeAudit({
+      entityName: 'DeliveryChallan',
+      entityId: challan._id,
+      action: 'RESTORE_DISPATCH',
+      oldValue: { status: 'CANCELLED', dcNumber: challan.dcNumber },
+      newValue: { status: challan.status, dcNumber: challan.dcNumber },
+      actor,
+    }).catch(() => {});
+
+    return { dcNumber: challan.dcNumber, soNumber: challan.soNumber, status: challan.status };
   },
 
   async createActualDispatch(data, actor = null) {
@@ -1345,6 +1584,92 @@ export const dispatchControlService = {
    * when the planner clicks "+ Add Phase" — it picks a date and optionally
    * fills line qtys, or asks the server to auto-fill from balance.
    */
+  /** Proposal only — see productionPlanInherit.service.js for the rule. */
+  async previewProductionPlanInherit(soNumber) {
+    return productionPlanInheritService.previewInherit(soNumber);
+  },
+
+  /**
+   * Commit an inherit: one dispatch phase per production-plan date, then record
+   * what each line drew from the plan so the same capacity cannot be spent twice.
+   *
+   * `days` is what the planner SAW AND EDITED, not the raw proposal — the UI
+   * sends its edited copy back, so a changed number is honoured exactly.
+   */
+  async applyProductionPlanInherit(soNumber, { days = [] } = {}, actor = null) {
+    if (!days.length) throw new AppError('Nothing to inherit — no dates were selected.', 422);
+
+    const created = [];
+    const shortfalls = [];
+
+    // createPhase returns the whole schedule, not the phase it made, so the new
+    // phaseNo is found by diffing against what existed before. Needed because
+    // the consumption record has to name the phase that spent the capacity.
+    const phaseNosOf = (sched) => {
+      const out = new Set();
+      (sched?.items || []).forEach((it) => (it.phases || []).forEach((ph) => ph.phaseNo && out.add(ph.phaseNo)));
+      return out;
+    };
+    const seen = phaseNosOf(await DispatchSchedule.findOne({ soNumber }).sort({ createdAt: -1 }).lean());
+
+    for (const day of days) {
+      const lines = (day.lines || []).filter((l) => Number(l.plannedQty) > 0);
+      if (!lines.length) continue;
+
+      // Reuse createPhase so an inherited phase is identical in every way to a
+      // hand-made one — same validation, same PPC sync, same audit trail.
+      // eslint-disable-next-line no-await-in-loop
+      const res = await this.createPhase(soNumber, {
+        plannedDate: day.plannedDate,
+        notes: day.notes || `Inherited from production plan ${day.planNo || ''}`.trim(),
+        allowOverPlan: Boolean(day.allowOverPlan),
+        lines: lines.map((l) => ({
+          orderItemId: l.orderItemId,
+          skuCode: l.skuCode,
+          skuName: l.skuName,
+          plannedQty: Number(l.plannedQty),
+        })),
+      }, actor);
+
+      const after = phaseNosOf(res);
+      const phaseNo = [...after].find((x) => !seen.has(x)) || null;
+      if (phaseNo) seen.add(phaseNo);
+
+      // Only NOW mark the plan capacity spent — if phase creation threw, nothing
+      // was consumed, so a retry cannot leak capacity.
+      for (const l of lines) {
+        if (!day.planId) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const out = await productionPlanInheritService.consumePlanLine({
+          planId: day.planId,
+          skuId: l.skuId,
+          skuCode: l.skuCode,
+          qty: Number(l.plannedQty),
+          soNumber,
+          phaseNo,
+        });
+        if (out?.short > 0) {
+          shortfalls.push({
+            planNo: day.planNo, plannedDate: day.plannedDate,
+            skuCode: l.skuCode, skuName: l.skuName, short: out.short,
+          });
+        }
+      }
+
+      created.push({ plannedDate: day.plannedDate, phaseNo, planNo: day.planNo, lines: lines.length });
+    }
+
+    if (!created.length) throw new AppError('Nothing to inherit — every line was zero.', 422);
+
+    return {
+      soNumber,
+      phases: created,
+      // Capacity that vanished between preview and apply (someone else spent it).
+      // The phases were still created; this tells the planner to re-check.
+      shortfalls,
+    };
+  },
+
   async createPhase(soNumber, data, actor = null) {
     // FMS sequential gate: can't plan a dispatch until the prior steps are done.
     await o2dFmsService.assertActionAllowed({ soNumber, action: 'DISPATCH_PLAN' });
@@ -1588,6 +1913,17 @@ export const dispatchControlService = {
         });
       }
 
+      // If this phase was inherited from a production plan, hand that capacity
+      // back so the day is free to be planned again. Only for a HARD delete —
+      // a soft-cancelled phase still holds real dispatches against it.
+      if (hardDeletedAny) {
+        try {
+          await productionPlanInheritService.releasePlanConsumption({ soNumber, phaseNo: targetPhaseNo });
+        } catch (err) {
+          logger.error(`[dispatch] plan capacity release failed for ${soNumber}/${targetPhaseNo}: ${err.message}`);
+        }
+      }
+
       return {
         ...(await this.getSchedule(soNumber)),
         outcome: { hardDeletedAny, softCancelledAny },
@@ -1649,7 +1985,11 @@ export const dispatchControlService = {
     // overdue / planned / upcoming numbers.
     const orderSoSet = new Set(orders.map((o) => o.soNumber));
     const liveSchedules = schedules.filter((s) => orderSoSet.has(s.soNumber));
-    const liveChallans = challans.filter((c) => orderSoSet.has(c.soNumber));
+    // Cancelled dispatches were reversed out of every other number; excluding
+    // them here keeps the dashboard's monthly actuals consistent with the plan.
+    const liveChallans = challans.filter(
+      (c) => orderSoSet.has(c.soNumber) && c.status !== DC_STATUS.CANCELLED,
+    );
 
     const orderTotals = orders.reduce((acc, order) => {
       acc.totalOrders += 1;
@@ -1813,9 +2153,11 @@ export const dispatchControlService = {
             status: phase.status || 'PLANNED',
             delayDays,
             lastActualDate,
-            shipments: (phase.actualDispatches || []).map((d) => ({
-              date: d.date, qty: Number(d.qty || 0), invoiceNo: d.invoiceNo || null,
-            })),
+            shipments: (phase.actualDispatches || [])
+              .filter((d) => !d.cancelled)
+              .map((d) => ({
+                date: d.date, qty: Number(d.qty || 0), invoiceNo: d.invoiceNo || null,
+              })),
           });
         });
       });
@@ -1845,7 +2187,12 @@ export const dispatchControlService = {
       // Reset phase actuals, then replay challans chronologically.
       schedule.items.forEach((it) => it.phases.forEach((p) => { p.actualDispatches = []; p.totalActualQty = 0; }));
 
-      const challans = await DeliveryChallan.find({ soNumber: order.soNumber }).sort({ dcDate: 1, createdAt: 1 }).lean();
+      const challans = await DeliveryChallan.find({
+        soNumber: order.soNumber,
+        // Never replay a cancelled dispatch: the rebuild wipes phase actuals and
+        // re-applies every challan, so including these would undo cancellations.
+        status: { $ne: DC_STATUS.CANCELLED },
+      }).sort({ dcDate: 1, createdAt: 1 }).lean();
       for (const challan of challans) {
         const phaseNos = (challan.phaseRefs || []).map((r) => r.phaseNo).filter(Boolean);
         // Unplanned (or phase-less) DCs contribute to SKU totals but bind to no phase.
@@ -1873,6 +2220,9 @@ export const dispatchControlService = {
             if (!phase) return;
             phase.actualDispatches.push({
               date: challan.dcDate, qty: give, invoiceNo: challan.invoiceNo,
+              // Stamped here too, so a dispatch cancelled AFTER a rebuild can
+              // still find and reverse exactly its own contribution.
+              dcNumber: challan.dcNumber,
               invoiceDate: challan.dcDate, invoiceDoc: challan.pdfUrl,
             });
             phase.totalActualQty = Number(phase.totalActualQty || 0) + give;

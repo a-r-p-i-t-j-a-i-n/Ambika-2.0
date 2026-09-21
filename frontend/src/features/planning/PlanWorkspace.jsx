@@ -5,7 +5,7 @@ import {
   alpha, useTheme, CircularProgress, Skeleton, Chip,
   ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
-import { Plus, CalendarPlus, Search, LayoutList, CalendarRange, ListChecks, CalendarDays, Lock } from 'lucide-react';
+import { Plus, CalendarPlus, Search, LayoutList, CalendarRange, ListChecks, CalendarDays, Lock, Factory } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -24,6 +24,7 @@ import PhaseTimeline from './components/PhaseTimeline';
 import PhaseCard from './components/PhaseCard';
 import RiskRail from './components/RiskRail';
 import AddPhaseDialog from './components/AddPhaseDialog';
+import InheritProductionPlanDialog from './InheritProductionPlanDialog';
 import { useReturnToTask } from '../o2d-fms/useReturnToTask';
 import { useFmsGate, FmsGateDialog, FmsGateBanner } from '../o2d-fms/FmsGate';
 import { O2D } from '../o2d-fms/o2dTheme';
@@ -139,7 +140,7 @@ const PlanWorkspace = () => {
   };
 
   const soNumber = selectedOrder?.soNumber;
-  const { data: scheduleRes, isFetching: scheduleLoading } = useGetScheduleQuery(soNumber, { skip: !soNumber });
+  const { data: scheduleRes, isFetching: scheduleLoading, refetch: refetchSchedule } = useGetScheduleQuery(soNumber, { skip: !soNumber });
   const { data: comparisonRes, isFetching: comparisonLoading } = useGetOrderComparisonQuery(soNumber, { skip: !soNumber });
   const schedule   = scheduleRes?.data;
   const comparison = comparisonRes?.data;
@@ -149,6 +150,7 @@ const PlanWorkspace = () => {
   const gate = useFmsGate({ soNumber, action: 'DISPATCH_PLAN' });
   const tryAddPhase = () => { if (gate.blocked) setGateOpen(true); else setAddDialogOpen(true); };
   const [createPhase, { isLoading: isCreating }] = useCreatePhaseMutation();
+  const [inheritOpen, setInheritOpen] = useState(false);
   const [updatePhase, { isLoading: isUpdating }] = useUpdatePhaseMutation();
   const [deletePhase, { isLoading: isDeleting }] = useDeletePhaseMutation();
 
@@ -319,6 +321,17 @@ const PlanWorkspace = () => {
               >
                 Calendar
               </Button>
+              {/* Draw the dates the factory already promised this party, instead
+                  of retyping them. Opens a proposal the planner can edit. */}
+              <Button
+                size="small" variant="outlined" disableElevation
+                startIcon={<Factory size={14} />}
+                onClick={() => setInheritOpen(true)}
+                disabled={!soNumber || scheduleLoading}
+                sx={{ borderRadius: '6px', whiteSpace: 'nowrap', px: 1.5, textTransform: 'none', fontWeight: 700 }}
+              >
+                Inherit Production Plan
+              </Button>
               <Button
                 size="small" variant="contained" disableElevation
                 startIcon={gate.blocked ? <Lock size={13} /> : <Plus size={14} />}
@@ -380,9 +393,14 @@ const PlanWorkspace = () => {
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
                   Click <strong>Add Phase</strong> to start planning dispatches for this order.
                 </Typography>
-                <Button variant="contained" startIcon={gate.blocked ? <Lock size={14} /> : <Plus size={14} />} onClick={tryAddPhase}>
-                  Add Phase
-                </Button>
+                <Stack direction="row" spacing={1}>
+                  <Button variant="outlined" startIcon={<Factory size={14} />} onClick={() => setInheritOpen(true)}>
+                    Inherit Production Plan
+                  </Button>
+                  <Button variant="contained" startIcon={gate.blocked ? <Lock size={14} /> : <Plus size={14} />} onClick={tryAddPhase}>
+                    Add Phase
+                  </Button>
+                </Stack>
               </Paper>
             ) : (
               <Stack spacing={1.5}>
@@ -457,6 +475,13 @@ const PlanWorkspace = () => {
       />
 
       <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />
+
+      <InheritProductionPlanDialog
+        open={inheritOpen}
+        soNumber={soNumber}
+        onClose={() => setInheritOpen(false)}
+        onApplied={() => refetchSchedule?.()}
+      />
     </Box>
   );
 };

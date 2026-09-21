@@ -3,17 +3,19 @@ import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
   Chip, TextField, Skeleton, InputAdornment, TablePagination, alpha, Collapse,
   Button, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions,
-  Autocomplete, Checkbox,
+  Autocomplete, Checkbox, CircularProgress,
 } from '@mui/material';
 import {
   Search, Workflow, CheckCircle2, Clock, AlertTriangle, CircleDashed,
-  Plus, Trash2, ArrowRight, ClipboardList, ExternalLink, User, CalendarClock, Pencil, Layers, Mail,
+  Plus, Trash2, ArrowRight, ClipboardList, ExternalLink, User, CalendarClock, Pencil, Layers, Mail, Ban, RotateCcw,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import { useGetProcessesQuery, useGetBoardConsignmentsQuery } from '../../store/api/o2dFmsApi';
 import { useDeleteOrderMutation } from '../../store/api/orderApi';
-import { useDeleteChallanMutation } from '../../store/api/dispatchControlApi';
+import {
+  useDeleteChallanMutation, useCancelChallanMutation, useRestoreChallanMutation,
+} from '../../store/api/dispatchControlApi';
 import { usePermissions } from '../../hooks/usePermission';
 import { resolveActionLink, resolveEntityLink, actionLinkMeta } from './actionLinks';
 import BoardRowEditDialog from './BoardRowEditDialog';
@@ -248,7 +250,15 @@ const sortRows = (list, mode) => {
 // documents decide (challan / invoice / email / delivery / payment / transport).
 const dcStepState = (dc, step) => {
   if (!dc || !step) return null;
+  // A cancelled dispatch cancels everything downstream of it. Checked first so
+  // the row never shows "pending work" for a consignment nobody will ship.
+  if (dc.cancelled) {
+    return { done: false, cancelled: true, at: dc.cancelledAt, by: dc.cancelledByName, reason: dc.cancelReason };
+  }
   const log = dc.log?.[step.code];
+  if (log?.status === 'CANCELLED') {
+    return { done: false, cancelled: true, at: log.doneAt, by: log.doneByName };
+  }
   if (log) return { done: true, at: log.doneAt, by: log.doneByName };
   if (step.isDispatch) return { done: true, at: dc.dcDate, by: dc.createdByName };
   switch (step.triggerKey) {
@@ -411,6 +421,12 @@ const O2dStepBoard = () => {
   // button entirely for everyone else instead of showing a dead control.
   const canDelete = can('orders.delete') || isRoot;
   const [deleteChallan] = useDeleteChallanMutation();
+  const [cancelChallan] = useCancelChallanMutation();
+  const [restoreChallan] = useRestoreChallanMutation();
+  const [restoringId, setRestoringId] = useState(null);
+  const [cancelRow, setCancelRow] = useState(null);   // { p, dc } pending cancel
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
   const [deleteOrder, { isLoading: deleting }] = useDeleteOrderMutation();
   const [confirmRow, setConfirmRow] = useState(null); // { p, dc } pending delete confirmation
   const [sortBy, setSortBy] = useState('recentFirst');
@@ -639,6 +655,37 @@ const O2dStepBoard = () => {
     );
   };
 
+  // Un-cancel: straight action, no confirm dialog — it only puts things back,
+  // and the state it restores is the one the user already had.
+  const handleRestore = async (dc) => {
+    if (!dc?.dcId || restoringId) return;
+    setRestoringId(dc.dcId);
+    try {
+      await restoreChallan(dc.dcId).unwrap();
+      enqueueSnackbar(`${dc.dcNumber} restored — it counts as dispatched again.`, { variant: 'success' });
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Could not restore this dispatch.', { variant: 'error' });
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
+  const handleCancel = async () => {
+    const dc = cancelRow?.dc;
+    if (!dc?.dcId) return;
+    setCancelling(true);
+    try {
+      await cancelChallan({ id: dc.dcId, reason: cancelReason.trim() || undefined }).unwrap();
+      setCancelRow(null);
+      setCancelReason('');
+      enqueueSnackbar(`${dc.dcNumber} cancelled — its quantity is back on the plan.`, { variant: 'success' });
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Could not cancel this dispatch.', { variant: 'error' });
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const handleDelete = async () => {
     const { p, dc } = confirmRow || {};
     // A challan row deletes only THAT dispatch; an order row deletes the order
@@ -672,7 +719,7 @@ const O2dStepBoard = () => {
     return hide.length ? DC_COLUMNS.filter((c) => !hide.includes(c.key)) : DC_COLUMNS;
   }, [activeCode]);
 
-  const colCount = 11 + fieldCols.length + (canDelete ? 1 : 0) + (isPerDcStep ? 1 + dcCols.length : 0) + (isEmailStep ? 1 : 0) + extraCols.length;
+  const colCount = 11 + fieldCols.length + (canDelete ? 1 : 0) + (isPerDcStep ? 2 + dcCols.length : 0) + (isEmailStep ? 1 : 0) + extraCols.length;
 
   // ── Frozen panes ──
   // Action + SO Number (+ Split on the dispatch step) stay pinned while the
@@ -905,6 +952,7 @@ const O2dStepBoard = () => {
                     <TableCell>Delay</TableCell>
                     <TableCell sx={{ minWidth: 120 }}>Who</TableCell>
                     <TableCell align="center" sx={{ width: 52 }}>Task</TableCell>
+                    {isPerDcStep && <TableCell align="center" sx={{ width: 74 }}>Cancel</TableCell>}
                     <TableCell align="center" sx={{ width: 52 }}>Edit</TableCell>
                     {canDelete && <TableCell align="right" sx={{ width: 56 }}>Delete</TableCell>}
                   </TableRow>
@@ -927,6 +975,7 @@ const O2dStepBoard = () => {
                     // Per-challan state of THIS step — each split runs 2.06–2.13
                     // separately, so every row gets its OWN links + status.
                     const dcState = dc ? dcStepState(dc, activeStep) : null;
+                    const rowCancelled = !!dcState?.cancelled;
                     const rowDone = dc ? !!dcState?.done : done;
                     let links = rowDone ? rowDoneLinks(p, s) : rowDoLinks(p, s);
                     // A dispatched challan's PDF link points at ITS OWN pdf.
@@ -938,7 +987,16 @@ const O2dStepBoard = () => {
                     const who = (s.assignees || []).map(nameOf).filter(Boolean).join(', ') || s.ownerName || '—';
                     return (
                       <React.Fragment key={rowKey}>
-                      <TableRow hover>
+                      <TableRow
+                        hover
+                        sx={rowCancelled ? {
+                          // Faded red ground so a cancelled dispatch is obvious at a
+                          // glance without hiding it — the row stays as the record.
+                          bgcolor: alpha('#dc2626', 0.05),
+                          '& .frozenCell': { bgcolor: '#fdf2f2' },
+                          '&:hover': { bgcolor: alpha('#dc2626', 0.09) },
+                        } : undefined}
+                      >
                         <TableCell className="frozenCell" sx={freezeSx(0)}>
                           <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" alignItems="center">
                             {isEmailStep && (
@@ -1065,20 +1123,23 @@ const O2dStepBoard = () => {
                             {/* Per-challan status — THIS challan's own progress on
                                 the active step; hover for the full story (who,
                                 when, phase, remark). */}
-                            <Tooltip arrow title={rowDone
-                              ? `Done${dcState?.by ? ` by ${dcState.by}` : ''}${dcState?.at ? ` · ${fmtDT(dcState.at)}` : ''}${dc.phaseNo ? ` · Phase ${dc.phaseNo}` : ''}${dc.remark ? ` · ${dc.remark}` : ''}`
-                              : `${dc.dcNumber} is still waiting on this step${dc.phaseNo ? ` · Phase ${dc.phaseNo}` : ''}`}>
-                            <Chip size="small" icon={rowDone ? <CheckCircle2 size={14} /> : <CircleDashed size={14} />}
-                              label={rowDone ? 'Done' : 'Pending'}
+                            <Tooltip arrow title={rowCancelled
+                              ? `${dc.dcNumber} was cancelled${dcState?.by ? ` by ${dcState.by}` : ''}${dcState?.at ? ` · ${fmtDT(dcState.at)}` : ''}${dcState?.reason ? ` · ${dcState.reason}` : ''} — its quantity no longer counts as dispatched.`
+                              : rowDone
+                                ? `Done${dcState?.by ? ` by ${dcState.by}` : ''}${dcState?.at ? ` · ${fmtDT(dcState.at)}` : ''}${dc.phaseNo ? ` · Phase ${dc.phaseNo}` : ''}${dc.remark ? ` · ${dc.remark}` : ''}`
+                                : `${dc.dcNumber} is still waiting on this step${dc.phaseNo ? ` · Phase ${dc.phaseNo}` : ''}`}>
+                            <Chip size="small"
+                              icon={rowCancelled ? <Ban size={14} /> : rowDone ? <CheckCircle2 size={14} /> : <CircleDashed size={14} />}
+                              label={rowCancelled ? 'Cancelled' : rowDone ? 'Done' : 'Pending'}
                               sx={{
                                 height: 24, fontWeight: 700, borderRadius: '999px',
-                                color: rowDone ? '#15803d' : '#64748b',
-                                bgcolor: rowDone ? '#ecfdf5' : '#f8fafc',
-                                border: `1px solid ${rowDone ? '#bbf7d0' : '#e2e8f0'}`,
+                                color: rowCancelled ? '#b91c1c' : rowDone ? '#15803d' : '#64748b',
+                                bgcolor: rowCancelled ? '#fee2e2' : rowDone ? '#ecfdf5' : '#f8fafc',
+                                border: `1px solid ${rowCancelled ? '#fca5a5' : rowDone ? '#bbf7d0' : '#e2e8f0'}`,
                                 '& .MuiChip-icon': { color: 'inherit', ml: 0.75, mr: -0.25 }, '& .MuiChip-label': { px: 1 },
                               }} />
                             </Tooltip>
-                            {rowDone && dcState?.by && (
+                            {(rowCancelled || rowDone) && dcState?.by && (
                               <Typography sx={{ fontSize: '0.68rem', color: O2D.sub, mt: 0.25 }}>by <b>{dcState.by}</b></Typography>
                             )}
                           </>) : firstOfGroup && (<>
@@ -1168,6 +1229,49 @@ const O2dStepBoard = () => {
                             </IconButton>
                           </Tooltip>
                         </TableCell>
+                        {/* Cancel THIS dispatch. Not a delete: the row stays, the
+                            quantity goes back to the plan, and 2.06→2.13 for this
+                            challan all read cancelled. Already-cancelled rows show
+                            a static marker instead of a second button. */}
+                        {isPerDcStep && (
+                          <TableCell align="center">
+                            {!dc ? <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>
+                              : rowCancelled ? (
+                                <Tooltip arrow title={`Cancelled${dcState?.by ? ` by ${dcState.by}` : ''}${dcState?.reason ? ` · ${dcState.reason}` : ''} — click to undo: the quantity counts as dispatched again and steps 2.06→2.13 return to their real state.`}>
+                                  <span>
+                                    <Button
+                                      size="small" variant="outlined"
+                                      disabled={restoringId === dc.dcId}
+                                      startIcon={restoringId === dc.dcId ? <CircularProgress size={11} /> : <RotateCcw size={12} />}
+                                      onClick={() => handleRestore(dc)}
+                                      sx={{
+                                        textTransform: 'none', fontWeight: 700, fontSize: '0.68rem', borderRadius: '6px',
+                                        px: 0.9, py: 0.15, minWidth: 0, color: '#15803d', borderColor: '#bbf7d0',
+                                        '&:hover': { borderColor: '#15803d', bgcolor: alpha('#15803d', 0.06) },
+                                      }}
+                                    >
+                                      Restore
+                                    </Button>
+                                  </span>
+                                </Tooltip>
+                              ) : (
+                                <Tooltip arrow title={`Cancel dispatch ${dc.dcNumber} — its quantity returns to the plan and every later step is cancelled`}>
+                                  <Button
+                                    size="small" variant="outlined"
+                                    startIcon={<Ban size={12} />}
+                                    onClick={() => { setCancelReason(''); setCancelRow({ p, dc }); }}
+                                    sx={{
+                                      textTransform: 'none', fontWeight: 700, fontSize: '0.68rem', borderRadius: '6px',
+                                      px: 0.9, py: 0.15, minWidth: 0, color: '#b91c1c', borderColor: '#fca5a5',
+                                      '&:hover': { borderColor: '#b91c1c', bgcolor: alpha('#dc2626', 0.06) },
+                                    }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </Tooltip>
+                              )}
+                          </TableCell>
+                        )}
                         {/* Edit THIS row in place — an Excel-style popup, no
                             redirect. A challan row edits its Delivery Challan;
                             an order row edits the Sales Order basics. */}
@@ -1367,6 +1471,43 @@ const O2dStepBoard = () => {
 
       {/* In-place row editor — Excel-style popup, saves without leaving the board. */}
       <BoardRowEditDialog row={editRow} onClose={() => setEditRow(null)} />
+
+      {/* Cancel confirmation — spell out exactly what cancelling does, because
+          the point of it (versus delete) is that the numbers move. */}
+      <Dialog open={!!cancelRow} onClose={() => !cancelling && setCancelRow(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Ban size={18} color="#b91c1c" /> Cancel this dispatch?
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: '0.85rem', color: O2D.body, mb: 1.5 }}>
+            Dispatch <b>{cancelRow?.dc?.dcNumber}</b> on order <b>{cancelRow?.p?.soNumber}</b> will be
+            marked cancelled. It stays on the board as a record, but:
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.25, mb: 1.5, '& li': { fontSize: '0.8rem', color: O2D.body, mb: 0.5 } }}>
+            <li>its quantity <b>stops counting as dispatched</b> and returns to the plan</li>
+            <li>Plan vs Actual and the order balance update accordingly</li>
+            <li>steps <b>2.06 → 2.13</b> for this challan are marked cancelled</li>
+            <li>you can raise a <b>fresh dispatch</b> against the same plan</li>
+          </Box>
+          <TextField
+            fullWidth size="small" label="Reason (optional)" value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            placeholder="e.g. Client cancelled the order"
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setCancelRow(null)} disabled={cancelling} sx={{ textTransform: 'none', fontWeight: 700 }}>
+            Keep it
+          </Button>
+          <Button
+            variant="contained" color="error" disableElevation disabled={cancelling}
+            startIcon={<Ban size={14} />} onClick={handleCancel}
+            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px' }}
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel dispatch'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Delete confirmation — deleting removes the sales order AND its whole
           FMS tracker (server-side cascade), so spell that out before acting. */}

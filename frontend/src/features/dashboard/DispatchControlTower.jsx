@@ -314,13 +314,13 @@ const Row = ({ order }) => {
                                 </Box>
                                 
                                 <Box sx={{ bgcolor: BRAND.surfaceAlt, p: 1, borderRadius: '6px' }}>
-                                  {phase.actualDispatches?.map((ad, adIdx) => (
-                                    <Box key={adIdx} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: adIdx < phase.actualDispatches.length - 1 ? 0.5 : 0 }}>
+                                  {(phase.actualDispatches || []).filter((ad) => !ad.cancelled).map((ad, adIdx) => (
+                                    <Box key={adIdx} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: adIdx < (phase.actualDispatches || []).filter((x) => !x.cancelled).length - 1 ? 0.5 : 0 }}>
                                       <Typography variant="caption" fontWeight={800} color={BRAND.success} sx={{ fontSize: '0.6rem' }}>{ad.qty}</Typography>
                                       <Typography variant="caption" sx={{ fontSize: '0.55rem', color: BRAND.slate }}>{dayjs(ad.date).format('DD/MM')}</Typography>
                                     </Box>
                                   ))}
-                                  {(!phase.actualDispatches || phase.actualDispatches.length === 0) && (
+                                  {(phase.actualDispatches || []).filter((ad) => !ad.cancelled).length === 0 && (
                                     <Typography variant="caption" color="text.disabled" fontWeight={700} sx={{ fontSize: '0.6rem' }}>Waiting...</Typography>
                                   )}
                                 </Box>

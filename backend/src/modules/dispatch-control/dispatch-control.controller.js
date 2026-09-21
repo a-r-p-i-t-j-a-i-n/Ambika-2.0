@@ -44,6 +44,34 @@ export const dispatchControlController = {
     res.json(ApiResponse.ok(`${result.sent} of ${result.total} emails sent`, result));
   }),
 
+  cancelChallan: asyncHandler(async (req, res) => {
+    const result = await dispatchControlService.cancelChallan(req.params.id, req.body, buildActor(req));
+    res.json(ApiResponse.ok(
+      result.alreadyCancelled ? 'Dispatch was already cancelled' : 'Dispatch cancelled',
+      result,
+    ));
+  }),
+
+  restoreChallan: asyncHandler(async (req, res) => {
+    const result = await dispatchControlService.restoreChallan(req.params.id, buildActor(req));
+    res.json(ApiResponse.ok(
+      result.alreadyActive ? 'Dispatch is already active' : 'Dispatch restored',
+      result,
+    ));
+  }),
+
+  previewInherit: asyncHandler(async (req, res) => {
+    const data = await dispatchControlService.previewProductionPlanInherit(req.params.soNumber);
+    res.json(ApiResponse.ok('Production plan proposal built', data));
+  }),
+
+  applyInherit: asyncHandler(async (req, res) => {
+    const data = await dispatchControlService.applyProductionPlanInherit(
+      req.params.soNumber, req.body, buildActor(req),
+    );
+    res.json(ApiResponse.ok(`${data.phases.length} phase(s) created from the production plan`, data));
+  }),
+
   getComparison: asyncHandler(async (req, res) => {
     const comparison = await dispatchControlService.getComparison(req.params.soNumber);
     res.json(ApiResponse.ok('Plan vs actual comparison retrieved', comparison));

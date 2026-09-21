@@ -39,6 +39,102 @@ const STATUS = {
 };
 const statusMeta = (s) => STATUS[s] || STATUS.PLANNED;
 
+// How much of a plan a dispatch plan has already taken.
+// Business wording, not ours: the planner thinks "has this been used by an
+// order yet".
+const USED = { color: '#7c3aed', label: 'Fully used' };
+const PARTIAL = { color: '#b45309', label: 'Partly used' };
+
+// What each card SHOWS. Separate from the usage filter below: that decides
+// WHICH plans appear, this decides WHICH NUMBERS are on them.
+//   planned - only what the factory committed to make
+//   used    - only what a dispatch plan has actually taken
+//   both    - the committed figure with the taken figure against it (default)
+// Deliberately "used", not "actual": in this system Actual already means a real
+// dispatch that left the gate, and these are two different numbers.
+const VIEW_OPTS = [
+  { value: 'both',    label: 'Planned & used' },
+  { value: 'planned', label: 'Planned only' },
+  { value: 'used',    label: 'Used only' },
+];
+
+// The usage filter — the question a planner actually asks of this calendar.
+const USAGE_OPTS = [
+  { value: 'all',     label: 'All plans' },
+  { value: 'free',    label: 'Not used yet' },
+  { value: 'partial', label: 'Partly used' },
+  { value: 'used',    label: 'Fully used' },
+];
+const usageOf = (p) => {
+  const planned = Number(p.totalPlannedQty || 0);
+  const used = Number(p.totalConsumedQty || 0);
+  if (used <= 0) return 'free';
+  if (used >= planned) return 'used';
+  return 'partial';
+};
+const consumptionOf = (p) => {
+  const planned = Number(p.totalPlannedQty || 0);
+  const used = Number(p.totalConsumedQty || 0);
+  return {
+    planned,
+    used,
+    free: Math.max(0, planned - used),
+    pct: planned > 0 ? Math.min(100, Math.round((used / planned) * 100)) : 0,
+    full: planned > 0 && used >= planned,
+    some: used > 0,
+    soNumbers: p.consumedBySo || [],
+  };
+};
+// The colour a plan card shows: consumption wins over lifecycle status, because
+// "this day is already committed to an order" is the thing a planner must see.
+// A calendar card merges a party's plans for that day, so consumption has to be
+// summed across the group, not read off one plan.
+const groupConsumption = (g) => {
+  const plans = (g.events || []).map((e) => e._plan).filter(Boolean);
+  const planned = plans.reduce((s2, p) => s2 + Number(p.totalPlannedQty || 0), 0);
+  const used = plans.reduce((s2, p) => s2 + Number(p.totalConsumedQty || 0), 0);
+  const soNumbers = [...new Set(plans.flatMap((p) => p.consumedBySo || []).filter(Boolean))];
+  return {
+    planned, used, free: Math.max(0, planned - used), soNumbers,
+    pct: planned > 0 ? Math.min(100, Math.round((used / planned) * 100)) : 0,
+    full: planned > 0 && used >= planned,
+    some: used > 0,
+    cancelled: plans.length > 0 && plans.every((p) => p.planStatus === 'CANCELLED'),
+  };
+};
+const groupMeta = (g, mode = 'both') => {
+  const c = groupConsumption(g);
+  if (c.cancelled) return STATUS.CANCELLED;
+  // "Planned only" shows plan numbers, so it gets plan colours — full stop.
+  if (mode === 'planned') return statusMeta(g.status);
+  // "Used only" shows nothing BUT used quantities, so every card is a used card.
+  if (mode === 'used') return USED;
+  if (c.full) return USED;
+  if (c.some) return PARTIAL;
+  return statusMeta(g.status);
+};
+
+// The status handed to the PDF engine, so the printed sheet colours each card
+// exactly as the screen does instead of falling back to the lifecycle status.
+const printStatusOf = (plan, mode) => {
+  if (plan.planStatus === 'CANCELLED') return 'CANCELLED';
+  if (mode === 'planned') return plan.planStatus || 'PLANNED';
+  const planned = Number(plan.totalPlannedQty || 0);
+  const used = Number(plan.totalConsumedQty || 0);
+  if (mode === 'used') return 'FULLY_USED';
+  if (used > 0 && used >= planned) return 'FULLY_USED';
+  if (used > 0) return 'PARTLY_USED';
+  return plan.planStatus || 'PLANNED';
+};
+
+const cardMeta = (p) => {
+  const c = consumptionOf(p);
+  if (p.planStatus === 'CANCELLED') return STATUS.CANCELLED;
+  if (c.full) return USED;
+  if (c.some) return PARTIAL;
+  return statusMeta(p.planStatus);
+};
+
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 
@@ -71,6 +167,8 @@ export default function ProductionPlanCalendar() {
   const [cursor, setCursor] = useState(dayjs());
   const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'list' | 'party'
   const [partyFilter, setPartyFilter] = useState([]);
+  const [usageFilter, setUsageFilter] = useState('all');
+  const [viewMode2, setViewMode2] = useState('both');   // what the cards show
   const [search, setSearch] = useState('');
   const [dayOpen, setDayOpen] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -99,39 +197,54 @@ export default function ProductionPlanCalendar() {
     const q = search.trim().toLowerCase();
     return plans.filter((p) => {
       if (partyFilter.length && !partyFilter.includes(p.partyName)) return false;
+      if (usageFilter !== 'all' && usageOf(p) !== usageFilter) return false;
+      // Showing "used only" alongside plans that were never used would be a page
+      // of blank cards, so the mode implies the filter.
+      if (viewMode2 === 'used' && Number(p.totalConsumedQty || 0) <= 0) return false;
       if (!q) return true;
       const hay = `${p.planNo || ''} ${p.partyName || ''} ${p.soNumber || ''} ${p.poNumber || ''} ${(p.items || []).map((i) => `${i.skuName} ${i.skuCode}`).join(' ')}`;
       return hay.toLowerCase().includes(q);
     });
-  }, [plans, partyFilter, search]);
+  }, [plans, partyFilter, usageFilter, viewMode2, search]);
 
   // ── Plans → the Dispatch Calendar's event contract ────────────────────
   // Shaping the data this way is what lets the screen, the grouping rule and
   // the whole PDF engine be shared instead of forked. `_plan` rides along so a
   // merged card can still open the individual plan it came from.
-  const events = useMemo(() => filtered.map((p) => ({
+  const events = useMemo(() => filtered.map((p) => {
+    const usedView = viewMode2 === 'used';
+    // In "Used only" the headline number IS the consumed figure, so the cards,
+    // the totals and the exported sheet all agree with what is on screen.
+    const headline = (planned, consumed) => (usedView ? Number(consumed || 0) : Number(planned || 0));
+    return {
     id: p._id,
     dateKey: dayjs(p.plannedDate).format('YYYY-MM-DD'),
     date: p.plannedDate,
     partyName: p.partyName || '—',
     eventType: 'scheduled',
-    status: p.planStatus || 'PLANNED',
+    status: printStatusOf(p, viewMode2),
     isDelayed: false,
     delayDays: 0,
     soNumber: p.soNumber || p.planNo,
     poNumber: p.poNumber || '',
-    plannedQty: Number(p.totalPlannedQty || 0),
+    plannedQty: headline(p.totalPlannedQty, p.totalConsumedQty),
+    // Carried through the grouping so the PDF colours each card by usage and
+    // can print the USED column — without this the sheet fell back to event
+    // type and printed everything blue.
+    usedQty: Number(p.totalConsumedQty || 0),
     actualQty: Number(p.totalProducedQty || 0),
     pendingQty: 0,
     skus: (p.items || []).map((it) => ({
       skuName: it.skuName,
       skuCode: it.skuCode,
-      plannedQty: Number(it.plannedQty || 0),
+      plannedQty: headline(it.plannedQty, it.consumedQty),
+      usedQty: Number(it.consumedQty || 0),
       actualQty: Number(it.producedQty || 0),
       pendingQty: 0,
-    })),
+    })).filter((sk) => sk.plannedQty > 0),
     _plan: p,
-  })), [filtered]);
+    };
+  }), [filtered, viewMode2]);
 
   // Day → party-merged groups, using the SAME rule the dispatch screen uses.
   const byDay = useMemo(() => {
@@ -174,6 +287,7 @@ export default function ProductionPlanCalendar() {
       plans: live.length,
       planned: live.reduce((s, p) => s + Number(p.totalPlannedQty || 0), 0),
       produced: live.reduce((s, p) => s + Number(p.totalProducedQty || 0), 0),
+      used: live.reduce((s, p) => s + Number(p.totalConsumedQty || 0), 0),
       parties: new Set(live.map((p) => p.partyName)).size,
     };
   }, [filtered]);
@@ -207,15 +321,24 @@ export default function ProductionPlanCalendar() {
   const exportPayload = () => ({
     month: cursor.toISOString(),
     events,
-    filters: { partyLabel, search: search.trim() },
+    filters: {
+      contentLabel: (VIEW_OPTS.find((o) => o.value === viewMode2) || {}).label,
+      statusLabel: usageFilter === 'all' ? '' : (USAGE_OPTS.find((o) => o.value === usageFilter) || {}).label,
+      partyLabel,
+      search: search.trim(),
+    },
     title: viewMode === 'list' ? 'Production Planning List' : 'Production Planning Calendar',
     docTitle: 'Production Plan',
     footer: 'Generated from Ambika Production Planning',
     fileStem: 'Production-Plan',
-    statLabels: ['Plans', 'Planned pcs', 'Produced pcs', 'Parties'],
+    // Colour by usage, not by event type, and print the USED column — this is
+    // what makes the sheet match the filters on screen.
+    usageMode: viewMode2,
+    emptyCellText: 'No plan',
+    statLabels: ['Plans', 'Planned pcs', 'Used pcs', 'Parties'],
     emptyText: 'No plans match the current filters this month.',
     // No "delayed" notion on a plan — the 4th tile carries the party count.
-    statValues: { delayed: monthStats.parties },
+    statValues: { dispatched: monthStats.used, delayed: monthStats.parties },
   });
 
   const handlePreview = () => {
@@ -274,7 +397,8 @@ export default function ProductionPlanCalendar() {
   // One party band: party block | SKU tiles | total panel. Shared by the list
   // view and the day drill-down, exactly as the dispatch screen does it.
   const PartyBand = ({ g, onClick }) => {
-    const m = statusMeta(g.status);
+    const m = groupMeta(g, viewMode2);
+    const cons = groupConsumption(g);
     const rows = (g.skus || []).filter((sk) => Number(sk.plannedQty) > 0);
     return (
       <Stack
@@ -290,7 +414,8 @@ export default function ProductionPlanCalendar() {
         <Box sx={{ width: { md: 168 }, flexShrink: 0, p: 1.25, bgcolor: alpha(m.color, 0.07), borderLeft: `4px solid ${m.color}` }}>
           <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: NAVY, lineHeight: 1.2 }}>{g.partyName}</Typography>
           <Typography sx={{ fontSize: '0.6rem', color: O2D.sub, mb: 0.85 }}>
-            {g.events.length} plan{g.events.length > 1 ? 's' : ''} · {g.orderCount ? `${g.orderCount} ref` : 'no order'}
+            {g.events.length} plan{g.events.length > 1 ? 's' : ''}
+            {cons.soNumbers.length ? ` · used by ${cons.soNumbers.join(', ')}` : ' · not yet used'}
           </Typography>
           <Chip
             size="small"
@@ -320,6 +445,20 @@ export default function ProductionPlanCalendar() {
             {num(g.totalQty)}
           </Typography>
           <Typography sx={{ fontSize: '0.55rem', fontWeight: 800, color: O2D.faint, letterSpacing: '0.09em', mt: 0.25 }}>TOTAL PCS</Typography>
+          {/* What a dispatch plan has already drawn from this day. */}
+          {cons.some && (
+            <Tooltip arrow slotProps={O2D_TIP}
+              title={`${num(cons.used)} of ${num(cons.planned)} pcs used${cons.soNumbers.length ? ` by ${cons.soNumbers.join(', ')}` : ''} · ${num(cons.free)} still free`}>
+              <Chip
+                size="small"
+                label={cons.full ? 'Fully used' : `${num(cons.used)} used`}
+                sx={{
+                  mt: 0.6, height: 19, borderRadius: '4px', fontSize: '0.58rem', fontWeight: 800,
+                  bgcolor: alpha(m.color, 0.14), color: m.color,
+                }}
+              />
+            </Tooltip>
+          )}
         </Box>
       </Stack>
     );
@@ -347,10 +486,16 @@ export default function ProductionPlanCalendar() {
           {[
             { k: 'Plans', v: monthStats.plans, c: O2D.ink },
             { k: 'Planned pcs', v: num(monthStats.planned), c: BRAND },
+            { k: 'Used pcs', v: num(monthStats.used), c: '#7c3aed' },
             { k: 'Produced pcs', v: num(monthStats.produced), c: '#15803d' },
             { k: 'Parties', v: monthStats.parties, c: O2D.ink },
           ].map((s) => (
-            <Box key={s.k} sx={{ textAlign: 'right', display: { xs: s.k === 'Plans' ? 'block' : 'none', sm: 'block' } }}>
+            <Box key={s.k} sx={{
+              textAlign: 'right',
+              display: s.k === 'Produced pcs'
+                ? { xs: 'none', xl: 'block' }
+                : { xs: s.k === 'Plans' ? 'block' : 'none', sm: 'block' },
+            }}>
               <Typography sx={{ fontSize: '1rem', fontWeight: 800, lineHeight: 1, color: s.c, fontVariantNumeric: 'tabular-nums' }}>{s.v}</Typography>
               <Typography sx={{ fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: O2D.sub }}>{s.k}</Typography>
             </Box>
@@ -365,24 +510,26 @@ export default function ProductionPlanCalendar() {
       <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${GRID}`, bgcolor: O2D.surface }}>
         {/* ── Toolbar ──────────────────────────────────────────────── */}
         <Stack direction="row" alignItems="center" spacing={0.75}
-          sx={{ px: { xs: 1.25, sm: 1.5 }, py: 0.75, flexWrap: { xs: 'wrap', lg: 'nowrap' }, rowGap: 0.75, borderBottom: `1px solid ${GRID}` }}>
+          sx={{ px: { xs: 1.25, sm: 1.5 }, py: 0.75, flexWrap: { xs: 'wrap', md: 'nowrap' }, rowGap: 0.75, borderBottom: `1px solid ${GRID}` }}>
           <Stack direction="row" alignItems="center" spacing={0.5}>
             <IconButton size="small" onClick={() => setCursor((c) => c.subtract(1, 'month'))} sx={navBtn}><ChevronLeft size={17} /></IconButton>
-            <Typography sx={{ fontWeight: 800, fontSize: '0.88rem', minWidth: 124, textAlign: 'center', color: BRAND_DK }}>
+            <Typography noWrap sx={{ fontWeight: 800, fontSize: '0.84rem', minWidth: 106, textAlign: 'center', color: BRAND_DK }}>
               {cursor.format('MMMM YYYY')}
             </Typography>
             <IconButton size="small" onClick={() => setCursor((c) => c.add(1, 'month'))} sx={navBtn}><ChevronRight size={17} /></IconButton>
-            <Button size="small" onClick={() => setCursor(dayjs())}
-              sx={{ fontWeight: 800, color: BRAND, textTransform: 'none', '&:hover': { bgcolor: alpha(BRAND, 0.06) } }}>
-              Today
-            </Button>
           </Stack>
 
           {/* View switch — Calendar · List · Party grid */}
           <ToggleButtonGroup size="small" exclusive value={viewMode} onChange={(_, v) => v && setViewMode(v)}
-            sx={{ '& .MuiToggleButton-root': { border: `1px solid ${GRID}`, px: 1.1, gap: 0.5, textTransform: 'none', fontWeight: 800, fontSize: '0.72rem', color: O2D.sub, '&.Mui-selected': { bgcolor: alpha(BRAND, 0.1), color: BRAND } } }}>
-            <ToggleButton value="calendar"><LayoutGrid size={14} /> Calendar</ToggleButton>
-            <ToggleButton value="list"><ListIcon size={14} /> List</ToggleButton>
+            sx={{ flexShrink: 0, '& .MuiToggleButton-root': { border: `1px solid ${GRID}`, px: { xs: 0.9, xl: 1.1 }, gap: 0.5, textTransform: 'none', fontWeight: 800, fontSize: '0.72rem', color: O2D.sub, '&.Mui-selected': { bgcolor: alpha(BRAND, 0.1), color: BRAND } } }}>
+            <ToggleButton value="calendar">
+              <Tooltip arrow slotProps={O2D_TIP} title="Calendar"><LayoutGrid size={14} /></Tooltip>
+              <Box component="span" sx={{ display: { xs: 'none', xl: 'inline' } }}>Calendar</Box>
+            </ToggleButton>
+            <ToggleButton value="list">
+              <Tooltip arrow slotProps={O2D_TIP} title="List"><ListIcon size={14} /></Tooltip>
+              <Box component="span" sx={{ display: { xs: 'none', xl: 'inline' } }}>List</Box>
+            </ToggleButton>
             <ToggleButton value="party">
               <Tooltip arrow slotProps={O2D_TIP} title="Party-wise monthly grid"><Building2 size={14} /></Tooltip>
             </ToggleButton>
@@ -394,14 +541,38 @@ export default function ProductionPlanCalendar() {
             multiple size="small" limitTags={1}
             options={partyOptions} value={partyFilter}
             onChange={(_, v) => setPartyFilter(v)}
-            sx={{ minWidth: 175, maxWidth: 260 }}
+            sx={{
+              width: { md: 150, lg: 172, xl: 210 }, minWidth: 138, flexShrink: 1,
+              // A selected party rendered as a chip that overflowed its own box.
+              // Keep the row on one line, clip it, and cap the chip so a long
+              // party name truncates inside the control instead of escaping it.
+              '& .MuiAutocomplete-inputRoot': { flexWrap: 'nowrap', overflow: 'hidden', py: '3px' },
+              '& .MuiAutocomplete-tag': { maxWidth: 'calc(100% - 52px)', m: '1px 2px' },
+              '& .MuiChip-label': { textOverflow: 'ellipsis' },
+            }}
             renderInput={(params) => <TextField {...params} placeholder={partyFilter.length ? '' : 'All parties'} />}
           />
 
           <TextField
-            size="small" placeholder="Search plan, SKU, SO/PO…"
+            select size="small" label="Show" id="pp-view-filter"
+            value={viewMode2} onChange={(e) => setViewMode2(e.target.value)}
+            sx={{ width: 126, flexShrink: 0 }}
+            SelectProps={{ native: true }} InputLabelProps={{ shrink: true }}
+          >
+            {VIEW_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </TextField>
+          <TextField
+            select size="small" label="Usage" id="pp-usage-filter"
+            value={usageFilter} onChange={(e) => setUsageFilter(e.target.value)}
+            sx={{ width: 120, flexShrink: 0 }}
+            SelectProps={{ native: true }} InputLabelProps={{ shrink: true }}
+          >
+            {USAGE_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </TextField>
+          <TextField
+            size="small" placeholder="Search…"
             value={search} onChange={(e) => setSearch(e.target.value)}
-            sx={{ minWidth: 180 }}
+            sx={{ width: { md: 128, lg: 160, xl: 210 }, minWidth: 110, flexShrink: 1 }}
             InputProps={{
               startAdornment: <Search size={15} style={{ marginRight: 7, color: O2D.faint }} />,
               endAdornment: search ? <IconButton size="small" onClick={() => setSearch('')}><X size={13} /></IconButton> : null,
@@ -413,9 +584,10 @@ export default function ProductionPlanCalendar() {
             startIcon={downloading ? <CircularProgress size={13} color="inherit" /> : <Download size={14} />}
             onClick={(e) => setExportAnchor(e.currentTarget)}
             disabled={downloading}
-            sx={{ fontWeight: 800, borderRadius: '8px', textTransform: 'none', boxShadow: 'none', flexShrink: 0 }}
+            sx={{ fontWeight: 800, borderRadius: '8px', textTransform: 'none', boxShadow: 'none', flexShrink: 0, px: { md: 1, xl: 1.5 } }}
           >
-            Export PDF
+            <Box component="span" sx={{ display: { xs: 'none', xl: 'inline' } }}>Export PDF</Box>
+            <Box component="span" sx={{ display: { xs: 'inline', xl: 'none' } }}>Export</Box>
           </Button>
           <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)}>
             <MenuItem onClick={handlePreview}>
@@ -441,7 +613,7 @@ export default function ProductionPlanCalendar() {
         {/* ── Legend ───────────────────────────────────────────────── */}
         <Stack direction="row" alignItems="center" spacing={1.5}
           sx={{ px: { xs: 1.25, sm: 1.5 }, py: 0.5, borderBottom: `1px solid ${GRID}`, bgcolor: O2D.surfaceAlt, flexWrap: 'wrap', rowGap: 0.5 }}>
-          {Object.values(STATUS).map((s) => (
+          {[...Object.values(STATUS), PARTIAL, USED].map((s) => (
             <Stack key={s.label} direction="row" alignItems="center" spacing={0.5}>
               <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: s.color }} />
               <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: O2D.body }}>{s.label}</Typography>
@@ -504,40 +676,87 @@ export default function ProductionPlanCalendar() {
 
                     <Stack spacing={0.4}>
                       {shown.map((g) => {
-                        const m = statusMeta(g.status);
+                        const m = groupMeta(g, viewMode2);
+                        const cons = groupConsumption(g);
                         const rows = (g.skus || []).filter((sk) => Number(sk.plannedQty) > 0);
+                        // "Planned only" drops the USED column entirely — an empty
+                        // heading in a used-colour was the confusing part.
+                        const showUsedCol = viewMode2 !== 'planned';
                         return (
                           <Tooltip key={g.id} arrow slotProps={O2D_TIP} disableInteractive
-                            title={`${g.partyName} · ${num(g.totalQty)} pcs · ${m.label}`}>
-                            <Box sx={{ borderLeft: `3px solid ${m.color}`, bgcolor: alpha(m.color, 0.07), borderRadius: '3px', px: 0.5, py: 0.3 }}>
-                              <Stack direction="row" alignItems="center" spacing={0.5}>
+                            title={cons.some
+                              ? `${g.partyName} · ${num(g.totalQty)} pcs planned · ${num(cons.used)} used by ${cons.soNumbers.join(', ') || 'a dispatch plan'} · ${num(cons.free)} still free`
+                              : `${g.partyName} · ${num(g.totalQty)} pcs · ${m.label} · not yet used by any order`}>
+                            <Box sx={{
+                              border: `1px solid ${alpha(m.color, 0.35)}`,
+                              borderLeft: `3px solid ${m.color}`,
+                              borderRadius: '3px', overflow: 'hidden',
+                            }}>
+                              {/* Party header */}
+                              <Stack direction="row" alignItems="center" spacing={0.5}
+                                sx={{ px: 0.5, py: 0.25, bgcolor: alpha(m.color, 0.12) }}>
                                 <Typography noWrap sx={{ fontSize: '0.6rem', fontWeight: 800, color: O2D.ink, flex: 1, minWidth: 0, lineHeight: 1.3 }}>
                                   {shortParty(g.partyName)}
                                 </Typography>
-                                <Typography sx={{ fontSize: '0.46rem', fontWeight: 900, color: m.color, flexShrink: 0 }}>{m.short}</Typography>
                                 {g.events.length > 1 && (
-                                  <Typography sx={{ fontSize: '0.46rem', fontWeight: 800, color: O2D.faint, flexShrink: 0 }}>×{g.events.length}</Typography>
+                                  <Typography sx={{ fontSize: '0.46rem', fontWeight: 800, color: O2D.faint, flexShrink: 0 }}>x{g.events.length}</Typography>
                                 )}
+                                <Typography sx={{ fontSize: '0.46rem', fontWeight: 900, color: m.color, flexShrink: 0 }}>{m.short}</Typography>
                               </Stack>
 
-                              {rows.slice(0, 3).map((sk, i) => (
-                                <Stack key={i} direction="row" alignItems="center" spacing={0.5}>
-                                  <Typography noWrap sx={{ fontSize: '0.54rem', color: O2D.body, flex: 1, minWidth: 0, lineHeight: 1.35 }}>{sk.skuName}</Typography>
-                                  <Typography sx={{ fontSize: '0.54rem', fontWeight: 800, color: O2D.ink, flexShrink: 0, fontVariantNumeric: 'tabular-nums', lineHeight: 1.35 }}>
-                                    {num(sk.plannedQty)}
-                                  </Typography>
-                                </Stack>
-                              ))}
+                              {/* Column heads — only the columns this view uses. */}
+                              <Stack direction="row" sx={{ px: 0.5, py: 0.1, bgcolor: alpha(m.color, 0.05), borderTop: `1px solid ${alpha(m.color, 0.18)}` }}>
+                                <Box sx={{ flex: 1, minWidth: 0 }} />
+                                {showUsedCol && (
+                                  <Typography sx={{ width: 34, textAlign: 'right', fontSize: '0.4rem', fontWeight: 900, letterSpacing: '0.04em', color: m.color }}>USED</Typography>
+                                )}
+                                <Typography sx={{ width: 34, textAlign: 'right', fontSize: '0.4rem', fontWeight: 900, letterSpacing: '0.04em', color: O2D.faint }}>PLAN</Typography>
+                              </Stack>
+
+                              {rows.slice(0, 3).map((sk, i) => {
+                                // Per-SKU figures, summed across the plans this card
+                                // merges, so each row reads used against planned.
+                                const mine = (g.events || [])
+                                  .map((e) => e._plan)
+                                  .filter(Boolean)
+                                  .flatMap((pl) => pl.items || [])
+                                  .filter((it) => (it.skuCode || it.skuName) === (sk.skuCode || sk.skuName));
+                                const skUsed = mine.reduce((t, it) => t + Number(it.consumedQty || 0), 0);
+                                const skPlanned = mine.reduce((t, it) => t + Number(it.plannedQty || 0), 0);
+                                return (
+                                  <Stack key={i} direction="row" alignItems="center"
+                                    sx={{ px: 0.5, borderTop: `1px solid ${alpha(m.color, 0.12)}` }}>
+                                    <Typography noWrap sx={{ fontSize: '0.54rem', color: O2D.body, flex: 1, minWidth: 0, lineHeight: 1.45 }}>{sk.skuName}</Typography>
+                                    {showUsedCol && (
+                                      <Typography sx={{ width: 34, textAlign: 'right', fontSize: '0.54rem', fontWeight: 800, color: skUsed > 0 ? m.color : O2D.faint, fontVariantNumeric: 'tabular-nums', lineHeight: 1.45 }}>
+                                        {skUsed > 0 ? num(skUsed) : '-'}
+                                      </Typography>
+                                    )}
+                                    <Typography sx={{ width: 34, textAlign: 'right', fontSize: '0.54rem', fontWeight: 800, color: O2D.ink, fontVariantNumeric: 'tabular-nums', lineHeight: 1.45 }}>
+                                      {num(skPlanned)}
+                                    </Typography>
+                                  </Stack>
+                                );
+                              })}
                               {rows.length > 3 && (
-                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: O2D.faint, lineHeight: 1.4 }}>
+                                <Typography sx={{ px: 0.5, fontSize: '0.5rem', fontWeight: 700, color: O2D.faint, lineHeight: 1.5, borderTop: `1px solid ${alpha(m.color, 0.12)}` }}>
                                   +{rows.length - 3} more SKU{rows.length - 3 > 1 ? 's' : ''}
                                 </Typography>
                               )}
 
-                              <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.2, pt: 0.2, borderTop: `1px solid ${alpha(m.color, 0.22)}` }}>
-                                <Typography sx={{ fontSize: '0.44rem', fontWeight: 800, color: O2D.faint, textTransform: 'uppercase', letterSpacing: '0.05em', flex: 1 }}>Total</Typography>
-                                <Typography sx={{ fontSize: '0.56rem', fontWeight: 900, color: m.color, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                                  {num(g.totalQty)} pcs
+                              {/* Totals — same columns, so the card reads downward. */}
+                              <Stack direction="row" alignItems="center"
+                                sx={{ px: 0.5, py: 0.1, borderTop: `1px solid ${alpha(m.color, 0.35)}`, bgcolor: alpha(m.color, 0.08) }}>
+                                <Typography sx={{ flex: 1, minWidth: 0, fontSize: '0.44rem', fontWeight: 900, color: O2D.faint, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                  Total
+                                </Typography>
+                                {showUsedCol && (
+                                  <Typography sx={{ width: 34, textAlign: 'right', fontSize: '0.54rem', fontWeight: 900, color: m.color, fontVariantNumeric: 'tabular-nums' }}>
+                                    {num(cons.used)}
+                                  </Typography>
+                                )}
+                                <Typography sx={{ width: 34, textAlign: 'right', fontSize: '0.54rem', fontWeight: 900, color: O2D.ink, fontVariantNumeric: 'tabular-nums' }}>
+                                  {num(cons.planned)}
                                 </Typography>
                               </Stack>
                             </Box>

@@ -30,7 +30,7 @@ const dayStart = (d) => {
  * name from the SKU collection so a renamed SKU can't leave stale text on old
  * plans, and so a caller can't invent a line for a SKU that doesn't exist.
  */
-async function normaliseItems(rawItems) {
+async function normaliseItems(rawItems, existing = null) {
   const items = (Array.isArray(rawItems) ? rawItems : [])
     .filter((it) => it && it.skuId && toNum(it.plannedQty) > 0);
 
@@ -59,6 +59,10 @@ async function normaliseItems(rawItems) {
 
   // Two lines for the same SKU on one plan are a data-entry slip, not a
   // feature — fold them together rather than storing a confusing duplicate.
+  const priorByKey = new Map(
+    ((existing?.items) || []).map((it) => [String(it.skuId), it]),
+  );
+
   const merged = new Map();
   for (const it of items) {
     const key = String(it.skuId);
@@ -71,6 +75,11 @@ async function normaliseItems(rawItems) {
       skuName:     sku.name || 'SKU',
       plannedQty,
       producedQty: toNum(it.producedQty) + (prev ? prev.producedQty : 0),
+      // Never taken from the request body: consumption is owned by dispatch
+      // planning. Editing a plan's quantities must not wipe what an order has
+      // already drawn from it, or the same capacity could be inherited twice.
+      consumedQty:  prev ? prev.consumedQty : toNum(priorByKey.get(key)?.consumedQty),
+      consumptions: prev ? prev.consumptions : (priorByKey.get(key)?.consumptions || []),
       note:        String(it.note || prev?.note || '').trim(),
     });
   }
@@ -95,13 +104,15 @@ function deriveStatus(items, current) {
 
 /** Shared shaping for create/update so both paths store identical roll-ups. */
 async function buildPayload(body, existing = null) {
-  const items = await normaliseItems(body.items);
+  const items = await normaliseItems(body.items, existing);
   const planStatus = deriveStatus(items, body.planStatus || existing?.planStatus);
 
   return {
     items,
     totalPlannedQty:  sumBy(items, 'plannedQty'),
     totalProducedQty: sumBy(items, 'producedQty'),
+    totalConsumedQty: sumBy(items, 'consumedQty'),
+    consumedBySo: [...new Set(items.flatMap((it) => (it.consumptions || []).map((c) => c.soNumber).filter(Boolean)))],
     planStatus,
   };
 }

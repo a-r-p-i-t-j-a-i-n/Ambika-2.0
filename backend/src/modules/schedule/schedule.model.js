@@ -4,6 +4,13 @@ import { SCHEDULE_STATUS } from '../../config/constants.js';
 const actualDispatchSchema = new mongoose.Schema({
   date:         { type: Date, required: true },
   qty:          { type: Number, required: true },
+  // Which Delivery Challan produced this actual. Needed so cancelling a dispatch
+  // can subtract exactly its own contribution from the phase instead of guessing
+  // by date/qty. Null on rows written before cancellation existed.
+  dcNumber:     { type: String, default: null },
+  // Set when the challan is cancelled: the row is KEPT (history) but its qty is
+  // taken out of totalActualQty, so restoring is an exact, lossless add-back.
+  cancelled:    { type: Boolean, default: false },
   invoiceNo:    { type: String },
   invoiceDate:  { type: Date },
   invoiceDoc:   { type: String }, // Individual Drive Link

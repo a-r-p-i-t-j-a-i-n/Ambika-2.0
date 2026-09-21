@@ -56,6 +56,23 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (soNumber) => `/dispatch-control/orders/${encodeURIComponent(soNumber)}/dispatchable-phases`,
       providesTags: (_r, _e, soNumber) => [{ type: 'Schedule', id: soNumber }],
     }),
+    // Production plan -> dispatch plan. The preview is a pure read; apply is what
+    // creates phases AND marks the plan capacity spent.
+    previewInheritPlan: builder.query({
+      query: (soNumber) => `/dispatch-control/orders/${encodeURIComponent(soNumber)}/inherit-production-plan`,
+      providesTags: (_r, _e, soNumber) => [{ type: 'Schedule', id: soNumber }, 'ProductionPlan'],
+    }),
+    applyInheritPlan: builder.mutation({
+      query: ({ soNumber, days }) => ({
+        url: `/dispatch-control/orders/${encodeURIComponent(soNumber)}/inherit-production-plan`,
+        method: 'POST',
+        body: { days },
+      }),
+      invalidatesTags: (_r, _e, { soNumber }) => [
+        { type: 'Schedule', id: soNumber }, 'Schedule', 'Order', 'PPC',
+        'DispatchDashboard', 'O2DProcess', 'ProductionPlan',
+      ],
+    }),
     createPhase: builder.mutation({
       query: ({ soNumber, ...body }) => ({
         url: `/dispatch-control/orders/${encodeURIComponent(soNumber)}/phases`,
@@ -122,6 +139,17 @@ export const dispatchControlApi = baseApi.injectEndpoints({
     }),
     // Delete ONE delivery challan. On a per-challan step the board's delete acts
     // on the row you clicked — the challan — not the whole sales order.
+    // Cancel a dispatch: the row survives, its quantity is returned to the plan,
+    // and every downstream step for that challan is marked cancelled.
+    cancelChallan: builder.mutation({
+      query: ({ id, reason }) => ({ url: `/dispatch-control/challans/${id}/cancel`, method: 'PATCH', body: { reason } }),
+      invalidatesTags: ['Challan', 'Order', 'Schedule', 'Comparison', 'DispatchDashboard', 'PPC', 'O2DProcess', 'O2DMyTasks'],
+    }),
+    // Exact inverse of cancelChallan — puts the quantity back on the plan.
+    restoreChallan: builder.mutation({
+      query: (id) => ({ url: `/dispatch-control/challans/${id}/restore`, method: 'PATCH' }),
+      invalidatesTags: ['Challan', 'Order', 'Schedule', 'Comparison', 'DispatchDashboard', 'PPC', 'O2DProcess', 'O2DMyTasks'],
+    }),
     deleteChallan: builder.mutation({
       query: (id) => ({ url: `/challans/${id}`, method: 'DELETE' }),
       invalidatesTags: ['Challan', 'Order', 'Schedule', 'Comparison', 'DispatchDashboard', 'O2DProcess', 'O2DMyTasks'],
@@ -161,6 +189,8 @@ export const {
   useGetScheduleQuery,
   useGetDispatchablePhasesQuery,
   useCreatePhaseMutation,
+  usePreviewInheritPlanQuery,
+  useApplyInheritPlanMutation,
   useUpdatePhaseMutation,
   useDeletePhaseMutation,
   useNormalizeSheetRowsMutation,
@@ -171,5 +201,7 @@ export const {
   useGenerateChallanPdfMutation,
   useUpdateChallanMutation,
   useDeleteChallanMutation,
+  useCancelChallanMutation,
+  useRestoreChallanMutation,
   useUploadOrderDocumentMutation,
 } = dispatchControlApi;

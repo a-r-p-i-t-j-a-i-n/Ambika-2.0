@@ -31,6 +31,23 @@ const planItemSchema = new Schema({
   // Filled in as the shop floor reports against the plan. Kept here (rather than
   // derived) so the calendar can colour a day without a second aggregation.
   producedQty: { type: Number, default: 0, min: 0 },
+
+  // ── Consumption by dispatch planning ────────────────────────────────
+  // How much of this line has been pulled into a real dispatch plan ("inherit").
+  // remaining = plannedQty - consumedQty, and that is what a later order may
+  // still draw on. Stored rather than derived so the calendar can colour a day
+  // without joining every schedule.
+  consumedQty: { type: Number, default: 0, min: 0 },
+  // Who took it, so a cancelled/edited plan can give the capacity back and the
+  // calendar can say WHICH order consumed this day.
+  consumptions: [{
+    _id:      false,
+    soNumber: { type: String, default: '' },
+    phaseNo:  { type: String, default: '' },
+    qty:      { type: Number, default: 0 },
+    at:       { type: Date, default: Date.now },
+  }],
+
   note:        { type: String, default: '' },
 }, { _id: false });
 
@@ -53,6 +70,10 @@ const ProductionPlanEntrySchema = new Schema({
   // thousands of these and must never have to sum `items` client-side.
   totalPlannedQty:  { type: Number, default: 0, min: 0 },
   totalProducedQty: { type: Number, default: 0, min: 0 },
+  // Roll-up of items[].consumedQty — drives the calendar's used/free colouring.
+  totalConsumedQty: { type: Number, default: 0, min: 0 },
+  // Which orders have drawn on this day's plan, for the calendar's tooltip.
+  consumedBySo:     { type: [String], default: [] },
 
   // ── The optional order link ─────────────────────────────────────────
   // Present only when a PO/SO exists for this plan. Its absence is the whole

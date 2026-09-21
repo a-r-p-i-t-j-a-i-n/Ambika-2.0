@@ -59,8 +59,28 @@ const deliveryChallanSchema = new mongoose.Schema({
   // Step 2.09, "Not Delivered": the date the doer will chase it again. Was being
   // set by the service but never declared here, so strict mode silently dropped
   // it and the re-track date could never be stored or shown.
-  newTrackDate:   { type: Date, default: null },
-  newTrackDate:   { type: Date, default: null },    // re-track date when not yet delivered
+  newTrackDate:   { type: Date, default: null },   // re-track date when not yet delivered
+
+  // ── Cancellation (step 2.06 onwards) ─────────────────────────────────────
+  // A dispatch that went wrong is CANCELLED, never deleted: the paper trail
+  // stays, its quantity stops counting as dispatched, and the doer can raise a
+  // fresh dispatch against the same plan.
+  cancelledAt:     { type: Date, default: null },
+  cancelledBy:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  cancelledByName: { type: String, default: null },
+  cancelReason:    { type: String, default: null },
+  // What the cancellation took off each plan phase. Restoring adds back exactly
+  // this, so a cancel→restore round trip cannot drift the plan numbers — and it
+  // works for legacy actuals that carry no dcNumber to match on.
+  cancelSnapshot:  [{
+    _id:      false,
+    skuCode:  { type: String },
+    skuName:  { type: String },
+    phaseNo:  { type: String },
+    qty:      { type: Number, default: 0 },
+  }],
+  // The status to return to on restore (a delivered challan stays delivered).
+  statusBeforeCancel: { type: String, default: null },
 
   // ── Plan-vs-Actual linkage (the core design choice) ────────
   // Every DC explicitly references the plan phase it fulfils.
