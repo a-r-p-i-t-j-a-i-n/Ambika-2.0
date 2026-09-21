@@ -167,6 +167,21 @@ export const emailScheduleSchema = Joi.object({
   }).unknown(true)).default([]),
 });
 
+export const bulkEmailPreviewSchema = Joi.object({
+  soNumbers: Joi.array().items(Joi.string().trim()).min(1).max(50).required(),
+});
+
+export const bulkEmailScheduleSchema = Joi.object({
+  emails: Joi.array().items(Joi.object({
+    soNumber: Joi.string().trim().required(),
+    to:       Joi.string().trim().required(),
+    cc:       Joi.alternatives(Joi.string().allow('', null), Joi.array().items(Joi.string())),
+    subject:  optionalString,
+    message:  Joi.string().allow('', null),
+    attachments: Joi.array().items(Joi.object().unknown(true)).default([]),
+  })).min(1).max(50).required(),
+});
+
 export const dashboardQuerySchema = Joi.object({
   from: Joi.date(),
   to: Joi.date(),

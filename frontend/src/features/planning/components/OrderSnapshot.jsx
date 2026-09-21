@@ -4,21 +4,23 @@ import { Building2, Calendar, Truck, Hash } from 'lucide-react';
 import dayjs from 'dayjs';
 
 // Aligned KPI tile — square corners, fills its grid cell so the row stays even.
-const Kpi = ({ label, value, color }) => {
+const Kpi = ({ label, value, color, solid = false }) => {
   const theme = useTheme();
+  const c = color || theme.palette.primary.main;
   return (
     <Box sx={{
-      px: 1.25, py: 0.9, borderRadius: '6px',
-      bgcolor: alpha(color || theme.palette.primary.main, 0.05),
-      border: '1px solid', borderColor: alpha(color || theme.palette.primary.main, 0.16),
+      px: 1, py: 0.85, borderRadius: '6px', minWidth: 0,
+      bgcolor: solid ? c : alpha(c, 0.05),
+      border: '1px solid', borderColor: solid ? c : alpha(c, 0.16),
     }}>
-      <Typography sx={{
-        fontSize: '0.58rem', fontWeight: 800, color: 'text.secondary',
-        textTransform: 'uppercase', letterSpacing: '0.06em',
+      <Typography noWrap sx={{
+        fontSize: '0.55rem', fontWeight: 800,
+        color: solid ? alpha('#fff', 0.92) : 'text.secondary',
+        textTransform: 'uppercase', letterSpacing: '0.05em',
       }}>{label}</Typography>
-      <Typography sx={{
-        fontSize: '1.05rem', fontWeight: 800, lineHeight: 1.2,
-        color: color || theme.palette.text.primary,
+      <Typography noWrap sx={{
+        fontSize: '1rem', fontWeight: 800, lineHeight: 1.2,
+        color: solid ? '#fff' : (color || theme.palette.text.primary),
         fontVariantNumeric: 'tabular-nums',
       }}>{value}</Typography>
     </Box>
@@ -37,6 +39,14 @@ const OrderSnapshot = ({ schedule, comparison }) => {
   const unplannedQty = totals.unplannedBalanceQty != null
     ? Number(totals.unplannedBalanceQty)
     : Math.max(0, Number(totals.orderQty || 0) - Number(totals.plannedQty || 0));
+  // Planned MORE than ordered — the case the client flagged (planned 14,000 on a
+  // 5,000 order). Shown as its own tile so the mismatch is impossible to miss.
+  const overPlannedQty = Math.max(0, Number(totals.plannedQty || 0) - Number(totals.orderQty || 0));
+  // Balance now follows the PLAN, not the sales order: planned minus dispatched.
+  // So an order planned above its SO quantity still shows the real work left.
+  const planBalanceQty = totals.planBalanceQty != null
+    ? Number(totals.planBalanceQty)
+    : Math.max(0, Number(totals.plannedQty || 0) - Number(totals.dispatchedQty ?? totals.actualQty ?? 0));
 
   return (
     <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', border: '1px solid', borderColor: 'divider' }}>
@@ -58,12 +68,18 @@ const OrderSnapshot = ({ schedule, comparison }) => {
       </Stack>
 
       {/* KPI grid — always an even, aligned row (wraps cleanly on narrow widths) */}
-      <Box sx={{ mt: 1.5, display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1 }}>
+      <Box sx={{ mt: 1.5, display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(6, 1fr)' }, gap: 0.75 }}>
         <Kpi label="Ordered"    value={Number(totals.orderQty || 0).toLocaleString('en-IN')} />
         <Kpi label="Planned"    value={Number(totals.plannedQty || 0).toLocaleString('en-IN')} color={theme.palette.primary.main} />
         <Kpi label="Unplanned"  value={Number(unplannedQty).toLocaleString('en-IN')} color={unplannedQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
         <Kpi label="Dispatched" value={Number(totals.dispatchedQty || 0).toLocaleString('en-IN')} color={theme.palette.success.main} />
-        <Kpi label="Balance"    value={Number(totals.balanceQty || 0).toLocaleString('en-IN')} color={totals.balanceQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
+        <Kpi label="Balance"    value={Number(planBalanceQty).toLocaleString('en-IN')} color={planBalanceQty > 0 ? theme.palette.warning.main : theme.palette.success.main} />
+        <Kpi
+          label="Over Planned"
+          value={Number(overPlannedQty).toLocaleString('en-IN')}
+          color={overPlannedQty > 0 ? theme.palette.error.main : theme.palette.success.main}
+          solid={overPlannedQty > 0}
+        />
       </Box>
 
       <Box sx={{ mt: 1.75 }}>

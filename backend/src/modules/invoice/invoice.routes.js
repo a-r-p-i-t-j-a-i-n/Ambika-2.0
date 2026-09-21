@@ -17,6 +17,7 @@ import { protect } from '../../middleware/auth.middleware.js';
 import { attachUserPermissions } from '../../middleware/permission.middleware.js';
 import { INVOICE_STATUS, STEP_STATUS } from '../../config/constants.js';
 import { emailService } from '../../services/email.service.js';
+import { pdfService } from '../../services/pdf.service.js';
 import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 import { logger } from '../../utils/logger.js';
 
@@ -152,6 +153,23 @@ export const invoiceService = {
     const attachments = await emailService.resolveStoredAttachments(
       tagged.map((a) => ({ filename: a.name, url: a.url })),
     );
+
+    // The delivery challan PDF ALWAYS rides along, generated server-side — the
+    // same guarantee step 2.05 gives for the dispatch plan, so the client never
+    // receives an invoice without the challan it belongs to.
+    if (inv.dcId) {
+      try {
+        const dc = await DeliveryChallan.findById(inv.dcId).lean();
+        if (dc) {
+          const buf = await pdfService.generateDeliveryChallanBuffer(dc);
+          const dcFile = `Delivery-Challan-${String(dc.dcNumber || inv.dcNumber || 'dc').replace(/[^\w.-]+/g, '_')}.pdf`;
+          attachments.push({ filename: dcFile, content: buf });
+          tagged.push({ url: '', name: dcFile, label: 'Delivery Challan' });
+        }
+      } catch (err) {
+        logger.error(`[invoice] challan PDF generation failed for ${inv.invoiceNo}: ${err.message}`);
+      }
+    }
     // A clean, professional HTML email — NO raw URLs in the body. The documents
     // ride along as real attachments; we just list their names for reference.
     const bodyHtml = message || `<p>Dear ${inv.partyName || 'Customer'},</p><p>Please find your tax invoice <b>${inv.invoiceNo}</b> and supporting documents attached.</p>`;
@@ -218,6 +236,107 @@ export const invoiceService = {
 
     return { emailStatus, recipient };
   },
+
+  /**
+   * Draft for ONE challan's invoice email. Built server-side so the bulk preview
+   * is produced by the same data the sender uses — a preview that can drift from
+   * what goes out is worse than none.
+   */
+  async buildInvoiceEmailDraft({ soNumber, dcId, dcNumber }) {
+    const q = { soNumber };
+    if (dcId) q.dcId = dcId;
+    else if (dcNumber) q.dcNumber = dcNumber;
+    const inv = await Invoice.findOne(q).populate('partyId', 'name email toEmails ccEmails').sort({ createdAt: -1 }).lean();
+
+    if (!inv) {
+      return {
+        key: `${soNumber}::${dcNumber || 'order'}`,
+        soNumber,
+        dcNumber: dcNumber || '',
+        partyName: '',
+        error: `No invoice yet for ${dcNumber || soNumber} — create it in step 2.7 first.`,
+      };
+    }
+
+    const party = inv.partyId || {};
+    const to = (party.toEmails || []).length ? party.toEmails.join(', ') : (party.email || '');
+    const cc = (party.ccEmails || []).join(', ');
+
+    const docs = [
+      ...(inv.invoiceUrls || []).map((u, i) => ({ url: u, name: `Invoice-${i + 1}`, label: 'Invoice' })),
+      ...(inv.ewayBillUrls || []).map((u, i) => ({ url: u, name: `EwayBill-${i + 1}`, label: 'E-way Bill' })),
+      ...(inv.pdirUrls || []).map((u, i) => ({ url: u, name: `PDIR-${i + 1}`, label: 'PDIR' })),
+    ].filter((a) => a.url);
+
+    const attachments = [
+      ...docs.map((d) => ({ fileName: d.name, label: d.label, url: d.url })),
+      ...(inv.dcId ? [{
+        fileName: `Delivery-Challan-${String(inv.dcNumber || 'dc').replace(/[^\w.-]+/g, '_')}.pdf`,
+        label: 'Delivery Challan (PDF)',
+        auto: true,
+      }] : []),
+    ];
+
+    const message = [
+      `Dear ${inv.partyName || 'Customer'},`,
+      '',
+      `Please find attached tax invoice ${inv.invoiceNo}${inv.dcNumber ? ` against delivery challan ${inv.dcNumber}` : ''}`
+        + `${inv.soNumber ? ` for order ${inv.soNumber}` : ''}.`,
+      '',
+      'The delivery challan PDF and the supporting documents are attached for your reference.',
+      '',
+      'Regards,',
+      'Ambika Global',
+    ].join('\n');
+
+    return {
+      key: `${inv.soNumber}::${inv.dcNumber || 'order'}`,
+      id: String(inv._id),
+      soNumber: inv.soNumber,
+      dcNumber: inv.dcNumber || '',
+      invoiceNo: inv.invoiceNo,
+      partyName: inv.partyName || party.name || '',
+      to,
+      cc,
+      subject: `Invoice ${inv.invoiceNo} — ${inv.partyName || ''}`.trim(),
+      message,
+      attachments,
+      warning: !to
+        ? 'No email address on the party master'
+        : (!docs.length ? 'No invoice document uploaded — only the challan PDF will go' : ''),
+    };
+  },
+
+  async bulkEmailPreview(targets = []) {
+    return Promise.all(targets.map((t) => this.buildInvoiceEmailDraft(t)));
+  },
+
+  /** Send many invoice emails; one failure never aborts the rest. */
+  async bulkSendToClient(emails = [], actor = null) {
+    const results = [];
+    for (const item of emails) {
+      const key = item?.key || item?.id;
+      try {
+        if (!item?.id) throw new AppError('Invoice not found for this row.', 404);
+        const res = await this.sendToClient(item.id, {
+          to: item.to,
+          cc: item.cc,
+          subject: item.subject,
+          message: String(item.message || '').replace(/\n/g, '<br/>'),
+          attachments: item.attachments,
+        }, actor);
+        results.push({
+          key, soNumber: item.soNumber, status: res.emailStatus, recipient: res.recipient,
+          error: res.emailStatus === 'SENT' ? null : 'SMTP relay reported a failure',
+        });
+      } catch (err) {
+        logger.error(`[invoice] bulk email failed for ${key}: ${err.message}`);
+        results.push({ key, soNumber: item?.soNumber, status: 'FAILED', recipient: item?.to || '', error: err.message });
+      }
+    }
+    const sent = results.filter((r) => r.status === 'SENT').length;
+    return { total: results.length, sent, failed: results.length - sent, results };
+  },
 };
 
 const c = {
@@ -226,12 +345,19 @@ const c = {
   getById: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice retrieved', await invoiceService.getById(req.params.id))); }),
   update:  asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice updated', await invoiceService.update(req.params.id, req.body))); }),
   send:    asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice email processed', await invoiceService.sendToClient(req.params.id, req.body, req.user))); }),
+  bulkPreview: asyncHandler(async (req, res) => { res.json(ApiResponse.ok('Invoice email drafts built', await invoiceService.bulkEmailPreview(req.body.targets || []))); }),
+  bulkSend: asyncHandler(async (req, res) => {
+    const result = await invoiceService.bulkSendToClient(req.body.emails || [], req.user);
+    res.json(ApiResponse.ok(`${result.sent} of ${result.total} emails sent`, result));
+  }),
 };
 
 const router = Router();
 router.use(protect, attachUserPermissions);
 router.route('/').get(c.getAll).post(c.create);
 router.route('/:id').get(c.getById).put(c.update);
+router.post('/bulk-email-preview', c.bulkPreview);
+router.post('/bulk-email', c.bulkSend);
 router.post('/:id/send', c.send);
 
 export default router;

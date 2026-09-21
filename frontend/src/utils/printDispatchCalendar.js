@@ -51,6 +51,17 @@ const STATUS_COLOR = {
   // Production Plan reuses this engine and finishes at COMPLETED rather than
   // DISPATCHED; same teal, so "done" reads identically on both sheets.
   COMPLETED: '#0f766e',
+  // Production Plan usage states — the printed card must be the colour the
+  // planner just looked at on screen, or the PDF contradicts the calendar.
+  PARTLY_USED: '#b45309',
+  FULLY_USED:  '#7c3aed',
+};
+
+// Generic title-casing reads badly for these ("Partly Used"), so the print
+// engine is given the exact wording the screen uses.
+const STATUS_LABEL = {
+  PARTLY_USED: 'Partly used',
+  FULLY_USED:  'Fully used',
 };
 
 // The active on-screen filters, printed under the month so an exported sheet
@@ -73,6 +84,7 @@ const eventQty = (event) => (
 const eventStatus = (event) => {
   if (event.isDelayed) return 'Delayed';
   if (event.eventType === 'actual') return 'Actual';
+  if (STATUS_LABEL[event.status]) return STATUS_LABEL[event.status];
   return String(event.status || 'PLANNED').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
@@ -245,6 +257,16 @@ function buildCalendarSheet({
   // Defaults keep the Dispatch output byte-identical.
   title = 'Dispatch Planning Calendar',
   footer = 'Generated from Dispatch Planning Execution System',
+  // ── Production Plan mode ────────────────────────────────────────────────
+  // Without this the sheet colours every card by event TYPE (all 'scheduled' ->
+  // all blue 'SCH'), which is why a fully-used plan printed identically to an
+  // untouched one. Pass 'planned' | 'used' | 'both' to colour by usage instead
+  // and to print a USED column beside PLAN, matching the screen exactly.
+  usageMode = null,
+  // Named distinctly from buildListSheet's `emptyText`: both sheets share one
+  // options object at the call site, and a collision meant the calendar cells
+  // printed the list's full sentence.
+  emptyCellText = 'No dispatch',
 } = {}) {
   const monthStart = dayjs(month).startOf('month');
   const monthLabel = monthStart.format('MMMM YYYY');
@@ -273,47 +295,119 @@ function buildCalendarSheet({
   // week count, so a 5-week month gets taller cells instead of a band of dead space.
   //   A4 landscape @ 8mm margins = 194mm tall; masthead + weekday bar + footer ≈ 26mm.
   //   164 (not 168) leaves headroom for printer variance on top of the 0.97 print zoom.
-  const ROW_MM = Math.min(34, Math.max(20, 164 / weeks));
+  // Uniform rows waste the sheet: a week with nothing planned took as much paper
+  // as the busiest one. Each week now gets height in proportion to its FULLEST
+  // day, with empty weeks squeezed to just their date numbers. The total is
+  // normalised back to the same 164mm, so the one-page guarantee is untouched —
+  // this only moves height from where it was idle to where it is needed.
+  const AVAIL_MM = 164;
+  const EMPTY_ROW_MM = 9;      // enough for the date figure alone
+  const MIN_ROW_MM = 17;
+  const MAX_ROW_MM = 62;
 
   // ── Cell budget, in mm, measured from the CSS below (1px = 25.4/96 mm) ──
   // Every cell is laid out against this arithmetic instead of a guessed cap, so
   // nothing can ever be clipped by `overflow:hidden` and silently disappear.
-  const CELL_BUDGET = ROW_MM - 5.5;   // minus td padding + the date line
   const CARD_CHROME = 7.1;            // party head + totals row + border/padding
   const LINE_MM = 2.41;               // one SKU row
+  const DATE_LINE_MM = 5.5;           // td padding + the date line
   // A detailed card must also budget for its own "+N more items" line, which can
   // appear on any card — omitting it is what made the first cut clip.
   const CARD_FULL = CARD_CHROME + LINE_MM;
 
+  // What a day WANTS, in mm, if it were given all the room it asked for.
+  const dayDemand = (day) => {
+    const list = byDate.get(day.format('YYYY-MM-DD')) || [];
+    if (!list.length) return 0;
+    const groups = groupDayByParty(list);
+    return groups.reduce(
+      (sum, g) => sum + CARD_CHROME + Math.min((g.skus || []).length, 6) * LINE_MM,
+      0,
+    );
+  };
+
+  // A week is as tall as its fullest day.
+  const rowDemand = Array.from({ length: weeks }, (_, r) => Math.max(
+    0, ...days.slice(r * 7, (r + 1) * 7).map(dayDemand),
+  ));
+
+  const busyIdx = rowDemand.map((d, i) => (d > 0 ? i : -1)).filter((i) => i >= 0);
+  const forBusy = Math.max(0, AVAIL_MM - (weeks - busyIdx.length) * EMPTY_ROW_MM);
+  const demandTotal = busyIdx.reduce((sum, i) => sum + rowDemand[i], 0) || 1;
+
+  let rowMm = rowDemand.map((d) => (d > 0
+    ? Math.max(MIN_ROW_MM, Math.min(MAX_ROW_MM, (d / demandTotal) * forBusy))
+    : EMPTY_ROW_MM));
+  // Clamping breaks the sum, so scale the busy rows back onto the budget. A
+  // grid that overflows by even 2mm is the second page we promised never to
+  // print, so this normalisation is not optional.
+  const busySum = busyIdx.reduce((sum, i) => sum + rowMm[i], 0);
+  if (busySum > 0 && Math.abs(busySum - forBusy) > 0.5) {
+    const k = forBusy / busySum;
+    rowMm = rowMm.map((v, i) => (rowDemand[i] > 0 ? v * k : v));
+  }
+
+  // Each cell is laid out against ITS OWN row's budget, not a global one.
+  const cellBudget = (rowIdx) => Math.max(6, rowMm[rowIdx] - DATE_LINE_MM);
+
   // Showing EVERY party matters more than showing each party's SKU breakdown, so
   // degrade in that order: full detail → one summary line per party → "+N more".
-  const planCell = (n) => {
-    const lines = Math.floor((CELL_BUDGET / n - CARD_FULL) / LINE_MM);
+  const planCell = (n, budget) => {
+    const lines = Math.floor((budget / n - CARD_FULL) / LINE_MM);
     if (lines >= 2) return { cards: n, lines: Math.min(lines, 6), compact: false };
-    const fit = Math.floor((CELL_BUDGET - CARD_CHROME * 0.4) / CARD_CHROME);
-    if (Math.floor(CELL_BUDGET / CARD_CHROME) >= n) return { cards: n, lines: 0, compact: true };
+    const fit = Math.floor((budget - CARD_CHROME * 0.4) / CARD_CHROME);
+    if (Math.floor(budget / CARD_CHROME) >= n) return { cards: n, lines: 0, compact: true };
     return { cards: Math.max(1, fit), lines: 0, compact: true }; // leaves room for "+N more"
   };
-  const calendarCells = days.map((day) => {
+  // Usage colouring mirrors ProductionPlanCalendar.groupMeta so the printed card
+  // and the on-screen card can never disagree.
+  const USAGE = {
+    planned: { color: '#1d4ed8', short: 'PLN' },
+    partly:  { color: '#b45309', short: 'PRT' },
+    fully:   { color: '#7c3aed', short: 'USE' },
+  };
+  const usageOfGroup = (g) => {
+    if (usageMode === 'planned') return USAGE.planned;
+    if (usageMode === 'used') return USAGE.fully;
+    const planned = Number(g.plannedQty || 0);
+    const used = Number(g.usedQty || 0);
+    if (used > 0 && used >= planned) return USAGE.fully;
+    if (used > 0) return USAGE.partly;
+    return USAGE.planned;
+  };
+  const showUsedCol = usageMode && usageMode !== 'planned';
+
+  const calendarCells = days.map((day, dayIdx) => {
+    const budget = cellBudget(Math.floor(dayIdx / 7));
     const key = day.format('YYYY-MM-DD');
     const list = byDate.get(key) || [];
     // Same rule as the screen: one card PER PARTY (orders merged), items merged,
     // and NO sales-order number on the print.
     const groups = groupDayByParty(list);
     const inMonth = day.isSame(monthStart, 'month');
-    const plan = groups.length ? planCell(groups.length) : { cards: 0, lines: 0, compact: false };
+    const plan = groups.length ? planCell(groups.length, budget) : { cards: 0, lines: 0, compact: false };
     const chips = groups.slice(0, plan.cards).map((g) => {
       const type = TYPE[g.eventType] || TYPE.scheduled;
-      const colour = g.isDelayed ? '#be123c' : type.color;
+      const usage = usageMode ? usageOfGroup(g) : null;
+      const colour = g.isDelayed ? '#be123c' : (usage ? usage.color : type.color);
+      const tagText = usage ? usage.short : type.short;
       const isActual = g.eventType === 'actual';
       const skus = (g.skus || []).filter((sku) => Number(isActual ? sku.actualQty : sku.plannedQty) > 0);
 
       // Compact: party + total only. Used when the day has too many parties for a
       // per-SKU breakdown to fit — every party still appears, which is the point.
       const skuLines = plan.compact ? '' : (
-        skus.slice(0, plan.lines).map((sku) => `
+        // Column heads only in usage mode, and only when there are two columns
+        // to label — a lone heading over one number is noise.
+        (showUsedCol ? `<div class="skuRow head"><span class="skuName"></span>`
+          + `<span class="skuUsed" style="color:${colour}">USED</span>`
+          + `<span class="skuQty">PLAN</span></div>` : '')
+        + skus.slice(0, plan.lines).map((sku) => `
           <div class="skuRow">
             <span class="skuName">${esc(sku.skuName || '-')}</span>
+            ${showUsedCol
+    ? `<span class="skuUsed" style="color:${Number(sku.usedQty || 0) > 0 ? colour : '#9ca3af'}">${Number(sku.usedQty || 0) > 0 ? num(sku.usedQty) : '-'}</span>`
+    : ''}
             <span class="skuQty">${num(isActual ? sku.actualQty : sku.plannedQty)}</span>
           </div>`).join('')
         + (skus.length > plan.lines
@@ -324,12 +418,14 @@ function buildCalendarSheet({
         <div class="chip${g.isDelayed ? ' delayed' : ''}" style="border-left-color:${colour}">
           <div class="chipHead">
             <span class="party">${esc(shortParty(g.partyName))}</span>
-            <span class="tag" style="color:${colour}">${esc(type.short)}</span>
+            <span class="tag" style="color:${colour}">${esc(tagText)}</span>
             ${g.orderCount > 1 ? `<span class="so">&times;${g.orderCount}</span>` : ''}
           </div>
           ${skuLines}
           <div class="tot" style="border-top-color:${colour}">
-            <span>TOTAL</span><span class="totQty" style="color:${colour}">${num(g.totalQty)} pcs</span>
+            <span>TOTAL</span>
+            ${showUsedCol ? `<span class="skuUsed" style="color:${colour}">${num(g.usedQty || 0)}</span>` : ''}
+            <span class="totQty" style="color:${colour}">${num(g.totalQty)}</span>
           </div>
         </div>`;
     }).join('');
@@ -341,13 +437,13 @@ function buildCalendarSheet({
     return `
       <td>
         <div class="date">${day.date()}</div>
-        ${chips || '<div class="empty">No dispatch</div>'}
+        ${chips || `<div class="empty">${esc(emptyCellText)}</div>`}
         ${more}
       </td>`;
   });
 
   const gridRows = Array.from({ length: weeks }, (_, row) => (
-    `<tr>${calendarCells.slice(row * 7, (row + 1) * 7).join('')}</tr>`
+    `<tr style="height:${rowMm[row].toFixed(1)}mm">${calendarCells.slice(row * 7, (row + 1) * 7).join('')}</tr>`
   )).join('');
 
   const css = `
@@ -365,7 +461,7 @@ function buildCalendarSheet({
   .calendar { margin-top: 5px; border: 1.5px solid #16305a; }
   table { border-collapse: collapse; width: 100%; table-layout: fixed; }
   .calendar th { background: #16305a; color: #fff; border: 1px solid #16305a; font-size: 8px; padding: 3px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 800; }
-  .calendar td { width: 14.28%; height: ${ROW_MM.toFixed(1)}mm; vertical-align: top; border: 1px solid #8ea0c2; padding: 3px; overflow: hidden; }
+  .calendar td { width: 14.28%; vertical-align: top; border: 1px solid #8ea0c2; padding: 3px; overflow: hidden; }
   /* Previous / next month — clearly dead space, and it survives a B&W photocopy. */
   .calendar td.out { background: #dde4ee; }
   .calendar td.out .date { color: #8b98ad; font-weight: 600; }
@@ -381,7 +477,9 @@ function buildCalendarSheet({
   .skuRow { display: flex; align-items: center; gap: 4px; line-height: 1.3; }
   .skuMore { font-size: 6.5px; font-weight: 700; color: #6a7690; line-height: 1.3; }
   .skuName { font-size: 7px; color: #3f4650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
-  .skuQty { font-size: 7px; font-weight: 800; color: #0b2545; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .skuQty { font-size: 7px; font-weight: 800; color: #0b2545; flex: 0 0 auto; min-width: 9mm; text-align: right; font-variant-numeric: tabular-nums; }
+  .skuUsed { font-size: 7px; font-weight: 800; flex: 0 0 auto; min-width: 9mm; text-align: right; font-variant-numeric: tabular-nums; }
+  .skuRow.head .skuName, .skuRow.head .skuQty, .skuRow.head .skuUsed { font-size: 5.5px; font-weight: 900; letter-spacing: 0.04em; color: #9ca3af; }
   .tot { display: flex; align-items: center; justify-content: space-between; margin-top: 1px; padding-top: 1px; border-top: 1px solid #cbd5e1; font-size: 6.5px; font-weight: 800; color: #9ca3af; letter-spacing: 0.05em; line-height: 1.3; }
   .totQty { font-size: 7.5px; font-weight: 900; font-variant-numeric: tabular-nums; }
   .empty { color: #cbd5e1; font-size: 7.5px; margin-top: 8px; text-align: center; }
@@ -392,6 +490,13 @@ function buildCalendarSheet({
      push the last week onto a second sheet. */
   @media print {
     .sheet { zoom: 0.97; }
+    /* HARD one-page guarantee. The cell budget above already degrades content to
+       fit, but a printer with deeper non-printable margins could still push a few
+       mm over and produce a near-blank second sheet. A sheet that cannot grow
+       cannot spill, so cap it and forbid breaks outright. */
+    .sheet { max-height: 194mm; overflow: hidden; page-break-after: avoid; break-after: avoid; }
+    table.calendar, table.calendar tr, table.calendar td { page-break-inside: avoid; break-inside: avoid; }
+    table.calendar td { overflow: hidden; }
   }
 `;
 
@@ -472,6 +577,7 @@ function buildListSheet({
   const groupLabel = (g) => {
     if (g.isDelayed) return 'Delayed';
     if (g.eventType === 'actual') return 'Dispatched';
+    if (STATUS_LABEL[g.status]) return STATUS_LABEL[g.status];
     return String(g.status || 'PLANNED').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
   };
 

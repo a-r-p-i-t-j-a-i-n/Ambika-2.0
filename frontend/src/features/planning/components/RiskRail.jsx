@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Paper, Typography, Stack, Chip, alpha, useTheme, Tooltip } from '@mui/material';
-import { ShieldAlert, ShieldCheck, ArrowRightCircle, AlertTriangle, Clock } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, ArrowRightCircle, AlertTriangle, Clock, TrendingUp } from 'lucide-react';
 
 const RISK_META = {
   OVERDUE_PLAN:        { label: 'Overdue Plan',        icon: Clock,         tone: 'error'   },
@@ -15,11 +15,27 @@ const RiskRail = ({ comparison, onCarryForward }) => {
   const totals = comparison?.totals || {};
 
   const carryForwardRows = rows.filter((r) => Number(r.carryForwardSuggestionQty || 0) > 0);
+
+  // Which SKUs were planned BEYOND what was ordered, and by how much. The header
+  // tile gives the one total; this says where it came from, so the planner can go
+  // straight to the offending phase instead of hunting for it.
+  const overPlannedRows = rows
+    .map((r) => ({
+      orderItemId: r.orderItemId,
+      skuName: r.skuName,
+      skuCode: r.skuCode,
+      orderQty: Number(r.orderQty || 0),
+      plannedQty: Number(r.plannedQty || 0),
+      overQty: Math.max(0, Number(r.plannedQty || 0) - Number(r.orderQty || 0)),
+    }))
+    .filter((r) => r.overQty > 0)
+    .sort((a, b) => b.overQty - a.overQty);
+  const overPlannedTotal = overPlannedRows.reduce((sum, r) => sum + r.overQty, 0);
   const flatRisks = rows.flatMap((r) =>
     (r.risks || []).map((risk) => ({ ...risk, skuCode: r.skuCode, skuName: r.skuName, orderItemId: r.orderItemId })),
   );
 
-  const allClear = !flatRisks.length && !carryForwardRows.length;
+  const allClear = !flatRisks.length && !carryForwardRows.length && !overPlannedRows.length;
 
   return (
     <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', border: '1px solid', borderColor: 'divider', position: 'sticky', top: 16 }}>
@@ -28,7 +44,10 @@ const RiskRail = ({ comparison, onCarryForward }) => {
           ? <ShieldCheck size={14} color={theme.palette.success.main} />
           : <ShieldAlert  size={14} color={theme.palette.error.main} />}
         <Typography variant="subtitle2" fontWeight={800}>
-          {allClear ? 'No risks detected' : `Risks (${flatRisks.length})`}
+          {/* Over-planned SKUs count as risks here even though the API has no such
+              risk type — otherwise the header reads "Risks (0)" on an order that is
+              planned at 280% of what was sold, which is exactly what was reported. */}
+          {allClear ? 'No risks detected' : `Risks (${flatRisks.length + overPlannedRows.length})`}
         </Typography>
       </Stack>
 
@@ -66,6 +85,47 @@ const RiskRail = ({ comparison, onCarryForward }) => {
             );
           })}
         </Stack>
+      )}
+
+      {overPlannedRows.length > 0 && (
+        <>
+          <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.75 }}>
+            <TrendingUp size={12} color={theme.palette.error.main} />
+            <Typography variant="caption" sx={{ fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'error.main', flex: 1 }}>
+              Planned over order
+            </Typography>
+            <Typography variant="caption" sx={{ fontWeight: 800, color: 'error.main', fontVariantNumeric: 'tabular-nums' }}>
+              +{overPlannedTotal.toLocaleString('en-IN')}
+            </Typography>
+          </Stack>
+          <Stack spacing={0.75} sx={{ mb: 2 }}>
+            {overPlannedRows.map((r) => (
+              <Box key={r.orderItemId || r.skuCode} sx={{
+                p: 1, borderRadius: '6px',
+                bgcolor: alpha(theme.palette.error.main, 0.07),
+                border: '1px solid', borderColor: alpha(theme.palette.error.main, 0.28),
+              }}>
+                <Stack direction="row" spacing={0.75} alignItems="center">
+                  <Typography variant="caption" sx={{ fontWeight: 700, flex: 1 }} noWrap>
+                    {r.skuName}
+                  </Typography>
+                  <Chip
+                    size="small"
+                    label={`+${r.overQty.toLocaleString('en-IN')}`}
+                    sx={{
+                      height: 18, borderRadius: '4px', fontSize: '0.64rem', fontWeight: 800,
+                      bgcolor: theme.palette.error.main, color: '#fff',
+                      '& .MuiChip-label': { px: 0.6 },
+                    }}
+                  />
+                </Stack>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25, fontVariantNumeric: 'tabular-nums' }}>
+                  Planned {r.plannedQty.toLocaleString('en-IN')} vs ordered {r.orderQty.toLocaleString('en-IN')}
+                </Typography>
+              </Box>
+            ))}
+          </Stack>
+        </>
       )}
 
       {carryForwardRows.length > 0 && (

@@ -448,6 +448,7 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       ? 'Unplanned'
       : ([...new Set((c.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || c.phaseRef?.phaseNo || '—');
     const delivered = c.deliveryStatus === 'Delivered' || c.status === 'DELIVERED';
+    const cancelled = c.status === 'CANCELLED';
     // Per-challan who/when log. 2.06 (Actual Dispatch) falls back to the challan's
     // own creator + date when not explicitly logged.
     const log = { ...(logByDc.get(String(c._id)) || {}) };
@@ -457,6 +458,10 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
     return {
       dcId: c._id,
       dcNumber: c.dcNumber,
+      cancelled,
+      cancelledAt: c.cancelledAt || null,
+      cancelledByName: c.cancelledByName || null,
+      cancelReason: c.cancelReason || null,
       log,
       dcDate: c.dcDate,
       qty: Number(c.totalQuantityPcs || 0),
@@ -469,7 +474,15 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       // instead of one shared step-level flag that would mark every challan done the
       // moment the first PDF was made.
       pdfUrl: c.pdfUrl || null,
-      delivery: { delivered, status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'), date: c.deliveryDate || null },
+      delivery: {
+        delivered,
+        status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'),
+        date: c.deliveryDate || null,
+        // When 2.09 was answered "Not Delivered", the date it will be chased again.
+        newTrackDate: c.newTrackDate || null,
+        // True once ANY outcome has been recorded — drives the action's done-state.
+        recorded: Boolean(c.deliveryStatus),
+      },
       invoice: {
         has: !!inv, invoiceNo: inv?.invoiceNo || null, status: inv?.status || null, date: inv?.invoiceDate || null,
         amount: Number(inv?.invoiceAmount || 0), received: Number(inv?.amountReceived || 0), balance: Number(inv?.balance || 0),
@@ -480,6 +493,11 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       eway: { has: !!(inv && ((inv.ewayBillUrls || []).length || inv.ewayBillUrl)) },
       payment: {
         has: !!pay, status: pay?.confirmation?.status || (pay ? 'PENDING' : null),
+        // Step 2.10's own outcome. `has` only says a payment record exists — which
+        // 2.11 also creates — so the follow-up step needs its own signal to avoid
+        // reading as done before anyone followed up.
+        followUpStatus: pay?.followUp?.status || null,
+        followUpDate: pay?.followUp?.actual || null,
         confirmed: pay?.confirmation?.status === 'DONE', received: Number(pay?.confirmation?.receivedAmount || 0),
         // Explicit doer-recorded outcome (PENDING | NOT_RECEIVED | RECEIVED) + note,
         // so the task/tracker can show "Not received" as a real state, not a blank.
@@ -764,7 +782,7 @@ export const o2dFmsService = {
   // SKUs, qty, invoice figures, transporter and L.R. straight from the documents.
   async listBoardConsignments() {
     const challans = await DeliveryChallan.find({ isDeleted: { $ne: true } })
-      .select('dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate')
+      .select('dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate newTrackDate cancelledAt cancelledByName cancelReason')
       .populate('createdBy', 'name')
       .sort({ dcDate: 1, createdAt: 1 })
       .limit(2000)
@@ -804,6 +822,12 @@ export const o2dFmsService = {
       return {
         dcId: ch._id,
         dcNumber: ch.dcNumber,
+        // Cancelled dispatches stay on the board (audit trail) but every step
+        // that follows them reads as cancelled, not pending.
+        cancelled: ch.status === 'CANCELLED',
+        cancelledAt: ch.cancelledAt || null,
+        cancelledByName: ch.cancelledByName || null,
+        cancelReason: ch.cancelReason || null,
         soNumber: ch.soNumber || null,
         poNumber: ch.poNumber || null,
         partyName: ch.partyName || null,
@@ -822,7 +846,13 @@ export const o2dFmsService = {
         pdfUrl: ch.pdfUrl || null,
         // Per-challan step audit (2.06–2.13): stepCode → { doneByName, doneAt, status }.
         log: logByDc.get(String(ch._id)) || {},
-        delivery: { delivered, status: ch.deliveryStatus || (delivered ? 'Delivered' : 'Pending'), date: ch.deliveryDate || null },
+        delivery: {
+          delivered,
+          status: ch.deliveryStatus || (delivered ? 'Delivered' : 'Pending'),
+          date: ch.deliveryDate || null,
+          newTrackDate: ch.newTrackDate || null,
+          recorded: Boolean(ch.deliveryStatus),
+        },
         invoice: inv ? {
           invoiceNo: inv.invoiceNo || null,
           date: inv.invoiceDate || null,
@@ -919,6 +949,50 @@ export const o2dFmsService = {
    * Actual Dispatch). Upserts by (dcId, stepCode) — the latest doer/time wins.
    * Best-effort — never throws (the real work must not fail because logging did).
    */
+  /**
+   * Mark every post-dispatch step of ONE consignment as cancelled.
+   *
+   * When a delivery challan is cancelled the work that follows it — invoice,
+   * email, delivery, payment, transport bill — is cancelled with it. Writing the
+   * per-challan log for each step is what makes the board show them red instead
+   * of leaving a trail of "pending" tasks nobody will ever do.
+   */
+  async cancelConsignmentSteps({ soNumber, salesOrderId, dcId, dcNumber, actor }) {
+    const steps = ['2.06', '2.07', '2.08', '2.09', '2.10', '2.11', '2.12', '2.13'];
+    const out = [];
+    for (const stepCode of steps) {
+      // eslint-disable-next-line no-await-in-loop
+      const entry = await this.recordConsignmentStep({
+        soNumber, salesOrderId, dcId, dcNumber, stepCode, actor, status: 'CANCELLED',
+      });
+      if (entry) out.push(entry);
+    }
+    return out;
+  },
+
+  /**
+   * Undo cancelConsignmentSteps: remove the CANCELLED log entries for a challan
+   * so its steps fall back to their real state (derived from the documents).
+   * Only CANCELLED rows are removed — genuine DONE history is preserved.
+   */
+  async clearConsignmentCancellation({ soNumber, salesOrderId, dcId }) {
+    try {
+      if (!dcId || (!soNumber && !salesOrderId)) return null;
+      const query = salesOrderId ? { salesOrderId } : { soNumber };
+      const process = await O2DProcess.findOne({ ...query, isDeleted: { $ne: true } });
+      if (!process) return null;
+      const before = (process.consignmentLog || []).length;
+      process.consignmentLog = (process.consignmentLog || []).filter(
+        (l) => !(String(l.dcId) === String(dcId) && l.status === 'CANCELLED'),
+      );
+      if (process.consignmentLog.length !== before) await process.save();
+      return before - process.consignmentLog.length;
+    } catch (err) {
+      logger?.error?.(`[o2d-fms] clearConsignmentCancellation failed: ${err.message}`);
+      return null;
+    }
+  },
+
   async recordConsignmentStep({ soNumber, salesOrderId, dcId, dcNumber, stepCode, actor, status = 'DONE', at }) {
     try {
       if (!stepCode || !dcId || (!soNumber && !salesOrderId)) return null;

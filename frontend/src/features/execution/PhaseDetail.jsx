@@ -71,7 +71,8 @@ const PhaseDetail = () => {
           skuName: item.skuName, skuCode: item.skuCode,
           plannedDate: ph.plannedDate, status: ph.status, notes: ph.notes,
           planned, actual, remaining: Math.max(0, planned - actual),
-          dispatches: ph.actualDispatches || [],
+          // Cancelled dispatches were reversed — never list them as shipments.
+          dispatches: (ph.actualDispatches || []).filter((d) => !d.cancelled),
         };
       })
       .filter(Boolean);

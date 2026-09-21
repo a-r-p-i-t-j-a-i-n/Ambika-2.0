@@ -31,6 +31,15 @@ export const dispatchControlApi = baseApi.injectEndpoints({
     emailDispatchSchedule: builder.mutation({
       query: (body) => ({ url: '/dispatch-control/email-schedule', method: 'POST', body }),
     }),
+    // Bulk 2.05: drafts are built SERVER-side by the same code the single compose
+    // screen uses, so what a reviewer reads in the preview is what actually goes out.
+    bulkEmailPreview: builder.mutation({
+      query: (body) => ({ url: '/dispatch-control/email-schedule/bulk-preview', method: 'POST', body }),
+    }),
+    bulkEmailSchedule: builder.mutation({
+      query: (body) => ({ url: '/dispatch-control/email-schedule/bulk', method: 'POST', body }),
+      invalidatesTags: ['O2DProcess', 'O2DMyTasks', 'Order'],
+    }),
     getOrderComparison: builder.query({
       query: (soNumber) => `/dispatch-control/orders/${encodeURIComponent(soNumber)}/comparison`,
       providesTags: (_r, _e, soNumber) => [{ type: 'Comparison', id: soNumber }],
@@ -46,6 +55,23 @@ export const dispatchControlApi = baseApi.injectEndpoints({
     getDispatchablePhases: builder.query({
       query: (soNumber) => `/dispatch-control/orders/${encodeURIComponent(soNumber)}/dispatchable-phases`,
       providesTags: (_r, _e, soNumber) => [{ type: 'Schedule', id: soNumber }],
+    }),
+    // Production plan -> dispatch plan. The preview is a pure read; apply is what
+    // creates phases AND marks the plan capacity spent.
+    previewInheritPlan: builder.query({
+      query: (soNumber) => `/dispatch-control/orders/${encodeURIComponent(soNumber)}/inherit-production-plan`,
+      providesTags: (_r, _e, soNumber) => [{ type: 'Schedule', id: soNumber }, 'ProductionPlan'],
+    }),
+    applyInheritPlan: builder.mutation({
+      query: ({ soNumber, days }) => ({
+        url: `/dispatch-control/orders/${encodeURIComponent(soNumber)}/inherit-production-plan`,
+        method: 'POST',
+        body: { days },
+      }),
+      invalidatesTags: (_r, _e, { soNumber }) => [
+        { type: 'Schedule', id: soNumber }, 'Schedule', 'Order', 'PPC',
+        'DispatchDashboard', 'O2DProcess', 'ProductionPlan',
+      ],
     }),
     createPhase: builder.mutation({
       query: ({ soNumber, ...body }) => ({
@@ -111,6 +137,23 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (id) => ({ url: `/challans/${id}/pdf`, method: 'POST' }),
       invalidatesTags: (_r, _e, id) => [{ type: 'Challan', id }, 'Challan'],
     }),
+    // Delete ONE delivery challan. On a per-challan step the board's delete acts
+    // on the row you clicked — the challan — not the whole sales order.
+    // Cancel a dispatch: the row survives, its quantity is returned to the plan,
+    // and every downstream step for that challan is marked cancelled.
+    cancelChallan: builder.mutation({
+      query: ({ id, reason }) => ({ url: `/dispatch-control/challans/${id}/cancel`, method: 'PATCH', body: { reason } }),
+      invalidatesTags: ['Challan', 'Order', 'Schedule', 'Comparison', 'DispatchDashboard', 'PPC', 'O2DProcess', 'O2DMyTasks'],
+    }),
+    // Exact inverse of cancelChallan — puts the quantity back on the plan.
+    restoreChallan: builder.mutation({
+      query: (id) => ({ url: `/dispatch-control/challans/${id}/restore`, method: 'PATCH' }),
+      invalidatesTags: ['Challan', 'Order', 'Schedule', 'Comparison', 'DispatchDashboard', 'PPC', 'O2DProcess', 'O2DMyTasks'],
+    }),
+    deleteChallan: builder.mutation({
+      query: (id) => ({ url: `/challans/${id}`, method: 'DELETE' }),
+      invalidatesTags: ['Challan', 'Order', 'Schedule', 'Comparison', 'DispatchDashboard', 'O2DProcess', 'O2DMyTasks'],
+    }),
     updateChallan: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/challans/${id}`, method: 'PUT', body }),
       invalidatesTags: (_r, _e, { id }) => [{ type: 'Challan', id }, 'Challan'],
@@ -139,11 +182,15 @@ export const {
   useCreateDispatchPlanMutation,
   useCreateActualDispatchMutation,
   useEmailDispatchScheduleMutation,
+  useBulkEmailPreviewMutation,
+  useBulkEmailScheduleMutation,
   useGetOrderComparisonQuery,
   useGetOrderSummaryQuery,
   useGetScheduleQuery,
   useGetDispatchablePhasesQuery,
   useCreatePhaseMutation,
+  usePreviewInheritPlanQuery,
+  useApplyInheritPlanMutation,
   useUpdatePhaseMutation,
   useDeletePhaseMutation,
   useNormalizeSheetRowsMutation,
@@ -153,5 +200,8 @@ export const {
   useGetChallanByIdQuery,
   useGenerateChallanPdfMutation,
   useUpdateChallanMutation,
+  useDeleteChallanMutation,
+  useCancelChallanMutation,
+  useRestoreChallanMutation,
   useUploadOrderDocumentMutation,
 } = dispatchControlApi;

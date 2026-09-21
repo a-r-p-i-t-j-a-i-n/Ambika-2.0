@@ -17,7 +17,8 @@ const PhaseBlock = ({ phase, theme }) => {
   const planned   = Number(phase.plannedQty || 0);
   const actual    = Number(phase.actualQty || 0);
   const delayDays = Number(phase.delayDays || 0);
-  const shipments = phase.actualDispatches || [];
+  // Cancelled dispatches were reversed out of the plan — exclude them here too.
+  const shipments = (phase.actualDispatches || []).filter((d) => !d.cancelled);
   const pct = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : 0;
   const tone = pct >= 100 ? theme.palette.success.main
              : actual > 0 ? theme.palette.warning.main

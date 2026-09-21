@@ -31,6 +31,9 @@ export const groupDayByParty = (list = []) => {
       plannedQty: 0,
       actualQty: 0,
       pendingQty: 0,
+      // Production Plan only: how much of the plan an order has already taken.
+      // Summed here so the PDF can colour a card the same way the screen does.
+      usedQty: 0,
     };
     g.events.push(e);
     if (e.eventType === 'actual') g.eventType = 'actual';
@@ -41,17 +44,19 @@ export const groupDayByParty = (list = []) => {
     g.plannedQty += Number(e.plannedQty || 0);
     g.actualQty += Number(e.actualQty || 0);
     g.pendingQty += Number(e.pendingQty || 0);
+    g.usedQty += Number(e.usedQty || 0);
     (e.skus || []).forEach((sk) => {
       // Merge by SKU identity (code when present, else name) so the same item on
       // two different orders becomes ONE line with the combined quantity.
       const k = String(sk.skuCode || sk.skuName || '').toUpperCase();
       const cur = g.skuMap.get(k) || {
         skuName: sk.skuName, skuCode: sk.skuCode,
-        plannedQty: 0, actualQty: 0, pendingQty: 0,
+        plannedQty: 0, actualQty: 0, pendingQty: 0, usedQty: 0,
       };
       cur.plannedQty += Number(sk.plannedQty || 0);
       cur.actualQty += Number(sk.actualQty || 0);
       cur.pendingQty += Number(sk.pendingQty || 0);
+      cur.usedQty += Number(sk.usedQty || 0);
       g.skuMap.set(k, cur);
     });
     groups.set(e.partyName, g);

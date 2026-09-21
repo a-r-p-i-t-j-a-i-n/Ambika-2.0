@@ -6,7 +6,7 @@ import {
   createFilterOptions,
 } from '@mui/material';
 import {
-  X, Save, Hash, Calendar, Truck, Building2, Package,
+  X, Save, Calendar, Truck, Building2, Package,
   CheckCircle2, FileText, MapPin, Receipt, Info,
 } from 'lucide-react';
 import dayjs from 'dayjs';
@@ -58,6 +58,11 @@ const SectionLabel = ({ icon: Icon, children, hint }) => {
   );
 };
 
+// Part-box warning ground. Same red/white pair the order form uses for a
+// below-master price, so "red field = check this number" reads the same way.
+const PART_BOX_RED = '#c62828';
+const PART_BOX_RED_DK = '#8e0000';
+
 const n = (v) => Number(v || 0);
 const fmt = (v) => n(v).toLocaleString('en-IN');
 const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -67,6 +72,21 @@ const fmtKg = (v) => round2(v).toLocaleString('en-IN', { minimumFractionDigits: 
 // computes them: boxes = ⌈pcs ÷ pcs-per-box⌉, and weight is proportional to the
 // pcs shipped — e.g. a 105-pcs box weighing 35.80 kg gives ~17.90 kg for 52 pcs.
 const autoBoxes = (qty, pcsPerBox) => (Number(pcsPerBox) > 0 ? Math.ceil(n(qty) / Number(pcsPerBox)) : 0);
+// Part-box detail for the warning: 1,000 pcs at 120/box = 8 full boxes + 40 loose,
+// shown as 9. Returns null when the packing is unknown or the fit is exact.
+const partBoxInfo = (qty, pcsPerBox) => {
+  const ppb = Number(pcsPerBox) || 0;
+  const q = n(qty);
+  if (ppb <= 0 || q <= 0) return null;
+  const remainder = q % ppb;
+  if (remainder === 0) return null;
+  return {
+    full: Math.floor(q / ppb),
+    loose: remainder,
+    exact: Math.round((q / ppb) * 100) / 100,
+    rounded: Math.ceil(q / ppb),
+  };
+};
 const autoWeight = (qty, { pcsPerBox, weightPerBox, weightPerPc } = {}) => {
   if (Number(weightPerBox) > 0 && Number(pcsPerBox) > 0) return round2((n(qty) / Number(pcsPerBox)) * Number(weightPerBox));
   if (Number(weightPerPc) > 0) return round2(n(qty) * Number(weightPerPc));
@@ -488,8 +508,6 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
                   InputProps={{ ...params.InputProps, startAdornment: <InputAdornment position="start"><Truck size={13} /></InputAdornment> }} />
               )}
             />
-            <TextField label="Invoice No" value={header.invoiceNo} onChange={(e) => setHeader((p) => ({ ...p, invoiceNo: e.target.value }))}
-              InputProps={{ startAdornment: <InputAdornment position="start"><Hash size={13} /></InputAdornment> }} />
             <TextField label="L.R. / Docket No" value={header.lrNo} onChange={(e) => setHeader((p) => ({ ...p, lrNo: e.target.value.toUpperCase() }))}
               placeholder="Transporter's LR / docket no"
               helperText="Lorry Receipt from the transporter — prints on the delivery challan."
@@ -528,6 +546,7 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
             ) : lines.map((l, idx) => {
               const done = l.balanceQty <= 0;
               const over = n(l.quantityPcs) > l.balanceQty;
+              const part = partBoxInfo(l.quantityPcs, l.pcsPerBox);
               return (
                 <Box key={l.skuCode + idx} sx={{
                   display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: GRID.xs },
@@ -552,9 +571,30 @@ const DispatchEntry = ({ open, onClose, presetOrder = null, presetSoNumber = nul
                     onChange={(e) => setQty(idx, e.target.value)}
                     inputProps={{ style: { textAlign: 'right', fontWeight: 800 }, min: 0 }} error={over}
                     helperText={over ? 'over balance' : ''} sx={{ '& .MuiFormHelperText-root': { m: 0, fontSize: '0.6rem' } }} />
-                  <TextField size="small" type="number" value={l.noOfBoxes}
-                    onChange={(e) => updateLine(idx, { noOfBoxes: e.target.value, boxesTouched: true })}
-                    inputProps={{ style: { textAlign: 'right' }, min: 0 }} placeholder="Boxes" />
+                  <Tooltip
+                    arrow
+                    placement="top"
+                    disableHoverListener={!part}
+                    title={part
+                      ? `${fmt(l.quantityPcs)} pcs at ${fmt(l.pcsPerBox)}/box = ${part.exact} boxes — ${fmt(part.full)} full box${part.full === 1 ? '' : 'es'} + ${fmt(part.loose)} pcs loose. Rounded up to ${fmt(part.rounded)}; the last box is a part-box. Edit if you pack it differently.`
+                      : ''}
+                  >
+                    <TextField size="small" type="number" value={l.noOfBoxes}
+                      onChange={(e) => updateLine(idx, { noOfBoxes: e.target.value, boxesTouched: true })}
+                      inputProps={{ style: { textAlign: 'right' }, min: 0 }} placeholder="Boxes"
+                      sx={part ? {
+                        '& .MuiOutlinedInput-root': {
+                          bgcolor: PART_BOX_RED,
+                          '& fieldset':             { borderColor: PART_BOX_RED_DK, borderWidth: '1.5px' },
+                          '&:hover fieldset':       { borderColor: PART_BOX_RED_DK },
+                          '&.Mui-focused fieldset': { borderColor: PART_BOX_RED_DK, borderWidth: '2px' },
+                        },
+                        '& .MuiOutlinedInput-input': {
+                          color: '#fff', WebkitTextFillColor: '#fff', fontWeight: 800, caretColor: '#fff',
+                        },
+                        '& .MuiOutlinedInput-input::placeholder': { color: '#fff', opacity: 0.75 },
+                      } : undefined} />
+                  </Tooltip>
                   <TextField size="small" type="number" value={l.weightKg}
                     onChange={(e) => updateLine(idx, { weightKg: e.target.value, weightTouched: true })}
                     inputProps={{ style: { textAlign: 'right' }, min: 0, step: 'any' }} placeholder="Weight" />

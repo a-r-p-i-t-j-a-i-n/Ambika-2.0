@@ -152,6 +152,9 @@ const DispatchCalendar = () => {
           const actualQty = Number(ph.totalActualQty || 0);
           const pendingQty = Math.max(0, plannedQty - actualQty);
           const actualDispatches = (ph.actualDispatches || [])
+            // A cancelled dispatch must not appear as an Actual anywhere — the
+            // row is kept on the plan for history, but its qty was reversed.
+            .filter((a) => !a.cancelled)
             .map((a) => ({
               date: a.date || a.actualDate || a.dcDate || a.invoiceDate,
               qty: Number(a.qty || a.actualQty || a.quantityPcs || 0),
@@ -207,6 +210,9 @@ const DispatchCalendar = () => {
         (item.phases || []).forEach((ph) => {
           const plannedQty = Number(ph.plannedQty || 0);
           const actualDispatches = (ph.actualDispatches || [])
+            // A cancelled dispatch must not appear as an Actual anywhere — the
+            // row is kept on the plan for history, but its qty was reversed.
+            .filter((a) => !a.cancelled)
             .map((a) => ({
               date: a.date || a.actualDate || a.dcDate || a.invoiceDate,
               qty: Number(a.qty || a.actualQty || a.quantityPcs || 0),

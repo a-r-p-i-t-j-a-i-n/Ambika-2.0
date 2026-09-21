@@ -242,7 +242,9 @@ const TaskPage = () => {
           )}
           {process && (
             <Button variant="text" size="small" startIcon={<Workflow size={14} />}
-              onClick={() => navigate(`/o2d-fms/process/${process._id}`)}
+              // Back to the Step Board, not the per-order process page — the
+              // board is where a doer actually works, and it lands on this step.
+              onClick={() => navigate(`/o2d-fms/steps/${encodeURIComponent(stepCode || '')}`)}
               sx={{ fontWeight: 700, whiteSpace: 'nowrap', textTransform: 'none', color: O2D.brand, flexShrink: 0 }}>
               Order flow
             </Button>
