@@ -24,6 +24,11 @@ import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
 const TRANSPORT_OPTIONS = ['Road', 'Rail', 'Air', 'Sea', 'Courier'];
 const PARTY_GROUPS = ['Domestic', 'Export', 'OEM', 'Distributor', 'Direct'];
 
+// Below-master price warning: solid red ground + white text. #c62828 gives white
+// ~5.9:1 contrast (AA), and the darker edge keeps the field readable when focused.
+const BELOW_RED = '#c62828';
+const BELOW_RED_DK = '#8e0000';
+
 const emptyItem = () => ({
   _tempId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   skuId: '', skuName: '', skuCode: '', orderQty: '', rate: '', asnCode: '', remark: '',
@@ -909,6 +914,25 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                   onChange={(e) => handleItemChange(idx, 'rate', e.target.value)}
                   inputProps={{ style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }}
                   placeholder="0"
+                  // Below the master price the whole field goes solid red with white
+                  // text, not just a red outline — the client wants it unmissable.
+                  // WebkitTextFillColor is set alongside color because Chrome paints
+                  // number inputs with the fill colour and would keep the text dark.
+                  sx={belowMaster ? {
+                    '& .MuiOutlinedInput-root': {
+                      bgcolor: BELOW_RED,
+                      '& fieldset':                  { borderColor: BELOW_RED_DK, borderWidth: '1.5px' },
+                      '&:hover fieldset':            { borderColor: BELOW_RED_DK },
+                      '&.Mui-focused fieldset':      { borderColor: BELOW_RED_DK, borderWidth: '2px' },
+                      '&.Mui-error fieldset':        { borderColor: BELOW_RED_DK },
+                    },
+                    '& .MuiOutlinedInput-input': {
+                      color: '#fff', WebkitTextFillColor: '#fff',
+                      fontWeight: 800, caretColor: '#fff',
+                    },
+                    '& .MuiOutlinedInput-input::placeholder': { color: '#fff', opacity: 0.75 },
+                    '& .MuiInputAdornment-root': { color: '#fff' },
+                  } : undefined}
                   InputProps={{
                     startAdornment: <InputAdornment position="start" sx={{ mr: 0.25 }}><IndianRupee size={12} /></InputAdornment>,
                     endAdornment: (belowMaster || history.length > 0) ? (
@@ -917,7 +941,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                           <Tooltip arrow placement="top" title={
                             `You're entering ₹${Number(it.rate).toLocaleString('en-IN')} — LOWER than the master price ₹${mpRow.toLocaleString('en-IN')} from Pricing & Revenue. Kindly check (you can still submit).`
                           }>
-                            <Box component="span" sx={{ display: 'inline-flex', cursor: 'help', color: 'error.main', mr: history.length > 0 ? 0.5 : 0 }}>
+                            <Box component="span" sx={{ display: 'inline-flex', cursor: 'help', color: '#fff', mr: history.length > 0 ? 0.5 : 0 }}>
                               <AlertCircle size={13} />
                             </Box>
                           </Tooltip>
@@ -934,7 +958,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                             {history.length > 6 && <Typography variant="caption" sx={{ opacity: 0.7 }}>+{history.length - 6} more…</Typography>}
                           </Box>
                         )}>
-                          <Box component="span" sx={{ display: 'inline-flex', cursor: 'help', color: 'primary.main' }}>
+                          <Box component="span" sx={{ display: 'inline-flex', cursor: 'help', color: belowMaster ? '#fff' : 'primary.main' }}>
                             <History size={13} />
                           </Box>
                         </Tooltip>

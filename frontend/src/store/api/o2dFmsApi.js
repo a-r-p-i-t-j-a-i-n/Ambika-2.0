@@ -51,12 +51,15 @@ export const o2dFmsApi = baseApi.injectEndpoints({
     }),
     getProcessById: builder.query({
       query: (id) => `/o2d-fms/processes/${id}`,
-      providesTags: (r, e, id) => [{ type: 'O2DProcess', id }],
+      // Also carries the bare tag: post-dispatch entry forms (2.09-2.13) do not
+      // know the process id, so without it their saves could never refresh the
+      // open task and the step kept showing stale "not done yet" state.
+      providesTags: (r, e, id) => [{ type: 'O2DProcess', id }, 'O2DProcess'],
     }),
     // Per-consignment ledger (Consignment Tracker) — one row per Delivery Challan.
     getConsignments: builder.query({
       query: (id) => `/o2d-fms/processes/${id}/consignments`,
-      providesTags: (r, e, id) => [{ type: 'O2DProcess', id: `consignments-${id}` }],
+      providesTags: (r, e, id) => [{ type: 'O2DProcess', id: `consignments-${id}` }, 'O2DProcess'],
     }),
     getProcessByOrder: builder.query({
       query: (orderId) => `/o2d-fms/processes/by-order/${orderId}`,

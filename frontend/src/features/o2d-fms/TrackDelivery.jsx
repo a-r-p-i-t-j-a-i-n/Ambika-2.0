@@ -35,14 +35,30 @@ const TrackDelivery = () => {
     const target = `${dcParam}|${soParam}`;
     if (!dcParam && !soParam) return;
     if (presetRef.current === target || !challans.length) return;
-    const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
-      || (soParam && challans.find((c) => c.soNumber === soParam));
-    if (match) { presetRef.current = target; setDc(match); }
+    // Scoped to ONE challan → resolve to THAT challan only. A `||` fallback here
+    // silently switched the doer to another consignment when the scoped one was
+    // not in the fetched page, so the entry saved against the wrong challan.
+    const match = dcParam
+      ? challans.find((c) => c.dcNumber === dcParam)
+      : (soParam && challans.find((c) => c.soNumber === soParam));
+    presetRef.current = target;
+    setDc(match || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [soParam, dcParam, challans]);
   const [status, setStatus] = useState('Delivered');
   const [deliveryDate, setDeliveryDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [newTrackDate, setNewTrackDate] = useState('');
+
+  // Re-opening this step ("Do again") should show what is already recorded for
+  // the challan, so the doer edits a real entry instead of retyping it blind.
+  const seedRef = useRef('');
+  useEffect(() => {
+    if (!dc?._id || seedRef.current === String(dc._id)) return;
+    seedRef.current = String(dc._id);
+    if (dc.deliveryStatus) setStatus(dc.deliveryStatus);
+    if (dc.deliveryDate) setDeliveryDate(dayjs(dc.deliveryDate).format('YYYY-MM-DD'));
+    setNewTrackDate(dc.newTrackDate ? dayjs(dc.newTrackDate).format('YYYY-MM-DD') : '');
+  }, [dc]);
 
   const save = async () => {
     if (!dc) return enqueueSnackbar('Select a delivery challan first.', { variant: 'warning' });

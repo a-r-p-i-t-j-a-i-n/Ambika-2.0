@@ -55,7 +55,10 @@ const invoiceSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 invoiceSchema.pre('save', function (next) {
-  this.balance = (this.invoiceAmount || 0) - (this.amountReceived || 0);
+  // Clamped at 0: `balance` is DERIVED, and the field carries min:0 — an
+  // over-receipt (or a correction) would otherwise make this hook produce a
+  // value the schema rejects, failing the whole save with a 422.
+  this.balance = Math.max(0, (this.invoiceAmount || 0) - (this.amountReceived || 0));
   next();
 });
 

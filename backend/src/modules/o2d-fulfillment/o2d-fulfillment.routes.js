@@ -51,17 +51,23 @@ export const fulfillmentService = {
     dc.deliveryStatus = status || dc.deliveryStatus;
     if (status === 'Delivered') { dc.status = DC_STATUS.DELIVERED; dc.deliveryDate = deliveryDate || new Date(); }
     else if (status === 'Cancelled') { dc.status = DC_STATUS.CANCELLED; }
+    // A fresh re-track date replaces the old one; clear it once delivered.
     if (newTrackDate) dc.newTrackDate = newTrackDate;
+    if (status === 'Delivered') dc.newTrackDate = null;
     await dc.save();
     if (status === 'Delivered') {
       await advance(dc.soNumber, 'POD'); // reflect in FMS tracker
-      await logStep(dc.soNumber, dc._id, dc.dcNumber, '2.09', actor);
     }
+    // Logged for every recorded outcome, not just delivery: the doer performed
+    // the task either way, so the action shows "Do again" with who/when instead
+    // of staying on "Not done for this consignment yet".
+    if (status) await logStep(dc.soNumber, dc._id, dc.dcNumber, '2.09', actor);
     return dc.toObject();
   },
 
   // Upsert the client Payment row for an invoice, carrying context.
   async _payment(invoiceId, dcId) {
+    if (!invoiceId) throw new AppError('No invoice selected for this consignment — pick its invoice first.', 400);
     let pay = await Payment.findOne({ invoiceId, type: PAYMENT_TYPE.CLIENT_PAYMENT });
     if (!pay) {
       const inv = invoiceId ? await Invoice.findById(invoiceId).lean() : null;
@@ -76,7 +82,8 @@ export const fulfillmentService = {
   // ── 2.10 Follow up for payment ────────────────────────────
   async paymentFollowUp({ invoiceId, dcId, status }, actor) {
     const pay = await this._payment(invoiceId, dcId);
-    pay.followUp = { ...pay.followUp, actual: new Date(), status: toStep(status) };
+    pay.set('followUp.actual', new Date());
+    pay.set('followUp.status', toStep(status));
     await pay.save();
     const inv = invoiceId ? await Invoice.findById(invoiceId).select('soNumber dcNumber dcId').lean() : null;
     await logStep(inv?.soNumber, dcId || pay.dcId || inv?.dcId, pay.dcNumber || inv?.dcNumber, '2.10', actor);
@@ -86,23 +93,39 @@ export const fulfillmentService = {
   // ── 2.11 Receive payment + Tally entry ────────────────────
   async paymentReceipt({ invoiceId, dcId, status, receivedDate, receivedAmount }, actor) {
     const pay = await this._payment(invoiceId, dcId);
-    pay.confirmation = {
-      ...pay.confirmation,
-      actual: new Date(),
-      receivedDate: receivedDate || new Date(),
-      receivedAmount: Number(receivedAmount) || 0,
-      status: toStep(status),
-    };
+    pay.set('confirmation.actual', new Date());
+    pay.set('confirmation.receivedDate', receivedDate || new Date());
+    pay.set('confirmation.receivedAmount', Number(receivedAmount) || 0);
+    pay.set('confirmation.status', toStep(status));
     await pay.save();
 
     // Reflect on the invoice's received/balance + status.
     if (invoiceId && status !== 'Cancelled') {
       const inv = await Invoice.findById(invoiceId);
       if (inv) {
-        inv.amountReceived = (inv.amountReceived || 0) + (Number(receivedAmount) || 0);
-        inv.status = inv.amountReceived >= (inv.invoiceAmount || 0) && inv.invoiceAmount > 0
-          ? INVOICE_STATUS.PAID : INVOICE_STATUS.PARTIAL;
-        await inv.save(); // pre-save recomputes balance
+        // SET, never +=. The Payment record holds what has been received for this
+        // invoice, so re-saving 2.11 (a correction, or a retry after an error)
+        // restates the figure instead of adding it again. The old `+=` is how a
+        // ₹3,000 invoice reached ₹120,000 received.
+        const received = Number(pay.confirmation?.receivedAmount) || 0;
+        const amount = Number(inv.invoiceAmount) || 0;
+        inv.amountReceived = received;
+        inv.status = received >= amount && amount > 0 ? INVOICE_STATUS.PAID : INVOICE_STATUS.PARTIAL;
+        // The receipt itself is already saved on the Payment record; mirroring it
+        // onto the invoice is a SIDE-EFFECT and must never fail the step. A legacy
+        // invoice missing a required field (invoiceNo / invoiceDate) would make
+        // full-document validation throw, and the doer would just see a 422 on a
+        // form they filled correctly. Fall back to writing only the three derived
+        // fields, which skips validation of the rest of the document.
+        try {
+          await inv.save(); // pre-save recomputes balance
+        } catch (err) {
+          logger.error(`[o2d-fulfillment] invoice ${inv.invoiceNo || invoiceId} amount sync failed: ${err.message}`);
+          await Invoice.updateOne(
+            { _id: inv._id },
+            { $set: { amountReceived: received, balance: Math.max(0, amount - received), status: inv.status } },
+          ).catch((e) => logger.error(`[o2d-fulfillment] invoice amount fallback failed: ${e.message}`));
+        }
         await advance(inv.soNumber, 'PAYMENT'); // reflect in FMS tracker
         await logStep(inv.soNumber, inv.dcId || dcId || pay.dcId, inv.dcNumber || pay.dcNumber, '2.11', actor);
       }
@@ -112,6 +135,7 @@ export const fulfillmentService = {
 
   // Upsert the TransportBill row for a challan.
   async _transport(dcId) {
+    if (!dcId) throw new AppError('No delivery challan selected for this transport bill.', 400);
     let tb = await TransportBill.findOne({ dcId });
     if (!tb) {
       const dc = await DeliveryChallan.findById(dcId).lean();
@@ -123,7 +147,9 @@ export const fulfillmentService = {
   // ── 2.12 Receive transport bill ───────────────────────────
   async transportReceive({ dcId, status, attachment }, actor) {
     const tb = await this._transport(dcId);
-    tb.receipt = { ...tb.receipt, actual: new Date(), status: toStep(status), attachment: attachment || tb.receipt?.attachment };
+    tb.set('receipt.actual', new Date());
+    tb.set('receipt.status', toStep(status));
+    if (attachment) tb.set('receipt.attachment', attachment);
     await tb.save();
     const dc = await DeliveryChallan.findById(dcId).select('soNumber dcNumber').lean();
     await logStep(dc?.soNumber, dcId, dc?.dcNumber || tb.dcNumber, '2.12', actor);
@@ -133,7 +159,8 @@ export const fulfillmentService = {
   // ── 2.13 Transport bill payment status ────────────────────
   async transportPayment({ dcId, status }, actor) {
     const tb = await this._transport(dcId);
-    tb.payment = { ...tb.payment, actual: new Date(), status: toStep(status) };
+    tb.set('payment.actual', new Date());
+    tb.set('payment.status', toStep(status));
     await tb.save();
     const dc = await DeliveryChallan.findById(dcId).select('soNumber dcNumber').lean();
     await logStep(dc?.soNumber, dcId, dc?.dcNumber || tb.dcNumber, '2.13', actor);

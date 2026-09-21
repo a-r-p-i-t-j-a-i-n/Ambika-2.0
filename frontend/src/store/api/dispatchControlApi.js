@@ -31,6 +31,15 @@ export const dispatchControlApi = baseApi.injectEndpoints({
     emailDispatchSchedule: builder.mutation({
       query: (body) => ({ url: '/dispatch-control/email-schedule', method: 'POST', body }),
     }),
+    // Bulk 2.05: drafts are built SERVER-side by the same code the single compose
+    // screen uses, so what a reviewer reads in the preview is what actually goes out.
+    bulkEmailPreview: builder.mutation({
+      query: (body) => ({ url: '/dispatch-control/email-schedule/bulk-preview', method: 'POST', body }),
+    }),
+    bulkEmailSchedule: builder.mutation({
+      query: (body) => ({ url: '/dispatch-control/email-schedule/bulk', method: 'POST', body }),
+      invalidatesTags: ['O2DProcess', 'O2DMyTasks', 'Order'],
+    }),
     getOrderComparison: builder.query({
       query: (soNumber) => `/dispatch-control/orders/${encodeURIComponent(soNumber)}/comparison`,
       providesTags: (_r, _e, soNumber) => [{ type: 'Comparison', id: soNumber }],
@@ -111,6 +120,12 @@ export const dispatchControlApi = baseApi.injectEndpoints({
       query: (id) => ({ url: `/challans/${id}/pdf`, method: 'POST' }),
       invalidatesTags: (_r, _e, id) => [{ type: 'Challan', id }, 'Challan'],
     }),
+    // Delete ONE delivery challan. On a per-challan step the board's delete acts
+    // on the row you clicked — the challan — not the whole sales order.
+    deleteChallan: builder.mutation({
+      query: (id) => ({ url: `/challans/${id}`, method: 'DELETE' }),
+      invalidatesTags: ['Challan', 'Order', 'Schedule', 'Comparison', 'DispatchDashboard', 'O2DProcess', 'O2DMyTasks'],
+    }),
     updateChallan: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/challans/${id}`, method: 'PUT', body }),
       invalidatesTags: (_r, _e, { id }) => [{ type: 'Challan', id }, 'Challan'],
@@ -139,6 +154,8 @@ export const {
   useCreateDispatchPlanMutation,
   useCreateActualDispatchMutation,
   useEmailDispatchScheduleMutation,
+  useBulkEmailPreviewMutation,
+  useBulkEmailScheduleMutation,
   useGetOrderComparisonQuery,
   useGetOrderSummaryQuery,
   useGetScheduleQuery,
@@ -153,5 +170,6 @@ export const {
   useGetChallanByIdQuery,
   useGenerateChallanPdfMutation,
   useUpdateChallanMutation,
+  useDeleteChallanMutation,
   useUploadOrderDocumentMutation,
 } = dispatchControlApi;

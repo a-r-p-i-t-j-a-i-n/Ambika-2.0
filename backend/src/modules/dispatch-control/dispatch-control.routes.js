@@ -3,6 +3,8 @@ import validate from '../../middleware/validate.js';
 import { dispatchControlController } from './dispatch-control.controller.js';
 import {
   actualDispatchSchema,
+  bulkEmailPreviewSchema,
+  bulkEmailScheduleSchema,
   createPhaseSchema,
   dashboardQuerySchema,
   emailScheduleSchema,
@@ -30,6 +32,8 @@ router.post('/order-entry',                             validate(orderEntrySchem
 router.post('/dispatch-plans',                          validate(planDispatchSchema),  dispatchControlController.planDispatch);
 router.post('/actual-dispatches',                       validate(actualDispatchSchema),dispatchControlController.createActualDispatch);
 router.post('/email-schedule',                          validate(emailScheduleSchema), dispatchControlController.emailSchedule);
+router.post('/email-schedule/bulk-preview',              validate(bulkEmailPreviewSchema), dispatchControlController.bulkEmailPreview);
+router.post('/email-schedule/bulk',                      validate(bulkEmailScheduleSchema), dispatchControlController.bulkEmailSchedule);
 
 // Phase-level CRUD (the planner manages individual phases here).
 router.post('/orders/:soNumber/phases',                 validate(soNumberParamSchema, 'params'), validate(createPhaseSchema), dispatchControlController.createPhase);

@@ -44,7 +44,9 @@ export function useReturnToTask() {
 
   const finishToTask = async (ctx = {}) => {
     if (active) { returnToTask(); return true; }
-    return openFmsTask(ctx); // module-first → resolve & open the order's active task
+    // module-first → resolve & open the order's active task, still pinned to the
+    // challan this form was scoped to (?dc=) when there is one.
+    return openFmsTask({ dcNumber: fromDc || undefined, ...ctx });
   };
 
   return { active, returnToTask, finishToTask };

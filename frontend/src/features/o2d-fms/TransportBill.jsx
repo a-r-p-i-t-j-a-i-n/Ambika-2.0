@@ -50,9 +50,14 @@ const TransportBill = () => {
     const target = `${dcParam}|${soParam}`;
     if (!dcParam && !soParam) return;
     if (presetRef.current === target || !challans.length) return;
-    const match = (dcParam && challans.find((c) => c.dcNumber === dcParam))
-      || (soParam && challans.find((c) => c.soNumber === soParam));
-    if (match) { presetRef.current = target; setDc(match); }
+    // Scoped to ONE challan → resolve to THAT challan only. A `||` fallback here
+    // silently switched the doer to another consignment when the scoped one was
+    // not in the fetched page, so the entry saved against the wrong challan.
+    const match = dcParam
+      ? challans.find((c) => c.dcNumber === dcParam)
+      : (soParam && challans.find((c) => c.soNumber === soParam));
+    presetRef.current = target;
+    setDc(match || null);
   }, [challans, soParam, dcParam]);
   const [rcvStatus, setRcvStatus] = useState('Done');
   const [attachment, setAttachment] = useState(null); // { fileName, url }

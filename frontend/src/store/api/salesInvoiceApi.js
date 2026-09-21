@@ -27,6 +27,14 @@ export const salesInvoiceApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/sales-invoices/${id}/send`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['SalesInvoice', { type: 'SalesInvoice', id }, 'O2DProcess', 'O2DMyTasks'],
     }),
+    // Bulk step 2.08 — drafts built server-side so preview == what is sent.
+    bulkInvoiceEmailPreview: builder.mutation({
+      query: (body) => ({ url: '/sales-invoices/bulk-email-preview', method: 'POST', body }),
+    }),
+    bulkInvoiceEmail: builder.mutation({
+      query: (body) => ({ url: '/sales-invoices/bulk-email', method: 'POST', body }),
+      invalidatesTags: ['SalesInvoice', 'O2DProcess', 'O2DMyTasks'],
+    }),
   }),
 });
 
@@ -34,6 +42,8 @@ export const {
   useGetSalesInvoicesQuery,
   useGetSalesInvoiceQuery,
   useCreateSalesInvoiceMutation,
+  useBulkInvoiceEmailPreviewMutation,
+  useBulkInvoiceEmailMutation,
   useUpdateSalesInvoiceMutation,
   useSendSalesInvoiceMutation,
 } = salesInvoiceApi;

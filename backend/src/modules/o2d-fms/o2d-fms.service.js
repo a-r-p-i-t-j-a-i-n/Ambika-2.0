@@ -469,7 +469,15 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       // instead of one shared step-level flag that would mark every challan done the
       // moment the first PDF was made.
       pdfUrl: c.pdfUrl || null,
-      delivery: { delivered, status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'), date: c.deliveryDate || null },
+      delivery: {
+        delivered,
+        status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'),
+        date: c.deliveryDate || null,
+        // When 2.09 was answered "Not Delivered", the date it will be chased again.
+        newTrackDate: c.newTrackDate || null,
+        // True once ANY outcome has been recorded — drives the action's done-state.
+        recorded: Boolean(c.deliveryStatus),
+      },
       invoice: {
         has: !!inv, invoiceNo: inv?.invoiceNo || null, status: inv?.status || null, date: inv?.invoiceDate || null,
         amount: Number(inv?.invoiceAmount || 0), received: Number(inv?.amountReceived || 0), balance: Number(inv?.balance || 0),
@@ -480,6 +488,11 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       eway: { has: !!(inv && ((inv.ewayBillUrls || []).length || inv.ewayBillUrl)) },
       payment: {
         has: !!pay, status: pay?.confirmation?.status || (pay ? 'PENDING' : null),
+        // Step 2.10's own outcome. `has` only says a payment record exists — which
+        // 2.11 also creates — so the follow-up step needs its own signal to avoid
+        // reading as done before anyone followed up.
+        followUpStatus: pay?.followUp?.status || null,
+        followUpDate: pay?.followUp?.actual || null,
         confirmed: pay?.confirmation?.status === 'DONE', received: Number(pay?.confirmation?.receivedAmount || 0),
         // Explicit doer-recorded outcome (PENDING | NOT_RECEIVED | RECEIVED) + note,
         // so the task/tracker can show "Not received" as a real state, not a blank.
@@ -764,7 +777,7 @@ export const o2dFmsService = {
   // SKUs, qty, invoice figures, transporter and L.R. straight from the documents.
   async listBoardConsignments() {
     const challans = await DeliveryChallan.find({ isDeleted: { $ne: true } })
-      .select('dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate')
+      .select('dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate newTrackDate')
       .populate('createdBy', 'name')
       .sort({ dcDate: 1, createdAt: 1 })
       .limit(2000)
@@ -822,7 +835,13 @@ export const o2dFmsService = {
         pdfUrl: ch.pdfUrl || null,
         // Per-challan step audit (2.06–2.13): stepCode → { doneByName, doneAt, status }.
         log: logByDc.get(String(ch._id)) || {},
-        delivery: { delivered, status: ch.deliveryStatus || (delivered ? 'Delivered' : 'Pending'), date: ch.deliveryDate || null },
+        delivery: {
+          delivered,
+          status: ch.deliveryStatus || (delivered ? 'Delivered' : 'Pending'),
+          date: ch.deliveryDate || null,
+          newTrackDate: ch.newTrackDate || null,
+          recorded: Boolean(ch.deliveryStatus),
+        },
         invoice: inv ? {
           invoiceNo: inv.invoiceNo || null,
           date: inv.invoiceDate || null,

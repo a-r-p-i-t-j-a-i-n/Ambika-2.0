@@ -562,10 +562,14 @@ const buildComparison = async (soNumber) => {
     acc.plannedQty += Number(row.plannedQty || 0);
     acc.actualQty += Number(row.actualQty || 0);
     acc.balanceQty += Number(row.balanceQty || 0);
+    // Balance measured against the PLAN, not the sales order: what the planner
+    // committed minus what actually went out. Deliberately separate from
+    // balanceQty (order-based), which six other screens still read.
+    acc.planBalanceQty += Number(row.pendingPlannedQty || 0);
     acc.riskCount += row.risks.length;
     acc.carryForwardQty += Number(row.carryForwardSuggestionQty || 0);
     return acc;
-  }, { orderQty: 0, plannedQty: 0, actualQty: 0, balanceQty: 0, riskCount: 0, carryForwardQty: 0 });
+  }, { orderQty: 0, plannedQty: 0, actualQty: 0, balanceQty: 0, planBalanceQty: 0, riskCount: 0, carryForwardQty: 0 });
 
   totals.fulfillmentPct = totals.orderQty > 0 ? Number(((totals.actualQty / totals.orderQty) * 100).toFixed(2)) : 0;
   totals.planAchievementPct = totals.plannedQty > 0 ? Number(((totals.actualQty / totals.plannedQty) * 100).toFixed(2)) : 0;
@@ -1224,6 +1228,116 @@ export const dispatchControlService = {
     });
 
     return { emailStatus, recipient, cc: ccList, attachmentCount: atts.length };
+  },
+
+  /**
+   * Build the to / cc / subject / message for ONE order's dispatch-schedule mail.
+   * Lives on the server so the bulk preview a user reviews is produced by exactly
+   * the same code that a single compose screen would show — a preview that could
+   * drift from what is actually sent would be worse than no preview at all.
+   */
+  async buildScheduleEmailDraft(soNumber) {
+    const order = await SalesOrder.findOne({ soNumber }).lean();
+    if (!order) return { soNumber, error: `Sales Order ${soNumber} not found` };
+
+    let party = null;
+    if (order.partyId) party = await Party.findById(order.partyId).lean();
+    if (!party && order.partyName) {
+      party = await Party.findOne({ name: new RegExp(`^${escapeRegex(order.partyName)}$`, 'i') }).lean();
+    }
+
+    let schedule = null;
+    try { schedule = await this.getSchedule(soNumber); } catch { /* plan may not exist yet */ }
+
+    const to = (party?.toEmails || []).length
+      ? party.toEmails.join(', ')
+      : (party?.email || '');
+    const cc = (party?.ccEmails || []).join(', ');
+
+    const fmtQty = (n) => Number(n || 0).toLocaleString('en-IN');
+    const fmtDay = (d) => (d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-');
+
+    const lines = (schedule?.items || []).flatMap((it) => (it.phases || [])
+      .filter((ph) => Number(ph.plannedQty || 0) > 0)
+      .map((ph) => `  • ${it.skuName || it.skuCode}: ${fmtQty(ph.plannedQty)} on ${fmtDay(ph.plannedDate)}`));
+
+    const subject = `Dispatch Schedule — ${order.soNumber}${order.poNumber ? ` (PO ${order.poNumber})` : ''}`;
+    // Assembled line-by-line and joined, rather than one string full of '\n'
+    // escapes — easier to read and impossible to break with a stray newline.
+    const message = [
+      `Dear ${order.partyName || 'Customer'},`,
+      '',
+      `Please find the dispatch schedule for your order ${order.soNumber}${order.poNumber ? ` (PO ${order.poNumber})` : ''}.`,
+      '',
+      ...(lines.length ? ['Planned dispatches:', ...lines, ''] : []),
+      'The detailed dispatch plan PDF is attached for your reference.',
+      '',
+      'Regards,',
+      'Ambika Global',
+    ].join('\n');
+
+    return {
+      soNumber: order.soNumber,
+      partyName: order.partyName || party?.name || '',
+      poNumber: order.poNumber || '',
+      to,
+      cc,
+      subject,
+      message,
+      phaseLineCount: lines.length,
+      // The reviewer must SEE what rides along, not be told it in prose. The
+      // server attaches this same file at send time in emailSchedule().
+      attachments: schedule
+        ? [{
+          fileName: `Dispatch-Plan-${String(order.soNumber || 'order').replace(/[^\w.-]+/g, '_')}.pdf`,
+          label: 'Dispatch Plan (PDF)',
+          auto: true,
+        }]
+        : [],
+      // Surfaced so the preview grid can flag a draft that would fail before the
+      // user hits Send All, rather than after.
+      warning: !to ? 'No email address on the party master' : (!lines.length ? 'No dispatch plan lines yet' : ''),
+    };
+  },
+
+  /** Drafts for a set of orders, in the order asked for. */
+  async bulkScheduleEmailPreview(soNumbers = []) {
+    const list = [...new Set((soNumbers || []).map((x) => String(x || '').trim()).filter(Boolean))];
+    return Promise.all(list.map((so) => this.buildScheduleEmailDraft(so)));
+  },
+
+  /**
+   * Send many dispatch-schedule emails. Each goes through the SAME emailSchedule
+   * path (server-built PDF, branded HTML, FMS step logging), and one failure never
+   * aborts the rest — the caller gets a per-order verdict to show.
+   */
+  async bulkEmailSchedule(emails = [], actor = null) {
+    const results = [];
+    for (const item of emails) {
+      const soNumber = String(item?.soNumber || '').trim();
+      try {
+        if (!soNumber) throw new AppError('Sales order number is required.', 400);
+        const res = await this.emailSchedule({
+          soNumber,
+          to: item.to,
+          cc: item.cc,
+          subject: item.subject,
+          message: item.message,
+          attachments: item.attachments || [],
+        }, actor);
+        results.push({
+          soNumber,
+          status: res.emailStatus,
+          recipient: res.recipient,
+          error: res.emailStatus === 'SENT' ? null : 'SMTP relay reported a failure',
+        });
+      } catch (err) {
+        logger.error(`[dispatch] bulk schedule email failed for ${soNumber}: ${err.message}`);
+        results.push({ soNumber, status: 'FAILED', recipient: item?.to || '', error: err.message });
+      }
+    }
+    const sent = results.filter((r) => r.status === 'SENT').length;
+    return { total: results.length, sent, failed: results.length - sent, results };
   },
 
   /**

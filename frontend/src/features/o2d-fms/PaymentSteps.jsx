@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Paper, Stack, Typography, Autocomplete, TextField, Button, MenuItem, Chip, CircularProgress, Divider, alpha, useTheme,
+  Box, Paper, Stack, Typography, Autocomplete, TextField, Button, MenuItem, Chip, CircularProgress, Divider, alpha, useTheme,
 } from '@mui/material';
 import { IndianRupee, Save, PhoneCall, BadgeCheck } from 'lucide-react';
 import dayjs from 'dayjs';
@@ -51,16 +51,35 @@ const PaymentSteps = () => {
     const target = `${dcParam}|${soParam}`;
     if (!dcParam && !soParam) return;
     if (presetRef.current === target || !invoices.length) return;
-    const match = (dcParam && invoices.find((i) => i.dcNumber === dcParam))
-      || (soParam && invoices.find((i) => i.soNumber === soParam));
-    if (match) { presetRef.current = target; setInv(match); }
+    // Scoped to ONE challan → resolve to THAT challan's own invoice and NOTHING
+    // else. The old `||` fell through to the order's first invoice whenever the
+    // challan's invoice was missing from the page, so submitting sent the payment
+    // against a DIFFERENT consignment and returned to that one's task.
+    const match = dcParam
+      ? invoices.find((i) => i.dcNumber === dcParam)
+      : (soParam && invoices.find((i) => i.soNumber === soParam));
+    presetRef.current = target;
+    setInv(match || null);
   }, [invoices, soParam, dcParam]);
+  // True when this screen is scoped to a challan we could not resolve an invoice
+  // for — the doer must be told, not silently pointed at another challan.
+  const dcInvoiceMissing = Boolean(dcParam) && invoices.length > 0 && !inv;
   const [fuStatus, setFuStatus] = useState('Yes');
+  const money = (v) => Number(v || 0).toLocaleString('en-IN');
+
   const [rcStatus, setRcStatus] = useState('Yes');
   const [rcDate, setRcDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [rcAmount, setRcAmount] = useState('');
+  // Show back what was saved for this invoice — nothing computed. Blank if none.
+  const amountSeedRef = useRef('');
+  useEffect(() => {
+    if (!inv?._id || amountSeedRef.current === String(inv._id)) return;
+    amountSeedRef.current = String(inv._id);
+    setRcAmount(inv.amountReceived ? String(inv.amountReceived) : '');
+  }, [inv]);
 
   const saveFollowUp = async () => {
+    if (dcInvoiceMissing) return enqueueSnackbar(`No invoice exists for challan ${dcParam} yet — create it in step 2.7 first.`, { variant: 'warning' });
     if (!inv) return enqueueSnackbar('Select an invoice first.', { variant: 'warning' });
     try {
       await followUp({ invoiceId: inv._id, dcId: inv.dcId, status: fuStatus }).unwrap();
@@ -70,6 +89,7 @@ const PaymentSteps = () => {
   };
 
   const saveReceipt = async () => {
+    if (dcInvoiceMissing) return enqueueSnackbar(`No invoice exists for challan ${dcParam} yet — create it in step 2.7 first.`, { variant: 'warning' });
     if (!inv) return enqueueSnackbar('Select an invoice first.', { variant: 'warning' });
     try {
       await receipt({ invoiceId: inv._id, dcId: inv.dcId, status: rcStatus, receivedDate: rcDate, receivedAmount: Number(rcAmount) || 0 }).unwrap();
@@ -81,8 +101,35 @@ const PaymentSteps = () => {
   return (
     <O2dStepShell icon={IndianRupee} step={shell.step} title={shell.title} subtitle={shell.subtitle} gate={gate}>
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+        {/* Scope banner — when the task sent us here for ONE challan, say so, and
+            restrict the picker to that challan's own invoice. Without this the
+            doer could not tell which consignment they were recording against. */}
+        {dcParam && (
+          <Box sx={{
+            mb: 1.5, px: 1.25, py: 0.9, borderRadius: 1.5,
+            bgcolor: alpha(theme.palette.secondary.main, 0.08),
+            border: `1px solid ${alpha(theme.palette.secondary.main, 0.3)}`,
+          }}>
+            <Typography variant="caption" sx={{ fontWeight: 800, color: theme.palette.secondary.dark, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Recording for this consignment
+            </Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: '0.9rem' }}>{dcParam}</Typography>
+          </Box>
+        )}
+        {dcInvoiceMissing && (
+          <Box sx={{
+            mb: 1.5, px: 1.25, py: 0.9, borderRadius: 1.5,
+            bgcolor: alpha(theme.palette.warning.main, 0.1),
+            border: `1px solid ${alpha(theme.palette.warning.main, 0.35)}`,
+          }}>
+            <Typography sx={{ fontSize: '0.82rem', color: theme.palette.warning.dark, fontWeight: 600 }}>
+              No invoice exists for challan <b>{dcParam}</b> yet. Create it in <b>Step 2.7 — Create Invoice &amp; Eway Bill</b>
+              {' '}for this challan, then come back. Nothing will be saved against another consignment.
+            </Typography>
+          </Box>
+        )}
         <Autocomplete
-          options={invoices}
+          options={dcParam ? invoices.filter((i) => i.dcNumber === dcParam) : invoices}
           value={inv}
           onChange={(_, v) => setInv(v)}
           getOptionLabel={(o) => (o ? `${o.invoiceNo} — ${o.partyName}` : '')}
@@ -133,7 +180,9 @@ const PaymentSteps = () => {
               </Stack>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                 <TextField label="Received Amount Date" type="date" value={rcDate} onChange={(e) => setRcDate(e.target.value)} size="small" InputLabelProps={{ shrink: true }} sx={{ minWidth: 200 }} />
-                <TextField label="Received Amount (₹)" type="number" value={rcAmount} onChange={(e) => setRcAmount(e.target.value)} size="small" fullWidth />
+                <TextField label="Invoice Amount (₹)" value={money(inv.invoiceAmount)} size="small" disabled sx={{ minWidth: 170 }} />
+                <TextField label="Received Amount (₹)" type="number" value={rcAmount}
+                  onChange={(e) => setRcAmount(e.target.value)} size="small" fullWidth />
               </Stack>
               <Divider />
               <Stack direction="row" justifyContent="flex-end">

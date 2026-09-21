@@ -113,9 +113,14 @@ export const consignmentActionDone = (key, c) => {
     // emailed this challan they see "Do again · Done by … · time" (and can re-send),
     // never a blank "Do it now" after the fact.
     case 'INVOICE_EMAIL': return c.invoice?.emailStatus === 'SENT' || !!c.invoice?.emailSentAt;
+    // 2.09 is done when an outcome has been RECORDED. "Not delivered, chase on
+    // the 25th" is a completed piece of work — the button should read "Do again",
+    // not "Not done for this consignment yet".
     case 'POD':
-    case 'TRACK_DELIVERY': return !!c.delivery?.delivered;
-    case 'PAYMENT_FOLLOWUP': return !!c.payment?.has;
+    case 'TRACK_DELIVERY': return !!c.delivery?.delivered || !!c.delivery?.recorded;
+    // 2.10 is done when the FOLLOW-UP itself was recorded, not merely because a
+    // payment record exists (step 2.11 creates one too).
+    case 'PAYMENT_FOLLOWUP': return c.payment?.followUpStatus === 'DONE' || !!c.payment?.followUpDate;
     case 'PAYMENT':
     case 'PAYMENT_RECEIPT': return !!c.payment?.confirmed;
     case 'TRANSPORT_BILL_RECEIVE': return c.transport?.receiptStatus === 'DONE';
@@ -360,7 +365,14 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const autoTickedRef = React.useRef(false);
   React.useEffect(() => {
     if (!autoComplete || autoTickedRef.current) return;
-    const ls = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
+    // WAIT for the server's copy of the step. Falling back to the `step` prop
+    // used to let this run before the fetch resolved: the checklist was still
+    // empty, so nothing was ticked and nothing auto-completed — yet the ref was
+    // already set, so the real data arriving could never re-run it. That is why
+    // a step reached from a cold route (2.10-2.13) stayed at 0/1 with the
+    // "checklist marked for you" banner showing, while warm ones (2.03-2.06)
+    // looked fine.
+    const ls = procRes?.data?.steps?.find((x) => x.stepCode === step?.stepCode);
     if (!ls) return;
     autoTickedRef.current = true;
     // ?entryDone is a ONE-SHOT signal meaning "you just submitted the form for THIS
@@ -433,7 +445,9 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   React.useEffect(() => {
     const key = searchParams.get('doneAction');
     if (!key) return;
-    const ls = procRes?.data?.steps?.find((s) => s.stepCode === step?.stepCode) || step;
+    // Same rule as the auto-tick above: this effect consumes the one-shot flag,
+    // so it must not run against a half-loaded step.
+    const ls = procRes?.data?.steps?.find((x) => x.stepCode === step?.stepCode);
     if (!ls) return;
     const marker = `${ls.stepCode}:${key}`;
     if (actionDoneRef.current === marker) return;
@@ -739,6 +753,15 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
                   {consignment.dcNumber}{consignment.phaseNo ? ` · ${consignment.phaseNo}` : ''}{consignment.qty ? ` · ${Number(consignment.qty).toLocaleString('en-IN')} pcs` : ''}
                 </Typography>
               </Box>
+              {/* An open "chase again on <date>" commitment from 2.09 — the doer
+                  needs to see it wherever this challan's task is opened. */}
+              {consignment.delivery?.newTrackDate && !consignment.delivery?.delivered && (
+                <Chip
+                  size="small"
+                  label={`Re-track ${fmt(consignment.delivery.newTrackDate)}`}
+                  sx={{ height: 20, fontSize: '0.62rem', fontWeight: 800, bgcolor: alpha('#b45309', 0.12), color: '#b45309' }}
+                />
+              )}
               <Chip size="small" label="Actions apply to this challan" sx={{ height: 20, fontSize: '0.62rem', fontWeight: 700, bgcolor: alpha('#7c3aed', 0.1), color: '#6d28d9' }} />
             </Paper>
           )}

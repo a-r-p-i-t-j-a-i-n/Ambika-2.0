@@ -23,13 +23,17 @@ export function useOpenFmsTask() {
   const navigate = useNavigate();
   const [resolve] = useLazyGetActiveTaskQuery();
 
-  return async ({ soNumber, salesOrderId, intakeId, action } = {}) => {
+  return async ({ soNumber, salesOrderId, intakeId, action, dcNumber } = {}) => {
     try {
       const res = await resolve({ soNumber, salesOrderId, intakeId, action }).unwrap();
       const t = res?.data;
       if (t?.processId && t?.stepCode) {
         const q = new URLSearchParams({ entryDone: '1' });
         if (action) q.set('doneAction', action);
+        // On a split order the resolved task is the ORDER's active step, which
+        // says nothing about which challan the entry was for. Carry the one the
+        // form was working on so the doer lands back on that consignment.
+        if (dcNumber) q.set('dc', dcNumber);
         navigate(`/o2d-fms/task/${t.processId}/${encodeURIComponent(t.stepCode)}?${q.toString()}`);
         return true;
       }

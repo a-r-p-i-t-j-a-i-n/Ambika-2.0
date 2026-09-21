@@ -56,6 +56,10 @@ const deliveryChallanSchema = new mongoose.Schema({
   // ── Delivery tracking (O2D Step 2.9) ───────────────────────
   deliveryStatus: { type: String, default: null }, // Delivered / Not Delivered / Cancelled
   deliveryDate:   { type: Date, default: null },
+  // Step 2.09, "Not Delivered": the date the doer will chase it again. Was being
+  // set by the service but never declared here, so strict mode silently dropped
+  // it and the re-track date could never be stored or shown.
+  newTrackDate:   { type: Date, default: null },
   newTrackDate:   { type: Date, default: null },    // re-track date when not yet delivered
 
   // ── Plan-vs-Actual linkage (the core design choice) ────────
