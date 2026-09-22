@@ -1,0 +1,25 @@
+# Backend-scoped ignores.
+#
+# The root .gitignore already covers these for anyone working from the repo
+# root; this file repeats them so the rules still hold when backend/ is used
+# on its own (deploy.yml rsyncs this folder to the server by itself).
+
+# Dependencies - installed with `npm install`, never committed.
+node_modules/
+
+# Secrets. .env.example IS committed (it holds names only, no values).
+.env
+.env.*
+!.env.example
+
+# Runtime uploads. The leading slash matters: it pins this to backend/uploads/
+# only. An unanchored "uploads/" would also swallow src/common/uploads/, which
+# is source code app.js imports - the backend would fail to boot.
+/uploads/
+
+# Logs
+*.log
+logs/
+
+# Coverage / test output (no test suite today; here for when one lands)
+coverage/

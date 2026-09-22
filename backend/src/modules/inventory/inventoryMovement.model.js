@@ -69,6 +69,14 @@ const inventoryMovementSchema = new Schema({
   piId:         { type: Schema.Types.ObjectId, ref: 'ProformaInvoice' },
   piNumber:     { type: String, trim: true, default: '' },
 
+  // Why a MANUAL stock entry was made, kept structured so History can explain it
+  // later without parsing prose. `reason` holds the code (e.g. VENDOR_RECEIPT,
+  // OTHER); `customReason` the operator's free text, and only when reason is
+  // OTHER. Optional and defaulted, so every automated caller (GRN, transfers,
+  // production, dispatch) is completely unaffected.
+  reason:          { type: String, trim: true, default: '' },
+  customReason:    { type: String, trim: true, default: '' },
+
   remarks:         { type: String, trim: true, default: '' },
   performedBy:     { type: Schema.Types.ObjectId, ref: 'User' },
   performedByName: { type: String, trim: true, default: '' },

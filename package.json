@@ -1,0 +1,15 @@
+{
+  "name": "ambika-2.0",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local development orchestrator for Ambika 2.0 (AGL ERP). Runs the existing backend and frontend dev servers together. Development convenience only - production is unchanged and still runs from deploy/ecosystem.config.cjs (pm2) and deploy/nginx.conf.",
+  "scripts": {
+    "dev": "concurrently --kill-others --names \"BACKEND,FRONTEND\" --prefix-colors \"blue.bold,magenta.bold\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

@@ -163,7 +163,7 @@ const StockHistory = ({ skuId }) => {
                 )}
                 {metrics.maxLevel > 0 && (
                   <ReferenceLine y={metrics.maxLevel} stroke={STOCK_TOKENS.OK.color} strokeDasharray="4 4"
-                    label={{ value: 'Order up to', fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
+                    label={{ value: 'Max Level', fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
                 )}
                 <Area type="monotone" dataKey="closing" stroke={O2D.brand} strokeWidth={2.5} fill="url(#imsHistFill)" dot={false} />
               </AreaChart>
@@ -176,13 +176,13 @@ const StockHistory = ({ skuId }) => {
         <Table size="small" sx={imsTableSx(720)}>
           <TableHead>
             <TableRow>
-              <TableCell>Date</TableCell>
+              <TableCell align="center">Date</TableCell>
               <TableCell align="right"><Th label="Opened with" hint="Balance carried forward from the previous day." /></TableCell>
               <TableCell align="right">Came in</TableCell>
               <TableCell align="right">Went out</TableCell>
               <TableCell align="right">Net</TableCell>
               <TableCell align="right"><Th label="Closed with" hint="Balance at the end of the day." /></TableCell>
-              <TableCell>Level</TableCell>
+              <TableCell align="center">Level</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -199,7 +199,7 @@ const StockHistory = ({ skuId }) => {
               const tone = d.stockOut ? STOCK_TOKENS.OUT_OF_STOCK : d.belowReorder ? STOCK_TOKENS.REORDER : null;
               return (
                 <TableRow key={d.date} hover sx={tone ? { bgcolor: tone.tint } : (d.movementCount > 0 ? { bgcolor: O2D.surfaceAlt } : null)}>
-                  <TableCell sx={{ whiteSpace: 'nowrap', fontWeight: 600, color: O2D.ink }}>{dayjs(d.date).format('ddd, DD MMM YYYY')}</TableCell>
+                  <TableCell align="center" sx={{ whiteSpace: 'nowrap', fontWeight: 600, color: O2D.ink }}>{dayjs(d.date).format('ddd, DD MMM YYYY')}</TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{num(d.opening)}</TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: d.inQty ? moveToken('IN').color : O2D.faint, fontWeight: d.inQty ? 700 : 400 }}>
                     {d.inQty ? `+${num(d.inQty)}` : '—'}
@@ -211,7 +211,7 @@ const StockHistory = ({ skuId }) => {
                     {d.net === 0 ? '—' : `${d.net > 0 ? '+' : '−'}${num(Math.abs(d.net))}`}
                   </TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: tone?.color || O2D.ink }}>{num(d.closing)}</TableCell>
-                  <TableCell>
+                  <TableCell align="center">
                     {tone
                       ? <Chip size="small" label={d.stockOut ? 'Out of stock' : 'Below reorder'}
                           sx={{ height: 20, fontWeight: 700, fontSize: '0.66rem', borderRadius: '999px', bgcolor: tone.bg, color: tone.color, border: `1px solid ${tone.border}` }} />
@@ -249,7 +249,7 @@ const StockForecast = ({ skuId }) => {
 
   return (
     <Panel title="What happens next" icon={LineChartIcon}
-      hint="A straight-line projection assuming today's average daily use continues and nothing new arrives."
+      hint="A straight-line projection assuming today's Average Daily Consumption continues and nothing new arrives."
       actions={(
         <ToggleButtonGroup size="small" exclusive value={days} onChange={(_, v) => v && setDays(v)} sx={toggleSx}>
           {RANGE_PRESETS.map((n) => <ToggleButton key={n} value={n}>{n} days</ToggleButton>)}
@@ -282,7 +282,7 @@ const StockForecast = ({ skuId }) => {
               )}
               {m.maxLevel > 0 && (
                 <ReferenceLine y={m.maxLevel} stroke={STOCK_TOKENS.OK.color} strokeDasharray="4 4"
-                  label={{ value: 'Order up to', fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
+                  label={{ value: 'Max Level', fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
               )}
               <Line type="monotone" dataKey="projected" stroke={O2D.brand} strokeWidth={2.5} dot={false} />
             </LineChart>
@@ -309,9 +309,9 @@ const MovementHistory = ({ skuId }) => {
         <Table size="small" sx={imsTableSx(960)}>
           <TableHead>
             <TableRow>
-              <TableCell>Date</TableCell>
+              <TableCell align="center">Date</TableCell>
               <TableCell><Th label="Recorded at" hint="When the entry was actually keyed in, and its movement number." /></TableCell>
-              <TableCell>What happened</TableCell>
+              <TableCell align="center">What happened</TableCell>
               <TableCell align="right">Change</TableCell>
               <TableCell align="right">Balance after</TableCell>
               <TableCell>Recorded by</TableCell>
@@ -334,12 +334,12 @@ const MovementHistory = ({ skuId }) => {
               const ref = [mv.refNumber, mv.poNumber, mv.vendorName].filter(Boolean).join(' · ');
               return (
                 <TableRow key={mv._id} hover>
-                  <TableCell sx={{ whiteSpace: 'nowrap', fontWeight: 600, color: O2D.ink }}>{dayjs(mv.movementDate).format('DD MMM YYYY')}</TableCell>
+                  <TableCell align="center" sx={{ whiteSpace: 'nowrap', fontWeight: 600, color: O2D.ink }}>{dayjs(mv.movementDate).format('DD MMM YYYY')}</TableCell>
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>
                     <Typography sx={{ fontSize: '0.71rem', color: O2D.sub }}>{dayjs(mv.createdAt || mv.movementDate).format('DD MMM, HH:mm')}</Typography>
                     <Typography sx={{ fontSize: '0.65rem', fontFamily: 'ui-monospace, monospace', color: O2D.faint }}>{mv.movementNumber}</Typography>
                   </TableCell>
-                  <TableCell><MoveChip movementType={mv.movementType} txnType={mv.txnType} /></TableCell>
+                  <TableCell align="center"><MoveChip movementType={mv.movementType} txnType={mv.txnType} /></TableCell>
                   <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: t.color, whiteSpace: 'nowrap' }}>
                     {t.sign}{num(mv.quantity)}
                   </TableCell>
@@ -391,7 +391,7 @@ const ImsItemDetail = () => {
       : m.status === 'LOW'
         ? `Cover is thinning${m.daysCover != null ? ` — roughly ${num(m.daysCover)} days left` : ''}. Keep an eye on it.`
         : m.status === 'OVERSTOCK'
-          ? 'Stock is above the order-up-to level. Hold off buying until it comes down.'
+          ? 'Stock is above the Max Level. Hold off buying until it comes down.'
           : 'Stock is at a healthy level. Nothing to do right now.';
 
   return (
@@ -427,28 +427,28 @@ const ImsItemDetail = () => {
       {/* ── The planning numbers, each one explained on hover ── */}
       <Panel title="The numbers behind this item" hint="Hover any label to see what it means.">
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          <Metric label="On hand" value={num(m.onHand)} color={O2D.brand} strong
+          <Metric label="Closing Stock" value={num(m.onHand)} color={O2D.brand} strong
             hint="Units physically in the store right now." />
-          <Metric label="In transit" value={num(m.inTransit)}
+          <Metric label="Material In Transit" value={num(m.inTransit)}
             hint="Ordered from the vendor but not yet received." />
-          <Metric label="Daily use" value={num(m.adc)}
+          <Metric label="Average Daily Consumption" value={num(m.adc)}
             hint="Average units consumed per day, worked out from actual production issues." />
-          <Metric label="Lead time" value={`${num(m.leadDays)}d`}
+          <Metric label="Lead Time (From Indent to Receipt)" value={`${num(m.leadDays)}d`}
             hint="Days the vendor takes to deliver after the order is placed." />
-          <Metric label="Safety" value={`${num(m.safetyFactor)}×`}
+          <Metric label="Safety Factor" value={`${num(m.safetyFactor)}×`}
             hint="Cushion multiplier for demand spikes and late deliveries. 1.5 means we hold 50% extra." />
           <Metric label="Reorder at" value={num(m.reorderPoint)}
-            hint="When on-hand falls to this number, place the order — daily use × lead time × safety." />
-          <Metric label="Order up to" value={num(m.maxLevel)}
+            hint="When Closing Stock falls to this number, place the order — Average Daily Consumption × Lead Time × Safety Factor." />
+          <Metric label="Max Level" value={num(m.maxLevel)}
             hint="When we buy, we buy enough to reach this level." />
           <Metric label="Cover" value={m.daysCover == null ? '—' : `${num(m.daysCover)}d`}
             color={tightCover ? STOCK_TOKENS.REORDER.color : undefined} strong={tightCover}
-            hint="Days the current stock will last at the average daily use." />
-          <Metric label="Order now" value={num(m.suggestedOrderQty)}
+            hint="Days the current stock will last at the Average Daily Consumption." />
+          <Metric label="Reorder Quantity" value={num(m.suggestedOrderQty)}
             color={m.suggestedOrderQty > 0 ? STOCK_TOKENS.REORDER.color : undefined}
-            hint="How much to buy to bring stock back to the order-up-to level." />
+            hint="How much to buy to bring stock back to the Max Level." />
           <Metric label="Value" value={inr(m.stockValue)}
-            hint="What the stock on hand is worth at the last purchase cost." />
+            hint="What the Closing Stock is worth at the last purchase cost." />
         </Stack>
       </Panel>
 

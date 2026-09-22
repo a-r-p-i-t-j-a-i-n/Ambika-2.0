@@ -1,8 +1,10 @@
 node_modules/
 .env
 .env.*
+!.env.example
 dist/
 build/
+coverage/
 
 # Backend analysis / documentation (local only — not for git)
 BACKEND_ANALYSIS.md
@@ -26,3 +28,35 @@ FMS_FRONTEND_MODULE_PLAN.md
 
 # Holds real production credentials — scp it to the server, never commit it
 deploy/server.env.template
+
+# ---------------------------------------------------------------
+# Local dev / generated artefacts (added for a clean, Git-safe setup)
+# ---------------------------------------------------------------
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+# Git-Bash crash dumps (bash.exe.stackdump is currently tracked - see report)
+*.stackdump
+
+# Runtime uploads written by the backend (express.static serves ./uploads
+# relative to process.cwd()). The leading slash is REQUIRED: an unanchored
+# "uploads/" would also match backend/src/common/uploads/, which is SOURCE
+# CODE that app.js imports. Same trap the rsync excludes in deploy.yml warn about.
+/backend/uploads/
+/uploads/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+
+# Vite cache
+.vite/
+
+.excel

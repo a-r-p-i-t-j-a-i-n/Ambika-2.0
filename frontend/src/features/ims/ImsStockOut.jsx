@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Table, TableHead, TableBody,
+  Box, Paper, Stack, Typography, TextField, Button, Table, TableHead, TableBody,
   TableRow, TableCell, IconButton, Chip, FormControlLabel, Switch, CircularProgress, Tooltip, alpha,
 } from '@mui/material';
 import { PackageMinus, Trash2, Save, AlertTriangle, ArrowRight, Info } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import {
-  ImsShell, Panel, TableScroll, EmptyNote, Th, O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx,
+  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker,
+  O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx,
 } from './imsMeta';
 import { useGetImsOverviewQuery, useImsIssueMutation } from '../../store/api/imsApi';
 
@@ -41,13 +42,18 @@ const ImsStockOut = () => {
   const [allowNegative, setAllowNegative] = useState(false);
   const [lines, setLines] = useState([]); // {skuId, skuCode, skuName, unit, onHand, reorderPoint, quantity}
 
-  const addItem = (it) => {
-    if (!it || lines.some((l) => l.skuId === it.skuId)) return;
-    setLines((p) => [...p, {
-      skuId: it.skuId, skuCode: it.skuCode, skuName: it.skuName, unit: it.unit,
-      onHand: it.onHand, reorderPoint: it.reorderPoint, quantity: '',
-    }]);
-  };
+  // The row shape is unchanged — quantity starts EMPTY, whether one item is
+  // added or twenty. Nothing downstream can tell how it was picked.
+  const toLine = (it) => ({
+    skuId: it.skuId, skuCode: it.skuCode, skuName: it.skuName, unit: it.unit,
+    onHand: it.onHand, reorderPoint: it.reorderPoint, quantity: '',
+  });
+  const addItems = (picked = []) => setLines((p) => {
+    // Guard against a double-add even though the picker already greys out rows
+    // that are on the table.
+    const have = new Set(p.map((l) => l.skuId));
+    return [...p, ...picked.filter((it) => it && !have.has(it.skuId)).map(toLine)];
+  });
   const setQty = (id, q) => setLines((p) => p.map((l) => (l.skuId === id ? { ...l, quantity: q } : l)));
   const remove = (id) => setLines((p) => p.filter((l) => l.skuId !== id));
 
@@ -75,13 +81,12 @@ const ImsStockOut = () => {
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not issue stock.', { variant: 'error' }); }
   };
 
-  const available = items.filter((i) => !lines.some((l) => l.skuId === i.skuId));
 
   return (
     <ImsShell
       icon={PackageMinus}
       title="Stock Out — issue material to production"
-      subtitle="Record what left the store. On-hand comes down and the issue is logged against your name."
+      subtitle="Record what left the store. Closing Stock comes down and the issue is logged against your name."
       maxWidth={1180}
     >
       <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
@@ -117,36 +122,26 @@ const ImsStockOut = () => {
 
       {/* ── Step 2 ── */}
       <Panel>
-        <StepHead n={2} title="What is going out?" hint="Search for an item, then type the quantity issued." done={lines.length > 0} />
-        <Autocomplete
-          sx={{ mt: 1.25 }}
-          options={available}
-          getOptionLabel={(o) => `${o.skuCode} — ${o.skuName}`}
-          value={null} blurOnSelect clearOnBlur
-          onChange={(_, v) => addItem(v)}
-          renderOption={(props, o) => (
-            <li {...props} key={o.skuId}>
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }}>{o.skuName}</Typography>
-                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
-                  {o.skuCode} · {num(o.onHand)} {o.unit} in store
-                </Typography>
-              </Box>
-            </li>
-          )}
-          renderInput={(p) => <TextField {...p} label="Add an item" placeholder="Type a code or item name…" size="small" />}
+        <StepHead n={2} title="What is going out?" hint="Tick the items being issued, add them, then type each quantity." done={lines.length > 0} />
+        {/* Multi-select: tick several items and add them in one go. Each one
+            still lands as an ordinary row with an EMPTY quantity, exactly as a
+            one-by-one add did. */}
+        <ItemMultiPicker
+          options={items}
+          addedIds={lines.map((l) => l.skuId)}
+          onAdd={addItems}
         />
 
         <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
           <Table size="small" sx={imsTableSx(760)}>
             <TableHead>
               <TableRow>
-                <TableCell>Code</TableCell>
-                <TableCell>Item</TableCell>
-                <TableCell align="right">In store now</TableCell>
+                <TableCell>SKU Code</TableCell>
+                <TableCell>Item Name</TableCell>
+                <TableCell align="right">Available Qty</TableCell>
                 <TableCell align="right">Quantity issued</TableCell>
-                <TableCell align="right"><Th label="Left after this" hint="What on-hand becomes once you save this issue." /></TableCell>
-                <TableCell align="right" />
+                <TableCell align="right"><Th label="Left after this" hint="What the Closing Stock becomes once you save this issue." /></TableCell>
+                <TableCell align="center" />
               </TableRow>
             </TableHead>
             <TableBody>
@@ -191,7 +186,7 @@ const ImsStockOut = () => {
                         </Tooltip>
                       ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>}
                     </TableCell>
-                    <TableCell align="right" sx={{ width: 48 }}>
+                    <TableCell align="center" sx={{ width: 48 }}>
                       <Tooltip arrow slotProps={O2D_TIP} title="Remove this line">
                         <IconButton size="small" onClick={() => remove(l.skuId)} sx={{ color: O2D.faint, '&:hover': { color: STOCK_TOKENS.OUT_OF_STOCK.color } }}>
                           <Trash2 size={15} />

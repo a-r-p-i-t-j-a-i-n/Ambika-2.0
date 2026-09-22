@@ -155,7 +155,7 @@ const ImsDashboard = () => {
       <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
         <KpiTile label="Items tracked" value={num(s.itemCount)} sub="Consumables & packaging"
           color={O2D.brand} icon={Boxes} onClick={() => navigate('/ims/stock')} />
-        <KpiTile label="Units on hand" value={num(s.totalOnHand)} sub="Across all items"
+        <KpiTile label="Closing Stock" value={num(s.totalOnHand)} sub="Total units across all items"
           color="#0f766e" icon={PackageOpen} onClick={() => navigate('/ims/stock')} />
         <KpiTile label="Value in store" value={inr(s.totalStockValue)} sub="At last purchase cost"
           color="#4338ca" icon={IndianRupee} onClick={() => navigate('/ims/stock')} />
@@ -220,7 +220,7 @@ const ImsDashboard = () => {
           hint="Stock value by category — the top 8 categories by rupee value.">
           {categoryData.length === 0 ? (
             <EmptyNote icon={IndianRupee} title="No stock value to show"
-              hint="Value appears once items have both an on-hand quantity and a purchase cost." />
+              hint="Value appears once items have both a Closing Stock quantity and a purchase cost." />
           ) : (
             <Box sx={{ height: 226 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -295,7 +295,7 @@ const ImsDashboard = () => {
                           {r.skuCode} · <b>{num(r.onHand)}</b> left · order <b>{num(r.suggestedOrderQty)}</b>
                         </Typography>
                       </TableCell>
-                      <TableCell align="right" sx={{ py: 0.85, width: 110 }}><StatusChip status={r.status} /></TableCell>
+                      <TableCell align="center" sx={{ py: 0.85, width: 110 }}><StatusChip status={r.status} /></TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -320,11 +320,11 @@ const ImsDashboard = () => {
           <Table size="small" sx={imsTableSx(760)}>
             <TableHead>
               <TableRow>
-                <TableCell>Date</TableCell>
-                <TableCell>Item</TableCell>
-                <TableCell>What happened</TableCell>
+                <TableCell align="center">Date</TableCell>
+                <TableCell>Item Name</TableCell>
+                <TableCell align="center">What happened</TableCell>
                 <TableCell align="right">Change</TableCell>
-                <TableCell align="right">Balance after<Help text="On-hand quantity immediately after this movement was recorded." /></TableCell>
+                <TableCell align="right">Balance after<Help text="Closing Stock immediately after this movement was recorded." /></TableCell>
                 <TableCell>Recorded by</TableCell>
               </TableRow>
             </TableHead>
@@ -339,11 +339,11 @@ const ImsDashboard = () => {
                 const t = moveToken(m.movementType);
                 return (
                   <TableRow key={m._id} hover>
-                    <TableCell sx={{ whiteSpace: 'nowrap', color: O2D.sub }}>{dayjs(m.movementDate).format('DD MMM')}</TableCell>
+                    <TableCell align="center" sx={{ whiteSpace: 'nowrap', color: O2D.sub }}>{dayjs(m.movementDate).format('DD MMM')}</TableCell>
                     <TableCell>
                       <Typography noWrap sx={{ fontSize: '0.78rem', fontWeight: 600, color: O2D.ink, maxWidth: 240 }} title={m.skuName}>{m.skuName}</Typography>
                     </TableCell>
-                    <TableCell><MoveChip movementType={m.movementType} txnType={m.txnType} /></TableCell>
+                    <TableCell align="center"><MoveChip movementType={m.movementType} txnType={m.txnType} /></TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, color: t.color, fontVariantNumeric: 'tabular-nums' }}>
                       {t.sign}{num(m.quantity)}
                     </TableCell>

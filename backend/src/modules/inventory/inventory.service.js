@@ -96,6 +96,9 @@ const createStockMovement = async (input = {}, opts = {}) => {
     poNumber: input.poNumber || '',
     piId: input.piId || undefined,
     piNumber: input.piNumber || '',
+    // Only manual entries set these; every other caller leaves them blank.
+    reason: input.reason || '',
+    customReason: input.customReason || '',
     remarks: input.remarks || '',
     performedBy: input.performedBy?._id || input.performedById,
     performedByName: input.performedBy?.name || input.performedByName || '',

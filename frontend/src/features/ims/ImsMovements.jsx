@@ -46,7 +46,7 @@ const ImsMovements = () => {
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const exportCsv = () => {
-    const header = ['Date', 'Movement no', 'Code', 'Item', 'What happened', 'Direction', 'Quantity', 'Balance after', 'Recorded by', 'Notes'];
+    const header = ['Date', 'Movement no', 'SKU Code', 'Item Name', 'What happened', 'Direction', 'Quantity', 'Balance after', 'Recorded by', 'Notes'];
     const lines = filtered.map((m) => [
       dayjs(m.movementDate).format('YYYY-MM-DD'), m.movementNumber, m.skuCode, m.skuName,
       txnLabel(m.txnType), m.movementType === 'IN' ? 'In' : 'Out', m.quantity, m.balanceAfter,
@@ -118,12 +118,12 @@ const ImsMovements = () => {
           <Table size="small" sx={imsTableSx(1000)}>
             <TableHead>
               <TableRow>
-                <TableCell>Date</TableCell>
+                <TableCell align="center">Date</TableCell>
                 <TableCell><Th label="Movement no" hint="The system's own reference for this entry — quote it when checking an entry with the store." /></TableCell>
-                <TableCell>Item</TableCell>
-                <TableCell>What happened</TableCell>
+                <TableCell>Item Name</TableCell>
+                <TableCell align="center">What happened</TableCell>
                 <TableCell align="right">Change</TableCell>
-                <TableCell align="right"><Th label="Balance after" hint="On-hand quantity immediately after this movement." /></TableCell>
+                <TableCell align="right"><Th label="Balance after" hint="Closing Stock immediately after this movement." /></TableCell>
                 <TableCell>Recorded by</TableCell>
                 <TableCell>Notes</TableCell>
               </TableRow>
@@ -143,7 +143,7 @@ const ImsMovements = () => {
                 return (
                   <TableRow key={m._id} hover sx={{ cursor: m.skuId ? 'pointer' : 'default' }}
                     onClick={() => m.skuId && navigate(`/ims/item/${m.skuId}`)}>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
                       <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: O2D.ink }}>{dayjs(m.movementDate).format('DD MMM YYYY')}</Typography>
                       <Typography sx={{ fontSize: '0.65rem', color: O2D.faint }}>{dayjs(m.createdAt || m.movementDate).format('HH:mm')}</Typography>
                     </TableCell>
@@ -152,7 +152,7 @@ const ImsMovements = () => {
                       <Typography noWrap sx={{ fontSize: '0.79rem', fontWeight: 600, color: O2D.ink }} title={m.skuName}>{m.skuName}</Typography>
                       <Typography sx={{ fontSize: '0.65rem', color: O2D.sub, fontFamily: 'ui-monospace, monospace' }}>{m.skuCode}</Typography>
                     </TableCell>
-                    <TableCell><MoveChip movementType={m.movementType} txnType={m.txnType} /></TableCell>
+                    <TableCell align="center"><MoveChip movementType={m.movementType} txnType={m.txnType} /></TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: t.color, whiteSpace: 'nowrap' }}>
                       {t.sign}{num(m.quantity)}
                     </TableCell>

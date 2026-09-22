@@ -23,7 +23,7 @@ const reasonFor = (r) => {
     return `About ${num(cover)} days of stock left, but the vendor needs ${num(lead)} days to deliver.`;
   }
   if (cover != null) return `About ${num(cover)} days of stock left at the current rate of use.`;
-  return 'On-hand has fallen to the reorder point.';
+  return 'Closing Stock has fallen to the reorder point.';
 };
 
 const ImsReorder = () => {
@@ -57,7 +57,7 @@ const ImsReorder = () => {
   const reorderCount = rows.filter((r) => r.status === 'REORDER').length;
 
   const exportCsv = () => {
-    const header = ['Code', 'Item', 'Category', 'On hand', 'In transit', 'Reorder at', 'Order up to', 'Days cover', 'Order this much', 'Min order qty', 'Status', 'Why'];
+    const header = ['SKU Code', 'Item Name', 'Category', 'Closing Stock', 'Material In Transit', 'Reorder at', 'Max Level', 'Days cover', 'Reorder Quantity', 'MOQ', 'Status', 'Why'];
     const lines = filtered.map((r) => [
       r.skuCode, r.skuName, r.category, r.onHand, r.inTransit, r.reorderPoint, r.maxLevel,
       r.daysCover ?? '', r.suggestedOrderQty, r.moq, stockToken(r.status).label, reasonFor(r),
@@ -137,15 +137,15 @@ const ImsReorder = () => {
           <Table size="small" sx={imsTableSx(1040)}>
             <TableHead>
               <TableRow>
-                <TableCell>Code</TableCell>
-                <TableCell>Item</TableCell>
+                <TableCell>SKU Code</TableCell>
+                <TableCell>Item Name</TableCell>
                 <TableCell>Why it's here</TableCell>
-                <TableCell align="right">In store</TableCell>
-                <TableCell align="right"><Th label="In transit" hint="Already ordered and on its way — subtract this before ordering again." /></TableCell>
+                <TableCell align="right">Available Qty</TableCell>
+                <TableCell align="right"><Th label="Material In Transit" hint="Already ordered and on its way — subtract this before ordering again." /></TableCell>
                 <TableCell align="right"><Th label="Reorder at" hint="The level that triggered this item onto the list." /></TableCell>
-                <TableCell align="right"><Th label="Order up to" hint="The level we buy back up to." /></TableCell>
-                <TableCell align="right"><Th label="Order this much" hint="Enough to bring stock back to the order-up-to level, allowing for what is already in transit." /></TableCell>
-                <TableCell>Status</TableCell>
+                <TableCell align="right"><Th label="Max Level" hint="The level we buy back up to." /></TableCell>
+                <TableCell align="right"><Th label="Reorder Quantity" hint="Enough to bring stock back to the Max Level, allowing for Material In Transit." /></TableCell>
+                <TableCell align="center">Status</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -197,7 +197,7 @@ const ImsReorder = () => {
                         </Box>
                       </Tooltip>
                     </TableCell>
-                    <TableCell><StatusChip status={r.status} /></TableCell>
+                    <TableCell align="center"><StatusChip status={r.status} /></TableCell>
                   </TableRow>
                 );
               })}

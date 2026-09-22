@@ -41,6 +41,14 @@ const inventoryPolicySchema = new Schema({
   moq:             { type: Number, default: 0, min: 0 },         // min order qty
   // Order-up-to / max level. If left 0 we derive ADC×lead×safetyFactor at read time.
   maxLevel:        { type: Number, default: 0, min: 0 },
+  // How maxLevel is decided:
+  //   AUTO   — always recompute ADC × lead × safetyFactor, so editing the Safety
+  //            Factor moves the max level (the sheet's behaviour).
+  //   MANUAL — the stored maxLevel is a deliberate override and wins over the
+  //            formula; the Policy drawer says so before the user edits the SF.
+  // Absent on rows written before this field existed — ims.service infers those
+  // from the numbers themselves rather than migrating (see resolveMaxLevel).
+  maxLevelMode:    { type: String, enum: ['AUTO', 'MANUAL'], default: 'AUTO' },
   materialInTransit: { type: Number, default: 0, min: 0 },       // ordered, not yet received
   bookedQty:       { type: Number, default: 0, min: 0 },         // committed to production/orders
 

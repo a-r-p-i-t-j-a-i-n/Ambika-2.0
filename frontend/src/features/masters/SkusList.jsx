@@ -24,14 +24,9 @@ import {
   gridSx, pageSx, panelSx, fieldSx, btnSx,
 } from './components/masterUi';
 
-// Item-type metadata — labels, colours and the kind tabs.
-const TYPE_META = {
-  FINISHED_GOOD: { label: 'Finished Good', color: '#0f766e' },
-  RAW_MATERIAL:  { label: 'Raw Material',  color: '#b45309' },
-  CONSUMABLE:    { label: 'Consumable',    color: '#1d4ed8' },
-  PACKING:       { label: 'Packing',       color: '#7c3aed' },
-  CIRCLE:        { label: 'Circle',        color: '#64748b' },
-};
+// Item-type metadata — labels and colours now live in their own module so the
+// IMS stock list can share them without importing this screen.
+import { TYPE_META } from './itemTypeMeta';
 
 const SKU_KINDS = [
   { key: '',              label: 'All Items',      icon: LayoutGrid },
@@ -67,7 +62,7 @@ const sheetSkuItems = [
 const emptyForm = {
   name: '', code: '', itemType: 'FINISHED_GOOD', category: '', unit: 'PCS',
   pcsPerBox: 1, weightPerPc: 0, weightPerBox: 0, leadDays: 7,
-  aliasesText: '', packingDetails: '',
+  aliasesText: '', packingDetails: '', convertedItemNameForResale: '',
 };
 
 const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
@@ -91,6 +86,8 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
       leadDays: sku.leadDays || 7,
       aliasesText: (sku.aliases || []).join(', '),
       packingDetails: sku.packingDetails || '',
+      // Missing on SKUs created before this field existed — reads as ''.
+      convertedItemNameForResale: sku.convertedItemNameForResale || '',
     } : { ...emptyForm, itemType: defaultType || 'FINISHED_GOOD' });
   }, [open, sku, defaultType]);
 
@@ -112,6 +109,7 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
       leadDays: Number(form.leadDays) || 0,
       aliases: form.aliasesText.split(',').map((item) => item.trim()).filter(Boolean),
       packingDetails: form.packingDetails,
+      convertedItemNameForResale: form.convertedItemNameForResale.trim(),
     };
 
     try {
@@ -159,6 +157,14 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
           <TextField label="Category / Sub-group" value={form.category} onChange={(e) => updateField('category', e.target.value)} />
         </Box>
         <TextField label="SKU Item Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} fullWidth />
+        <TextField
+          label="Converted Item Name (For Resale)"
+          value={form.convertedItemNameForResale}
+          onChange={(e) => updateField('convertedItemNameForResale', e.target.value)}
+          placeholder={'e.g. 1.75" Brush'}
+          helperText="Optional — the name this item is sold on as, when it differs from the item name."
+          fullWidth
+        />
 
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
           <TextField label="Unit" value={form.unit} onChange={(e) => updateField('unit', e.target.value.toUpperCase())} />
@@ -238,6 +244,18 @@ const SkusList = () => {
     },
     { field: 'code', headerName: 'SKU code', width: 165,
       renderCell: (p) => <CellText mono weight={700} color={BRAND}>{p.value}</CellText>
+    },
+    // Right after the name/code pair, matching the Excel master's own column
+    // order — not out past Type and Group, where it sat behind a horizontal
+    // scroll on a 1366px laptop and read as "missing".
+    // minWidth 275 is measured, not guessed: the uppercase header at 0.64rem with
+    // 0.07em tracking measures 246px and the header cell eats ~22px of padding,
+    // so 230 clipped it to "CONVERTED ITEM NAME (FOR …" — the column's own identity.
+    // Long values still ellipsise in the cell and show in full on hover.
+    { field: 'convertedItemNameForResale', headerName: 'Converted Item Name (For Resale)', flex: 1, minWidth: 275,
+      renderCell: (p) => (p.value
+        ? <Tooltip title={p.value}><Box sx={{ minWidth: 0, alignSelf: 'center' }}><CellText color={O2D.sub}>{p.value}</CellText></Box></Tooltip>
+        : <Empty />)
     },
     // width 150 (was 140) so "Finished Good" never wraps or clips inside its pill.
     // Every type pill is held to one width so the column reads as a single set

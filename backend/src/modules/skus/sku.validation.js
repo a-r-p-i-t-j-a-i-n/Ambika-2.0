@@ -10,6 +10,9 @@ export const createSkuSchema = Joi.object({
   itemType: Joi.string().valid(...ITEM_TYPES),
   category: Joi.string().allow('', null),
   aliases: Joi.array().items(Joi.string().trim()).default([]),
+  // "Converted Item Name (For Resale)" — optional, no default, so a PATCH that
+  // omits it leaves the stored value alone rather than blanking it.
+  convertedItemNameForResale: Joi.string().trim().max(200).allow('', null),
   unit: Joi.string().default('PCS'),
   pcsPerBox: Joi.number().min(1).default(1),
   weightPerBox: Joi.number().min(0).default(0),
