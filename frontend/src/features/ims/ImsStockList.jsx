@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Paper, Stack, Typography, TextField, MenuItem, InputAdornment, Table, TableHead, TableBody,
+  Box, Paper, Stack, Typography, TextField, MenuItem, InputAdornment, Table, TableHead, TableBody, alpha,
   TableRow, TableCell, Chip, IconButton, Tooltip, Button, Skeleton, TablePagination, Collapse,
   Dialog, DialogTitle, DialogContent, DialogActions, ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
@@ -19,19 +19,81 @@ import {
 } from './imsMeta';
 import { useGetImsOverviewQuery, useGetImsForecastQuery } from '../../store/api/imsApi';
 import PolicyDrawer from './PolicyDrawer';
+import { TYPE_META } from '../masters/itemTypeMeta';
+
+// ── Item classification (SKU Master is the source of truth) ─────────────────
+// Every row here IS a SKU Master record (ims.service joins SKU + stock + policy),
+// so `itemType` on the row is the master classification verbatim. TYPE_META is
+// imported from the SKU Master screen so a class always carries the same colour
+// in both places — this screen never keeps its own category mapping.
+const UNMAPPED_KEY = "__UNMAPPED__";
+const titleCase = (s) => String(s).toLowerCase().split("_")
+  .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+// A classification the master map has no colour for still shows its REAL master
+// value, just in a neutral chip — nothing is ever inferred from the code or name.
+// "Unmapped" is reserved for a row whose SKU carries no classification at all.
+const typeMeta = (itemType) => {
+  if (!itemType) return { label: "Unmapped", color: STOCK_TOKENS.OUT_OF_STOCK.color, unmapped: true };
+  return TYPE_META[itemType] || { label: titleCase(itemType), color: O2D.sub };
+};
+
+// Same pill shape as StatusChip so the two columns read as one system.
+const CategoryChip = ({ itemType }) => {
+  const m = typeMeta(itemType);
+  const chip = (
+    <Chip
+      size="small" label={m.label}
+      sx={{
+        height: 22, fontWeight: 700, fontSize: "0.7rem", borderRadius: "999px",
+        bgcolor: alpha(m.color, 0.12), color: m.color, border: `1px solid ${alpha(m.color, 0.3)}`,
+        "& .MuiChip-label": { px: 1 },
+      }}
+    />
+  );
+  return m.unmapped
+    ? <Tooltip arrow slotProps={O2D_TIP} title="This item has no classification in the SKU Master. Set its type there to categorise it."><span>{chip}</span></Tooltip>
+    : chip;
+};
 
 // Plain-English definitions for the planning columns. These are the words that
 // lose a non-warehouse reader, so every one of them carries its meaning inline.
 const GLOSSARY = [
-  ['On hand', 'How many units are physically in the store right now.'],
-  ['In transit', 'Ordered from the vendor but not yet received.'],
-  ['Daily use', 'Average number of units consumed per day (ADC), taken from actual issues.'],
-  ['Lead time', 'Days the vendor takes to deliver after you place the order.'],
-  ['Safety', 'A cushion multiplier for demand spikes and late deliveries. 1.5 means we hold 50% extra.'],
-  ['Reorder at', 'The trigger level. When on-hand drops to this, place the order — Daily use × Lead time × Safety.'],
-  ['Order up to', 'The ceiling. When we buy, we buy enough to reach this level.'],
-  ['Cover', 'How many days the current stock will last at the average daily use.'],
+  ['Available Qty', 'How many units are physically in the store right now.'],
+  ['Material In Transit', 'Ordered from the vendor but not yet received.'],
+  ['Average Daily Consumption', 'Average consumption per day calculated from the last 90 days of actual consumption. Calculated, not typed in.'],
+  ['Lead Time (From Indent to Receipt)', 'Days the vendor takes to deliver after you place the order.'],
+  ['Safety Factor', 'A cushion multiplier for demand spikes and late deliveries, set per item. 1.5 means we hold 50% extra.'],
+  ['Reorder at', 'The trigger level. When Closing Stock drops to this, place the order — Average Daily Consumption × Lead Time. The Safety Factor does not enter here, so changing it never moves this number.'],
+  ['Max Level', 'The ceiling. When we buy, we buy enough to reach this level — Average Daily Consumption × Lead Time × Safety Factor. An "M" beside the figure means it was overridden by hand and ignores the formula.'],
+  ['Daily Consumption', 'Actual consumption recorded today — the total issued to production so far today. Blank means nothing has been issued today. Average Daily Consumption is the steady 90-day rate; this is just today.'],
 ];
+
+// Colour key for the footer. It reads STOCK_TOKENS / STOCK_ORDER directly — the
+// very same map the row tints and the Status chips already use — so the legend
+// cannot drift from the table. No colour is defined here.
+const ColorCodingLegend = () => (
+  <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap
+    sx={{ py: { xs: 1, md: 0 } }}>
+    <Typography sx={{
+      fontSize: '0.68rem', fontWeight: 800, color: O2D.sub,
+      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+    }}>
+      Color Coding
+    </Typography>
+    {STOCK_ORDER.map((k) => {
+      const t = STOCK_TOKENS[k];
+      return (
+        <Tooltip key={k} arrow slotProps={O2D_TIP} title={t.meaning}>
+          <Stack direction="row" alignItems="center" spacing={0.55} sx={{ cursor: 'help' }}>
+            <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: t.color, flexShrink: 0 }} />
+            <Typography sx={{ fontSize: '0.7rem', color: O2D.body, whiteSpace: 'nowrap' }}>{t.label}</Typography>
+          </Stack>
+        </Tooltip>
+      );
+    })}
+  </Stack>
+);
 
 // ── Stock projection dialog ──────────────────────────────────────────────────
 const ForecastDialog = ({ item, onClose }) => {
@@ -75,10 +137,10 @@ const ForecastDialog = ({ item, onClose }) => {
 
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
             {[
-              ['On hand now', num(m.onHand)],
+              ['Closing Stock', num(m.onHand)],
               ['Used per day', `${num(m.adc)}/day`],
               ['Reorder at', num(m.reorderPoint)],
-              ['Order up to', num(m.maxLevel)],
+              ['Max Level', num(m.maxLevel)],
             ].map(([k, v]) => (
               <Chip key={k} size="small" label={<span><b>{k}:</b> {v}</span>}
                 sx={{ height: 24, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
@@ -107,7 +169,7 @@ const ForecastDialog = ({ item, onClose }) => {
                     )}
                     {m.maxLevel > 0 && (
                       <ReferenceLine y={m.maxLevel} stroke={STOCK_TOKENS.OK.color} strokeDasharray="4 4"
-                        label={{ value: 'Order up to', fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
+                        label={{ value: 'Max Level', fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
                     )}
                     <Line type="monotone" dataKey="projected" stroke={O2D.brand} strokeWidth={2.5} dot={false} />
                   </LineChart>
@@ -155,7 +217,15 @@ const ImsStockList = () => {
   const { data, isFetching } = useGetImsOverviewQuery({ search: search || undefined });
   const rows = useMemo(() => data?.data || [], [data]);
   const summary = data?.meta || {};
-  const categories = useMemo(() => [...new Set(rows.map((r) => r.category).filter(Boolean))].sort(), [rows]);
+  // Options come from the classifications actually present in the result set.
+  const categories = useMemo(() => {
+    const seen = new Map();
+    rows.forEach((r) => {
+      const key = r.itemType || UNMAPPED_KEY;
+      if (!seen.has(key)) seen.set(key, typeMeta(r.itemType).label);
+    });
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [rows]);
 
   const counts = useMemo(() => {
     const c = { ALL: rows.length };
@@ -168,7 +238,8 @@ const ImsStockList = () => {
   const urgency = (r) => STOCK_ORDER.indexOf(r.status);
 
   const filtered = useMemo(() => {
-    const list = rows.filter((r) => (status === 'ALL' || r.status === status) && (!category || r.category === category));
+    const list = rows.filter((r) => (status === 'ALL' || r.status === status)
+      && (!category || (r.itemType || UNMAPPED_KEY) === category));
     const sorters = {
       urgency: (a, b) => urgency(a) - urgency(b) || (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9),
       cover: (a, b) => (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9),
@@ -183,8 +254,8 @@ const ImsStockList = () => {
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const exportCsv = () => {
-    const header = ['Code', 'Item', 'Category', 'On hand', 'In transit', 'Daily use', 'Lead days', 'Safety', 'Reorder at', 'Order up to', 'Days cover', 'Status'];
-    const lines = filtered.map((r) => [r.skuCode, r.skuName, r.category, r.onHand, r.inTransit, r.adc, r.leadDays, r.safetyFactor, r.reorderPoint, r.maxLevel, r.daysCover ?? '', stockToken(r.status).label]);
+    const header = ['SKU Code', 'Item Name', 'Category', 'Closing Stock', 'Material In Transit', 'Average Daily Consumption', 'Lead Time (From Indent to Receipt)', 'Safety Factor', 'Reorder at', 'Max Level', 'Daily Consumption', 'Converted Item Name (For Resale)', 'Status'];
+    const lines = filtered.map((r) => [r.skuCode, r.skuName, typeMeta(r.itemType).label, r.onHand, r.inTransit, r.adc, r.leadDays, r.safetyFactor, r.reorderPoint, r.maxLevel, r.dailyConsumption ?? '', r.convertedItemNameForResale || '', stockToken(r.status).label]);
     const csv = [header, ...lines].map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
@@ -198,7 +269,7 @@ const ImsStockList = () => {
     <ImsShell
       icon={Boxes}
       title="Stock & Master Data"
-      subtitle="Every consumable and packaging item — what's on hand, and when to buy more."
+      subtitle="Every consumable and packaging item — the Closing Stock, and when to buy more."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv}
           disabled={!filtered.length}
@@ -209,7 +280,7 @@ const ImsStockList = () => {
     >
       <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
         <KpiTile label="Items" value={num(summary.itemCount)} sub="In the master list" color={O2D.brand} icon={Boxes} />
-        <KpiTile label="Units on hand" value={num(summary.totalOnHand)} sub="Physically in store" color="#0f766e" icon={PackageOpen} />
+        <KpiTile label="Closing Stock" value={num(summary.totalOnHand)} sub="Total units physically in store" color="#0f766e" icon={PackageOpen} />
         <KpiTile label="Value in store" value={inr(summary.totalStockValue)} sub="At last purchase cost" color="#4338ca" icon={IndianRupee} />
         {/* This tile counts Out of stock + Order now together, so it opens the
             Buying list rather than a single-status filter that would show fewer
@@ -230,7 +301,7 @@ const ImsStockList = () => {
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} /></InputAdornment> }} />
           <TextField select size="small" label="Category" value={category} onChange={(e) => setCategory(e.target.value)} sx={{ minWidth: 170 }}>
             <MenuItem value="">All categories</MenuItem>
-            {categories.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+            {categories.map(([key, label]) => <MenuItem key={key} value={key}>{label}</MenuItem>)}
           </TextField>
           <TextField select size="small" label="Sort by" value={sort} onChange={(e) => setSort(e.target.value)} sx={{ minWidth: 165 }}>
             <MenuItem value="urgency">Most urgent first</MenuItem>
@@ -280,35 +351,36 @@ const ImsStockList = () => {
           <Table size="small" sx={imsTableSx(1120)}>
             <TableHead>
               <TableRow>
-                <TableCell>Code</TableCell>
-                <TableCell>Item</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell>SKU Code</TableCell>
+                <TableCell>Item Name</TableCell>
                 <TableCell>Category</TableCell>
-                <TableCell align="right"><Th label="On hand" hint="Units physically in the store right now." /></TableCell>
-                <TableCell align="right"><Th label="In transit" hint="Ordered from the vendor but not yet received." /></TableCell>
-                <TableCell align="right"><Th label="Daily use" hint="Average units consumed per day, from actual production issues." /></TableCell>
-                <TableCell align="right"><Th label="Lead time" hint="Days the vendor takes to deliver after the order is placed." /></TableCell>
-                <TableCell align="right"><Th label="Safety" hint="Cushion multiplier for demand spikes and late deliveries." /></TableCell>
-                <TableCell align="right"><Th label="Reorder at" hint="When on-hand falls to this number, place the order." /></TableCell>
-                <TableCell align="right"><Th label="Order up to" hint="Buy enough to bring stock back to this level." /></TableCell>
-                <TableCell align="right"><Th label="Cover" hint="Days the current stock lasts at the average daily use." /></TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right" />
+                <TableCell align="right"><Th label="Available Qty" hint="Units physically in the store right now." /></TableCell>
+                <TableCell align="right"><Th label="Material In Transit" hint="Ordered from the vendor but not yet received." /></TableCell>
+                <TableCell align="right"><Th label="Average Daily Consumption" hint="Average consumption per day calculated from the last 90 days of actual consumption." /></TableCell>
+                <TableCell align="right"><Th label="Daily Consumption" hint="Actual consumption recorded today." /></TableCell>
+                <TableCell align="right"><Th label="Lead Time (From Indent to Receipt)" hint="Days the vendor takes to deliver after the order is placed." /></TableCell>
+                <TableCell align="right"><Th label="Safety Factor" hint="Cushion multiplier for demand spikes and late deliveries." /></TableCell>
+                <TableCell align="right"><Th label="Reorder at" hint="When Closing Stock falls to this number, place the order." /></TableCell>
+                <TableCell align="right"><Th label="Max Level" hint="Buy enough to bring stock back to this level." /></TableCell>
+                <TableCell><Th label="Converted Item Name (For Resale)" hint="The name this item is sold on as, when it differs from the item name. SKU Master data — edit it there." /></TableCell>
+                <TableCell align="center">Status</TableCell>
+                <TableCell align="center" />
               </TableRow>
             </TableHead>
             <TableBody>
               {isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={13} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={260} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={15} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={260} /></TableCell></TableRow>
               )}
               {!isFetching && filtered.length === 0 && (
-                <TableRow><TableCell colSpan={13} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={15} sx={{ border: 0 }}>
                   <EmptyNote icon={Boxes} title="No items match these filters"
                     hint="Try clearing the status filter or searching for a different code." />
                 </TableCell></TableRow>
               )}
-              {paged.map((r) => {
+              {paged.map((r, i) => {
                 const t = stockToken(r.status);
                 const critical = r.status === 'OUT_OF_STOCK' || r.status === 'REORDER';
-                const tightCover = r.daysCover != null && r.leadDays != null && r.daysCover < r.leadDays;
                 return (
                   <TableRow key={r.skuId} hover sx={{
                     cursor: 'pointer',
@@ -317,6 +389,12 @@ const ImsStockList = () => {
                     ...(critical ? { bgcolor: t.tint, borderLeft: `3px solid ${t.color}` } : { borderLeft: '3px solid transparent' }),
                     '&:hover .row-go': { opacity: 1, transform: 'translateX(0)' },
                   }} onClick={() => navigate(`/ims/item/${r.skuId}`)}>
+                    {/* Derived from the page offset, not the array index, so page 2
+                        continues at 26 rather than restarting at 1. Purely
+                        presentational — it feeds no filter, sort or calculation. */}
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>
+                      {page * rowsPerPage + i + 1}
+                    </TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{r.skuCode}</TableCell>
                     <TableCell sx={{ maxWidth: 250 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }} title={r.skuName}>{r.skuName}</Typography>
@@ -328,33 +406,58 @@ const ImsStockList = () => {
                         </Tooltip>
                       )}
                     </TableCell>
-                    <TableCell sx={{ color: O2D.sub, fontSize: '0.73rem' }}>{r.category || '—'}</TableCell>
+                    <TableCell><CategoryChip itemType={r.itemType} /></TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inTransit ? O2D.body : O2D.faint }}>{r.inTransit ? num(r.inTransit) : '—'}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.adc ? num(r.adc) : '—'}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.leadDays != null ? `${num(r.leadDays)}d` : '—'}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.safetyFactor ? `${num(r.safetyFactor)}×` : '—'}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num(r.reorderPoint)}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num(r.maxLevel)}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: tightCover ? STOCK_TOKENS.REORDER.color : O2D.body }}>
-                      {r.daysCover == null ? '—' : (
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {r.adc ? (
                         <Tooltip arrow slotProps={O2D_TIP}
-                          title={tightCover
-                            ? `Only ${num(r.daysCover)} days of stock left, but the vendor needs ${num(r.leadDays)} days to deliver. Order immediately.`
-                            : `About ${num(r.daysCover)} days of stock left at the current rate of use.`}>
-                          <span>{num(r.daysCover)}d</span>
+                          title={`${num(r.consumption90dQty)} units consumed over the last ${num(r.consumption90dDays)} days across ${num(r.consumption90dEvents)} movement(s) — ${num(r.consumption90dQty)} ÷ ${num(r.consumption90dDays)}.`}>
+                          <span>{num(r.adc)}</span>
+                        </Tooltip>
+                      ) : '—'}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: r.dailyConsumption == null ? O2D.faint : O2D.ink }}>
+                      {r.dailyConsumption == null ? '—' : (
+                        <Tooltip arrow slotProps={O2D_TIP}
+                          title={`${num(r.dailyConsumption)} unit(s) issued today across ${num(r.consumptionTodayEvents)} movement(s).`}>
+                          <span>{num(r.dailyConsumption)}</span>
                         </Tooltip>
                       )}
                     </TableCell>
-                    <TableCell><StatusChip status={r.status} /></TableCell>
-                    <TableCell align="right" sx={{ width: 108, whiteSpace: 'nowrap' }}>
-                      <Stack direction="row" spacing={0.25} justifyContent="flex-end" alignItems="center">
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.leadDays != null ? `${num(r.leadDays)}d` : '—'}</TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.safetyFactor ? `${num(r.safetyFactor)}×` : '—'}</TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num(r.reorderPoint)}</TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {r.maxLevelMode === 'MANUAL' ? (
+                        // Flagged, because this one does NOT follow the Safety Factor.
+                        <Tooltip arrow slotProps={O2D_TIP}
+                          title={`Manually overridden. The formula would give ${num(r.formulaMaxLevel)} — changing the Safety Factor will not affect this value.`}>
+                          <Box component="span" sx={{ cursor: 'help', borderBottom: `1px dotted ${O2D.sub}` }}>
+                            {num(r.maxLevel)}<Box component="span" sx={{ fontSize: '0.6rem', fontWeight: 800, color: O2D.sub, ml: 0.4 }}>M</Box>
+                          </Box>
+                        </Tooltip>
+                      ) : num(r.maxLevel)}
+                    </TableCell>
+                    {/* SKU master data. Deliberately r.convertedItemNameForResale,
+                        never the legacy InventoryPolicy copy — SKU Master is the
+                        source of truth and the only place this is editable. */}
+                    <TableCell sx={{ maxWidth: 230 }}>
+                      {r.convertedItemNameForResale ? (
+                        <Tooltip arrow slotProps={O2D_TIP} title={r.convertedItemNameForResale}>
+                          <Typography noWrap sx={{ fontSize: '0.8rem', color: O2D.body }}>{r.convertedItemNameForResale}</Typography>
+                        </Tooltip>
+                      ) : <Typography sx={{ fontSize: '0.8rem', color: O2D.faint }}>—</Typography>}
+                    </TableCell>
+                    <TableCell align="center"><StatusChip status={r.status} /></TableCell>
+                    <TableCell align="center" sx={{ width: 108, whiteSpace: 'nowrap' }}>
+                      <Stack direction="row" spacing={0.25} justifyContent="center" alignItems="center">
                         <Tooltip arrow slotProps={O2D_TIP} title="See when this runs out">
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); setForecast(r); }} sx={{ color: O2D.sub }}>
                             <LineChartIcon size={15} />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip arrow slotProps={O2D_TIP} title="Edit the planning policy (daily use, lead time, safety)">
+                        <Tooltip arrow slotProps={O2D_TIP} title="Edit the planning policy (Lead Time, Safety Factor, MOQ)">
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); setEditSku(r.skuId); }} sx={{ color: O2D.sub }}>
                             <Pencil size={15} />
                           </IconButton>
@@ -373,12 +476,22 @@ const ImsStockList = () => {
             </TableBody>
           </Table>
         </TableScroll>
-        <TablePagination
-          component="div" count={filtered.length} page={page} onPageChange={(_, p) => setPage(p)}
-          rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-          rowsPerPageOptions={[10, 25, 50, 100]} labelRowsPerPage="Items per page:"
-          sx={{ borderTop: `1px solid ${O2D.lineSoft}`, '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '0.73rem', color: O2D.sub } }}
-        />
+        {/* Footer row: colour key on the left, pagination on the far right.
+            flexWrap lets the two drop onto separate lines on tablet/mobile
+            instead of forcing the panel to scroll sideways. */}
+        <Box sx={{
+          borderTop: `1px solid ${O2D.lineSoft}`,
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+          justifyContent: 'space-between', columnGap: 2, rowGap: 0.5, pl: { xs: 1, sm: 1.5 },
+        }}>
+          <ColorCodingLegend />
+          <TablePagination
+            component="div" count={filtered.length} page={page} onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            rowsPerPageOptions={[10, 25, 50, 100]} labelRowsPerPage="Items per page:"
+            sx={{ borderTop: 0, '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '0.73rem', color: O2D.sub } }}
+          />
+        </Box>
       </Panel>
 
       <PolicyDrawer skuId={editSku} onClose={() => setEditSku(null)} />

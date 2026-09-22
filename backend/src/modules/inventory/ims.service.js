@@ -5,6 +5,7 @@ import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.
 import { inventoryService } from './inventory.service.js';
 import SKU from '../skus/sku.model.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { checkSafetyFactor, checkStockInReason, STOCK_IN_REASONS } from './ims.validation.js';
 
 /**
  * IMS service — the Packaging & Consumables Inventory layer on top of the core
@@ -32,18 +33,98 @@ const shiftDay = (ymd, n) => {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 };
 
+// The two consumption figures the stock list shows side by side. BOTH are now
+// measured from the CONSUME_OUT ledger — neither is a typed-in planning number:
+//
+//   Average Daily Consumption (ADC)  last 90 IST days of consumption ÷ 90
+//   Daily Consumption               what was actually issued TODAY
+//
+// They answer different questions (the steady rate vs. what happened today), so
+// they are computed by two separate aggregations and must never be conflated.
+const CONSUMPTION_WINDOW_DAYS = 90;
+
+/**
+ * ADC from a 90-day consumption bucket: total ÷ 90, rounded to 2dp like every
+ * other IMS figure. No bucket (nothing consumed in the window) means 0 — it
+ * never falls back to the stored policy value, and never borrows today's number.
+ */
+const adcFrom = (bucket) => round2((bucket?.qty || 0) / CONSUMPTION_WINDOW_DAYS);
+
+// How far a legacy stored maxLevel may sit from the formula and still be read as
+// formula-derived. The client's sheet holds ADC×lead×SF rounded to whole units
+// (2.8 × 16 × 1.5 = 67.2 was typed as 67), so whole-unit rounding must not be
+// mistaken for a deliberate override.
+const MAX_LEVEL_MATCH_TOLERANCE = 0.02; // 2%, floored at 1 unit
+
+/**
+ * Work out the order-up-to (Max) level for a policy, and say where it came from.
+ *
+ * Max Level = Average Daily Consumption × Lead Time × Safety Factor — that is the
+ * approved rule, and it must stay live so editing the Safety Factor for a SKU
+ * actually moves that SKU's Max Level, Safety Stock and suggested order qty.
+ *
+ * A stored maxLevel only wins when it is a genuine manual override:
+ *   • maxLevelMode === 'MANUAL' (and a positive value) — set explicitly from the
+ *     Policy drawer. Authoritative, never second-guessed.
+ *   • maxLevelMode === 'AUTO' — the formula, whatever is stored.
+ *   • no maxLevelMode at all (rows written before the flag existed) — inferred:
+ *     a stored value that still matches ADC×lead×SF within rounding was clearly
+ *     the sheet's own calculated column, so it is treated as formula-derived;
+ *     anything else (e.g. a max level set against a zero ADC) is kept as a
+ *     manual override. Nothing is rewritten on disk — the inference is read-only,
+ *     so no data migration is needed either way.
+ *
+ * @returns {{maxLevel:number, formulaMaxLevel:number, storedMaxLevel:number,
+ *            maxLevelMode:'AUTO'|'MANUAL', maxLevelInferred:boolean}}
+ */
+export const resolveMaxLevel = (policy = {}, adcOverride) => {
+  // ADC is measured, not stored. Callers pass the calculated 90-day figure; the
+  // stored policy value is only a fallback for legacy callers that have none.
+  const adc = adcOverride === undefined
+    ? Number(policy.averageDailyConsumption || 0)
+    : Number(adcOverride) || 0;
+  const leadDays = Number(policy.leadDays || 0);
+  const safetyFactor = Number(policy.safetyFactor || 1.5);
+  const formulaMaxLevel = round2(adc * leadDays * safetyFactor);
+  const storedMaxLevel = round2(policy.maxLevel || 0);
+  const auto = { maxLevel: formulaMaxLevel, formulaMaxLevel, storedMaxLevel };
+
+  const mode = policy.maxLevelMode;
+  // An explicit MANUAL with nothing stored would zero out the max level and
+  // break the status thresholds, so it falls back to the formula.
+  if (mode === 'MANUAL' && storedMaxLevel > 0) {
+    return { ...auto, maxLevel: storedMaxLevel, maxLevelMode: 'MANUAL', maxLevelInferred: false };
+  }
+  if (mode === 'AUTO' || mode === 'MANUAL') {
+    return { ...auto, maxLevelMode: 'AUTO', maxLevelInferred: false };
+  }
+
+  // Legacy row — no flag. Infer, without touching the stored value.
+  if (storedMaxLevel <= 0) return { ...auto, maxLevelMode: 'AUTO', maxLevelInferred: true };
+  const slack = Math.max(1, formulaMaxLevel * MAX_LEVEL_MATCH_TOLERANCE);
+  const matchesFormula = formulaMaxLevel > 0 && Math.abs(storedMaxLevel - formulaMaxLevel) <= slack;
+  return matchesFormula
+    ? { ...auto, maxLevelMode: 'AUTO', maxLevelInferred: true }
+    : { ...auto, maxLevel: storedMaxLevel, maxLevelMode: 'MANUAL', maxLevelInferred: true };
+};
+
 /** Stock status from on-hand + in-transit vs the policy thresholds. */
-const deriveMetrics = (policy = {}, stock = {}) => {
-  const adc = Number(policy.averageDailyConsumption || 0);
+const deriveMetrics = (policy = {}, stock = {}, calculatedAdc = 0) => {
+  // ADC is the MEASURED 90-day rate supplied by the caller, never
+  // policy.averageDailyConsumption. That stored column is kept on the model for
+  // backward compatibility but no longer drives anything IMS shows or computes.
+  const adc = round2(Number(calculatedAdc) || 0);
   const leadDays = Number(policy.leadDays || 0);
   const safetyFactor = Number(policy.safetyFactor || 1.5);
   const inTransit = Number(policy.materialInTransit || 0);
   const onHand = round2(stock.qtyOnHand || 0);
 
   const leadTimeDemand = round2(adc * leadDays);                 // qty consumed over a lead time
-  // Order-up-to / max level: stored value wins, else the sheet rule ADC×lead×SF.
-  const maxLevel = round2(policy.maxLevel || adc * leadDays * safetyFactor);
+  // Order-up-to / max level — ADC×lead×SF unless a genuine manual override exists.
+  const { maxLevel, formulaMaxLevel, storedMaxLevel, maxLevelMode, maxLevelInferred } = resolveMaxLevel(policy, adc);
   const safetyStock = round2(Math.max(0, maxLevel - leadTimeDemand)); // the buffer above lead demand
+  // Reorder point is lead-time demand only — deliberately free of the Safety
+  // Factor, so changing the SF never moves "Reorder at".
   const reorderPoint = leadTimeDemand;                            // reorder when cover ≤ lead time
   const projectedAvailable = round2(onHand + inTransit);
   const daysCover = adc > 0 ? round2(onHand / adc) : null;        // null = no consumption set
@@ -62,6 +143,9 @@ const deriveMetrics = (policy = {}, stock = {}) => {
   return {
     onHand, inTransit, adc, leadDays, safetyFactor,
     leadTimeDemand, safetyStock, reorderPoint, maxLevel,
+    // Max-level provenance, so the UI can say when the Safety Factor is being
+    // overruled instead of silently showing a number the formula did not make.
+    formulaMaxLevel, storedMaxLevel, maxLevelMode, maxLevelInferred,
     projectedAvailable, daysCover, status, suggestedOrderQty,
     avgCost: round2(stock.avgCost || 0),
     stockValue: round2((stock.qtyOnHand || 0) * (stock.avgCost || 0)),
@@ -70,6 +154,102 @@ const deriveMetrics = (policy = {}, stock = {}) => {
 
 export const imsService = {
   IMS_ITEM_TYPES,
+
+  /**
+   * Measured consumption per SKU over the last 90 IST calendar days — the input
+   * to Average Daily Consumption (ADC = this total ÷ 90).
+   *
+   * Kept deliberately separate from _todayConsumptionBySku: the two have
+   * different semantics (steady rate vs. what happened today) and are shown as
+   * two different columns, so folding them into one aggregation would couple
+   * numbers that must be free to disagree.
+   *
+   * ONE aggregation for the whole page — never a query per row. Same qualifying
+   * rule as today's figure: only txnType CONSUME_OUT on movementType OUT, so
+   * TRANSFER_OUT, QC_REJECT_OUT, RETURN_OUT, DISPATCH_OUT, ADJUST_OUT,
+   * CONVERT_OUT and every IN movement are excluded.
+   *
+   * A SKU with no qualifying movement in the window is ABSENT from the map, and
+   * the caller reads that as ADC 0 — never as "fall back to the stored value".
+   *
+   * @returns {Promise<Map<string, {qty:number, events:number}>>} keyed by String(skuId)
+   */
+  async _consumptionBySku90d(skuIds = []) {
+    if (!skuIds.length) return new Map();
+    // Start at 00:00 IST, 89 days back, so the window spans 90 IST calendar days
+    // inclusive of today — the same day-bucketing getStockHistory uses.
+    const fromKey = shiftDay(istDayKey(new Date()), -(CONSUMPTION_WINDOW_DAYS - 1));
+    const fromStart = new Date(`${fromKey}T00:00:00.000${IST_OFFSET}`);
+
+    const rows = await InventoryMovement.aggregate([
+      {
+        $match: {
+          skuId: { $in: skuIds.map((id) => new mongoose.Types.ObjectId(String(id))) },
+          movementType: MOVEMENT_TYPE.OUT,
+          txnType: TXN_TYPE.CONSUME_OUT,
+          isDeleted: { $ne: true },
+          movementDate: { $gte: fromStart },
+        },
+      },
+      { $group: { _id: '$skuId', qty: { $sum: '$quantity' }, events: { $sum: 1 } } },
+    ]);
+    return new Map(rows.map((r) => [String(r._id), { qty: round2(r.qty), events: r.events }]));
+  },
+
+  /** ADC for one SKU, for the single-item endpoints. Same rule, same window. */
+  async _adcForSku(skuId) {
+    const map = await this._consumptionBySku90d([skuId]);
+    return adcFrom(map.get(String(skuId)));
+  },
+
+  /**
+   * TODAY'S actual consumption per SKU — the sum of today's CONSUME_OUT
+   * quantities, not an average over any window.
+   *
+   * "Today" is the IST calendar day, because the client lives and reports in
+   * IST: the window is [today 00:00 IST, tomorrow 00:00 IST), which is the same
+   * day-bucketing getStockHistory uses. A movement posted at 23:30 IST belongs
+   * to today even though it is already tomorrow in UTC.
+   *
+   * Several issues on the same day sum into one figure — 10 at 10am + 5 at 1pm
+   * + 7 at 4pm reads as 22, not three rows and not an average.
+   *
+   * ONE aggregation for the whole page — never a query per row. The $match is
+   * served by the existing { skuId: 1, movementDate: -1 } compound index.
+   *
+   * Only true production issues count. The equality match on CONSUME_OUT is what
+   * excludes TRANSFER_OUT, QC_REJECT_OUT, RETURN_OUT, DISPATCH_OUT, ADJUST_OUT
+   * and CONVERT_OUT, and movementType OUT excludes every IN movement, so none of
+   * them can ever inflate the figure.
+   *
+   * A SKU with no qualifying movement today is ABSENT from the returned map.
+   * That absence is meaningful: the caller renders it as "—" (nothing issued
+   * today) rather than 0. Yesterday's consumption never fills it in.
+   *
+   * @returns {Promise<Map<string, {qty:number, events:number}>>} keyed by String(skuId)
+   */
+  async _todayConsumptionBySku(skuIds = []) {
+    if (!skuIds.length) return new Map();
+    const todayKey = istDayKey(new Date());
+    const dayStart = new Date(`${todayKey}T00:00:00.000${IST_OFFSET}`);
+    const nextDayStart = new Date(`${shiftDay(todayKey, 1)}T00:00:00.000${IST_OFFSET}`);
+
+    const rows = await InventoryMovement.aggregate([
+      {
+        $match: {
+          skuId: { $in: skuIds.map((id) => new mongoose.Types.ObjectId(String(id))) },
+          movementType: MOVEMENT_TYPE.OUT,
+          txnType: TXN_TYPE.CONSUME_OUT,
+          isDeleted: { $ne: true },
+          // Half-open interval: $lt, not $lte, so a movement stamped exactly at
+          // tomorrow 00:00 IST counts against tomorrow and never both days.
+          movementDate: { $gte: dayStart, $lt: nextDayStart },
+        },
+      },
+      { $group: { _id: '$skuId', qty: { $sum: '$quantity' }, events: { $sum: 1 } } },
+    ]);
+    return new Map(rows.map((r) => [String(r._id), { qty: round2(r.qty), events: r.events }]));
+  },
 
   /**
    * The master IMS view — every consumable/packaging SKU joined with its policy
@@ -88,9 +268,12 @@ export const imsService = {
     const skus = await SKU.find(filter).sort({ category: 1, name: 1 }).limit(limit).lean();
     const ids = skus.map((s) => s._id);
 
-    const [stocks, policies] = await Promise.all([
+    // Two grouped aggregations for the whole page — never one per row.
+    const [stocks, policies, consumption, window90d] = await Promise.all([
       InventoryStock.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
+      this._todayConsumptionBySku(ids),
+      this._consumptionBySku90d(ids),
     ]);
     const stockBy = new Map(stocks.map((s) => [String(s.skuId), s]));
     const polBy = new Map(policies.map((p) => [String(p.skuId), p]));
@@ -99,9 +282,16 @@ export const imsService = {
       const stock = stockBy.get(String(sku._id)) || {};
       const policy = polBy.get(String(sku._id)) || {
         averageDailyConsumption: 0, leadDays: sku.leadDays ?? 16, safetyFactor: 1.5,
-        moq: 0, maxLevel: 0, materialInTransit: 0, openingStock: 0, convertedItemName: '',
+        moq: 0, maxLevel: 0, maxLevelMode: 'AUTO', materialInTransit: 0, openingStock: 0, convertedItemName: '',
       };
-      const m = deriveMetrics(policy, stock);
+      // ADC, measured: 90-day consumption ÷ 90. Drives lead-time demand, reorder
+      // point, max level and safety stock through the unchanged formulas.
+      const bucket90d = window90d.get(String(sku._id));
+      const m = deriveMetrics(policy, stock, adcFrom(bucket90d));
+      // TODAY'S measured consumption — a different question and a different
+      // aggregation. Absent = nothing issued today, rendered as "—"; never
+      // back-filled from earlier days and never divided by the window.
+      const consumed = consumption.get(String(sku._id));
       return {
         skuId: sku._id,
         skuCode: sku.code,
@@ -109,11 +299,23 @@ export const imsService = {
         itemType: sku.itemType,
         category: sku.category || '',
         unit: sku.unit || 'PCS',
-        convertedItemName: policy.convertedItemName || '',
+        // "Converted Item Name (For Resale)" is SKU master data, so the master
+        // wins. InventoryPolicy.convertedItemName is the older IMS-local copy —
+        // still read as a fallback so seeded rows keep showing their value until
+        // the master row carries it, but IMS never writes it any more.
+        convertedItemName: sku.convertedItemNameForResale || policy.convertedItemName || '',
+        convertedItemNameForResale: sku.convertedItemNameForResale || '',
         hasPolicy: polBy.has(String(sku._id)),
         openingStock: round2(policy.openingStock || 0),
         moq: round2(policy.moq || 0),
         lastMovementAt: stock.lastMovementAt || null,
+        // Today's total, as issued — no division, no averaging.
+        dailyConsumption: consumed ? consumed.qty : null,
+        consumptionTodayEvents: consumed ? consumed.events : 0,
+        // The numerator behind `adc`, so the UI can show its working.
+        consumption90dQty: bucket90d ? bucket90d.qty : 0,
+        consumption90dEvents: bucket90d ? bucket90d.events : 0,
+        consumption90dDays: CONSUMPTION_WINDOW_DAYS,
         ...m,
       };
     });
@@ -149,7 +351,9 @@ export const imsService = {
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
     ]);
     if (!sku) throw new AppError('Item not found', 404);
-    const m = deriveMetrics(policy || {}, stock || {});
+    // Same measured ADC the stock list uses, so the projection cannot disagree
+    // with the row it was opened from.
+    const m = deriveMetrics(policy || {}, stock || {}, await this._adcForSku(skuId));
     const n = Math.min(Math.max(Number(days) || 30, 7), 120);
 
     const series = [];
@@ -187,7 +391,7 @@ export const imsService = {
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
     ]);
     if (!sku) throw new AppError('Item not found', 404);
-    const m = deriveMetrics(policy || {}, stock || {});
+    const m = deriveMetrics(policy || {}, stock || {}, await this._adcForSku(skuId));
 
     // Resolve the [from, to] window as IST calendar days. Default: last 30 days.
     const todayKey = istDayKey(new Date());
@@ -284,13 +488,35 @@ export const imsService = {
 
   // ── Policy CRUD ────────────────────────────────────────────────────────────
   async getPolicy(skuId) {
-    const policy = await InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean();
-    return policy || null;
+    const [policy, sku] = await Promise.all([
+      InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
+      SKU.findById(skuId).select('convertedItemNameForResale').lean(),
+    ]);
+    if (!policy) return null;
+    // Resolve the max level here too, so the drawer opens knowing whether this
+    // SKU's Max Level follows the Safety Factor or overrides it. The resale name
+    // and the measured ADC ride along read-only — the first is SKU master data,
+    // the second is computed from the ledger; neither is editable here.
+    const adc = await this._adcForSku(skuId);
+    return {
+      ...policy,
+      ...resolveMaxLevel(policy, adc),
+      calculatedAdc: adc,
+      consumption90dDays: CONSUMPTION_WINDOW_DAYS,
+      convertedItemNameForResale: sku?.convertedItemNameForResale || policy.convertedItemName || '',
+    };
   },
 
   async upsertPolicy(skuId, data, user) {
     const sku = await SKU.findById(skuId).select('code name unit category itemType').lean();
     if (!sku) throw new AppError('SKU not found', 404);
+    // Second line of defence: the route already runs policySchema, but the range
+    // must hold for any other caller too — never trust the input control alone.
+    if (data.safetyFactor !== undefined) {
+      const check = checkSafetyFactor(data.safetyFactor);
+      if (!check.ok) throw new AppError(check.message, 422);
+      data = { ...data, safetyFactor: check.value };
+    }
     const set = {
       skuCode: sku.code, skuName: sku.name, unit: sku.unit, category: sku.category || '', itemType: sku.itemType,
       averageDailyConsumption: data.averageDailyConsumption,
@@ -298,29 +524,61 @@ export const imsService = {
       safetyFactor: data.safetyFactor,
       moq: data.moq,
       maxLevel: data.maxLevel,
+      maxLevelMode: data.maxLevelMode,
       materialInTransit: data.materialInTransit,
       convertedItemName: data.convertedItemName,
       remarks: data.remarks,
       updatedBy: user?._id,
     };
+    // Switching a SKU back to AUTO leaves the old maxLevel on disk untouched —
+    // the flag alone decides which number is used, so nothing is destroyed and
+    // flipping back to MANUAL restores the previous override.
     if (data.openingStock !== undefined) set.openingStock = data.openingStock;
+
+    // A row written before maxLevelMode existed is read by inference, and that
+    // inference compares the stored max level against ADC × lead × SF. Editing
+    // any of those three would move the goalposts and could silently re-read a
+    // formula-derived value as a manual override. So when the caller does not
+    // state a mode, freeze the inference as it stands *before* this edit lands.
+    if (set.maxLevelMode === undefined) {
+      const existing = await InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } })
+        .select('maxLevel maxLevelMode averageDailyConsumption leadDays safetyFactor').lean();
+      if (existing && existing.maxLevelMode === undefined) {
+        set.maxLevelMode = resolveMaxLevel(existing, await this._adcForSku(skuId)).maxLevelMode;
+      }
+    }
     Object.keys(set).forEach((k) => set[k] === undefined && delete set[k]);
 
+    // Scoped to this one SKU (skuId is unique on the collection), so saving
+    // Product A's Safety Factor can never touch Product B's.
     const policy = await InventoryPolicy.findOneAndUpdate(
       { skuId },
       { $set: set, $setOnInsert: { skuId, createdBy: user?._id } },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
     ).lean();
-    return policy;
+    const adc = await this._adcForSku(skuId);
+    return { ...policy, ...resolveMaxLevel(policy, adc), calculatedAdc: adc, consumption90dDays: CONSUMPTION_WINDOW_DAYS };
   },
 
   // ── Stock-In (manual receipt / opening / correction) ────────────────────────
   async receive(payload, user) {
     const items = (payload.items || []).filter((i) => Number(i.quantity) > 0);
     if (!items.length) throw new AppError('Add at least one item with a quantity.', 400);
-    const reason = payload.reason || 'VENDOR';
-    const txnType = reason === 'OPENING' ? TXN_TYPE.OPENING : TXN_TYPE.ADJUST_IN;
+    // Second line of defence: the route already runs receiveSchema, but the
+    // OTHER-needs-text rule must hold for any other caller too.
+    const checked = checkStockInReason(payload.reason, payload.customReason);
+    if (!checked.ok) throw new AppError(checked.message, 422);
+    const { reason, customReason } = checked;
+
+    // Unchanged movement logic: opening stock is still the only one that posts
+    // an OPENING txn; everything else — including OTHER — is an ADJUST_IN.
+    const txnType = reason === 'OPENING_STOCK' ? TXN_TYPE.OPENING : TXN_TYPE.ADJUST_IN;
     const movementDate = payload.date ? new Date(payload.date) : new Date();
+    // What History shows: the reason label, and for OTHER the operator's words
+    // beside it — "Other — Material received as sample".
+    const reasonText = reason === 'OTHER'
+      ? `${STOCK_IN_REASONS.OTHER} — ${customReason}`
+      : STOCK_IN_REASONS[reason];
 
     const results = [];
     for (const it of items) {
@@ -328,8 +586,8 @@ export const imsService = {
         skuId: it.skuId, quantity: Number(it.quantity), unitCost: Number(it.unitCost || 0),
         batchNo: it.batchNo || '', warehouse: payload.warehouse,
         txnType, sourceModule: 'IMS', refType: 'IMS_RECEIPT', refNumber: payload.reference || '',
-        remarks: [reason === 'OPENING' ? 'Opening stock' : 'Stock-in', payload.reference, it.remarks]
-          .filter(Boolean).join(' · '),
+        reason, customReason,
+        remarks: [reasonText, payload.reference, it.remarks].filter(Boolean).join(' · '),
         performedBy: user, movementDate,
       });
       results.push({ skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand });

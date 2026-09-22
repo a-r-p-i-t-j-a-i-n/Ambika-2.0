@@ -44,6 +44,19 @@ const SkuSchema = new Schema({
   itemType: { type: String, enum: ITEM_TYPES, default: 'FINISHED_GOOD', index: true },
   category: { type: String, trim: true }, // sub-group within the itemType
   aliases: [{ type: String, trim: true }],
+
+  // "Converted Item Name (For Resale)" — the client's Excel master column.
+  // The name the item is sold on as, when it is resold under a different
+  // description from the one it is bought/stocked under (CO-BS-50-00
+  // "Brush - 5"" resells as "1.75" Brush"). Master data: it describes the
+  // item's resale identity, so it lives here and nowhere else — IMS reads it
+  // off the SKU rather than keeping its own copy.
+  // Optional and defaulted, so SKUs written before this field existed keep
+  // loading and saving untouched; no migration needed.
+  // An explicit null from a client is stored as '' rather than null, so every
+  // reader gets a string and never has to guard for it.
+  convertedItemNameForResale: { type: String, trim: true, default: '', set: (v) => (v == null ? '' : v) },
+
   unit: { type: String, default: 'PCS' }, // e.g., PCS, KGS, MTR, LTR
   pcsPerBox: { type: Number, default: 1, min: 1 },
   weightPerBox: { type: Number, default: 0, min: 0 }, // Weight in KGs

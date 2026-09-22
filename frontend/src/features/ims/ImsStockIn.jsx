@@ -1,21 +1,44 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Table, TableHead, TableBody,
-  TableRow, TableCell, IconButton, MenuItem, CircularProgress, Tooltip, Chip, alpha,
+  TableRow, TableCell, IconButton, CircularProgress, Tooltip, Chip, alpha,
 } from '@mui/material';
 import { PackagePlus, Trash2, Save, ArrowRight, Info } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import {
-  ImsShell, Panel, TableScroll, EmptyNote, Th, O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx,
+  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker,
+  O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx,
 } from './imsMeta';
 import { useGetImsOverviewQuery, useImsReceiveMutation } from '../../store/api/imsApi';
 
 const REASONS = [
-  { value: 'VENDOR', label: 'Vendor receipt', hint: 'Material physically received from a supplier against a bill or challan.' },
-  { value: 'OPENING', label: 'Opening stock', hint: 'The stock that already existed when you started using IMS.' },
-  { value: 'CORRECTION', label: 'Correction / adjustment', hint: 'Fixing a counting mistake so the system matches the physical store.' },
+  { value: 'VENDOR_RECEIPT', label: 'Vendor receipt', hint: 'Material physically received from a supplier against a bill or challan.' },
+  { value: 'OPENING_STOCK', label: 'Opening stock', hint: 'The stock that already existed when you started using IMS.' },
+  { value: 'CORRECTION_ADJUSTMENT', label: 'Correction / adjustment', hint: 'Fixing a counting mistake so the system matches the physical store.' },
+  // Anything that is none of the above. Rather than minting a new code per
+  // one-off situation, the operator types the reason and it is stored with it.
+  { value: 'OTHER', label: 'Other', hint: 'Anything else — type your own reason into this field so History can explain it later.' },
 ];
+
+const REASON_BY_LABEL = new Map(REASONS.map((r) => [r.label.toLowerCase(), r]));
+
+/**
+ * Turn whatever is in the Reason field into what the API expects. The field is
+ * the single source of truth — a predefined label maps to its code, anything
+ * else IS the reason and rides along as customReason under OTHER.
+ *
+ * "Other" typed or picked on its own is deliberately NOT valid: it names no
+ * reason, which is the whole point of letting the user type one.
+ */
+const resolveReason = (text) => {
+  const t = String(text || '').trim();
+  const hit = REASON_BY_LABEL.get(t.toLowerCase());
+  if (hit && hit.value !== 'OTHER') return { reason: hit.value, customReason: '', custom: false, ok: true, hint: hit.hint };
+  if (hit) return { reason: 'OTHER', customReason: '', custom: true, ok: false, hint: hit.hint };
+  if (!t) return { reason: '', customReason: '', custom: false, ok: false, hint: '' };
+  return { reason: 'OTHER', customReason: t, custom: true, ok: true, hint: '' };
+};
 
 // A numbered step header. Forms that read as 1 → 2 → 3 are the single biggest
 // legibility win for a first-time user; nothing here is guesswork.
@@ -42,43 +65,53 @@ const ImsStockIn = () => {
   const [receive, { isLoading }] = useImsReceiveMutation();
 
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
-  const [reason, setReason] = useState('VENDOR');
+  // The Reason field's raw text. Everything else about the reason is derived.
+  const [reasonText, setReasonText] = useState(REASONS[0].label);
+  // Selecting "Other" is a mode switch, not a value — see onInputChange below.
+  const otherJustPicked = useRef(false);
   const [reference, setReference] = useState('');
   const [lines, setLines] = useState([]); // {skuId, skuCode, skuName, unit, onHand, quantity, unitCost}
 
-  const addItem = (it) => {
-    if (!it || lines.some((l) => l.skuId === it.skuId)) return;
-    setLines((p) => [...p, {
-      skuId: it.skuId, skuCode: it.skuCode, skuName: it.skuName, unit: it.unit,
-      onHand: it.onHand, maxLevel: it.maxLevel, quantity: '', unitCost: '',
-    }]);
-  };
+  // The row shape is unchanged — quantity and unitCost start EMPTY, whether one
+  // item is added or twenty. Nothing downstream can tell how it was picked.
+  const toLine = (it) => ({
+    skuId: it.skuId, skuCode: it.skuCode, skuName: it.skuName, unit: it.unit,
+    onHand: it.onHand, maxLevel: it.maxLevel, quantity: '', unitCost: '',
+  });
+  const addItems = (picked = []) => setLines((p) => {
+    // Guard against a double-add even though the picker already greys out rows
+    // that are on the table.
+    const have = new Set(p.map((l) => l.skuId));
+    return [...p, ...picked.filter((it) => it && !have.has(it.skuId)).map(toLine)];
+  });
   const setField = (id, k, v) => setLines((p) => p.map((l) => (l.skuId === id ? { ...l, [k]: v } : l)));
   const remove = (id) => setLines((p) => p.filter((l) => l.skuId !== id));
 
-  const valid = lines.length > 0 && lines.every((l) => Number(l.quantity) > 0);
+  const picked = resolveReason(reasonText);
+  const reasonError = !picked.ok;
+  const valid = lines.length > 0 && lines.every((l) => Number(l.quantity) > 0) && picked.ok;
   const totalQty = lines.reduce((t, l) => t + Number(l.quantity || 0), 0);
   const totalValue = lines.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitCost || 0), 0);
-  const activeReason = REASONS.find((r) => r.value === reason);
 
   const submit = async () => {
     try {
       const res = await receive({
-        date, reason, reference,
+        date, reference,
+        // Unchanged API: a predefined code, or OTHER carrying the typed text.
+        reason: picked.reason, customReason: picked.customReason,
         items: lines.map((l) => ({ skuId: l.skuId, skuCode: l.skuCode, quantity: Number(l.quantity), unitCost: Number(l.unitCost || 0) })),
       }).unwrap();
       enqueueSnackbar(`Stock added for ${res?.data?.count || lines.length} item(s).`, { variant: 'success' });
-      setLines([]); setReference('');
+      setLines([]); setReference(''); setReasonText(REASONS[0].label);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not add stock.', { variant: 'error' }); }
   };
 
-  const available = items.filter((i) => !lines.some((l) => l.skuId === i.skuId));
 
   return (
     <ImsShell
       icon={PackagePlus}
       title="Stock In — bring material into the store"
-      subtitle="Record what arrived. On-hand goes up and the movement is logged against your name."
+      subtitle="Record what arrived. Closing Stock goes up and the movement is logged against your name."
       maxWidth={1180}
     >
       {/* What this screen does and does not do — stated up front so nobody
@@ -102,11 +135,58 @@ const ImsStockIn = () => {
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
           <TextField label="Date received" type="date" size="small" value={date} onChange={(e) => setDate(e.target.value)}
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
-          <TextField select label="Reason" size="small" value={reason} onChange={(e) => setReason(e.target.value)}
-            helperText={activeReason?.hint}
-            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
-            {REASONS.map((r) => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
-          </TextField>
+          {/* One control, both jobs: pick a predefined reason or type your own.
+              freeSolo is what lets the same field accept arbitrary text, so there
+              is no second input to keep in sync. */}
+          <Autocomplete
+            freeSolo size="small" options={REASONS}
+            // All four options, always. The default filter would narrow the
+            // list to whatever is already typed, so a field reading "Vendor
+            // receipt" would offer only that one and hide "Other" — fatal for a
+            // 4-item mode picker. selectOnFocus makes overtyping a single click.
+            filterOptions={(x) => x} selectOnFocus handleHomeEndKeys openOnFocus
+            getOptionLabel={(o) => (typeof o === 'string' ? o : o.label)}
+            inputValue={reasonText}
+            onInputChange={(_, v, changeReason) => {
+              // After picking an option MUI writes its label back into the input.
+              // For "Other" we want an EMPTY field instead, so the user can type
+              // immediately rather than deleting the word first.
+              if (changeReason === 'reset' && otherJustPicked.current) {
+                otherJustPicked.current = false;
+                setReasonText('');
+                return;
+              }
+              setReasonText(v);
+            }}
+            onChange={(_, v) => {
+              if (v && typeof v === 'object') {
+                otherJustPicked.current = v.value === 'OTHER';
+                setReasonText(v.value === 'OTHER' ? '' : v.label);
+              } else {
+                setReasonText(v || '');
+              }
+            }}
+            renderOption={(props, o) => (
+              <li {...props} key={o.value}>
+                <Box>
+                  <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: O2D.ink }}>{o.label}</Typography>
+                  <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }}>{o.hint}</Typography>
+                </Box>
+              </li>
+            )}
+            renderInput={(params) => (
+              <TextField {...params} label="Reason" size="small" required
+                placeholder="Pick one, or type your own reason…"
+                error={reasonError}
+                helperText={
+                  !reasonText.trim() ? 'Reason is required — pick one from the list or type your own.'
+                    : !picked.ok ? 'Type your own reason here, in place of "Other".'
+                      : picked.custom ? 'Saved as a custom reason and shown in History.'
+                        : picked.hint
+                }
+                FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: reasonError ? undefined : O2D.sub, mx: 0 } }} />
+            )}
+          />
           <TextField label="Reference (optional)" size="small" value={reference} onChange={(e) => setReference(e.target.value)}
             placeholder="Bill / challan / note no."
             helperText="Helps you trace this entry later in History."
@@ -116,37 +196,27 @@ const ImsStockIn = () => {
 
       {/* ── Step 2 — the lines ── */}
       <Panel>
-        <StepHead n={2} title="What is coming in?" hint="Search for an item, then type the quantity received." done={lines.length > 0} />
-        <Autocomplete
-          sx={{ mt: 1.25 }}
-          options={available}
-          getOptionLabel={(o) => `${o.skuCode} — ${o.skuName}`}
-          value={null} blurOnSelect clearOnBlur
-          onChange={(_, v) => addItem(v)}
-          renderOption={(props, o) => (
-            <li {...props} key={o.skuId}>
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }}>{o.skuName}</Typography>
-                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
-                  {o.skuCode} · {num(o.onHand)} {o.unit} in store
-                </Typography>
-              </Box>
-            </li>
-          )}
-          renderInput={(p) => <TextField {...p} label="Add an item" placeholder="Type a code or item name…" size="small" />}
+        <StepHead n={2} title="What is coming in?" hint="Tick the items that arrived, add them, then type each quantity." done={lines.length > 0} />
+        {/* Multi-select: tick several items and add them in one go. Each one
+            still lands as an ordinary row with an EMPTY quantity, exactly as a
+            one-by-one add did. */}
+        <ItemMultiPicker
+          options={items}
+          addedIds={lines.map((l) => l.skuId)}
+          onAdd={addItems}
         />
 
         <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
           <Table size="small" sx={imsTableSx(820)}>
             <TableHead>
               <TableRow>
-                <TableCell>Code</TableCell>
-                <TableCell>Item</TableCell>
-                <TableCell align="right">In store now</TableCell>
+                <TableCell>SKU Code</TableCell>
+                <TableCell>Item Name</TableCell>
+                <TableCell align="right">Available Qty</TableCell>
                 <TableCell align="right">Quantity received</TableCell>
                 <TableCell align="right"><Th label="Cost per unit" hint="Optional. Used to value the stock and to price future purchases." /></TableCell>
-                <TableCell align="right"><Th label="New balance" hint="What on-hand becomes once you save this receipt." /></TableCell>
-                <TableCell align="right" />
+                <TableCell align="right"><Th label="New balance" hint="What the Closing Stock becomes once you save this receipt." /></TableCell>
+                <TableCell align="center" />
               </TableRow>
             </TableHead>
             <TableBody>
@@ -186,7 +256,7 @@ const ImsStockIn = () => {
                         </Stack>
                       ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>}
                     </TableCell>
-                    <TableCell align="right" sx={{ width: 48 }}>
+                    <TableCell align="center" sx={{ width: 48 }}>
                       <Tooltip arrow slotProps={O2D_TIP} title="Remove this line">
                         <IconButton size="small" onClick={() => remove(l.skuId)} sx={{ color: O2D.faint, '&:hover': { color: STOCK_TOKENS.OUT_OF_STOCK.color } }}>
                           <Trash2 size={15} />

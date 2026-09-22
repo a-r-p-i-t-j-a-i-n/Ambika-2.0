@@ -219,6 +219,55 @@ const navSectionsSimple = [
         ],
       },
       {
+        // Same two-level IMS tree as `navSectionsFull` (IMS -> inventory type
+        // -> screens). The routes already existed; only the nav row was absent
+        // from the simplified sidebar.
+        text: 'IMS',
+        icon: <Boxes size={19} />,
+        children: [
+          {
+            text: 'Consumables & Packaging',
+            icon: <Package size={19} />,
+            path: '/ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/ims' },
+              { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/ims/stock' },
+              { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
+              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
+              { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
+              { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
+            ],
+          },
+          {
+            text: 'Raw Material',
+            icon: <Layers size={19} />,
+            path: '/rm-ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
+              { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/rm-ims/stock' },
+              { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
+              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
+              { text: 'Cut Coils into Circles', icon: <Recycle size={19} />,        path: '/rm-ims/conversion' },
+              { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
+              { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
+            ],
+          },
+          {
+            text: 'Finished Goods',
+            icon: <PackageCheck size={19} />,
+            path: '/fg-ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/fg-ims' },
+              { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/fg-ims/stock' },
+              { text: 'Production In (DPR)',   icon: <Factory size={19} />,         path: '/fg-ims/production-in' },
+              { text: 'Dispatch Out',          icon: <Truck size={19} />,           path: '/fg-ims/dispatch-out' },
+              { text: 'Production Plan',       icon: <ClipboardList size={19} />,   path: '/fg-ims/planning' },
+              { text: 'Movement History',      icon: <History size={19} />,         path: '/fg-ims/movements' },
+            ],
+          },
+        ],
+      },
+      {
         text: 'Master',
         icon: <FolderOpen size={19} />,
         children: [

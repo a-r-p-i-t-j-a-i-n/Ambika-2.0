@@ -150,6 +150,7 @@ export const getSkuLookup = async (query = {}) => {
   return Sku.find(filter)
     .select(
       'name code itemType category pcsPerBox weightPerPc weightPerBox unit aliases ' +
+      'convertedItemNameForResale ' +
       'sellingPrice rmCost gstRate sellingPriceFrom rmCostFrom marginFloor clientId',
     )
     .sort({ name: 1 })
