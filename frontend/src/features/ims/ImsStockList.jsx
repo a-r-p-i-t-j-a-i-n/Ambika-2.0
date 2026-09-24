@@ -7,7 +7,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Boxes, Search, Pencil, LineChart as LineChartIcon, PackageOpen, AlertTriangle, TrendingDown,
-  ChevronRight, IndianRupee, Info, X, Download,
+  ChevronRight, Info, X, Download,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ReferenceLine, CartesianGrid,
@@ -15,7 +15,7 @@ import {
 import dayjs from 'dayjs';
 import {
   ImsShell, Panel, TableScroll, KpiTile, StatusChip, StatusLegend, EmptyNote, Th, Eyebrow,
-  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr, imsTableSx,
+  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, imsTableSx,
 } from './imsMeta';
 import { useGetImsOverviewQuery, useGetImsForecastQuery } from '../../store/api/imsApi';
 import PolicyDrawer from './PolicyDrawer';
@@ -55,6 +55,16 @@ const CategoryChip = ({ itemType }) => {
     ? <Tooltip arrow slotProps={O2D_TIP} title="This item has no classification in the SKU Master. Set its type there to categorise it."><span>{chip}</span></Tooltip>
     : chip;
 };
+
+// What a policy-only column shows for an item that has no policy. The value the
+// backend plans with is a default, not something anyone set for this item, so
+// the cell says so instead of printing the default as if it were data.
+const NotConfigured = () => (
+  <Tooltip arrow slotProps={O2D_TIP}
+    title="No planning policy set for this item. IMS falls back to a system default to keep the levels working — set a policy to make this a real figure.">
+    <Box component="span" sx={{ cursor: 'help', color: O2D.faint }}>—</Box>
+  </Tooltip>
+);
 
 // Plain-English definitions for the planning columns. These are the words that
 // lose a non-warehouse reader, so every one of them carries its meaning inline.
@@ -254,8 +264,19 @@ const ImsStockList = () => {
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const exportCsv = () => {
-    const header = ['SKU Code', 'Item Name', 'Category', 'Closing Stock', 'Material In Transit', 'Average Daily Consumption', 'Lead Time (From Indent to Receipt)', 'Safety Factor', 'Reorder at', 'Max Level', 'Daily Consumption', 'Converted Item Name (For Resale)', 'Status'];
-    const lines = filtered.map((r) => [r.skuCode, r.skuName, typeMeta(r.itemType).label, r.onHand, r.inTransit, r.adc, r.leadDays, r.safetyFactor, r.reorderPoint, r.maxLevel, r.dailyConsumption ?? '', r.convertedItemNameForResale || '', stockToken(r.status).label]);
+    // Column for column, the table on screen. The export used to run Lead Time
+    // before Safety Factor and put Daily Consumption after Max Level, and to
+    // call the Available Qty column "Closing Stock" — three ways for a reader
+    // comparing the file with the screen to land on the wrong number.
+    // Safety Factor and Lead Time come out blank for an item with no planning
+    // policy, matching the "—" the table shows.
+    const header = ['S.No.', 'SKU Code', 'Item Name', 'Category', 'Available Qty', 'Material In Transit',
+      'Average Daily Consumption', 'Safety Factor', 'Daily Consumption', 'Lead Time (From Indent to Receipt)',
+      'Reorder at', 'Max Level', 'Converted Item Name (For Resale)', 'Status'];
+    const lines = filtered.map((r, i) => [i + 1, r.skuCode, r.skuName, typeMeta(r.itemType).label, r.onHand,
+      r.inTransit, r.adc, r.hasPolicy ? r.safetyFactor : '', r.dailyConsumption ?? '',
+      r.hasPolicy ? r.leadDays : '', r.reorderPoint, r.maxLevel, r.convertedItemNameForResale || '',
+      stockToken(r.status).label]);
     const csv = [header, ...lines].map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
@@ -281,7 +302,6 @@ const ImsStockList = () => {
       <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
         <KpiTile label="Items" value={num(summary.itemCount)} sub="In the master list" color={O2D.brand} icon={Boxes} />
         <KpiTile label="Closing Stock" value={num(summary.totalOnHand)} sub="Total units physically in store" color="#0f766e" icon={PackageOpen} />
-        <KpiTile label="Value in store" value={inr(summary.totalStockValue)} sub="At last purchase cost" color="#4338ca" icon={IndianRupee} />
         {/* This tile counts Out of stock + Order now together, so it opens the
             Buying list rather than a single-status filter that would show fewer
             rows than the number on the tile. */}
@@ -358,9 +378,12 @@ const ImsStockList = () => {
                 <TableCell align="right"><Th label="Available Qty" hint="Units physically in the store right now." /></TableCell>
                 <TableCell align="right"><Th label="Material In Transit" hint="Ordered from the vendor but not yet received." /></TableCell>
                 <TableCell align="right"><Th label="Average Daily Consumption" hint="Average consumption per day calculated from the last 90 days of actual consumption." /></TableCell>
+                {/* Safety Factor sits at column 8 (counting S.No. as 1) in every
+                    IMS stock list, so a planner finds it in the same place
+                    whichever module they are in. */}
+                <TableCell align="right"><Th label="Safety Factor" hint="Cushion multiplier for demand spikes and late deliveries." /></TableCell>
                 <TableCell align="right"><Th label="Daily Consumption" hint="Actual consumption recorded today." /></TableCell>
                 <TableCell align="right"><Th label="Lead Time (From Indent to Receipt)" hint="Days the vendor takes to deliver after the order is placed." /></TableCell>
-                <TableCell align="right"><Th label="Safety Factor" hint="Cushion multiplier for demand spikes and late deliveries." /></TableCell>
                 <TableCell align="right"><Th label="Reorder at" hint="When Closing Stock falls to this number, place the order." /></TableCell>
                 <TableCell align="right"><Th label="Max Level" hint="Buy enough to bring stock back to this level." /></TableCell>
                 <TableCell><Th label="Converted Item Name (For Resale)" hint="The name this item is sold on as, when it differs from the item name. SKU Master data — edit it there." /></TableCell>
@@ -417,6 +440,12 @@ const ImsStockList = () => {
                         </Tooltip>
                       ) : '—'}
                     </TableCell>
+                    {/* A policy figure. An item with no policy has none, so it
+                        shows "—" rather than the system default dressed up as a
+                        configured value. The backend fallback is untouched. */}
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {r.hasPolicy ? `${num(r.safetyFactor)}×` : <NotConfigured />}
+                    </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: r.dailyConsumption == null ? O2D.faint : O2D.ink }}>
                       {r.dailyConsumption == null ? '—' : (
                         <Tooltip arrow slotProps={O2D_TIP}
@@ -425,8 +454,9 @@ const ImsStockList = () => {
                         </Tooltip>
                       )}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.leadDays != null ? `${num(r.leadDays)}d` : '—'}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.safetyFactor ? `${num(r.safetyFactor)}×` : '—'}</TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {r.hasPolicy ? `${num(r.leadDays)}d` : <NotConfigured />}
+                    </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num(r.reorderPoint)}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                       {r.maxLevelMode === 'MANUAL' ? (

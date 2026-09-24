@@ -32,12 +32,19 @@ export const fgImsController = {
     res.json(ApiResponse.ok('Item policy saved', await fgImsService.upsertPolicy(req.params.skuId, req.body, req.user)));
   }),
 
+  // A replay of a submission already recorded writes nothing and is answered
+  // with 200 + what the first request did, so a double-click reads as success
+  // rather than silently moving the stock a second time.
   produce: asyncHandler(async (req, res) => {
-    res.status(201).json(ApiResponse.created('Production recorded — stock updated', await fgImsService.produce(req.body, req.user)));
+    const out = await fgImsService.produce(req.body, req.user);
+    if (out.duplicate) return res.json(ApiResponse.ok('Already recorded — this entry was submitted twice.', out));
+    return res.status(201).json(ApiResponse.created('Production recorded — stock updated', out));
   }),
 
   dispatch: asyncHandler(async (req, res) => {
-    res.status(201).json(ApiResponse.created('Dispatch recorded — stock updated', await fgImsService.dispatch(req.body, req.user)));
+    const out = await fgImsService.dispatch(req.body, req.user);
+    if (out.duplicate) return res.json(ApiResponse.ok('Already recorded — this entry was submitted twice.', out));
+    return res.status(201).json(ApiResponse.created('Dispatch recorded — stock updated', out));
   }),
 
   getMovements: asyncHandler(async (req, res) => {

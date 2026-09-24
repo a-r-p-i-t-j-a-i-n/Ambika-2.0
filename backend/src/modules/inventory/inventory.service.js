@@ -1,11 +1,264 @@
+import mongoose from 'mongoose';
 import InventoryStock, { DEFAULT_WAREHOUSE } from './inventoryStock.model.js';
 import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.model.js';
+import InventoryRequestKey from './inventoryRequestKey.model.js';
 import SKU from '../skus/sku.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { generateMovementNumber } from '../../utils/docNumberGenerator.js';
+import { logger } from '../../utils/logger.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * Text on its way to the ledger.
+ *
+ * `undefined` and `null` must never reach the database as the literal words
+ * "undefined" / "null": two legacy movements carry exactly that in `reason` and
+ * `customReason`, and no reader can tell them apart from a reason somebody
+ * actually typed. Anything blank becomes an empty string instead.
+ */
+export const ledgerText = (v) => {
+  const s = String(v ?? '').trim();
+  return (s === 'undefined' || s === 'null') ? '' : s;
+};
+
+// How many times a stock write is retried when another movement lands on the
+// same row in the same instant. Five is far more than the handful of concurrent
+// writers a store ever has, and stops a hot SKU spinning forever.
+const OCC_MAX_ATTEMPTS = 5;
+// How many times a whole multi-line batch is replayed when the transaction hits
+// a write conflict. withTransaction already retries internally; this is the belt
+// to its braces.
+const TXN_MAX_ATTEMPTS = 3;
+
+const TRANSIENT_LABELS = ['TransientTransactionError', 'UnknownTransactionCommitResult'];
+const isTransient = (e) => TRANSIENT_LABELS.some((l) => e?.errorLabels?.includes?.(l))
+  || e?.code === 112 || e?.codeName === 'WriteConflict';
+const isDuplicateKey = (e) => e?.code === 11000;
+// A standalone mongod cannot run transactions. Deployments differ between
+// laptops and the cluster, so this degrades instead of failing outright.
+const isTxnUnsupported = (e) => e?.code === 20
+  || /Transaction numbers are only allowed on a replica set|transactions are not supported/i.test(e?.message || '');
+
+let txnUnsupportedWarned = false;
+
+/**
+ * Run `work` as one all-or-nothing unit: either every movement it writes lands,
+ * or none of them does.
+ *
+ * A multi-line Stock Out used to commit line by line, so a request that failed
+ * half way left the earlier lines in the ledger while returning an error — the
+ * operator saw a failure and stock had already moved. `work` is handed the
+ * session and must pass it down to every write.
+ *
+ * On a deployment without transactions (a standalone mongod) the work still
+ * runs, just without the rollback guarantee, and says so once in the log.
+ */
+export const runAtomically = async (work) => {
+  let session;
+  try {
+    session = await mongoose.startSession();
+  } catch (e) {
+    if (!txnUnsupportedWarned) { logger.warn(`[inventory] transactions unavailable — writes are not atomic: ${e.message}`); txnUnsupportedWarned = true; }
+    return work(null);
+  }
+  try {
+    for (let attempt = 1; attempt <= TXN_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        let out;
+        await session.withTransaction(async () => { out = await work(session); });
+        return out;
+      } catch (e) {
+        if (isTxnUnsupported(e)) {
+          if (!txnUnsupportedWarned) { logger.warn('[inventory] transactions unavailable — writes are not atomic'); txnUnsupportedWarned = true; }
+          return work(null);
+        }
+        if (isTransient(e) && attempt < TXN_MAX_ATTEMPTS) { await sleep(25 * attempt); continue; }
+        if (isTransient(e)) {
+          throw new AppError('These items are being updated by someone else right now. Please try again.', 409);
+        }
+        throw e;
+      }
+    }
+    return undefined;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
+ * Collapse repeated lines for the same SKU into one before anything is checked
+ * or written.
+ *
+ * Two lines of 25 for a SKU holding 30 used to pass the availability check —
+ * each was compared against the same on-hand on its own — and then the first
+ * committed and the second failed, leaving 5 in the store behind an HTTP 400.
+ * Summing first means the check sees the 50 that is really being asked for.
+ *
+ * Only quantity is summed. Batch and remarks are kept from the first line and
+ * the rest appended, so nothing an operator typed is silently dropped.
+ */
+export const mergeDuplicateLines = (items = []) => {
+  const byKey = new Map();
+  for (const it of items) {
+    const key = String(it.skuId);
+    const existing = byKey.get(key);
+    if (!existing) { byKey.set(key, { ...it, quantity: Number(it.quantity) || 0 }); continue; }
+    existing.quantity = round2(existing.quantity + (Number(it.quantity) || 0));
+    const extra = [it.batchNo, it.remarks].filter(Boolean).join(' ');
+    if (extra) existing.remarks = [existing.remarks, extra].filter(Boolean).join(' · ');
+  }
+  return [...byKey.values()];
+};
+
+/**
+ * Fold every warehouse row for one SKU into the single figure the IMS screens
+ * show.
+ *
+ * IMS has no warehouse selector: the stock list, the forecast and the stock card
+ * all answer "what does the company hold". Keying a Map by skuId silently kept
+ * whichever warehouse row came back last, so a SKU stocked in two places showed
+ * one of them and under-reported the rest. The ledger reconciles against the sum
+ * across warehouses, so the sum is what these screens have always meant. The
+ * write path stays warehouse-scoped — only the reading is combined.
+ */
+export const combineStockRows = (rows = []) => {
+  if (!rows.length) return {};
+  if (rows.length === 1) return rows[0];
+  let qtyOnHand = 0;
+  let qtyReserved = 0;
+  let stockValue = 0;
+  let lastMovementAt = null;
+  let lastCost = 0;
+  for (const r of rows) {
+    qtyOnHand = round2(qtyOnHand + (r.qtyOnHand || 0));
+    qtyReserved = round2(qtyReserved + (r.qtyReserved || 0));
+    stockValue = round2(stockValue + (r.qtyOnHand || 0) * (r.avgCost || 0));
+    if (r.lastMovementAt && (!lastMovementAt || r.lastMovementAt > lastMovementAt)) {
+      lastMovementAt = r.lastMovementAt;
+      lastCost = r.lastCost || lastCost;
+    }
+  }
+  return {
+    ...rows[0],
+    qtyOnHand,
+    qtyReserved,
+    lastMovementAt,
+    lastCost: lastCost || rows[0].lastCost || 0,
+    // Weighted by quantity, so the combined row values the same as the parts.
+    avgCost: qtyOnHand > 0 ? round2(stockValue / qtyOnHand) : round2(rows[0].avgCost || 0),
+    warehouse: 'ALL',
+    warehouseCount: rows.length,
+  };
+};
+
+/** Group stock rows by SKU and combine each SKU's warehouses into one row. */
+export const stockBySkuId = (rows = []) => {
+  const byId = new Map();
+  for (const r of rows) {
+    const k = String(r.skuId);
+    if (!byId.has(k)) byId.set(k, []);
+    byId.get(k).push(r);
+  }
+  return new Map([...byId].map(([k, list]) => [k, combineStockRows(list)]));
+};
+
+/**
+ * Apply one signed delta to a SKU+warehouse stock row and return the saved row.
+ *
+ * This used to read the document, mutate it and call `.save()`. With
+ * `optimisticConcurrency` on the base schema two simultaneous movements on one
+ * SKU raced: the loser got a raw Mongoose VersionError, which escaped as an HTTP
+ * 500 quoting the internal document id, and its movement was simply lost. Here
+ * the read and the write are joined by a version-guarded findOneAndUpdate, so a
+ * loser re-reads the winner's number and applies its delta on top of it.
+ */
+const applyStockDelta = async (p) => {
+  for (let attempt = 1; attempt <= OCC_MAX_ATTEMPTS; attempt += 1) {
+    const find = InventoryStock.findOne({ skuId: p.skuId, warehouse: p.warehouse });
+    if (p.session) find.session(p.session);
+    const current = await find.lean();
+
+    const onHand = round2(current?.qtyOnHand || 0);
+    if (p.movementType === MOVEMENT_TYPE.OUT && onHand < p.quantity && !p.allowNegative) {
+      throw new AppError(`Insufficient stock for ${p.skuCode || p.skuId} in ${p.warehouse} (on-hand ${onHand}, requested ${p.quantity})`, 400);
+    }
+
+    const set = {
+      qtyOnHand: round2(onHand + p.qtyDelta),
+      lastMovementAt: p.lastMovementAt,
+      updatedBy: p.updatedBy,
+    };
+    // Weighted-average cost on IN (only when a unit cost is given) — unchanged
+    // arithmetic, now computed from the row this update is guarded against.
+    if (p.movementType === MOVEMENT_TYPE.IN && p.unitCost > 0) {
+      const newQty = onHand + p.quantity;
+      const avgCost = round2(current?.avgCost || 0);
+      set.avgCost = newQty > 0 ? round2((onHand * avgCost + p.quantity * p.unitCost) / newQty) : p.unitCost;
+      set.lastCost = p.unitCost;
+    }
+    if (p.skuCode && !current?.skuCode) set.skuCode = p.skuCode;
+    if (p.skuName && !current?.skuName) set.skuName = p.skuName;
+
+    if (!current) {
+      try {
+        const [created] = await InventoryStock.create([{
+          skuId: p.skuId, skuCode: p.skuCode || '', skuName: p.skuName || '', unit: p.unit || 'PCS',
+          warehouse: p.warehouse, ...set,
+        }], p.session ? { session: p.session } : undefined);
+        return created;
+      } catch (e) {
+        // Another movement created the row first (unique skuId+warehouse) —
+        // read it back and apply this delta on top.
+        if (isDuplicateKey(e) && !p.session && attempt < OCC_MAX_ATTEMPTS) { await sleep(5 * attempt); continue; }
+        throw e;
+      }
+    }
+
+    const updated = await InventoryStock.findOneAndUpdate(
+      { _id: current._id, __v: current.__v },
+      { $set: set, $inc: { __v: 1 } },
+      { new: true, session: p.session },
+    );
+    if (updated) return updated;
+    // Inside a transaction a collision surfaces as a write conflict, which the
+    // caller replays; there is no point re-reading our own snapshot here.
+    if (p.session) throw new AppError('This item is being updated by someone else right now. Please try again.', 409);
+    if (attempt < OCC_MAX_ATTEMPTS) await sleep(5 * attempt);
+  }
+  throw new AppError('This item is being updated by someone else right now. Please try again.', 409);
+};
+
+/**
+ * Idempotency gate for a multi-line entry.
+ *
+ * The caller passes the id its form minted for this submission. The first
+ * request claims the key; a replay — a double-click, a browser retry, a second
+ * tab — finds it already claimed and is answered with what the first one did
+ * instead of moving stock twice. Requests without a key behave exactly as
+ * before, so every existing caller is untouched.
+ *
+ * Claimed OUTSIDE the transaction, deliberately. A duplicate-key error raised
+ * inside a transaction aborts it, and that abort cannot be swallowed: the commit
+ * then fails as a transient error and the driver replays the whole batch, over
+ * and over, until the request times out. The claim is its own atomic step and
+ * the transaction never sees it.
+ *
+ * @returns {{ replay: true, count: number } | { replay: false, claimed: boolean }}
+ */
+const claimRequestKey = async (key, meta = {}) => {
+  if (!key) return { replay: false, claimed: false };
+  try {
+    await InventoryRequestKey.create([{ _id: key, ...meta }]);
+    return { replay: false, claimed: true };
+  } catch (e) {
+    if (!isDuplicateKey(e)) throw e;
+    const prior = await InventoryRequestKey.findById(key).lean();
+    return { replay: true, count: prior?.count || 0 };
+  }
+};
 
 /**
  * Core stock engine — the ONLY place that mutates InventoryStock. Every call
@@ -49,32 +302,16 @@ const createStockMovement = async (input = {}, opts = {}) => {
     if (sku) { skuCode = skuCode || sku.code; skuName = skuName || sku.name; unit = unit || sku.unit; }
   }
 
-  // Get-or-create the stock row for this SKU+warehouse.
-  let stock = await InventoryStock.findOne({ skuId: input.skuId, warehouse });
-  if (!stock) {
-    stock = new InventoryStock({
-      skuId: input.skuId, skuCode: skuCode || '', skuName: skuName || '', unit: unit || 'PCS',
-      warehouse, qtyOnHand: 0,
-    });
-  }
-
-  if (movementType === MOVEMENT_TYPE.OUT && stock.qtyOnHand < quantity && !opts.allowNegative) {
-    throw new AppError(`Insufficient stock for ${skuCode || input.skuId} in ${warehouse} (on-hand ${stock.qtyOnHand}, requested ${quantity})`, 400);
-  }
-
-  // Weighted-average cost on IN (only when a unit cost is given).
-  if (movementType === MOVEMENT_TYPE.IN && unitCost > 0) {
-    const newQty = stock.qtyOnHand + quantity;
-    stock.avgCost = newQty > 0 ? round2((stock.qtyOnHand * stock.avgCost + quantity * unitCost) / newQty) : unitCost;
-    stock.lastCost = unitCost;
-  }
-
-  stock.qtyOnHand = round2(stock.qtyOnHand + qtyDelta);
-  stock.lastMovementAt = input.movementDate || new Date();
-  if (skuCode && !stock.skuCode) stock.skuCode = skuCode;
-  if (skuName && !stock.skuName) stock.skuName = skuName;
-  stock.updatedBy = input.performedBy?._id || input.performedById;
-  await stock.save(opts.session ? { session: opts.session } : undefined);
+  // Get-or-create the stock row for this SKU+warehouse and apply the delta under
+  // a version guard, so two simultaneous movements cannot overwrite each other.
+  const stock = await applyStockDelta({
+    skuId: input.skuId, warehouse, quantity, qtyDelta, movementType, unitCost,
+    skuCode, skuName, unit,
+    lastMovementAt: input.movementDate || new Date(),
+    updatedBy: input.performedBy?._id || input.performedById,
+    allowNegative: !!opts.allowNegative,
+    session: opts.session,
+  });
 
   const movementNumber = await generateMovementNumber(input.movementDate || new Date());
   const [movement] = await InventoryMovement.create([{
@@ -85,21 +322,25 @@ const createStockMovement = async (input = {}, opts = {}) => {
     txnType, movementType, quantity, qtyDelta,
     balanceAfter: stock.qtyOnHand,
     unitCost, lineValue: round2(quantity * unitCost),
-    batchNo: input.batchNo || '',
-    sourceModule: input.sourceModule || '',
-    refType: input.refType || '',
+    batchNo: ledgerText(input.batchNo),
+    sourceModule: ledgerText(input.sourceModule),
+    refType: ledgerText(input.refType),
     refId: input.refId || undefined,
-    refNumber: input.refNumber || '',
+    refNumber: ledgerText(input.refNumber),
     vendorId: input.vendorId || undefined,
-    vendorName: input.vendorName || '',
+    vendorName: ledgerText(input.vendorName),
     poId: input.poId || undefined,
-    poNumber: input.poNumber || '',
+    poNumber: ledgerText(input.poNumber),
     piId: input.piId || undefined,
-    piNumber: input.piNumber || '',
+    piNumber: ledgerText(input.piNumber),
     // Only manual entries set these; every other caller leaves them blank.
-    reason: input.reason || '',
-    customReason: input.customReason || '',
-    remarks: input.remarks || '',
+    // ledgerText keeps a missing value out of the ledger as '' rather than as
+    // the literal word "undefined", which is what two legacy rows carry.
+    reason: ledgerText(input.reason),
+    customReason: ledgerText(input.customReason),
+    remarks: ledgerText(input.remarks),
+    // Set only by the entry screens, so a replayed submission can be recognised.
+    clientRequestId: ledgerText(input.clientRequestId),
     performedBy: input.performedBy?._id || input.performedById,
     performedByName: input.performedBy?.name || input.performedByName || '',
     createdBy: input.performedBy?._id || input.performedById,
@@ -108,8 +349,56 @@ const createStockMovement = async (input = {}, opts = {}) => {
   return { movement, stock };
 };
 
+/**
+ * Run a multi-line stock entry as one unit, with replay protection.
+ *
+ * Everything the IMS entry screens post goes through here: the duplicate-line
+ * merge, the idempotency claim, the transaction and the rollback all live in one
+ * place so FG and Consumables cannot drift apart on any of them.
+ *
+ * @param {object} cfg
+ *   items*             the request's lines (already filtered to quantity > 0)
+ *   clientRequestId?   the submission id, when the caller sent one
+ *   mergeDuplicates?   sum repeated SKUs before checking/writing (OUT paths)
+ *   meta               { sourceModule, action, performedBy } for the key row
+ *   preflight?         async (lines, session) — runs before any write
+ *   write*             async (line, session) — writes one line
+ * @returns {{ count:number, results:any[], duplicate?:boolean }}
+ */
+const runStockEntry = async ({ items, clientRequestId, mergeDuplicates, meta, preflight, write }) => {
+  const lines = mergeDuplicates ? mergeDuplicateLines(items) : items;
+  const key = ledgerText(clientRequestId);
+
+  const claim = await claimRequestKey(key, meta);
+  // Already recorded by an earlier, identical submission — say so and write
+  // nothing. The caller reports success, because the work IS done.
+  if (claim.replay) return { count: claim.count, results: [], duplicate: true };
+
+  try {
+    const out = await runAtomically(async (session) => {
+      if (preflight) await preflight(lines, session);
+      const results = [];
+      for (const line of lines) results.push(await write(line, session));
+      return { count: results.length, results };
+    });
+    if (claim.claimed) await InventoryRequestKey.updateOne({ _id: key }, { $set: { count: out.count } });
+    return out;
+  } catch (e) {
+    // The entry did not happen, so its key must not lock the corrected retry
+    // out. Only a claim this request made is released.
+    if (claim.claimed) await InventoryRequestKey.deleteOne({ _id: key }).catch(() => {});
+    throw e;
+  }
+};
+
 export const inventoryService = {
   createStockMovement,
+  runStockEntry,
+  runAtomically,
+  mergeDuplicateLines,
+  combineStockRows,
+  stockBySkuId,
+  ledgerText,
 
   /** Thin helper: record an IN movement (caller supplies txnType e.g. GRN_IN). */
   increaseStock: (input, opts) => createStockMovement({ ...input, movementType: MOVEMENT_TYPE.IN }, opts),

@@ -1,11 +1,15 @@
 import mongoose from 'mongoose';
 import InventoryPolicy from './inventoryPolicy.model.js';
-import InventoryStock from './inventoryStock.model.js';
+import InventoryStock, { DEFAULT_WAREHOUSE } from './inventoryStock.model.js';
 import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.model.js';
-import { inventoryService } from './inventory.service.js';
+import { inventoryService, combineStockRows, stockBySkuId } from './inventory.service.js';
 import SKU from '../skus/sku.model.js';
+import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
-import { checkSafetyFactor, checkStockInReason, STOCK_IN_REASONS } from './ims.validation.js';
+import {
+  checkSafetyFactor, checkStockInReason, STOCK_IN_REASONS,
+  checkStockOutReason, STOCK_OUT_REASONS,
+} from './ims.validation.js';
 
 /**
  * IMS service — the Packaging & Consumables Inventory layer on top of the core
@@ -106,6 +110,19 @@ export const resolveMaxLevel = (policy = {}, adcOverride) => {
   return matchesFormula
     ? { ...auto, maxLevelMode: 'AUTO', maxLevelInferred: true }
     : { ...auto, maxLevel: storedMaxLevel, maxLevelMode: 'MANUAL', maxLevelInferred: true };
+};
+
+/**
+ * The policy an item is planned with when it has none of its own.
+ *
+ * Defined once, because the stock list built these defaults inline while the
+ * forecast and the stock card passed `policy || {}` — so an item with no policy
+ * showed a Lead Time of 7 days on one screen and 0 on the next. Every read path
+ * now starts from the same row.
+ */
+const imsPolicyOrDefaults = (policy, sku = {}) => policy || {
+  averageDailyConsumption: 0, leadDays: sku.leadDays ?? 16, safetyFactor: 1.5,
+  moq: 0, maxLevel: 0, maxLevelMode: 'AUTO', materialInTransit: 0, openingStock: 0, convertedItemName: '',
 };
 
 /** Stock status from on-hand + in-transit vs the policy thresholds. */
@@ -275,15 +292,14 @@ export const imsService = {
       this._todayConsumptionBySku(ids),
       this._consumptionBySku90d(ids),
     ]);
-    const stockBy = new Map(stocks.map((s) => [String(s.skuId), s]));
+    // Every warehouse a SKU is stocked in, folded into one figure — keying the
+    // Map by skuId alone used to keep only the last row.
+    const stockBy = stockBySkuId(stocks);
     const polBy = new Map(policies.map((p) => [String(p.skuId), p]));
 
     const rows = skus.map((sku) => {
       const stock = stockBy.get(String(sku._id)) || {};
-      const policy = polBy.get(String(sku._id)) || {
-        averageDailyConsumption: 0, leadDays: sku.leadDays ?? 16, safetyFactor: 1.5,
-        moq: 0, maxLevel: 0, maxLevelMode: 'AUTO', materialInTransit: 0, openingStock: 0, convertedItemName: '',
-      };
+      const policy = imsPolicyOrDefaults(polBy.get(String(sku._id)), sku);
       // ADC, measured: 90-day consumption ÷ 90. Drives lead-time demand, reorder
       // point, max level and safety stock through the unchanged formulas.
       const bucket90d = window90d.get(String(sku._id));
@@ -345,15 +361,16 @@ export const imsService = {
 
   /** Per-day stock burn-down for one item (the sheet's dated columns). */
   async getForecast(skuId, days = 30) {
-    const [sku, stock, policy] = await Promise.all([
+    const [sku, stocks, policy] = await Promise.all([
       SKU.findById(skuId).lean(),
-      InventoryStock.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
+      InventoryStock.find({ skuId, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
     ]);
     if (!sku) throw new AppError('Item not found', 404);
-    // Same measured ADC the stock list uses, so the projection cannot disagree
-    // with the row it was opened from.
-    const m = deriveMetrics(policy || {}, stock || {}, await this._adcForSku(skuId));
+    // Same measured ADC, same combined stock and the same policy defaults the
+    // stock list uses, so the projection cannot disagree with the row it was
+    // opened from.
+    const m = deriveMetrics(imsPolicyOrDefaults(policy, sku), combineStockRows(stocks), await this._adcForSku(skuId));
     const n = Math.min(Math.max(Number(days) || 30, 7), 120);
 
     const series = [];
@@ -373,7 +390,10 @@ export const imsService = {
     }
     return {
       sku: { skuId: sku._id, skuCode: sku.code, skuName: sku.name, unit: sku.unit, category: sku.category },
-      metrics: m, reorderDay, stockoutDay, series,
+      // Whether the levels above came from a policy or from the fallback, so the
+      // item page can say "not configured" instead of showing a default as data.
+      metrics: { ...m, hasPolicy: !!policy },
+      reorderDay, stockoutDay, series,
     };
   },
 
@@ -385,13 +405,13 @@ export const imsService = {
    * which always reconciles with on-hand (on-hand = Σ of all ledger deltas).
    */
   async getStockHistory(skuId, query = {}) {
-    const [sku, stock, policy] = await Promise.all([
+    const [sku, stocks, policy] = await Promise.all([
       SKU.findById(skuId).lean(),
-      InventoryStock.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
+      InventoryStock.find({ skuId, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
     ]);
     if (!sku) throw new AppError('Item not found', 404);
-    const m = deriveMetrics(policy || {}, stock || {}, await this._adcForSku(skuId));
+    const m = deriveMetrics(imsPolicyOrDefaults(policy, sku), combineStockRows(stocks), await this._adcForSku(skuId));
 
     // Resolve the [from, to] window as IST calendar days. Default: last 30 days.
     const todayKey = istDayKey(new Date());
@@ -580,40 +600,44 @@ export const imsService = {
       ? `${STOCK_IN_REASONS.OTHER} — ${customReason}`
       : STOCK_IN_REASONS[reason];
 
-    const results = [];
-    for (const it of items) {
-      const { movement, stock } = await inventoryService.increaseStock({
-        skuId: it.skuId, quantity: Number(it.quantity), unitCost: Number(it.unitCost || 0),
-        batchNo: it.batchNo || '', warehouse: payload.warehouse,
-        txnType, sourceModule: 'IMS', refType: 'IMS_RECEIPT', refNumber: payload.reference || '',
-        reason, customReason,
-        remarks: [reasonText, payload.reference, it.remarks].filter(Boolean).join(' · '),
-        performedBy: user, movementDate,
-      });
-      results.push({ skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand });
-    }
-    return { count: results.length, results };
+    // One unit of work: every line lands or none does, and a replayed
+    // submission is recognised by its request id rather than adding stock twice.
+    return inventoryService.runStockEntry({
+      items,
+      clientRequestId: payload.clientRequestId,
+      meta: { sourceModule: 'IMS', action: 'receive', performedBy: user?._id },
+      write: async (it, session) => {
+        const { movement, stock } = await inventoryService.increaseStock({
+          skuId: it.skuId, quantity: Number(it.quantity), unitCost: Number(it.unitCost || 0),
+          batchNo: it.batchNo || '', warehouse: payload.warehouse,
+          txnType, sourceModule: 'IMS', refType: 'IMS_RECEIPT', refNumber: payload.reference || '',
+          reason, customReason,
+          remarks: [reasonText, payload.reference, it.remarks].filter(Boolean).join(' · '),
+          performedBy: user, movementDate, clientRequestId: payload.clientRequestId,
+        }, { session });
+        return { skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand };
+      },
+    });
   },
 
   // ── Stock-Out (production issue / consumption) ──────────────────────────────
   async issue(payload, user) {
     const items = (payload.items || []).filter((i) => Number(i.quantity) > 0);
     if (!items.length) throw new AppError('Add at least one item with a quantity.', 400);
-    const warehouse = payload.warehouse;
+    const warehouse = (payload.warehouse || DEFAULT_WAREHOUSE).trim();
     const allowNegative = !!payload.allowNegative;
     const movementDate = payload.date ? new Date(payload.date) : new Date();
 
-    // Pre-validate on-hand for every line so we don't half-commit an issue.
-    if (!allowNegative) {
-      const ids = items.map((i) => i.skuId);
-      const stocks = await InventoryStock.find({ skuId: { $in: ids } }).lean();
-      const onHandBy = new Map(stocks.map((s) => [String(s.skuId), s.qtyOnHand]));
-      const short = items.filter((i) => Number(i.quantity) > (onHandBy.get(String(i.skuId)) || 0));
-      if (short.length) {
-        const names = short.map((i) => i.skuCode || i.skuId).join(', ');
-        throw new AppError(`Not enough stock for: ${names}. Lower the quantity or tick "allow negative".`, 400);
-      }
-    }
+    // Why the material left the store. Second line of defence: the route already
+    // runs issueSchema, but the OTHER-needs-text rule must hold for any caller.
+    // Every reason here is a genuine consumption, so the txnType stays
+    // CONSUME_OUT and what ADC measures is completely unchanged.
+    const checked = checkStockOutReason(payload.reason, payload.customReason);
+    if (!checked.ok) throw new AppError(checked.message, 422);
+    const { reason, customReason } = checked;
+    const reasonText = reason === 'OTHER'
+      ? `${STOCK_OUT_REASONS.OTHER} — ${customReason}`
+      : STOCK_OUT_REASONS[reason];
 
     const context = [
       payload.purpose && `Purpose: ${payload.purpose}`,
@@ -621,23 +645,70 @@ export const imsService = {
       payload.department && `Dept: ${payload.department}`,
     ].filter(Boolean).join(' · ');
 
-    const results = [];
-    for (const it of items) {
-      const { movement, stock } = await inventoryService.decreaseStock({
-        skuId: it.skuId, quantity: Number(it.quantity), warehouse,
-        txnType: TXN_TYPE.CONSUME_OUT, sourceModule: 'IMS',
-        refType: 'IMS_ISSUE', refNumber: payload.reference || '',
-        remarks: [context, it.remarks].filter(Boolean).join(' · ') || 'Production issue',
-        performedBy: user, movementDate,
-      }, { allowNegative });
-      results.push({ skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand });
-    }
-    return { count: results.length, results };
+    return inventoryService.runStockEntry({
+      items,
+      clientRequestId: payload.clientRequestId,
+      // Two lines for the same item are one issue of their sum. Left separate,
+      // each was checked against the same on-hand and passed, and then the first
+      // committed while the second failed — an HTTP 400 on top of stock that had
+      // already moved.
+      mergeDuplicates: true,
+      meta: { sourceModule: 'IMS', action: 'issue', performedBy: user?._id },
+      preflight: async (lines, session) => {
+        if (allowNegative) return;
+        // Checked against the warehouse the movement will actually come out of,
+        // so this can never pass where the stock engine would refuse.
+        const ids = lines.map((i) => i.skuId);
+        const q = InventoryStock.find({ skuId: { $in: ids }, warehouse, isDeleted: { $ne: true } });
+        if (session) q.session(session);
+        const stocks = await q.lean();
+        const onHandBy = new Map(stocks.map((s) => [String(s.skuId), s.qtyOnHand]));
+        const short = lines.filter((i) => Number(i.quantity) > (onHandBy.get(String(i.skuId)) || 0));
+        if (short.length) {
+          const names = short.map((i) => i.skuCode || i.skuId).join(', ');
+          throw new AppError(`Not enough stock for: ${names}. Lower the quantity or tick "allow negative".`, 400);
+        }
+      },
+      write: async (it, session) => {
+        const { movement, stock } = await inventoryService.decreaseStock({
+          skuId: it.skuId, quantity: Number(it.quantity), warehouse,
+          txnType: TXN_TYPE.CONSUME_OUT, sourceModule: 'IMS',
+          refType: 'IMS_ISSUE', refNumber: payload.reference || '',
+          reason, customReason,
+          remarks: [reasonText, context, it.remarks].filter(Boolean).join(' · '),
+          performedBy: user, movementDate, clientRequestId: payload.clientRequestId,
+        }, { allowNegative, session });
+        return { skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand };
+      },
+    });
   },
 
-  /** Movement history scoped to consumable/packaging items. */
+  /**
+   * The ids of every consumable/packaging SKU — the scope every Consumables
+   * screen is about. IMS_ITEM_TYPES is the one source of truth for what this
+   * module covers; nothing here ever guesses from a code prefix.
+   */
+  async _imsSkuIds() {
+    const skus = await SKU.find({ itemType: { $in: IMS_ITEM_TYPES }, isDeleted: { $ne: true } }).select('_id').lean();
+    return skus.map((s) => s._id);
+  },
+
+  /**
+   * Movement history scoped to consumable/packaging items.
+   *
+   * This used to hand the query straight to the shared engine reader, which is
+   * scoped to nothing: the Consumables history listed finished-goods dispatches,
+   * raw-material conversions and purchase GRNs alongside its own rows. The
+   * filtering, searching, sorting and paging all still come from ApiFeatures —
+   * only the starting set is now this module's own SKUs.
+   */
   async getMovements(query = {}) {
-    return inventoryService.getMovements(query);
+    const ids = await this._imsSkuIds();
+    const base = InventoryMovement.find({ skuId: { $in: ids }, isDeleted: { $ne: true } });
+    const features = new ApiFeatures(base, query)
+      .filter().search(['movementNumber', 'skuCode', 'skuName', 'refNumber', 'poNumber', 'piNumber', 'vendorName'])
+      .sort().select().paginate();
+    return features.exec();
   },
 
   // ── Dashboard ───────────────────────────────────────────────────────────────
@@ -653,19 +724,35 @@ export const imsService = {
       if (['REORDER', 'OUT_OF_STOCK', 'LOW'].includes(r.status)) byCategory[k].reorder += 1;
     }
 
-    // Top consumed (OUT) items over the last 30 days.
+    // Top consumed items over the last 30 days.
+    //
+    // Both of these were unscoped: "Top consumed" counted every OUT movement in
+    // the company — a finished-goods dispatch, a QC rejection, a coil conversion
+    // — and the recent list showed other modules' rows on the Consumables
+    // dashboard. They are now this module's SKUs only, and "consumed" means the
+    // same CONSUME_OUT that Average Daily Consumption is measured from, so the
+    // two numbers on this screen can no longer contradict each other.
     const since = new Date(Date.now() - 30 * 86400000);
+    const imsIds = await this._imsSkuIds();
     const topConsumed = await InventoryMovement.aggregate([
-      { $match: { movementType: MOVEMENT_TYPE.OUT, movementDate: { $gte: since }, isDeleted: { $ne: true } } },
+      {
+        $match: {
+          skuId: { $in: imsIds },
+          movementType: MOVEMENT_TYPE.OUT,
+          txnType: TXN_TYPE.CONSUME_OUT,
+          movementDate: { $gte: since },
+          isDeleted: { $ne: true },
+        },
+      },
       { $group: { _id: { skuId: '$skuId', skuCode: '$skuCode', skuName: '$skuName' }, qty: { $sum: '$quantity' } } },
       { $sort: { qty: -1 } },
       { $limit: 8 },
       { $project: { _id: 0, skuCode: '$_id.skuCode', skuName: '$_id.skuName', qty: 1 } },
     ]);
 
-    const recentMovements = await InventoryMovement.find({ isDeleted: { $ne: true } })
+    const recentMovements = await InventoryMovement.find({ skuId: { $in: imsIds }, isDeleted: { $ne: true } })
       .sort({ movementDate: -1, createdAt: -1 }).limit(12)
-      .select('movementNumber movementDate skuCode skuName movementType txnType quantity balanceAfter performedByName remarks')
+      .select('movementNumber movementDate skuCode skuName movementType txnType quantity balanceAfter performedByName reason customReason remarks')
       .lean();
 
     const reorderList = docs

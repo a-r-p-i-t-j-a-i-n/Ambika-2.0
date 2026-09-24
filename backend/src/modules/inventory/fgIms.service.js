@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
 import InventoryPolicy from './inventoryPolicy.model.js';
-import InventoryStock from './inventoryStock.model.js';
+import InventoryStock, { DEFAULT_WAREHOUSE } from './inventoryStock.model.js';
 import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.model.js';
-import { inventoryService } from './inventory.service.js';
+import { inventoryService, combineStockRows, stockBySkuId } from './inventory.service.js';
 import SKU from '../skus/sku.model.js';
 import { AppError } from '../../utils/apiResponse.js';
 
@@ -44,10 +44,114 @@ const shiftDay = (ymd, n) => {
 
 // Active demand rate = the column the chosen mode points at, falling back to the
 // legacy single ADC. (Same three-tier model the RM sheet uses.)
+//
+// Average Daily Demand is a PLANNED figure a planner types per season — it is
+// deliberately NOT the ledger-measured Average Daily Consumption that the
+// Consumables IMS computes from its issue history. The two are different
+// business concepts and must not be merged.
 const resolveDemand = (policy = {}) => {
   const mode = policy.consumptionMode || 'NORMAL';
   const byMode = { LOW: policy.adcLow, NORMAL: policy.adcNormal, PEAK: policy.adcPeak }[mode];
   return Number(byMode || policy.averageDailyConsumption || 0);
+};
+
+// The cushion used when a finished good has no Safety Factor of its own.
+const DEFAULT_SAFETY_FACTOR = 1.5;
+
+/**
+ * The Safety Factor to plan this finished good with.
+ *
+ * FG deliberately allows a Safety Factor of 0 ("no cushion" — fgIms.validation
+ * enforces only "0 or greater"), so the default may only stand in for a value
+ * that is genuinely ABSENT. Reading it as `safetyFactor || 1.5` made a stored 0
+ * fall through to 1.5: the policy said 0, the database held 0, and every level
+ * built from it was computed at 1.5 — a Max Level of 75 where the planner had
+ * asked for none at all. Nullish, not falsy.
+ */
+const resolveSafetyFactor = (policy = {}) => {
+  const raw = policy.safetyFactor;
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_SAFETY_FACTOR;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : DEFAULT_SAFETY_FACTOR;
+};
+
+/**
+ * The policy a finished good is planned with when it has none of its own.
+ *
+ * Defined once, because the stock list built these defaults inline while the
+ * forecast and the stock card passed `policy || {}` — so a SKU with no policy
+ * showed a Lead Time of 5 days on one screen and 0 on the next. Every read path
+ * now starts from the same row.
+ */
+const fgPolicyOrDefaults = (policy, sku = {}) => policy || {
+  averageDailyConsumption: 0, leadDays: sku.leadDays ?? 7, safetyFactor: DEFAULT_SAFETY_FACTOR,
+  moq: 0, maxLevel: 0, materialInTransit: 0, bookedQty: 0, openingStock: 0,
+  consumptionMode: 'NORMAL',
+};
+
+// How far a legacy stored maxLevel may sit from the formula and still be read as
+// formula-derived. Whole-unit rounding in the source sheet (7.5 × 7 × 1.5 = 78.75
+// typed as 79) must not be mistaken for a deliberate override. The floor is half
+// a unit because that is the most such rounding can ever be out by — anything
+// wider would start swallowing small deliberate overrides on low-volume SKUs.
+const MAX_LEVEL_MATCH_TOLERANCE = 0.02; // 2%, floored at half a unit
+const MAX_LEVEL_MATCH_FLOOR = 0.5;
+
+/**
+ * Work out the target (Max) level for a finished good, and say where it came from.
+ *
+ * Max Level = Average Daily Demand × Lead Time × Safety Factor — that rule has to
+ * stay live, so editing a SKU's Safety Factor actually moves its Max Level, Safety
+ * Stock and suggested production quantity. Before this, ANY stored maxLevel — even
+ * a stale one — silently won forever and the Safety Factor did nothing.
+ *
+ * A stored maxLevel only wins when it is a genuine manual override:
+ *   • nothing stored (0 / blank) — the formula. This is FG's own long-standing
+ *     convention, stated in the Policy drawer: "leave Max level blank/0 to
+ *     auto-use demand × lead × safety factor". Choosing AUTO in the drawer
+ *     clears the field, so AUTO is always unambiguous going forward.
+ *   • maxLevelMode === 'MANUAL' with a positive value — set explicitly from the
+ *     Policy drawer. Authoritative.
+ *   • anything else with a positive stored value — INFERRED, never assumed: a
+ *     stored value that still matches demand×lead×SF within rounding was a
+ *     calculated figure, so it reads as formula-derived; anything else is kept
+ *     as a manual override.
+ *
+ * That last rule is where FG deliberately differs from the Consumables twin in
+ * ims.service.js, and it is a data-safety decision rather than a style one.
+ * InventoryPolicy defaults maxLevelMode to 'AUTO', so EVERY finished-good policy
+ * written before this change already carries an 'AUTO' flag that no user ever
+ * chose. Trusting it would silently throw away every hand-typed FG Max Level the
+ * moment this shipped. Inference keeps those overrides intact, and because the
+ * drawer now clears the value whenever AUTO is chosen, newly-saved rows never
+ * reach the ambiguous case at all. Nothing is rewritten on disk — no migration.
+ *
+ * The demand figure itself is untouched — this only decides how the target level
+ * built from it is resolved.
+ *
+ * @returns {{maxLevel:number, formulaMaxLevel:number, storedMaxLevel:number,
+ *            maxLevelMode:'AUTO'|'MANUAL', maxLevelInferred:boolean}}
+ */
+export const resolveFgMaxLevel = (policy = {}, demandOverride) => {
+  const add = demandOverride === undefined ? resolveDemand(policy) : Number(demandOverride) || 0;
+  const leadDays = Number(policy.leadDays || 0);
+  const safetyFactor = resolveSafetyFactor(policy);
+  const formulaMaxLevel = round2(add * leadDays * safetyFactor);
+  const storedMaxLevel = round2(policy.maxLevel || 0);
+  const auto = { maxLevel: formulaMaxLevel, formulaMaxLevel, storedMaxLevel };
+
+  // Blank / 0 is FG's own "follow the formula" signal, and what the drawer now
+  // writes whenever AUTO is chosen.
+  if (storedMaxLevel <= 0) return { ...auto, maxLevelMode: 'AUTO', maxLevelInferred: false };
+  // An explicit MANUAL — the only flag that is taken at face value here.
+  if (policy.maxLevelMode === 'MANUAL') {
+    return { ...auto, maxLevel: storedMaxLevel, maxLevelMode: 'MANUAL', maxLevelInferred: false };
+  }
+  const slack = Math.max(MAX_LEVEL_MATCH_FLOOR, formulaMaxLevel * MAX_LEVEL_MATCH_TOLERANCE);
+  const matchesFormula = formulaMaxLevel > 0 && Math.abs(storedMaxLevel - formulaMaxLevel) <= slack;
+  return matchesFormula
+    ? { ...auto, maxLevelMode: 'AUTO', maxLevelInferred: true }
+    : { ...auto, maxLevel: storedMaxLevel, maxLevelMode: 'MANUAL', maxLevelInferred: true };
 };
 
 /**
@@ -58,14 +162,17 @@ const resolveDemand = (policy = {}) => {
 const deriveMetrics = (policy = {}, stock = {}, sku = {}) => {
   const add = resolveDemand(policy);                       // avg daily demand
   const leadDays = Number(policy.leadDays || 0);           // production lead time
-  const safetyFactor = Number(policy.safetyFactor || 1.5);
+  const safetyFactor = resolveSafetyFactor(policy);
   const inProduction = Number(policy.materialInTransit || 0); // WIP expected in
   const booked = Number(policy.bookedQty || 0);            // committed to orders
   const onHand = round2(stock.qtyOnHand || 0);
 
   const leadTimeDemand = round2(add * leadDays);
-  const maxLevel = round2(policy.maxLevel || add * leadDays * safetyFactor);
+  // Target / max level — demand×lead×SF unless a genuine manual override exists.
+  const { maxLevel, formulaMaxLevel, storedMaxLevel, maxLevelMode, maxLevelInferred } = resolveFgMaxLevel(policy, add);
   const safetyStock = round2(Math.max(0, maxLevel - leadTimeDemand));
+  // Reorder point is lead-time demand only — deliberately free of the Safety
+  // Factor, so changing the SF never moves "Reorder At".
   const reorderPoint = leadTimeDemand;
   // What we can actually promise = in stock + coming off the line − already sold.
   const projectedAvailable = round2(onHand + inProduction - booked);
@@ -90,6 +197,9 @@ const deriveMetrics = (policy = {}, stock = {}, sku = {}) => {
   return {
     onHand, inProduction, booked, add, leadDays, safetyFactor,
     leadTimeDemand, safetyStock, reorderPoint, maxLevel,
+    // Max-level provenance, so the UI can say when the Safety Factor is being
+    // overruled instead of silently showing a number the formula did not make.
+    formulaMaxLevel, storedMaxLevel, maxLevelMode, maxLevelInferred,
     projectedAvailable, daysCover, availablePct, status, suggestedProduceQty,
     avgCost: round2(stock.avgCost || 0),
     rate: round2(rate),
@@ -123,16 +233,14 @@ export const fgImsService = {
       InventoryStock.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
     ]);
-    const stockBy = new Map(stocks.map((s) => [String(s.skuId), s]));
+    // Every warehouse a SKU is stocked in, folded into one figure — keying the
+    // Map by skuId alone used to keep only the last row.
+    const stockBy = stockBySkuId(stocks);
     const polBy = new Map(policies.map((p) => [String(p.skuId), p]));
 
     const rows = skus.map((sku) => {
       const stock = stockBy.get(String(sku._id)) || {};
-      const policy = polBy.get(String(sku._id)) || {
-        averageDailyConsumption: 0, leadDays: sku.leadDays ?? 7, safetyFactor: 1.5,
-        moq: 0, maxLevel: 0, materialInTransit: 0, bookedQty: 0, openingStock: 0,
-        consumptionMode: 'NORMAL',
-      };
+      const policy = fgPolicyOrDefaults(polBy.get(String(sku._id)), sku);
       const m = deriveMetrics(policy, stock, sku);
       return {
         skuId: sku._id,
@@ -183,13 +291,15 @@ export const fgImsService = {
 
   /** Per-day stock burn-down for one finished good (demand-projection). */
   async getForecast(skuId, days = 30) {
-    const [sku, stock, policy] = await Promise.all([
+    const [sku, stocks, policy] = await Promise.all([
       SKU.findById(skuId).lean(),
-      InventoryStock.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
+      InventoryStock.find({ skuId, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
     ]);
     if (!sku) throw new AppError('Item not found', 404);
-    const m = deriveMetrics(policy || {}, stock || {}, sku);
+    // Same combined stock and same policy defaults as the stock list, so the
+    // projection cannot disagree with the row it was opened from.
+    const m = deriveMetrics(fgPolicyOrDefaults(policy, sku), combineStockRows(stocks), sku);
     const n = Math.min(Math.max(Number(days) || 30, 7), 120);
 
     const series = [];
@@ -209,7 +319,10 @@ export const fgImsService = {
     }
     return {
       sku: { skuId: sku._id, skuCode: sku.code, skuName: sku.name, unit: sku.unit, category: sku.category },
-      metrics: m, reorderDay, stockoutDay, series,
+      // Whether the levels above came from a policy or from the fallback, so the
+      // item page can say "not configured" instead of showing a default as data.
+      metrics: { ...m, hasPolicy: !!policy },
+      reorderDay, stockoutDay, series,
     };
   },
 
@@ -220,13 +333,13 @@ export const fgImsService = {
    * up to end of that day, which always reconciles with on-hand.
    */
   async getStockHistory(skuId, query = {}) {
-    const [sku, stock, policy] = await Promise.all([
+    const [sku, stocks, policy] = await Promise.all([
       SKU.findById(skuId).lean(),
-      InventoryStock.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
+      InventoryStock.find({ skuId, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
     ]);
     if (!sku) throw new AppError('Item not found', 404);
-    const m = deriveMetrics(policy || {}, stock || {}, sku);
+    const m = deriveMetrics(fgPolicyOrDefaults(policy, sku), combineStockRows(stocks), sku);
 
     const todayKey = istDayKey(new Date());
     let toKey = query.to ? istDayKey(new Date(`${query.to}T12:00:00${IST_OFFSET}`)) : todayKey;
@@ -320,7 +433,11 @@ export const fgImsService = {
 
   // ── Policy CRUD ────────────────────────────────────────────────────────────
   async getPolicy(skuId) {
-    return InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean();
+    const policy = await InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean();
+    if (!policy) return null;
+    // Resolve the target level here too, so the drawer opens knowing whether this
+    // SKU's Max Level follows the Safety Factor or overrides it.
+    return { ...policy, ...resolveFgMaxLevel(policy) };
   },
 
   async upsertPolicy(skuId, data, user) {
@@ -332,19 +449,43 @@ export const fgImsService = {
       consumptionMode: data.consumptionMode,
       averageDailyConsumption: data.averageDailyConsumption,
       leadDays: data.leadDays, safetyFactor: data.safetyFactor,
-      moq: data.moq, maxLevel: data.maxLevel,
+      moq: data.moq, maxLevel: data.maxLevel, maxLevelMode: data.maxLevelMode,
       materialInTransit: data.materialInTransit, bookedQty: data.bookedQty,
       rate: data.rate, remarks: data.remarks,
       updatedBy: user?._id,
     };
     if (data.openingStock !== undefined) set.openingStock = data.openingStock;
+
+    // Normalise the Max Level pair so a saved row can never contradict itself.
+    //
+    // resolveFgMaxLevel reads a positive stored value as an override unless it
+    // still matches the formula, so a row must never sit in AUTO while carrying a
+    // number: the next Safety Factor edit moves the formula away from it, the
+    // value is then re-read as a manual override, and the edit is silently
+    // discarded. AUTO therefore always stores 0 — this module's own "blank means
+    // follow the formula" rule — and MANUAL always keeps its number.
+    const existing = await InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } })
+      .select('maxLevel maxLevelMode consumptionMode adcLow adcNormal adcPeak averageDailyConsumption leadDays safetyFactor')
+      .lean();
+    // What the caller said, or — for one that does not manage the flag — what the
+    // row meant BEFORE this edit, so this edit's own Safety Factor or demand
+    // change cannot move the goalposts of the inference. A brand-new row is
+    // judged by what is being written instead.
+    const mode = set.maxLevelMode || resolveFgMaxLevel(existing || set).maxLevelMode;
+    if (mode === 'MANUAL') {
+      set.maxLevelMode = 'MANUAL';
+    } else {
+      set.maxLevelMode = 'AUTO';
+      set.maxLevel = 0;
+    }
     Object.keys(set).forEach((k) => set[k] === undefined && delete set[k]);
 
-    return InventoryPolicy.findOneAndUpdate(
+    const policy = await InventoryPolicy.findOneAndUpdate(
       { skuId },
       { $set: set, $setOnInsert: { skuId, createdBy: user?._id } },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
     ).lean();
+    return { ...policy, ...resolveFgMaxLevel(policy) };
   },
 
   // ── Production In (Daily Production Report / opening / correction) ───────────
@@ -369,18 +510,24 @@ export const fgImsService = {
       payload.supervisor && `Supervisor: ${payload.supervisor}`,
     ].filter(Boolean).join(' · ');
 
-    const results = [];
-    for (const it of items) {
-      const { movement, stock } = await inventoryService.increaseStock({
-        skuId: it.skuId, quantity: Number(it.quantity), unitCost: Number(it.unitCost || 0),
-        batchNo: it.batchNo || '', warehouse: payload.warehouse,
-        txnType, sourceModule: 'FG_IMS', refType: 'FG_PRODUCTION', refNumber: payload.reference || '',
-        remarks: [label, context, payload.reference, it.remarks].filter(Boolean).join(' · '),
-        performedBy: user, movementDate,
-      });
-      results.push({ skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand });
-    }
-    return { count: results.length, results };
+    // One unit of work: every line lands or none does, and a replayed
+    // submission (double-click, browser retry) is recognised by its request id
+    // and answered without producing the same batch twice.
+    return inventoryService.runStockEntry({
+      items,
+      clientRequestId: payload.clientRequestId,
+      meta: { sourceModule: 'FG_IMS', action: 'produce', performedBy: user?._id },
+      write: async (it, session) => {
+        const { movement, stock } = await inventoryService.increaseStock({
+          skuId: it.skuId, quantity: Number(it.quantity), unitCost: Number(it.unitCost || 0),
+          batchNo: it.batchNo || '', warehouse: payload.warehouse,
+          txnType, sourceModule: 'FG_IMS', refType: 'FG_PRODUCTION', refNumber: payload.reference || '',
+          remarks: [label, context, payload.reference, it.remarks].filter(Boolean).join(' · '),
+          performedBy: user, movementDate, clientRequestId: payload.clientRequestId,
+        }, { session });
+        return { skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand };
+      },
+    });
   },
 
   // ── Dispatch Out (goods shipped to a customer) ──────────────────────────────
@@ -389,18 +536,7 @@ export const fgImsService = {
     if (!items.length) throw new AppError('Add at least one item with a quantity.', 400);
     const allowNegative = !!payload.allowNegative;
     const movementDate = payload.date ? new Date(payload.date) : new Date();
-
-    // Pre-validate on-hand for every line so we don't half-commit a dispatch.
-    if (!allowNegative) {
-      const ids = items.map((i) => i.skuId);
-      const stocks = await InventoryStock.find({ skuId: { $in: ids } }).lean();
-      const onHandBy = new Map(stocks.map((s) => [String(s.skuId), s.qtyOnHand]));
-      const short = items.filter((i) => Number(i.quantity) > (onHandBy.get(String(i.skuId)) || 0));
-      if (short.length) {
-        const names = short.map((i) => i.skuCode || i.skuId).join(', ');
-        throw new AppError(`Not enough stock to dispatch: ${names}. Lower the quantity or tick "allow negative".`, 400);
-      }
-    }
+    const warehouse = (payload.warehouse || DEFAULT_WAREHOUSE).trim();
 
     const context = [
       payload.customer && `Customer: ${payload.customer}`,
@@ -408,18 +544,41 @@ export const fgImsService = {
       payload.vehicleNo && `Vehicle: ${payload.vehicleNo}`,
     ].filter(Boolean).join(' · ');
 
-    const results = [];
-    for (const it of items) {
-      const { movement, stock } = await inventoryService.decreaseStock({
-        skuId: it.skuId, quantity: Number(it.quantity), warehouse: payload.warehouse,
-        txnType: TXN_TYPE.DISPATCH_OUT, sourceModule: 'FG_IMS',
-        refType: 'FG_DISPATCH', refNumber: payload.reference || payload.orderNo || '',
-        remarks: [context, it.remarks].filter(Boolean).join(' · ') || 'Finished goods dispatch',
-        performedBy: user, movementDate,
-      }, { allowNegative });
-      results.push({ skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand });
-    }
-    return { count: results.length, results };
+    return inventoryService.runStockEntry({
+      items,
+      clientRequestId: payload.clientRequestId,
+      // Two lines for the same finished good are one dispatch of their sum. Left
+      // separate, each was checked against the same on-hand and passed, and then
+      // the first committed while the second failed — an HTTP 400 on top of
+      // stock that had already moved.
+      mergeDuplicates: true,
+      meta: { sourceModule: 'FG_IMS', action: 'dispatch', performedBy: user?._id },
+      preflight: async (lines, session) => {
+        if (allowNegative) return;
+        // Checked against the warehouse the movement will actually come out of,
+        // so this can never pass where the stock engine would refuse.
+        const ids = lines.map((i) => i.skuId);
+        const q = InventoryStock.find({ skuId: { $in: ids }, warehouse, isDeleted: { $ne: true } });
+        if (session) q.session(session);
+        const stocks = await q.lean();
+        const onHandBy = new Map(stocks.map((s) => [String(s.skuId), s.qtyOnHand]));
+        const short = lines.filter((i) => Number(i.quantity) > (onHandBy.get(String(i.skuId)) || 0));
+        if (short.length) {
+          const names = short.map((i) => i.skuCode || i.skuId).join(', ');
+          throw new AppError(`Not enough stock to dispatch: ${names}. Lower the quantity or tick "allow negative".`, 400);
+        }
+      },
+      write: async (it, session) => {
+        const { movement, stock } = await inventoryService.decreaseStock({
+          skuId: it.skuId, quantity: Number(it.quantity), warehouse,
+          txnType: TXN_TYPE.DISPATCH_OUT, sourceModule: 'FG_IMS',
+          refType: 'FG_DISPATCH', refNumber: payload.reference || payload.orderNo || '',
+          remarks: [context, it.remarks].filter(Boolean).join(' · ') || 'Finished goods dispatch',
+          performedBy: user, movementDate, clientRequestId: payload.clientRequestId,
+        }, { allowNegative, session });
+        return { skuId: it.skuId, movementNumber: movement.movementNumber, balanceAfter: stock.qtyOnHand };
+      },
+    });
   },
 
   /** Movement history scoped to finished-good SKUs. */

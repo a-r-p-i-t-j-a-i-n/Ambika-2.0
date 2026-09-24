@@ -99,12 +99,6 @@ const navSectionsFull = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
           },
-          // ── Hidden from the client's sidebar ────────────────────────────
-          // Only Consumables & Packaging is shown for now. Raw Material and
-          // Finished Goods are commented out rather than deleted: their screens,
-          // routes and data are all untouched, so /rm-ims and /fg-ims still work
-          // if opened directly. Uncomment the block below to bring them back.
-/*
           {
             text: 'Raw Material',
             icon: <Layers size={19} />,
@@ -132,7 +126,6 @@ const navSectionsFull = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/fg-ims/movements' },
             ],
           },
-*/
         ],
       },
     ],
@@ -245,12 +238,6 @@ const navSectionsSimple = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
           },
-          // ── Hidden from the client's sidebar ────────────────────────────
-          // Only Consumables & Packaging is shown for now. Raw Material and
-          // Finished Goods are commented out rather than deleted: their screens,
-          // routes and data are all untouched, so /rm-ims and /fg-ims still work
-          // if opened directly. Uncomment the block below to bring them back.
-/*
           {
             text: 'Raw Material',
             icon: <Layers size={19} />,
@@ -278,7 +265,6 @@ const navSectionsSimple = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/fg-ims/movements' },
             ],
           },
-*/
         ],
       },
       {

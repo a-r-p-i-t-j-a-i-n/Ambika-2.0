@@ -58,6 +58,8 @@ export const TXN_LABEL = {
   DISPATCH_OUT: 'Dispatched',
   // Raw-material only — the two halves of a coil → circle conversion.
   CONVERT_OUT: 'Coil cut up', CONVERT_IN: 'Circles produced',
+  // Finished-goods only — the two ends of the FG flow.
+  PRODUCE_IN: 'Produced', SALES_RETURN_IN: 'Sales return',
 };
 
 export const txnLabel = (t) => TXN_LABEL[t] || t || '—';
@@ -74,6 +76,19 @@ export const compactInr = (v) => {
   if (n >= 1e3) return `₹${Math.round(n / 1e3)}k`;
   return `₹${n}`;
 };
+
+// ── Layout widths ────────────────────────────────────────────────────────────
+// The one width every multi-line entry screen is capped at — Stock In, Stock
+// Out, Production In, Dispatch Out, and the RM pair. It exists so a form never
+// stretches into an unreadable single line of controls on an ultrawide monitor,
+// NOT to keep the page narrow: with the 268px sidebar open, a 1920 viewport
+// gives the content area ~1650px, so anything much below this leaves a wide
+// dead margin down both sides while the table inside is still scrolling.
+//
+// It lives here rather than being retyped per screen because "the entry screens
+// are all the same width" is the actual requirement — six literals drift, one
+// token cannot.
+export const IMS_FORM_MAX = 1680;
 
 // ── Shared sx recipes ────────────────────────────────────────────────────────
 // One table look for every IMS grid — warm hairlines, a tinted sticky-feeling
