@@ -8,7 +8,7 @@ import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import {
   RmShell, Panel, TableScroll, EmptyNote, Th, StepHead, KindChip,
-  O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx,
+  O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx, IMS_FORM_MAX,
 } from './rmImsMeta';
 import { useGetRmOverviewQuery, useRmReceiveMutation } from '../../store/api/rmImsApi';
 
@@ -58,7 +58,7 @@ const RmImsStockIn = () => {
       icon={PackagePlus}
       title="Stock In — bring raw material into the store"
       subtitle="Record what arrived. On-hand goes up and the movement is logged against your name."
-      maxWidth={1180}
+      maxWidth={IMS_FORM_MAX}
     >
       <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">

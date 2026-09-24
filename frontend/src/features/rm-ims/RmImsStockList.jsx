@@ -36,6 +36,32 @@ const KIND_FILTERS = [
   { value: 'CIRCLE', label: 'Circles only', icon: CircleDashed },
 ];
 
+// Colour key for the footer. It reads STOCK_TOKENS / STOCK_ORDER directly — the
+// very same map the row tints and the Status chips already use — so the legend
+// cannot drift from the table. No colour is defined here.
+const ColorCodingLegend = () => (
+  <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap
+    sx={{ py: { xs: 1, md: 0 } }}>
+    <Typography sx={{
+      fontSize: '0.68rem', fontWeight: 800, color: O2D.sub,
+      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+    }}>
+      Color Coding
+    </Typography>
+    {STOCK_ORDER.map((k) => {
+      const t = STOCK_TOKENS[k];
+      return (
+        <Tooltip key={k} arrow slotProps={O2D_TIP} title={t.meaning}>
+          <Stack direction="row" alignItems="center" spacing={0.55} sx={{ cursor: 'help' }}>
+            <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: t.color, flexShrink: 0 }} />
+            <Typography sx={{ fontSize: '0.7rem', color: O2D.body, whiteSpace: 'nowrap' }}>{t.label}</Typography>
+          </Stack>
+        </Tooltip>
+      );
+    })}
+  </Stack>
+);
+
 const helperSx = { sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0, mt: 0.4 } };
 
 // ── Planning policy dialog ───────────────────────────────────────────────────
@@ -58,6 +84,12 @@ const PolicyDialog = ({ row, onClose }) => {
   const sf = Number(f.safetyFactor) || 0;
   const derived = Math.round(activeAdc * lead * sf);
   const effectiveMax = Number(f.maxLevel) || derived;
+  // Display only, for the preview sentence below. The reorder point is lead-time
+  // demand and carries NO Safety Factor — the Safety Factor belongs to the
+  // order-up-to level (`derived`). Mirrors rmIms.service.js, which computes
+  // reorderPoint = adc × leadDays and maxLevel = adc × leadDays × safetyFactor.
+  // Nothing here is saved; `submit` posts the same fields it always did.
+  const derivedReorderAt = Math.round(activeAdc * lead);
   const modeLabel = { LOW: 'Low', NORMAL: 'Normal', PEAK: 'Peak' }[f.consumptionMode];
 
   const submit = async () => {
@@ -120,7 +152,7 @@ const PolicyDialog = ({ row, onClose }) => {
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ mt: 1.25 }}>
               <TextField size="small" type="number" label="Lead time (days)" value={f.leadDays} onChange={set('leadDays')} fullWidth
                 helperText="Days the vendor takes to deliver." FormHelperTextProps={helperSx} />
-              <TextField size="small" type="number" label="Safety factor" value={f.safetyFactor} onChange={set('safetyFactor')} fullWidth
+              <TextField size="small" type="number" label="Safety Factor" value={f.safetyFactor} onChange={set('safetyFactor')} fullWidth
                 helperText="Cushion for spikes and late deliveries." FormHelperTextProps={helperSx} />
             </Stack>
           </Paper>
@@ -137,11 +169,12 @@ const PolicyDialog = ({ row, onClose }) => {
             <Typography sx={{ fontSize: '0.74rem', color: O2D.body }}>
               {activeAdc > 0 && lead > 0 && sf > 0 ? (
                 <>
-                  At the <b>{modeLabel}</b> rate: {num(activeAdc)} per day × {num(lead)} days × {num(sf)} safety
-                  = <b>reorder at {num(derived)}</b>. IMS will flag this item the moment on-hand falls to {num(derived)},
-                  and will suggest ordering back up to {num(effectiveMax)}.
+                  At the <b>{modeLabel}</b> rate: {num(activeAdc)} per day × {num(lead)} days
+                  = <b>reorder at {num(derivedReorderAt)}</b>. IMS will flag this item the moment on-hand falls
+                  to {num(derivedReorderAt)}, and will suggest ordering back up to {num(effectiveMax)}
+                  — {num(activeAdc)} × {num(lead)} × {num(sf)} safety.
                 </>
-              ) : `Enter the ${modeLabel} daily rate, lead time and safety factor to see the reorder point this produces.`}
+              ) : `Enter the ${modeLabel} daily rate, lead time and safety factor to see the reorder point and the order-up-to level they produce.`}
             </Typography>
           </Paper>
 
@@ -323,6 +356,7 @@ const RmImsStockList = () => {
           <Table size="small" sx={imsTableSx(1120)}>
             <TableHead>
               <TableRow>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
                 <TableCell>Item</TableCell>
                 <TableCell>Material</TableCell>
                 <TableCell align="right"><Th label="On hand" hint="How much is physically in the store right now." /></TableCell>
@@ -338,15 +372,15 @@ const RmImsStockList = () => {
             </TableHead>
             <TableBody>
               {isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={11} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={280} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={12} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={280} /></TableCell></TableRow>
               )}
               {!isFetching && filtered.length === 0 && (
-                <TableRow><TableCell colSpan={11} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={12} sx={{ border: 0 }}>
                   <EmptyNote icon={Layers} title="No raw material matches these filters"
                     hint="Try clearing the status filter, switching between coils and circles, or searching a different code." />
                 </TableCell></TableRow>
               )}
-              {paged.map((r) => {
+              {paged.map((r, i) => {
                 const t = stockToken(r.status);
                 const critical = r.status === 'OUT_OF_STOCK' || r.status === 'REORDER';
                 const band = availBand(r.availablePct);
@@ -354,6 +388,12 @@ const RmImsStockList = () => {
                   <TableRow key={r.skuId} hover sx={{
                     ...(critical ? { bgcolor: t.tint, borderLeft: `3px solid ${t.color}` } : { borderLeft: '3px solid transparent' }),
                   }}>
+                    {/* Derived from the page offset, not the array index, so page 2
+                        continues at 26 rather than restarting at 1. Purely
+                        presentational — it feeds no filter, sort or calculation. */}
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>
+                      {page * rowsPerPage + i + 1}
+                    </TableCell>
                     <TableCell sx={{ maxWidth: 270 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }} title={r.skuName}>{r.skuName}</Typography>
                       <Typography sx={{ fontSize: '0.66rem', color: O2D.sub, fontFamily: 'ui-monospace, monospace' }}>
@@ -389,12 +429,22 @@ const RmImsStockList = () => {
             </TableBody>
           </Table>
         </TableScroll>
-        <TablePagination
-          component="div" count={filtered.length} page={page} onPageChange={(_, p) => setPage(p)}
-          rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-          rowsPerPageOptions={[10, 25, 50, 100]} labelRowsPerPage="Items per page:"
-          sx={{ borderTop: `1px solid ${O2D.lineSoft}`, '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '0.73rem', color: O2D.sub } }}
-        />
+        {/* Footer row: colour key on the left, pagination on the far right.
+            flexWrap lets the two drop onto separate lines on tablet/mobile
+            instead of forcing the panel to scroll sideways. */}
+        <Box sx={{
+          borderTop: `1px solid ${O2D.lineSoft}`,
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+          justifyContent: 'space-between', columnGap: 2, rowGap: 0.5, pl: { xs: 1, sm: 1.5 },
+        }}>
+          <ColorCodingLegend />
+          <TablePagination
+            component="div" count={filtered.length} page={page} onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            rowsPerPageOptions={[10, 25, 50, 100]} labelRowsPerPage="Items per page:"
+            sx={{ borderTop: 0, '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '0.73rem', color: O2D.sub } }}
+          />
+        </Box>
       </Panel>
 
       {/* Availability bands, spelled out once so the meter never needs decoding. */}

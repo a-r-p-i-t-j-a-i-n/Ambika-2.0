@@ -1,32 +1,50 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, Button, Table, TableHead, TableBody,
-  TableRow, TableCell, IconButton, Chip, FormControlLabel, Switch, CircularProgress, Tooltip, alpha,
+  TableRow, TableCell, IconButton, Chip, FormControlLabel, Switch, CircularProgress, Tooltip,
+  Autocomplete,
 } from '@mui/material';
 import { PackageMinus, Trash2, Save, AlertTriangle, ArrowRight, Info } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import {
-  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker,
-  O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx,
+  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, newRequestId,
+  O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx, IMS_FORM_MAX, emptyCellSx,
 } from './imsMeta';
 import { useGetImsOverviewQuery, useImsIssueMutation } from '../../store/api/imsApi';
 
-const StepHead = ({ n, title, hint, done }) => (
-  <Stack direction="row" spacing={1} alignItems="center">
-    <Box sx={{
-      width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0,
-      fontSize: '0.7rem', fontWeight: 800,
-      bgcolor: done ? STOCK_TOKENS.OK.bg : alpha(O2D.brand, 0.1),
-      color: done ? STOCK_TOKENS.OK.color : O2D.brand,
-      border: `1px solid ${done ? STOCK_TOKENS.OK.border : alpha(O2D.brand, 0.25)}`,
-    }}>{n}</Box>
-    <Box sx={{ minWidth: 0 }}>
-      <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.25 }}>{title}</Typography>
-      {hint && <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>{hint}</Typography>}
-    </Box>
-  </Stack>
-);
+/**
+ * Why the material is leaving the store — the same control, and the same
+ * "type your own" rule, as the Reason on Stock In.
+ *
+ * Every reason here IS consumption. A Stock Out still posts a CONSUME_OUT, and
+ * that is exactly what Average Daily Consumption is measured from, so writing
+ * off damage or fixing a miscount must not be recorded through this screen —
+ * either would quietly inflate every reorder level built on ADC.
+ */
+const REASONS = [
+  { value: 'PRODUCTION_ISSUE', label: 'Production issue', hint: 'Material issued to the line to be used in production.' },
+  { value: 'MAINTENANCE', label: 'Maintenance / upkeep', hint: 'Used servicing or maintaining the machines.' },
+  { value: 'SAMPLE_TESTING', label: 'Sample / testing', hint: 'Taken for a sample, a trial or quality testing.' },
+  { value: 'OTHER', label: 'Other', hint: 'Anything else — type your own reason so History can explain it later.' },
+];
+
+const REASON_BY_LABEL = new Map(REASONS.map((r) => [r.label.toLowerCase(), r]));
+
+/**
+ * Turn whatever is in the Reason field into what the API expects — identical to
+ * the Stock In rule: a predefined label maps to its code, anything else IS the
+ * reason and rides along as customReason under OTHER. "Other" on its own names
+ * no reason, so it is deliberately not valid.
+ */
+const resolveReason = (text) => {
+  const t = String(text || '').trim();
+  const hit = REASON_BY_LABEL.get(t.toLowerCase());
+  if (hit && hit.value !== 'OTHER') return { reason: hit.value, customReason: '', custom: false, ok: true, hint: hit.hint };
+  if (hit) return { reason: 'OTHER', customReason: '', custom: true, ok: false, hint: hit.hint };
+  if (!t) return { reason: '', customReason: '', custom: false, ok: false, hint: '' };
+  return { reason: 'OTHER', customReason: t, custom: true, ok: true, hint: '' };
+};
 
 // Stock Out (production issue / consumption) — multi-line, reduces inventory.
 const ImsStockOut = () => {
@@ -35,6 +53,13 @@ const ImsStockOut = () => {
   const [issue, { isLoading }] = useImsIssueMutation();
 
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
+  // The Reason field's raw text. Everything else about the reason is derived.
+  const [reasonText, setReasonText] = useState(REASONS[0].label);
+  // Selecting "Other" is a mode switch, not a value — see onInputChange below.
+  const otherJustPicked = useRef(false);
+  // Identifies THIS submission. It survives a failed save on purpose, so the
+  // corrected retry is the same issue, and is replaced once one is accepted.
+  const requestId = useRef(newRequestId());
   const [purpose, setPurpose] = useState('');
   const [issuedTo, setIssuedTo] = useState('');
   const [department, setDepartment] = useState('');
@@ -57,7 +82,9 @@ const ImsStockOut = () => {
   const setQty = (id, q) => setLines((p) => p.map((l) => (l.skuId === id ? { ...l, quantity: q } : l)));
   const remove = (id) => setLines((p) => p.filter((l) => l.skuId !== id));
 
-  const valid = lines.length > 0 && lines.every((l) => Number(l.quantity) > 0);
+  const picked = resolveReason(reasonText);
+  const reasonError = !picked.ok;
+  const valid = lines.length > 0 && lines.every((l) => Number(l.quantity) > 0) && picked.ok;
   const overLines = lines.filter((l) => Number(l.quantity || 0) > Number(l.onHand || 0));
   const anyOver = overLines.length > 0;
   const blocked = anyOver && !allowNegative;
@@ -74,10 +101,17 @@ const ImsStockOut = () => {
     try {
       const res = await issue({
         date, purpose, issuedTo, department, reference, allowNegative,
+        // Same shape as Stock In: a predefined code, or OTHER carrying the text.
+        reason: picked.reason, customReason: picked.customReason,
+        clientRequestId: requestId.current,
         items: lines.map((l) => ({ skuId: l.skuId, skuCode: l.skuCode, quantity: Number(l.quantity) })),
       }).unwrap();
-      enqueueSnackbar(`Issued ${res?.data?.count || lines.length} item(s) — stock updated.`, { variant: 'success' });
+      enqueueSnackbar(res?.data?.duplicate
+        ? 'Already recorded — this issue was submitted twice, so stock was not changed again.'
+        : `Issued ${res?.data?.count || lines.length} item(s) — stock updated.`, { variant: 'success' });
       setLines([]); setPurpose(''); setIssuedTo(''); setDepartment(''); setReference('');
+      setReasonText(REASONS[0].label);
+      requestId.current = newRequestId();
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not issue stock.', { variant: 'error' }); }
   };
 
@@ -87,7 +121,7 @@ const ImsStockOut = () => {
       icon={PackageMinus}
       title="Stock Out — issue material to production"
       subtitle="Record what left the store. Closing Stock comes down and the issue is logged against your name."
-      maxWidth={1180}
+      maxWidth={IMS_FORM_MAX}
     >
       <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">
@@ -105,6 +139,58 @@ const ImsStockOut = () => {
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
           <TextField label="Date issued" type="date" size="small" value={date} onChange={(e) => setDate(e.target.value)}
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
+          {/* One control, both jobs — the same Reason field Stock In uses: pick a
+              predefined reason or type your own. freeSolo is what lets the same
+              field accept arbitrary text, so there is no second input to keep in
+              sync. Stored on the movement, so History can explain the issue
+              later without anyone parsing prose out of the remarks. */}
+          <Autocomplete
+            freeSolo size="small" options={REASONS}
+            // All four options, always. The default filter would narrow the list
+            // to whatever is already typed and hide "Other".
+            filterOptions={(x) => x} selectOnFocus handleHomeEndKeys openOnFocus
+            getOptionLabel={(o) => (typeof o === 'string' ? o : o.label)}
+            inputValue={reasonText}
+            onInputChange={(_, v, changeReason) => {
+              // After picking an option MUI writes its label back into the input.
+              // For "Other" we want an EMPTY field instead, so the user can type
+              // immediately rather than deleting the word first.
+              if (changeReason === 'reset' && otherJustPicked.current) {
+                otherJustPicked.current = false;
+                setReasonText('');
+                return;
+              }
+              setReasonText(v);
+            }}
+            onChange={(_, v) => {
+              if (v && typeof v === 'object') {
+                otherJustPicked.current = v.value === 'OTHER';
+                setReasonText(v.value === 'OTHER' ? '' : v.label);
+              } else {
+                setReasonText(v || '');
+              }
+            }}
+            renderOption={(props, o) => (
+              <li {...props} key={o.value}>
+                <Box>
+                  <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: O2D.ink }}>{o.label}</Typography>
+                  <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }}>{o.hint}</Typography>
+                </Box>
+              </li>
+            )}
+            renderInput={(params) => (
+              <TextField {...params} label="Reason" size="small" required
+                placeholder="Pick one, or type your own reason…"
+                error={reasonError}
+                helperText={
+                  !reasonText.trim() ? 'Reason is required — pick one from the list or type your own.'
+                    : !picked.ok ? 'Type your own reason here, in place of "Other".'
+                      : picked.custom ? 'Saved as a custom reason and shown in History.'
+                        : picked.hint
+                }
+                FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: reasonError ? undefined : O2D.sub, mx: 0 } }} />
+            )}
+          />
           <TextField label="Purpose" size="small" value={purpose} onChange={(e) => setPurpose(e.target.value)}
             placeholder="e.g. Buffing line"
             helperText="What the material is being used for."
@@ -137,7 +223,7 @@ const ImsStockOut = () => {
             <TableHead>
               <TableRow>
                 <TableCell>SKU Code</TableCell>
-                <TableCell>Item Name</TableCell>
+                <TableCell sx={{ width: '100%' }}>Item Name</TableCell>
                 <TableCell align="right">Available Qty</TableCell>
                 <TableCell align="right">Quantity issued</TableCell>
                 <TableCell align="right"><Th label="Left after this" hint="What the Closing Stock becomes once you save this issue." /></TableCell>
@@ -146,8 +232,8 @@ const ImsStockOut = () => {
             </TableHead>
             <TableBody>
               {lines.length === 0 && (
-                <TableRow><TableCell colSpan={6} sx={{ border: 0 }}>
-                  <EmptyNote icon={PackageMinus} title="No items added yet"
+                <TableRow><TableCell colSpan={6} sx={emptyCellSx}>
+                  <EmptyNote dense icon={PackageMinus} title="No items added yet"
                     hint="Use the search box above to pick the first item being issued." />
                 </TableCell></TableRow>
               )}
@@ -160,7 +246,7 @@ const ImsStockOut = () => {
                 return (
                   <TableRow key={l.skuId} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{l.skuCode}</TableCell>
-                    <TableCell sx={{ maxWidth: 240 }}>
+                    <TableCell sx={{ minWidth: 180 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }} title={l.skuName}>{l.skuName}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>{num(l.onHand)} {l.unit}</TableCell>
@@ -244,7 +330,9 @@ const ImsStockOut = () => {
       }}>
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
           <StepHead n={3} title="Confirm and save"
-            hint={blocked ? 'Fix the over-issued lines first.' : valid ? 'Everything looks right.' : 'Add at least one item with a quantity above zero.'}
+            hint={blocked ? 'Fix the over-issued lines first.'
+              : reasonError ? 'Pick a reason, or type your own.'
+                : valid ? 'Everything looks right.' : 'Add at least one item with a quantity above zero.'}
             done={valid && !blocked} />
           <FormControlLabel
             sx={{ ml: 0.5, mr: 'auto' }}

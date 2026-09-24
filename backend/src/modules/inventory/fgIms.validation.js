@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { ymdDate, clientRequestIdField } from './ims.validation.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
@@ -14,11 +15,11 @@ export const fgForecastQuerySchema = Joi.object({
 }).unknown(true);
 
 // Kept as plain YYYY-MM-DD strings (no Joi date coercion) so the service can
-// bucket them on the IST calendar itself.
-const ymd = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+// bucket them on the IST calendar itself. The calendar check is shared with the
+// Consumables IMS — the shape alone let "2026-13-45" through to a 500.
 export const fgHistoryQuerySchema = Joi.object({
-  from:      ymd,
-  to:        ymd,
+  from:      ymdDate,
+  to:        ymdDate,
   warehouse: Joi.string().trim().max(40).allow('', null),
 }).unknown(true);
 
@@ -31,9 +32,19 @@ export const fgPolicySchema = Joi.object({
   consumptionMode: Joi.string().valid('LOW', 'NORMAL', 'PEAK'),
   averageDailyConsumption: Joi.number().min(0),
   leadDays:        Joi.number().min(0),
-  safetyFactor:    Joi.number().min(0),
+  // Deliberately NOT bounded to the 1.0–5.0 / 0.1-step range the Consumables IMS
+  // enforces: finished-goods planning needs a wider range for seasonal cover, and
+  // ims.validation.js records that RM/FG write this shared collection with their
+  // own wider ranges. Left as-is on purpose — only "0 or more" is enforced.
+  safetyFactor:    Joi.number().min(0).messages({
+    'number.base': 'safetyFactor must be a number.',
+    'number.min':  'safetyFactor must be 0 or greater.',
+  }),
   moq:             Joi.number().min(0),
   maxLevel:        Joi.number().min(0),
+  // AUTO   → Max Level follows Average Daily Demand × Lead Time × Safety Factor.
+  // MANUAL → the stored maxLevel is a deliberate override and the formula is ignored.
+  maxLevelMode:    Joi.string().valid('AUTO', 'MANUAL'),
   materialInTransit: Joi.number().min(0),  // in-production (WIP)
   bookedQty:       Joi.number().min(0),    // committed to orders
   openingStock:    Joi.number().min(0),
@@ -52,6 +63,7 @@ const lineItem = Joi.object({
 
 export const fgProduceSchema = Joi.object({
   date:       Joi.date(),
+  clientRequestId: clientRequestIdField,
   reason:     Joi.string().valid('PRODUCTION', 'OPENING', 'SALES_RETURN', 'CORRECTION').default('PRODUCTION'),
   reference:  Joi.string().trim().max(120).allow('', null),
   shift:      Joi.string().trim().max(60).allow('', null),
@@ -63,6 +75,7 @@ export const fgProduceSchema = Joi.object({
 
 export const fgDispatchSchema = Joi.object({
   date:        Joi.date(),
+  clientRequestId: clientRequestIdField,
   customer:    Joi.string().trim().max(160).allow('', null),
   orderNo:     Joi.string().trim().max(120).allow('', null),
   vehicleNo:   Joi.string().trim().max(60).allow('', null),

@@ -77,9 +77,28 @@ const inventoryMovementSchema = new Schema({
   reason:          { type: String, trim: true, default: '' },
   customReason:    { type: String, trim: true, default: '' },
 
+  // KNOWN LIMITATION — traceability.
+  //
+  // The entry screens fold their business context into this one free-text line:
+  // FG Production In writes "Shift: A · Line: M-01 · Supervisor: …", FG Dispatch
+  // Out writes "Customer: … · Order: … · Vehicle: …", and Consumables Stock Out
+  // writes "Purpose: … · Issued to: … · Dept: …". None of it is queryable, so
+  // History cannot filter by customer, shift or department, and a report cannot
+  // group by them without parsing prose.
+  //
+  // Promoting them to real fields is a schema change with a backfill for every
+  // existing row, so it is deliberately NOT done here — it is recorded as a
+  // limitation rather than half-solved. `reason`/`customReason` above are the
+  // precedent for how one of these should look when it is done.
   remarks:         { type: String, trim: true, default: '' },
   performedBy:     { type: Schema.Types.ObjectId, ref: 'User' },
   performedByName: { type: String, trim: true, default: '' },
+
+  // The submission this row belongs to, as the entry screen minted it. Set only
+  // by the IMS/FG entry forms; every automated caller leaves it blank. It is the
+  // audit trail behind the idempotency guard (see inventoryRequestKey.model) —
+  // the uniqueness itself lives there, this is the back-reference.
+  clientRequestId: { type: String, trim: true, default: '', index: true },
 }, baseSchemaOptions);
 
 // Ledger lookups.

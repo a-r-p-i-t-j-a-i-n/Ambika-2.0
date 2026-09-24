@@ -57,7 +57,9 @@ const ImsReorder = () => {
   const reorderCount = rows.filter((r) => r.status === 'REORDER').length;
 
   const exportCsv = () => {
-    const header = ['SKU Code', 'Item Name', 'Category', 'Closing Stock', 'Material In Transit', 'Reorder at', 'Max Level', 'Days cover', 'Reorder Quantity', 'MOQ', 'Status', 'Why'];
+    // "Available Qty" is what the column is called on every IMS screen; the
+    // export used to call the same number "Closing Stock".
+    const header = ['SKU Code', 'Item Name', 'Category', 'Available Qty', 'Material In Transit', 'Reorder at', 'Max Level', 'Days cover', 'Reorder Quantity', 'MOQ', 'Status', 'Why'];
     const lines = filtered.map((r) => [
       r.skuCode, r.skuName, r.category, r.onHand, r.inTransit, r.reorderPoint, r.maxLevel,
       r.daysCover ?? '', r.suggestedOrderQty, r.moq, stockToken(r.status).label, reasonFor(r),

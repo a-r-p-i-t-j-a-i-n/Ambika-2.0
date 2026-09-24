@@ -1,14 +1,14 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Autocomplete, TextField, Button, Table, TableHead, TableBody,
-  TableRow, TableCell, IconButton, CircularProgress, Tooltip, Chip, alpha,
+  TableRow, TableCell, IconButton, CircularProgress, Tooltip, Chip,
 } from '@mui/material';
 import { PackagePlus, Trash2, Save, ArrowRight, Info } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import {
-  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker,
-  O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx,
+  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, newRequestId,
+  O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx, IMS_FORM_MAX, emptyCellSx,
 } from './imsMeta';
 import { useGetImsOverviewQuery, useImsReceiveMutation } from '../../store/api/imsApi';
 
@@ -40,24 +40,6 @@ const resolveReason = (text) => {
   return { reason: 'OTHER', customReason: t, custom: true, ok: true, hint: '' };
 };
 
-// A numbered step header. Forms that read as 1 → 2 → 3 are the single biggest
-// legibility win for a first-time user; nothing here is guesswork.
-const StepHead = ({ n, title, hint, done }) => (
-  <Stack direction="row" spacing={1} alignItems="center">
-    <Box sx={{
-      width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0,
-      fontSize: '0.7rem', fontWeight: 800,
-      bgcolor: done ? STOCK_TOKENS.OK.bg : alpha(O2D.brand, 0.1),
-      color: done ? STOCK_TOKENS.OK.color : O2D.brand,
-      border: `1px solid ${done ? STOCK_TOKENS.OK.border : alpha(O2D.brand, 0.25)}`,
-    }}>{n}</Box>
-    <Box sx={{ minWidth: 0 }}>
-      <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.25 }}>{title}</Typography>
-      {hint && <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>{hint}</Typography>}
-    </Box>
-  </Stack>
-);
-
 // Stock In — manual multi-line receipt (vendor / opening / correction). Adds to inventory.
 const ImsStockIn = () => {
   const { data } = useGetImsOverviewQuery({});
@@ -71,6 +53,9 @@ const ImsStockIn = () => {
   const otherJustPicked = useRef(false);
   const [reference, setReference] = useState('');
   const [lines, setLines] = useState([]); // {skuId, skuCode, skuName, unit, onHand, quantity, unitCost}
+  // Identifies THIS submission. It survives a failed save on purpose, so the
+  // corrected retry is the same receipt, and is replaced once one is accepted.
+  const requestId = useRef(newRequestId());
 
   // The row shape is unchanged — quantity and unitCost start EMPTY, whether one
   // item is added or twenty. Nothing downstream can tell how it was picked.
@@ -96,13 +81,16 @@ const ImsStockIn = () => {
   const submit = async () => {
     try {
       const res = await receive({
-        date, reference,
+        date, reference, clientRequestId: requestId.current,
         // Unchanged API: a predefined code, or OTHER carrying the typed text.
         reason: picked.reason, customReason: picked.customReason,
         items: lines.map((l) => ({ skuId: l.skuId, skuCode: l.skuCode, quantity: Number(l.quantity), unitCost: Number(l.unitCost || 0) })),
       }).unwrap();
-      enqueueSnackbar(`Stock added for ${res?.data?.count || lines.length} item(s).`, { variant: 'success' });
+      enqueueSnackbar(res?.data?.duplicate
+        ? 'Already recorded — this receipt was submitted twice, so stock was not added again.'
+        : `Stock added for ${res?.data?.count || lines.length} item(s).`, { variant: 'success' });
       setLines([]); setReference(''); setReasonText(REASONS[0].label);
+      requestId.current = newRequestId();
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not add stock.', { variant: 'error' }); }
   };
 
@@ -112,7 +100,7 @@ const ImsStockIn = () => {
       icon={PackagePlus}
       title="Stock In — bring material into the store"
       subtitle="Record what arrived. Closing Stock goes up and the movement is logged against your name."
-      maxWidth={1180}
+      maxWidth={IMS_FORM_MAX}
     >
       {/* What this screen does and does not do — stated up front so nobody
           double-enters a vendor receipt that GRN already posted. */}
@@ -211,7 +199,7 @@ const ImsStockIn = () => {
             <TableHead>
               <TableRow>
                 <TableCell>SKU Code</TableCell>
-                <TableCell>Item Name</TableCell>
+                <TableCell sx={{ width: '100%' }}>Item Name</TableCell>
                 <TableCell align="right">Available Qty</TableCell>
                 <TableCell align="right">Quantity received</TableCell>
                 <TableCell align="right"><Th label="Cost per unit" hint="Optional. Used to value the stock and to price future purchases." /></TableCell>
@@ -221,8 +209,8 @@ const ImsStockIn = () => {
             </TableHead>
             <TableBody>
               {lines.length === 0 && (
-                <TableRow><TableCell colSpan={7} sx={{ border: 0 }}>
-                  <EmptyNote icon={PackagePlus} title="No items added yet"
+                <TableRow><TableCell colSpan={7} sx={emptyCellSx}>
+                  <EmptyNote dense icon={PackagePlus} title="No items added yet"
                     hint="Use the search box above to pick the first item on the bill." />
                 </TableCell></TableRow>
               )}
@@ -232,7 +220,7 @@ const ImsStockIn = () => {
                 return (
                   <TableRow key={l.skuId} hover>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{l.skuCode}</TableCell>
-                    <TableCell sx={{ maxWidth: 230 }}>
+                    <TableCell sx={{ minWidth: 180 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }} title={l.skuName}>{l.skuName}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>{num(l.onHand)} {l.unit}</TableCell>

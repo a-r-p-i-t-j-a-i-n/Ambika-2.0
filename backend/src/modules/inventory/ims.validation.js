@@ -14,12 +14,33 @@ export const forecastQuerySchema = Joi.object({
   days: Joi.number().integer().min(7).max(120),
 }).unknown(true);
 
-// Kept as plain YYYY-MM-DD strings (no Joi date coercion) so the service can bucket
-// them on the IST calendar itself.
-const ymd = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+/**
+ * A calendar day, kept as a plain YYYY-MM-DD string (no Joi date coercion) so
+ * the service can bucket it on the IST calendar itself.
+ *
+ * The shape alone is not enough: "2026-13-45" matches the pattern, and the
+ * service then built an Invalid Date from it and threw deep inside a
+ * toLocaleDateString — a 500 for what is plainly a bad request. The parts are
+ * checked against a real calendar here, which also rejects 2026-02-30.
+ */
+export const ymdDate = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/)
+  .custom((value, helpers) => {
+    const [y, m, d] = value.split('-').map(Number);
+    if (m < 1 || m > 12 || d < 1 || d > 31) return helpers.error('any.invalid');
+    const probe = new Date(Date.UTC(y, m - 1, d));
+    // Round-tripping catches the days a month does not have: Date rolls
+    // 2026-02-30 forward to 2026-03-02 rather than rejecting it.
+    const ok = probe.getUTCFullYear() === y && probe.getUTCMonth() === m - 1 && probe.getUTCDate() === d;
+    return ok ? value : helpers.error('any.invalid');
+  })
+  .messages({
+    'string.pattern.base': 'date must be in YYYY-MM-DD format',
+    'any.invalid': 'date must be a real calendar date (YYYY-MM-DD)',
+  });
+
 export const historyQuerySchema = Joi.object({
-  from:      ymd,
-  to:        ymd,
+  from:      ymdDate,
+  to:        ymdDate,
   warehouse: Joi.string().trim().max(40).allow('', null),
 }).unknown(true);
 
@@ -140,8 +161,52 @@ export const checkStockInReason = (reason, customReason) => {
   return { ok: true, reason: code, customReason: code === 'OTHER' ? custom : '' };
 };
 
+/**
+ * Why material left the store on a manual Stock Out.
+ *
+ * Deliberately only reasons that ARE consumption. Every Stock Out still posts a
+ * CONSUME_OUT, which is what Average Daily Consumption is measured from, so a
+ * reason must never describe something that is not consumption — writing off
+ * damage or correcting a miscount through this screen would quietly inflate
+ * every reorder level built on ADC. Those belong in a separate adjustment flow.
+ */
+export const STOCK_OUT_REASONS = {
+  PRODUCTION_ISSUE: 'Production issue',
+  MAINTENANCE:      'Maintenance / upkeep',
+  SAMPLE_TESTING:   'Sample / testing',
+  OTHER:            'Other',
+};
+
+/**
+ * Same shape as checkStockInReason: an unknown code falls back to the default
+ * rather than failing, and OTHER must carry the operator's own words.
+ * @returns {{ok:true, reason:string, customReason:string}|{ok:false, message:string}}
+ */
+export const checkStockOutReason = (reason, customReason) => {
+  const v = String(reason || '').trim().toUpperCase();
+  const code = STOCK_OUT_REASONS[v] ? v : 'PRODUCTION_ISSUE';
+  const custom = String(customReason || '').trim();
+  if (code === 'OTHER' && !custom) {
+    return { ok: false, message: 'Custom Reason is required when Reason is Other.' };
+  }
+  if (custom.length > 200) {
+    return { ok: false, message: 'Custom Reason must be 200 characters or fewer.' };
+  }
+  // A custom reason only means anything alongside OTHER — drop it otherwise so a
+  // predefined reason can never carry stray text.
+  return { ok: true, reason: code, customReason: code === 'OTHER' ? custom : '' };
+};
+
+/**
+ * The id an entry screen mints for one submission. Optional everywhere, so every
+ * existing caller is unaffected; when present it makes the entry idempotent —
+ * a double-click or a browser retry is recognised instead of posting twice.
+ */
+export const clientRequestIdField = Joi.string().trim().max(100).allow('', null);
+
 export const receiveSchema = Joi.object({
   date:      Joi.date(),
+  clientRequestId: clientRequestIdField,
   reason:    Joi.string()
     .valid(...Object.keys(STOCK_IN_REASONS), ...Object.keys(LEGACY_REASON_CODES))
     .default('VENDOR_RECEIPT'),
@@ -161,6 +226,18 @@ export const receiveSchema = Joi.object({
 
 export const issueSchema = Joi.object({
   date:        Joi.date(),
+  clientRequestId: clientRequestIdField,
+  // Optional and defaulted, so a Stock Out posted before this field existed —
+  // or by any caller that does not send one — behaves exactly as it always did.
+  reason:      Joi.string().valid(...Object.keys(STOCK_OUT_REASONS)).default('PRODUCTION_ISSUE'),
+  customReason: Joi.when('reason', {
+    is: 'OTHER',
+    then: Joi.string().trim().min(1).max(200).required().messages({
+      'any.required': 'Custom Reason is required when Reason is Other.',
+      'string.empty': 'Custom Reason is required when Reason is Other.',
+    }),
+    otherwise: Joi.string().trim().max(200).allow('', null).default(''),
+  }),
   purpose:     Joi.string().trim().max(200).allow('', null),
   issuedTo:    Joi.string().trim().max(120).allow('', null),
   department:  Joi.string().trim().max(120).allow('', null),

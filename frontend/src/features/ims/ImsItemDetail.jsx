@@ -433,17 +433,23 @@ const ImsItemDetail = () => {
             hint="Ordered from the vendor but not yet received." />
           <Metric label="Average Daily Consumption" value={num(m.adc)}
             hint="Average units consumed per day, worked out from actual production issues." />
-          <Metric label="Lead Time (From Indent to Receipt)" value={`${num(m.leadDays)}d`}
+          {/* A policy figure: an item with no policy has none, so the tile says
+              so rather than showing the system default as if it were set. The
+              backend fallback that keeps the levels working is untouched. */}
+          <Metric label="Lead Time (From Indent to Receipt)"
+            value={m.hasPolicy === false ? 'Not configured' : `${num(m.leadDays)}d`}
             hint="Days the vendor takes to deliver after the order is placed." />
-          <Metric label="Safety Factor" value={`${num(m.safetyFactor)}×`}
-            hint="Cushion multiplier for demand spikes and late deliveries. 1.5 means we hold 50% extra." />
           <Metric label="Reorder at" value={num(m.reorderPoint)}
-            hint="When Closing Stock falls to this number, place the order — Average Daily Consumption × Lead Time × Safety Factor." />
+            hint="When Closing Stock falls to this number, place the order — Average Daily Consumption × Lead Time. The Safety Factor does not enter here, so changing it never moves this number." />
           <Metric label="Max Level" value={num(m.maxLevel)}
             hint="When we buy, we buy enough to reach this level." />
           <Metric label="Cover" value={m.daysCover == null ? '—' : `${num(m.daysCover)}d`}
             color={tightCover ? STOCK_TOKENS.REORDER.color : undefined} strong={tightCover}
             hint="Days the current stock will last at the Average Daily Consumption." />
+          {/* 8th tile, matching the Safety Factor's column position in the stock list. */}
+          <Metric label="Safety Factor"
+            value={m.hasPolicy === false ? 'Not configured' : `${num(m.safetyFactor)}×`}
+            hint="Cushion multiplier for demand spikes and late deliveries. 1.5 means we hold 50% extra." />
           <Metric label="Reorder Quantity" value={num(m.suggestedOrderQty)}
             color={m.suggestedOrderQty > 0 ? STOCK_TOKENS.REORDER.color : undefined}
             hint="How much to buy to bring stock back to the Max Level." />
