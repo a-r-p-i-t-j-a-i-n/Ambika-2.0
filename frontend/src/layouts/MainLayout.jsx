@@ -99,6 +99,11 @@ const navSectionsFull = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
           },
+          // ── Hidden from the client's sidebar ────────────────────────────
+          // Raw Material is commented out rather than deleted: its screens,
+          // routes and data are all untouched, so /rm-ims still works if opened
+          // directly. Uncomment the block below to bring it back.
+          /*
           {
             text: 'Raw Material',
             icon: <Layers size={19} />,
@@ -113,6 +118,7 @@ const navSectionsFull = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
             ],
           },
+          */
           {
             text: 'Finished Goods',
             icon: <PackageCheck size={19} />,
@@ -238,6 +244,10 @@ const navSectionsSimple = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
           },
+          // ── Hidden from the client's sidebar ────────────────────────────
+          // Same as navSectionsFull above: Raw Material is commented out, not
+          // deleted. /rm-ims still works if opened directly.
+          /*
           {
             text: 'Raw Material',
             icon: <Layers size={19} />,
@@ -252,6 +262,7 @@ const navSectionsSimple = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
             ],
           },
+          */
           {
             text: 'Finished Goods',
             icon: <PackageCheck size={19} />,
