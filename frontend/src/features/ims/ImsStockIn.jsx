@@ -225,9 +225,17 @@ const ImsStockIn = () => {
                     </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>{num(l.onHand)} {l.unit}</TableCell>
                     <TableCell align="right">
+                      {/* The column heading is the only visible label, and a
+                          screen reader does not carry it into the cell — so each
+                          box names its own item. Same wording pattern as the FG
+                          entry screens ("Quantity produced — <item>"). */}
                       <TextField size="small" type="number" value={l.quantity} autoFocus={lines[lines.length - 1].skuId === l.skuId}
                         onChange={(e) => setField(l.skuId, 'quantity', e.target.value)}
-                        inputProps={{ min: 0, style: { textAlign: 'right', width: 84, fontWeight: 700 } }} placeholder="0" />
+                        inputProps={{
+                          min: 0,
+                          'aria-label': `Quantity received — ${l.skuName}`,
+                          style: { textAlign: 'right', width: 84, fontWeight: 700 },
+                        }} placeholder="0" />
                     </TableCell>
                     <TableCell align="right">
                       <TextField size="small" type="number" value={l.unitCost}

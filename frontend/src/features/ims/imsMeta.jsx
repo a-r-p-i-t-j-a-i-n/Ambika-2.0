@@ -414,6 +414,28 @@ export const newRequestId = () => (globalThis.crypto?.randomUUID
   ? globalThis.crypto.randomUUID()
   : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
+/**
+ * The picker's own tooltip config — the shared O2D_TIP plus a popper that can
+ * never intercept a pointer.
+ *
+ * The item rows sit directly above the "Add selected" button. MUI tooltips are
+ * INTERACTIVE by default, which keeps the popper mounted and pointer-aware so a
+ * user can hover into it; over a button that means the popper lingers after the
+ * cursor leaves the row and swallows the click. `disableInteractive` on the
+ * Tooltip removes the grace period, and `pointerEvents: 'none'` here guarantees
+ * that even mid-fade the layer is transparent to clicks.
+ *
+ * Deliberately local: O2D_TIP is shared with every other module, and this is a
+ * property of the picker's cramped layout, not of tooltips in general.
+ */
+const PICKER_TIP = {
+  ...O2D_TIP,
+  popper: {
+    ...(O2D_TIP.popper || {}),
+    sx: { ...(O2D_TIP.popper?.sx || {}), pointerEvents: 'none' },
+  },
+};
+
 export const ItemMultiPicker = ({
   options = [],
   addedIds = [],
@@ -596,7 +618,10 @@ export const ItemMultiPicker = ({
                     fontSize: '0.74rem', fontWeight: 800, color: accent, lineHeight: 1.3,
                     fontFamily: 'ui-monospace, monospace',
                   }}>{o.skuCode}</Typography>
-                  <Tooltip arrow slotProps={O2D_TIP} title={`${o.skuName} · ${o.skuCode}`}>
+                  {/* disableInteractive + the non-interactive popper above: the
+                      row sits directly over "Add selected", and an interactive
+                      tooltip lingers there and eats the click. */}
+                  <Tooltip arrow disableInteractive slotProps={PICKER_TIP} title={`${o.skuName} · ${o.skuCode}`}>
                     <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink, lineHeight: 1.3 }}>{o.skuName}</Typography>
                   </Tooltip>
                   <Typography noWrap sx={{ fontSize: '0.68rem', color: O2D.sub, lineHeight: 1.3 }}>

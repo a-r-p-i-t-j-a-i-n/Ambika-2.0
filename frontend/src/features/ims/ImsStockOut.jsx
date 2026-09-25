@@ -251,10 +251,18 @@ const ImsStockOut = () => {
                     </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>{num(l.onHand)} {l.unit}</TableCell>
                     <TableCell align="right">
+                      {/* The column heading is the only visible label, and a
+                          screen reader does not carry it into the cell — so each
+                          box names its own item. Same wording pattern as the FG
+                          entry screens ("Quantity dispatched — <item>"). */}
                       <TextField size="small" type="number" value={l.quantity} error={over && !allowNegative}
                         autoFocus={lines[lines.length - 1].skuId === l.skuId}
                         onChange={(e) => setQty(l.skuId, e.target.value)}
-                        inputProps={{ min: 0, style: { textAlign: 'right', width: 84, fontWeight: 700 } }} placeholder="0" />
+                        inputProps={{
+                          min: 0,
+                          'aria-label': `Quantity issued — ${l.skuName}`,
+                          style: { textAlign: 'right', width: 84, fontWeight: 700 },
+                        }} placeholder="0" />
                     </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                       {qty > 0 ? (
