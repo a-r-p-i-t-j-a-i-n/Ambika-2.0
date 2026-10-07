@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog, Box, Typography, TextField, Button, IconButton, Divider,
   Grid, Autocomplete, CircularProgress, Paper, Chip, MenuItem,
+  Checkbox, FormControlLabel,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { X, Save, PackageCheck, Building2, FileText, Eye, Upload, ExternalLink } from 'lucide-react';
@@ -13,11 +14,18 @@ import {
   usePreviewGrnPdfMutation,
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
+// The RM module's own classification of its SKUs (kind COIL / CIRCLE, derived
+// from SKU.itemType). Reused rather than re-deriving "is this a coil?" here, so
+// the form and the server can never disagree about what counts as RM.
+import { useGetRmOverviewQuery } from '../../../store/api/rmImsApi';
 import { fileHref } from '../indents/indentMeta';
 import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel } from './grnMeta';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
+// The SAME two values and default the RM Stock In screen uses, so "Received At"
+// has one definition across both modules.
+import { RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT } from '../../rm-ims/receivedAt';
 
 const ACCEPT = '.pdf,image/*';
 
@@ -47,6 +55,10 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
   const [header, setHeader] = useState({
     grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '',
     vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '',
+    // Raw Material opt-in and the location it lands at. Both ride along in
+    // buildPayload()'s `...header` spread, so create, update and preview all
+    // carry them without a second code path.
+    addToRmStock: false, rmReceivedAtLocation: DEFAULT_RECEIVED_AT,
   });
   const [items, setItems] = useState([]);
   const [doc, setDoc] = useState(null);
@@ -110,6 +122,8 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
         invoiceDate: grn.invoiceDate ? grn.invoiceDate.slice(0, 10) : '',
         vehicleNumber: grn.vehicleNumber || '', receivedBy: grn.receivedBy || '', preparedBy: grn.preparedBy || '',
         howItemReceived: grn.howItemReceived || 'FULL_MATERIAL_RECEIVED', remarks: grn.remarks || '',
+        addToRmStock: !!grn.addToRmStock,
+        rmReceivedAtLocation: grn.rmReceivedAtLocation || DEFAULT_RECEIVED_AT,
       });
       setDoc(grn.challanDocument?.fileUrl ? { ...grn.challanDocument } : null);
       setItems((grn.items || []).map((it) => ({
@@ -119,7 +133,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
         invoiceQty: it.invoiceQty, receivedQty: it.receivedQty, rate: it.rate, batchNo: it.batchNo || '', remarks: it.remarks || '',
       })));
     } else {
-      setHeader({ grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '', vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '' });
+      setHeader({ grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '', vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '', addToRmStock: false, rmReceivedAtLocation: DEFAULT_RECEIVED_AT });
       setDoc(null);
       if (presetPo) { setPo(presetPo); setItems(linesFromPo(presetPo)); }
       else { setPo(null); setItems([]); }
@@ -141,6 +155,20 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
 
   const validItems = items.filter((it) => round2(it.receivedQty) > 0);
 
+  // ── Coil / Circle need a batch number ──────────────────────────────────────
+  // Only these two. Every other purchased item keeps Batch No optional. The
+  // server enforces the same rule from the SKU master; this is the operator-
+  // facing half so the asterisk and the block appear before they hit Save.
+  const { data: rmRes } = useGetRmOverviewQuery({}, { skip: !open });
+  const rmKindBySku = useMemo(() => {
+    const m = new Map();
+    (rmRes?.data || []).forEach((r) => m.set(String(r.skuId), r.kind === 'CIRCLE' ? 'Circle' : 'Coil'));
+    return m;
+  }, [rmRes]);
+  /** 'Coil' | 'Circle' | '' — '' means "not RM", so leave the row alone. */
+  const rmKindOf = (it) => rmKindBySku.get(String(it.skuId || '')) || '';
+  const batchMissing = (it) => !!rmKindOf(it) && !it.batchNo?.trim();
+
   // Highlight the header Remarks field — and escalate it to a required/warning
   // state when an over-pending (extra) receipt has no remark of its own.
   const extraNeedsRemark = validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore) && !it.remarks?.trim());
@@ -153,6 +181,19 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
     const extra = validItems.find((it) => round2(it.receivedQty) > round2(it.pendingBefore));
     if (extra && !(extra.remarks?.trim() || header.remarks.trim())) {
       enqueueSnackbar(`"${extra.itemName}" exceeds pending qty — add remarks for the extra receipt`, { variant: 'warning' }); return false;
+    }
+    // Coil / Circle must be identifiable by batch. Checked against the received
+    // lines only — a row with nothing received is not a receipt. Independent of
+    // "Add to RM Stock": a Coil GRN needs the batch either way.
+    const noBatch = validItems.find(batchMissing);
+    if (noBatch) {
+      enqueueSnackbar(`Batch Number is required for ${rmKindOf(noBatch)}.`, { variant: 'warning' });
+      return false;
+    }
+    // Mirrors the server rule: opting a GRN in to RM stock without saying where
+    // the material landed would leave the movement with no location.
+    if (header.addToRmStock && !header.rmReceivedAtLocation) {
+      enqueueSnackbar('Choose a Received At location for "Add to RM Stock"', { variant: 'warning' }); return false;
     }
     return true;
   };
@@ -280,6 +321,42 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
             <Grid item xs={6} sm={3}><TextField label="Vehicle No" fullWidth value={header.vehicleNumber} onChange={(e) => setHeader((h) => ({ ...h, vehicleNumber: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
+
+            {/* ── Raw Material opt-in ──────────────────────────────────────
+                Off unless the operator ticks it. Unticked, Raw Material lines
+                are still received against the PO — they simply post no stock.
+                Every other item type is unaffected either way.
+
+                Received At is a SEPARATE decision and is always shown: it
+                records where the material physically landed, which is true of
+                the receipt whether or not the stock is posted. It used to be
+                hidden until the box was ticked, which wrongly implied the two
+                were one choice and threw away a location the operator had
+                already picked. */}
+            <Grid item xs={12} sm={6}>
+              <FormControlLabel
+                control={(
+                  <Checkbox
+                    checked={header.addToRmStock}
+                    onChange={(e) => setHeader((h) => ({ ...h, addToRmStock: e.target.checked }))}
+                  />
+                )}
+                label={<Typography sx={{ fontWeight: 700, fontSize: '0.88rem' }}>Add to RM Stock</Typography>}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 4, mt: -0.5 }}>
+                When checked, the received Raw Material quantity is added to RM stock as this GRN is completed.
+              </Typography>
+            </Grid>
+            <Grid item xs={6} sm={3}>
+              <TextField
+                label="Received At *" select fullWidth
+                value={header.rmReceivedAtLocation}
+                onChange={(e) => setHeader((h) => ({ ...h, rmReceivedAtLocation: e.target.value }))}
+                helperText="Where the material physically landed. Recorded whether or not RM stock is posted."
+              >
+                {RECEIVED_AT_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+              </TextField>
+            </Grid>
           </Grid>
 
           {po ? (
@@ -305,7 +382,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
             <>
               <Box sx={{
                 display: { xs: 'none', md: 'grid' },
-                gridTemplateColumns: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 0.9fr 1.3fr',
+                gridTemplateColumns: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 1.12fr 1.08fr',
                 gap: 1, px: 1, mb: 0.5,
               }}>
                 {['Description', 'SKU', 'Ordered Qty', 'Already Received', 'Pending Qty', 'Invoice Qty', 'Received Qty', 'Batch No', 'Remarks'].map((h, i) => (
@@ -322,7 +399,7 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
                   return (
                     <Box key={idx} sx={{
                       display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', md: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 0.9fr 1.3fr' },
+                      gridTemplateColumns: { xs: '1fr', md: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 1.12fr 1.08fr' },
                       gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
                       borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
                       '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
@@ -343,7 +420,13 @@ const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
                         onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
                         helperText={extra ? `Pending: ${pendingBefore} · Extra ${extraQty}` : `Pending: ${pendingBefore}`}
                         inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                      <TextField size="small" label="Batch No" placeholder="optional" value={it.batchNo}
+                      {/* Required for Coil and Circle only — every other item
+                          keeps the original optional field untouched. */}
+                      <TextField size="small"
+                        label={rmKindOf(it) ? 'Batch No *' : 'Batch No'}
+                        placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'optional'}
+                        value={it.batchNo}
+                        error={batchMissing(it) && round2(it.receivedQty) > 0}
                         onChange={(e) => setItem(idx, { batchNo: e.target.value })} />
                       <TextField size="small" label="Remarks" placeholder={extra ? 'required (extra)' : 'optional'} value={it.remarks}
                         onChange={(e) => setItem(idx, { remarks: e.target.value })} error={extra && !it.remarks?.trim() && !header.remarks.trim()} />

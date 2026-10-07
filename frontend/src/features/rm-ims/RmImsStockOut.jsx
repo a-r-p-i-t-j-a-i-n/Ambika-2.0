@@ -1,16 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Box, Paper, Stack, Typography, TextField, Button, Autocomplete, IconButton, FormControlLabel, Switch,
+  Box, Paper, Stack, Typography, TextField, MenuItem, Button, Autocomplete, IconButton, FormControlLabel, Switch,
   Table, TableHead, TableBody, TableRow, TableCell, CircularProgress, Chip, Tooltip,
 } from '@mui/material';
 import { PackageMinus, Plus, Trash2, Save, AlertTriangle, ArrowRight, Info } from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import {
-  RmShell, Panel, TableScroll, EmptyNote, Th, StepHead, KindChip,
+  RmShell, Panel, TableScroll, EmptyNote, Th, StepHead, KindChip, uomOf, newRequestId,
+  STOCK_OUT_REASON_OPTIONS, RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
   O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx, IMS_FORM_MAX,
 } from './rmImsMeta';
 import { useGetRmOverviewQuery, useRmIssueMutation } from '../../store/api/rmImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.rm;
 
 const blankLine = () => ({ sku: null, quantity: '', remarks: '' });
 
@@ -20,9 +24,15 @@ const RmImsStockOut = () => {
   const [issue, { isLoading }] = useRmIssueMutation();
 
   const [header, setHeader] = useState({
-    date: dayjs().format('YYYY-MM-DD'), purpose: '', issuedTo: '', department: '', reference: '', allowNegative: false,
+    date: dayjs().format('YYYY-MM-DD'),
+    reason: 'PRODUCTION_ISSUE',
+    customReason: '',
+    warehouse: DEFAULT_RECEIVED_AT,
+    purpose: '', issuedTo: '', department: '', reference: '', allowNegative: false,
   });
   const [lines, setLines] = useState([blankLine()]);
+  // Replay protection for this submission — see the note on Stock In.
+  const [requestId, setRequestId] = useState(newRequestId);
 
   const setLine = (i, k, v) => setLines((p) => p.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
   const addLine = () => setLines((p) => [...p, blankLine()]);
@@ -39,17 +49,33 @@ const RmImsStockOut = () => {
     return rp > 0 && after <= rp && Number(l.sku.onHand || 0) > rp;
   });
 
+  const activeReason = STOCK_OUT_REASON_OPTIONS.find((r) => r.value === header.reason);
+  const activeLocation = RECEIVED_AT_OPTIONS.find((w) => w.value === header.warehouse);
+  // "Other" has to say what it was, or History can never explain this movement.
+  const needsCustomReason = header.reason === 'OTHER' && !header.customReason.trim();
+
   const submit = async () => {
     if (!valid.length) return enqueueSnackbar('Add at least one item with a quantity.', { variant: 'warning' });
+    if (needsCustomReason) return enqueueSnackbar('Custom Reason is required when Reason is Other.', { variant: 'warning' });
     try {
       const res = await issue({
-        date: header.date, purpose: header.purpose || undefined, issuedTo: header.issuedTo || undefined,
+        date: header.date, reason: header.reason,
+        clientRequestId: requestId,
+        customReason: header.reason === 'OTHER' ? header.customReason.trim() : undefined,
+        warehouse: header.warehouse,
+        purpose: header.purpose || undefined, issuedTo: header.issuedTo || undefined,
         department: header.department || undefined, reference: header.reference || undefined,
         allowNegative: header.allowNegative,
         items: valid.map((l) => ({ skuId: l.sku.skuId, skuCode: l.sku.skuCode, quantity: Number(l.quantity), remarks: l.remarks || undefined })),
       }).unwrap();
-      enqueueSnackbar(`Issued ${res?.data?.count || valid.length} item(s) — stock updated.`, { variant: 'success' });
+      if (res?.data?.duplicate) {
+        enqueueSnackbar('Already recorded — this issue was submitted twice, so stock was not changed again.', { variant: 'info' });
+      } else {
+        enqueueSnackbar(`Issued ${res?.data?.count || valid.length} item(s) — stock updated.`, { variant: 'success' });
+      }
       setLines([blankLine()]);
+      setHeader((h) => ({ ...h, customReason: '' }));
+      setRequestId(newRequestId());
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not issue stock.', { variant: 'error' }); }
   };
 
@@ -74,10 +100,36 @@ const RmImsStockOut = () => {
       {/* ── Step 1 ── */}
       <Panel>
         <StepHead n={1} title="Issue details" hint="When it went out, where it went, and who took it." done={!!header.date} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25, mt: 1.25 }}>
           <TextField size="small" type="date" label="Date issued" value={header.date}
             onChange={(e) => setHeader((h) => ({ ...h, date: e.target.value }))}
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
+          {/* Why the material left. Every option here IS consumption, so the
+              movement stays a CONSUME_OUT and what a future Average Daily
+              Consumption measures is unchanged. */}
+          <TextField select size="small" label="Reason" value={header.reason}
+            onChange={(e) => setHeader((h) => ({ ...h, reason: e.target.value }))}
+            helperText={activeReason?.hint}
+            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
+            {STOCK_OUT_REASON_OPTIONS.map((r) => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" label="Received At" value={header.warehouse}
+            onChange={(e) => setHeader((h) => ({ ...h, warehouse: e.target.value }))}
+            helperText={activeLocation?.hint}
+            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
+            {RECEIVED_AT_OPTIONS.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
+          </TextField>
+          {header.reason === 'OTHER' && (
+            <TextField size="small" label="Custom Reason" value={header.customReason}
+              onChange={(e) => setHeader((h) => ({ ...h, customReason: e.target.value }))}
+              placeholder="Say what this issue was"
+              error={needsCustomReason}
+              inputProps={{ maxLength: 200 }}
+              helperText={needsCustomReason
+                ? 'Custom Reason is required when Reason is Other.'
+                : 'Saved as a custom reason and shown in History.'}
+              FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
+          )}
           <TextField size="small" label="Purpose" value={header.purpose}
             onChange={(e) => setHeader((h) => ({ ...h, purpose: e.target.value }))}
             placeholder="e.g. Press shop"
@@ -99,14 +151,16 @@ const RmImsStockOut = () => {
       <Panel>
         <StepHead n={2} title="What is going out?" hint="Pick each coil or circle, then type the quantity issued." done={valid.length > 0} />
         <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-          <Table size="small" sx={imsTableSx(880)}>
+          <Table size="small" sx={imsTableSx(960)}>
             <TableHead>
               <TableRow>
-                <TableCell>Item</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
+                <TableCell align="right"><Th label="UOM" hint={H.unit} /></TableCell>
                 <TableCell align="right">In store now</TableCell>
                 <TableCell align="right">Quantity issued</TableCell>
-                <TableCell align="right"><Th label="Left after this" hint="What on-hand becomes once you save this issue." /></TableCell>
-                <TableCell>Notes</TableCell>
+                <TableCell align="right"><Th label="Left after this" hint={H.newBalance} /></TableCell>
+                <TableCell><Th label="Notes" hint={H.movementNotes} /></TableCell>
                 <TableCell align="right" />
               </TableRow>
             </TableHead>
@@ -121,6 +175,7 @@ const RmImsStockOut = () => {
                 const tone = over ? STOCK_TOKENS.OUT_OF_STOCK : belowReorder ? STOCK_TOKENS.REORDER : STOCK_TOKENS.OK;
                 return (
                   <TableRow key={i} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ minWidth: 290 }}>
                       <Autocomplete
                         size="small" options={items} value={l.sku} onChange={(_, v) => setLine(i, 'sku', v)}
@@ -142,13 +197,17 @@ const RmImsStockOut = () => {
                         renderInput={(p) => <TextField {...p} placeholder="Search a coil or circle…" />}
                       />
                     </TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.7rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
+                      {l.sku ? uomOf(l.sku) : '—'}
+                    </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>
                       {l.sku ? num(onHand) : '—'}
                     </TableCell>
                     <TableCell align="right" sx={{ width: 130 }}>
                       <TextField size="small" type="number" value={l.quantity} error={over && !header.allowNegative}
                         onChange={(e) => setLine(i, 'quantity', e.target.value)}
-                        inputProps={{ min: 0, style: { textAlign: 'right', width: 82, fontWeight: 700 } }} placeholder="0" />
+                        inputProps={{ min: 0, style: { textAlign: 'right', width: 82, fontWeight: 700 },
+                          'aria-label': `Quantity issued — ${l.sku?.skuName || 'item'}` }} placeholder="0" />
                     </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                       {l.sku && qty > 0 ? (
@@ -180,7 +239,7 @@ const RmImsStockOut = () => {
                 );
               })}
               {lines.length === 0 && (
-                <TableRow><TableCell colSpan={6} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={8} sx={{ border: 0 }}>
                   <EmptyNote icon={PackageMinus} title="No items added yet" hint="Add a line to start this issue." />
                 </TableCell></TableRow>
               )}

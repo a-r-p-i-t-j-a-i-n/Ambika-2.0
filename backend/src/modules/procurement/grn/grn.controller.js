@@ -49,7 +49,14 @@ export const grnController = {
 
   complete: asyncHandler(async (req, res) => {
     const grn = await grnService.complete(req.params.id, req.body, req.user);
-    res.json(ApiResponse.ok('GRN completed — stock posted', grn));
+    // What actually happened to the RM lines, counted by the service rather
+    // than inferred by the screen - so the dialog can never report "RM stock
+    // updated" for a GRN that had no RM line on it, or that was not opted in.
+    const rm = grn.$locals?.rmSummary || null;
+    const message = rm?.rmPostedCount
+      ? `GRN completed — stock posted; ${rm.rmPostedCount} RM line(s) added to RM stock at ${rm.rmReceivedAtLocation}`
+      : 'GRN completed — stock posted';
+    res.json(ApiResponse.ok(message, { ...grn.toObject(), rmSummary: rm }));
   }),
 
   cancel: asyncHandler(async (req, res) => {

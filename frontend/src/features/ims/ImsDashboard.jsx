@@ -15,8 +15,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   ImsShell, Panel, TableScroll, KpiTile, StatusChip, MoveChip, EmptyNote, Help,
   O2D, STOCK_TOKENS, STOCK_ORDER, num, inr, compactInr, imsTableSx, moveToken,
+  Th,
 } from './imsMeta';
 import { useGetImsDashboardQuery } from '../../store/api/imsApi';
+import { FIELD } from './imsFieldHelp';
+
+const H = FIELD.ims;
 
 // The warm chart palette — pulled from the same tokens the chips use, so a bar
 // and a status pill for the same thing are never two different colours.
@@ -320,25 +324,27 @@ const ImsDashboard = () => {
           <Table size="small" sx={imsTableSx(760)}>
             <TableHead>
               <TableRow>
-                <TableCell align="center">Date</TableCell>
-                <TableCell>Item Name</TableCell>
-                <TableCell align="center">What happened</TableCell>
-                <TableCell align="right">Change</TableCell>
-                <TableCell align="right">Balance after<Help text="Closing Stock immediately after this movement was recorded." /></TableCell>
-                <TableCell>Recorded by</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell align="center"><Th label="Date" hint={H.movementDate} /></TableCell>
+                <TableCell><Th label="Item Name" hint={H.skuName} /></TableCell>
+                <TableCell align="center"><Th label="What happened" hint={H.movementType} /></TableCell>
+                <TableCell align="right"><Th label="Change" hint={H.movementQty} /></TableCell>
+                <TableCell align="right">Balance after<Help text={H.balanceAfter} /></TableCell>
+                <TableCell><Th label="Recorded by" hint={H.recordedBy} /></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {(d?.recentMovements || []).length === 0 && (
-                <TableRow><TableCell colSpan={6} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={7} sx={{ border: 0 }}>
                   <EmptyNote icon={History} title="No stock movements yet"
                     hint="Movements appear the moment you record a Stock In or a Stock Out." />
                 </TableCell></TableRow>
               )}
-              {(d?.recentMovements || []).map((m) => {
+              {(d?.recentMovements || []).map((m, i) => {
                 const t = moveToken(m.movementType);
                 return (
                   <TableRow key={m._id} hover>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell align="center" sx={{ whiteSpace: 'nowrap', color: O2D.sub }}>{dayjs(m.movementDate).format('DD MMM')}</TableCell>
                     <TableCell>
                       <Typography noWrap sx={{ fontSize: '0.78rem', fontWeight: 600, color: O2D.ink, maxWidth: 240 }} title={m.skuName}>{m.skuName}</Typography>

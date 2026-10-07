@@ -14,8 +14,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   RmShell, Panel, TableScroll, KpiTile, StatusChip, MoveChip, EmptyNote, Help, YieldChip,
   O2D, STOCK_TOKENS, STOCK_ORDER, moveToken, num, inr, compactInr, imsTableSx,
+  Th,
 } from './rmImsMeta';
 import { useGetRmDashboardQuery } from '../../store/api/rmImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.rm;
 
 const CAT_COLORS = ['#1d4ed8', '#0f766e', '#c2410c', '#4338ca', '#b45309', '#15803d', '#7c3aed', '#0891b2'];
 
@@ -148,7 +152,7 @@ const RmImsDashboard = () => {
           color="#0f766e" icon={Disc3} onClick={() => navigate('/rm-ims/stock?kind=COIL')} />
         <KpiTile label="Circles" value={num(s.circleCount)} sub="Cut and ready"
           color="#4338ca" icon={CircleDashed} onClick={() => navigate('/rm-ims/stock?kind=CIRCLE')} />
-        <KpiTile label="Units on hand" value={num(s.totalOnHand)} sub="Coils and circles together"
+        <KpiTile label="Total Available Quantity" value={num(s.totalOnHand)} sub="Coils and circles together"
           color={O2D.brand} icon={PackageOpen} onClick={() => navigate('/rm-ims/stock')} />
         <KpiTile label="Value in store" value={inr(s.totalStockValue)} sub="At last known rate"
           color="#7c3aed" icon={IndianRupee} />
@@ -324,25 +328,27 @@ const RmImsDashboard = () => {
           <Table size="small" sx={imsTableSx(760)}>
             <TableHead>
               <TableRow>
-                <TableCell>Date</TableCell>
-                <TableCell>Item</TableCell>
-                <TableCell>What happened</TableCell>
-                <TableCell align="right">Change</TableCell>
-                <TableCell align="right">Balance after<Help text="On-hand quantity immediately after this movement was recorded." /></TableCell>
-                <TableCell>Recorded by</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="Date" hint={H.movementDate} /></TableCell>
+                <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
+                <TableCell><Th label="What happened" hint={H.movementType} /></TableCell>
+                <TableCell align="right"><Th label="Change" hint={H.movementQty} /></TableCell>
+                <TableCell align="right">Balance after<Help text={H.balanceAfter} /></TableCell>
+                <TableCell><Th label="Recorded by" hint={H.recordedBy} /></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {(d?.recentMovements || []).length === 0 && (
-                <TableRow><TableCell colSpan={6} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={7} sx={{ border: 0 }}>
                   <EmptyNote icon={History} title="No stock movements yet"
                     hint="Movements appear the moment you record a Stock In, a Stock Out or a conversion." />
                 </TableCell></TableRow>
               )}
-              {(d?.recentMovements || []).map((m) => {
+              {(d?.recentMovements || []).map((m, i) => {
                 const t = moveToken(m.movementType);
                 return (
                   <TableRow key={m._id} hover>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap', color: O2D.sub }}>{dayjs(m.movementDate).format('DD MMM')}</TableCell>
                     <TableCell>
                       <Typography noWrap sx={{ fontSize: '0.78rem', fontWeight: 600, color: O2D.ink, maxWidth: 240 }} title={m.skuName}>{m.skuName}</Typography>

@@ -19,6 +19,8 @@ import poRoutes      from './modules/purchase-orders/purchase-order.routes.js';
 //  Unified Order Management (O2D)
 import orderRoutes    from './modules/order/order.routes.js';
 import partyRoutes    from './modules/clients/party.routes.js';
+import machineRoutes  from './modules/masters/machines/machine.routes.js';
+import machineOperatorRoutes from './modules/masters/machine-operators/machineOperator.routes.js';
 import scheduleRoutes from './modules/schedule/schedule.routes.js';
 import challanRoutes  from './modules/challan/challan.routes.js';
 import fmsRoutes      from './modules/fms/fms.routes.js';
@@ -47,6 +49,7 @@ import inventoryRoutes from './modules/inventory/inventory.routes.js';
 import imsRoutes from './modules/inventory/ims.routes.js';
 import rmImsRoutes from './modules/inventory/rmIms.routes.js';
 import fgImsRoutes from './modules/inventory/fgIms.routes.js';
+import scrapImsRoutes from './modules/inventory/scrapIms.routes.js';
 import grnRoutes from './modules/procurement/grn/grn.routes.js';
 import serviceCompletionRoutes from './modules/procurement/service-completion/serviceCompletion.routes.js';
 import incomingQcRoutes from './modules/procurement/incoming-qc/incomingQc.routes.js';
@@ -119,6 +122,8 @@ app.get('/api/health', healthPayload);
 app.use('/api/v1/auth',            authRoutes);
 app.use('/api/v1/clients',         clientRoutes);
 app.use('/api/v1/skus',            skuRoutes);
+app.use('/api/v1/machines',        machineRoutes);         // Master Data — machines + their assigned operators
+app.use('/api/v1/machine-operators', machineOperatorRoutes); // Master Data — operators + their assigned machines
 app.use('/api/v1/purchase-orders', poRoutes);
 app.use('/api/v1/sales-orders',    orderRoutes); // Unified
 app.use('/api/v1/orders',          orderRoutes); // Unified
@@ -153,6 +158,7 @@ app.use('/api/v1/inventory', inventoryRoutes); // Shared inventory stock-movemen
 app.use('/api/v1/ims', imsRoutes); // IMS — Packaging & Consumables inventory (built on the stock engine)
 app.use('/api/v1/rm-ims', rmImsRoutes); // RM IMS — Raw Material (Coil + Circle) inventory
 app.use('/api/v1/fg-ims', fgImsRoutes); // FG IMS — Finished Goods inventory (Production In / Dispatch Out)
+app.use('/api/v1/scrap-ims', scrapImsRoutes); // Scrap IMS — cut-by-cut scrap register + scrap stock (Scrap In / Scrap Out)
 app.use('/api/v1/procurement/grns', grnRoutes); // Purchase FMS — Goods Receipt Notes (Step 1.8)
 app.use('/api/v1/procurement/service-completions', serviceCompletionRoutes); // Purchase FMS — Service Completion (Step 1.8A)
 app.use('/api/v1/procurement/incoming-qc', incomingQcRoutes); // Purchase FMS — Incoming QC (Step 1.9)

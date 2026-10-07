@@ -16,26 +16,12 @@ import {
 // Config-driven: each master kind declares its columns + which are editable.
 // type: text | number | bool | select | csv (comma-separated array).
 const KINDS = [
-  {
-    kind: 'machine', label: 'Machines', icon: Cpu,
-    columns: [
-      { field: 'code', label: 'Code', required: true },
-      { field: 'name', label: 'Name' },
-      { field: 'machineType', label: 'Type', type: 'select', options: MACHINE_TYPES },
-      { field: 'department', label: 'Dept' },
-      { field: 'defaultSpm', label: 'SPM', type: 'number' },
-    ],
-  },
-  {
-    kind: 'operator', label: 'Operators', icon: Users,
-    columns: [
-      { field: 'name', label: 'Name', required: true },
-      { field: 'code', label: 'Code' },
-      { field: 'machineCodes', label: 'Machines', type: 'csv' },
-      { field: 'department', label: 'Dept' },
-      { field: 'shift', label: 'Shift' },
-    ],
-  },
+  // Machines and Operators used to live here as two more tabs. They are Master
+  // Data now — Master Data → Machines / Machine Operators — which is the only
+  // place they are edited, so a machine cannot drift between two screens and the
+  // machine↔operator link is written to the assignment collection rather than
+  // typed into a comma-separated box. The /dpr/masters/:kind API still serves
+  // both kinds for backward compatibility.
   {
     kind: 'processRoute', label: 'Process Routes', icon: Route,
     columns: [

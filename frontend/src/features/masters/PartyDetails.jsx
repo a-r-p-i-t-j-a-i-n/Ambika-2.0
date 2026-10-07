@@ -267,6 +267,7 @@ const PartyDetails = () => {
                     <Table size="small">
                       <TableHead>
                         <TableRow sx={{ '& th': { fontWeight: 800, fontSize: '0.7rem', textTransform: 'uppercase', color: 'text.secondary' } }}>
+                          <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
                           <TableCell>SKU</TableCell>
                           <TableCell>Code</TableCell>
                           <TableCell>Unit</TableCell>
@@ -279,6 +280,7 @@ const PartyDetails = () => {
                       <TableBody>
                         {party.orderedSkus.map((s, i) => (
                           <TableRow key={s._id || i} hover>
+                            <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                             <TableCell sx={{ fontWeight: 600 }}>{s.skuName}</TableCell>
                             <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{s.skuCode || '—'}</Typography></TableCell>
                             <TableCell>{s.unit || 'Pcs'}</TableCell>
@@ -356,6 +358,7 @@ const PartyDetails = () => {
                     <Table size="small">
                       <TableHead>
                         <TableRow>
+                          <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
                           <TableCell>Product Name</TableCell>
                           <TableCell>SKU Code</TableCell>
                           <TableCell align="right">Rate</TableCell>
@@ -365,6 +368,7 @@ const PartyDetails = () => {
                       <TableBody>
                         {party.suppliedProducts.map((p, i) => (
                           <TableRow key={p._id || i} hover>
+                            <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                             <TableCell sx={{ fontWeight: 600 }}>{p.productName || '—'}</TableCell>
                             <TableCell>
                               <Typography variant="body2" color="primary.main" fontWeight={700}>{p.skuCode || '—'}</Typography>

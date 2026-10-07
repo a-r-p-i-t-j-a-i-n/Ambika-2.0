@@ -13,6 +13,9 @@ import {
   O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx, IMS_FORM_MAX, emptyCellSx, FG_ACCENT, FG_ACCENT_DARK,
 } from './fgImsMeta';
 import { useGetFgOverviewQuery, useFgDispatchMutation } from '../../store/api/fgImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.fg;
 
 // Dispatch Out — record finished goods shipped to a customer. Reduces inventory.
 // Standalone entry for now (not yet auto-wired to the Dispatch module).
@@ -155,23 +158,24 @@ const FgImsDispatchOut = () => {
           <Table size="small" sx={imsTableSx(880)}>
             <TableHead>
               <TableRow>
-                <TableCell>SKU Code</TableCell>
-                <TableCell sx={{ width: '100%' }}>Finished Good</TableCell>
-                <TableCell><Th label="UOM" hint="The unit this finished good is counted in. It comes from the SKU master and is never typed here." /></TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
+                <TableCell sx={{ width: '100%' }}><Th label="Finished Good" hint={H.skuName} /></TableCell>
+                <TableCell><Th label="UOM" hint={H.unit} /></TableCell>
                 <TableCell align="right">Available Qty</TableCell>
                 <TableCell align="right">Quantity dispatched</TableCell>
-                <TableCell align="right"><Th label="Remaining balance" hint="What the stock on hand becomes once you save this dispatch." /></TableCell>
+                <TableCell align="right"><Th label="Remaining balance" hint={H.newBalance} /></TableCell>
                 <TableCell align="center" />
               </TableRow>
             </TableHead>
             <TableBody>
               {lines.length === 0 && (
-                <TableRow><TableCell colSpan={7} sx={emptyCellSx}>
+                <TableRow><TableCell colSpan={8} sx={emptyCellSx}>
                   <EmptyNote dense icon={Truck} title="No finished goods added yet"
                     hint="Use the search box above to pick the first item being shipped." />
                 </TableCell></TableRow>
               )}
-              {lines.map((l) => {
+              {lines.map((l, i) => {
                 const qty = Number(l.quantity || 0);
                 const over = qty > Number(l.onHand || 0);
                 const after = Number(l.onHand || 0) - qty;
@@ -179,6 +183,7 @@ const FgImsDispatchOut = () => {
                 const tone = over ? STOCK_TOKENS.OUT_OF_STOCK : belowReorder ? STOCK_TOKENS.REORDER : STOCK_TOKENS.OK;
                 return (
                   <TableRow key={l.skuId} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: FG_ACCENT, whiteSpace: 'nowrap' }}>{l.skuCode}</TableCell>
                     <TableCell sx={{ minWidth: 180 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }} title={l.skuName}>{l.skuName}</Typography>

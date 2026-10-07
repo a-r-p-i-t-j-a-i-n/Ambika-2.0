@@ -20,6 +20,9 @@ import {
 import { useGetImsOverviewQuery, useGetImsForecastQuery } from '../../store/api/imsApi';
 import PolicyDrawer from './PolicyDrawer';
 import { TYPE_META } from '../masters/itemTypeMeta';
+import { FIELD } from './imsFieldHelp';
+
+const H = FIELD.ims;
 
 // ── Item classification (SKU Master is the source of truth) ─────────────────
 // Every row here IS a SKU Master record (ims.service joins SKU + stock + policy),
@@ -372,22 +375,22 @@ const ImsStockList = () => {
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
-                <TableCell>SKU Code</TableCell>
-                <TableCell>Item Name</TableCell>
-                <TableCell>Category</TableCell>
-                <TableCell align="right"><Th label="Available Qty" hint="Units physically in the store right now." /></TableCell>
-                <TableCell align="right"><Th label="Material In Transit" hint="Ordered from the vendor but not yet received." /></TableCell>
-                <TableCell align="right"><Th label="Average Daily Consumption" hint="Average consumption per day calculated from the last 90 days of actual consumption." /></TableCell>
+                <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
+                <TableCell><Th label="Item Name" hint={H.skuName} /></TableCell>
+                <TableCell><Th label="Category" hint={H.category} /></TableCell>
+                <TableCell align="right"><Th label="Available Qty" hint={H.onHand} /></TableCell>
+                <TableCell align="right"><Th label="Material In Transit" hint={H.inTransit} /></TableCell>
+                <TableCell align="right"><Th label="Average Daily Consumption" hint={H.adc} /></TableCell>
                 {/* Safety Factor sits at column 8 (counting S.No. as 1) in every
                     IMS stock list, so a planner finds it in the same place
                     whichever module they are in. */}
-                <TableCell align="right"><Th label="Safety Factor" hint="Cushion multiplier for demand spikes and late deliveries." /></TableCell>
-                <TableCell align="right"><Th label="Daily Consumption" hint="Actual consumption recorded today." /></TableCell>
-                <TableCell align="right"><Th label="Lead Time (From Indent to Receipt)" hint="Days the vendor takes to deliver after the order is placed." /></TableCell>
-                <TableCell align="right"><Th label="Reorder at" hint="When Closing Stock falls to this number, place the order." /></TableCell>
-                <TableCell align="right"><Th label="Max Level" hint="Buy enough to bring stock back to this level." /></TableCell>
-                <TableCell><Th label="Converted Item Name (For Resale)" hint="The name this item is sold on as, when it differs from the item name. SKU Master data — edit it there." /></TableCell>
-                <TableCell align="center">Status</TableCell>
+                <TableCell align="right"><Th label="Safety Factor" hint={H.safetyFactor} /></TableCell>
+                <TableCell align="right"><Th label="Daily Consumption" hint={H.dailyConsumption} /></TableCell>
+                <TableCell align="right"><Th label="Lead Time (From Indent to Receipt)" hint={H.leadDays} /></TableCell>
+                <TableCell align="right"><Th label="Reorder at" hint={H.reorderPoint} /></TableCell>
+                <TableCell align="right"><Th label="Max Level" hint={H.maxLevel} /></TableCell>
+                <TableCell><Th label="Converted Item Name (For Resale)" hint={H.convertedItemName} /></TableCell>
+                <TableCell align="center"><Th label="Status" hint={H.status} /></TableCell>
                 <TableCell align="center" />
               </TableRow>
             </TableHead>

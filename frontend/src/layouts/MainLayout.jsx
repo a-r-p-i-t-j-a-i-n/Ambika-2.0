@@ -11,6 +11,7 @@ import {
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
   ReceiptText, FileSpreadsheet,
   Boxes, PackagePlus, PackageMinus, History, Layers, Recycle, PackageCheck, Factory,
+  Cpu, HardHat, Disc3,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -99,11 +100,6 @@ const navSectionsFull = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
           },
-          // ── Hidden from the client's sidebar ────────────────────────────
-          // Raw Material is commented out rather than deleted: its screens,
-          // routes and data are all untouched, so /rm-ims still works if opened
-          // directly. Uncomment the block below to bring it back.
-          /*
           {
             text: 'Raw Material',
             icon: <Layers size={19} />,
@@ -118,7 +114,6 @@ const navSectionsFull = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
             ],
           },
-          */
           {
             text: 'Finished Goods',
             icon: <PackageCheck size={19} />,
@@ -130,6 +125,23 @@ const navSectionsFull = [
               { text: 'Dispatch Out',          icon: <Truck size={19} />,           path: '/fg-ims/dispatch-out' },
               { text: 'Production Plan',       icon: <ClipboardList size={19} />,   path: '/fg-ims/planning' },
               { text: 'Movement History',      icon: <History size={19} />,         path: '/fg-ims/movements' },
+            ],
+          },
+          {
+            text: 'Scrap',
+            icon: <Recycle size={19} />,
+            path: '/scrap-ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/scrap-ims' },
+              { text: 'Scrap Register',        icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
+              // Scrap grouped by the physical coil it came off — "how much
+              // scrap came off THAT coil". The module's own strip lists it too,
+              // but this sidebar is how people actually navigate, and a page
+              // missing from here is a page nobody finds.
+              { text: 'Scrap by Coil',         icon: <Disc3 size={19} />,           path: '/scrap-ims/by-coil' },
+              { text: 'Scrap In',              icon: <PackagePlus size={19} />,     path: '/scrap-ims/scrap-in' },
+              { text: 'Scrap Out',             icon: <PackageMinus size={19} />,    path: '/scrap-ims/scrap-out' },
+              { text: 'Scrap Movement',        icon: <History size={19} />,         path: '/scrap-ims/movements' },
             ],
           },
         ],
@@ -244,10 +256,6 @@ const navSectionsSimple = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
           },
-          // ── Hidden from the client's sidebar ────────────────────────────
-          // Same as navSectionsFull above: Raw Material is commented out, not
-          // deleted. /rm-ims still works if opened directly.
-          /*
           {
             text: 'Raw Material',
             icon: <Layers size={19} />,
@@ -262,7 +270,6 @@ const navSectionsSimple = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
             ],
           },
-          */
           {
             text: 'Finished Goods',
             icon: <PackageCheck size={19} />,
@@ -276,6 +283,23 @@ const navSectionsSimple = [
               { text: 'Movement History',      icon: <History size={19} />,         path: '/fg-ims/movements' },
             ],
           },
+          {
+            text: 'Scrap',
+            icon: <Recycle size={19} />,
+            path: '/scrap-ims',
+            children: [
+              { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/scrap-ims' },
+              { text: 'Scrap Register',        icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
+              // Scrap grouped by the physical coil it came off — "how much
+              // scrap came off THAT coil". The module's own strip lists it too,
+              // but this sidebar is how people actually navigate, and a page
+              // missing from here is a page nobody finds.
+              { text: 'Scrap by Coil',         icon: <Disc3 size={19} />,           path: '/scrap-ims/by-coil' },
+              { text: 'Scrap In',              icon: <PackagePlus size={19} />,     path: '/scrap-ims/scrap-in' },
+              { text: 'Scrap Out',             icon: <PackageMinus size={19} />,    path: '/scrap-ims/scrap-out' },
+              { text: 'Scrap Movement',        icon: <History size={19} />,         path: '/scrap-ims/movements' },
+            ],
+          },
         ],
       },
       {
@@ -284,6 +308,8 @@ const navSectionsSimple = [
         children: [
           { text: 'SKU Master',         icon: <Package size={19} />, path: '/skus' },
           { text: 'Parties',            icon: <Users size={19} />,   path: '/parties' },
+          { text: 'Machines',           icon: <Cpu size={19} />,     path: '/machines' },
+          { text: 'Machine Operators',  icon: <HardHat size={19} />, path: '/machine-operators' },
           { text: 'Vendor Details',     icon: <UserCog size={19} />, path: '/procurement/vendors' },
           { text: 'Transporter Master', icon: <Truck size={19} />,   path: '/o2d-fms/transporters' },
         ],
@@ -320,6 +346,8 @@ const PAGE_TITLES = {
   '/invoices':               'Invoices & FMS',
   '/skus':                   'SKU Master',
   '/parties':                'Party Master',
+  '/machine-operators':      'Machine Operators',
+  '/machines':               'Machines',
   '/procurement/indents':    'Purchase Indents',
   '/procurement/purchase-orders': 'Purchase Orders',
   '/procurement/follow-ups': 'Material Follow-ups',
@@ -390,6 +418,12 @@ const PAGE_TITLES = {
   '/rm-ims':                 'Raw Material IMS',
   '/fg-ims/stock':           'Finished Goods — Stock & Master',
   '/fg-ims/item':            'Finished Goods — Item',
+  '/scrap-ims/records':      'Scrap — Register',
+  '/scrap-ims/scrap-in':     'Scrap — Scrap In',
+  '/scrap-ims/scrap-out':    'Scrap — Scrap Out',
+  '/scrap-ims/movements':    'Scrap — Scrap Movement',
+  '/scrap-ims/record':       'Scrap — Batch',
+  '/scrap-ims':              'Scrap',
   '/fg-ims/production-in':   'Finished Goods — Production In (DPR)',
   '/fg-ims/dispatch-out':    'Finished Goods — Dispatch Out',
   '/fg-ims/planning':        'Finished Goods — Production Plan',

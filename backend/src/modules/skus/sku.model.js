@@ -11,12 +11,18 @@ const { Schema, model } = mongoose;
 //   CONSUMABLE    — buffs, brushes, bearings, belts, oils the company BUYS
 //   PACKING       — boxes, partitions, stickers, tape the company BUYS
 //   CIRCLE        — cut metal circles (reserved; not price-tracked today)
+//   SCRAP         — metal offcuts left by cutting; held in kilograms, sold or
+//                   disposed of, never bought (blocked in purchase-item-guard)
 // `category` is the sub-group WITHIN an itemType (e.g. CONSUMABLE → "Bearing").
 export const ITEM_TYPES = [
   'FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE',
   // Purchase FMS purchasable categories (additive)
   'PACKAGING', 'CHEMICAL', 'INK', 'BUTTER_PAPER', 'SUBLIMATION_PAPER',
   'STATIONERY', 'SERVICE', 'SPARE_PART', 'JOB_WORK', 'WIP_MATERIAL',
+  // Scrap IMS (additive). Scrap is a by-product of cutting, never something the
+  // company purchases — purchase-item-guard blocks it from every procurement
+  // flow, the same way it blocks finished goods.
+  'SCRAP',
 ];
 
 // Which item types are bought from suppliers (buy side) vs sold to customers.
@@ -25,6 +31,14 @@ export const BUY_SIDE_ITEM_TYPES = [
   'PACKAGING', 'CHEMICAL', 'INK', 'BUTTER_PAPER', 'SUBLIMATION_PAPER',
   'STATIONERY', 'SERVICE', 'SPARE_PART', 'JOB_WORK', 'WIP_MATERIAL',
 ];
+
+/**
+ * The two item types Raw Material IMS owns: coils and the circles cut from
+ * them. Lives here beside the other classifications so any module that has to
+ * ask "is this line Raw Material?" reads the same list - RM IMS itself, and the
+ * GRN, which posts RM lines only when the operator opts in.
+ */
+export const RM_ITEM_TYPES = ['RAW_MATERIAL', 'CIRCLE'];
 
 // Item types that must NEVER enter Purchase FMS (produced internally, sold via O2D).
 // FG / SALE_PRODUCT / READY_STOCK_PRODUCT are defensive aliases for legacy or imported data.
