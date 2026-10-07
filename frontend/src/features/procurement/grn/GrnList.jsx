@@ -6,8 +6,9 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, PackageCheck, Ban, FileDown,
-  FileStack, PackageOpen, Boxes, Hourglass,
+  FileStack, PackageOpen, Boxes, Hourglass, Trash2, Lock,
 } from 'lucide-react';
+import { usePermissions } from '../../../hooks/usePermission';
 import { useNavigate } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import {
@@ -17,9 +18,10 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
-import { GrnStatusChip, GRN_STATUSES, fmtDate } from './grnMeta';
+import { GrnStatusChip, GRN_STATUSES, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
 import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
+import GrnDeleteDialog from './GrnDeleteDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
@@ -42,6 +44,8 @@ const GrnList = () => {
   const [activeGrn, setActiveGrn] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const canDeleteGrn = usePermissions().can('procurement.deleteGrn');
 
   const queryArgs = {
     page: paginationModel.page + 1,
@@ -73,12 +77,16 @@ const GrnList = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  const onDelete = (r) => { setDeleteTarget(r); closeMenu(); };
+
+  // DRAFT → Edit | Complete | Cancel | Delete. Completed GRNs are view-only.
   const actionsFor = (r) => {
-    const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
-    if (r.grnStatus === 'DRAFT') {
+    const a = [{ key: 'view', label: isGrnCompleted(r) ? 'View (read-only)' : 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
+    if (isGrnDraft(r)) {
       a.push({ key: 'edit', label: 'Edit Draft', icon: <Pencil size={16} />, fn: () => onEdit(r) });
       a.push({ key: 'complete', label: 'Complete & Post Stock', icon: <PackageCheck size={16} />, fn: () => onComplete(r) });
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
+      if (canDeleteGrn) a.push({ key: 'delete', label: 'Delete Draft', icon: <Trash2 size={16} />, fn: () => onDelete(r), danger: true });
     }
     if (r.grnPdfUrl) a.push({ key: 'pdf', label: 'Download GRN PDF', icon: <FileDown size={16} />, fn: () => onPdf(r) });
     return a;
@@ -101,7 +109,16 @@ const GrnList = () => {
     { field: 'totalShortQty', headerName: 'SHORT QTY', width: 100, align: 'right', headerAlign: 'right',
       renderCell: (p) => <Typography variant="body2" sx={{ color: p.value > 0 ? '#b45309' : 'text.secondary', fontWeight: p.value > 0 ? 700 : 400 }}>{p.value || 0}</Typography> },
     { field: 'grnStatus', headerName: 'STATUS', width: 150,
-      renderCell: (p) => <GrnStatusChip status={p.value} /> },
+      renderCell: (p) => (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <GrnStatusChip status={p.value} />
+          {isGrnCompleted(p.row) && (
+            <Tooltip title="Completed — stock posted. Read-only: cannot be edited or deleted.">
+              <Box component="span" sx={{ display: 'inline-flex', color: PFMS.faint }}><Lock size={14} /></Box>
+            </Tooltip>
+          )}
+        </Box>
+      ) },
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
       renderCell: (p) => (
         <Tooltip title="Actions">
@@ -180,8 +197,8 @@ const GrnList = () => {
       {/* Row actions */}
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
         {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}>
-            <ListItemIcon>{a.icon}</ListItemIcon>
+          <MenuItem key={a.key} onClick={a.fn} sx={a.danger ? { color: 'error.main' } : undefined}>
+            <ListItemIcon sx={a.danger ? { color: 'error.main' } : undefined}>{a.icon}</ListItemIcon>
             <ListItemText>{a.label}</ListItemText>
           </MenuItem>
         ))}
@@ -190,6 +207,7 @@ const GrnList = () => {
       {/* Form + dialogs */}
       <GrnFormDialog open={formOpen} grn={editGrn} onClose={() => { setFormOpen(false); setEditGrn(null); }} />
       <GrnCompleteDialog open={completeOpen} grn={activeGrn} onClose={() => { setCompleteOpen(false); setActiveGrn(null); }} />
+      <GrnDeleteDialog open={Boolean(deleteTarget)} grn={deleteTarget} onClose={() => setDeleteTarget(null)} />
     </Box>
   );
 };

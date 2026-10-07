@@ -26,6 +26,28 @@ const findOrThrow = async (id) => {
   return grn;
 };
 
+// A GRN is editable/deletable/cancellable only while it is an un-posted DRAFT.
+// complete() claims a draft by flipping stockPosted first, so `stockPosted`
+// also covers a GRN whose completion is in flight.
+const isOpenDraft = (grn) => grn.grnStatus === GRN_STATUS.DRAFT && !grn.stockPosted;
+const OPEN_DRAFT_FILTER = { grnStatus: GRN_STATUS.DRAFT, stockPosted: { $ne: true } };
+
+/**
+ * Save a draft GRN only if it is still an open draft in the database — guards
+ * against an edit/delete/cancel landing after a concurrent Complete claimed it.
+ */
+const saveOpenDraft = async (grn) => {
+  grn.$where = OPEN_DRAFT_FILTER;
+  try {
+    return await grn.save();
+  } catch (err) {
+    if (err?.name === 'DocumentNotFoundError') {
+      throw new AppError('This GRN has just been completed and can no longer be changed', 409);
+    }
+    throw err;
+  }
+};
+
 /** Derive per-line short/extra/pending + totals (server-authoritative). */
 const computeLines = (items = []) => {
   const lines = items.map((it) => {
@@ -387,7 +409,7 @@ export const grnService = {
       await grn.save();
       throw new AppError('This GRN has been digitally signed by the MD and is locked for editing', 400);
     }
-    if (grn.grnStatus !== GRN_STATUS.DRAFT) throw new AppError('Only draft GRNs can be edited', 400);
+    if (!isOpenDraft(grn)) throw new AppError('Only draft GRNs can be edited', 400);
     const { items, challanDocument, invoiceDocument, ...rest } = data;
     Object.assign(grn, rest);
     if (challanDocument) grn.challanDocument = challanDocument.fileUrl ? { ...challanDocument, uploadedAt: new Date() } : {};
@@ -400,75 +422,110 @@ export const grnService = {
     }
     grn.updatedBy = user?._id;
     grn.activityTimeline.push({ action: 'UPDATE', description: 'Draft GRN updated', actorId: user?._id });
-    return grn.save();
+    return saveOpenDraft(grn);
   },
 
   async remove(id, user) {
     const grn = await findOrThrow(id);
-    if (grn.grnStatus !== GRN_STATUS.DRAFT) {
+    if (!isOpenDraft(grn)) {
       throw new AppError('Only draft GRNs can be deleted', 400);
     }
     grn.isDeleted = true;
     grn.deletedAt = new Date();
     grn.deletedBy = user?._id;
     grn.activityTimeline.push({ action: 'DELETE', description: 'GRN deleted', actorId: user?._id });
-    return grn.save();
+    return saveOpenDraft(grn);
   },
 
   /**
    * Complete a GRN: post stock via inventoryService, update PO + PI quantities,
    * roll receipt status, generate the GRN PDF, and leave qcStatus PENDING for
-   * Step 1.9 Incoming QC. Idempotent (grnStatus + stockPosted + movement check).
+   * Step 1.9 Incoming QC. Idempotent: the draft is claimed atomically (DRAFT +
+   * stockPosted:false → stockPosted:true) before anything is posted, so of two
+   * concurrent/double-submitted completes only one can ever post stock.
    */
   async complete(id, data, user) {
-    const grn = await findOrThrow(id);
-    if (grn.grnStatus !== GRN_STATUS.DRAFT) throw new AppError('Only draft GRNs can be completed', 400);
-    if (grn.stockPosted) throw new AppError('Stock already posted for this GRN', 400);
+    const grn = await GoodsReceiptNote.findOneAndUpdate(
+      { _id: id, isDeleted: { $ne: true }, ...OPEN_DRAFT_FILTER },
+      { $set: { stockPosted: true } },
+      { new: true },
+    );
+    if (!grn) {
+      const current = await findOrThrow(id);
+      if (current.grnStatus !== GRN_STATUS.DRAFT) throw new AppError('Only draft GRNs can be completed', 400);
+      throw new AppError('Stock already posted for this GRN', 400);
+    }
+    // Hand the draft back (still DRAFT, editable) when completion fails before
+    // any stock landed, so the user can correct it and complete again.
+    const releaseClaim = () => GoodsReceiptNote.updateOne(
+      { _id: grn._id, grnStatus: GRN_STATUS.DRAFT },
+      { $set: { stockPosted: false } },
+    );
 
     const existing = await inventoryService.getMovementsByRef('GRN', grn._id);
     if (existing.length) throw new AppError('Inventory movements already exist for this GRN', 400);
 
-    const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
-    if (!po) throw new AppError('Linked Purchase Order not found', 404);
+    let po; let pi; let receivedLines;
+    try {
+      po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
+      if (!po) throw new AppError('Linked Purchase Order not found', 404);
 
-    const receivedLines = grn.items.filter((it) => round2(it.receivedQty) > 0);
-    if (!receivedLines.length) throw new AppError('Enter a received quantity on at least one item', 400);
+      receivedLines = grn.items.filter((it) => round2(it.receivedQty) > 0);
+      if (!receivedLines.length) throw new AppError('Enter a received quantity on at least one item', 400);
 
-    // Rule 6: extra receipt requires remarks.
-    const extraNoRemarks = receivedLines.find((l) => round2(l.extraQty) > 0 && !(l.remarks || data.remarks || grn.remarks));
-    if (extraNoRemarks) {
-      throw new AppError(`"${extraNoRemarks.itemName}" was received over the ordered qty — remarks are required for extra receipt`, 400);
-    }
-
-    // Every received line must resolve to a SKU (stock cannot be posted otherwise).
-    for (const line of receivedLines) {
-      if (!line.skuId && line.skuCode) {
-        const sku = await SKU.findOne({ code: String(line.skuCode).trim().toUpperCase() }).select('_id').lean();
-        if (sku) line.skuId = sku._id;
+      // Rule 6: extra receipt requires remarks.
+      const extraNoRemarks = receivedLines.find((l) => round2(l.extraQty) > 0 && !(l.remarks || data.remarks || grn.remarks));
+      if (extraNoRemarks) {
+        throw new AppError(`"${extraNoRemarks.itemName}" was received over the ordered qty — remarks are required for extra receipt`, 400);
       }
-      if (!line.skuId) throw new AppError(`"${line.itemName}" is not linked to a SKU — add it to the SKU master before receiving`, 400);
+
+      // Every received line must resolve to a SKU (stock cannot be posted otherwise).
+      for (const line of receivedLines) {
+        if (!line.skuId && line.skuCode) {
+          const sku = await SKU.findOne({ code: String(line.skuCode).trim().toUpperCase() }).select('_id').lean();
+          if (sku) line.skuId = sku._id;
+        }
+        if (!line.skuId) throw new AppError(`"${line.itemName}" is not linked to a SKU — add it to the SKU master before receiving`, 400);
+      }
+
+      pi = grn.piId ? await ProformaInvoice.findOne({ _id: grn.piId, isDeleted: { $ne: true } }) : null;
+    } catch (err) {
+      await releaseClaim();
+      throw err;
     }
 
-    const pi = grn.piId ? await ProformaInvoice.findOne({ _id: grn.piId, isDeleted: { $ne: true } }) : null;
-
-    // ── 1) Post stock — strictly through inventoryService ──
-    for (const line of receivedLines) {
-      const { movement } = await inventoryService.increaseStock({
-        skuId: line.skuId, skuCode: line.skuCode, skuName: line.itemName, unit: line.unit,
-        warehouse: grn.warehouse,
-        quantity: round2(line.receivedQty),
-        unitCost: round2(line.rate),
-        txnType: 'GRN_IN', sourceModule: 'PURCHASE_FMS',
-        refType: 'GRN', refId: grn._id, refNumber: grn.grnNumber,
-        batchNo: line.batchNo || '',
-        vendorId: grn.vendorId, vendorName: grn.vendorName,
-        poId: grn.poId, poNumber: grn.poNumber, piId: grn.piId, piNumber: grn.piNumber,
-        remarks: 'Stock added from Purchase GRN',
-        performedBy: user, movementDate: grn.grnDate,
+    // ── 1) Post stock — strictly through inventoryService, all lines or none ──
+    try {
+      await inventoryService.runAtomically(async (session) => {
+        for (const line of receivedLines) {
+          const { movement } = await inventoryService.increaseStock({
+            skuId: line.skuId, skuCode: line.skuCode, skuName: line.itemName, unit: line.unit,
+            warehouse: grn.warehouse,
+            quantity: round2(line.receivedQty),
+            unitCost: round2(line.rate),
+            txnType: 'GRN_IN', sourceModule: 'PURCHASE_FMS',
+            refType: 'GRN', refId: grn._id, refNumber: grn.grnNumber,
+            batchNo: line.batchNo || '',
+            vendorId: grn.vendorId, vendorName: grn.vendorName,
+            poId: grn.poId, poNumber: grn.poNumber, piId: grn.piId, piNumber: grn.piNumber,
+            remarks: 'Stock added from Purchase GRN',
+            performedBy: user, movementDate: grn.grnDate,
+          }, { session });
+          line.movementId = movement._id;
+          line.movementNumber = movement.movementNumber;
+        }
       });
-      line.movementId = movement._id;
-      line.movementNumber = movement.movementNumber;
+    } catch (err) {
+      // Rolled back (or nothing written) → release the claim. If movements did
+      // land (deployment without transactions), keep the GRN locked so a retry
+      // can never post the same stock twice.
+      const posted = await inventoryService.getMovementsByRef('GRN', grn._id).catch(() => [{}]);
+      if (!posted.length) await releaseClaim();
+      else logger.error(`[grn] ${grn.grnNumber}: stock posting failed part-way (${posted.length} movement(s) written) — GRN left locked: ${err.message}`);
+      throw err;
+    }
 
+    for (const line of receivedLines) {
       // ── 2) PO line: receivedQty / pendingQty ──
       const poItem = po.items.find((p) => String(p._id) === String(line.poItemId))
         || po.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode);
@@ -622,6 +679,6 @@ export const grnService = {
     if (data.remarks) grn.remarks = data.remarks;
     grn.updatedBy = user?._id;
     grn.activityTimeline.push({ action: 'CANCEL', description: 'GRN cancelled', actorId: user?._id });
-    return grn.save();
+    return saveOpenDraft(grn);
   },
 };

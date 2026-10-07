@@ -4,8 +4,9 @@ import {
   Grid, MenuItem, Autocomplete, CircularProgress, Paper, Tooltip, Chip,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { X, Save, ShoppingBag, Plus, Trash2, Building2, FileText, AlertTriangle, Eye } from 'lucide-react';
+import { X, Save, ShoppingBag, Plus, Trash2, Building2, FileText, AlertTriangle, Eye, CheckCircle2 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
+import { usePermissions } from '../../../hooks/usePermission';
 import {
   useGetIndentsQuery,
   useGetAllApprovedItemsQuery,
@@ -100,6 +101,14 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const isRevise = Boolean(reviseFrom?._id);
   // The PO whose data prefills the form (edit target or the cancelled PO to revise).
   const sourcePo = po || reviseFrom;
+  const isCreate = !isEdit && !isRevise;
+
+  // "Save PO Directly" skips the approval step, so it's only offered when PO
+  // approval isn't required — the creator already holds PO approval authority
+  // (procurement.approve). The server enforces the same rule.
+  const { can } = usePermissions();
+  const canDirectSave = can('procurement.approve');
+  const [pendingMode, setPendingMode] = useState(''); // which create button is saving
 
   // Tracks which indent the JSL rows were last auto-built for, so a late-loading
   // vendor catalog re-matches rates without wiping manual edits or rebuilding.
@@ -628,7 +637,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl(''); }
   };
 
-  const handleSubmit = async () => {
+  // saveMode: 'DRAFT' (default) | 'DIRECT' — only meaningful for a new PO.
+  const handleSubmit = async (saveMode = 'DRAFT') => {
     if (!vendor?._id) { enqueueSnackbar('Vendor is mandatory', { variant: 'warning' }); return; }
     if (approvedItemMode) {
       if (!selectedApprovedItems.length) { enqueueSnackbar('Select at least one approved item', { variant: 'warning' }); return; }
@@ -649,7 +659,20 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     }
 
     const payload = buildPayload();
+    const direct = isCreate && saveMode === 'DIRECT' && canDirectSave;
+    // A direct save comes back APPROVED with its final number; if the server's
+    // approval step didn't go through, the PO is still saved as a draft.
+    const notifyCreated = (saved) => {
+      if (saved?.approvalStatus === 'APPROVED') {
+        enqueueSnackbar(`PO ${poDisplayNumber(saved)} created — approved and ready to release`, { variant: 'success' });
+      } else if (direct) {
+        enqueueSnackbar(`PO ${poDisplayNumber(saved)} saved as draft — approve it from the PO detail`, { variant: 'warning' });
+      } else {
+        enqueueSnackbar(`PO ${poDisplayNumber(saved)} saved as draft`, { variant: 'success' });
+      }
+    };
 
+    setPendingMode(saveMode);
     try {
       if (isRevise) {
         // New draft PO from the cancelled one — source indents derived server-side.
@@ -660,15 +683,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         enqueueSnackbar('Purchase order updated', { variant: 'success' });
       } else if (approvedItemMode) {
         // Item-wise: one vendor, hand-picked approved items (source indents derived).
-        const res = await createFromItems(payload).unwrap();
-        enqueueSnackbar(`PO ${poDisplayNumber(res?.data)} saved as draft`, { variant: 'success' });
+        const res = await createFromItems({ ...payload, saveMode: direct ? 'DIRECT' : 'DRAFT' }).unwrap();
+        notifyCreated(res?.data);
       } else {
-        const res = await createPo({ ...payload, indentId: indent._id }).unwrap();
-        enqueueSnackbar(`PO ${poDisplayNumber(res?.data)} saved as draft`, { variant: 'success' });
+        const res = await createPo({ ...payload, indentId: indent._id, saveMode: direct ? 'DIRECT' : 'DRAFT' }).unwrap();
+        notifyCreated(res?.data);
       }
       onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save purchase order', { variant: 'error' });
+    } finally {
+      setPendingMode('');
     }
   };
 
@@ -1132,9 +1157,18 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       {/* Footer */}
       <Divider />
       <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#fff' }}>
-        <Typography variant="caption" color="text.secondary">
-          {validItems.length} item(s) · {fmtINR(totals.grand)}
-        </Typography>
+        <Box>
+          <Typography variant="caption" color="text.secondary" display="block">
+            {validItems.length} item(s) · {fmtINR(totals.grand)}
+          </Typography>
+          {isCreate && (
+            <Typography variant="caption" color="text.secondary" display="block">
+              {canDirectSave
+                ? 'Draft stays editable and needs approval · Save PO Directly approves it now with the final PO number'
+                : 'PO approval is required for your role — save as draft and send it for approval'}
+            </Typography>
+          )}
+        </Box>
         <Box sx={{ display: 'flex', gap: 1.5 }}>
           <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || previewing}>Cancel</Button>
           <Button variant="outlined" color="secondary"
@@ -1142,10 +1176,35 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
             onClick={handlePreview} disabled={saving || previewing}>
             Preview PDF
           </Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-            onClick={handleSubmit} disabled={saving || previewing}>
-            {isEdit ? 'Save Changes' : 'Save as Draft'}
-          </Button>
+          {isCreate ? (
+            <>
+              <Tooltip title="Creates an editable draft PO with a temporary DRAFT number. It must be approved before release.">
+                <span>
+                  <Button variant={canDirectSave ? 'outlined' : 'contained'}
+                    startIcon={pendingMode === 'DRAFT' ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+                    onClick={() => handleSubmit('DRAFT')} disabled={saving || previewing}>
+                    Save as Draft
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={canDirectSave
+                ? 'Creates the PO as approved with its final PO number — ready to release. No separate approval step.'
+                : 'Not available — PO approval is required for your role (needs PO approval rights).'}>
+                <span>
+                  <Button variant="contained" color="success"
+                    startIcon={pendingMode === 'DIRECT' ? <CircularProgress size={16} color="inherit" /> : <CheckCircle2 size={16} />}
+                    onClick={() => handleSubmit('DIRECT')} disabled={!canDirectSave || saving || previewing}>
+                    Save PO Directly
+                  </Button>
+                </span>
+              </Tooltip>
+            </>
+          ) : (
+            <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+              onClick={() => handleSubmit()} disabled={saving || previewing}>
+              {isEdit ? 'Save Changes' : 'Save as Draft'}
+            </Button>
+          )}
         </Box>
       </Box>
 
