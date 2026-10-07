@@ -10,7 +10,7 @@ import {
   useGetInvoiceableGrnsQuery,
   useCreateVendorInvoiceMutation,
   useUpdateVendorInvoiceMutation,
-  useGetProformaInvoiceByIdQuery,
+  useGetInvoiceAdvancePositionQuery,
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fileHref } from '../indents/indentMeta';
@@ -84,8 +84,13 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
   const anchor = selectedQcs[0] || null; // first pick fixes the vendor + PO
 
   const piId = anchor?.piId || invoice?.piId;
-  const { data: piRes } = useGetProformaInvoiceByIdQuery(piId, { skip: !piId });
-  const advancePaid = round2(invoice?.advancePaid ?? piRes?.data?.paidAmount ?? 0);
+  // Server-computed PI advance position: what is still unallocated after the
+  // PI's other invoices (this invoice's own share excluded when editing).
+  const { data: advRes } = useGetInvoiceAdvancePositionQuery(
+    { piId, excludeInvoiceId: invoice?._id || undefined },
+    { skip: !open || !piId },
+  );
+  const advancePosition = advRes?.data || null;
 
   useEffect(() => {
     if (!open) return;
@@ -133,7 +138,14 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
     return { taxable: round2(a.taxable + c.taxable), gst: round2(a.gst + c.gst), total: round2(a.total + c.total) };
   }, { taxable: 0, gst: 0, total: 0 }), [items]);
   const invoiceAmount = itemTotals.total;
-  const netPayable = round2(invoiceAmount - (form.debitNoteRequired ? num(form.debitNoteAmount) : 0) - advancePaid);
+  const debitNote = form.debitNoteRequired ? num(form.debitNoteAmount) : 0;
+  // Preview of the server's allocation rule: min(available advance, invoice − debit
+  // note). The server recomputes it on save; an invoice that already has a voucher
+  // keeps its frozen share.
+  const advancePaid = invoice?.voucherId
+    ? round2(Math.min(num(invoice.advancePaid), Math.max(0, invoiceAmount - debitNote)))
+    : round2(Math.max(0, Math.min(num(advancePosition?.advanceAvailable), invoiceAmount - debitNote)));
+  const netPayable = round2(invoiceAmount - debitNote - advancePaid);
 
   // Group rows by GRN for the table, keeping the flat index for edits.
   const groups = useMemo(() => {
@@ -272,7 +284,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
               <Typography variant="caption" fontWeight={700}>{anchor?.vendorName || invoice?.vendorName || '—'}</Typography>
               <Chip size="small" variant="outlined" label={`PO ${anchor?.poNumber || invoice?.poNumber || '—'}`} sx={{ fontWeight: 700 }} />
               <Chip size="small" variant="outlined" label={`${isEdit ? (invoice.grnNumbers?.length || 1) : selectedQcs.length} GRN(s)`} sx={{ fontWeight: 700 }} />
-              <Chip size="small" color="info" variant="outlined" label={`Advance ${fmtINR(advancePaid)}`} sx={{ fontWeight: 700 }} />
+              <Chip size="small" color="info" variant="outlined" label={advancePosition ? `PI advance available ${fmtINR(advancePosition.advanceAvailable)} of ${fmtINR(advancePosition.advancePaid)}` : `Advance ${fmtINR(advancePaid)}`} sx={{ fontWeight: 700 }} />
             </Box>
           )}
         </Paper>
@@ -366,7 +378,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <Amt label="INVOICE" value={invoiceAmount} />
             <Amt label="− DEBIT NOTE" value={form.debitNoteRequired ? form.debitNoteAmount : 0} />
-            <Amt label="− ADVANCE PAID" value={advancePaid} />
+            <Amt label="− ADVANCE ADJUSTED" value={advancePaid} />
             <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="primary.main" fontWeight={700}>NET PAYABLE</Typography><Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(netPayable)}</Typography></Box>
           </Box>
         </Paper>

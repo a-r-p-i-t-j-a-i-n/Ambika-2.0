@@ -14,11 +14,11 @@ export const vendorApi = baseApi.injectEndpoints({
     }),
     createVendor: builder.mutation({
       query: (body) => ({ url: '/vendors', method: 'POST', body }),
-      invalidatesTags: ['Vendor'],
+      invalidatesTags: ['Vendor', 'Pricing'],
     }),
     updateVendor: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/vendors/${id}`, method: 'PUT', body }),
-      invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
+      invalidatesTags: (r, e, { id }) => ['Vendor', 'Pricing', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
     }),
     deleteVendor: builder.mutation({
       query: (id) => ({ url: `/vendors/${id}`, method: 'DELETE' }),
@@ -31,12 +31,12 @@ export const vendorApi = baseApi.injectEndpoints({
     }),
     addVendorPricingHistory: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/vendors/${id}/pricing-history`, method: 'POST', body }),
-      invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
+      invalidatesTags: (r, e, { id }) => ['Vendor', 'Pricing', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
     }),
     // Add / upsert a product on a vendor's catalog (New PO "Add Vendor for this Item").
     addVendorProduct: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/vendors/${id}/products`, method: 'POST', body }),
-      invalidatesTags: (r, e, { id }) => ['Vendor', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
+      invalidatesTags: (r, e, { id }) => ['Vendor', 'Pricing', { type: 'Vendor', id }, { type: 'Vendor', id: `pricing-${id}` }],
     }),
   }),
 });

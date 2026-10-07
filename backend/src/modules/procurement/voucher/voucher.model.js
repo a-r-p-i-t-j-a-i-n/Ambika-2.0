@@ -59,8 +59,12 @@ const voucherSchema = new Schema({
   vendorName:    { type: String, trim: true, default: '' },
   poId:          { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder' },
   poNumber:      { type: String, trim: true, default: '' },
-  grnId:         { type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' },
-  qcId:          { type: Schema.Types.ObjectId, ref: 'IncomingQC' },
+  grnId:         { type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' }, // legacy single ref = first GRN
+  qcId:          { type: Schema.Types.ObjectId, ref: 'IncomingQC' },       // legacy single ref = first QC
+  // Multi-GRN invoices: every GRN / QC the invoice covers (copied from the invoice).
+  grnIds:        { type: [{ type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' }], default: [] },
+  grnNumbers:    { type: [String], default: [] },
+  qcIds:         { type: [{ type: Schema.Types.ObjectId, ref: 'IncomingQC' }], default: [] },
 
   // ── Financials (snapshot from the invoice) ──
   invoiceAmount:    { type: Number, default: 0 },

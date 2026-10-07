@@ -214,6 +214,7 @@ const VoucherDetail = () => {
                   <Grid item xs={6}><Field label="Invoice" value={v.invoiceNumber || '—'} /></Grid>
                   <Grid item xs={6}><Field label="PO" value={v.poNumber || '—'} /></Grid>
                   <Grid item xs={6}><Field label="Status" value={<VoucherStatusChip status={v.voucherStatus} />} /></Grid>
+                  <Grid item xs={12}><Field label={`GRN${(v.grnNumbers || []).length > 1 ? 's' : ''}`} value={(v.grnNumbers || []).join(', ') || '—'} /></Grid>
                 </>
               )}
             </Grid>

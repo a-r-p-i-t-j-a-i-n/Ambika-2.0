@@ -21,6 +21,10 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
 
   useEffect(() => { if (open) { setAllowOverReceipt(false); setRemarks(''); } }, [open]);
 
+  // Lines received beyond the pending qty (figures are server-derived; the
+  // server re-validates against the PO's current state on completion).
+  const extraLines = (grn?.items || []).filter((l) => Number(l.extraQty) > 0);
+
   const handleComplete = async () => {
     try {
       await completeGrn({ id: grn._id, allowOverReceipt, remarks: remarks.trim() }).unwrap();
@@ -47,10 +51,21 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
         <Alert severity="warning" sx={{ mb: 2 }}>
           This will <b>increase stock</b> by the received quantities and update the PO. It cannot be undone.
         </Alert>
+        {extraLines.length > 0 && (
+          <Alert severity="error" sx={{ mb: 1.5 }}>
+            Received qty exceeds the PO&apos;s current pending qty for:{' '}
+            {extraLines.map((l) => `${l.itemName} (+${l.extraQty})`).join(', ')}.
+            Tick &quot;Allow over-receipt&quot; and add remarks to receive the extra.
+          </Alert>
+        )}
         <FormControlLabel
           control={<Checkbox checked={allowOverReceipt} onChange={(e) => setAllowOverReceipt(e.target.checked)} />}
           label="Allow over-receipt (received qty may exceed pending PO qty)"
         />
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          Pending qty is re-checked against the PO when you complete. Without this, any
+          excess over the current pending qty is rejected.
+        </Typography>
         <TextField label="Remarks" fullWidth multiline minRows={2} value={remarks}
           onChange={(e) => setRemarks(e.target.value)} sx={{ mt: 1.5 }} />
       </DialogContent>

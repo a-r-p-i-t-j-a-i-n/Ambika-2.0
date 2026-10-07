@@ -22,6 +22,7 @@ const poItemSchema = Joi.object({
   unit:     Joi.string().trim().max(30).allow('', null).default('Pcs'),
   rate:     Joi.number().min(0).default(0),
   gstRate:  Joi.number().min(0).max(100).default(0),
+  rateSource: Joi.string().valid('VENDOR_MASTER', 'APPROVED_QUOTATION', 'MANUAL', '').allow(null),
   // Client-side computed amounts are accepted but recomputed server-side.
   taxableAmount: Joi.number().min(0).optional(),
   taxAmount:     Joi.number().min(0).optional(),

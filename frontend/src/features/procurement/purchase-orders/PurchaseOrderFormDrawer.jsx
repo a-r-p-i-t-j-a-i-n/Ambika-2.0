@@ -48,6 +48,15 @@ const NO_SPIN = {
 const GST_PRESETS = [0, 5, 12, 18, 28];
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
+// Origin of an OTHER line's rate — only a user edit (MANUAL) is written back to
+// the Vendor Master / Pricing History when the PO is approved.
+const rateSourceOf = (it) => {
+  if (it.rateEdited) return 'MANUAL';
+  if (it.fromQuotation) return 'APPROVED_QUOTATION';
+  if (it.autoRate != null) return 'VENDOR_MASTER';
+  return it.rateSource || '';
+};
+
 const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18, hsn: '', indentId: '', indentNumber: '', indentItemId: '', indentItemDisplayNumber: '', approvedQuantity: 0, fromApprovedItem: false, rateMatched: undefined, manual: false });
 const emptyJslItem = () => ({ grade: '', width: '1250', finish: '2B/ME', quantity: '', unit: 'Kgs', baseRate: '', upfrontDiscount: '', bonanzaDiscount: '' });
 const emptyItemFor = (fmt) => (fmt === 'JSL' ? emptyJslItem() : emptyItem());
@@ -220,6 +229,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         indentId: it.indentId || '', indentNumber: it.indentNumber || '',
         indentItemId: it.indentItemId || '', indentItemDisplayNumber: it.indentItemDisplayNumber || '',
         manual: true, rateMatched: true,
+        rateSource: it.rateSource || '', rateEdited: it.rateSource === 'MANUAL',
       })) : [emptyItemFor(fmt)]);
     } else {
       setIndent(null); setVendor(null); setApprovedVendors([]); setApprovedVendorId('');
@@ -419,8 +429,9 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       rate: it.approvedRate ?? '',
       gstRate: it.gstRate ?? 18,
       // Approved-quotation rates are negotiated — keep them; don't overwrite from
-      // the Vendor Master catalog.
+      // the Vendor Master catalog (and don't treat them as a user rate edit).
       manual: true,
+      fromQuotation: true,
     }));
     setItems(lines.length ? lines : [emptyItem()]);
   };
@@ -608,6 +619,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       indentItemDisplayNumber: it.indentItemDisplayNumber || '',
       quantity: Number(it.quantity), unit: it.unit || 'Pcs',
       rate: Number(it.rate) || 0, gstRate: Number(it.gstRate) || 0,
+      rateSource: rateSourceOf(it),
     })),
   });
 
@@ -1060,7 +1072,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                                   itemName: val.productName, skuCode: val.skuCode || '',
                                   skuId: val.skuId || '', rate: val.rate ?? it.rate, unit: val.unit || it.unit,
                                   gstRate: val.gstRate ?? it.gstRate, hsn: val.hsn || '',
-                                  rateMatched: true, manual: false, autoRate: val.rate ?? undefined, autoGst: val.gstRate ?? undefined,
+                                  rateMatched: true, manual: false, rateEdited: false, autoRate: val.rate ?? undefined, autoGst: val.gstRate ?? undefined,
                                 });
                               }
                             }}
@@ -1088,7 +1100,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                         {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                       </TextField>
                       <TextField size="small" type="number" placeholder="0.00" value={it.rate}
-                        onChange={(e) => setItem(idx, { rate: e.target.value, manual: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
+                        onChange={(e) => setItem(idx, { rate: e.target.value, manual: true, rateEdited: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                       <Autocomplete
                         freeSolo disableClearable size="small"
                         options={GST_PRESETS.map(String)}
@@ -1100,7 +1112,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                           // when the vendor-master auto-fill sets the GST); those must NOT
                           // flag the row, or auto-fill would be permanently blocked.
                           const patch = { gstRate: cleaned === '' ? '' : Number(cleaned) };
-                          if (reason === 'input') patch.manual = true;
+                          if (reason === 'input') { patch.manual = true; patch.rateEdited = true; }
                           setItem(idx, patch);
                         }}
                         renderInput={(params) => (

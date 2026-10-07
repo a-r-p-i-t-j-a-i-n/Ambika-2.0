@@ -79,6 +79,86 @@ const computeLines = (items = []) => {
   };
 };
 
+// GRN states whose received qty counts toward the PO (stock already posted).
+const POSTED_GRN_STATUSES = [GRN_STATUS.RECEIVED, GRN_STATUS.PARTIAL_RECEIVED, GRN_STATUS.FULLY_RECEIVED];
+
+/** Match a GRN line back to its PO line (by PO line _id, else by SKU code). */
+const matchPoItem = (poItems = [], line) =>
+  poItems.find((p) => line.poItemId && String(p._id) === String(line.poItemId))
+  || poItems.find((p) => p.skuCode && line.skuCode
+    && String(p.skuCode).trim().toUpperCase() === String(line.skuCode).trim().toUpperCase());
+
+/**
+ * Received qty per PO line, summed from the PO's completed GRNs — the source of
+ * truth for "already received" (drafts and cancelled GRNs never count).
+ */
+const receivedByPoLine = async (po) => {
+  const grns = await GoodsReceiptNote.find({
+    poId: po._id, isDeleted: { $ne: true }, grnStatus: { $in: POSTED_GRN_STATUSES },
+  }).select('items.poItemId items.skuCode items.receivedQty').lean();
+  const received = new Map((po.items || []).map((p) => [String(p._id), 0]));
+  for (const g of grns) {
+    for (const l of g.items || []) {
+      const p = matchPoItem(po.items, l);
+      if (p) received.set(String(p._id), round2(received.get(String(p._id)) + (Number(l.receivedQty) || 0)));
+    }
+  }
+  return received;
+};
+
+/**
+ * Rebuild GRN lines with ordered / previously-received qty taken from the
+ * current PO + completed GRNs — never from the client. Only the physical
+ * receipt fields (invoice/received qty, batch, remarks) come from `items`.
+ */
+const snapshotFromPo = (po, received, items = []) => {
+  const seen = new Set();
+  return items.map((it) => {
+    const p = matchPoItem(po.items, it);
+    if (!p) throw new AppError(`"${it.itemName}" is not a line on PO ${po.poNumber || ''}`.trim(), 400);
+    const key = String(p._id);
+    if (seen.has(key)) throw new AppError(`"${p.itemName}" appears more than once in this GRN`, 400);
+    seen.add(key);
+    return {
+      ...it,
+      poItemId: p._id,
+      skuId: it.skuId || p.skuId, skuCode: it.skuCode || p.skuCode, unit: it.unit || p.unit,
+      orderedQty: p.quantity || 0,
+      previouslyReceivedQty: received.get(key) || 0,
+    };
+  });
+};
+
+const plain = (doc) => (typeof doc?.toObject === 'function' ? doc.toObject() : doc);
+
+/** Re-derive a GRN's PO-based figures against the current database state. */
+const refreshLines = async (po, items) => {
+  const received = await receivedByPoLine(po);
+  return computeLines(snapshotFromPo(po, received, (items || []).map(plain)));
+};
+
+const PO_LOCK_TTL_MS = 2 * 60 * 1000;
+
+/** Claim the per-PO GRN posting lock; null when another completion holds it. */
+const acquirePoLock = async (poId) => {
+  const now = new Date();
+  const res = await VendorPurchaseOrder.updateOne(
+    {
+      _id: poId,
+      $or: [{ grnPostingLockAt: null }, { grnPostingLockAt: { $lt: new Date(now.getTime() - PO_LOCK_TTL_MS) } }],
+    },
+    { $set: { grnPostingLockAt: now } },
+  );
+  return res.modifiedCount === 1 ? now : null;
+};
+
+const releasePoLock = (poId, lockedAt) => VendorPurchaseOrder.updateOne(
+  { _id: poId, grnPostingLockAt: lockedAt },
+  { $set: { grnPostingLockAt: null } },
+).catch((err) => logger.error(`[grn] failed to release PO lock ${poId}: ${err.message}`));
+
+const isVersionConflict = (err) => err?.name === 'VersionError' || err?.name === 'ParallelSaveError';
+
 // ─────────────────────────────────────────────────────────────
 // PDF — Goods Receiving & Inspection Report (A4)
 // ─────────────────────────────────────────────────────────────
@@ -314,17 +394,20 @@ export const grnService = {
       throw new AppError('This PO is already fully received', 400);
     }
 
-    // Rule 2: auto-load lines from the PO (pending only).
-    const sourceItems = data.items?.length ? data.items : (po.items || [])
-      .filter((it) => round2((it.quantity || 0) - (it.receivedQty || 0)) > 0)
+    // Rule 2: auto-load lines from the PO (pending only). Ordered / already
+    // received qty always come from the PO + its completed GRNs, never the client.
+    const received = await receivedByPoLine(po);
+    const sourceItems = data.items?.length ? snapshotFromPo(po, received, data.items) : (po.items || [])
+      .filter((it) => round2((it.quantity || 0) - (received.get(String(it._id)) || 0)) > 0)
       .map((it) => {
-        const pending = round2((it.quantity || 0) - (it.receivedQty || 0));
+        const prev = received.get(String(it._id)) || 0;
+        const pending = round2((it.quantity || 0) - prev);
         return {
           // For JSL, itemName is the "Grade Width Finish" label that should be
           // shown as the Item Description; itemDescription only holds the raw
           // indent item name and is not used for display.
           poItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
-          orderedQty: it.quantity, previouslyReceivedQty: it.receivedQty || 0,
+          orderedQty: it.quantity, previouslyReceivedQty: prev,
           invoiceQty: pending, receivedQty: pending, rate: it.rate, batchNo: '', remarks: '',
         };
       });
@@ -376,6 +459,19 @@ export const grnService = {
     const grn = await GoodsReceiptNote.findOne({ _id: id, isDeleted: { $ne: true } })
       .populate('createdBy', 'name').lean();
     if (!grn) throw new AppError('GRN not found', 404);
+    // An open draft's "already received / pending" snapshot goes stale as other
+    // GRNs on the same PO complete — show it against the current PO state.
+    if (isOpenDraft(grn)) {
+      try {
+        const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).lean();
+        if (po) {
+          const { lines, totals } = await refreshLines(po, grn.items);
+          Object.assign(grn, totals, { items: lines });
+        }
+      } catch (err) {
+        logger.warn(`[grn] could not refresh draft ${grn.grnNumber} against its PO: ${err.message}`);
+      }
+    }
     return grn;
   },
 
@@ -394,12 +490,25 @@ export const grnService = {
           fullyReceived:   { $sum: { $cond: [{ $eq: ['$grnStatus', GRN_STATUS.FULLY_RECEIVED] }, 1, 0] } },
           draft:           { $sum: { $cond: [{ $eq: ['$grnStatus', GRN_STATUS.DRAFT] }, 1, 0] } },
           cancelled:       { $sum: { $cond: [{ $eq: ['$grnStatus', GRN_STATUS.CANCELLED] }, 1, 0] } },
-          receivedQty:     { $sum: { $cond: [{ $ne: ['$grnStatus', GRN_STATUS.CANCELLED] }, '$totalReceivedQty', 0] } },
-          pendingQty:      { $sum: { $cond: [{ $ne: ['$grnStatus', GRN_STATUS.CANCELLED] }, { $subtract: ['$totalOrderedQty', '$totalReceivedQty'] }, 0] } },
+          // Only completed GRNs have actually received anything.
+          receivedQty:     { $sum: { $cond: [{ $in: ['$grnStatus', POSTED_GRN_STATUSES] }, '$totalReceivedQty', 0] } },
         },
       },
     ]);
-    return rows[0] || { total: 0, partialReceived: 0, fullyReceived: 0, draft: 0, cancelled: 0, receivedQty: 0, pendingQty: 0 };
+    // Pending is a PO-level figure: ordered − received, per line, over POs that
+    // are still awaiting material (counted once per PO, not once per GRN).
+    const pendingRows = await VendorPurchaseOrder.aggregate([
+      { $match: { isDeleted: { $ne: true }, poStatus: { $in: [PO_STATUS.RELEASED_TO_VENDOR, PO_STATUS.PARTIAL_RECEIVED] } } },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: null,
+          pendingQty: { $sum: { $max: [0, { $subtract: [{ $ifNull: ['$items.quantity', 0] }, { $ifNull: ['$items.receivedQty', 0] }] }] } },
+        },
+      },
+    ]);
+    const stats = rows[0] || { total: 0, partialReceived: 0, fullyReceived: 0, draft: 0, cancelled: 0, receivedQty: 0 };
+    return { ...stats, pendingQty: round2(pendingRows[0]?.pendingQty || 0) };
   },
 
   async update(id, data, user) {
@@ -416,7 +525,9 @@ export const grnService = {
     if (invoiceDocument) grn.invoiceDocument = invoiceDocument.fileUrl ? { ...invoiceDocument, uploadedAt: new Date() } : {};
     if (items) {
       await assertPurchasable(items);
-      const { lines, totals } = computeLines(items);
+      const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).lean();
+      if (!po) throw new AppError('Linked Purchase Order not found', 404);
+      const { lines, totals } = await refreshLines(po, items);
       grn.items = lines;
       Object.assign(grn, totals);
     }
@@ -465,16 +576,49 @@ export const grnService = {
     const existing = await inventoryService.getMovementsByRef('GRN', grn._id);
     if (existing.length) throw new AppError('Inventory movements already exist for this GRN', 400);
 
+    // Serialise completions per PO: of two GRNs racing for the same remaining
+    // qty, the second waits for (and is validated against) the first.
+    const poLockedAt = await acquirePoLock(grn.poId);
+    if (!poLockedAt) {
+      await releaseClaim();
+      throw new AppError('Another GRN for this PO is being completed right now. Please try again in a moment.', 409);
+    }
+    try {
+      return await this._completeLocked(grn, data, user, releaseClaim);
+    } finally {
+      await releasePoLock(grn.poId, poLockedAt);
+    }
+  },
+
+  /** complete() body — runs with the GRN claimed and the PO posting lock held. */
+  async _completeLocked(grn, data, user, releaseClaim) {
+    const id = grn._id;
     let po; let pi; let receivedLines;
     try {
       po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
       if (!po) throw new AppError('Linked Purchase Order not found', 404);
 
+      // Re-derive ordered / already-received / pending from the current DB state
+      // — the draft's snapshot may predate other GRNs completed on this PO.
+      const { lines, totals } = await refreshLines(po, grn.items);
+      grn.items = lines;
+      Object.assign(grn, totals);
+
       receivedLines = grn.items.filter((it) => round2(it.receivedQty) > 0);
       if (!receivedLines.length) throw new AppError('Enter a received quantity on at least one item', 400);
 
-      // Rule 6: extra receipt requires remarks.
-      const extraNoRemarks = receivedLines.find((l) => round2(l.extraQty) > 0 && !(l.remarks || data.remarks || grn.remarks));
+      // Rule 6: extra receipt (beyond the CURRENT pending qty) must be explicitly
+      // allowed by the user and carry remarks.
+      const extraLines = receivedLines.filter((l) => round2(l.extraQty) > 0);
+      if (extraLines.length && !data.allowOverReceipt) {
+        const l = extraLines[0];
+        throw new AppError(
+          `"${l.itemName}": receiving ${l.receivedQty} but only ${l.pendingBeforeGrn} is pending on the PO. `
+          + 'Tick "Allow over-receipt" to receive the extra quantity.',
+          409,
+        );
+      }
+      const extraNoRemarks = extraLines.find((l) => !(l.remarks || data.remarks || grn.remarks));
       if (extraNoRemarks) {
         throw new AppError(`"${extraNoRemarks.itemName}" was received over the ordered qty — remarks are required for extra receipt`, 400);
       }
@@ -525,15 +669,40 @@ export const grnService = {
       throw err;
     }
 
-    for (const line of receivedLines) {
-      // ── 2) PO line: receivedQty / pendingQty ──
-      const poItem = po.items.find((p) => String(p._id) === String(line.poItemId))
-        || po.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode);
-      if (poItem) {
-        poItem.receivedQty = round2((poItem.receivedQty || 0) + line.receivedQty);
+    // ── 2) PO lines: receivedQty / pendingQty = completed GRNs + this GRN ──
+    // Absolute values (not increments), so re-applying on a fresh copy after a
+    // concurrent write elsewhere on the PO is safe.
+    const priorReceived = new Map(receivedLines.map((l) => [String(l.poItemId), round2(l.previouslyReceivedQty)]));
+    let poFullyReceived = false;
+    const applyToPo = (doc) => {
+      for (const line of receivedLines) {
+        const poItem = matchPoItem(doc.items, line);
+        if (!poItem) continue;
+        poItem.receivedQty = round2((priorReceived.get(String(line.poItemId)) || 0) + line.receivedQty);
         poItem.pendingQty = Math.max(0, round2((poItem.quantity || 0) - poItem.receivedQty));
       }
+      // ── 4) Roll PO status (Rules 4 & 5) ──
+      poFullyReceived = doc.items.every((p) => round2((p.quantity || 0) - (p.receivedQty || 0)) <= 0);
+      doc.poStatus = poFullyReceived ? PO_STATUS.FULLY_RECEIVED : PO_STATUS.PARTIAL_RECEIVED;
+      doc.updatedBy = user?._id;
+      doc.activityTimeline.push({ action: 'GRN_RECEIVED', description: `${grn.grnNumber} received (${grn.totalReceivedQty})`, actorId: user?._id });
+    };
+    applyToPo(po);
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await po.save();
+        break;
+      } catch (err) {
+        if (!isVersionConflict(err) || attempt >= 4) {
+          logger.error(`[grn] ${grn.grnNumber}: stock posted but PO ${grn.poNumber} update failed: ${err.message}`);
+          throw new AppError('Stock was posted but the PO could not be updated. Please contact the administrator.', 500);
+        }
+        po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
+        applyToPo(po);
+      }
+    }
 
+    for (const line of receivedLines) {
       // ── 3) PI line: receivedQty / balanceQty ──
       if (pi) {
         const piItem = pi.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode)
@@ -545,13 +714,10 @@ export const grnService = {
       }
     }
 
-    // ── 4) Roll PO status (Rules 4 & 5) ──
-    const poFullyReceived = po.items.every((p) => round2((p.quantity || 0) - (p.receivedQty || 0)) <= 0);
-    po.poStatus = poFullyReceived ? PO_STATUS.FULLY_RECEIVED : PO_STATUS.PARTIAL_RECEIVED;
-    po.updatedBy = user?._id;
-    po.activityTimeline.push({ action: 'GRN_RECEIVED', description: `${grn.grnNumber} received (${grn.totalReceivedQty})`, actorId: user?._id });
-    await po.save();
-    if (pi) { pi.updatedBy = user?._id; await pi.save(); }
+    if (pi) {
+      pi.updatedBy = user?._id;
+      try { await pi.save(); } catch (err) { logger.error(`[grn] ${grn.grnNumber}: PI ${grn.piNumber} received-qty update failed: ${err.message}`); }
+    }
 
     // ── 5) Finalize GRN + QC handoff ──
     grn.grnStatus = poFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED;

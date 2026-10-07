@@ -8,6 +8,7 @@ import { X, Save, PackageCheck, Building2, FileText, Eye, Upload, ExternalLink }
 import { useSnackbar } from 'notistack';
 import {
   useGetPurchaseOrdersQuery,
+  useGetGrnByIdQuery,
   useCreateGrnMutation,
   useUpdateGrnMutation,
   usePreviewGrnPdfMutation,
@@ -39,8 +40,12 @@ const QtyCell = ({ label, value, color }) => (
   </Box>
 );
 
-const GrnFormDialog = ({ open, onClose, grn = null, presetPo = null }) => {
+const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) => {
   const { enqueueSnackbar } = useSnackbar();
+  // Editing: load the draft fresh — the server re-derives its "already received /
+  // pending" figures against the PO's current state (a list row may be stale).
+  const { data: freshGrnRes } = useGetGrnByIdQuery(grnProp?._id, { skip: !open || !grnProp?._id });
+  const grn = grnProp ? (freshGrnRes?.data || grnProp) : null;
   // The server assigns the GRN No. when the draft is first saved (POST create).
   // After that first save the dialog stays open on the saved draft so the user
   // keeps seeing its real number, and further saves update it (never re-create).

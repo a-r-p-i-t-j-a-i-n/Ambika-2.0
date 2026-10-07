@@ -83,7 +83,9 @@ export const updateGrnSchema = Joi.object({
 
 // Extra-receipt remarks are enforced in the service (needs PO context).
 export const completeGrnSchema = Joi.object({
-  remarks: Joi.string().trim().max(1000).allow('', null),
+  remarks:          Joi.string().trim().max(1000).allow('', null),
+  // Explicit consent to receive beyond the PO's current pending qty.
+  allowOverReceipt: Joi.boolean().default(false),
 });
 
 export const cancelGrnSchema = Joi.object({
