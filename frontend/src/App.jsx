@@ -120,6 +120,8 @@ const FinalPaymentList     = lazyWithRetry(() => import('./features/procurement/
 const FinalPaymentDetail   = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentDetail'));
 const PurchaseMasterData   = lazyWithRetry(() => import('./features/procurement/PurchaseMasterData'));
 const PurchaseFmsHub       = lazyWithRetry(() => import('./features/procurement/PurchaseFmsHub'));
+const FmsDoerAssignment    = lazyWithRetry(() => import('./features/fms-doers/DoerAssignmentPage'));
+const FmsTasksPage         = lazyWithRetry(() => import('./features/fms-doers/FmsTasksPage'));
 const VendorMaster         = lazyWithRetry(() => import('./features/procurement/vendors/VendorMaster'));
 const VendorDetail         = lazyWithRetry(() => import('./features/procurement/vendors/VendorDetail'));
 
@@ -309,6 +311,9 @@ function App() {
               {/* Purchase FMS — unified workflow page with step navigation */}
               <Route path="/purchase-fms" element={<Navigate to="/purchase-fms/purchase-indents" replace />} />
               <Route path="/purchase-fms/:step" element={<PurchaseFmsHub />} />
+              {/* FMS step-wise doers — config (fms.manageDoers) + doer task lists */}
+              <Route path="/fms/doer-assignment" element={<RequirePermission slug="fms.manageDoers" fallback="inline"><FmsDoerAssignment /></RequirePermission>} />
+              <Route path="/fms/my-tasks" element={<FmsTasksPage />} />
 
               {/* Purchase FMS — Purchase Indents */}
               <Route path="/procurement/indents" element={<IndentList />} />

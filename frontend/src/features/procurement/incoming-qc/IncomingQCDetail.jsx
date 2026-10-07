@@ -25,6 +25,7 @@ import { ReceiptText } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -172,6 +173,7 @@ const IncomingQCDetail = () => {
         );
       })()}
 
+      <FmsDoerCard entityType="QC" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>

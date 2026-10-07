@@ -88,6 +88,9 @@ export const PERMISSIONS = Object.freeze({
   'settings.view':               { module: 'Settings',       label: 'View company settings',                     risk: 'low' },
   'settings.edit':               { module: 'Settings',       label: 'Edit company settings (thresholds, GST)',   risk: 'high' },
 
+  // ── FMS Doer Assignment (step-wise doers across FMS modules) ─────
+  'fms.manageDoers':             { module: 'FMS',            label: 'Configure FMS step doers & reassign FMS tasks', risk: 'high' },
+
   // ── O2D FMS (Flow Management System) ─────────────────────────────
   'o2dfms.view':                 { module: 'O2D FMS',        label: 'View processes, tasks & dashboard',         risk: 'low' },
   'o2dfms.act':                  { module: 'O2D FMS',        label: 'Complete a step (do the operation)',        risk: 'medium' },

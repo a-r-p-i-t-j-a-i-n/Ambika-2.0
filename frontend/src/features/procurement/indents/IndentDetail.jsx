@@ -23,6 +23,7 @@ import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
 import ServiceCompletionDialog from '../service-completions/ServiceCompletionDialog';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
@@ -337,6 +338,7 @@ const IndentDetail = () => {
         );
       })()}
 
+      <FmsDoerCard entityType="INDENT" entityId={id} />
       <Grid container spacing={2}>
         {/* Header + items */}
         <Grid item xs={12}>

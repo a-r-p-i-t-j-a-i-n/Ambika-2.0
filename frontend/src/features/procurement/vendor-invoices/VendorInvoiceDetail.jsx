@@ -22,6 +22,7 @@ import VoucherFormDialog from '../vouchers/VoucherFormDialog';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const INV_ITEM_COLS = '2fr 0.8fr 0.8fr 0.6fr 0.9fr 0.9fr 0.95fr 1.4fr';
 const CMP_COLS = '1.8fr 1fr 0.5fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.95fr';
@@ -96,6 +97,7 @@ const VendorInvoiceDetail = () => {
         </Box>
       </Box>
 
+      <FmsDoerCard entityType="INVOICE" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>

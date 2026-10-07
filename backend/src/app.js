@@ -57,6 +57,8 @@ import finalPaymentRoutes from './modules/procurement/final-payment/finalPayment
 import vendorRoutes from './modules/vendors/vendor.routes.js';
 import transporterRoutes from './modules/transporters/transporter.routes.js';
 import approvalRoutes from './modules/approvals/approval.routes.js';
+import fmsDoerRoutes from './modules/fms-doers/fmsDoer.routes.js';
+import { fmsWorkflowSync } from './modules/fms-doers/fmsDoerSync.middleware.js';
 
 
 
@@ -143,6 +145,11 @@ app.use('/api/v1/o2d-fulfillment',  o2dFulfillmentRoutes); // O2D Steps 2.9–2.
 app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (process tracking)
 app.use('/api/v1/notifications',    notificationRoutes);
 app.use('/api/v1/order-intake',     orderIntakeRoutes);
+// FMS doer tasks follow Purchase FMS progress: after any successful write under
+// these paths, re-sync step tasks (post-response; never alters the request).
+app.use('/api/v1/procurement', fmsWorkflowSync);
+app.use('/api/v1/approvals', fmsWorkflowSync);
+app.use('/api/v1/fms-doers', fmsDoerRoutes); // FMS step-wise doer assignment + doer tasks
 app.use('/api/v1/procurement/indents', indentRoutes); // Purchase FMS — Purchase Indents
 app.use('/api/v1/procurement/purchase-orders', vendorPoRoutes); // Purchase FMS — Vendor POs (Step 1.4)
 app.use('/api/v1/procurement/follow-ups', followUpRoutes); // Purchase FMS — Material Follow-ups (Step 1.5)

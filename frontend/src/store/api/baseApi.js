@@ -36,6 +36,7 @@ export const baseApi = createApi({
     'Party', 'Vendor', 'Transporter', 'SKU', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison',
     'Schedule', 'Challan', 'Invoice', 'SalesInvoice', 'Auth', 'PPC', 'Shipment', 'Payment',
     'TransportBill', 'Employees',
+    'FmsDoerAssignments', 'FmsTasks',
     'AccessUsers', 'AccessRoles', 'AccessAudit',
     'Pricing', 'PriceHistory', 'PriceApprovals', 'Quote', 'CompanySettings',
     'PricingReviewers', 'PricingDocuments', 'PricingAnalytics',

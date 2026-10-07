@@ -23,6 +23,7 @@ import ProformaInvoicePdfPreview from './ProformaInvoicePdfPreview';
 import { PaymentStatusChip, modeLabel } from '../advance-payments/apMeta';
 import AdvancePaymentFormDialog from '../advance-payments/AdvancePaymentFormDialog';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -119,6 +120,7 @@ const ProformaInvoiceDetail = () => {
         </Box>
       </Box>
 
+      <FmsDoerCard entityType="PI" entityId={id} />
       <Grid container spacing={3}>
         {/* PI + PO info */}
         <Grid item xs={12} md={6}>

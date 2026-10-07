@@ -8,6 +8,7 @@ import { initSocket } from './sockets/socketService.js';
 import { seedAccessControl } from './modules/access-control/role.seed.js';
 import { seedPricing } from './modules/pricing/pricing.seed.js';
 import { startO2DEscalationJob } from './jobs/o2d-fms.escalation.job.js';
+import { startFmsDoerSyncJob } from './jobs/fms-doer.sync.job.js';
 
 const startServer = async () => {
   // Connect to MongoDB
@@ -33,6 +34,11 @@ const startServer = async () => {
   // O2D FMS — recurring SLA-breach escalation (email to owner + MD).
   if (process.env.O2D_FMS_ESCALATION !== 'off') {
     startO2DEscalationJob();
+  }
+
+  // FMS doer tasks — startup backfill + periodic reconcile.
+  if (process.env.FMS_DOER_SYNC !== 'off') {
+    startFmsDoerSyncJob();
   }
 
   server.on('error', (err) => {
