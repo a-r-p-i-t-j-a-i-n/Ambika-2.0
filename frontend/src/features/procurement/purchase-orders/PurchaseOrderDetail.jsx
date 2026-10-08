@@ -50,7 +50,8 @@ const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
     <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
     {/* overflowWrap:anywhere lets long unbroken tokens (GST/PAN/emails) wrap inside their column */}
-    <Typography sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
+    {/* div, not p: some values are chips (block elements), which may not sit inside a <p> */}
+    <Typography component="div" sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
   </Box>
 );
 

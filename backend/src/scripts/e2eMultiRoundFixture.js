@@ -26,6 +26,7 @@
  * reads the configured MONGO_URI, so it cannot touch the client's Atlas data.
  */
 import mongoose from 'mongoose';
+import { assertE2ESafe, isEntry } from './e2eSafety.js';
 
 import User from '../modules/auth/auth.model.js';
 import SKU from '../modules/skus/sku.model.js';
@@ -41,6 +42,9 @@ import { SCRAP_SKU_CODE, SCRAP_SKU_DEFAULTS } from '../modules/inventory/scrapSk
 import { COIL_CIRCLE_MAP } from '../data/coil-circle-map.js';
 
 export const E2E_URI = 'mongodb://127.0.0.1:27017/ambika_e2e_multiround';
+// Local scratch DB, S3 off, email off — or stop before anything connects.
+// Only when RUN as a script: unit tests import pure data from some fixtures.
+if (isEntry(import.meta.url)) assertE2ESafe(E2E_URI, 'e2eMultiRoundFixture.js');
 export const E2E_USER = { email: 'multiround-e2e@test.local', password: 'E2e@12345', name: 'Multi-round E2E', role: 'MD' };
 
 if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)/.test(E2E_URI)) {
@@ -52,6 +56,7 @@ const COILS = [
   { code: 'JSL202-06', name: 'DD 0.60 mm', category: 'DD Steel' },
   { code: 'JSL204-07', name: 'Cu 0.70 mm', category: 'Copper' },
   { code: 'JSL204-08', name: 'Cu 0.80 mm', category: 'Copper' },
+  { code: 'JSL204-10', name: 'Cu 1.00 mm', category: 'Copper' },
 ];
 
 /** Physical coils. Each is a GRN_IN — the identity every round links to. */
@@ -68,6 +73,12 @@ const RECEIPTS = [
   // Its own coil GRADE, so nothing --api does to JSL204-07 stock (the allow-
   // negative over-cut draws the grade's item total down) can reach it.
   { key: 'UI', coil: 'JSL202-06', batchNo: 'MR-UI-B001', weight: 2000, rate: 170, warehouse: 'PLG01' },
+  // Browser only: a fresh coil cut FULL in one go.
+  { key: 'UIFULL', coil: 'JSL202-06', batchNo: 'MR-UI-FULL', weight: 2000, rate: 170, warehouse: 'PLG01' },
+  // --api: a fresh coil cut FULL in one round. Its own grade, untouched by the rest.
+  { key: 'FULL1', coil: 'JSL204-10', batchNo: 'MR-FULL-1', weight: 2000, rate: 200, warehouse: 'PLG01' },
+  // --api: Partial 500 → Partial 700 → Full (the remaining 800).
+  { key: 'PPF', coil: 'JSL204-10', batchNo: 'MR-PPF', weight: 2000, rate: 200, warehouse: 'PLG01' },
 ];
 
 const HIST_SOURCE_REF = 'EXCEL_RM_24_25|CONVERSION|MR-HIST';
@@ -208,7 +219,14 @@ const api = async () => {
   const saved = [];
   for (let i = 0; i < plan.length; i += 1) {
     const [cut, out] = plan[i];
-    const doc = await round('PLG4', cut, [circle('JSL204-07-700', Math.round(out / 5), out)]);
+    const type = i < 3 ? 'PARTIAL' : 'FULL';
+    if (type === 'FULL') {
+      // The screen says 499 but the coil has 500 left: a stale full cut is refused, not re-sized.
+      await refused('a FULL round whose weight no longer matches what the coil has left (stale form)',
+        () => round('PLG4', 499, [circle('JSL204-07-700', 86, out)], { cuttingType: 'FULL' }),
+        /now has 500 KG remaining, not 499 KG/);
+    }
+    const doc = await round('PLG4', cut, [circle('JSL204-07-700', Math.round(out / 5), out)], { cuttingType: type });
     saved.push(doc);
     lin = await rmImsService.getCoilLineage(plg._id);
     const row = await historyRow('MR-PLG-4R');
@@ -229,6 +247,10 @@ const api = async () => {
     lin.rounds.map((r) => `${r.roundNo}:${r.remainingAfterKg}`).join(' '));
   check('round statuses Partial, Partial, Partial, Fully cut',
     eq(lin.rounds.map((r) => r.status), ['PARTIAL', 'PARTIAL', 'PARTIAL', 'FULLY_CUT']));
+  check('cutting type is stored per round: Partial, Partial, Partial, Full',
+    eq(saved.map((d) => d.cuttingType), ['PARTIAL', 'PARTIAL', 'PARTIAL', 'FULL'])
+      && eq(lin.rounds.map((r) => r.cuttingType), ['PARTIAL', 'PARTIAL', 'PARTIAL', 'FULL']),
+    lin.rounds.map((r) => r.cuttingType).join(','));
   const plgRow = await historyRow('MR-PLG-4R');
   check('history row: original 2,000, total cut 2,000, circles 1,730, scrap 270, remaining 0',
     plgRow.receivedKg === 2000 && plgRow.cutKg === 2000 && plgRow.circlesKg === 1730 && plgRow.scrapKg === 270 && plgRow.remainingKg === 0,
@@ -246,25 +268,63 @@ const api = async () => {
   check('circle stock JSL204-07-700 holds the pieces of all four rounds', (await stockOf(byCode['JSL204-07-700']._id)) === 346,
     `${await stockOf(byCode['JSL204-07-700']._id)} pcs`);
   await refused('a fifth round on the fully cut coil (no override)',
-    () => round('PLG4', 1, [circle('JSL204-07-700', 1, 1)]), /fully cut — 0 KG is available/);
+    () => round('PLG4', 1, [circle('JSL204-07-700', 1, 1)], { cuttingType: 'PARTIAL' }), /fully cut — 0 KG is available/);
+  await refused('a FULL round on the fully cut coil',
+    () => round('PLG4', 1, [circle('JSL204-07-700', 1, 1)], { cuttingType: 'FULL' }), /already fully cut — 0 KG remaining/);
+  await refused('…even with "Allow cutting more coil than we hold" on (full means what is left, and nothing is)',
+    () => round('PLG4', 1, [circle('JSL204-07-700', 1, 1)], { cuttingType: 'FULL', allowNegative: true }), /already fully cut — 0 KG remaining/);
+
+  /* ── F. Full cutting of a fresh coil in ONE round ── */
+  console.log('\nF. Full cutting — fresh MR-FULL-1 (2,000 kg) in one round');
+  const full1 = receipts.FULL1;
+  const f1 = await round('FULL1', 2000, [circle('JSL204-10-850', 100, 1100), circle('JSL204-10-925', 80, 600)], { cuttingType: 'FULL' });
+  lin = await rmImsService.getCoilLineage(full1._id);
+  check('a FULL round on a fresh 2,000 kg coil takes all 2,000 kg', f1.coilWeightKg === 2000 && f1.cuttingType === 'FULL');
+  check('…remaining 0, coil FULLY_CUT, 1 round, round status Fully cut',
+    lin.totals.coil.availableKg === 0 && lin.totals.coil.status === 'FULLY_CUT' && lin.totals.rounds === 1 && lin.rounds[0].status === 'FULLY_CUT');
+  check('…two circle sizes in one round: output 1,700, scrap 300, yield 85%',
+    f1.circlesWeightKg === 1700 && f1.scrapKg === 300 && f1.yieldRatioPct === 85);
+  await refused('FULL cutting with "No receipt available" (no coil to take the remainder of)',
+    () => rmImsService.convert({
+      clientRequestId: 'mr-full-manual', manualFallback: true, coilSkuId: full1.skuId, coilWeightKg: 100,
+      warehouse: 'PLG01', cuttingType: 'FULL', circles: [circle('JSL204-10-850', 5, 50)],
+    }, user), /Full cutting needs the physical coil/);
+  /* ── G0. Partial → Partial → Full on a fresh 2,000 kg coil ── */
+  console.log('\nPartial 500 → Partial 700 → Full (800) — MR-PPF');
+  const ppf = receipts.PPF;
+  const p1 = await round('PPF', 500, [circle('JSL204-10-850', 50, 425)], { cuttingType: 'PARTIAL' });
+  const p2 = await round('PPF', 700, [circle('JSL204-10-925', 70, 595)], { cuttingType: 'PARTIAL' });
+  let ppfLin = await rmImsService.getCoilLineage(ppf._id);
+  check('after Partial 500 + Partial 700: remaining 800, PARTIALLY_CUT', ppfLin.totals.coil.availableKg === 800 && ppfLin.totals.coil.status === 'PARTIALLY_CUT');
+  const p3 = await round('PPF', 800, [circle('JSL204-10-850', 80, 680)], { cuttingType: 'FULL' });
+  ppfLin = await rmImsService.getCoilLineage(ppf._id);
+  check('Full takes exactly the remaining 800 kg', p3.coilWeightKg === 800 && p3.cuttingType === 'FULL' && !!p1 && !!p2);
+  check('rounds: Partial 500 → 1,500 · Partial 700 → 800 · Full 800 → 0; coil FULLY_CUT',
+    eq(ppfLin.rounds.map((r) => [r.cuttingType, r.cutKg, r.remainingAfterKg, r.status]), [['PARTIAL', 500, 1500, 'PARTIAL'], ['PARTIAL', 700, 800, 'PARTIAL'], ['FULL', 800, 0, 'FULLY_CUT']])
+      && ppfLin.totals.coil.status === 'FULLY_CUT',
+    JSON.stringify(ppfLin.rounds.map((r) => [r.cuttingType, r.cutKg, r.remainingAfterKg, r.status])));
+  check('circles 1,700 · scrap 300 · weighted yield 85%', ppfLin.totals.circlesKg === 1700 && ppfLin.totals.scrapKg === 300 && ppfLin.totals.avgYieldPct === 85,
+    JSON.stringify([ppfLin.totals.circlesKg, ppfLin.totals.scrapKg, ppfLin.totals.avgYieldPct]));
+  await refused('an unknown cutting type', () => round('OVER', 10, [circle('JSL204-07-700', 1, 5)], { cuttingType: 'HALF' }),
+    /Cutting type must be FULL or PARTIAL/);
 
   /* ── B. Validation ── */
   console.log('\nB. Validation on MR-OVER (1,000 kg)');
   await refused('1,001 kg from a coil with 1,000 available',
-    () => round('OVER', 1001, [circle('JSL204-07-700', 10, 900)]), /Only 1,000 KG is available from this physical coil/);
+    () => round('OVER', 1001, [circle('JSL204-07-700', 10, 900)], { cuttingType: 'PARTIAL' }), /Only 1,000 KG is available from this physical coil/);
   const schemaBase = {
     coilSkuId: String(receipts.OVER.skuId), coilReceiptId: String(receipts.OVER._id),
     circles: [{ circleSkuId: String(byCode['JSL204-07-700']._id), pcs: 1, weightKg: 1 }],
   };
   check('0 kg is refused at the API boundary', !!rmConvertSchema.validate({ ...schemaBase, coilWeightKg: 0 }).error);
   check('negative kg is refused at the API boundary', !!rmConvertSchema.validate({ ...schemaBase, coilWeightKg: -5 }).error);
-  await refused('0 kg reaching the service directly', () => round('OVER', 0, [circle('JSL204-07-700', 1, 1)]));
-  await refused('a negative weight reaching the service directly', () => round('OVER', -5, [circle('JSL204-07-700', 1, 1)]));
-  const overRound1 = await round('OVER', 400, [circle('JSL204-07-700', 70, 350)]);
+  await refused('0 kg reaching the service directly', () => round('OVER', 0, [circle('JSL204-07-700', 1, 1)], { cuttingType: 'PARTIAL' }));
+  await refused('a negative weight reaching the service directly', () => round('OVER', -5, [circle('JSL204-07-700', 1, 1)], { cuttingType: 'PARTIAL' }));
+  const overRound1 = await round('OVER', 400, [circle('JSL204-07-700', 70, 350)], { cuttingType: 'PARTIAL' });
   check('a valid first round on MR-OVER saves (400 kg → 600 left)', !!overRound1?._id);
-  await refused('601 kg once only 600 is left', () => round('OVER', 601, [circle('JSL204-07-700', 10, 500)]),
+  await refused('601 kg once only 600 is left', () => round('OVER', 601, [circle('JSL204-07-700', 10, 500)], { cuttingType: 'PARTIAL' }),
     /Only 600 KG is available from this physical coil/);
-  const overDoc = await round('OVER', 700, [circle('JSL204-07-700', 120, 600)], { allowNegative: true });
+  const overDoc = await round('OVER', 700, [circle('JSL204-07-700', 120, 600)], { allowNegative: true, cuttingType: 'PARTIAL' });
   check('with "Allow cutting more coil than we hold" ON, 700 kg of 600 is accepted (existing behaviour)', !!overDoc?._id);
   lin = await rmImsService.getCoilLineage(receipts.OVER._id);
   const overRow = await historyRow('MR-OVER');
@@ -278,8 +338,8 @@ const api = async () => {
   const jw = receipts.JW2;
   const scrapAllBefore = await stockOf(scrapSku._id);
   const scrapPlgBeforeJw = await stockOf(scrapSku._id, 'PLG01');
-  const jw1 = await round('JW2', 1000, [circle('JSL204-08-850', 170, 850)]);
-  const jw2 = await round('JW2', 1000, [circle('JSL204-08-850', 164, 820)]);
+  const jw1 = await round('JW2', 1000, [circle('JSL204-08-850', 170, 850)], { cuttingType: 'PARTIAL' });
+  const jw2 = await round('JW2', 1000, [circle('JSL204-08-850', 164, 820)], { cuttingType: 'FULL' });
   check('both job-work rounds save', !!jw1?._id && !!jw2?._id);
   check('circles are recorded (CONVERT_IN per round)',
     (await InventoryMovement.countDocuments({ txnType: TXN_TYPE.CONVERT_IN, refNumber: { $in: [jw1.conversionNumber, jw2.conversionNumber] } })) === 2);
@@ -309,7 +369,7 @@ const api = async () => {
     conversionDate: new Date(Date.UTC(2026, 9, 20)), clientRequestId: 'mr-hist-replay',
     batchNo: 'MR-HIST', coilReceiptId: receipts.HIST._id, coilSkuId: receipts.HIST.skuId,
     coilWeightKg: 400, rate: 190, warehouse: 'PLG01', scrapVerified: 'PENDING',
-    circles: [circle('JSL204-08-850', 68, 340)],
+    cuttingType: 'PARTIAL', circles: [circle('JSL204-08-850', 68, 340)],
   };
   const c1 = await rmImsService.convert(replayPayload, user);
   const before = await counts();
@@ -337,11 +397,11 @@ const api = async () => {
 
   /* ── G. History list shape ── */
   console.log('\nG. Cutting History list');
-  check('one row per physical coil — 4 coils cut, however many rounds',
-    hist.docs.length === 4 && hist.summary.coils === 4 && new Set(hist.docs.map((d) => String(d.coilReceiptId))).size === 4,
+  check('one row per physical coil — 6 coils cut, however many rounds',
+    hist.docs.length === 6 && hist.summary.coils === 6 && new Set(hist.docs.map((d) => String(d.coilReceiptId))).size === 6,
     hist.docs.map((d) => `${d.batchNo}×${d.rounds}`).join(', '));
   check('an uncut coil (MR-UI-B001) is not listed', !hist.docs.some((d) => d.batchNo === 'MR-UI-B001'));
-  check('rounds counted across the list: 4 + 2 + 2 + 1 = 9', hist.summary.rounds === 9, String(hist.summary.rounds));
+  check('rounds counted across the list: 4 + 2 + 2 + 1 + 1 + 3 = 13', hist.summary.rounds === 13, String(hist.summary.rounds));
   const onlyJw = await rmImsService.listCuttingHistory({ location: 'JW001' });
   check('location filter JW001 → only the job-work coil', onlyJw.docs.length === 1 && onlyJw.docs[0].batchNo === 'MR-JW-2R');
   const partial = await rmImsService.listCuttingHistory({ status: 'PARTIALLY_CUT' });
@@ -388,6 +448,16 @@ const verify = async () => {
   check('history row: cut 2,000, circles 1,670, scrap 330, yield 83.5, 2 rounds, fully cut',
     row?.cutKg === 2000 && row?.circlesKg === 1670 && row?.scrapKg === 330 && row?.yieldPct === 83.5 && row?.rounds === 2 && row?.status === 'FULLY_CUT',
     JSON.stringify(row && { c: row.cutKg, o: row.circlesKg, s: row.scrapKg, y: row.yieldPct, n: row.rounds, st: row.status }));
+  check('the operator\'s cutting type was stored: round 1 Partial, round 2 Full',
+    eq(convs.map((c) => c.cuttingType), ['PARTIAL', 'FULL']) && eq(lin.rounds.map((r) => r.cuttingType), ['PARTIAL', 'FULL']),
+    JSON.stringify(convs.map((c) => c.cuttingType)));
+
+  console.log('\nVERIFY — MR-UI-FULL, a fresh 2,000 kg coil cut FULL in one round in the browser');
+  const full = await CoilConversion.find({ batchNo: 'MR-UI-FULL' }).lean();
+  check('one conversion, Full cutting, 2,000 kg — the whole coil', full.length === 1 && full[0].cuttingType === 'FULL' && full[0].coilWeightKg === 2000,
+    JSON.stringify(full.map((c) => [c.cuttingType, c.coilWeightKg])));
+  const fullLin = await rmImsService.getCoilLineage(receipts.UIFULL._id);
+  check('…remaining 0, coil FULLY_CUT, 1 round', fullLin.totals.coil.availableKg === 0 && fullLin.totals.coil.status === 'FULLY_CUT' && fullLin.totals.rounds === 1);
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed.`);
   await mongoose.disconnect();

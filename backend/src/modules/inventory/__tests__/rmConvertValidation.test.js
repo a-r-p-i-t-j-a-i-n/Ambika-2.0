@@ -94,3 +94,12 @@ test('cutting-history query: location and status are restricted to the derived v
   assert.ok(v({ status: 'HALF_DONE' }).error);
   assert.ok(v({ limit: 201 }).error);
 });
+
+// ── Cutting type ─────────────────────────────────────────────────────────────
+test('cuttingType: FULL / PARTIAL accepted (any case), absent still accepted, anything else refused', () => {
+  assert.equal(validate({}).error, undefined);
+  assert.equal(validate({ cuttingType: 'FULL' }).error, undefined);
+  assert.equal(validate({ cuttingType: 'partial' }).value.cuttingType, 'PARTIAL');
+  assert.equal(validate({ cuttingType: null }).error, undefined);
+  assert.ok(validate({ cuttingType: 'HALF' }).error);
+});

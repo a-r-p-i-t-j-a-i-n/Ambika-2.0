@@ -98,6 +98,22 @@ const coilConversionSchema = new Schema({
    */
   clientRequestId: { type: String, trim: true, default: undefined },
 
+  /**
+   * What the operator SAID this round would be — "Full cutting" (take every
+   * kilogram the coil has left) or "Partial cutting" (take the weight typed).
+   *
+   * An INSTRUCTION, not a status. The coil's status (Not / Partially / Fully
+   * cut) and each round's outcome stay derived from the weights in
+   * coilLineage.js and are never stored. The two usually agree, but not always:
+   * a Partial round typed at exactly the remaining weight finishes the coil.
+   * Stored because it cannot be recovered afterwards, and because the server
+   * needs it to enforce that a FULL round takes exactly what is left.
+   *
+   * Absent on every conversion made before it existed (all historical ones),
+   * and nothing back-fills it — a guess at intent is not a record of it.
+   */
+  cuttingType: { type: String, enum: ['FULL', 'PARTIAL'], default: undefined },
+
   remarks: { type: String, trim: true, default: '' },
 }, baseSchemaOptions);
 

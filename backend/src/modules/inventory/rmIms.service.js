@@ -942,8 +942,18 @@ export const rmImsService = {
   async convert(payload, user) {
     const coil = await SKU.findById(payload.coilSkuId).select('code name unit itemType').lean();
     if (!coil) throw new AppError('Coil SKU not found', 404);
-    const coilWeight = Number(payload.coilWeightKg || 0);
+    // `let`: a FULL round is re-resolved inside the session to exactly what
+    // the coil has left (see below), so the stored weight is the ledger's.
+    let coilWeight = Number(payload.coilWeightKg || 0);
     if (coilWeight <= 0) throw new AppError('Coil weight must be greater than zero.', 400);
+    /**
+     * The operator's choice for THIS round: FULL ("cut everything left") or
+     * PARTIAL ("cut the weight I typed"). Null for a caller that sends neither,
+     * which behaves exactly as every cut did before this existed.
+     */
+    const cuttingTypeRaw = String(payload.cuttingType || '').trim().toUpperCase();
+    const cuttingType = ['FULL', 'PARTIAL'].includes(cuttingTypeRaw) ? cuttingTypeRaw : null;
+    if (cuttingTypeRaw && !cuttingType) throw new AppError('Cutting type must be FULL or PARTIAL.', 400);
 
     const circles = (payload.circles || []).filter((c) => c.circleSkuId && Number(c.weightKg) > 0);
     if (!circles.length) throw new AppError('Add at least one produced circle (with weight).', 400);
@@ -960,6 +970,11 @@ export const rmImsService = {
      * that could have named its coil is no longer allowed to lose it silently.
      */
     const manualFallback = !!payload.manualFallback;
+    // "Full" means "everything this physical coil has left" — a cut that names
+    // no coil has no such figure, so there is nothing for FULL to resolve to.
+    if (cuttingType === 'FULL' && manualFallback) {
+      throw new AppError('Full cutting needs the physical coil (its batch number): a full cut takes exactly what that coil has left. Use Partial cutting for a cut with no receipt.', 400);
+    }
 
     /* ── Is this coil approved to produce these circles? ──
      *
@@ -1079,6 +1094,13 @@ export const rmImsService = {
           receiptBinding = 'AUTO';
         }
 
+        // FULL with no coil bound (neither named nor resolvable) has nothing to
+        // resolve to. manualFallback is refused before the session; this is
+        // the same rule for any other way of arriving without a receipt.
+        if (cuttingType === 'FULL' && !receipt) {
+          throw new AppError('Full cutting needs the physical coil (its batch number).', 400);
+        }
+
         if (receipt) {
           // Checked for EVERY receipt, however it arrived — an id posted by a
           // script gets the same scrutiny as one the picker chose.
@@ -1092,7 +1114,9 @@ export const rmImsService = {
             throw new AppError('That receipt carries no batch number, so the coil cannot be identified. Use manual selection instead.', 400);
           }
 
-          if (!allowNegative) {
+          // A FULL round always needs the coil's balance, override or not —
+          // it is the number a full cut resolves to.
+          if (!allowNegative || cuttingType === 'FULL') {
             const bal = await InventoryMovement.aggregate([
               { $match: { batchNo: receipt.batchNo, skuId: receipt.skuId, isDeleted: { $ne: true } } },
               {
@@ -1104,7 +1128,32 @@ export const rmImsService = {
               },
             ]).session(session);
             const available = round2(Number(bal[0]?.inQty || 0) - Number(bal[0]?.outQty || 0));
-            if (coilWeight > available) {
+
+            /**
+             * ── FULL CUTTING: the server decides the weight ────────────────
+             *
+             * "Full" means every kilogram this physical coil has left, by the
+             * batch ledger, read here inside the session. The weight the
+             * screen sent is NOT trusted to be that figure — it is CHECKED
+             * against it. A mismatch means the screen was stale (another round
+             * was saved since it loaded), and the circles the operator weighed
+             * were weighed against a coil that is no longer that size, so the
+             * cut is refused rather than quietly re-sized under them.
+             */
+            if (cuttingType === 'FULL') {
+              if (available <= EPS) {
+                throw new AppError(`Physical coil ${receipt.batchNo} is already fully cut — 0 KG remaining, so there is nothing left for a full cut.`, 400);
+              }
+              if (Math.abs(coilWeight - available) > EPS) {
+                throw new AppError(
+                  `Physical coil ${receipt.batchNo} now has ${kgText(available)} KG remaining, not ${kgText(coilWeight)} KG — it changed since the form loaded. Enter the batch number again to refresh, then save the full cut.`,
+                  409,
+                );
+              }
+              coilWeight = available;
+            }
+
+            if (!allowNegative && coilWeight > available) {
               throw new AppError(
                 // Worded for the operator holding the coil: what this physical
                 // coil still has, against what this ROUND tried to take.
@@ -1201,6 +1250,9 @@ export const rmImsService = {
           // Undefined, not '', so the unique index stays sparse for callers
           // that send no id.
           clientRequestId: key || undefined,
+          // The operator's instruction for this round; undefined when none was
+          // given, so older callers write exactly what they always did.
+          cuttingType: cuttingType || undefined,
           remarks: payload.remarks || '',
           createdBy: user?._id,
         }], session ? { session } : undefined);

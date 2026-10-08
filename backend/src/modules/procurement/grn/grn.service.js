@@ -629,8 +629,6 @@ export const grnService = {
     const planFor = new Map(plan.map((p) => [p.line, p]));
     const rmLines = plan.filter((p) => p.isRm).map((p) => p.line);
 
-    const pi = grn.piId ? await ProformaInvoice.findOne({ _id: grn.piId, isDeleted: { $ne: true } }) : null;
-
     // ── One unit of work ─────────────────────────────────────────────────────
     // Every movement, both documents' quantities and the GRN's own status land
     // together or not at all. This used to commit line by line with no session,
@@ -638,10 +636,35 @@ export const grnService = {
     // that was never completed — "GRN saved but stock failed", silently. Same
     // helper every IMS entry screen posts through; on a standalone mongod it
     // degrades to non-atomic and logs that once.
+    //
+    // ── EVERY ATTEMPT STARTS FROM FRESH DOCUMENTS ───────────────────────────
+    // withTransaction re-runs this callback after a transient abort (a write
+    // conflict, or "catalog changes" while an index builds). The PO, PI and GRN
+    // used to be loaded ONCE, outside, and mutated in here — so a retry replayed
+    // `receivedQty += …` and `activityTimeline.push(…)` on objects the aborted
+    // attempt had already changed. On the PO that surfaced as a VersionError
+    // that failed the whole completion; on the PI, whose quantity updates carry
+    // no version check, it could have double-counted received quantities.
+    // Re-reading them through the session per attempt makes a retry a clean
+    // re-run of the same work. Decisions made above (the plan, the lines, the
+    // locations) are pure reads and stay as they are.
+    let completed = null;
     await inventoryService.runAtomically(async (session) => {
       const opts = session ? { session } : undefined;
+      const inTxn = (q) => (session ? q.session(session) : q);
+      // eslint-disable-next-line no-shadow
+      const po = await inTxn(VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }));
+      if (!po) throw new AppError('Linked Purchase Order not found', 404);
+      // eslint-disable-next-line no-shadow
+      const pi = grn.piId ? await inTxn(ProformaInvoice.findOne({ _id: grn.piId, isDeleted: { $ne: true } })) : null;
+      const txGrn = await inTxn(GoodsReceiptNote.findById(grn._id));
+      const txLineById = new Map(txGrn.items.map((it) => [String(it._id), it]));
 
       for (const line of receivedLines) {
+        // The GRN line this attempt will actually save — carries any SKU link
+        // resolved above, so it is persisted exactly as before.
+        const txLine = txLineById.get(String(line._id)) || line;
+        if (line.skuId && !txLine.skuId) txLine.skuId = line.skuId;
         // ── 1) Post stock — strictly through inventoryService ──
         const step = planFor.get(line);
         if (step.post) {
@@ -661,8 +684,8 @@ export const grnService = {
             remarks: 'Stock added from Purchase GRN',
             performedBy: user, movementDate: grn.grnDate,
           }, opts);
-          line.movementId = movement._id;
-          line.movementNumber = movement.movementNumber;
+          txLine.movementId = movement._id;
+          txLine.movementNumber = movement.movementNumber;
         }
 
         // ── 2) PO line: receivedQty / pendingQty ──
@@ -694,27 +717,31 @@ export const grnService = {
       await po.save(opts);
       if (pi) { pi.updatedBy = user?._id; await pi.save(opts); }
 
-      // ── 5) Finalize GRN + QC handoff ──
-      grn.grnStatus = poFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED;
-      grn.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
-      grn.stockPosted = true;               // already claimed above; kept explicit
-      grn.addToRmStock = addToRmStock;      // the operator's choice, on the record
+      // ── 5) Finalize GRN + QC handoff ── (on this attempt's fresh copy)
+      txGrn.grnStatus = poFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED;
+      txGrn.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
+      txGrn.stockPosted = true;               // already claimed above; kept explicit
+      txGrn.addToRmStock = addToRmStock;      // the operator's choice, on the record
       // Record where the goods landed, not merely where stock went: when the
       // opt-in is on that is the posting location, otherwise it is whatever the
       // operator chose. Never nulled just because no stock was posted.
-      grn.rmReceivedAtLocation = addToRmStock ? rmLocation : receivedAtLocation;
-      grn.receivedAt = new Date();
-      grn.completedAt = new Date();
-      grn.completedBy = user?.name || '';
-      if (data.remarks) grn.remarks = data.remarks;
-      grn.updatedBy = user?._id;
-      grn.activityTimeline.push({
+      txGrn.rmReceivedAtLocation = addToRmStock ? rmLocation : receivedAtLocation;
+      txGrn.receivedAt = new Date();
+      txGrn.completedAt = new Date();
+      txGrn.completedBy = user?.name || '';
+      if (data.remarks) txGrn.remarks = data.remarks;
+      txGrn.updatedBy = user?._id;
+      txGrn.activityTimeline.push({
         action: 'COMPLETE',
-        description: buildCompletionNote(grn.grnStatus, rmLines.length, addToRmStock, rmLocation),
+        description: buildCompletionNote(txGrn.grnStatus, rmLines.length, addToRmStock, rmLocation),
         actorId: user?._id,
       });
-      await grn.save(opts);
+      await txGrn.save(opts);
+      completed = txGrn;
     });
+    // From here on, the document that was actually committed.
+    // eslint-disable-next-line no-param-reassign
+    grn = completed;
 
     // What the caller tells the operator. Counted from what was actually
     // decided, so the UI can never claim RM stock moved when no RM line did.

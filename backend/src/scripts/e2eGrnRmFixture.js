@@ -13,6 +13,7 @@
  * never reads the configured MONGO_URI, so it cannot touch the Atlas data.
  */
 import mongoose from 'mongoose';
+import { assertE2ESafe, isEntry } from './e2eSafety.js';
 import bcrypt from 'bcryptjs';
 
 import User from '../modules/auth/auth.model.js';
@@ -23,6 +24,9 @@ import InventoryMovement from '../modules/inventory/inventoryMovement.model.js';
 import InventoryStock from '../modules/inventory/inventoryStock.model.js';
 
 export const E2E_URI = 'mongodb://127.0.0.1:27017/ambika_e2e_verify';
+// Local scratch DB, S3 off, email off — or stop before anything connects.
+// Only when RUN as a script: unit tests import pure data from some fixtures.
+if (isEntry(import.meta.url)) assertE2ESafe(E2E_URI, 'e2eGrnRmFixture.js');
 export const E2E_USER = { email: 'e2e@test.local', password: 'E2e@12345', name: 'E2E Runner', role: 'MD' };
 
 if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)/.test(E2E_URI)) {

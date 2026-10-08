@@ -78,7 +78,7 @@ const CoilRounds = ({ receiptId }) => {
         <Typography sx={{ fontSize: '0.74rem', fontWeight: 800, color: O2D.ink }}>Cutting rounds</Typography>
         {receipt.batchNo && (
           <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
-            Batch {receipt.batchNo} · {receipt.skuCode} · original {num(receipt.receivedWeightKg)} kg
+            Batch {receipt.batchNo} · {receipt.skuCode} · total coil weight {num(receipt.receivedWeightKg)} kg
           </Typography>
         )}
         <Button size="small" endIcon={<ArrowUpRight size={13} />} onClick={() => navigate(`/rm-ims/coil/${receiptId}`)}
@@ -90,11 +90,12 @@ const CoilRounds = ({ receiptId }) => {
         <Typography sx={{ fontSize: '0.72rem', color: '#b91c1c' }}>Could not load the rounds for this coil.</Typography>
       ) : (
         <TableScroll>
-          <Table size="small" sx={imsTableSx(820)} aria-label={`Cutting rounds for batch ${receipt.batchNo || ''}`}>
+          <Table size="small" sx={imsTableSx(900)} aria-label={`Cutting rounds for batch ${receipt.batchNo || ''}`}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64 }}>Round</TableCell>
                 <TableCell>Date</TableCell>
+                <TableCell>Cutting type</TableCell>
                 <TableCell align="right">Cut this round</TableCell>
                 <TableCell align="right">Circle output</TableCell>
                 <TableCell align="right">Scrap</TableCell>
@@ -106,7 +107,7 @@ const CoilRounds = ({ receiptId }) => {
             </TableHead>
             <TableBody>
               {isFetching && !rounds.length && (
-                <TableRow><TableCell colSpan={9}><Skeleton height={22} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={10}><Skeleton height={22} /></TableCell></TableRow>
               )}
               {rounds.map((r) => (
                 <TableRow key={r.conversionId} data-testid="cut-round-row">
@@ -114,6 +115,19 @@ const CoilRounds = ({ receiptId }) => {
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>
                     <Typography sx={{ fontSize: '0.76rem', fontWeight: 600, color: O2D.ink }}>{day(r.date)}</Typography>
                     <Typography sx={{ fontSize: '0.62rem', color: O2D.faint, fontFamily: 'ui-monospace, monospace' }}>{r.conversionNumber}</Typography>
+                  </TableCell>
+                  {/* The operator's choice for the round, as recorded — not
+                      the outcome (that is Status). Never guessed when absent. */}
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    {r.cuttingType ? (
+                      <Typography sx={{ fontSize: '0.74rem', fontWeight: 700, color: O2D.ink }}>
+                        {r.cuttingType === 'FULL' ? 'Full' : 'Partial'}
+                      </Typography>
+                    ) : (
+                      <Tooltip arrow slotProps={O2D_TIP} title="Not recorded — this round was saved before the cutting type was captured. It is not guessed from the weights.">
+                        <Typography sx={{ fontSize: '0.74rem', color: O2D.faint, cursor: 'help' }}>—</Typography>
+                      </Tooltip>
+                    )}
                   </TableCell>
                   <TableCell align="right" sx={{ ...numCell, fontWeight: 800 }}>{num(r.cutKg)} kg</TableCell>
                   <TableCell align="right" sx={{ ...numCell, color: '#4338ca' }}>{num(r.circlesKg)} kg</TableCell>
@@ -211,7 +225,7 @@ const CuttingHistoryPanel = () => {
               <TableCell sx={{ width: 36 }} />
               <TableCell align="center" sx={{ width: 56, whiteSpace: 'nowrap' }}>S.No.</TableCell>
               <TableCell>Batch / Coil</TableCell>
-              <TableCell align="right">Original KG</TableCell>
+              <TableCell align="right">Total coil weight KG</TableCell>
               <TableCell align="right">Total cut KG</TableCell>
               <TableCell align="right">Circle output KG</TableCell>
               <TableCell align="right">Scrap KG</TableCell>
@@ -306,13 +320,18 @@ const CuttingHistoryPanel = () => {
       </TableScroll>
       <Stack direction="row" alignItems="center" flexWrap="wrap" useFlexGap sx={{ px: 1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
         {/* Always stated, even at zero: cuts that name no coil are real and
-            sit outside this table, and the reader is told how many. */}
+            sit outside this table, and the reader is told how many. Only once
+            the count is KNOWN — a "0" shown while loading would be a false fact. */}
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ py: 0.75, mr: 'auto' }}>
-          <Box sx={{ color: O2D.faint, display: 'flex' }}><HelpCircle size={13} /></Box>
-          <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }} data-testid="cut-history-untraceable">
-            {num(untraceable.records || 0)} older cut{untraceable.records === 1 ? '' : 's'} ({num(untraceable.cutKg || 0)} kg) name no physical coil — spreadsheet imports
-            or “No receipt available” — so they are not shown as rounds here. They remain in Past conversions below.
-          </Typography>
+          {data?.meta && (
+            <>
+              <Box sx={{ color: O2D.faint, display: 'flex' }}><HelpCircle size={13} /></Box>
+              <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }} data-testid="cut-history-untraceable">
+                {num(untraceable.records || 0)} older cut{untraceable.records === 1 ? '' : 's'} ({num(untraceable.cutKg || 0)} kg) name no physical coil — spreadsheet imports
+                or “No receipt available” — so they are not shown as rounds here. They remain in Past conversions below.
+              </Typography>
+            </>
+          )}
         </Stack>
         <TablePagination
           component="div" count={meta.pagination?.total || 0} page={page} rowsPerPage={rowsPerPage}

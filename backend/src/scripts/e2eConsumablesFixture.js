@@ -19,6 +19,7 @@
  * reads the configured MONGO_URI, so production cannot be touched.
  */
 import mongoose from 'mongoose';
+import { assertE2ESafe, isEntry } from './e2eSafety.js';
 
 import User from '../modules/auth/auth.model.js';
 import SKU from '../modules/skus/sku.model.js';
@@ -27,6 +28,9 @@ import InventoryMovement, { TXN_TYPE, MOVEMENT_TYPE } from '../modules/inventory
 import InventoryStock from '../modules/inventory/inventoryStock.model.js';
 
 export const E2E_URI = 'mongodb://127.0.0.1:27017/ambika_cp_e2e';
+// Local scratch DB, S3 off, email off — or stop before anything connects.
+// Only when RUN as a script: unit tests import pure data from some fixtures.
+if (isEntry(import.meta.url)) assertE2ESafe(E2E_URI, 'e2eConsumablesFixture.js');
 export const E2E_USER = { email: 'cp-e2e@test.local', password: 'E2e@12345', name: 'CP E2E', role: 'MD', mobile: '9000000002' };
 
 if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)/.test(E2E_URI)) {

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, Button, Autocomplete, IconButton, MenuItem,
   FormControlLabel, Switch, Table, TableHead, TableBody, TableRow, TableCell, CircularProgress,
-  Tooltip, LinearProgress,
+  Tooltip, LinearProgress, Radio, RadioGroup, FormControl, FormLabel,
 } from '@mui/material';
 import {
   Recycle, Plus, Trash2, Save, Disc3, CircleDashed, AlertTriangle, Info, Scissors, ArrowUpRight,
@@ -70,6 +70,10 @@ const RmImsConversion = () => {
   // The received coil the typed batch number resolved to, when it resolved to
   // one. Extra knowledge about the same cut — it replaces nothing on screen.
   const [receipt, setReceipt] = useState(null);
+  // "Full cutting" / "Partial cutting" — the operator's choice for THIS round,
+  // asked only once a physical coil is linked. Never pre-selected. Stored with
+  // the coil it was made for (see `cutType` below).
+  const [cutChoice, setCutChoice] = useState({ coilKey: null, type: null });
   const [debouncedBatch, setDebouncedBatch] = useState('');
   // The coil the last saved cut came off, so its full history is one click away
   // while it is still the thing the operator is thinking about.
@@ -98,6 +102,14 @@ const RmImsConversion = () => {
     warehouse: DEFAULT_RECEIVED_AT,
   });
   const [circles, setCircles] = useState([blankCircle()]);
+  // A cutting-type choice made for one coil says nothing about the next: a
+  // different (or cleared) coil — or ticking / unticking "No receipt
+  // available" — starts the round over, with neither option selected. The
+  // choice is kept together with the coil it was made for, so it simply reads
+  // as "not chosen" for any other coil; no effect has to reset it.
+  const coilKey = `${receipt?.id || ''}|${head.manualFallback ? 'manual' : ''}`;
+  const cutType = cutChoice.coilKey === coilKey ? cutChoice.type : null;
+  const setCutType = (type) => setCutChoice({ coilKey: type ? coilKey : null, type });
 
   /**
    * Which circles THIS coil is approved to produce.
@@ -212,6 +224,7 @@ const RmImsConversion = () => {
     if (appliedCoil.current === found.id) return;
     appliedCoil.current = found.id;
     setReceipt(found);
+    setCutChoice({ coilKey: null, type: null }); // a newly linked coil starts a new round
     const match = coils.find((c) => String(c.skuId) === String(found.skuId));
     if (match) setCoil(match);
     const rate = String(found.unitCost ?? '');
@@ -308,16 +321,6 @@ const RmImsConversion = () => {
       : 'No approved circle sizes are configured for this coil.';
 
   const circlesWeight = round2(circles.reduce((s, c) => s + Number(c.weightKg || 0), 0));
-  const coilWt = Number(head.coilWeightKg || 0);
-  const scrap = round2(coilWt - circlesWeight);
-  const yieldPct = coilWt > 0 ? round2((circlesWeight / coilWt) * 100) : 0;
-  // A circle line is only complete with BOTH figures: the pieces are what goes
-  // into circle stock (circles are counted, not weighed), and the weight is what
-  // yield and scrap are worked out from. A line with only a weight used to be
-  // accepted and then posted kilograms into a balance counted in pieces.
-  const validCircles = circles.filter((c) => c.sku && Number(c.weightKg) > 0 && Number(c.pcs) > 0);
-  const missingPcs = circles.filter((c) => c.sku && Number(c.weightKg) > 0 && !(Number(c.pcs) > 0));
-  const overCut = scrap < 0;
 
   /**
    * THE PHYSICAL COIL, ROUND BY ROUND — all derived, nothing typed.
@@ -350,6 +353,39 @@ const RmImsConversion = () => {
     };
   })() : null;
 
+  /**
+   * CUT THIS ROUND — where the weight comes from.
+   *
+   *   Full cutting    → the coil's remaining weight, read-only. Not typed and
+   *                     not copied into the field: it IS coilFacts.availableKg,
+   *                     so a refreshed lineage can never leave a stale number
+   *                     behind. The server re-checks it against the ledger.
+   *   Partial cutting → the weight the operator typed.
+   *   No coil linked  → (manual fallback) the weight typed, as it always was.
+   *
+   * "Cutting type" is the operator's instruction for THIS round. It is not the
+   * coil's status, which stays derived from the weights (cuttingStatusOf).
+   */
+  const isFull = !!coilFacts && cutType === 'FULL';
+  const coilWt = isFull ? coilFacts.availableKg : Number(head.coilWeightKg || 0);
+  const scrap = round2(coilWt - circlesWeight);
+  const yieldPct = coilWt > 0 ? round2((circlesWeight / coilWt) * 100) : 0;
+  // A circle line is only complete with BOTH figures: the pieces are what goes
+  // into circle stock (circles are counted, not weighed), and the weight is what
+  // yield and scrap are worked out from. A line with only a weight used to be
+  // accepted and then posted kilograms into a balance counted in pieces.
+  const validCircles = circles.filter((c) => c.sku && Number(c.weightKg) > 0 && Number(c.pcs) > 0);
+  const missingPcs = circles.filter((c) => c.sku && Number(c.weightKg) > 0 && !(Number(c.pcs) > 0));
+  const overCut = scrap < 0;
+  // No coil to cut yet: no physical coil linked and "No receipt available" not
+  // ticked. The round's controls stay disabled until one of those is true.
+  const noCoil = !receipt && !head.manualFallback;
+  // Once there is a coil, Full or Partial must be chosen on purpose — never
+  // pre-selected. ("No receipt available" can only be Partial.)
+  const cutTypeMissing = !noCoil && !cutType;
+  // Nothing left on the coil: a full cut has nothing to take.
+  const fullImpossible = isFull && coilFacts.availableKg <= 0.001;
+
   // Where a batch number identified the coil, its own remaining weight is the
   // limit — the item's total across every batch would let a spent coil through.
   const available = coilFacts ? coilFacts.availableKg : Number(coil?.onHand || 0);
@@ -369,7 +405,45 @@ const RmImsConversion = () => {
       status: cuttingStatusOf({ cutKg: totalCutKg, remainingKg }),
     };
   })() : null;
-  const badWeight = head.coilWeightKg !== '' && !(coilWt > 0);
+  const badWeight = !isFull && head.coilWeightKg !== '' && !(coilWt > 0);
+
+  /**
+   * TOTAL COIL WEIGHT / ALREADY CUT / REMAINING WEIGHT (+ the coil's status).
+   *
+   * Information, not inputs: read straight from `coilFacts` — the goods
+   * receipt and the batch ledger, the same remaining figure the server checks
+   * a round against. Before a coil is linked every value reads "—".
+   */
+  const tileLabelSx = { fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub };
+  const coilFactsTiles = (
+    <Box data-testid="coil-facts" sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1, mt: receipt ? 1 : 1.5 }}>
+      {[
+        ['Total coil weight', coilFacts ? `${num(coilFacts.originalKg)} kg` : '—', O2D.ink, 'What this coil weighed on its goods receipt.'],
+        ['Already cut', coilFacts ? `${num(coilFacts.alreadyCutKg)} kg` : '—', O2D.body,
+          !coilFacts ? 'Every earlier round of this coil.'
+            : coilFacts.rounds == null ? 'Loading this coil\'s rounds…'
+              : coilFacts.otherOutKg > 0.001
+                ? `${coilFacts.rounds} round${coilFacts.rounds === 1 ? '' : 's'} here (${num(coilFacts.roundsCutKg)} kg) + ${num(coilFacts.otherOutKg)} kg earlier, not linked to a round`
+                : `${coilFacts.rounds} previous round${coilFacts.rounds === 1 ? '' : 's'}`],
+        ['Remaining weight', coilFacts ? `${num(coilFacts.availableKg)} kg` : '—',
+          !coilFacts ? O2D.faint : coilFacts.availableKg > 0.001 ? '#0f766e' : STOCK_TOKENS.OUT_OF_STOCK.color,
+          'Total coil weight minus already cut — the most this round can take.'],
+      ].map(([label, value, color, sub]) => (
+        <Box key={label} sx={{ px: 1.1, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, minWidth: 0 }}>
+          <Typography sx={tileLabelSx}>{label}</Typography>
+          <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
+          <Typography sx={{ fontSize: '0.6rem', color: O2D.faint }}>{sub}</Typography>
+        </Box>
+      ))}
+      <Box sx={{ px: 1.1, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+        <Typography sx={tileLabelSx}>Cutting status</Typography>
+        <Box sx={{ mt: 0.4 }}>
+          {coilFacts ? <CutStatusChip status={coilFacts.status} /> : <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: O2D.faint }}>—</Typography>}
+        </Box>
+        <Typography sx={{ fontSize: '0.6rem', color: O2D.faint, mt: 0.3 }}>Worked out from the weights — never set by hand.</Typography>
+      </Box>
+    </Box>
+  );
   // Belt and braces. The dropdown can only offer approved sizes, so this should
   // never be non-empty — but a stale list after a coil change, or a size the
   // client withdrew mid-shift, would otherwise reach the server as a 400 the
@@ -385,7 +459,8 @@ const RmImsConversion = () => {
    */
   const lineageMissing = !receipt && !head.manualFallback;
   const ready = !!coil && coilWt > 0 && validCircles.length > 0 && !missingPcs.length
-    && !overCut && !shortCoil && !blockedCircles.length && !lineageMissing;
+    && !overCut && !shortCoil && !blockedCircles.length && !lineageMissing
+    && !cutTypeMissing && !fullImpossible;
   const band = yieldBand(yieldPct);
   const activeLocation = RECEIVED_AT_OPTIONS.find((w) => w.value === head.warehouse);
   /**
@@ -406,6 +481,8 @@ const RmImsConversion = () => {
 
   const submit = async () => {
     if (!coil) return enqueueSnackbar('Pick the coil being cut.', { variant: 'warning' });
+    if (cutTypeMissing) return enqueueSnackbar('Choose Full cutting or Partial cutting for this round.', { variant: 'warning' });
+    if (fullImpossible) return enqueueSnackbar('This coil is already fully cut — nothing is left for a full cut.', { variant: 'error' });
     if (!(coilWt > 0)) return enqueueSnackbar('Enter how much of the coil is cut this round (more than 0 kg).', { variant: 'warning' });
     if (shortCoil) return enqueueSnackbar(`Only ${num(available)} KG is available from this physical coil.`, { variant: 'error' });
     if (missingPcs.length) return enqueueSnackbar('Enter the number of pieces for every circle produced.', { variant: 'warning' });
@@ -441,6 +518,9 @@ const RmImsConversion = () => {
         // operator ticked it. Sent explicitly so the server never has to infer
         // intent from an absent field.
         manualFallback: !receipt && head.manualFallback ? true : undefined,
+        // Only meaningful for a linked coil. FULL makes the server take the
+        // coil's remaining weight — and refuse if it differs from `coilWeightKg`.
+        cuttingType: cutType || undefined,
         // No fallback to the grade's master rate: blank means "use this coil's
         // own receipt rate", which the server applies from the linked receipt.
         coilSkuId: coil.skuId, coilWeightKg: coilWt, rate: Number(head.rate || 0),
@@ -492,6 +572,7 @@ const RmImsConversion = () => {
         warehouse: DEFAULT_RECEIVED_AT, scrapVerified: 'PENDING',
       }));
       setCircles([blankCircle()]);
+      setCutType(null);
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not save the conversion.', { variant: 'error' }); }
   };
 
@@ -535,6 +616,7 @@ const RmImsConversion = () => {
             onChange={(_, v) => {
               setCoil(v);
               setReceipt(null);
+              setCutChoice({ coilKey: null, type: null });
               setHead((h) => ({
                 ...h,
                 rate: h.rate !== '' && h.rate === autoFilled.current.rate ? '' : h.rate,
@@ -592,41 +674,20 @@ const RmImsConversion = () => {
                   View this coil's history
                 </Button>
                 <Button size="small" color="inherit"
-                  onClick={() => { setReceipt(null); appliedCoil.current = null; }}
+                  onClick={() => { setReceipt(null); setCutChoice({ coilKey: null, type: null }); appliedCoil.current = null; }}
                   sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.sub }}>
                   Clear coil
                 </Button>
               </Stack>
             </Stack>
-            {/* Read-only. Derived from the receipt and the ledger; the
-                operator enters only "Cut this round" below. */}
-            <Box data-testid="coil-facts" sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1, mt: 1 }}>
-              {[
-                ['Original coil weight', `${num(coilFacts.originalKg)} kg`, O2D.ink, 'What this coil weighed on its goods receipt.'],
-                ['Already cut', `${num(coilFacts.alreadyCutKg)} kg`, O2D.body,
-                  coilFacts.rounds == null ? 'Loading this coil\'s rounds…'
-                    : coilFacts.otherOutKg > 0.001
-                      ? `${coilFacts.rounds} round${coilFacts.rounds === 1 ? '' : 's'} here (${num(coilFacts.roundsCutKg)} kg) + ${num(coilFacts.otherOutKg)} kg earlier, not linked to a round`
-                      : `${coilFacts.rounds} previous round${coilFacts.rounds === 1 ? '' : 's'}`],
-                ['Available to cut', `${num(coilFacts.availableKg)} kg`, coilFacts.availableKg > 0.001 ? '#0f766e' : STOCK_TOKENS.OUT_OF_STOCK.color,
-                  'Original minus everything already cut — the most this round can take.'],
-              ].map(([label, value, color, sub]) => (
-                <Box key={label} sx={{ px: 1.1, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, minWidth: 0 }}>
-                  <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>{label}</Typography>
-                  <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-                  <Typography sx={{ fontSize: '0.6rem', color: O2D.faint }}>{sub}</Typography>
-                </Box>
-              ))}
-              <Box sx={{ px: 1.1, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-                <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>Cutting status</Typography>
-                <Box sx={{ mt: 0.4 }}><CutStatusChip status={coilFacts.status} /></Box>
-                <Typography sx={{ fontSize: '0.6rem', color: O2D.faint, mt: 0.3 }}>Worked out from the weights — never set by hand.</Typography>
-              </Box>
-            </Box>
+            {coilFactsTiles}
           </Paper>
         )}
+        {/* No coil yet: the same three figures, shown as "—", so the operator
+            sees what will be filled in rather than a gap in the form. */}
+        {!receipt && coilFactsTiles}
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25, mt: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.5 }}>
           <TextField select size="small" label="Received At" value={head.warehouse}
             onChange={(e) => setHead((h) => ({ ...h, warehouse: e.target.value }))}
             helperText={activeLocation?.hint}
@@ -639,43 +700,118 @@ const RmImsConversion = () => {
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
             {SCRAP_STATES.map((s) => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
           </TextField>
-          {/* The ONE weight the operator enters: how much of this physical
-              coil goes into the machine in THIS round. Not pre-filled — see
-              the auto-fill effect above. Sent as `coilWeightKg`, which is
-              exactly what the server deducts from the coil for this round. */}
-          <TextField size="small" type="number" label="Cut this round (kg)" value={head.coilWeightKg}
-            onChange={(e) => setHead((h) => ({ ...h, coilWeightKg: e.target.value }))}
-            error={shortCoil || badWeight}
-            inputProps={{ min: 0, step: 'any' }}
-            helperText={(
-              <>
-                {badWeight ? 'Enter a weight above 0 kg. '
-                  : shortCoil ? `Only ${num(available)} KG is available from this physical coil. `
-                    : coilFacts ? `${num(coilFacts.availableKg)} kg available to cut. `
-                      : (coil ? `${num(coil.onHand)} in store. ` : 'Pick a coil first. ')}
-                {coilFacts && coilFacts.availableKg > 0.001 && (
-                  <Box component="button" type="button"
-                    onClick={() => setHead((h) => ({ ...h, coilWeightKg: String(coilFacts.availableKg) }))}
-                    sx={{ p: 0, border: 0, bgcolor: 'transparent', color: O2D.brand, fontWeight: 700, fontSize: 'inherit', cursor: 'pointer', textDecoration: 'underline' }}>
-                    Use all {num(coilFacts.availableKg)} kg
-                  </Box>
-                )}
-              </>
-            )}
-            FormHelperTextProps={{ component: 'div', sx: { fontSize: '0.66rem', color: (shortCoil || badWeight) ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }} />
           <TextField size="small" type="number" label="Rate (₹ per kg)" value={head.rate}
             onChange={(e) => setHead((h) => ({ ...h, rate: e.target.value }))}
             helperText={receipt
               ? `From this coil's goods receipt (₹${num(receipt.unitCost)}/kg). Used to value the circles produced.`
               : 'Filled from the coil\'s goods receipt once its batch number is entered. Used to value the circles produced.'}
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
-          <FormControlLabel
-            sx={{ alignSelf: 'start', mt: 0.5, gridColumn: { md: '1 / span 2' } }}
-            control={<Switch size="small" checked={head.allowNegative}
-              onChange={(e) => setHead((h) => ({ ...h, allowNegative: e.target.checked }))} />}
-            label={<Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>Allow cutting more coil than we hold</Typography>}
-          />
         </Box>
+
+        {/* ── THIS CUTTING ROUND ────────────────────────────────────────────
+            With a physical coil linked, the operator says what this round is:
+            Full (everything left — the system fills the weight) or Partial
+            (type the weight; the rest stays for a later round). That choice is
+            the INSTRUCTION for this round; the coil's status after it is still
+            worked out from the weights, never from the choice. */}
+        <Box data-testid="this-cutting-round" sx={{
+          mt: 1.5, px: 1.5, py: 1.25, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt,
+          display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.3fr 1fr 1fr' }, gap: 1.5, alignItems: 'start',
+        }}>
+          {/* Always on screen; usable only once there is a coil to cut.
+              Full needs a linked coil (it takes what THAT coil has left), so a
+              "No receipt available" cut can only be Partial. */}
+          <FormControl disabled={noCoil}>
+            <FormLabel id="cut-type-label" sx={{ fontSize: '0.7rem', fontWeight: 800, color: O2D.ink, '&.Mui-focused': { color: O2D.ink }, '&.Mui-disabled': { color: O2D.faint } }}>
+              Cutting type
+            </FormLabel>
+            <RadioGroup row aria-labelledby="cut-type-label" value={cutType || ''}
+              onChange={(e) => setCutType(e.target.value)}>
+              <FormControlLabel value="FULL" disabled={noCoil || !coilFacts || coilFacts.availableKg <= 0.001}
+                control={<Radio size="small" />}
+                label={(
+                  <Box>
+                    <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'inherit' }}>Full cutting</Typography>
+                    <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
+                      {!coilFacts ? (noCoil ? 'Choose the coil first' : 'Needs a physical coil')
+                        : coilFacts.availableKg > 0.001 ? `Cut everything left — ${num(coilFacts.availableKg)} kg` : 'Nothing left on this coil'}
+                    </Typography>
+                  </Box>
+                )} />
+              <FormControlLabel value="PARTIAL" disabled={noCoil} control={<Radio size="small" />}
+                label={(
+                  <Box>
+                    <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'inherit' }}>Partial cutting</Typography>
+                    <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
+                      {noCoil ? 'Choose the coil first' : 'Cut part; the rest stays for a later round'}
+                    </Typography>
+                  </Box>
+                )} />
+            </RadioGroup>
+          </FormControl>
+
+          {/* The weight this round takes. Full: the system's figure, read-only.
+              Partial / no coil linked: typed. Sent as `coilWeightKg` — exactly
+              what the server deducts from the coil for this round. */}
+          <TextField size="small" type="number" label="Cut this round (kg)"
+            value={isFull ? String(coilFacts.availableKg) : head.coilWeightKg}
+            onChange={(e) => setHead((h) => ({ ...h, coilWeightKg: e.target.value }))}
+            disabled={noCoil || cutTypeMissing}
+            placeholder={noCoil ? 'Choose the coil first' : cutTypeMissing ? 'Choose Full or Partial first' : undefined}
+            InputLabelProps={noCoil || cutTypeMissing ? { shrink: true } : undefined}
+            error={shortCoil || badWeight}
+            inputProps={{ min: 0, step: 'any', readOnly: isFull }}
+            sx={isFull ? { '& .MuiInputBase-root': { bgcolor: O2D.surfaceAlt } } : { '& .MuiInputBase-root': { bgcolor: O2D.surface } }}
+            helperText={(
+              <>
+                {noCoil ? 'Enter the batch number above to choose the coil.'
+                  : cutTypeMissing ? 'Choose the cutting type to enter this round\'s weight.'
+                  : isFull ? `Full cutting — the whole remaining ${num(coilFacts.availableKg)} kg, set by the system.`
+                    : badWeight ? 'Enter a weight above 0 kg. '
+                      : shortCoil ? `Only ${num(available)} KG is available from this physical coil. `
+                        : coilFacts ? `Up to ${num(coilFacts.availableKg)} kg remaining. `
+                          : (coil ? `${num(coil.onHand)} in store. ` : 'Pick a coil first. ')}
+                {/* "Use all" is Full cutting — the same calculation, not a copy. */}
+                {cutType === 'PARTIAL' && coilFacts && coilFacts.availableKg > 0.001 && (
+                  <Box component="button" type="button" onClick={() => setCutType('FULL')}
+                    sx={{ p: 0, border: 0, bgcolor: 'transparent', color: O2D.brand, fontWeight: 700, fontSize: 'inherit', cursor: 'pointer', textDecoration: 'underline' }}>
+                    Use all {num(coilFacts.availableKg)} kg (Full cutting)
+                  </Box>
+                )}
+              </>
+            )}
+            FormHelperTextProps={{ component: 'div', sx: { fontSize: '0.66rem', color: (shortCoil || badWeight) ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }} />
+
+          {/* AFTER THIS ROUND — what the round takes and leaves on the coil.
+              Derived, before saving; the status is the coil's, from weights. */}
+          <Box data-testid="round-outcome" sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>
+              After this round
+            </Typography>
+            {[
+              ['Cut this round', after ? `${num(coilWt)} kg` : '—', O2D.ink],
+              ['Remaining weight', after ? `${num(after.remainingKg)} kg` : '—',
+                after && after.remainingKg < 0 ? STOCK_TOKENS.OUT_OF_STOCK.color : '#0f766e'],
+            ].map(([label, value, color]) => (
+              <Stack key={label} direction="row" justifyContent="space-between" spacing={1} sx={{ mt: 0.25 }}>
+                <Typography sx={{ fontSize: '0.7rem', color: O2D.sub }}>{label}</Typography>
+                <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
+              </Stack>
+            ))}
+            <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} sx={{ mt: 0.25 }}>
+              <Typography sx={{ fontSize: '0.7rem', color: O2D.sub }}>Status</Typography>
+              {after ? <CutStatusChip status={after.status} /> : <Typography sx={{ fontSize: '0.8rem', color: O2D.faint }}>—</Typography>}
+            </Stack>
+          </Box>
+        </Box>
+
+        {/* Last in the round: the existing over-cut override, unchanged. */}
+        <FormControlLabel
+          sx={{ mt: 0.75 }}
+          control={<Switch size="small" checked={head.allowNegative}
+            onChange={(e) => setHead((h) => ({ ...h, allowNegative: e.target.checked }))} />}
+          label={<Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>Allow cutting more coil than we hold</Typography>}
+        />
 
         {/* ── Received At was changed away from the GRN's own record ───────
             Spelled out rather than silently accepted: this one field decides
@@ -939,7 +1075,8 @@ const RmImsConversion = () => {
               </Typography>
               <Stack direction="row" spacing={1} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap alignItems="stretch" data-testid="after-round">
                 {[
-                  ['Original', `${num(coilFacts.originalKg)} kg`, O2D.ink],
+                  ['Cutting type', cutType === 'FULL' ? 'Full' : cutType === 'PARTIAL' ? 'Partial' : '—', O2D.ink],
+                  ['Total coil', `${num(coilFacts.originalKg)} kg`, O2D.ink],
                   ['Already cut', `${num(coilFacts.alreadyCutKg)} kg`, O2D.body],
                   ['This round', `${num(coilWt)} kg`, O2D.body],
                   ['Remaining', after ? `${num(after.remainingKg)} kg` : `${num(coilFacts.availableKg)} kg`,
@@ -951,7 +1088,7 @@ const RmImsConversion = () => {
                   </Box>
                 ))}
                 <Box sx={{ px: 1.25, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, minWidth: 106 }}>
-                  <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>Status</Typography>
+                  <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>Physical coil status</Typography>
                   <Box sx={{ mt: 0.35 }}><CutStatusChip status={after ? after.status : coilFacts.status} /></Box>
                 </Box>
               </Stack>

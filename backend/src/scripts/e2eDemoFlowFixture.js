@@ -26,6 +26,7 @@
  */
 import fs from 'node:fs';
 import mongoose from 'mongoose';
+import { assertE2ESafe, isEntry } from './e2eSafety.js';
 
 import User from '../modules/auth/auth.model.js';
 import SKU from '../modules/skus/sku.model.js';
@@ -41,6 +42,9 @@ import { SCRAP_SKU_CODE, SCRAP_SKU_DEFAULTS } from '../modules/inventory/scrapSk
 import { COIL_CIRCLE_MAP } from '../data/coil-circle-map.js';
 
 export const E2E_URI = 'mongodb://127.0.0.1:27017/ambika_e2e_fullflow';
+// Local scratch DB, S3 off, email off — or stop before anything connects.
+// Only when RUN as a script: unit tests import pure data from some fixtures.
+if (isEntry(import.meta.url)) assertE2ESafe(E2E_URI, 'e2eDemoFlowFixture.js');
 const DB_NAME = 'ambika_e2e_fullflow';
 const API = 'http://127.0.0.1:5099/api/v1';
 export const E2E_USER = {

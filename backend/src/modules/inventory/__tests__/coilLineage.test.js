@@ -432,3 +432,28 @@ test('M10 — an untouched coil is NOT CUT', () => {
   const s = ledgerCoilState({ receivedKg: 2000, roundsCutKg: 0, ledgerAvailableKg: 2000 });
   assert.equal(s.status, CUT_STATUS.NOT_CUT);
 });
+
+// ── C. Cutting type: the operator's instruction rides along, never guessed ───
+test('C1 — each round carries the stored cutting type; a round without one stays null', () => {
+  const { rounds } = deriveRounds({
+    receivedKg: 2000,
+    conversions: [
+      cut('a', '2026-10-01', 500, 450, { cuttingType: 'PARTIAL' }),
+      cut('b', '2026-10-02', 700, 600),                      // made before cutting type existed
+      cut('c', '2026-10-03', 800, 700, { cuttingType: 'FULL' }),
+    ],
+  });
+  assert.deepEqual(rounds.map((r) => r.cuttingType), ['PARTIAL', null, 'FULL']);
+  // The outcome is still derived from the weights, independently of the type.
+  assert.deepEqual(rounds.map((r) => r.status), ['PARTIAL', 'PARTIAL', 'FULLY_CUT']);
+});
+
+test('C2 — a PARTIAL round typed at exactly the remaining weight still finishes the coil (type ≠ status)', () => {
+  const { rounds, totals } = deriveRounds({
+    receivedKg: 1000,
+    conversions: [cut('a', '2026-10-01', 1000, 850, { cuttingType: 'PARTIAL' })],
+  });
+  assert.equal(rounds[0].cuttingType, 'PARTIAL');
+  assert.equal(rounds[0].status, 'FULLY_CUT');
+  assert.equal(totals.status, CUT_STATUS.FULLY_CUT);
+});

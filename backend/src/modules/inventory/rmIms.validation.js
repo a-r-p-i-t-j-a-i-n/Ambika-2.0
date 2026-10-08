@@ -216,6 +216,11 @@ export const rmConvertSchema = Joi.object({
   warehouse:  Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow('', null)
     .messages({ 'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` }),
   allowNegative: Joi.boolean().default(false),
+  // The operator's choice for THIS round. Optional, so a caller that predates
+  // it (a script, an older client) behaves exactly as before. FULL makes the
+  // server take the coil's remaining weight, checked against what was sent.
+  cuttingType: Joi.string().trim().uppercase().valid('FULL', 'PARTIAL').allow('', null)
+    .messages({ 'any.only': 'Cutting type must be FULL or PARTIAL.' }),
   // Only the two values Cut Coils now offers are accepted from THIS endpoint.
   // The model/ScrapRecord enums keep JOB_WORK/REJECTED too, for the historical
   // rows and any other caller that still carries them — see coilConversion.model.js.

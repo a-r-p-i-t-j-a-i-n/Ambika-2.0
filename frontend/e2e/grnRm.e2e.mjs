@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { assertE2ESetup } from './_e2eSafety.mjs';
 
 /**
  * The installed playwright build asks for a Chromium revision this machine does
@@ -40,6 +41,8 @@ const findChromium = () => {
 };
 
 const APP = 'http://127.0.0.1:3100';
+// Guarded e2e backend (scratch DB, S3 + email off) and a frontend pointed at it — or stop.
+await assertE2ESetup(APP, 'http://127.0.0.1:5099/api/v1', 'grnRm.e2e.mjs');
 const USER = { email: 'e2e@test.local', password: 'E2e@12345' };
 const SHOTS = process.env.SHOT_DIR || 'e2e/shots';
 

@@ -36,7 +36,7 @@ const helperSx = { fontSize: '0.66rem', color: O2D.sub, mx: 0 };
  * every check — "is there enough?", the after-balance — runs on that KG figure.
  */
 const ScrapImsStockOut = () => {
-  const { data: stockRes } = useGetScrapStockQuery();
+  const { data: stockRes, isError: stockFailed, error: stockError } = useGetScrapStockQuery();
   const stock = stockRes?.data;
   const [scrapOut, { isLoading }] = useScrapOutMutation();
 
@@ -249,7 +249,10 @@ const ScrapImsStockOut = () => {
 
         {/* ── Step 3 ── */}
         <Panel>
-          <StepHead n={3} title="How much is going out?" hint={`Available at ${form.warehouse}: ${num(onHand)} kg.`} done={hasQty && !blocked} />
+          <StepHead n={3} title="How much is going out?" hint={stockFailed
+            // Never show a failed load as "0 kg on hand". (Issuing stays blocked, as before.)
+            ? `Could not load the scrap on hand — ${stockError?.data?.message || 'refresh the page to try again'}`
+            : `Available at ${form.warehouse}: ${num(onHand)} kg.`} done={hasQty && !blocked} />
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 120px', sm: '180px 130px 1fr' }, gap: 1.25, mt: 1.25, alignItems: 'start' }}>
             <TextField
               size="small" type="number" label="Quantity" value={form.quantity}

@@ -24,6 +24,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { assertE2ESetup } from './_e2eSafety.mjs';
 
 /** Same reason as grnRm.e2e.mjs: use the newest Chromium already in the cache. */
 const findChromium = () => {
@@ -41,6 +42,8 @@ const findChromium = () => {
 };
 
 const APP = 'http://127.0.0.1:3100';
+// Guarded e2e backend (scratch DB, S3 + email off) and a frontend pointed at it — or stop.
+await assertE2ESetup(APP, 'http://127.0.0.1:5099/api/v1', 'cutCoils.e2e.mjs');
 const USER = { email: 'cut-e2e@test.local', password: 'E2e@12345' };
 const SHOTS = process.env.SHOT_DIR || 'e2e/shots';
 
@@ -91,6 +94,13 @@ const readNoOptions = async (page) => {
 };
 
 const closeMenu = async (page) => { await page.keyboard.press('Escape'); await page.waitForTimeout(150); };
+
+/** With a physical coil linked, the round's cutting type (Full / Partial) must be
+ *  chosen before its weight can be typed. These runs type the weight: Partial. */
+const choosePartial = async (page) => {
+  const r = page.getByRole('radio', { name: /partial cutting/i });
+  if (await r.count()) { await r.first().check(); await page.waitForTimeout(150); }
+};
 
 /** Codes look like "JSL204-07-700 — Cu - 0.7mm - 7.00""; pull the code out. */
 const codesFrom = (options) => options
@@ -194,6 +204,7 @@ const run = async () => {
 
   /* ── 7. The coil weight, and the arithmetic on screen ── */
   const weight = page.getByLabel(/^cut this round/i).first();
+  await choosePartial(page);
   await weight.fill('100');
   await page.waitForTimeout(600);
   const sums = await page.locator('body').innerText();
@@ -329,6 +340,7 @@ const run = async () => {
   await page.waitForTimeout(300);
   await page.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(0).fill('100');
   await page.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(1).fill('150');
+  await choosePartial(page);
   await page.getByLabel(/^cut this round/i).first().fill('200');
   await page.waitForTimeout(600);
   await shot(page, '08b-jw001-ready-to-save');
@@ -365,6 +377,7 @@ const run = async () => {
       await page.locator('table tbody tr').nth(1).locator('input[type="number"]').nth(1).fill('35');
     } else { await closeMenu(page); }
   }
+  await choosePartial(page);
   await weight.fill('100');
   await page.waitForTimeout(800);
   await shot(page, '09-before-save');

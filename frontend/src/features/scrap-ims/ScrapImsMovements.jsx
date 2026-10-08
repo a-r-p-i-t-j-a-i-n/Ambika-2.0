@@ -42,7 +42,7 @@ const ScrapImsMovements = () => {
   const params = { page: page + 1, limit };
   for (const [k, v] of Object.entries(filters)) if (v) params[k] = v;
 
-  const { data, isFetching } = useGetScrapMovementsQuery(params);
+  const { data, isFetching, isError, error } = useGetScrapMovementsQuery(params);
   const { data: stockRes } = useGetScrapStockQuery();
 
   const rows = data?.data || [];
@@ -168,11 +168,15 @@ const ScrapImsMovements = () => {
               {!rows.length && (
                 <TableRow>
                   <TableCell colSpan={11}>
+                    {/* A failed load is said as a failure — never as "nothing yet",
+                        which would tell the operator something false. Same rule
+                        Scrap Out History already follows. */}
                     <EmptyNote
                       icon={ScrollText}
-                      title={isFetching ? 'Loading…' : 'No scrap movements yet'}
+                      title={isFetching ? 'Loading…' : isError ? 'Could not load the scrap movements.' : 'No scrap movements yet'}
                       hint={isFetching ? undefined
-                        : 'Cutting a coil in-house adds its scrap here automatically. Use Scrap In for scrap that arrived some other way.'}
+                        : isError ? (error?.data?.message || 'The server did not answer. Refresh the page to try again.')
+                          : 'Cutting a coil in-house adds its scrap here automatically. Use Scrap In for scrap that arrived some other way.'}
                     />
                   </TableCell>
                 </TableRow>

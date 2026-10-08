@@ -178,6 +178,11 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
       // Partial while this round left metal on the coil, Fully Cut on the round
       // that finished it. The same subtraction, never stored.
       status: roundStatus(remainingAfterKg),
+      // What the operator CHOSE for the round (FULL / PARTIAL), as stored on
+      // the conversion — the one figure here that is not derived, because
+      // intent cannot be recovered from weights. Null where it was never
+      // captured (every cut made before it existed); never guessed.
+      cuttingType: c.cuttingType || null,
 
       scrapRecordId: scrap?._id || null,
       disposition: scrap?.disposition || null,

@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { assertE2ESetup } from './_e2eSafety.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -34,6 +35,8 @@ const findChromium = () => {
 };
 
 const APP = 'http://127.0.0.1:3100';
+// Guarded e2e backend (scratch DB, S3 + email off) and a frontend pointed at it — or stop.
+await assertE2ESetup(APP, 'http://127.0.0.1:5099/api/v1', 'fullFlow.e2e.mjs');
 const API = 'http://127.0.0.1:5099/api/v1';
 const USER = { email: 'fullflow-e2e@test.local', password: 'E2e@12345' };
 const SHOTS = process.env.SHOT_DIR || 'e2e/shots';
@@ -271,6 +274,8 @@ const main = async () => {
     const row0 = page.locator('table tbody tr').nth(0);
     await row0.locator('input[type="number"]').nth(0).fill(String(r.pcs));
     await row0.locator('input[type="number"]').nth(1).fill(String(r.kg));
+    // A linked coil asks for the cutting type first; this run types the weight.
+    await page.getByRole('radio', { name: /partial cutting/i }).first().check();
     await page.getByLabel(/^cut this round/i).first().fill(String(r.coilKg));
     await page.waitForTimeout(900);
 

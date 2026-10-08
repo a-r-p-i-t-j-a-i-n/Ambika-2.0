@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { assertE2ESetup } from './_e2eSafety.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -33,6 +34,8 @@ const findChromium = () => {
 };
 
 const APP = 'http://127.0.0.1:3100';
+// Guarded e2e backend (scratch DB, S3 + email off) and a frontend pointed at it — or stop.
+await assertE2ESetup(APP, 'http://127.0.0.1:5099/api/v1', 'demoTour.e2e.mjs');
 const API = 'http://127.0.0.1:5099/api/v1';
 const USER = { email: 'fullflow-e2e@test.local', password: 'E2e@12345' };
 const SHOTS = process.env.SHOT_DIR || 'e2e/shots/demo-tour';

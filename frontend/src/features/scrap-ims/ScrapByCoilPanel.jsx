@@ -37,7 +37,7 @@ const ScrapByCoilPanel = ({ filters = {}, limit = 25 }) => {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(limit);
 
-  const { data, isFetching } = useGetScrapByCoilQuery({
+  const { data, isFetching, isError, error } = useGetScrapByCoilQuery({
     ...filters, page: page + 1, limit: rowsPerPage,
   });
 
@@ -102,8 +102,9 @@ const ScrapByCoilPanel = ({ filters = {}, limit = 25 }) => {
               <TableRow><TableCell colSpan={12} sx={{ border: 0, p: 0 }}>
                 <EmptyNote
                   icon={Scissors}
-                  title="No scrap is traced to a physical coil yet"
-                  hint={(untraceable.scrapKg || 0) > 0
+                  title={isError ? 'Could not load scrap by physical coil.' : 'No scrap is traced to a physical coil yet'}
+                  hint={isError ? (error?.data?.message || 'The server did not answer. Refresh the page to try again.')
+                    : (untraceable.scrapKg || 0) > 0
                     ? `${kg(untraceable.scrapKg)} of scrap is on record, but none of it names a goods receipt. Cuts booked from now on pick the coil, so they will appear here.`
                     : 'Cut a coil in Raw Material and it will appear here.'}
                 />

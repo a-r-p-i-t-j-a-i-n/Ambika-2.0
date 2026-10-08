@@ -44,7 +44,7 @@ const ScrapImsList = () => {
     ...(search ? { search } : {}),
   }), [page, rowsPerPage, location, disposition, batchStatus, search]);
 
-  const { data, isFetching } = useGetScrapOverviewQuery(query);
+  const { data, isFetching, isError, error } = useGetScrapOverviewQuery(query);
   const rows = data?.data || [];
   const meta = data?.meta || {};
   const s = meta.summary || {};
@@ -151,8 +151,11 @@ const ScrapImsList = () => {
               )}
               {!isFetching && !rows.length && (
                 <TableRow><TableCell colSpan={12} sx={{ border: 0 }}>
-                  <EmptyNote icon={Search} title="No scrap records match these filters"
-                    hint="Try clearing the location or check filter, or searching a different batch." />
+                  {/* A failed load is said as a failure, never as "no match". */}
+                  <EmptyNote icon={Search}
+                    title={isError ? 'Could not load the scrap register.' : 'No scrap records match these filters'}
+                    hint={isError ? (error?.data?.message || 'The server did not answer. Refresh the page to try again.')
+                      : 'Try clearing the location or check filter, or searching a different batch.'} />
                 </TableCell></TableRow>
               )}
               {rows.map((r, i) => (
