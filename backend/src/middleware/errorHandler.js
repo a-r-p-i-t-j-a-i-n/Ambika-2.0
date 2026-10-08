@@ -35,6 +35,12 @@ const errorHandler = (err, req, res, _next) => {
     message = `Duplicate value for field(s): ${field}. Please use a unique value.`;
   }
 
+  // ── Mongoose optimistic-concurrency conflict ───────────
+  if (err.name === 'VersionError' || err.name === 'ParallelSaveError') {
+    statusCode = 409;
+    message = 'This record was changed by someone else just now. Please refresh and try again.';
+  }
+
   // ── Mongoose Validation Error ──────────────────────────
   if (err.name === 'ValidationError') {
     statusCode = 422;

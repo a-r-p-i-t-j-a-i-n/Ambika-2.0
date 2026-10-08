@@ -12,7 +12,7 @@ import { fmtINR } from '../../../utils/formatters';
 // the Current Price cell (column 4) so it is always visible — never pushed
 // off-screen the way a trailing actions column would be.
 const PriceMasterTable = ({
-  rows, isLoading, onRowClick, onRevise, canRevise = false,
+  rows, isLoading, onRowClick, onRevise, canRevise = false, priceType,
 }) => {
   const theme = useTheme();
 
@@ -191,7 +191,36 @@ const PriceMasterTable = ({
         );
       },
     },
-  ], [theme, canRevise, onRevise]);
+    // Purchase stream: the latest rate in the Vendor Master (read-only reference;
+    // kept current by Vendor Master edits and approved POs — not a price revision).
+    ...(priceType === 'RM_COST' ? [{
+      field: 'latestVendorRate',
+      headerName: 'Latest Vendor Rate',
+      width: 170,
+      align: 'right', headerAlign: 'right',
+      valueGetter: (_value, row) => row.latestVendorRate?.rate ?? null,
+      renderCell: (p) => {
+        const v = p.row.latestVendorRate;
+        if (!v) return <Typography sx={{ color: 'text.disabled', fontSize: '0.82rem' }}>—</Typography>;
+        const via = v.source === 'PURCHASE_ORDER'
+          ? `PO creation${v.referenceNumber ? ` (${v.referenceNumber})` : ''}`
+          : 'Vendor Master';
+        const when = v.updatedAt ? ` · ${dayjs(v.updatedAt).format('DD MMM YYYY')}` : '';
+        return (
+          <Tooltip arrow title={`${v.vendorName || 'Vendor'} · updated through ${via}${when}`}>
+            <Stack sx={{ alignItems: 'flex-end', py: 0.5 }}>
+              <Typography sx={{ fontWeight: 700, fontSize: '0.86rem', fontVariantNumeric: 'tabular-nums' }}>
+                {fmtINR(v.rate)}
+              </Typography>
+              <Typography sx={{ fontSize: '0.68rem', color: 'text.secondary', maxWidth: 150 }} noWrap>
+                {v.vendorName}
+              </Typography>
+            </Stack>
+          </Tooltip>
+        );
+      },
+    }] : []),
+  ], [theme, canRevise, onRevise, priceType]);
 
   return (
     <Box>

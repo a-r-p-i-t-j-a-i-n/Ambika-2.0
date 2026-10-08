@@ -25,6 +25,8 @@ import SKU from '../skus/sku.model.js';
 import Party from '../clients/party.model.js';
 import PriceRevision from './price-revision.model.js';
 import CompanySettings from './company-settings.model.js';
+import Vendor from '../vendors/vendor.model.js';
+import PricingHistory from '../vendors/pricingHistory.model.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
 
@@ -299,6 +301,76 @@ export const correctRevision = async (revisionId, body, req) => {
 
 // ── Master / list views ─────────────────────────────────────────────
 
+/**
+ * Latest purchase rate per SKU across all vendors, read from the Vendor Master
+ * (the source of truth for vendor rates; kept current by Vendor Master edits and
+ * approved POs). Returns Map<skuId, { rate, gstRate, vendorId, vendorName,
+ * updatedAt, source, referenceNumber }>, `source` taken from the matching
+ * Pricing History row when one exists.
+ */
+const latestVendorRates = async (skus) => {
+  if (!skus.length) return new Map();
+  const idByCode = new Map(skus.map((s) => [String(s.code || '').toUpperCase(), String(s._id)]));
+  const skuIdSet = new Set(skus.map((s) => String(s._id)));
+  const products = await Vendor.aggregate([
+    { $match: { isDeleted: { $ne: true } } },
+    { $unwind: '$products' },
+    {
+      $match: {
+        $or: [
+          { 'products.skuId': { $in: skus.map((s) => s._id) } },
+          { 'products.skuCode': { $in: [...idByCode.keys()].filter(Boolean) } },
+        ],
+      },
+    },
+    {
+      $project: {
+        vendorId: '$_id', vendorName: '$name', updatedAt: { $ifNull: ['$products.lastUpdatedAt', '$updatedAt'] },
+        skuId: '$products.skuId', skuCode: '$products.skuCode', rate: '$products.rate', gstRate: '$products.gstRate',
+      },
+    },
+  ]);
+
+  const best = new Map();
+  for (const p of products) {
+    const skuId = (p.skuId && skuIdSet.has(String(p.skuId))) ? String(p.skuId) : idByCode.get(String(p.skuCode || '').toUpperCase());
+    if (!skuId) continue;
+    const cur = best.get(skuId);
+    if (!cur || new Date(p.updatedAt || 0) > new Date(cur.updatedAt || 0)) best.set(skuId, p);
+  }
+  if (!best.size) return new Map();
+
+  // Where did each of those rates come from (Vendor Master edit vs PO)?
+  const winners = [...best.values()];
+  const history = await PricingHistory.aggregate([
+    {
+      $match: {
+        vendorId: { $in: winners.map((w) => w.vendorId) },
+        skuCode: { $in: winners.map((w) => String(w.skuCode || '').toUpperCase()).filter(Boolean) },
+      },
+    },
+    { $sort: { createdAt: -1 } },
+    { $group: { _id: { vendorId: '$vendorId', skuCode: '$skuCode' }, source: { $first: '$source' }, referenceNumber: { $first: '$referenceNumber' } } },
+  ]);
+  const historyKey = (vendorId, skuCode) => `${vendorId}|${String(skuCode || '').toUpperCase()}`;
+  const historyMap = new Map(history.map((h) => [historyKey(h._id.vendorId, h._id.skuCode), h]));
+
+  const out = new Map();
+  for (const [skuId, p] of best) {
+    const h = historyMap.get(historyKey(p.vendorId, p.skuCode));
+    out.set(skuId, {
+      rate: p.rate ?? 0,
+      gstRate: p.gstRate ?? 0,
+      vendorId: p.vendorId,
+      vendorName: p.vendorName || '',
+      updatedAt: p.updatedAt || null,
+      source: h?.source || 'VENDOR_MASTER',
+      referenceNumber: h?.referenceNumber || '',
+    });
+  }
+  return out;
+};
+
 export const getPriceMaster = async ({
   priceType = 'SELLING', itemType = '', category = '', search = '', status = '',
   effectiveFrom = null, effectiveTo = null, revisedBy = '', partyIds = '',
@@ -372,6 +444,11 @@ export const getPriceMaster = async ({
   ]);
   const pendingMap = new Map(pending.map((p) => [String(p._id), p.count]));
 
+  // 3b) Purchase stream only: the latest Vendor Master rate per SKU (read-only).
+  //     Vendor rates stay in the Vendor Master / Pricing History; they are shown
+  //     here for reference and never become PriceRevision rows.
+  const vendorRateMap = priceType === 'RM_COST' ? await latestVendorRates(skus) : new Map();
+
   // 4) Build rows.
   const rows = skus.map((sku) => {
     const revs = byId.get(String(sku._id)) || [];
@@ -424,6 +501,7 @@ export const getPriceMaster = async ({
       revisedByName:   live?.requestedByName || null,
       pricingRemarks:  sku.pricingRemarks || '',
       pendingCount:    pendingMap.get(String(sku._id)) || 0,
+      latestVendorRate: vendorRateMap.get(String(sku._id)) || null,
       scheduled:       scheduled ? {
         newPrice: scheduled.newPrice,
         effectiveFrom: scheduled.effectiveFrom,

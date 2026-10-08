@@ -15,6 +15,7 @@ import {
   invoiceQuerySchema,
   mongoIdParamSchema,
   qcIdParamSchema,
+  advancePositionQuerySchema,
 } from './vendorInvoice.validation.js';
 
 const router = Router();
@@ -28,6 +29,7 @@ router.route('/')
 router.get('/stats', c.getStats);
 router.get('/invoiceable-qcs', c.getInvoiceableQcs);
 router.get('/invoiceable-grns', c.getInvoiceableGrns); // Step 1.10 — GRN-first invoice creation
+router.get('/advance-position', validate(advancePositionQuerySchema, 'query'), c.getAdvancePosition); // PI advance paid / allocated / available
 router.get('/by-qc/:qcId', validate(qcIdParamSchema, 'params'), c.getByQc);
 
 router.route('/:id')

@@ -1,5 +1,5 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
-import { vendorInvoiceService } from './vendorInvoice.service.js';
+import { vendorInvoiceService, getAdvancePosition } from './vendorInvoice.service.js';
 import { userHasPermission } from '../../../middleware/permission.middleware.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
@@ -31,6 +31,11 @@ export const vendorInvoiceController = {
   getInvoiceableGrns: asyncHandler(async (req, res) => {
     const rows = await vendorInvoiceService.getInvoiceableGrns(req.query);
     res.json(ApiResponse.ok('Invoiceable GRNs', rows));
+  }),
+
+  getAdvancePosition: asyncHandler(async (req, res) => {
+    const pos = await getAdvancePosition(req.query.piId, req.query.excludeInvoiceId || null);
+    res.json(ApiResponse.ok('PI advance position', pos));
   }),
 
   getById: asyncHandler(async (req, res) => {

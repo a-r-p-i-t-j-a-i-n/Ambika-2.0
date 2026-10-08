@@ -42,6 +42,7 @@ import { GrnStatusChip } from '../grn/grnMeta';
 import GrnFormDialog from '../grn/GrnFormDialog';
 import GrnCompleteDialog from '../grn/GrnCompleteDialog';
 import IncomingQCFormDialog from '../incoming-qc/IncomingQCFormDialog';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 
 const TONE_COLOR = { info: '#2563eb', warning: '#b45309', success: '#16a34a', error: '#dc2626' };
@@ -494,6 +495,7 @@ const PurchaseOrderDetail = () => {
         </Box>
       )}
 
+      <FmsDoerCard entityType="PO" entityId={id} />
       <Grid container spacing={3}>
         {/* Vendor */}
         <Grid item xs={12} md={6}>

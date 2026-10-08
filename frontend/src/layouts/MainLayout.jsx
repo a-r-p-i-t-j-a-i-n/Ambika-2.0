@@ -234,6 +234,10 @@ const navSectionsSimple = [
               { text: 'Master Data',    icon: <FileText size={19} />, path: '/procurement/master-data' },
             ],
           },
+          // Step-wise doers across FMS modules. `perm` hides the row from users
+          // who cannot open it (the route is gated the same way).
+          { text: 'My FMS Tasks',    icon: <ListChecks size={19} />,        path: '/fms/my-tasks' },
+          { text: 'Doer Assignment', icon: <SlidersHorizontal size={19} />, path: '/fms/doer-assignment', perm: 'fms.manageDoers' },
         ],
       },
       {
@@ -378,6 +382,8 @@ const PAGE_TITLES = {
   '/purchase-fms/tally-entries':       'Purchase FMS — Tally Entries',
   '/purchase-fms/final-payments':      'Purchase FMS — Final Payments',
   '/purchase-fms':                     'Purchase FMS',
+  '/fms/my-tasks':                     'FMS Tasks',
+  '/fms/doer-assignment':              'FMS Doer Assignment',
 
   '/employees':              'Employees',
   '/access-control':         'Access Control',
@@ -458,7 +464,10 @@ const MainLayout = () => {
   const sections = useMemo(() => {
     // Clone sections (and their item arrays) so we can splice without mutating
     // the static navSections definition.
-    const out = navSections.map((s) => ({ ...s, items: [...s.items] }));
+    // Items may carry `perm` — drop them (at any depth) for users without it.
+    const allowed = (it) => !it.perm || isRoot || can(it.perm);
+    const prune = (items) => items.filter(allowed).map((it) => (it.children ? { ...it, children: prune(it.children) } : it));
+    const out = navSections.map((s) => ({ ...s, items: prune(s.items) }));
 
     // Ambika 2.0: the permission-driven groups below (Tasks, O2D FMS, Pricing
     // & Revenue, Access Control / Employees) are part of the FULL 1.0 nav and

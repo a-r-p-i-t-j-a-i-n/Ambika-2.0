@@ -123,6 +123,9 @@ export const updateGrnSchema = Joi.object({
 export const completeGrnSchema = Joi.object({
   remarks: Joi.string().trim().max(1000).allow('', null),
 
+  // Explicit consent to receive beyond the PO's current pending qty.
+  allowOverReceipt: Joi.boolean().default(false),
+
   // Opt-in: Raw Material / Circle lines post to inventory only when this is
   // true.
   //

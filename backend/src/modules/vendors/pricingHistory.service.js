@@ -131,28 +131,42 @@ export const pricingHistoryService = {
   },
 
   /**
-   * Sync pricing history from a saved Purchase Order's lines. For every OTHER-format
-   * line whose rate/GST differs from the Vendor Master, record history + update the
-   * master's latest rate. JSL POs are skipped (their "rate" is a computed final
-   * price, not the catalog base rate). Non-fatal — never blocks PO creation.
+   * Sync pricing history from an APPROVED Purchase Order's lines. Only OTHER-format
+   * lines whose rate the user actually changed on the PO (rateSource = MANUAL) are
+   * written back — rates auto-filled from the Vendor Master or carried from an
+   * approved quotation never are. JSL POs are skipped (their "rate" is a computed
+   * final price, not the catalog base rate). Idempotent per PO (a PO's lines are
+   * recorded once) and non-fatal — never blocks PO approval.
    */
   async recordPoLines(po, user) {
     try {
       if (!po?.vendorId || !po.items?.length) return;
+      // Older history rows written while this PO was still a draft carry no PO
+      // number — stamp the final one now that it exists.
+      if (po.poNumber) {
+        await PricingHistory.updateMany(
+          { referenceId: po._id, source: PRICING_SOURCE.PURCHASE_ORDER, referenceNumber: { $in: ['', null] } },
+          { $set: { referenceNumber: po.poNumber } },
+        );
+      }
       if (po.poFormatType === 'JSL') return; // discount pricing — not a catalog rate
+      const manualLines = po.items.filter((l) => l.rateSource === 'MANUAL' && (l.skuCode || l.skuId));
+      if (!manualLines.length) return;
+      // A PO's rates are recorded once — guards against a repeated approval hook.
+      if (await PricingHistory.exists({ referenceId: po._id, source: PRICING_SOURCE.PURCHASE_ORDER })) return;
       const vendor = await Vendor.findOne({ _id: po.vendorId, isDeleted: { $ne: true } });
       if (!vendor) return; // legacy Party vendor — no Vendor Master to sync
       const ctx = {
         source: PRICING_SOURCE.PURCHASE_ORDER,
         referenceId: po._id,
-        referenceNumber: po.poNumber,
+        referenceNumber: po.poNumber || po.draftNumber || '',
         userId: user?._id,
         userName: user?.name || '',
-        remarks: 'Rate updated through Purchase Order',
+        remarks: 'Rate updated through PO creation',
         effectiveDate: po.poDate || new Date(),
       };
       const entries = [];
-      for (const line of po.items) {
+      for (const line of manualLines) {
         if (!line.skuCode && !line.skuId) continue;
         const entry = this.recordChange(vendor, {
           skuId: line.skuId, skuCode: line.skuCode, itemName: line.itemName,

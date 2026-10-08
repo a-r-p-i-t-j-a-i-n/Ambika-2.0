@@ -40,6 +40,9 @@ const buildPayload = (v, overrides = {}) => ({
   ccEmails: v.ccEmails || [],
   bccEmails: v.bccEmails || [],
   products: (v.products || []).map((p) => ({
+    // Keep the row id so the server can diff a renamed product against its
+    // previous rate (pricing history) instead of treating it as a new SKU.
+    _id: p._id || undefined,
     skuId: p.skuId || null, productName: p.productName || '', skuCode: p.skuCode || '',
     unit: p.unit || 'Pcs', rate: p.rate || 0, gstRate: p.gstRate || 0, hsn: p.hsn || '', notes: p.notes || '',
   })),

@@ -93,6 +93,7 @@ const computeLines = (items = [], format = 'OTHER') => {
       skuId: it.skuId || undefined,
       hsn: it.hsn || '',
       quantity, unit: it.unit || 'Pcs', rate, gstRate,
+      rateSource: it.rateSource || '',
       taxableAmount, taxAmount,
       totalAmount: round2(taxableAmount + taxAmount),
       receivedQty,
@@ -903,9 +904,6 @@ export const purchaseOrderService = {
       );
     } catch (err) { logger.error(`[po] indent status update failed: ${err.message}`); }
 
-    // Sync Vendor Master rates + pricing history from any user-edited line rates.
-    await pricingHistoryService.recordPoLines(po, user);
-
     return po;
   },
 
@@ -1012,9 +1010,6 @@ export const purchaseOrderService = {
         await linkIndentToPo(ind, party._id, po, draftNumber, user);
       } catch (err) { logger.error(`[po] multi-indent link failed for ${ind.indentNumber}: ${err.message}`); }
     }
-
-    // Sync Vendor Master rates + pricing history from any user-edited line rates.
-    await pricingHistoryService.recordPoLines(po, user);
 
     return po;
   },
@@ -1140,8 +1135,6 @@ export const purchaseOrderService = {
     po.updatedBy = user?._id;
     po.activityTimeline.push({ action: 'UPDATE', description: 'Draft PO updated', actorId: user?._id });
     const saved = await po.save();
-    // Sync Vendor Master rates + pricing history from any user-edited line rates.
-    await pricingHistoryService.recordPoLines(saved, user);
     return saved;
   },
 
@@ -1206,6 +1199,10 @@ export const purchaseOrderService = {
     if (approved) {
       try { await syncIndentPoNumber(saved, user); }
       catch (err) { logger.error(`[po] indent poNumber sync failed for ${saved.poNumber}: ${err.message}`); }
+      // Vendor Master + Pricing History are updated only once the PO is approved
+      // (never from a draft that may still be edited, rejected or deleted), so
+      // every PO-sourced history row carries the final PO number.
+      await pricingHistoryService.recordPoLines(saved, user);
     }
 
     return saved;

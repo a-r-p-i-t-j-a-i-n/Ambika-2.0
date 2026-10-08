@@ -22,6 +22,7 @@ const poItemSchema = Joi.object({
   unit:     Joi.string().trim().max(30).allow('', null).default('Pcs'),
   rate:     Joi.number().min(0).default(0),
   gstRate:  Joi.number().min(0).max(100).default(0),
+  rateSource: Joi.string().valid('VENDOR_MASTER', 'APPROVED_QUOTATION', 'MANUAL', '').allow(null),
   // Client-side computed amounts are accepted but recomputed server-side.
   taxableAmount: Joi.number().min(0).optional(),
   taxAmount:     Joi.number().min(0).optional(),
@@ -39,11 +40,17 @@ const poItemSchema = Joi.object({
 
 const poFormatType = Joi.string().valid('JSL', 'OTHER').default('OTHER');
 
+// Create-time save action: DRAFT (default — existing behaviour) or DIRECT
+// ("Save PO Directly" — create + approve in one go; controller enforces
+// procurement.approve).
+const saveMode = Joi.string().valid('DRAFT', 'DIRECT').default('DRAFT');
+
 // ── Create (saved as DRAFT; only from an approved-quotation indent) ──
 export const createPoSchema = Joi.object({
   indentId:      objectId.required(),
   vendorId:      objectId.required(),
   poFormatType:  poFormatType,
+  saveMode:      saveMode,
   poDate:        Joi.date().optional(),
   vendorName:    Joi.string().trim().max(200).allow('', null),
   vendorGST:     Joi.string().trim().max(20).allow('', null),
@@ -86,7 +93,7 @@ export const createMultiPoSchema = Joi.object({
 export const createFromItemsSchema = createMultiPoSchema.fork(
   ['indentIds'],
   (s) => s.optional(),
-);
+).keys({ saveMode });
 
 // ── Revise a cancelled PO into a new draft (item indentId optional — defaults to
 // the source PO's indent server-side, so manually-added lines are tolerated). ──

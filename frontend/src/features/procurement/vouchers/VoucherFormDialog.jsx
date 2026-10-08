@@ -240,7 +240,9 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
               <Grid item xs={12}>
                 <Box sx={{ p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
                   <Typography variant="caption" color="text.secondary">Vendor <b>{src.vendorName}</b></Typography>
-                  <Typography variant="caption" color="text.secondary">GRN <b>{src.grnNumber || '—'}</b></Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    GRN <b>{(src.grnNumbers?.length ? src.grnNumbers : [src.grnNumber].filter(Boolean)).join(', ') || '—'}</b>
+                  </Typography>
                   <Typography variant="caption" color="text.secondary">PO <b>{src.poNumber || '—'}</b></Typography>
                 </Box>
               </Grid>

@@ -50,9 +50,34 @@ registerApprovalDocument('VOUCHER', {
   uploadFolder: 'vouchers',
   buildPdfBuffer: async (v, opts) => {
     const company = await resolveCompanyForApproval();
-    return buildVoucherPdfBuffer(v, company, opts?.signature || null);
+    const doc = await withGrnRefs(typeof v?.toObject === 'function' ? v.toObject() : { ...v });
+    return buildVoucherPdfBuffer(doc, company, opts?.signature || null);
   },
 });
+
+/** All GRN / QC references of a (multi-GRN) vendor invoice, legacy single refs as fallback. */
+const invoiceGrnRefs = (inv) => {
+  const lineGrnNumbers = [...new Set((inv.items || []).map((it) => it.grnNumber).filter(Boolean))];
+  return {
+    grnIds: inv.grnIds?.length ? inv.grnIds : (inv.grnId ? [inv.grnId] : []),
+    grnNumbers: inv.grnNumbers?.length ? inv.grnNumbers : (lineGrnNumbers.length ? lineGrnNumbers : (inv.grnNumber ? [inv.grnNumber] : [])),
+    qcIds: inv.qcIds?.length ? inv.qcIds : (inv.qcId ? [inv.qcId] : []),
+  };
+};
+
+/**
+ * Vouchers created before multi-GRN references were stored only carry the first
+ * grnId — read the full list from their invoice (read-time, nothing is written).
+ */
+const withGrnRefs = async (v) => {
+  if (v?.grnNumbers?.length || !v?.invoiceId) return v;
+  try {
+    const inv = await VendorInvoice.findById(v.invoiceId)
+      .select('grnId grnNumber grnIds grnNumbers qcId qcIds items.grnNumber').lean();
+    if (inv) Object.assign(v, invoiceGrnRefs(inv));
+  } catch (err) { logger.warn(`[voucher] GRN refs lookup failed for ${v.voucherNumber}: ${err.message}`); }
+  return v;
+};
 
 export const voucherService = {
   async create(data, user) {
@@ -78,6 +103,7 @@ export const voucherService = {
       invoiceId: inv._id, invoiceNumber: inv.invoiceNumber,
       vendorId: inv.vendorId, vendorName: inv.vendorName,
       poId: inv.poId, poNumber: inv.poNumber, grnId: inv.grnId, qcId: inv.qcId,
+      ...invoiceGrnRefs(inv),
       invoiceAmount: round2(inv.invoiceAmount),
       advancePaid: round2(inv.advancePaid),
       debitNoteAmount: round2(inv.debitNoteAmount),
@@ -156,7 +182,7 @@ export const voucherService = {
   async getById(id) {
     const v = await VendorVoucher.findOne({ _id: id, isDeleted: { $ne: true } }).populate('createdBy', 'name').lean();
     if (!v) throw new AppError('Voucher not found', 404);
-    return v;
+    return withGrnRefs(v);
   },
 
   async getByInvoice(invoiceId) {
@@ -272,7 +298,7 @@ export const voucherService = {
       if (s) company = { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, phone: s.companyPhone, email: s.companyEmail };
     } catch { /* fall back to env */ }
 
-    const buffer = await buildVoucherPdfBuffer(v, company);
+    const buffer = await buildVoucherPdfBuffer(await withGrnRefs(v), company);
     const fileName = `${String(v.voucherNumber || 'VOUCHER').replace(/[^\w.-]/g, '_')}.pdf`;
 
     let voucherPdfUrl;

@@ -103,7 +103,9 @@ const vendorInvoiceSchema = new Schema({
   gstAmount:        { type: Number, default: 0, min: 0 },
   tdsAmount:        { type: Number, default: 0, min: 0 },
   otherCharges:     { type: Number, default: 0 },
-  advancePaid:      { type: Number, default: 0, min: 0 }, // pulled from PI.paidAmount
+  // PI advance ALLOCATED to this invoice: min(PI advance still unallocated, invoice − debit note).
+  // Across a PI's live (non-rejected) invoices these never sum past PI.paidAmount.
+  advancePaid:      { type: Number, default: 0, min: 0 },
   netPayableAmount: { type: Number, default: 0 },         // invoice − debitNote − advancePaid
 
   invoiceDocument: { type: docSchema, default: () => ({}) },

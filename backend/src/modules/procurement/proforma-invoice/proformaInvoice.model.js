@@ -67,6 +67,9 @@ const proformaInvoiceSchema = new Schema({
   totalValue:    { type: Number, default: 0, min: 0 },
   paidAmount:    { type: Number, default: 0, min: 0 },  // written by Step 1.7 Advance Payment
   balanceAmount: { type: Number, default: 0, min: 0 },  // totalValue − paidAmount
+  // Short-lived lock held while a vendor invoice allocates this PI's advance, so
+  // two invoices can never consume the same remaining advance (vendorInvoice.service).
+  advanceAllocationLockAt: { type: Date, default: null },
 
   // ── Status ──
   approvalStatus: { type: String, enum: Object.values(PI_APPROVAL_STATUS), default: PI_APPROVAL_STATUS.PENDING, index: true },

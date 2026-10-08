@@ -27,7 +27,8 @@ const infoRows = (doc, x, yStart, w, rows) => {
   rows.forEach(([label, value]) => {
     doc.font('Helvetica').fontSize(8.5).fill('#475a8a').text(`${label}:`, x + 10, y, { width: 90, lineBreak: false });
     doc.fill(navy).text(value || '—', x + 100, y, { width: w - 110 });
-    y += 14;
+    // Long values (e.g. several GRN numbers) wrap — advance past the wrapped height.
+    y += Math.max(14, doc.heightOfString(value || '—', { width: w - 110 }) + 3);
   });
   return y;
 };
@@ -97,7 +98,8 @@ export const buildPurchaseVoucherPdfBuffer = (v, company = {}, mdSig = null) => 
     const half = W / 2 - 8;
     const lY = infoRows(doc, PAGE.m, y, half, [
       ['Voucher No', v.voucherNumber], ['Voucher Date', fmtDate(v.voucherDate)],
-      ['Invoice No', v.invoiceNumber], ['PO No', v.poNumber], ['Payment Terms', v.paymentTerms],
+      ['Invoice No', v.invoiceNumber], ['PO No', v.poNumber],
+      ['GRN No', (v.grnNumbers || []).join(', ')], ['Payment Terms', v.paymentTerms],
     ]);
     const rY = infoRows(doc, PAGE.m + half + 16, y, half, [
       ['Vendor', v.vendorName], ['Due Date', fmtDate(v.dueDate)],
