@@ -24,6 +24,29 @@ const findPrev = (prev, incoming) => {
   return null;
 };
 
+// Opening pricing-history row for a SKU rate first entered in the Vendor Master.
+const initialEntry = (vendor, product, user) => ({
+  vendorId: vendor._id,
+  vendorName: vendor.name || '',
+  skuId: product.skuId || null,
+  skuCode: upper(product.skuCode),
+  itemName: product.productName || '',
+  oldRate: 0,
+  newRate: num(product.rate),
+  oldGstRate: 0,
+  newGstRate: num(product.gstRate),
+  hsn: product.hsn || '',
+  unit: product.unit || '',
+  effectiveDate: new Date(),
+  source: PRICING_SOURCE.VENDOR_MASTER,
+  referenceType: PRICING_SOURCE.VENDOR_MASTER,
+  referenceId: vendor._id,
+  referenceNumber: '',
+  updatedBy: user?._id || null,
+  updatedByName: user?.name || '',
+  remarks: 'Initial rate added through Vendor Master',
+});
+
 export const vendorService = {
   async getAll(query) {
     const features = new ApiFeatures(Vendor.find({ isDeleted: { $ne: true } }), query)
@@ -41,8 +64,18 @@ export const vendorService = {
     return vendor;
   },
 
-  async create(data, userId) {
-    return Vendor.create({ ...data, createdBy: userId });
+  async create(data, user) {
+    const userId = user?._id;
+    const vendor = await Vendor.create({ ...data, createdBy: userId });
+    // Every SKU rate entered with the new vendor opens its pricing history.
+    const entries = (vendor.products || [])
+      .filter((p) => num(p.rate) > 0 || num(p.gstRate) > 0)
+      .map((p) => initialEntry(vendor, p, user));
+    if (entries.length) {
+      try { await PricingHistory.insertMany(entries); }
+      catch { /* audit insert is non-fatal */ }
+    }
+    return vendor;
   },
 
   async update(id, data, user) {
@@ -68,6 +101,8 @@ export const vendorService = {
         const gstChanged = oldGstRate != null && newGstRate !== oldGstRate;
 
         const stamped = {
+          // keep row identity across edits (only for an explicit id match)
+          ...(prev?._id && incoming._id && String(prev._id) === String(incoming._id) ? { _id: prev._id } : {}),
           skuId: incoming.skuId || prev?.skuId || null,
           productName: incoming.productName || '',
           skuCode: upper(incoming.skuCode),
@@ -80,7 +115,10 @@ export const vendorService = {
           lastUpdatedBy: (rateChanged || gstChanged) ? userId : (prev?.lastUpdatedBy || null),
         };
 
-        if (rateChanged || gstChanged) {
+        if (!prev && (newRate > 0 || newGstRate > 0)) {
+          // A SKU newly added to the vendor — its first rate opens the history.
+          historyEntries.push(initialEntry(vendor, stamped, user));
+        } else if (rateChanged || gstChanged) {
           historyEntries.push({
             vendorId: vendor._id,
             vendorName: vendor.name || '',

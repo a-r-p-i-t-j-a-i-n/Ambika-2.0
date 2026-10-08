@@ -103,6 +103,12 @@ export const mongoIdParamSchema = Joi.object({
   id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });
 
+// Read-only PI advance position (paid / allocated / available) for the invoice form.
+export const advancePositionQuerySchema = Joi.object({
+  piId:             Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
+  excludeInvoiceId: Joi.string().regex(/^[0-9a-fA-F]{24}$/).allow('', null),
+});
+
 export const qcIdParamSchema = Joi.object({
   qcId: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });

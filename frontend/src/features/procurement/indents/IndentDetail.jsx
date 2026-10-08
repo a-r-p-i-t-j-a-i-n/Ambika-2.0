@@ -23,6 +23,7 @@ import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
 import ServiceCompletionDialog from '../service-completions/ServiceCompletionDialog';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
@@ -338,6 +339,7 @@ const IndentDetail = () => {
         );
       })()}
 
+      <FmsDoerCard entityType="INDENT" entityId={id} />
       <Grid container spacing={2}>
         {/* Header + items */}
         <Grid item xs={12}>
@@ -386,6 +388,22 @@ const IndentDetail = () => {
                   <Box sx={{ mt: 1 }}>
                     <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>Item-wise Quotation Files</Typography>
                     <ItemFilesTable rows={step.itemQuotations} fileKey="quotationDocuments" />
+                    {step.legacyQuotationDocuments?.length > 0 && (
+                      <Box sx={{ mt: 1.5 }}>
+                        <Field label={`Earlier quotation files — not linked to an item (${step.legacyQuotationDocuments.length})`} value={
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                            {step.legacyQuotationDocuments.map((d, i) => (
+                              <Tooltip key={d.fileUrl || i} title={d.fileName || 'View file'}>
+                                <Button size="small" variant="outlined" startIcon={<FileText size={14} />}
+                                  href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
+                                  {d.fileName ? (d.fileName.length > 18 ? `${d.fileName.slice(0, 16)}…` : d.fileName) : `File ${i + 1}`}
+                                </Button>
+                              </Tooltip>
+                            ))}
+                          </Box>
+                        } />
+                      </Box>
+                    )}
                   </Box>
                 );
               }

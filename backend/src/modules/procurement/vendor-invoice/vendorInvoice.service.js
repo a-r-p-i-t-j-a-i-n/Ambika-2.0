@@ -1,9 +1,11 @@
 import VendorInvoice, { INVOICE_STATUS, INVOICE_VARIANCE_STATUS } from './vendorInvoice.model.js';
+import { getAdvancePosition, withPiAdvanceLock } from './piAdvance.js';
 import IncomingQC, { QC_STATUS } from '../incoming-qc/incomingQc.model.js';
 import VendorPurchaseOrder from '../purchase-order/purchaseOrder.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
+export { getAdvancePosition }; // re-exported for the controller / existing imports
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -114,6 +116,10 @@ const computeNetPayable = (inv) =>
 
 const uniq = (arr) => [...new Set(arr.filter(Boolean).map(String))];
 
+/** Allocate what is available, but never more than the invoice's payable basis. */
+const allocateAdvance = (available, invoiceAmount, debitNoteAmount) =>
+  Math.max(0, Math.min(round2(available), round2((invoiceAmount || 0) - (debitNoteAmount || 0))));
+
 // Validate a set of QCs can be invoiced together (same vendor, same PO, QC passed).
 const loadAndValidateQcs = async (qcIdList) => {
   const qcs = await IncomingQC.find({ _id: { $in: qcIdList }, isDeleted: { $ne: true } }).lean();
@@ -143,13 +149,13 @@ export const vendorInvoiceService = {
     if (!qcIdList.length) throw new AppError('Select at least one QC / GRN', 400);
     const qcs = await loadAndValidateQcs(qcIdList);
     const first = qcs[0];
+    // The PI advance is allocated under the per-PI lock: read what is still
+    // unallocated, take this invoice's share, and persist it before releasing.
+    return withPiAdvanceLock(first.piId, () => this._createLocked(data, user, opts, qcs));
+  },
 
-    // Rule 2 & 6: pull advance paid from the PI for net-payable adjustment.
-    let advancePaid = 0;
-    if (first.piId) {
-      const pi = await ProformaInvoice.findById(first.piId).select('paidAmount').lean();
-      advancePaid = round2(pi?.paidAmount || 0);
-    }
+  async _createLocked(data, user, opts, qcs) {
+    const first = qcs[0];
 
     // Recompute items + totals authoritatively from QC quantities + PO rates,
     // accounting for what's already been invoiced on prior invoices.
@@ -165,11 +171,12 @@ export const vendorInvoiceService = {
 
     const doc = normalizeDoc(data.invoiceDocument);
     const debitDoc = normalizeDoc(data.debitNoteDocument);
-    const base = {
-      invoiceAmount: itemTotals.invoiceAmount,
-      debitNoteAmount: data.debitNoteRequired ? round2(data.debitNoteAmount) : 0,
-      advancePaid,
-    };
+    // Rule 2 & 6: deduct only the PI advance not yet allocated to other invoices.
+    const invoiceAmount = itemTotals.invoiceAmount;
+    const debitNoteAmount = data.debitNoteRequired ? round2(data.debitNoteAmount) : 0;
+    const { advanceAvailable } = await getAdvancePosition(first.piId);
+    const advancePaid = allocateAdvance(advanceAvailable, invoiceAmount, debitNoteAmount);
+    const base = { invoiceAmount, debitNoteAmount, advancePaid };
     const netPayableAmount = computeNetPayable(base);
 
     const inv = await VendorInvoice.create({
@@ -320,7 +327,12 @@ export const vendorInvoiceService = {
   },
 
   async update(id, data, user, opts = {}) {
-    const inv = await findOrThrow(id);
+    const existing = await findOrThrow(id);
+    return withPiAdvanceLock(existing.piId, () => this._updateLocked(id, data, user, opts));
+  },
+
+  async _updateLocked(id, data, user, opts) {
+    const inv = await findOrThrow(id); // re-read under the PI lock
     const EDITABLE_STATUSES = [INVOICE_STATUS.DRAFT, INVOICE_STATUS.RECEIVED, INVOICE_STATUS.APPROVED, INVOICE_STATUS.PAYMENT_PENDING];
     if (!EDITABLE_STATUSES.includes(inv.invoiceStatus)) {
       throw new AppError('Invoice cannot be edited after payment is completed or when rejected', 400);
@@ -348,6 +360,17 @@ export const vendorInvoiceService = {
     if (invoiceDocument) inv.invoiceDocument = normalizeDoc(invoiceDocument);
     if (debitNoteDocument) inv.debitNoteDocument = normalizeDoc(debitNoteDocument);
     if (!inv.debitNoteRequired) inv.debitNoteAmount = 0;
+    // Re-allocate this invoice's advance share: what other live invoices on the
+    // PI hold is excluded from "available", so its own previous share is never
+    // counted twice.
+    // Once a voucher has been raised it carries its own copy of the advance, so
+    // the share is frozen (capped only so it never exceeds the payable basis).
+    if (inv.voucherId) {
+      inv.advancePaid = Math.min(round2(inv.advancePaid), Math.max(0, round2(inv.invoiceAmount - inv.debitNoteAmount)));
+    } else {
+      const { advanceAvailable } = await getAdvancePosition(inv.piId, inv._id);
+      inv.advancePaid = allocateAdvance(advanceAvailable, inv.invoiceAmount, inv.debitNoteAmount);
+    }
     inv.netPayableAmount = computeNetPayable(inv);
     if (inv.invoiceDocument?.fileUrl && inv.invoiceStatus === INVOICE_STATUS.DRAFT) inv.invoiceStatus = INVOICE_STATUS.RECEIVED;
     inv.updatedBy = user?._id;

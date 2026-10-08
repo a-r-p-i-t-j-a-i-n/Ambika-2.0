@@ -4,7 +4,7 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 
 export const vendorController = {
   create: asyncHandler(async (req, res) => {
-    const vendor = await vendorService.create(req.body, req.user?._id);
+    const vendor = await vendorService.create(req.body, req.user);
     res.status(201).json(ApiResponse.created('Vendor created', vendor));
   }),
 

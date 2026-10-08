@@ -33,6 +33,7 @@ import { PaymentStatusChip } from '../final-payments/paymentMeta';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import MdApprovalCard from '../approvals/MdApprovalCard';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -169,6 +170,7 @@ const VoucherDetail = () => {
         </Box>
       </Box>
 
+      <FmsDoerCard entityType="VOUCHER" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         <Grid item xs={12} md={7}>
@@ -212,6 +214,7 @@ const VoucherDetail = () => {
                   <Grid item xs={6}><Field label="Invoice" value={v.invoiceNumber || '—'} /></Grid>
                   <Grid item xs={6}><Field label="PO" value={v.poNumber || '—'} /></Grid>
                   <Grid item xs={6}><Field label="Status" value={<VoucherStatusChip status={v.voucherStatus} />} /></Grid>
+                  <Grid item xs={12}><Field label={`GRN${(v.grnNumbers || []).length > 1 ? 's' : ''}`} value={(v.grnNumbers || []).join(', ') || '—'} /></Grid>
                 </>
               )}
             </Grid>

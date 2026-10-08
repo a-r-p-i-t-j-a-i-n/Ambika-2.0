@@ -69,6 +69,13 @@ export const PO_FORMAT_TYPE = {
   OTHER: 'OTHER',
 };
 
+// Origin of a PO line's rate (OTHER format).
+export const PO_RATE_SOURCE = {
+  VENDOR_MASTER:      'VENDOR_MASTER',      // auto-filled from the vendor catalog
+  APPROVED_QUOTATION: 'APPROVED_QUOTATION', // negotiated in the approved quotation
+  MANUAL:             'MANUAL',             // typed / changed by the user on the PO
+};
+
 const poItemSchema = new Schema({
   // Source-indent linkage per line — a multi-indent PO carries items from several
   // indents, so each row records where it came from. Single-indent POs simply
@@ -94,6 +101,9 @@ const poItemSchema = new Schema({
   unit:          { type: String, trim: true, default: 'Pcs' },
   rate:          { type: Number, default: 0, min: 0 },
   gstRate:       { type: Number, default: 0, min: 0, max: 100 },
+  // Where this line's rate came from. Only a MANUAL (user-edited) rate is
+  // written back to the Vendor Master / Pricing History when the PO is approved.
+  rateSource:    { type: String, enum: [...Object.values(PO_RATE_SOURCE), ''], default: '' },
   taxableAmount: { type: Number, default: 0, min: 0 }, // qty × rate (server-computed)
   taxAmount:     { type: Number, default: 0, min: 0 }, // taxable × gst% (server-computed)
   totalAmount:   { type: Number, default: 0, min: 0 },
@@ -194,6 +204,9 @@ const vendorPurchaseOrderSchema = new Schema({
   followUpStatus:       { type: String, enum: Object.values(PO_FOLLOWUP_STATUS), default: PO_FOLLOWUP_STATUS.NOT_STARTED, index: true },
   readyForGrnAt:        { type: Date, default: null },
   finalMaterialDate:    { type: Date, default: null }, // confirmed delivery date — gates GRN
+  // Short-lived lock held while a GRN against this PO is being completed, so two
+  // GRNs can never both receive the same remaining quantity (see grn.service).
+  grnPostingLockAt:     { type: Date, default: null },
   expectedDeliveryDate: { type: Date, default: null }, // releasedAt + leadTime days
 
   // ── Step 1.6 — proforma invoice linkage (additive) ──

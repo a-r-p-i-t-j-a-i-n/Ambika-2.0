@@ -29,6 +29,56 @@ const findOrThrow = async (id) => {
   return indent;
 };
 
+/**
+ * Persist an approve/reject decision only if the indent is STILL awaiting
+ * approval in the database — of two concurrent approve/reject calls on the same
+ * indent, the second gets a clean 409 instead of silently overwriting the first.
+ */
+const saveAwaitingApproval = async (indent) => {
+  indent.$where = { approvalStatus: { $in: [INDENT_APPROVAL_STATUS.DRAFT, INDENT_APPROVAL_STATUS.PENDING_APPROVAL] } };
+  try {
+    return await indent.save();
+  } catch (err) {
+    if (['DocumentNotFoundError', 'VersionError', 'ParallelSaveError'].includes(err?.name)) {
+      throw new AppError(`Indent ${indent.indentNumber || ''} was just approved or rejected by someone else`.replace('  ', ' '), 409);
+    }
+    throw err;
+  }
+};
+
+/**
+ * Pre-items legacy indents store one product on the header (productNameRevised /
+ * skuCode / quantity / unit) and have no items[]. Before an approval decision,
+ * rebuild that single item row from the header so the decision has something to
+ * act on. A header that only carries an aggregate label ("X +2 more") or no
+ * quantity cannot be reconstructed safely — the approval is refused instead.
+ */
+const ensureLegacyItemRow = (indent) => {
+  if (indent.items?.length) return;
+  const name = String(indent.productNameRevised || '').trim();
+  if (!name || /\s\+\d+ more$/.test(name) || !(num(indent.quantity) > 0)) {
+    throw new AppError(
+      `Indent ${indent.indentNumber || ''} is an old record without item details — edit it to add its item(s) before approving`,
+      400,
+    );
+  }
+  indent.items = buildItems({
+    productNameRevised: name, skuCode: indent.skuCode, skuId: indent.skuId,
+    quantity: indent.quantity, unit: indent.unit, remarks: '',
+  });
+  indent.activityTimeline.push({ action: 'LEGACY_ITEM_RESTORED', description: `Item row rebuilt from legacy fields (${name}, qty ${num(indent.quantity)})` });
+};
+
+/** Resolve an approval row to its indent item — never guess by position when an id was sent. */
+const resolveDecisionItem = (indent, key, i) => {
+  if (key) {
+    const target = indent.items.id?.(key);
+    if (!target) throw new AppError(`An item on indent ${indent.indentNumber || ''} has changed since it was loaded — refresh and try again`, 409);
+    return target;
+  }
+  return indent.items[i];
+};
+
 const num = (n) => Number(n) || 0;
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -215,6 +265,9 @@ const resolveApprovedQty = (revisedInput, requestedQty, itemLabel) => {
 // search, the PO option label and any older reads stay consistent.
 const mirrorLegacy = (indent) => {
   const items = indent.items || [];
+  // A legacy record with no item rows keeps its own product fields — never
+  // overwrite them with blanks derived from an empty items[].
+  if (!items.length) return;
   const first = items[0] || {};
   indent.productNameRevised = items.length > 1
     ? `${first.itemName || ''} +${items.length - 1} more`
@@ -354,6 +407,7 @@ export const indentService = {
     if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
       throw new AppError('Indent is not awaiting approval', 400);
     }
+    ensureLegacyItemRow(indent); // pre-items record → rebuild its single item row (or refuse)
     const now = new Date();
     let approvedCount = 0;
     let rejectedCount = 0;
@@ -363,7 +417,7 @@ export const indentService = {
     // the prior all-or-nothing behavior).
     if (Array.isArray(data.items) && data.items.length) {
       data.items.forEach((row, i) => {
-        const target = (row._id && indent.items.id?.(row._id)) || indent.items[i];
+        const target = resolveDecisionItem(indent, row._id, i);
         if (!target) return;
         if (row.approvalStatus === ITEM_APPROVAL_STATUS.REJECTED) {
           if (!row.rejectionReason?.trim()) {
@@ -426,7 +480,7 @@ export const indentService = {
         : `Indent approved (total qty ${indent.approvedQuantity})`,
       actorId: user?._id,
     });
-    return indent.save();
+    return saveAwaitingApproval(indent);
   },
 
   async reject(id, data, user) {
@@ -454,7 +508,7 @@ export const indentService = {
     };
     indent.updatedBy = user?._id;
     indent.activityTimeline.push({ action: 'REJECT', description: 'Indent rejected', actorId: user?._id });
-    return indent.save();
+    return saveAwaitingApproval(indent);
   },
 
   // Bulk approve multiple pending indents (item-wise quantities). Each indent is
@@ -469,6 +523,7 @@ export const indentService = {
         if (![INDENT_APPROVAL_STATUS.PENDING_APPROVAL, INDENT_APPROVAL_STATUS.DRAFT].includes(indent.approvalStatus)) {
           throw new AppError('Only indents awaiting approval can be approved', 400);
         }
+        ensureLegacyItemRow(indent); // pre-items record → rebuild its single item row (or refuse)
 
         // Apply per-item decisions (match by item _id, else index) — Approved
         // Qty always mirrors Revised Qty, ignoring any approvedQuantity the
@@ -479,7 +534,7 @@ export const indentService = {
         if (Array.isArray(row.items) && row.items.length) {
           row.items.forEach((r, i) => {
             const key = r.itemId || r._id;
-            const target = (key && indent.items.id?.(key)) || indent.items[i];
+            const target = resolveDecisionItem(indent, key, i);
             if (!target) return;
             if (r.approvalStatus === ITEM_APPROVAL_STATUS.REJECTED) {
               if (!r.rejectionReason?.trim()) {
@@ -502,8 +557,13 @@ export const indentService = {
             target.approvedBy = user?.name || '';
           });
         } else {
-          // No item-wise payload — mirror the legacy all-approved behavior.
+          // No item-wise payload — approve every item exactly as single approve
+          // does (approved qty = requested qty, any stale reason cleared).
           (indent.items || []).forEach((it) => {
+            const approvedQty = resolveApprovedQty(undefined, it.quantity, it.itemName);
+            it.revisedQuantity = approvedQty;
+            it.approvedQuantity = approvedQty;
+            it.rejectionReason = '';
             it.approvalStatus = ITEM_APPROVAL_STATUS.APPROVED;
             it.approvedAt = now;
             it.approvedBy = user?.name || '';
@@ -538,14 +598,14 @@ export const indentService = {
             : 'Approved via bulk approval',
           actorId: user?._id,
         });
-        await indent.save();
+        await saveAwaitingApproval(indent);
 
         const items = indent.items || [];
         const productsSummary = items.length
           ? (items.length > 1 ? `${items[0].itemName} +${items.length - 1} more` : items[0].itemName)
           : (indent.productNameRevised || '—');
 
-        result.approvedCount += 1;
+        if (approvedCount > 0) result.approvedCount += 1; // fully-rejected indents are not "approved"
         result.approved.push({
           _id: indent._id,
           indentNumber: indent.indentNumber,
@@ -596,7 +656,7 @@ export const indentService = {
         };
         indent.updatedBy = user?._id;
         indent.activityTimeline.push({ action: 'REJECT', description: 'Rejected via bulk reject', actorId: user?._id });
-        await indent.save();
+        await saveAwaitingApproval(indent);
 
         result.rejectedCount += 1;
         result.rejected.push({ indentId: indent._id, indentNumber: indent.indentNumber });
@@ -644,6 +704,14 @@ export const indentService = {
       throw new AppError('Quote can only be recorded for an approved indent', 400);
     }
 
+    // Step 1.3 (Approved Quotation) already done? Then Step 1.2 edits must not
+    // move the workflow backwards or discard that approval.
+    const step13Approved = indent.quotationApprovalStep?.statusDone === QUOTATION_APPROVAL_STATUS.YES
+      && !indent.quotationApprovalStep?.skipped;
+    if (step13Approved && data.statusDone !== 'YES') {
+      throw new AppError('The quotation has already been approved (Step 1.3) — Step 1.2 cannot be changed to "Quote Not Required"', 400);
+    }
+
     const vendors = Array.isArray(data.vendors) && data.vendors.length
       ? buildVendorQuotes(data.vendors)
       : [];
@@ -674,9 +742,29 @@ export const indentService = {
       .map(cleanFile);
     if (!documents.length && upload.fileUrl) documents.push(cleanFile(upload));
 
+    // Legacy flat files (saved before item-wise uploads existed) that no item now
+    // carries are retained at quotation level — never dropped, never guessed onto
+    // an item. Carried forward across later saves.
+    let retainedLegacyDocs = [];
+    if (hasItemQuotations) {
+      const prev = indent.quoteComparativeStep?.toObject?.() || indent.quoteComparativeStep || {};
+      const prevHadItemFiles = (prev.itemQuotations || []).some((iq) => iq.quotationDocuments?.length);
+      const prevFlat = prev.quotationDocuments?.length
+        ? prev.quotationDocuments
+        : (prev.quotationUploaded?.fileUrl ? [prev.quotationUploaded] : []);
+      const pool = [...(prev.legacyQuotationDocuments || []), ...(prevHadItemFiles ? [] : prevFlat)];
+      const used = new Set(itemDocs.map((d) => d.fileUrl));
+      const seen = new Set();
+      retainedLegacyDocs = pool.filter((d) => {
+        if (!d?.fileUrl || used.has(d.fileUrl) || seen.has(d.fileUrl)) return false;
+        seen.add(d.fileUrl);
+        return true;
+      }).map(cleanFile);
+    }
+
     // The document set mirrored into legacy fields: item-wise files take
     // precedence, else the flat multi-file upload.
-    const legacyDocuments = hasItemQuotations ? itemDocs : documents;
+    const legacyDocuments = hasItemQuotations ? [...itemDocs, ...retainedLegacyDocs] : documents;
 
     // Step 1.2 is complete when statusDone = YES with proof of a received quote,
     // or QUOTE_NOT_REQUIRED. Proof = ≥1 file per item (item-wise) OR ≥1 uploaded
@@ -713,6 +801,7 @@ export const indentService = {
       quotationUploaded: mirrorDoc,
       quotationDocuments: multiVendor ? [] : legacyDocuments,
       itemQuotations,
+      legacyQuotationDocuments: retainedLegacyDocs,
       vendors,
       actualAt,
       updatedBy: user?._id,
@@ -739,7 +828,15 @@ export const indentService = {
       actorId: user?._id,
     });
 
-    if (data.statusDone === 'YES') {
+    if (data.statusDone === 'YES' && step13Approved) {
+      // Correction to Step 1.2 after the quotation was approved: keep the
+      // downstream workflow status and the Step 1.3 approval exactly as they are.
+      indent.activityTimeline.push({
+        action: 'QUOTE_COMPARATIVE',
+        description: `Step 1.2 updated after quotation approval — workflow status kept at ${indent.overallStatus}`,
+        actorId: user?._id,
+      });
+    } else if (data.statusDone === 'YES') {
       indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_RECEIVED;
       // If Step 1.3 was previously skipped (Step 1.2 had been "Quote Not Required"),
       // a quote is now required again — reopen the Approved Quotation step. Clearing

@@ -137,6 +137,9 @@ const quoteComparativeStepSchema = new Schema({
   quotationDocuments: { type: [fileSchema], default: [] },
   // Item-wise quotation uploads — one entry per indent line item.
   itemQuotations: { type: [itemQuotationSchema], default: [] },
+  // Files from the pre item-wise (flat) format that cannot be tied to one
+  // specific item — retained at quotation level so an edit never drops them.
+  legacyQuotationDocuments: { type: [fileSchema], default: [] },
   // Multi-vendor comparative — one entry per selected vendor.
   vendors:    { type: [vendorQuoteSchema], default: [] },
   actualAt:   { type: Date, default: null },

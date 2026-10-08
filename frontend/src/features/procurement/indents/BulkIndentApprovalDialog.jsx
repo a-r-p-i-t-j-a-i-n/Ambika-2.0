@@ -106,6 +106,7 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
   useEffect(() => {
     if (!open) return;
     setPhase('select');
+    setRows((data?.data || []).map(toRow)); // fresh decisions each time the modal opens
     setApprovedList([]);
     setApprovedSnapshot([]);
     setSelected(new Set());
@@ -114,11 +115,17 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
     setDept('');
     setRejectOpen(false);
     setRejectReason('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only on open
   }, [open]);
 
   // Hydrate the editable rows whenever the fetched data changes (select phase).
+  // A background refetch (window focus, another user's change) must not wipe the
+  // decisions already made here — rows the user has loaded keep their edits.
   useEffect(() => {
-    setRows((data?.data || []).map(toRow));
+    setRows((cur) => {
+      const kept = new Map(cur.map((r) => [String(r._id), r]));
+      return (data?.data || []).map((ind) => kept.get(String(ind._id)) || toRow(ind));
+    });
   }, [data]);
 
   const filtered = useMemo(() => {
@@ -207,7 +214,7 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
           : `${r.approvedCount || 0} indent(s) approved successfully`,
         { variant: 'success' },
       );
-      if (r.failed?.length) enqueueSnackbar(`${r.failed.length} indent(s) could not be approved`, { variant: 'warning' });
+      if (r.failed?.length) enqueueSnackbar(`${r.failed.length} indent(s) could not be approved: ${r.failed.map((f) => f.message).join('; ')}`, { variant: 'warning' });
       // Snapshot the approved rows (with items) so we can launch Step 1.2 directly,
       // independent of the list refetch that follows.
       const okIds = new Set((r.approved || []).map((a) => String(a._id)));
@@ -226,14 +233,16 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
   // the locally edited row (carries item-wise approved/revised quantities).
   const launchReceiveQuote = (a) => {
     const row = approvedSnapshot.find((rw) => String(rw._id) === String(a._id));
+    // Carry each item's decision so Step 1.2 only offers the approved items.
     const items = (row?.items || []).map((it) => ({
       _id: it._id,
       itemName: it.itemName,
       skuCode: it.skuCode,
       unit: it.unit,
       quantity: num(it.requestedQty),
-      revisedQuantity: approvedQtyOf(it),
-      approvedQuantity: approvedQtyOf(it),
+      approvalStatus: it.approvalStatus,
+      revisedQuantity: it.approvalStatus === 'REJECTED' ? 0 : approvedQtyOf(it),
+      approvedQuantity: it.approvalStatus === 'REJECTED' ? 0 : approvedQtyOf(it),
     }));
     const indentForQuote = {
       _id: a._id,
@@ -256,7 +265,7 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
       const res = await bulkReject({ indentIds: selectedRows.map((r) => r._id), remarks: rejectReason.trim() }).unwrap();
       const r = res?.data || {};
       enqueueSnackbar(`${r.rejectedCount || 0} indent(s) rejected`, { variant: 'success' });
-      if (r.failed?.length) enqueueSnackbar(`${r.failed.length} indent(s) could not be rejected`, { variant: 'warning' });
+      if (r.failed?.length) enqueueSnackbar(`${r.failed.length} indent(s) could not be rejected: ${r.failed.map((f) => f.message).join('; ')}`, { variant: 'warning' });
       setRejectOpen(false);
       setRejectReason('');
       onClose?.(true);

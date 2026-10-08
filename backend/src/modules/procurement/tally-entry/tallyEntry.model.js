@@ -56,6 +56,9 @@ const tallyEntrySchema = new Schema({
   poNumber:      { type: String, trim: true, default: '' },
   grnId:         { type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' },
   grnNumber:     { type: String, trim: true, default: '' },
+  // Multi-GRN invoices — every GRN covered by the source voucher.
+  grnIds:        { type: [{ type: Schema.Types.ObjectId, ref: 'GoodsReceiptNote' }], default: [] },
+  grnNumbers:    { type: [String], default: [] },
   vendorId:      { type: Schema.Types.ObjectId, ref: 'Party', index: true },
   vendorName:    { type: String, trim: true, default: '' },
 

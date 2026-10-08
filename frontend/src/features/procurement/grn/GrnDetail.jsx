@@ -8,8 +8,9 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, PackageCheck, Ban, Boxes, Building2, FileText, ShoppingBag,
-  Warehouse, ReceiptText, FileDown, ArrowRight,
+  Warehouse, ReceiptText, FileDown, ArrowRight, Trash2, Lock,
 } from 'lucide-react';
+import { usePermissions } from '../../../hooks/usePermission';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
 import {
@@ -17,9 +18,10 @@ import {
   useCancelGrnMutation,
   useGetInventoryMovementsByRefQuery,
 } from '../../../store/api/procurementApi';
-import { GrnStatusChip, QcStatusChip, howReceivedLabel, fmtINR, fmtDate } from './grnMeta';
+import { GrnStatusChip, QcStatusChip, howReceivedLabel, fmtINR, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
 import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
+import GrnDeleteDialog from './GrnDeleteDialog';
 import GrnPdfPreview from './GrnPdfPreview';
 import { QcResultChip } from '../incoming-qc/qcMeta';
 import IncomingQCFormDialog from '../incoming-qc/IncomingQCFormDialog';
@@ -28,6 +30,7 @@ import { Eye, ClipboardCheck } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
+import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -56,8 +59,9 @@ const GrnDetail = () => {
   const wfSteps = resolveWorkflowSteps({ grn });
   const [cancelGrn] = useCancelGrnMutation();
   const isMd = useSelector((s) => s.auth.isRoot);
+  const canDeleteGrn = usePermissions().can('procurement.deleteGrn');
 
-  const isCompleted = grn && ['PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(grn.grnStatus);
+  const isCompleted = grn && isGrnCompleted(grn);
   const { data: movRes } = useGetInventoryMovementsByRefQuery({ refType: 'GRN', refId: id }, { skip: !isCompleted });
   const movements = movRes?.data || [];
 
@@ -65,6 +69,7 @@ const GrnDetail = () => {
   const [completeOpen, setCompleteOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const [qcFormOpen, setQcFormOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   if (isLoading) return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
   if (!grn) {
@@ -76,7 +81,9 @@ const GrnDetail = () => {
     );
   }
 
-  const isDraft = grn.grnStatus === 'DRAFT';
+  // Draft = editable / deletable / completable. Once completed (stock posted)
+  // the GRN is read-only for good — the server enforces the same rule.
+  const isDraft = isGrnDraft(grn);
   // MD-signed GRNs are locked — editing/cancelling is blocked here (mirrors the
   // backend guard in grn.service.js) even if grnStatus were somehow still DRAFT.
   const isLocked = grn.approvalStatus === 'MD_APPROVED';
@@ -143,6 +150,11 @@ const GrnDetail = () => {
             {grn.uniqueId && <Chip size="small" variant="outlined" label={grn.uniqueId} sx={{ fontWeight: 700 }} />}
             <GrnStatusChip status={grn.grnStatus} />
             {grn.stockPosted && <QcStatusChip status={grn.qcStatus} />}
+            {isCompleted && (
+              <Chip size="small" variant="outlined" icon={<Lock size={13} />} label="Completed · Read-only"
+                title="Stock has been posted — this GRN can no longer be edited or deleted"
+                sx={{ fontWeight: 700, color: PFMS.sub, borderColor: PFMS.line, '& .MuiChip-icon': { color: PFMS.sub } }} />
+            )}
           </Box>
           <Typography variant="body2" color="text.secondary">
             {grn.vendorName} · PO {grn.poNumber || '—'} · {fmtDate(grn.grnDate)}
@@ -155,6 +167,7 @@ const GrnDetail = () => {
           {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={<PackageCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete &amp; Post Stock</Button>}
           {grn.grnPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>{isLocked ? 'View Signed PDF' : 'GRN PDF'}</Button>}
           {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
+          {isDraft && !isLocked && canDeleteGrn && <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} onClick={() => setDeleteOpen(true)}>Delete</Button>}
         </Box>
       </Box>
 
@@ -188,6 +201,7 @@ const GrnDetail = () => {
         );
       })()}
 
+      <FmsDoerCard entityType="GRN" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
         {/* GRN + PO info */}
@@ -404,6 +418,8 @@ const GrnDetail = () => {
       {/* Dialogs */}
       <GrnFormDialog open={formOpen} grn={grn} onClose={() => setFormOpen(false)} />
       <GrnCompleteDialog open={completeOpen} grn={grn} onClose={() => setCompleteOpen(false)} />
+      <GrnDeleteDialog open={deleteOpen} grn={grn}
+        onClose={(deleted) => { setDeleteOpen(false); if (deleted) navigate('/purchase-fms/grn'); }} />
       <GrnPdfPreview open={pdfOpen} grn={grn} onClose={() => setPdfOpen(false)} />
       <IncomingQCFormDialog open={qcFormOpen} presetGrn={grn} onClose={() => setQcFormOpen(false)} />
     </Box>

@@ -5,6 +5,7 @@ import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateAdvancePaymentNumber } from '../../../utils/docNumberGenerator.js';
 import { logger } from '../../../utils/logger.js';
+import { invoicesHoldingAdvance, withPiAdvanceLock } from '../vendor-invoice/piAdvance.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -132,8 +133,33 @@ export const advancePaymentService = {
    * never posted anything, so it just soft-deletes.
    */
   async remove(id, user) {
+    const found = await AdvancePayment.findOne({ _id: id, isDeleted: { $ne: true } });
+    if (!found) throw new AppError('Payment not found', 404);
+    // A CANCELLED entry never posted any advance — nothing to guard.
+    if (found.paymentStatus === PAYMENT_STATUS.CANCELLED) return this._removeLocked(id, user);
+    // Reversing a posted advance runs under the same per-PI lock the vendor
+    // invoice takes while allocating that advance, so the two can't interleave.
+    return withPiAdvanceLock(found.piId, () => this._removeLocked(id, user));
+  },
+
+  async _removeLocked(id, user) {
     const payment = await AdvancePayment.findOne({ _id: id, isDeleted: { $ne: true } });
     if (!payment) throw new AppError('Payment not found', 404);
+
+    // There is no advance-reversal / refund workflow, so an advance that vendor
+    // invoices have already adjusted cannot be reversed — that would leave the
+    // invoices (and their vouchers / payments) deducting money that was never paid.
+    if (payment.paymentStatus !== PAYMENT_STATUS.CANCELLED) {
+      const holding = await invoicesHoldingAdvance(payment.piId);
+      if (holding.length) {
+        const allocated = round2(holding.reduce((s, i) => s + (i.advancePaid || 0), 0));
+        throw new AppError(
+          `Advance payment cannot be cancelled because ₹${allocated.toLocaleString('en-IN')} has already been allocated to Vendor Invoices `
+          + `(${holding.map((i) => i.invoiceNumber).join(', ')}).`,
+          409,
+        );
+      }
+    }
 
     const latest = await AdvancePayment.findOne({ piId: payment.piId, isDeleted: { $ne: true } }).sort('-createdAt');
     if (!latest || String(latest._id) !== String(payment._id)) {

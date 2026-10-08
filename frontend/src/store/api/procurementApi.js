@@ -99,12 +99,12 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     createPurchaseOrder: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders', method: 'POST', body }),
-      invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
+      invalidatesTags: ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
     // New PO form item-picker → one vendor, hand-picked approved items.
     createPurchaseOrderFromItems: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders/create-from-items', method: 'POST', body }),
-      invalidatesTags: ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
+      invalidatesTags: ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
     // Returns a PDF Blob (no DB write). On error the backend sends JSON, so branch
     // the responseHandler on response.ok to surface a readable error message.
@@ -118,7 +118,7 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     updatePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}`, method: 'PATCH', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
     deletePurchaseOrder: builder.mutation({
       query: (id) => ({ url: `/procurement/purchase-orders/${id}`, method: 'DELETE' }),
@@ -126,7 +126,7 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     approvePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/approve`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
     releasePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/release`, method: 'POST', body }),
@@ -154,7 +154,7 @@ export const procurementApi = baseApi.injectEndpoints({
     // Revise a cancelled PO → new draft PO (copied data, new number, linked back).
     revisePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/revise`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
     }),
     markPoPiNotRequired: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/pi-not-required`, method: 'POST', body }),
@@ -411,6 +411,11 @@ export const procurementApi = baseApi.injectEndpoints({
     getInvoiceableGrns: builder.query({
       query: (params = {}) => ({ url: '/procurement/vendor-invoices/invoiceable-grns', params }),
       providesTags: ['VendorInvoice', 'IncomingQc'],
+    }),
+    // PI advance paid / already allocated to other invoices / still available.
+    getInvoiceAdvancePosition: builder.query({
+      query: (params) => ({ url: '/procurement/vendor-invoices/advance-position', params }),
+      providesTags: ['VendorInvoice', 'AdvancePayment', 'ProformaInvoice'],
     }),
     createVendorInvoice: builder.mutation({
       query: (body) => ({ url: '/procurement/vendor-invoices', method: 'POST', body }),
@@ -670,6 +675,7 @@ export const {
   useGetVendorInvoicesByQcQuery,
   useGetInvoiceableQcsQuery,
   useGetInvoiceableGrnsQuery,
+  useGetInvoiceAdvancePositionQuery,
   useCreateVendorInvoiceMutation,
   useUpdateVendorInvoiceMutation,
   useDeleteVendorInvoiceMutation,

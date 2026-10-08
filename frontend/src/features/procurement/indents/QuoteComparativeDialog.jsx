@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
-  Grid, MenuItem, Typography, CircularProgress, Divider,
+  Grid, MenuItem, Typography, CircularProgress, Divider, Alert,
 } from '@mui/material';
 import { Save } from 'lucide-react';
 import { useSnackbar } from 'notistack';
@@ -9,7 +9,7 @@ import { useQuoteComparativeMutation } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import ItemQuotationTable from './ItemQuotationTable';
-import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } from './indentMeta';
+import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote, fileHref } from './indentMeta';
 
 /**
  * Step 1.2 — Receive Quote & Make Comparative 1.02.
@@ -47,6 +47,8 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
   const [remarks, setRemarks] = useState('');
   const [rows, setRows] = useState([]); // [{ itemId, skuId, skuCode, itemName, qty, unit, statusDone, files, actualAt, remarks }]
   const [uploadingIdx, setUploadingIdx] = useState(-1);
+  // Uploads can run on several rows at once — Submit/Cancel wait for all of them.
+  const [uploadsInFlight, setUploadsInFlight] = useState(0);
 
   const [uploadDoc] = useUploadOrderDocumentMutation();
   const [quoteComparative, { isLoading: saving }] = useQuoteComparativeMutation();
@@ -70,7 +72,7 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
       const s = matchItemRow(saved, it);
       const files = (s?.quotationDocuments?.length ? s.quotationDocuments : legacyDocs)
         .filter((d) => d?.fileUrl)
-        .map((d) => ({ fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType }));
+        .map((d) => ({ fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType, uploadedAt: d.uploadedAt }));
       return {
         itemId: it._id && it._id !== 'legacy' ? it._id : undefined,
         skuId: it.skuId || undefined,
@@ -87,10 +89,21 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
     }));
   }, [open, indent]);
 
+  // Old flat-format files that can't be tied to one item (multi-item legacy
+  // records) — shown read-only; the server keeps them at quotation level.
+  const unlinkedLegacyDocs = (() => {
+    const step = indent?.quoteComparativeStep;
+    if (step?.legacyQuotationDocuments?.length) return step.legacyQuotationDocuments;
+    const hasItemFiles = (step?.itemQuotations || []).some((iq) => iq.quotationDocuments?.length);
+    if (hasItemFiles || itemsOf(indent).length <= 1) return [];
+    return (step?.quotationDocuments || []).filter((d) => d?.fileUrl);
+  })();
+
   const patchRow = (idx, patch) => setRows((cur) => cur.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
 
   const handleUploadRow = async (idx, picked) => {
     setUploadingIdx(idx);
+    setUploadsInFlight((n) => n + 1);
     for (const f of picked) {
       if (f.size > 10 * 1024 * 1024) {
         enqueueSnackbar(`${f.name} exceeds 10 MB`, { variant: 'warning' });
@@ -106,7 +119,8 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
         enqueueSnackbar(err?.data?.message || `Failed to upload ${f.name}`, { variant: 'error' });
       }
     }
-    setUploadingIdx(-1);
+    setUploadsInFlight((n) => n - 1);
+    setUploadingIdx((cur) => (cur === idx ? -1 : cur));
   };
 
   const removeFile = (idx, fileIdx) => setRows((cur) => cur.map((r, i) => (i === idx
@@ -134,7 +148,11 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
           skuCode: r.skuCode,
           itemName: r.itemName,
           statusDone: r.statusDone,
-          quotationDocuments: r.files.map((f) => ({ fileName: f.fileName, fileUrl: f.fileUrl, fileType: f.fileType })),
+          // Keep each file's original upload date (new uploads get stamped server-side).
+          quotationDocuments: r.files.map((f) => ({
+            fileName: f.fileName, fileUrl: f.fileUrl, fileType: f.fileType,
+            ...(f.uploadedAt ? { uploadedAt: f.uploadedAt } : {}),
+          })),
           actualAt: r.actualAt || actualAt,
           remarks: r.remarks?.trim() || '',
         })),
@@ -182,6 +200,18 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
           Multiple files allowed per item · PDF, PNG, JPG, XLSX · max 10 MB each
         </Typography>
+        {unlinkedLegacyDocs.length > 0 && (
+          <Alert severity="info" sx={{ mt: 1.5 }}>
+            {unlinkedLegacyDocs.length} earlier quotation file(s) are not linked to a specific item and are kept
+            at quotation level:{' '}
+            {unlinkedLegacyDocs.map((d, i) => (
+              <React.Fragment key={d.fileUrl}>
+                {i > 0 && ', '}
+                <a href={fileHref(d.fileUrl)} target="_blank" rel="noopener noreferrer">{d.fileName || `File ${i + 1}`}</a>
+              </React.Fragment>
+            ))}
+          </Alert>
+        )}
 
         <Divider sx={{ my: 1.5 }} />
         <Grid container spacing={2}>
@@ -194,9 +224,9 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
         </Grid>
       </DialogContent>
       <DialogActions sx={{ p: 2, gap: 1 }}>
-        <Button onClick={() => onClose?.(false)} disabled={saving || uploadingIdx !== -1}>Cancel</Button>
+        <Button onClick={() => onClose?.(false)} disabled={saving || uploadsInFlight > 0}>Cancel</Button>
         <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-          onClick={handleSubmit} disabled={saving || uploadingIdx !== -1}>
+          onClick={handleSubmit} disabled={saving || uploadsInFlight > 0}>
           Submit
         </Button>
       </DialogActions>
