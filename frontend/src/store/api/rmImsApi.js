@@ -19,6 +19,14 @@ export const rmImsApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/rm-ims/reorder', params }),
       providesTags: ['RmOverview'],
     }),
+    getRmItemDetail: builder.query({
+      query: (skuId) => `/rm-ims/item/${skuId}`,
+      providesTags: (_r, _e, skuId) => [{ type: 'RmOverview', id: skuId }],
+    }),
+    getRmStockHistory: builder.query({
+      query: ({ skuId, from, to }) => ({ url: `/rm-ims/history/${skuId}`, params: { from, to } }),
+      providesTags: (_r, _e, { skuId }) => [{ type: 'RmMovement', id: skuId }],
+    }),
     getRmForecast: builder.query({
       query: ({ skuId, days = 30 }) => ({ url: `/rm-ims/forecast/${skuId}`, params: { days } }),
       providesTags: (_r, _e, { skuId }) => [{ type: 'RmOverview', id: skuId }],
@@ -35,6 +43,57 @@ export const rmImsApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/rm-ims/conversions', params }),
       providesTags: ['RmConversion'],
     }),
+    /**
+     * The physical coils on the floor, for the Cut Coils picker.
+     *
+     * Tagged RmMovement because that is literally what it reads: a coil's
+     * remaining weight is derived from its movements, so a conversion — which
+     * invalidates RmMovement — must make this list recount.
+     */
+    getRmReceivedCoils: builder.query({
+      query: (params = {}) => ({ url: '/rm-ims/received-coils', params }),
+      providesTags: ['RmMovement'],
+    }),
+    /**
+     * One physical coil's whole cutting history — every round, in order.
+     *
+     * Tagged with BOTH ledger tags because that is what it is derived from: the
+     * rounds come from the conversions and the remaining weight from the
+     * movements, so a cut anywhere must make this recount. Nothing is cached
+     * server-side, so a stale page here is purely an RTK Query concern.
+     */
+    getRmCoilLineage: builder.query({
+      query: (receiptId) => `/rm-ims/coil/${receiptId}/lineage`,
+      providesTags: (_r, _e, receiptId) => [
+        { type: 'RmConversion', id: receiptId }, 'RmMovement',
+      ],
+    }),
+    /**
+     * Cutting History — one row per physical coil, under the Cut Coils form.
+     *
+     * Tagged like the lineage it summarises: a cut invalidates RmConversion and
+     * RmMovement, so a saved round shows up here (rounds +1, remaining down,
+     * status recomputed) without a reload.
+     */
+    getRmCuttingHistory: builder.query({
+      query: (params = {}) => ({ url: '/rm-ims/cutting-history', params }),
+      providesTags: ['RmConversion', 'RmMovement'],
+    }),
+    /**
+     * The circle sizes the identified coil is approved to produce.
+     *
+     * The client's mapping lives on the server and is asked for per coil, so
+     * this screen holds no copy of it — a copy here would be the one thing that
+     * still said "8.25 inch" the day the client dropped that size.
+     *
+     * Tagged RmOverview because it reads the SKU master, not the ledger: the
+     * answer changes when a circle SKU is added or deactivated, and NOT when a
+     * coil is cut. So cutting a coil does not refetch it.
+     */
+    getRmCircleOptions: builder.query({
+      query: (params = {}) => ({ url: '/rm-ims/circle-options', params }),
+      providesTags: ['RmOverview'],
+    }),
     upsertRmPolicy: builder.mutation({
       query: ({ skuId, ...body }) => ({ url: `/rm-ims/policy/${skuId}`, method: 'PUT', body }),
       invalidatesTags: (_r, _e, { skuId }) => ['RmOverview', 'RmDashboard', { type: 'RmPolicy', id: skuId }],
@@ -49,7 +108,13 @@ export const rmImsApi = baseApi.injectEndpoints({
     }),
     rmConvert: builder.mutation({
       query: (body) => ({ url: '/rm-ims/convert', method: 'POST', body }),
-      invalidatesTags: ['RmOverview', 'RmDashboard', 'RmMovement', 'RmConversion', 'InventoryStock', 'InventoryMovement'],
+      // A cut also writes a scrap record, and an in-house cut moves scrap
+      // stock, so every scrap screen is stale the moment this succeeds.
+      invalidatesTags: [
+        'RmOverview', 'RmDashboard', 'RmMovement', 'RmConversion',
+        'InventoryStock', 'InventoryMovement',
+        'ScrapOverview', 'ScrapDashboard', 'ScrapStock', 'ScrapMovement',
+      ],
     }),
   }),
 });
@@ -58,10 +123,16 @@ export const {
   useGetRmOverviewQuery,
   useGetRmDashboardQuery,
   useGetRmReorderQuery,
+  useGetRmItemDetailQuery,
+  useGetRmStockHistoryQuery,
   useGetRmForecastQuery,
   useGetRmPolicyQuery,
   useGetRmMovementsQuery,
   useGetRmConversionsQuery,
+  useGetRmReceivedCoilsQuery,
+  useGetRmCoilLineageQuery,
+  useGetRmCuttingHistoryQuery,
+  useGetRmCircleOptionsQuery,
   useUpsertRmPolicyMutation,
   useRmReceiveMutation,
   useRmIssueMutation,

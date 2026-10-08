@@ -16,8 +16,12 @@ import {
   FgShell, Panel, TableScroll, KpiTile, StatusChip, MoveChip, EmptyNote, Help,
   O2D, STOCK_TOKENS, STOCK_ORDER, num, inr, compactInr, imsTableSx, moveToken,
   FG_ACCENT, FG_ACCENT_DARK, FG_STATUS_LABEL,
+  Th,
 } from './fgImsMeta';
 import { useGetFgDashboardQuery } from '../../store/api/fgImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.fg;
 
 // The warm chart palette — pulled from the same tokens the chips use, so a bar
 // and a status pill for the same thing are never two different colours.
@@ -339,24 +343,26 @@ const FgImsDashboard = () => {
             <Table size="small" sx={imsTableSx(620)}>
               <TableHead>
                 <TableRow>
-                  <TableCell align="center">Date</TableCell>
-                  <TableCell>Finished Good</TableCell>
-                  <TableCell align="center">What happened</TableCell>
-                  <TableCell align="right">Change</TableCell>
-                  <TableCell align="right">Balance after<Help text="Stock on hand immediately after this movement was recorded." /></TableCell>
+                  <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                  <TableCell align="center"><Th label="Date" hint={H.movementDate} /></TableCell>
+                  <TableCell><Th label="Finished Good" hint={H.skuName} /></TableCell>
+                  <TableCell align="center"><Th label="What happened" hint={H.movementType} /></TableCell>
+                  <TableCell align="right"><Th label="Change" hint={H.movementQty} /></TableCell>
+                  <TableCell align="right">Balance after<Help text={H.balanceAfter} /></TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {(d?.recentMovements || []).length === 0 && (
-                  <TableRow><TableCell colSpan={5} sx={{ border: 0 }}>
+                  <TableRow><TableCell colSpan={6} sx={{ border: 0 }}>
                     <EmptyNote icon={History} title="No stock movements yet"
                       hint="Movements appear the moment you record a Production In or a Dispatch Out." />
                   </TableCell></TableRow>
                 )}
-                {(d?.recentMovements || []).map((m) => {
+                {(d?.recentMovements || []).map((m, i) => {
                   const t = moveToken(m.movementType);
                   return (
                     <TableRow key={m._id} hover>
+                      <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                       <TableCell align="center" sx={{ whiteSpace: 'nowrap', color: O2D.sub }}>{dayjs(m.movementDate).format('DD MMM')}</TableCell>
                       <TableCell>
                         <Typography noWrap sx={{ fontSize: '0.78rem', fontWeight: 600, color: O2D.ink, maxWidth: 200 }} title={m.skuName}>{m.skuName}</Typography>

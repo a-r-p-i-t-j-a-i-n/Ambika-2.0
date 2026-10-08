@@ -11,6 +11,9 @@ import {
   O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx, IMS_FORM_MAX, emptyCellSx,
 } from './imsMeta';
 import { useGetImsOverviewQuery, useImsReceiveMutation } from '../../store/api/imsApi';
+import { FIELD } from './imsFieldHelp';
+
+const H = FIELD.ims;
 
 const REASONS = [
   { value: 'VENDOR_RECEIPT', label: 'Vendor receipt', hint: 'Material physically received from a supplier against a bill or challan.' },
@@ -198,27 +201,29 @@ const ImsStockIn = () => {
           <Table size="small" sx={imsTableSx(820)}>
             <TableHead>
               <TableRow>
-                <TableCell>SKU Code</TableCell>
-                <TableCell sx={{ width: '100%' }}>Item Name</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
+                <TableCell sx={{ width: '100%' }}><Th label="Item Name" hint={H.skuName} /></TableCell>
                 <TableCell align="right">Available Qty</TableCell>
                 <TableCell align="right">Quantity received</TableCell>
-                <TableCell align="right"><Th label="Cost per unit" hint="Optional. Used to value the stock and to price future purchases." /></TableCell>
-                <TableCell align="right"><Th label="New balance" hint="What the Closing Stock becomes once you save this receipt." /></TableCell>
+                <TableCell align="right"><Th label="Cost per unit" hint={H.costPerUnit} /></TableCell>
+                <TableCell align="right"><Th label="New balance" hint={H.newBalance} /></TableCell>
                 <TableCell align="center" />
               </TableRow>
             </TableHead>
             <TableBody>
               {lines.length === 0 && (
-                <TableRow><TableCell colSpan={7} sx={emptyCellSx}>
+                <TableRow><TableCell colSpan={8} sx={emptyCellSx}>
                   <EmptyNote dense icon={PackagePlus} title="No items added yet"
                     hint="Use the search box above to pick the first item on the bill." />
                 </TableCell></TableRow>
               )}
-              {lines.map((l) => {
+              {lines.map((l, i) => {
                 const qty = Number(l.quantity || 0);
                 const newBal = Number(l.onHand || 0) + qty;
                 return (
                   <TableRow key={l.skuId} hover>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{l.skuCode}</TableCell>
                     <TableCell sx={{ minWidth: 180 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }} title={l.skuName}>{l.skuName}</Typography>

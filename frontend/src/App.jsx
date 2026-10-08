@@ -37,6 +37,10 @@ const InvoicesList         = lazyWithRetry(() => import('./features/ledger/Invoi
 const SkusList             = lazyWithRetry(() => import('./features/masters/SkusList'));
 const PartiesList          = lazyWithRetry(() => import('./features/masters/PartiesList'));
 const PartyDetails         = lazyWithRetry(() => import('./features/masters/PartyDetails'));
+const MachinesList         = lazyWithRetry(() => import('./features/masters/MachinesList'));
+const MachineDetails       = lazyWithRetry(() => import('./features/masters/MachineDetails'));
+const MachineOperatorsList = lazyWithRetry(() => import('./features/masters/MachineOperatorsList'));
+const OperatorDetails      = lazyWithRetry(() => import('./features/masters/OperatorDetails'));
 const AccessControl        = lazyWithRetry(() => import('./features/access-control/AccessControl'));
 const PricingHub           = lazyWithRetry(() => import('./features/pricing/PricingHub'));
 const ApprovalInbox        = lazyWithRetry(() => import('./features/pricing/ApprovalInbox'));
@@ -63,11 +67,22 @@ const ImsMovements         = lazyWithRetry(() => import('./features/ims/ImsMovem
 // RM IMS — Raw Material (Coil + Circle) inventory
 const RmImsDashboard       = lazyWithRetry(() => import('./features/rm-ims/RmImsDashboard'));
 const RmImsStockList       = lazyWithRetry(() => import('./features/rm-ims/RmImsStockList'));
+const RmImsItemDetail      = lazyWithRetry(() => import('./features/rm-ims/RmImsItemDetail'));
 const RmImsStockIn         = lazyWithRetry(() => import('./features/rm-ims/RmImsStockIn'));
 const RmImsStockOut        = lazyWithRetry(() => import('./features/rm-ims/RmImsStockOut'));
 const RmImsConversion      = lazyWithRetry(() => import('./features/rm-ims/RmImsConversion'));
+const RmImsCoilLineage     = lazyWithRetry(() => import('./features/rm-ims/RmImsCoilLineage'));
 const RmImsReorder         = lazyWithRetry(() => import('./features/rm-ims/RmImsReorder'));
 const RmImsMovements       = lazyWithRetry(() => import('./features/rm-ims/RmImsMovements'));
+
+// Scrap IMS — the register of what each coil cut left behind, and the scrap stock it feeds
+const ScrapImsDashboard    = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsDashboard'));
+const ScrapImsList         = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsList'));
+const ScrapImsByCoil       = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsByCoil'));
+const ScrapImsDetail       = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsDetail'));
+const ScrapImsStockIn      = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsStockIn'));
+const ScrapImsStockOut     = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsStockOut'));
+const ScrapImsMovements    = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsMovements'));
 // FG IMS — Finished Goods inventory (Production In / Dispatch Out)
 const FgImsDashboard       = lazyWithRetry(() => import('./features/fg-ims/FgImsDashboard'));
 const FgImsStockList       = lazyWithRetry(() => import('./features/fg-ims/FgImsStockList'));
@@ -183,11 +198,28 @@ function App() {
             {/* RM IMS — Raw Material (Coil + Circle) inventory */}
             <Route path="/rm-ims" element={<RmImsDashboard />} />
             <Route path="/rm-ims/stock" element={<RmImsStockList />} />
+            <Route path="/rm-ims/item/:skuId" element={<RmImsItemDetail />} />
             <Route path="/rm-ims/stock-in" element={<RmImsStockIn />} />
             <Route path="/rm-ims/stock-out" element={<RmImsStockOut />} />
             <Route path="/rm-ims/conversion" element={<RmImsConversion />} />
+            {/* One physical coil's whole cutting history. Keyed by the GRN_IN
+                movement id — the coil's stable internal identity — and NOT by
+                batch number, which is free text printed on a label. */}
+            <Route path="/rm-ims/coil/:receiptId" element={<RmImsCoilLineage />} />
             <Route path="/rm-ims/reorder" element={<RmImsReorder />} />
             <Route path="/rm-ims/movements" element={<RmImsMovements />} />
+
+            <Route path="/scrap-ims" element={<ScrapImsDashboard />} />
+            <Route path="/scrap-ims/records" element={<ScrapImsList />} />
+            {/* Scrap grouped by the physical coil it came off. Declared before
+                `/scrap-ims/record/:id` is irrelevant here (different segment),
+                but it is kept beside the register because it reads the same
+                records — one row per coil rather than one row per cut. */}
+            <Route path="/scrap-ims/by-coil" element={<ScrapImsByCoil />} />
+            <Route path="/scrap-ims/record/:id" element={<ScrapImsDetail />} />
+            <Route path="/scrap-ims/scrap-in" element={<ScrapImsStockIn />} />
+            <Route path="/scrap-ims/scrap-out" element={<ScrapImsStockOut />} />
+            <Route path="/scrap-ims/movements" element={<ScrapImsMovements />} />
 
             {/* FG IMS — Finished Goods inventory (Production In / Dispatch Out) */}
             <Route path="/fg-ims" element={<FgImsDashboard />} />
@@ -214,6 +246,10 @@ function App() {
             <Route path="/skus" element={<SkusList />} />
             <Route path="/parties" element={<PartiesList />} />
             <Route path="/parties/:id" element={<PartyDetails />} />
+            <Route path="/machines" element={<MachinesList />} />
+            <Route path="/machines/:id" element={<MachineDetails />} />
+            <Route path="/machine-operators" element={<MachineOperatorsList />} />
+            <Route path="/machine-operators/:id" element={<OperatorDetails />} />
 
             <Route
               path="/access-control"

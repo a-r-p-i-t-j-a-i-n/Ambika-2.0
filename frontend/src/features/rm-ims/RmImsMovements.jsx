@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Box, Paper, Stack, Typography, TextField, InputAdornment, Table, TableHead, TableBody, TableRow, TableCell,
+  Paper, Stack, Typography, TextField, InputAdornment, Table, TableHead, TableBody, TableRow, TableCell,
   Chip, Skeleton, TablePagination, Button, MenuItem,
 } from '@mui/material';
 import { History, Search, ArrowDownLeft, ArrowUpRight, Download, X, Scale } from 'lucide-react';
@@ -10,6 +10,9 @@ import {
   O2D, moveToken, txnLabel, num, imsTableSx,
 } from './rmImsMeta';
 import { useGetRmMovementsQuery } from '../../store/api/rmImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.rm;
 
 const RmImsMovements = () => {
   const [search, setSearch] = useState('');
@@ -31,7 +34,7 @@ const RmImsMovements = () => {
   const net = totals.in - totals.out;
 
   const exportCsv = () => {
-    const header = ['Movement no', 'Date', 'Code', 'Item', 'What happened', 'Direction', 'Quantity', 'Balance after', 'Batch', 'Reference', 'Recorded by'];
+    const header = ['Movement no', 'Date', 'SKU Code', 'Item Name', 'What happened', 'Direction', 'Quantity', 'Balance after', 'Batch', 'Reference', 'Recorded by'];
     const lines = shown.map((m) => [
       m.movementNumber, dayjs(m.movementDate).format('YYYY-MM-DD'), m.skuCode, m.skuName,
       txnLabel(m.txnType), m.movementType === 'IN' ? 'In' : 'Out', m.quantity, m.balanceAfter,
@@ -100,31 +103,33 @@ const RmImsMovements = () => {
           <Table size="small" sx={imsTableSx(1080)}>
             <TableHead>
               <TableRow>
-                <TableCell>Date</TableCell>
-                <TableCell><Th label="Movement no" hint="The system's own reference for this entry — quote it when checking with the store." /></TableCell>
-                <TableCell>Item</TableCell>
-                <TableCell>What happened</TableCell>
-                <TableCell align="right">Change</TableCell>
-                <TableCell align="right"><Th label="Balance after" hint="On-hand quantity immediately after this movement." /></TableCell>
-                <TableCell><Th label="Batch" hint="The mill or supplier batch, so a quality issue can be traced back." /></TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="Date" hint={H.movementDate} /></TableCell>
+                <TableCell><Th label="Movement no" hint={H.movementNumber} /></TableCell>
+                <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
+                <TableCell><Th label="What happened" hint={H.movementType} /></TableCell>
+                <TableCell align="right"><Th label="Change" hint={H.movementQty} /></TableCell>
+                <TableCell align="right"><Th label="Balance after" hint={H.balanceAfter} /></TableCell>
+                <TableCell><Th label="Batch" hint={H.batchNo} /></TableCell>
                 <TableCell>Reference</TableCell>
-                <TableCell>Recorded by</TableCell>
+                <TableCell><Th label="Recorded by" hint={H.recordedBy} /></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={9} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={280} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={280} /></TableCell></TableRow>
               )}
               {!isFetching && shown.length === 0 && (
-                <TableRow><TableCell colSpan={9} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
                   <EmptyNote icon={History} title="No movements to show"
                     hint="Clear the direction filter or the search, or record a Stock In, Stock Out or coil cutting to start the history." />
                 </TableCell></TableRow>
               )}
-              {shown.map((m) => {
+              {shown.map((m, i) => {
                 const t = moveToken(m.movementType);
                 return (
                   <TableRow key={m._id} hover>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: O2D.ink }}>{dayjs(m.movementDate).format('DD MMM YYYY')}</Typography>
                       <Typography sx={{ fontSize: '0.65rem', color: O2D.faint }}>{dayjs(m.createdAt || m.movementDate).format('HH:mm')}</Typography>

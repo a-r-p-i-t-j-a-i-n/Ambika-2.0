@@ -12,6 +12,9 @@ import {
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, num, imsTableSx, FG_ACCENT, FG_STATUS_LABEL,
 } from './fgImsMeta';
 import { useGetFgReplenishQuery } from '../../store/api/fgImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.fg;
 
 const fgStatusLabel = (k) => FG_STATUS_LABEL[k] || STOCK_TOKENS[k]?.label || k;
 
@@ -143,38 +146,39 @@ const FgImsPlanning = () => {
           <Table size="small" sx={imsTableSx(1560)}>
             <TableHead>
               <TableRow>
-                <TableCell>SKU Code</TableCell>
-                <TableCell>Finished Good</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
+                <TableCell><Th label="Finished Good" hint={H.skuName} /></TableCell>
                 <TableCell>Why it&apos;s here</TableCell>
-                <TableCell align="right"><Th label="Available Qty" hint="Finished units physically in the store right now." /></TableCell>
-                <TableCell align="right"><Th label="In Production (WIP)" hint="On the line now, expected to be completed and added to stock." /></TableCell>
-                <TableCell align="right"><Th label="Booked (Committed Orders)" hint="Already promised to customer orders, so not free to promise again." /></TableCell>
-                <TableCell align="right"><Th label="Projected Available" hint="Available Qty + In Production − Booked." /></TableCell>
-                <TableCell align="right"><Th label="Reorder At" hint="The level that put this item on the plan." /></TableCell>
-                <TableCell align="right"><Th label="Max Level" hint="The level we produce back up to." /></TableCell>
-                <TableCell align="right"><Th label="Days Cover" hint="Days the current stock lasts at the active season's demand." /></TableCell>
-                <TableCell align="right"><Th label="Production Quantity" hint="Enough to reach the Max Level, allowing for what is already in production and booked." /></TableCell>
-                <TableCell align="center">Status</TableCell>
+                <TableCell align="right"><Th label="Available Qty" hint={H.onHand} /></TableCell>
+                <TableCell align="right"><Th label="In Production (WIP)" hint={H.inProduction} /></TableCell>
+                <TableCell align="right"><Th label="Booked (Committed Orders)" hint={H.booked} /></TableCell>
+                <TableCell align="right"><Th label="Projected Available" hint={H.projectedAvailable} /></TableCell>
+                <TableCell align="right"><Th label="Reorder At" hint={H.reorderPoint} /></TableCell>
+                <TableCell align="right"><Th label="Max Level" hint={H.maxLevel} /></TableCell>
+                <TableCell align="right"><Th label="Days Cover" hint={H.daysCover} /></TableCell>
+                <TableCell align="right"><Th label="Production Quantity" hint={H.suggestedProduceQty} /></TableCell>
+                <TableCell align="center"><Th label="Status" hint={H.status} /></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={12} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={220} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={13} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={220} /></TableCell></TableRow>
               )}
               {!isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={12} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={13} sx={{ border: 0 }}>
                   <EmptyNote icon={CheckCircle2} title="Nothing to produce right now"
                     hint="Every finished good is comfortably above its Reorder At level. This plan fills itself as stock is dispatched."
                     tone={STOCK_TOKENS.OK.color} />
                 </TableCell></TableRow>
               )}
               {!isFetching && rows.length > 0 && filtered.length === 0 && (
-                <TableRow><TableCell colSpan={12} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={13} sx={{ border: 0 }}>
                   <EmptyNote icon={Search} title="No items match your search"
                     hint="Clear the search box or pick a different category." />
                 </TableCell></TableRow>
               )}
-              {paged.map((r) => {
+              {paged.map((r, i) => {
                 const t = STOCK_TOKENS[r.status] || STOCK_TOKENS.OK;
                 const tightCover = r.daysCover != null && r.daysCover < r.leadDays;
                 return (
@@ -184,6 +188,7 @@ const FgImsPlanning = () => {
                   <TableRow key={r.skuId} hover sx={{
                     cursor: 'pointer', borderLeft: `3px solid ${t.color}`,
                   }} onClick={() => navigate(`/fg-ims/item/${r.skuId}`)}>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: FG_ACCENT, whiteSpace: 'nowrap' }}>{r.skuCode}</TableCell>
                     <TableCell sx={{ maxWidth: 230 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }} title={r.skuName}>{r.skuName}</Typography>

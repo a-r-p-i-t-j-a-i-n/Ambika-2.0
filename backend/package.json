@@ -9,7 +9,22 @@
     "start": "node src/server.js",
     "seed": "node src/seeds/runSeeds.js",
     "seed:skus": "node src/scripts/bulkUpsertSkuMaster.js",
-    "seed:dpr": "node src/scripts/seed_ppc_dpr_masters.js"
+    "seed:dpr": "node src/scripts/seed_ppc_dpr_masters.js",
+    "import:rm": "node src/scripts/importRmExcelHistory.js",
+    "import:rm-conversions": "node src/scripts/importRmConversionDocs.js",
+    "import:scrap": "node src/scripts/importRmScrapRecords.js",
+    "backfill:scrap": "node src/scripts/backfillScrapFromConversions.js",
+    "seed:scrap-sku": "node src/scripts/ensureScrapSku.js",
+    "verify:scrap": "node src/scripts/verifyScrapIms.js",
+    "report:coil-lineage": "node src/scripts/reportCoilLineage.js",
+    "verify:grn-rm": "node src/scripts/verifyGrnRmStock.js",
+    "audit:coil-map": "node src/scripts/auditCoilCircleMap.js",
+    "reconcile:consumables": "node src/scripts/reconcileConsumables.js",
+    "test": "node --test \"src/**/__tests__/*.test.js\"",
+    "migrate:machines": "node src/scripts/migrateMachineOperatorMasters.js",
+    "import:machines": "node src/scripts/importMachineOperatorMaster.js",
+    "verify:machines": "node src/scripts/verifyMachineOperatorImport.js",
+    "import:consumables": "node src/scripts/importConsumablesTransactions.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",

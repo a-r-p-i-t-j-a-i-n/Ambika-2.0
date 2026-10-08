@@ -21,7 +21,7 @@ import { usePermission } from '../../hooks/usePermission';
 import {
   O2D, BRAND, BRAND_DK, NAVY, DANGER,
   Pill, Empty, CellText, PageHeading, NoRows,
-  gridSx, pageSx, panelSx, fieldSx, btnSx,
+  gridSx, pageSx, panelSx, fieldSx, btnSx, withSno, SNO_COLUMN,
 } from './components/masterUi';
 
 // Item-type metadata — labels and colours now live in their own module so the
@@ -239,6 +239,7 @@ const SkusList = () => {
   };
 
   const columns = [
+    SNO_COLUMN,
     { field: 'name', headerName: 'SKU item name', flex: 1, minWidth: 220,
       renderCell: (p) => <CellText weight={700} color={NAVY}>{p.value}</CellText>
     },
@@ -361,7 +362,7 @@ const SkusList = () => {
 
       <Paper sx={panelSx}>
         <DataGrid
-          rows={data?.data || []}
+          rows={withSno(data?.data, paginationModel)}
           columns={columns}
           getRowId={(row) => row._id}
           loading={isLoading}

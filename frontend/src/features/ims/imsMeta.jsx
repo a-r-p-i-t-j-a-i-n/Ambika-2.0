@@ -69,13 +69,64 @@ export const MoveChip = ({ movementType, txnType }) => {
 // ── Small help affordance ────────────────────────────────────────────────────
 // A quiet "?" next to a jargon word. The client should never have to ask what a
 // column means — the answer is one hover away.
-export const Help = ({ text, size = 12 }) => (
-  <Tooltip arrow title={text} slotProps={O2D_TIP}>
+//
+// `text` is either a plain sentence or a structured entry from imsFieldHelp.js:
+//   { means, source, formula, matters, example }
+// A structured entry renders as a few short labelled lines, because for a
+// calculated field "what is this?" is really four questions — what it means,
+// where the number came from, how it was worked out, and what it goes on to
+// drive. A single run-on sentence answered none of them well.
+
+const HELP_ROWS = [
+  ['means', 'What it means'],
+  ['source', 'Where it comes from'],
+  ['formula', 'How it is worked out'],
+  ['matters', 'Why it matters'],
+  ['example', 'Example'],
+];
+
+/** Renders a structured help entry; passes a plain string straight through. */
+export const HelpBody = ({ entry }) => {
+  if (!entry) return null;
+  if (typeof entry === 'string') return entry;
+  return (
+    <Box sx={{ display: 'grid', gap: 0.6 }}>
+      {HELP_ROWS.map(([key, label]) => (entry[key] ? (
+        <Box key={key}>
+          <Typography
+            component="div"
+            sx={{
+              fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.06em',
+              textTransform: 'uppercase', color: O2D.faint, lineHeight: 1.3,
+            }}
+          >
+            {label}
+          </Typography>
+          {/* pre-line so an entry can use line breaks — the status ladder does. */}
+          <Typography
+            component="div"
+            sx={{ fontSize: '0.72rem', fontWeight: 600, color: O2D.brand, lineHeight: 1.45, whiteSpace: 'pre-line' }}
+          >
+            {entry[key]}
+          </Typography>
+        </Box>
+      ) : null))}
+    </Box>
+  );
+};
+
+// Structured entries need more room than a one-liner, so they widen the bubble.
+const helpSlots = (entry) => (typeof entry === 'string' || !entry
+  ? O2D_TIP
+  : { ...O2D_TIP, tooltip: { sx: { ...O2D_TIP.tooltip.sx, maxWidth: 380 } } });
+
+export const Help = ({ text, size = 12 }) => (!text ? null : (
+  <Tooltip arrow title={<HelpBody entry={text} />} slotProps={helpSlots(text)}>
     <Box component="span" sx={{ display: 'inline-flex', ml: 0.4, color: O2D.faint, verticalAlign: 'middle', cursor: 'help' }}>
       <HelpCircle size={size} />
     </Box>
   </Tooltip>
-);
+));
 
 // A table header cell label with an attached explanation.
 export const Th = ({ label, hint }) => (hint

@@ -46,14 +46,68 @@ const coilConversionSchema = new Schema({
   scrapKg:         { type: Number, default: 0 },                // coil − circles (can be ~0)
   yieldRatioPct:   { type: Number, default: 0 },                // circles / coil × 100
 
-  scrapVerified: { type: String, enum: ['PENDING', 'JOB_WORK', 'DONE'], default: 'PENDING' },
+  // REJECTED is additive: the client's Summary Scrap sheet carries that state on
+  // two historical batches, and mapping it to PENDING would lose what they
+  // recorded. Existing documents are unaffected — nothing is re-validated.
+  scrapVerified: { type: String, enum: ['PENDING', 'JOB_WORK', 'DONE', 'REJECTED'], default: 'PENDING' },
+
+  /**
+   * Where this conversion came from, when it was not keyed in through the app.
+   *
+   * Historical batches imported from the client's workbook carry
+   * `EXCEL_RM_24_25|CONVERSION|<batch no>` here, which is what makes the import
+   * idempotent: the batch number is the client's own identifier for the cut, so
+   * the same row can never produce a second document. Unique+sparse, so the
+   * documents the app creates itself (which never set it) are untouched and the
+   * index costs nothing for them.
+   */
+  sourceRef: { type: String, trim: true, default: undefined },
   coilMovementId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement' },
   coilMovementNumber: { type: String, trim: true, default: '' },
+
+  /**
+   * WHICH physical coil was cut — the GRN_IN movement that brought it in.
+   *
+   * `batchNo` above is the coil's business identifier and is what people read,
+   * but it is free text: a typo, or a supplier one day reusing a number, and
+   * the trail to the receipt is gone. This is the exact link, so a conversion
+   * can always be traced back to the arrival it consumed, the rate actually
+   * paid for it, and the GRN/PO behind it.
+   *
+   * Null on every conversion that does not name a physical coil: all 481
+   * historical ones, and any cut booked through the manual by-item fallback.
+   * Nothing is back-filled, because nothing is known — a coil received without
+   * a batch number cannot be identified after the fact, and guessing which
+   * arrival a historical cut drew on would be fabrication.
+   */
+  coilReceiptId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement', default: null, index: true },
+  coilReceiptNumber: { type: String, trim: true, default: '' },
+
+  /**
+   * The submission this conversion came from.
+   *
+   * The entry screen mints an id per submission, so a double-click, a browser
+   * retry or a second tab all carry the SAME id. InventoryRequestKey catches
+   * the replay first, but those rows are disposable — they expire after seven
+   * days. This keeps the guarantee permanently, in the database rather than in
+   * the application: the unique index below means a second conversion for one
+   * submission cannot exist, however late the retry arrives.
+   *
+   * Sparse, so the 481 historical conversions and any caller that sends no id
+   * are not covered by it and cannot collide with each other.
+   */
+  clientRequestId: { type: String, trim: true, default: undefined },
 
   remarks: { type: String, trim: true, default: '' },
 }, baseSchemaOptions);
 
 coilConversionSchema.index({ conversionDate: -1 });
+// Idempotency guard for imported history — sparse, so app-created conversions
+// (which leave sourceRef unset) are not covered by it and cannot collide.
+coilConversionSchema.index({ sourceRef: 1 }, { unique: true, sparse: true });
+// One conversion per submission, enforced by the database. Sparse for the same
+// reason sourceRef is: documents without an id are simply not in the index.
+coilConversionSchema.index({ clientRequestId: 1 }, { unique: true, sparse: true });
 coilConversionSchema.index({ coilSkuCode: 1, conversionDate: -1 });
 
 const CoilConversion = model('CoilConversion', coilConversionSchema);

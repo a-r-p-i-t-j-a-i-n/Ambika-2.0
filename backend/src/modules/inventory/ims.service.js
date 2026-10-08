@@ -48,6 +48,26 @@ const shiftDay = (ymd, n) => {
 const CONSUMPTION_WINDOW_DAYS = 90;
 
 /**
+ * Lead Time for a Consumables item that has no Inventory Policy of its own.
+ *
+ * Consumables-only, and deliberately a constant rather than a fallback off the
+ * SKU master. The default used to be written `sku.leadDays ?? 16`, which never
+ * produced 16: SKU.leadDays carries its own model default of 7, so the nullish
+ * fallback was satisfied every time and every unplanned item planned on 7 days.
+ * All 180 Consumables SKUs hold exactly 7 and none leave the field unset, so
+ * the 16 was unreachable.
+ *
+ * 16 is the stated business lead time for Consumables (indent → receipt) and is
+ * what the policy model, the Policy drawer's pre-fill and the field help have
+ * always said the default is.
+ *
+ * Scope: Consumables only. Raw Material keeps its own fallback and Finished
+ * Goods deliberately defaults to 7 (production lead time, a different thing),
+ * so neither is touched and neither should read this constant.
+ */
+export const CONSUMABLES_DEFAULT_LEAD_DAYS = 16;
+
+/**
  * ADC from a 90-day consumption bucket: total ÷ 90, rounded to 2dp like every
  * other IMS figure. No bucket (nothing consumed in the window) means 0 — it
  * never falls back to the stored policy value, and never borrows today's number.
@@ -120,8 +140,10 @@ export const resolveMaxLevel = (policy = {}, adcOverride) => {
  * showed a Lead Time of 7 days on one screen and 0 on the next. Every read path
  * now starts from the same row.
  */
+// `sku` is still accepted so every existing call site is unchanged, but the
+// Lead Time no longer comes from it — see CONSUMABLES_DEFAULT_LEAD_DAYS.
 const imsPolicyOrDefaults = (policy, sku = {}) => policy || {
-  averageDailyConsumption: 0, leadDays: sku.leadDays ?? 16, safetyFactor: 1.5,
+  averageDailyConsumption: 0, leadDays: CONSUMABLES_DEFAULT_LEAD_DAYS, safetyFactor: 1.5,
   moq: 0, maxLevel: 0, maxLevelMode: 'AUTO', materialInTransit: 0, openingStock: 0, convertedItemName: '',
 };
 

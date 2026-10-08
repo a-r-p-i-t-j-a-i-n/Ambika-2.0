@@ -7,8 +7,8 @@
  *   SKU     → lists its Operations (Process Route) with SPM/cavity auto-fill
  *   SKU+Op  → filters Dies to the exact tool that ran the pieces
  */
-import Machine from './machine.model.js';
-import Operator from './operator.model.js';
+import Machine from '../masters/machines/machine.model.js';
+import Operator from '../masters/machine-operators/machineOperator.model.js';
 import ProcessRoute from './processRoute.model.js';
 import Die from './die.model.js';
 import SKU from '../skus/sku.model.js';
@@ -27,8 +27,12 @@ export const dprMasterService = {
    */
   async getFormOptions() {
     const [machines, operators, routes] = await Promise.all([
-      Machine.find({ ...notDeleted, active: { $ne: false } }).sort({ code: 1 }).lean(),
-      Operator.find({ ...notDeleted, active: { $ne: false } }).sort({ name: 1 }).lean(),
+      // Only scrapped machines drop out of the DPR dropdown. A machine that is
+      // merely idle ("Not in Use" — HYP01, S05, S10) still needs to be pickable,
+      // because production may be logged against it for an earlier date. Its
+      // isActive flag is false, so filtering on that would have quietly hidden it.
+      Machine.find({ ...notDeleted, machineStatus: { $ne: 'SCRAP' } }).sort({ code: 1 }).lean(),
+      Operator.find({ ...notDeleted, isActive: { $ne: false } }).sort({ name: 1 }).lean(),
       ProcessRoute.find(notDeleted).select('skuCode skuName').lean(),
     ]);
 

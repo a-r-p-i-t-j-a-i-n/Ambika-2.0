@@ -10,8 +10,8 @@
  */
 import mongoose from 'mongoose';
 import DprEntry from './dpr.model.js';
-import Machine from './machine.model.js';
-import Operator from './operator.model.js';
+import Machine from '../masters/machines/machine.model.js';
+import Operator from '../masters/machine-operators/machineOperator.model.js';
 import ProcessRoute from './processRoute.model.js';
 import SKU from '../skus/sku.model.js';
 import { computeOee, minutesBetween } from './oee.service.js';

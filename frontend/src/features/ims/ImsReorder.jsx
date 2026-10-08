@@ -12,6 +12,9 @@ import {
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, imsTableSx,
 } from './imsMeta';
 import { useGetImsReorderQuery } from '../../store/api/imsApi';
+import { FIELD } from './imsFieldHelp';
+
+const H = FIELD.ims;
 
 // One sentence saying WHY this item is on the list. A number in a "days cover"
 // column is data; this is the reason a buyer can act on without interpreting.
@@ -139,35 +142,36 @@ const ImsReorder = () => {
           <Table size="small" sx={imsTableSx(1040)}>
             <TableHead>
               <TableRow>
-                <TableCell>SKU Code</TableCell>
-                <TableCell>Item Name</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
+                <TableCell><Th label="Item Name" hint={H.skuName} /></TableCell>
                 <TableCell>Why it's here</TableCell>
                 <TableCell align="right">Available Qty</TableCell>
-                <TableCell align="right"><Th label="Material In Transit" hint="Already ordered and on its way — subtract this before ordering again." /></TableCell>
-                <TableCell align="right"><Th label="Reorder at" hint="The level that triggered this item onto the list." /></TableCell>
-                <TableCell align="right"><Th label="Max Level" hint="The level we buy back up to." /></TableCell>
-                <TableCell align="right"><Th label="Reorder Quantity" hint="Enough to bring stock back to the Max Level, allowing for Material In Transit." /></TableCell>
-                <TableCell align="center">Status</TableCell>
+                <TableCell align="right"><Th label="Material In Transit" hint={H.inTransit} /></TableCell>
+                <TableCell align="right"><Th label="Reorder at" hint={H.reorderPoint} /></TableCell>
+                <TableCell align="right"><Th label="Max Level" hint={H.maxLevel} /></TableCell>
+                <TableCell align="right"><Th label="Reorder Quantity" hint={H.suggestedOrderQty} /></TableCell>
+                <TableCell align="center"><Th label="Status" hint={H.status} /></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={9} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={220} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={220} /></TableCell></TableRow>
               )}
               {!isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={9} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
                   <EmptyNote icon={CheckCircle2} title="Nothing to buy right now"
                     hint="Every item is comfortably above its reorder point. This list fills itself as stock is issued to production."
                     tone={STOCK_TOKENS.OK.color} />
                 </TableCell></TableRow>
               )}
               {!isFetching && rows.length > 0 && filtered.length === 0 && (
-                <TableRow><TableCell colSpan={9} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
                   <EmptyNote icon={Search} title="No items match your search"
                     hint="Clear the search box or pick a different category." />
                 </TableCell></TableRow>
               )}
-              {paged.map((r) => {
+              {paged.map((r, i) => {
                 const t = stockToken(r.status);
                 return (
                   // No row wash here. On this screen EVERY row is a problem, so
@@ -176,6 +180,7 @@ const ImsReorder = () => {
                   <TableRow key={r.skuId} hover sx={{
                     cursor: 'pointer', borderLeft: `3px solid ${t.color}`,
                   }} onClick={() => navigate(`/ims/item/${r.skuId}`)}>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{r.skuCode}</TableCell>
                     <TableCell sx={{ maxWidth: 230 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }} title={r.skuName}>{r.skuName}</Typography>

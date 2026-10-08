@@ -23,6 +23,46 @@ export const RM_NAV = [
 
 export const RmShell = (props) => <ImsShell {...props} navItems={RM_NAV} />;
 
+// ── Where material physically sits ───────────────────────────────────────────
+// The client's sheet records a 'Received At' against every receipt and every
+// scrap line, and it only ever holds two values: the plant and the job worker
+// who cuts most of the coil. They map onto the stock engine's existing
+// `warehouse` field, so nothing new is invented here — the two codes the sheet
+// already uses are simply given names.
+//
+// Job-work STOCK BEHAVIOUR (what counts as ours, transfers, reconciliation) is
+// deliberately not modelled yet — this only records where an entry happened.
+// The list and the default now live in their own import-light module, so the
+// GRN Complete dialog can reuse the SAME two values without pulling the whole
+// IMS component surface into the procurement bundle. Re-exported here so every
+// RM screen keeps importing them from exactly where it always did.
+export { RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT } from './receivedAt.js';
+
+// ── Why stock moved ──────────────────────────────────────────────────────────
+// Same vocabulary and the same wording as Consumables & Packaging, so a planner
+// reads the identical list whichever IMS module they are standing in. The codes
+// are the ones the API validates against.
+export const STOCK_IN_REASON_OPTIONS = [
+  { value: 'VENDOR_RECEIPT',        label: 'Vendor receipt',         hint: 'Coils or circles physically received from a supplier against a bill or challan.' },
+  { value: 'OPENING_STOCK',         label: 'Opening stock',          hint: 'The material that already existed when you started using IMS.' },
+  { value: 'CORRECTION_ADJUSTMENT', label: 'Correction / adjustment', hint: 'Fixing a counting mistake so the system matches the physical store.' },
+  { value: 'OTHER',                 label: 'Other',                  hint: 'Anything else — type your own reason so History can explain it later.' },
+];
+
+export const STOCK_OUT_REASON_OPTIONS = [
+  { value: 'PRODUCTION_ISSUE', label: 'Production issue',    hint: 'Material issued to the line to be used in production.' },
+  { value: 'MAINTENANCE',      label: 'Maintenance / upkeep', hint: 'Used servicing or maintaining the machines.' },
+  { value: 'SAMPLE_TESTING',   label: 'Sample / testing',     hint: 'Taken for a sample, a trial or quality testing.' },
+  { value: 'OTHER',            label: 'Other',                hint: 'Anything else — type your own reason so History can explain it later.' },
+];
+
+// ── Unit of measure ──────────────────────────────────────────────────────────
+// Coil and Circle are NOT counted in the same unit, and that is the single
+// easiest thing to get wrong on a raw-material screen: coil is weighed in kilos,
+// circles are counted in pieces (the client's Total Available Quantity for a
+// circle sums 'Qty (In Pcs)'). Every quantity column therefore says which.
+export const uomOf = (row = {}) => row.unit || (row.kind === 'CIRCLE' ? 'PCS' : 'KGS');
+
 // ── Coil vs Circle ───────────────────────────────────────────────────────────
 // The one distinction that runs through every RM screen, so it gets its own
 // consistent token pair rather than a plain outlined chip.
@@ -123,6 +163,39 @@ export const ScrapChip = ({ state }) => {
       size="small" label={SCRAP_LABEL[state] || state || '—'}
       sx={{
         height: 21, fontWeight: 700, fontSize: '0.67rem', borderRadius: '999px',
+        bgcolor: t.bg, color: t.color, border: `1px solid ${t.border}`, '& .MuiChip-label': { px: 0.9 },
+      }}
+    />
+  );
+};
+
+// ── Physical-coil cutting status ─────────────────────────────────────────────
+// DERIVED from quantities, never picked by the operator. The server computes it
+// (coilLineage.js → cuttingStatus / ledgerCoilState); `cuttingStatusOf` mirrors
+// the same three-line rule ONLY for the live "after this round" preview, before
+// anything is saved.
+const CUT_EPS = 0.001;
+export const cuttingStatusOf = ({ cutKg = 0, remainingKg = 0 } = {}) => {
+  if (Number(cutKg) <= CUT_EPS) return 'NOT_CUT';
+  if (Number(remainingKg) > CUT_EPS) return 'PARTIALLY_CUT';
+  return 'FULLY_CUT';
+};
+
+export const CUT_STATUS_TONE = {
+  NOT_CUT: { label: 'Not cut', color: '#475569', bg: '#f1f5f9', border: '#e2e8f0' },
+  PARTIALLY_CUT: { label: 'Partially cut', color: '#b45309', bg: '#fef3c7', border: '#fde68a' },
+  FULLY_CUT: { label: 'Fully cut', color: '#15803d', bg: '#dcfce7', border: '#bbf7d0' },
+  // A ROUND that left metal on the coil.
+  PARTIAL: { label: 'Partial', color: '#b45309', bg: '#fef3c7', border: '#fde68a' },
+};
+
+export const CutStatusChip = ({ status, label }) => {
+  const t = CUT_STATUS_TONE[status] || CUT_STATUS_TONE.NOT_CUT;
+  return (
+    <Chip
+      size="small" label={label || t.label}
+      sx={{
+        height: 21, fontWeight: 800, fontSize: '0.67rem', borderRadius: '999px', whiteSpace: 'nowrap',
         bgcolor: t.bg, color: t.color, border: `1px solid ${t.border}`, '& .MuiChip-label': { px: 0.9 },
       }}
     />

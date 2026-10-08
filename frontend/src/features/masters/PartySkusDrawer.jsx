@@ -190,17 +190,20 @@ const PartySkusDrawer = ({ open, onClose, party }) => {
           <Table size="small" sx={{ '& td': { py: 0.6, px: 1 } }}>
             <TableHead>
               <TableRow sx={{ bgcolor: alpha(ACCENT, 0.05) }}>
-                {['Name', 'Code', 'Category', 'Unit', 'Pcs / Box', 'Wt / Pc (kg)', 'Box wt', 'Selling Price', 'GST %', ''].map((h, i) => (
+                {/* 'S.No.' leads the array so the generated header matches the
+                    serial cell the body now renders first. */}
+                {['S.No.', 'Name', 'Code', 'Category', 'Unit', 'Pcs / Box', 'Wt / Pc (kg)', 'Box wt', 'Selling Price', 'GST %', ''].map((h, i) => (
                   <TableCell key={h || i} sx={th}>{h}</TableCell>
                 ))}
               </TableRow>
             </TableHead>
             <TableBody>
-              {skus.map((sku) => {
+              {skus.map((sku, i) => {
                 const r = rowOf(sku);
                 const dirty = isDirty(sku._id);
                 return (
                   <TableRow key={sku._id} hover sx={{ bgcolor: dirty ? alpha('#d97706', 0.06) : 'inherit' }}>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{i + 1}</TableCell>
                     <TableCell><Cell value={r.name || ''} onChange={(v) => setDraft(sku._id, { name: v })} width={190} /></TableCell>
                     <TableCell><Cell value={r.code || ''} onChange={(v) => setDraft(sku._id, { code: v })} width={130} /></TableCell>
                     <TableCell><Cell value={r.category || ''} onChange={(v) => setDraft(sku._id, { category: v })} width={120} /></TableCell>

@@ -128,12 +128,14 @@ export const combineStockRows = (rows = []) => {
   if (!rows.length) return {};
   if (rows.length === 1) return rows[0];
   let qtyOnHand = 0;
+  let qtyOnHandKg = 0;
   let qtyReserved = 0;
   let stockValue = 0;
   let lastMovementAt = null;
   let lastCost = 0;
   for (const r of rows) {
     qtyOnHand = round2(qtyOnHand + (r.qtyOnHand || 0));
+    qtyOnHandKg = round2(qtyOnHandKg + (r.qtyOnHandKg || 0));
     qtyReserved = round2(qtyReserved + (r.qtyReserved || 0));
     stockValue = round2(stockValue + (r.qtyOnHand || 0) * (r.avgCost || 0));
     if (r.lastMovementAt && (!lastMovementAt || r.lastMovementAt > lastMovementAt)) {
@@ -144,6 +146,7 @@ export const combineStockRows = (rows = []) => {
   return {
     ...rows[0],
     qtyOnHand,
+    qtyOnHandKg,
     qtyReserved,
     lastMovementAt,
     lastCost: lastCost || rows[0].lastCost || 0,
@@ -191,6 +194,12 @@ const applyStockDelta = async (p) => {
       lastMovementAt: p.lastMovementAt,
       updatedBy: p.updatedBy,
     };
+    // Secondary weight, only when THIS movement carried one. A caller that says
+    // nothing about kilograms leaves the recorded weight exactly as it was, so
+    // Consumables, Finished Goods and every GRN behave as they always have.
+    if (p.qtyKgDelta !== null && p.qtyKgDelta !== undefined) {
+      set.qtyOnHandKg = round2((current?.qtyOnHandKg || 0) + p.qtyKgDelta);
+    }
     // Weighted-average cost on IN (only when a unit cost is given) — unchanged
     // arithmetic, now computed from the row this update is guarded against.
     if (p.movementType === MOVEMENT_TYPE.IN && p.unitCost > 0) {
@@ -261,6 +270,23 @@ const claimRequestKey = async (key, meta = {}) => {
 };
 
 /**
+ * Give a claimed key back.
+ *
+ * The entry did not happen, so its id must not lock out the corrected retry.
+ * Only ever called for a claim this request made itself.
+ */
+const releaseRequestKey = async (key) => {
+  if (!key) return;
+  await InventoryRequestKey.deleteOne({ _id: key }).catch(() => {});
+};
+
+/** Record how many lines the claimed entry wrote, for a replay to report. */
+const settleRequestKey = async (key, count) => {
+  if (!key) return;
+  await InventoryRequestKey.updateOne({ _id: key }, { $set: { count } }).catch(() => {});
+};
+
+/**
  * Core stock engine — the ONLY place that mutates InventoryStock. Every call
  * upserts the on-hand balance AND writes one append-only InventoryMovement
  * row, so stock is always reconstructable from the ledger.
@@ -275,6 +301,7 @@ const claimRequestKey = async (key, meta = {}) => {
  *   batchNo?, remarks?
  *   sourceModule?, refType?, refId?, refNumber?
  *   vendorId?, vendorName?, poId?, poNumber?, piId?, piNumber?
+ *   buyer?, enteredQty?, enteredUom?   Scrap Out only (buyer snapshot; figure as typed)
  *   performedBy?          { _id, name }  (or pass performedBy/performedByName)
  *   movementDate?
  * @param {object} opts  { allowNegative?: boolean }
@@ -294,6 +321,11 @@ const createStockMovement = async (input = {}, opts = {}) => {
   const unitCost = round2(input.unitCost);
   const sign = movementType === MOVEMENT_TYPE.IN ? 1 : -1;
   const qtyDelta = round2(sign * quantity);
+  // Optional secondary weight (RM circles). Absent stays absent all the way to
+  // the ledger: null means the source did not state a weight, which is not 0.
+  const hasKg = input.quantityKg !== null && input.quantityKg !== undefined && input.quantityKg !== '';
+  const quantityKg = hasKg ? round2(input.quantityKg) : null;
+  const qtyKgDelta = hasKg ? round2(sign * quantityKg) : null;
 
   // Fill item identity from the SKU master when not supplied.
   let { skuCode, skuName, unit } = input;
@@ -305,7 +337,7 @@ const createStockMovement = async (input = {}, opts = {}) => {
   // Get-or-create the stock row for this SKU+warehouse and apply the delta under
   // a version guard, so two simultaneous movements cannot overwrite each other.
   const stock = await applyStockDelta({
-    skuId: input.skuId, warehouse, quantity, qtyDelta, movementType, unitCost,
+    skuId: input.skuId, warehouse, quantity, qtyDelta, qtyKgDelta, movementType, unitCost,
     skuCode, skuName, unit,
     lastMovementAt: input.movementDate || new Date(),
     updatedBy: input.performedBy?._id || input.performedById,
@@ -321,6 +353,9 @@ const createStockMovement = async (input = {}, opts = {}) => {
     warehouse,
     txnType, movementType, quantity, qtyDelta,
     balanceAfter: stock.qtyOnHand,
+    // Null unless this movement stated a weight — see the model's note.
+    quantityKg, qtyKgDelta,
+    balanceKgAfter: hasKg ? round2(stock.qtyOnHandKg || 0) : null,
     unitCost, lineValue: round2(quantity * unitCost),
     batchNo: ledgerText(input.batchNo),
     sourceModule: ledgerText(input.sourceModule),
@@ -338,6 +373,14 @@ const createStockMovement = async (input = {}, opts = {}) => {
     // the literal word "undefined", which is what two legacy rows carry.
     reason: ledgerText(input.reason),
     customReason: ledgerText(input.customReason),
+    // The other side of a manual movement (Scrap In/Out). Blank for every
+    // automated caller, exactly like reason/customReason above.
+    partyName: ledgerText(input.partyName),
+    // Scrap Out only: the buyer snapshot and the figure as entered. Absent for
+    // every other caller, so they are left off the row entirely, not blanked.
+    buyer: input.buyer || undefined,
+    enteredQty: input.enteredQty ?? undefined,
+    enteredUom: input.enteredUom || undefined,
     remarks: ledgerText(input.remarks),
     // Set only by the entry screens, so a replayed submission can be recognised.
     clientRequestId: ledgerText(input.clientRequestId),
@@ -381,12 +424,12 @@ const runStockEntry = async ({ items, clientRequestId, mergeDuplicates, meta, pr
       for (const line of lines) results.push(await write(line, session));
       return { count: results.length, results };
     });
-    if (claim.claimed) await InventoryRequestKey.updateOne({ _id: key }, { $set: { count: out.count } });
+    if (claim.claimed) await settleRequestKey(key, out.count);
     return out;
   } catch (e) {
     // The entry did not happen, so its key must not lock the corrected retry
     // out. Only a claim this request made is released.
-    if (claim.claimed) await InventoryRequestKey.deleteOne({ _id: key }).catch(() => {});
+    if (claim.claimed) await releaseRequestKey(key);
     throw e;
   }
 };
@@ -395,6 +438,11 @@ export const inventoryService = {
   createStockMovement,
   runStockEntry,
   runAtomically,
+  // The two halves of runStockEntry's idempotency, for callers whose writes are
+  // not a uniform list of lines (see rmIms convert).
+  claimRequestKey,
+  releaseRequestKey,
+  settleRequestKey,
   mergeDuplicateLines,
   combineStockRows,
   stockBySkuId,

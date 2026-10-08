@@ -62,6 +62,12 @@ export const PERMISSIONS = Object.freeze({
   'masters.viewParty':           { module: 'Master Data',    label: 'View parties',                              risk: 'low' },
   'masters.editParty':           { module: 'Master Data',    label: 'Create / edit parties',                     risk: 'medium' },
   'masters.deleteParty':         { module: 'Master Data',    label: 'Delete a party',                            risk: 'high' },
+  'masters.viewMachine':         { module: 'Master Data',    label: 'View machine master',                       risk: 'low' },
+  'masters.editMachine':         { module: 'Master Data',    label: 'Create / edit machines',                    risk: 'medium' },
+  'masters.deleteMachine':       { module: 'Master Data',    label: 'Delete a machine',                          risk: 'high' },
+  'masters.viewOperator':        { module: 'Master Data',    label: 'View machine operator master',              risk: 'low' },
+  'masters.editOperator':        { module: 'Master Data',    label: 'Create / edit machine operators',           risk: 'medium' },
+  'masters.deleteOperator':      { module: 'Master Data',    label: 'Delete a machine operator',                 risk: 'high' },
 
   // ── Procurement (Purchase FMS) ──────────────────────────────────
   'procurement.approve':           { module: 'Procurement',    label: 'Approve procurement documents (PO / PI)',   risk: 'high' },

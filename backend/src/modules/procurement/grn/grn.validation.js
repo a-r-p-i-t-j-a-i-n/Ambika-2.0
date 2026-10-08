@@ -1,8 +1,33 @@
 import Joi from 'joi';
 import { PAGINATION } from '../../../config/constants.js';
 import { GRN_STATUS, HOW_ITEM_RECEIVED } from './grn.model.js';
+import { RM_RECEIVED_AT_LOCATIONS, DEFAULT_RM_RECEIVED_AT } from '../../inventory/inventoryStock.model.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
+
+/**
+ * "Received At" — where the Raw Material on this GRN physically landed.
+ *
+ * The same two-value list and the same vocabulary the RM Stock In screen
+ * validates against, imported rather than restated, so the two modules cannot
+ * drift. It is NOT the GRN's own `warehouse` (MAIN) and NOT `receivedAt` (the
+ * completion timestamp) — three different fields that read alike.
+ *
+ * Written as an explicit `when` with both branches spelled out rather than a
+ * base schema plus `.when().then()`: concatenating `allow(null)` with
+ * `required()` leaves null acceptable, which would let an opted-in GRN save
+ * with no location at all.
+ */
+const rmReceivedAtOnSave = Joi.any().when('addToRmStock', {
+  is: true,
+  then: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).required()
+    .messages({
+      'any.required': 'Received At is required when "Add to RM Stock" is ticked.',
+      'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}`,
+    }),
+  otherwise: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow(null, '').optional()
+    .messages({ 'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` }),
+});
 
 const grnDocumentSchema = Joi.object({
   fileName:   Joi.string().trim().max(300).allow('', null),
@@ -37,6 +62,10 @@ export const createGrnSchema = Joi.object({
   receivedBy:      Joi.string().trim().max(120).allow('', null),
   preparedBy:      Joi.string().trim().max(120).allow('', null),
   warehouse:       Joi.string().trim().max(40).allow('', null),
+  // The operator's RM choice, captured when the GRN is raised. Both are
+  // optional so a GRN that has nothing to do with Raw Material saves unchanged.
+  addToRmStock:         Joi.boolean(),
+  rmReceivedAtLocation: rmReceivedAtOnSave,
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)).default(HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED),
   challanDocument: grnDocumentSchema.default(null),
   invoiceDocument: grnDocumentSchema.default(null),
@@ -75,6 +104,10 @@ export const updateGrnSchema = Joi.object({
   receivedBy:      Joi.string().trim().max(120).allow('', null),
   preparedBy:      Joi.string().trim().max(120).allow('', null),
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)),
+  // No default on either: a PATCH that does not mention them must leave the
+  // saved choice alone rather than silently resetting it to "not opted in".
+  addToRmStock:         Joi.boolean(),
+  rmReceivedAtLocation: rmReceivedAtOnSave,
   challanDocument: grnDocumentSchema,
   invoiceDocument: grnDocumentSchema,
   remarks:         Joi.string().trim().max(1000).allow('', null),
@@ -82,10 +115,37 @@ export const updateGrnSchema = Joi.object({
 }).min(1);
 
 // Extra-receipt remarks are enforced in the service (needs PO context).
+//
+// NOTE - validate.js runs every schema with `stripUnknown: true`, so a field the
+// dialog sends but this schema does not name is dropped silently before the
+// controller ever sees it. Both fields below are therefore declared HERE, not
+// only on the model.
 export const completeGrnSchema = Joi.object({
-  remarks:          Joi.string().trim().max(1000).allow('', null),
+  remarks: Joi.string().trim().max(1000).allow('', null),
+
   // Explicit consent to receive beyond the PO's current pending qty.
   allowOverReceipt: Joi.boolean().default(false),
+
+  // Opt-in: Raw Material / Circle lines post to inventory only when this is
+  // true.
+  //
+  // Deliberately NOT defaulted. Both fields can now be chosen when the GRN is
+  // raised, so "the request did not mention it" and "the operator turned it
+  // off" are different answers: a default here would overwrite the saved choice
+  // with false for any caller that omits the field. The service resolves the
+  // fallback against the stored GRN instead.
+  addToRmStock: Joi.boolean(),
+
+  // "Received At" for those RM lines — the same list the RM Stock In screen
+  // validates against, imported rather than restated. Not defaulted, for the
+  // same reason; the service falls back to the GRN's own value, then to
+  // DEFAULT_RM_RECEIVED_AT.
+  rmReceivedAtLocation: Joi.string().trim().uppercase()
+    .valid(...RM_RECEIVED_AT_LOCATIONS)
+    .allow(null, '')
+    .messages({
+      'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}`,
+    }),
 });
 
 export const cancelGrnSchema = Joi.object({

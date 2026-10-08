@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { baseSchemaFields, baseSchemaOptions } from '../../../database/BaseSchema.js';
+import { RM_RECEIVED_AT_LOCATIONS } from '../../inventory/inventoryStock.model.js';
 
 const { Schema, model } = mongoose;
 
@@ -117,6 +118,33 @@ const grnSchema = new Schema({
   qcNumber:      { type: String, trim: true, default: '' },
   qcCompletedAt: { type: Date, default: null },
   stockPosted: { type: Boolean, default: false }, // idempotency guard
+
+  /**
+   * "Add to RM Stock" — the operator's opt-in on the Complete dialog.
+   *
+   * Raw Material / Circle lines post to inventory ONLY when this is true. Every
+   * other item type (consumables, packaging, spares …) posts exactly as it
+   * always has, so this gates RM and nothing else.
+   *
+   * Defaults to false: the choice has to be made, never assumed. Recorded on
+   * the GRN so the ledger can be explained later — a GRN with no RM movements
+   * is then plainly "not opted in" rather than "something went wrong".
+   */
+  addToRmStock: { type: Boolean, default: false },
+
+  /**
+   * "Received At" for the RM lines — where the material physically landed.
+   *
+   * The same two-value list and the same default the RM Stock In screen uses,
+   * so there is ONE definition of this field (see RM_RECEIVED_AT_LOCATIONS).
+   * It becomes the `warehouse` of the RM movements this GRN posts.
+   *
+   * Separate from `warehouse` above on purpose: that one is the GRN's own
+   * store (MAIN) and still carries every non-RM line. Nothing maps one onto the
+   * other. null until an RM-posting completion sets it, so no historical GRN
+   * gains a location it never had.
+   */
+  rmReceivedAtLocation: { type: String, enum: [...RM_RECEIVED_AT_LOCATIONS, null], default: null },
   receivedAt:  { type: Date, default: null },
   completedAt: { type: Date, default: null },
   completedBy: { type: String, trim: true, default: '' },

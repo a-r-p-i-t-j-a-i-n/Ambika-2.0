@@ -19,6 +19,9 @@ import {
 } from './fgImsMeta';
 import { useGetFgForecastQuery, useGetFgMovementsQuery, useGetFgHistoryQuery } from '../../store/api/fgImsApi';
 import FgPolicyDrawer from './FgPolicyDrawer';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.fg;
 
 // One metric in the header strip. `hint` carries the plain-English definition so
 // the strip stays compact without becoming a wall of jargon.
@@ -177,29 +180,31 @@ const StockHistory = ({ skuId }) => {
         <Table size="small" sx={imsTableSx(720)}>
           <TableHead>
             <TableRow>
-              <TableCell align="center">Date</TableCell>
-              <TableCell align="right"><Th label="Opened with" hint="Balance carried forward from the previous day." /></TableCell>
-              <TableCell align="right">Came in</TableCell>
-              <TableCell align="right">Went out</TableCell>
-              <TableCell align="right">Net</TableCell>
-              <TableCell align="right"><Th label="Closed with" hint="Balance at the end of the day." /></TableCell>
+              <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+              <TableCell align="center"><Th label="Date" hint={H.movementDate} /></TableCell>
+              <TableCell align="right"><Th label="Opened with" hint={H.openingBalance} /></TableCell>
+              <TableCell align="right"><Th label="Came in" hint={H.dayIn} /></TableCell>
+              <TableCell align="right"><Th label="Went out" hint={H.dayOut} /></TableCell>
+              <TableCell align="right"><Th label="Net" hint={H.dayNet} /></TableCell>
+              <TableCell align="right"><Th label="Closed with" hint={H.closingBalance} /></TableCell>
               <TableCell align="center">Level</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {isFetching && !days.length && (
-              <TableRow><TableCell colSpan={7} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={160} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={160} /></TableCell></TableRow>
             )}
             {!isFetching && tableDays.length === 0 && (
-              <TableRow><TableCell colSpan={7} sx={{ border: 0 }}>
+              <TableRow><TableCell colSpan={8} sx={{ border: 0 }}>
                 <EmptyNote icon={History} title="No history in this window"
                   hint="Widen the date range, or switch off 'hide days with no movement'." />
               </TableCell></TableRow>
             )}
-            {paged.map((d) => {
+            {paged.map((d, i) => {
               const tone = d.stockOut ? STOCK_TOKENS.OUT_OF_STOCK : d.belowReorder ? STOCK_TOKENS.REORDER : null;
               return (
                 <TableRow key={d.date} hover sx={tone ? { bgcolor: tone.tint } : (d.movementCount > 0 ? { bgcolor: O2D.surfaceAlt } : null)}>
+                  <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                   <TableCell align="center" sx={{ whiteSpace: 'nowrap', fontWeight: 600, color: O2D.ink }}>{dayjs(d.date).format('ddd, DD MMM YYYY')}</TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{num(d.opening)}</TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: d.inQty ? moveToken('IN').color : O2D.faint, fontWeight: d.inQty ? 700 : 400 }}>
@@ -310,31 +315,33 @@ const MovementHistory = ({ skuId }) => {
         <Table size="small" sx={imsTableSx(960)}>
           <TableHead>
             <TableRow>
-              <TableCell align="center">Date</TableCell>
-              <TableCell><Th label="Recorded at" hint="When the entry was actually keyed in, and its movement number." /></TableCell>
-              <TableCell align="center">What happened</TableCell>
-              <TableCell align="right">Change</TableCell>
+              <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+              <TableCell align="center"><Th label="Date" hint={H.movementDate} /></TableCell>
+              <TableCell><Th label="Recorded at" hint={H.recordedAt} /></TableCell>
+              <TableCell align="center"><Th label="What happened" hint={H.movementType} /></TableCell>
+              <TableCell align="right"><Th label="Change" hint={H.movementQty} /></TableCell>
               <TableCell align="right">Balance after</TableCell>
-              <TableCell>Recorded by</TableCell>
-              <TableCell>Source / reference</TableCell>
-              <TableCell>Notes</TableCell>
+              <TableCell><Th label="Recorded by" hint={H.recordedBy} /></TableCell>
+              <TableCell><Th label="Source / reference" hint={H.movementRef} /></TableCell>
+              <TableCell><Th label="Notes" hint={H.movementNotes} /></TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {isFetching && movements.length === 0 && (
-              <TableRow><TableCell colSpan={8} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={200} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={200} /></TableCell></TableRow>
             )}
             {!isFetching && movements.length === 0 && (
-              <TableRow><TableCell colSpan={8} sx={{ border: 0 }}>
+              <TableRow><TableCell colSpan={9} sx={{ border: 0 }}>
                 <EmptyNote icon={Clock} title="Nothing recorded for this item yet"
                   hint="The first Production In or Dispatch Out you record will appear here." />
               </TableCell></TableRow>
             )}
-            {paged.map((mv) => {
+            {paged.map((mv, i) => {
               const t = moveToken(mv.movementType);
               const ref = [mv.refNumber, mv.batchNo].filter(Boolean).join(' · ');
               return (
                 <TableRow key={mv._id} hover>
+                  <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                   <TableCell align="center" sx={{ whiteSpace: 'nowrap', fontWeight: 600, color: O2D.ink }}>{dayjs(mv.movementDate).format('DD MMM YYYY')}</TableCell>
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>
                     <Typography sx={{ fontSize: '0.71rem', color: O2D.sub }}>{dayjs(mv.createdAt || mv.movementDate).format('DD MMM, HH:mm')}</Typography>

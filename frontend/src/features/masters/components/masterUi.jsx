@@ -5,8 +5,9 @@
 // same pill. Presentation only — no data or query behaviour.
 
 import React from 'react';
-import { Box, Typography, Stack, alpha } from '@mui/material';
-import { O2D } from '../../o2d-fms/o2dTheme';
+import { Box, Typography, Stack, Tooltip, alpha } from '@mui/material';
+import { HelpCircle } from 'lucide-react';
+import { O2D, O2D_TIP } from '../../o2d-fms/o2dTheme';
 
 export const BRAND = O2D.brand;      // #1d4ed8
 export const BRAND_DK = '#1e3a8a';
@@ -136,4 +137,90 @@ export const btnSx = {
   whiteSpace: 'nowrap', fontSize: '0.82rem',
 };
 
-export { O2D };
+// ── Hover explanations ───────────────────────────────────────────────────────
+// Nobody should have to ask what a column or a form field means — the answer is
+// one hover away. All three helpers share the app's light-card tooltip.
+
+/** A quiet "?" next to a label, carrying the field's explanation. */
+export const Help = ({ text, size = 11 }) => (!text ? null : (
+  <Tooltip arrow title={text} slotProps={O2D_TIP}>
+    <Box
+      component="span"
+      sx={{ display: 'inline-flex', ml: 0.4, color: O2D.faint, verticalAlign: 'middle', cursor: 'help' }}
+    >
+      <HelpCircle size={size} />
+    </Box>
+  </Tooltip>
+));
+
+/**
+ * DataGrid renderHeader factory: the column label plus its explanation.
+ * Inherits every type style from the header cell so the tooltip affordance does
+ * not disturb the uppercase-tracked header look.
+ */
+export const headerTip = (label, hint) => function TippedHeader() {
+  return (
+    <Tooltip arrow title={hint || ''} slotProps={O2D_TIP}>
+      <Stack direction="row" alignItems="center" spacing={0.4} sx={{ minWidth: 0, cursor: 'help' }}>
+        <Typography
+          noWrap
+          sx={{
+            fontSize: 'inherit', fontWeight: 'inherit', color: 'inherit',
+            letterSpacing: 'inherit', textTransform: 'inherit',
+          }}
+        >
+          {label}
+        </Typography>
+        {hint ? <HelpCircle size={11} style={{ opacity: 0.55, flexShrink: 0 }} /> : null}
+      </Stack>
+    </Tooltip>
+  );
+};
+
+/**
+ * Wraps a grid cell so hovering reveals the whole value. Grid cells ellipsise,
+ * so this is what makes a clipped department or a long machine name readable.
+ */
+export const TipCell = ({ title, children }) => (
+  <Tooltip arrow title={title == null || title === '' ? '' : String(title)} slotProps={O2D_TIP}>
+    <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', alignSelf: 'center' }}>
+      {children}
+    </Box>
+  </Tooltip>
+);
+
+// ── Serial number ────────────────────────────────────────────────────────────
+// Matches the S.No. column the IMS stock lists already carry: 64px, centred,
+// tabular figures so the digits line up as you scroll.
+
+/**
+ * Stamps a display serial onto a page of rows. Derived from the page offset, so
+ * page 2 continues at 26 rather than restarting at 1. Purely presentational —
+ * it feeds no filter, sort or calculation.
+ */
+export const withSno = (rows, { page = 0, pageSize = 0 } = {}) =>
+  (rows || []).map((row, i) => ({ ...row, __sno: page * pageSize + i + 1 }));
+
+/** The matching DataGrid column. Unsortable: it numbers the view, not the data. */
+export const SNO_COLUMN = {
+  field: '__sno',
+  headerName: 'S.No.',
+  width: 64,
+  sortable: false,
+  filterable: false,
+  disableColumnMenu: true,
+  align: 'center',
+  headerAlign: 'center',
+  renderCell: (p) => (
+    <Typography
+      sx={{
+        alignSelf: 'center', fontSize: '0.8rem', fontWeight: 600,
+        color: O2D.sub, fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {p.value}
+    </Typography>
+  ),
+};
+
+export { O2D, O2D_TIP };

@@ -13,7 +13,8 @@
     "build:prod": "cross-env NODE_ENV=production vite build",
     "preview": "vite preview --host",
     "clean": "rimraf dist",
-    "lint": "eslint src --ext .js,.jsx --max-warnings=0"
+    "lint": "eslint src --ext .js,.jsx --max-warnings=0",
+    "test:e2e": "node e2e/grnRm.e2e.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.11.4",

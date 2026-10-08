@@ -13,7 +13,7 @@ import PartyFormDrawer from './PartyFormDrawer';
 import {
   O2D, BRAND, BRAND_DK, NAVY, DANGER,
   Pill, Empty, CellText, PageHeading, NoRows,
-  gridSx, pageSx, panelSx, fieldSx, btnSx,
+  gridSx, pageSx, panelSx, fieldSx, btnSx, withSno, SNO_COLUMN,
 } from './components/masterUi';
 
 const PartiesList = () => {
@@ -47,6 +47,7 @@ const PartiesList = () => {
   };
 
   const columns = [
+    SNO_COLUMN,
     { field: 'code', headerName: 'Code', width: 145,
       renderCell: (p) => <CellText mono weight={700} color={BRAND}>{p.value}</CellText>
     },
@@ -125,7 +126,7 @@ const PartiesList = () => {
       {/* Data Grid */}
       <Paper sx={panelSx}>
         <DataGrid
-          rows={data?.data || []}
+          rows={withSno(data?.data, paginationModel)}
           columns={columns}
           getRowId={(row) => row._id}
           loading={isLoading}

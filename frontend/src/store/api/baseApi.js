@@ -33,7 +33,7 @@ export const baseApi = createApi({
   refetchOnFocus: true,
   refetchOnReconnect: true,
   tagTypes: [
-    'Party', 'Vendor', 'Transporter', 'SKU', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison',
+    'Party', 'Vendor', 'Transporter', 'SKU', 'Machine', 'MachineOperator', 'Order', 'DispatchControl', 'DispatchDashboard', 'Comparison',
     'Schedule', 'Challan', 'Invoice', 'SalesInvoice', 'Auth', 'PPC', 'Shipment', 'Payment',
     'TransportBill', 'Employees',
     'FmsDoerAssignments', 'FmsTasks',
@@ -51,6 +51,7 @@ export const baseApi = createApi({
     'ImsOverview', 'ImsDashboard', 'ImsPolicy', 'ImsMovement',
     'RmOverview', 'RmDashboard', 'RmPolicy', 'RmMovement', 'RmConversion',
     'FgOverview', 'FgDashboard', 'FgPolicy', 'FgMovement',
+    'ScrapOverview', 'ScrapDashboard', 'ScrapRecord', 'ScrapStock', 'ScrapMovement', 'ScrapBuyer',
     'Dpr', 'DprBoard', 'DprMaster',
     'ServiceCompletion', 'ServiceCompletionStats',
     'IncomingQc', 'IncomingQcStats',

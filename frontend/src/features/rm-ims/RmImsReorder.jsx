@@ -7,10 +7,13 @@ import { ShoppingCart, Download, Copy, Check, CheckCircle2, Search, ArrowRight, 
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import {
-  RmShell, Panel, TableScroll, KpiTile, StatusChip, EmptyNote, Th, KindChip,
+  RmShell, Panel, TableScroll, KpiTile, StatusChip, EmptyNote, Th, KindChip, uomOf,
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr, imsTableSx,
 } from './rmImsMeta';
 import { useGetRmReorderQuery } from '../../store/api/rmImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.rm;
 
 // One sentence saying WHY this coil or circle is on the list.
 const reasonFor = (r) => {
@@ -62,9 +65,14 @@ const RmImsReorder = () => {
   const circleCount = rows.filter((r) => r.kind === 'CIRCLE').length;
 
   const exportCsv = () => {
-    const header = ['Code', 'Item', 'Kind', 'On hand', 'Days cover', 'Order up to', 'Order this much', 'Rate', 'Estimated spend', 'Vendor', 'Status', 'Why'];
+    const header = [
+      'SKU Code', 'Item Name', 'Material', 'UOM', 'Total Available Quantity', 'Material In Transit',
+      'Days cover', 'Reorder at', 'Max Level', 'Reorder Quantity', 'MOQ', 'Rate', 'Estimated spend',
+      'Vendor Name', 'Status', 'Why',
+    ];
     const lines = filtered.map((r) => [
-      r.skuCode, r.skuName, r.kind, r.onHand, r.daysCover ?? '', r.maxLevel, r.suggestedOrderQty,
+      r.skuCode, r.skuName, r.kind === 'CIRCLE' ? 'Circle' : 'Coil', uomOf(r),
+      r.onHand, r.inTransit, r.daysCover ?? '', r.reorderPoint, r.maxLevel, r.suggestedOrderQty, r.moq,
       r.rate, r.buyCost, r.vendorName, stockToken(r.status).label, reasonFor(r),
     ]);
     const csv = [header, ...lines].map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -146,54 +154,66 @@ const RmImsReorder = () => {
 
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1120)}>
+          <Table size="small" sx={imsTableSx(1480)}>
             <TableHead>
               <TableRow>
-                <TableCell>Item</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
+                <TableCell><Th label="Item Name" hint={H.skuName} /></TableCell>
                 <TableCell>Material</TableCell>
                 <TableCell>Why it's here</TableCell>
-                <TableCell align="right">In store</TableCell>
-                <TableCell align="right"><Th label="Cover" hint="Days the current stock lasts at the planned rate of use." /></TableCell>
-                <TableCell align="right"><Th label="Order up to" hint="The level we buy back up to." /></TableCell>
-                <TableCell align="right"><Th label="Order this much" hint="Enough to bring stock back to the order-up-to level." /></TableCell>
-                <TableCell align="right"><Th label="Estimated spend" hint="Order quantity × the rate saved on the item's policy." /></TableCell>
-                <TableCell>Vendor</TableCell>
-                <TableCell>Status</TableCell>
+                <TableCell align="right"><Th label="Total Available Quantity" hint={H.onHand} /></TableCell>
+                <TableCell align="right"><Th label="Material In Transit" hint={H.inTransit} /></TableCell>
+                <TableCell align="right"><Th label="Cover" hint={H.daysCover} /></TableCell>
+                <TableCell align="right"><Th label="Reorder at" hint={H.reorderPoint} /></TableCell>
+                <TableCell align="right"><Th label="Max Level" hint={H.maxLevel} /></TableCell>
+                <TableCell align="right"><Th label="Reorder Quantity" hint={H.suggestedOrderQty} /></TableCell>
+                <TableCell align="right"><Th label="Estimated spend" hint={H.buyCost} /></TableCell>
+                <TableCell><Th label="Vendor Name" hint={H.vendorName} /></TableCell>
+                <TableCell><Th label="Status" hint={H.status} /></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={10} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={240} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={14} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={240} /></TableCell></TableRow>
               )}
               {!isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={14} sx={{ border: 0 }}>
                   <EmptyNote icon={CheckCircle2} title="Nothing to buy right now"
                     hint="Every coil and circle is comfortably above its reorder point. This list fills itself as material is consumed."
                     tone={STOCK_TOKENS.OK.color} />
                 </TableCell></TableRow>
               )}
               {!isFetching && rows.length > 0 && filtered.length === 0 && (
-                <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={14} sx={{ border: 0 }}>
                   <EmptyNote icon={Search} title="No items match your search"
                     hint="Clear the search box or switch back to all raw material." />
                 </TableCell></TableRow>
               )}
-              {paged.map((r) => {
+              {paged.map((r, i) => {
                 const t = stockToken(r.status);
                 return (
                   // Coloured left edge only — on this screen every row is a
                   // problem, so tinting them all would carry no signal.
                   <TableRow key={r.skuId} hover sx={{ borderLeft: `3px solid ${t.color}` }}>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      <Typography sx={{ fontSize: '0.73rem', color: O2D.body, fontFamily: 'ui-monospace, monospace' }}>{r.skuCode}</Typography>
+                    </TableCell>
                     <TableCell sx={{ maxWidth: 240 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }} title={r.skuName}>{r.skuName}</Typography>
-                      <Typography sx={{ fontSize: '0.66rem', color: O2D.sub, fontFamily: 'ui-monospace, monospace' }}>{r.skuCode}</Typography>
+                      <Typography sx={{ fontSize: '0.62rem', color: O2D.faint }}>{uomOf(r)}</Typography>
                     </TableCell>
                     <TableCell><KindChip kind={r.kind} /></TableCell>
                     <TableCell sx={{ maxWidth: 270 }}>
                       <Typography sx={{ fontSize: '0.73rem', color: t.color, fontWeight: 600 }}>{reasonFor(r)}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inTransit ? O2D.body : O2D.faint }}>
+                      {r.inTransit ? num(r.inTransit) : '—'}
+                    </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{r.daysCover == null ? '—' : `${num(r.daysCover)}d`}</TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num(r.reorderPoint)}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num(r.maxLevel)}</TableCell>
                     <TableCell align="right">
                       <Tooltip arrow slotProps={O2D_TIP}
@@ -210,7 +230,7 @@ const RmImsReorder = () => {
                       {r.buyCost ? (
                         <>
                           <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink, lineHeight: 1.15 }}>{inr(r.buyCost)}</Typography>
-                          {r.rate > 0 && <Typography sx={{ fontSize: '0.62rem', color: O2D.faint }}>at {inr(r.rate)}/unit</Typography>}
+                          {r.rate > 0 && <Typography sx={{ fontSize: '0.62rem', color: O2D.faint }}>at {inr(r.rate)}/{uomOf(r)}</Typography>}
                         </>
                       ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>No rate set</Typography>}
                     </TableCell>
@@ -240,9 +260,9 @@ const RmImsReorder = () => {
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ px: 0.5 }}>
           <Layers size={13} color={O2D.faint} />
           <Typography sx={{ fontSize: '0.68rem', color: O2D.faint }}>
-            Quantities are worked out as <b>order up to</b> minus what is on hand and already in transit, then rounded up to
-            the supplier's minimum order quantity where one is recorded. Adjust an item's daily consumption, lead time or
-            safety factor from the Stock list to change what appears here.
+            Quantities are worked out as the <b>Max Level</b> minus what is on hand and already in transit, then rounded up to
+            the supplier's MOQ where one is recorded. Adjust an item's Daily Avg Consumption, Lead Time or
+            Safety Factor from the Stock list to change what appears here.
           </Typography>
         </Stack>
       )}

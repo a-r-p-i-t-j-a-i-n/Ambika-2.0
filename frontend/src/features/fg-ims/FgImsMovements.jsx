@@ -11,6 +11,9 @@ import {
   O2D, moveToken, txnLabel, num, imsTableSx, FG_ACCENT,
 } from './fgImsMeta';
 import { useGetFgMovementsQuery } from '../../store/api/fgImsApi';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.fg;
 
 const RANGES = [
   { value: 7, label: 'Last 7 days' },
@@ -126,33 +129,35 @@ const FgImsMovements = () => {
           <Table size="small" sx={imsTableSx(1000)}>
             <TableHead>
               <TableRow>
-                <TableCell align="center">Date</TableCell>
-                <TableCell><Th label="Movement no" hint="The system's own reference for this entry — quote it when checking an entry with the store." /></TableCell>
-                <TableCell>Finished Good</TableCell>
-                <TableCell align="center">What happened</TableCell>
-                <TableCell align="right">Change</TableCell>
-                <TableCell align="right"><Th label="Balance after" hint="Stock on hand immediately after this movement." /></TableCell>
-                <TableCell>Recorded by</TableCell>
-                <TableCell>Notes</TableCell>
+                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                <TableCell align="center"><Th label="Date" hint={H.movementDate} /></TableCell>
+                <TableCell><Th label="Movement no" hint={H.movementNumber} /></TableCell>
+                <TableCell><Th label="Finished Good" hint={H.skuName} /></TableCell>
+                <TableCell align="center"><Th label="What happened" hint={H.movementType} /></TableCell>
+                <TableCell align="right"><Th label="Change" hint={H.movementQty} /></TableCell>
+                <TableCell align="right"><Th label="Balance after" hint={H.balanceAfter} /></TableCell>
+                <TableCell><Th label="Recorded by" hint={H.recordedBy} /></TableCell>
+                <TableCell><Th label="Notes" hint={H.movementNotes} /></TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {isFetching && rows.length === 0 && (
-                <TableRow><TableCell colSpan={8} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={240} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={240} /></TableCell></TableRow>
               )}
               {!isFetching && filtered.length === 0 && (
-                <TableRow><TableCell colSpan={8} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={9} sx={{ border: 0 }}>
                   <EmptyNote icon={History} title="No movements in this window"
                     hint={rows.length === 0
                       ? 'The first Production In or Dispatch Out you record will appear here.'
                       : 'Widen the period, clear the direction filter, or record a Production In / Dispatch Out.'} />
                 </TableCell></TableRow>
               )}
-              {paged.map((m) => {
+              {paged.map((m, i) => {
                 const t = moveToken(m.movementType);
                 return (
                   <TableRow key={m._id} hover sx={{ cursor: m.skuId ? 'pointer' : 'default' }}
                     onClick={() => m.skuId && navigate(`/fg-ims/item/${m.skuId}`)}>
+                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
                       <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: O2D.ink }}>{dayjs(m.movementDate).format('DD MMM YYYY')}</Typography>
                       <Typography sx={{ fontSize: '0.65rem', color: O2D.faint }}>{dayjs(m.createdAt || m.movementDate).format('HH:mm')}</Typography>

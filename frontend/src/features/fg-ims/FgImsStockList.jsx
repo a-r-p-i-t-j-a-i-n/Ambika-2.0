@@ -20,6 +20,9 @@ import {
 } from './fgImsMeta';
 import { useGetFgOverviewQuery, useGetFgForecastQuery } from '../../store/api/fgImsApi';
 import FgPolicyDrawer from './FgPolicyDrawer';
+import { FIELD } from '../ims/imsFieldHelp';
+
+const H = FIELD.fg;
 
 // The status word a planner reads, for the places that need the bare string
 // (the CSV, the colour key) rather than a <StatusChip>.
@@ -355,29 +358,29 @@ const FgImsStockList = () => {
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
-                <TableCell>SKU Code</TableCell>
-                <TableCell>Finished Good</TableCell>
-                <TableCell>Category</TableCell>
-                <TableCell align="right"><Th label="Available Qty" hint="Finished units physically in the store right now." /></TableCell>
-                <TableCell align="right"><Th label="In Production (WIP)" hint="On the line now, expected to be completed and added to stock." /></TableCell>
-                <TableCell align="right"><Th label="Booked (Committed Orders)" hint="Already committed to confirmed customer orders, so not free to promise." /></TableCell>
+                <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
+                <TableCell><Th label="Finished Good" hint={H.skuName} /></TableCell>
+                <TableCell><Th label="Category" hint={H.category} /></TableCell>
+                <TableCell align="right"><Th label="Available Qty" hint={H.onHand} /></TableCell>
+                <TableCell align="right"><Th label="In Production (WIP)" hint={H.inProduction} /></TableCell>
+                <TableCell align="right"><Th label="Booked (Committed Orders)" hint={H.booked} /></TableCell>
                 {/* Safety Factor sits at column 8 (counting S.No. as 1) in every
                     IMS stock list, so a planner finds it in the same place
                     whichever module they are in. */}
-                <TableCell align="right"><Th label="Safety Factor" hint="Cushion multiplier for demand spikes and production delays." /></TableCell>
-                <TableCell align="right"><Th label="Projected Available" hint="Available Qty + In Production − Booked." /></TableCell>
-                <TableCell align="right"><Th label="Average Daily Demand" hint="Units expected to be dispatched per day for the active season. A planned figure, set by hand in the policy." /></TableCell>
-                <TableCell align="right"><Th label="Lead Time" hint="Days to produce a batch, from starting the run to stock being ready." /></TableCell>
+                <TableCell align="right"><Th label="Safety Factor" hint={H.safetyFactor} /></TableCell>
+                <TableCell align="right"><Th label="Projected Available" hint={H.projectedAvailable} /></TableCell>
+                <TableCell align="right"><Th label="Average Daily Demand" hint={H.add} /></TableCell>
+                <TableCell align="right"><Th label="Lead Time" hint={H.leadDays} /></TableCell>
                 {/* No "Reorder At" column here by request. The level itself is
                     untouched and still drives the Status chip on this very row,
                     the Production Plan, the forecast and the dispatch warnings —
                     it is simply not shown as a column on this screen. It stays
                     visible on the item quick-view, the item detail page and the
                     Production Plan. */}
-                <TableCell align="right"><Th label="Max Level" hint="Produce enough to bring stock back to this level." /></TableCell>
-                <TableCell align="right"><Th label="Days Cover" hint="Days the current stock lasts at the active season's demand." /></TableCell>
-                <TableCell align="right"><Th label="Available %" hint="Projected Available as a share of the Max Level." /></TableCell>
-                <TableCell align="center">Status</TableCell>
+                <TableCell align="right"><Th label="Max Level" hint={H.maxLevel} /></TableCell>
+                <TableCell align="right"><Th label="Days Cover" hint={H.daysCover} /></TableCell>
+                <TableCell align="right"><Th label="Available %" hint={H.availablePct} /></TableCell>
+                <TableCell align="center"><Th label="Status" hint={H.status} /></TableCell>
                 <TableCell align="center" />
               </TableRow>
             </TableHead>

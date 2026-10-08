@@ -18,8 +18,8 @@ import XLSX from 'xlsx';
 
 import connectDB from '../config/db.js';
 import { logger } from '../utils/logger.js';
-import Machine from '../modules/ppc/machine.model.js';
-import Operator from '../modules/ppc/operator.model.js';
+import Machine from '../modules/masters/machines/machine.model.js';
+import Operator from '../modules/masters/machine-operators/machineOperator.model.js';
 import ProcessRoute from '../modules/ppc/processRoute.model.js';
 import Die from '../modules/ppc/die.model.js';
 import SKU from '../modules/skus/sku.model.js';
@@ -47,56 +47,20 @@ const n = (v) => {
   return Number.isFinite(x) ? x : 0;
 };
 
-// Infer a machine family from its code prefix (3-letter codes first so SAP≠S).
-const machineTypeFromCode = (code) => {
-  const c = code.toUpperCase();
-  if (c.startsWith('CCP')) return 'Circle Cutting Press';
-  if (c.startsWith('DAP')) return 'Double Action Press';
-  if (c.startsWith('SAP')) return 'Single Action Press';
-  if (c.startsWith('HYP')) return 'Hydraulic Press';
-  if (c.startsWith('BF')) return 'Buffing Motor';
-  if (/^S\d/.test(c)) return 'Spinning / Rolling Machine';
-  if (/^C\d/.test(c)) return 'Cutting Machine';
-  if (/^L\d/.test(c)) return 'Lathe';
-  return 'Manual / Other';
-};
-
 // ── seeders ────────────────────────────────────────────────────────────────────
+/**
+ * Machines and Operators are no longer seeded from this CSV. They are Master Data
+ * now (Master Data → Machines / Machine Operators), owned by
+ * scripts/importMachineOperatorMaster.js, which reads the richer
+ * excel/"machine and operator.xlsx" — name, department, capacity, installation
+ * year and status, none of which this two-column CSV carries — and writes the
+ * machine↔operator links to the MachineOperatorAssignment collection.
+ *
+ * Left as a no-op rather than deleted so `npm run seed:dpr` keeps working and
+ * anyone reaching for it is pointed at the right script.
+ */
 const seedMachinesAndOperators = async () => {
-  const rows = readRows(FILES.machineOperator);
-  const machineCodes = new Set();
-  const opByName = new Map(); // name → Set(machineCodes)
-
-  for (const r of rows) {
-    const code = s(r['Machine Code']).toUpperCase();
-    const opName = s(r['Machine Operator']);
-    if (code) machineCodes.add(code);
-    if (opName) {
-      if (!opByName.has(opName)) opByName.set(opName, new Set());
-      if (code) opByName.get(opName).add(code);
-    }
-  }
-
-  let mUp = 0;
-  for (const code of machineCodes) {
-    await Machine.findOneAndUpdate(
-      { code },
-      { $set: { code, machineType: machineTypeFromCode(code), active: true, isDeleted: false } },
-      { upsert: true, setDefaultsOnInsert: true },
-    );
-    mUp += 1;
-  }
-
-  let oUp = 0;
-  for (const [name, codes] of opByName) {
-    await Operator.findOneAndUpdate(
-      { name },
-      { $set: { name, machineCodes: [...codes], active: true, isDeleted: false } },
-      { upsert: true, setDefaultsOnInsert: true },
-    );
-    oUp += 1;
-  }
-  logger.info(`  Machines upserted: ${mUp}, Operators upserted: ${oUp}`);
+  logger.info("  Machines/Operators: skipped — run `npm run import:machines` instead (Master Data owns them).");
 };
 
 const seedProcessRoutes = async () => {

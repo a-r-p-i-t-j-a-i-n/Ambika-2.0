@@ -218,6 +218,11 @@ const GrnDetail = () => {
               <Grid item xs={6} sm={4}><Field label="Received By" value={grn.receivedBy || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Prepared By" value={grn.preparedBy || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label={<><Warehouse size={12} /> Warehouse</>} value={grn.warehouse || 'MAIN'} /></Grid>
+              {/* Shown beside Warehouse on purpose: they are different things.
+                  Warehouse is the GRN's own store (MAIN); Received At is where
+                  the Raw Material landed, and is what the RM movement uses. */}
+              <Grid item xs={6} sm={4}><Field label="Add to RM Stock" value={grn.addToRmStock ? 'Yes' : 'No'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Received At" value={grn.rmReceivedAtLocation || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Completed At" value={fmtDate(grn.completedAt)} /></Grid>
               {grn.remarks ? <Grid item xs={12}><Field label="Remarks" value={grn.remarks} /></Grid> : null}
             </Grid>

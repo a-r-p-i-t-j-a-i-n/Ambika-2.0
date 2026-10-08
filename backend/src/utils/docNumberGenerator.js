@@ -54,6 +54,21 @@ export async function peekDocNumber(docType, date = new Date()) {
 }
 
 /**
+ * Generate the next Scrap Buyer master code.
+ * NOT reset per fiscal year — it names a buyer, not a document, and a buyer's
+ * code must not be reused by someone else on 1 April.
+ * @returns {string} e.g. "SB-0001"
+ */
+export async function generateScrapBuyerCode() {
+  const counter = await Counter.findByIdAndUpdate(
+    'SCRAP_BUYER',
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `SB-${String(counter.seq).padStart(4, '0')}`;
+}
+
+/**
  * Generate next Purchase Indent number (Purchase FMS).
  * Unpadded sequence, reset per fiscal year.
  * @param {Date} date — date to determine fiscal year
