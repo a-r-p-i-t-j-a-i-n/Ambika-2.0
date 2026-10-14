@@ -56,7 +56,7 @@ const ScrapImsDashboard = () => {
       actions={(
         <Button size="small" variant="outlined" endIcon={<ArrowRight size={14} />} onClick={() => navigate('/scrap-ims/records')}
           sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
-          Scrap register
+          Scrap master data
         </Button>
       )}
     >

@@ -84,6 +84,16 @@ const coilConversionSchema = new Schema({
   coilReceiptNumber: { type: String, trim: true, default: '' },
 
   /**
+   * WHICH physical coil was cut, when that coil has NO goods receipt — the
+   * ManualCoil entered on Cut Coils under "Manual Entry — No GRN".
+   *
+   * Mutually exclusive with `coilReceiptId`: a cut names its coil by its
+   * receipt, or by its manual entry, or (historical / "No receipt available")
+   * by neither. Null on everything recorded before manual coils existed.
+   */
+  manualCoilId: { type: Schema.Types.ObjectId, ref: 'ManualCoil', default: null, index: true },
+
+  /**
    * The submission this conversion came from.
    *
    * The entry screen mints an id per submission, so a double-click, a browser

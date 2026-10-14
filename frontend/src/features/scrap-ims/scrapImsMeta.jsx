@@ -22,7 +22,7 @@ export const SCRAP_ACCENT = '#b45309';
 // and the menu should not imply otherwise.
 export const SCRAP_NAV = [
   { label: 'Overview', short: 'Overview', path: '/scrap-ims', icon: LayoutDashboard, exact: true },
-  { label: 'Scrap register', short: 'Register', path: '/scrap-ims/records', icon: Recycle },
+  { label: 'Scrap master data', short: 'Master data', path: '/scrap-ims/records', icon: Recycle },
   /**
    * Scrap by the PHYSICAL coil it came off.
    *

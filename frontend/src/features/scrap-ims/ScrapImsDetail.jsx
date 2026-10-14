@@ -40,7 +40,7 @@ const ScrapImsDetail = () => {
   if (isLoading || !r) {
     return (
       <ScrapShell icon={Recycle} title="Scrap record" subtitle="Loading…"
-        onBack={() => navigate('/scrap-ims/records')} backLabel="Back to the scrap register">
+        onBack={() => navigate('/scrap-ims/records')} backLabel="Back to scrap master data">
         <Skeleton variant="rounded" height={320} />
       </ScrapShell>
     );
@@ -57,7 +57,7 @@ const ScrapImsDetail = () => {
       title={`Batch ${r.batchNo}`}
       subtitle={`${r.coilSkuName} · ${r.coilSkuCode} · ${when}`}
       onBack={() => navigate('/scrap-ims/records')}
-      backLabel="Back to the scrap register"
+      backLabel="Back to scrap master data"
     >
       <Paper elevation={0} sx={{ p: 1.25, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -149,12 +149,15 @@ const ScrapImsDetail = () => {
               "80 kg came off coil TX89165708" and a number nobody can source. */}
           <Metric
             label="Physical coil"
-            value={r.coilReceiptId ? (r.batchNo || 'Linked') : 'Untraceable'}
-            tone={r.coilReceiptId ? undefined : O2D.faint}
-            sub={r.coilReceiptId ? 'Traced to its goods receipt' : 'No goods receipt recorded'}
+            value={(r.coilReceiptId || r.manualCoilId) ? (r.batchNo || 'Linked') : 'Untraceable'}
+            tone={(r.coilReceiptId || r.manualCoilId) ? undefined : O2D.faint}
+            sub={r.coilReceiptId ? 'Traced to its goods receipt'
+              : r.manualCoilId ? 'Traced to its manual coil entry (no GRN)' : 'No goods receipt recorded'}
             hint={r.coilReceiptId
               ? 'This cut records the exact goods receipt it consumed, so its scrap rolls up against that one physical coil.'
-              : 'This record names a batch but not a goods receipt, so it cannot be attributed to a physical coil. Every row imported from the client’s workbook is in this position, and nothing is guessed after the fact — it is reported under “Untraceable” instead.'}
+              : r.manualCoilId
+                ? 'This coil had no goods receipt, so it was entered manually on Cut Coils with its original weight. Its scrap rolls up against that one physical coil.'
+                : 'This record names a batch but not a goods receipt, so it cannot be attributed to a physical coil. Every row imported from the client’s workbook is in this position, and nothing is guessed after the fact — it is reported under “Untraceable” instead.'}
           />
           <Metric label="Coil rate" value={r.coilRate ? `₹${num(r.coilRate)} / kg` : '—'}
             hint="The COIL's rate, not a scrap rate. The source carries no price for scrap, so scrap cannot be valued." />
@@ -164,9 +167,9 @@ const ScrapImsDetail = () => {
                 the coil, and a link that opened "some coil of this material"
                 would be a lie dressed up as traceability. Every imported
                 historical row is in that position, and nothing is guessed. */}
-            {r.coilReceiptId && (
+            {(r.coilReceiptId || r.manualCoilId) && (
               <Button size="small" variant="contained" disableElevation endIcon={<ArrowUpRight size={14} />}
-                onClick={() => navigate(`/rm-ims/coil/${r.coilReceiptId}`)}
+                onClick={() => navigate(`/rm-ims/coil/${r.coilReceiptId || r.manualCoilId}`)}
                 sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px' }}>
                 See this coil's full cutting history
               </Button>

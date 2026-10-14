@@ -253,7 +253,8 @@ const CuttingHistoryPanel = () => {
               </TableCell></TableRow>
             )}
             {rows.map((c, i) => {
-              const id = String(c.coilReceiptId);
+              // The physical coil — its receipt, or its manual entry (no GRN).
+              const id = String(c.coilId || c.coilReceiptId);
               const isOpen = open.has(id);
               const jw = c.jobWorkScrapKg > 0;
               return (
@@ -268,7 +269,7 @@ const CuttingHistoryPanel = () => {
                     <TableCell align="center" sx={{ ...numCell, color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell sx={{ maxWidth: 220 }}>
                       <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: O2D.ink, fontFamily: 'ui-monospace, monospace' }}>{c.batchNo || '—'}</Typography>
-                      <Typography noWrap sx={{ fontSize: '0.66rem', color: O2D.sub }} title={c.itemName}>{c.skuCode}{c.grnNo ? ` · ${c.grnNo}` : ''}</Typography>
+                      <Typography noWrap sx={{ fontSize: '0.66rem', color: O2D.sub }} title={c.itemName}>{c.skuCode}{c.grnNo ? ` · ${c.grnNo}` : ''}{c.coilSource === 'MANUAL' ? ' · Manual entry (no GRN)' : ''}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={numCell}>{num(c.receivedKg)}</TableCell>
                     <TableCell align="right" sx={{ ...numCell, fontWeight: 800 }}>{num(c.cutKg)}</TableCell>

@@ -123,6 +123,9 @@ const scrapRecordSchema = new Schema({
    * receipt, and nothing is back-filled because nothing is known.
    */
   coilReceiptId: { type: Schema.Types.ObjectId, ref: 'InventoryMovement', default: null, index: true },
+  // The manual-entry coil (no goods receipt) this scrap came off, copied from
+  // the conversion. Mutually exclusive with coilReceiptId; null on every older row.
+  manualCoilId: { type: Schema.Types.ObjectId, ref: 'ManualCoil', default: null, index: true },
 
   /**
    * The SCRAP_IN movement this cut posted into scrap stock, where it posted one.

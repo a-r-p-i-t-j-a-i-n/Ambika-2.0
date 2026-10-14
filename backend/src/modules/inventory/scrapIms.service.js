@@ -3,6 +3,7 @@ import ScrapRecord, { SCRAP_LOCATIONS, SCRAP_DISPOSITIONS } from './scrapRecord.
 import CoilConversion from './coilConversion.model.js';
 import InventoryStock from './inventoryStock.model.js';
 import InventoryMovement, { TXN_TYPE } from './inventoryMovement.model.js';
+import ManualCoil from './manualCoil.model.js';
 import { inventoryService } from './inventory.service.js';
 import { resolveScrapSku, SCRAP_UNIT } from './scrapSku.js';
 // The same arithmetic the coil lineage screen uses, so a coil's scrap, yield
@@ -319,7 +320,10 @@ export const scrapImsService = {
       { $match: filter },
       {
         $group: {
-          _id: '$coilReceiptId',
+          // The physical coil: its receipt, or — for a coil with no goods
+          // receipt — its manual entry. Both null is the untraceable bucket.
+          _id: { $ifNull: ['$coilReceiptId', '$manualCoilId'] },
+          isManual: { $max: { $cond: [{ $eq: [{ $type: '$manualCoilId' }, 'objectId'] }, 1, 0] } },
           scrapKg:   { $sum: '$scrapKg' },
           cutKg:     { $sum: '$coilWeightKg' },
           circlesKg: { $sum: '$circlesWeightKg' },
@@ -379,11 +383,29 @@ export const scrapImsService = {
         .lean()
       : [];
     const byId = new Map(receipts.map((m) => [String(m._id), m]));
+    // Manual-entry coils (no goods receipt): their entry stands in for the
+    // receipt — original weight as `quantity`, and no GRN, PO or supplier.
+    const manualIds = rows.filter((r) => r.isManual === 1).map((r) => r._id);
+    if (manualIds.length) {
+      const mcs = await ManualCoil.find({ _id: { $in: manualIds }, isDeleted: { $ne: true } })
+        .select('batchNo coilSkuId coilSkuCode coilSkuName originalWeightKg rate warehouse createdAt').lean();
+      for (const mc of mcs) {
+        byId.set(String(mc._id), {
+          movementNumber: '', batchNo: mc.batchNo, skuId: mc.coilSkuId, skuCode: mc.coilSkuCode, skuName: mc.coilSkuName,
+          quantity: mc.originalWeightKg, unitCost: mc.rate, warehouse: mc.warehouse || '', movementDate: mc.createdAt,
+          refType: 'MANUAL', refNumber: '', poNumber: '', vendorName: '',
+        });
+      }
+    }
 
     const docs = rows.map((r) => {
       const m = byId.get(String(r._id)) || null;
+      const manual = r.isManual === 1;
       return {
-        coilReceiptId: r._id,
+        coilId: r._id,
+        coilSource: manual ? 'MANUAL' : 'GRN',
+        coilReceiptId: manual ? null : r._id,
+        manualCoilId: manual ? r._id : null,
         movementNumber: m?.movementNumber || '',
         // The receipt's own batch number wins over the scrap record's copy:
         // the receipt is where the identity lives, the copy is denormalised.

@@ -11,6 +11,7 @@ import {
   rmPolicySchema, rmReceiveSchema, rmIssueSchema, rmConvertSchema,
   rmMovementQuerySchema, rmConversionsQuerySchema, rmReceivedCoilsQuerySchema,
   rmCircleOptionsQuerySchema, rmCoilLineageParamSchema, rmCuttingHistoryQuerySchema,
+  rmManualCoilLookupQuerySchema,
 } from './rmIms.validation.js';
 
 const router = Router();
@@ -27,6 +28,9 @@ router.get('/conversions', validate(rmConversionsQuerySchema, 'query'), c.getCon
 // The physical coils on the floor, for the Cut Coils picker. Read-only: it
 // reads GRN_IN movements back, it does not create a second stock record.
 router.get('/received-coils', validate(rmReceivedCoilsQuerySchema, 'query'), c.getReceivedCoils);
+// Manual Entry — No GRN: is this batch already a manual coil (continue its
+// rounds) or a received coil (cut it from its GRN instead)? Read-only.
+router.get('/manual-coils/lookup', validate(rmManualCoilLookupQuerySchema, 'query'), c.lookupManualCoil);
 // Which circles the identified coil may produce, from the client's mapping.
 // Read-only, like the lookup above it — the dropdown asks, it never writes.
 router.get('/circle-options', validate(rmCircleOptionsQuerySchema, 'query'), c.getCircleOptions);

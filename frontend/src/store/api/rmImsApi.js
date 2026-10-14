@@ -90,6 +90,16 @@ export const rmImsApi = baseApi.injectEndpoints({
      * answer changes when a circle SKU is added or deactivated, and NOT when a
      * coil is cut. So cutting a coil does not refetch it.
      */
+    /**
+     * Manual Entry — No GRN: what a typed batch number already names — a
+     * manual coil to continue (data), or a goods receipt that must be cut from
+     * its GRN instead (meta.grnReceipt). Tagged like the lineage: a saved round
+     * changes the manual coil's remaining weight.
+     */
+    lookupRmManualCoil: builder.query({
+      query: (params = {}) => ({ url: '/rm-ims/manual-coils/lookup', params }),
+      providesTags: ['RmConversion', 'RmMovement'],
+    }),
     getRmCircleOptions: builder.query({
       query: (params = {}) => ({ url: '/rm-ims/circle-options', params }),
       providesTags: ['RmOverview'],
@@ -133,6 +143,7 @@ export const {
   useGetRmCoilLineageQuery,
   useGetRmCuttingHistoryQuery,
   useGetRmCircleOptionsQuery,
+  useLookupRmManualCoilQuery,
   useUpsertRmPolicyMutation,
   useRmReceiveMutation,
   useRmIssueMutation,

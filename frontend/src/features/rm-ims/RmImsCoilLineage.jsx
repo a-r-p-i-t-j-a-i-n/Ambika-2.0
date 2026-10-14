@@ -114,7 +114,11 @@ const RmImsCoilLineage = () => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
+  // A manual-entry coil has no goods receipt — said once, and no receipt
+  // paperwork is shown for it, because there is none.
+  const isManual = r.source === 'MANUAL';
   const identity = [
+    isManual && 'Manual entry — no GRN',
     r.grnNo && `GRN ${r.grnNo}`,
     r.poNo && `PO ${r.poNo}`,
     r.indentCode && `Indent ${r.indentCode}`,
@@ -125,7 +129,7 @@ const RmImsCoilLineage = () => {
     <RmShell
       icon={Disc3}
       title={`Coil ${r.batchNo || r.movementNumber}`}
-      subtitle={`${r.itemName} · ${r.skuCode} · received ${day(r.receivedDate)}${identity ? ` · ${identity}` : ''}`}
+      subtitle={`${r.itemName} · ${r.skuCode} · ${isManual ? 'entered' : 'received'} ${day(r.receivedDate)}${identity ? ` · ${identity}` : ''}`}
       onBack={() => navigate('/rm-ims/conversion')}
       backLabel="Back to Cut coils"
       actions={(
@@ -137,7 +141,7 @@ const RmImsCoilLineage = () => {
           <Button size="small" variant="outlined" startIcon={<Recycle size={14} />}
             onClick={() => navigate('/scrap-ims/records')}
             sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
-            Scrap register
+            Scrap master data
           </Button>
         </Stack>
       )}
@@ -147,7 +151,7 @@ const RmImsCoilLineage = () => {
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Chip size="small" label={`Batch ${r.batchNo || '—'}`}
             sx={{ height: 22, fontWeight: 800, fontSize: '0.68rem', borderRadius: '999px', fontFamily: 'ui-monospace, monospace' }} />
-          <Chip size="small" variant="outlined" label={r.movementNumber}
+          <Chip size="small" variant="outlined" label={isManual ? 'Manual entry · no GRN' : r.movementNumber}
             sx={{ height: 22, fontWeight: 700, fontSize: '0.66rem', borderRadius: '999px', fontFamily: 'ui-monospace, monospace', color: O2D.sub }} />
           {r.warehouse && <Chip size="small" variant="outlined" label={`Received at ${r.warehouse}`} sx={{ height: 22, fontSize: '0.66rem', borderRadius: '999px', color: O2D.sub }} />}
           <Typography sx={{ fontSize: '0.72rem', color: O2D.sub, ml: { sm: 'auto' } }}>
@@ -188,7 +192,8 @@ const RmImsCoilLineage = () => {
 
       {/* ── The coil's totals ── */}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Received" value={kg(t.receivedKg)} icon={Disc3} sub="What physically arrived" />
+        <KpiTile label={isManual ? 'Total coil weight' : 'Received'} value={kg(t.receivedKg)} icon={Disc3}
+          sub={isManual ? 'Entered for the whole coil (no GRN)' : 'What physically arrived'} />
         <KpiTile label="Total cut" value={kg(t.cutKg)} icon={Scissors} color="#0f766e"
           sub={`${num(t.rounds)} cutting round${t.rounds === 1 ? '' : 's'}`} />
         <KpiTile label="Output / circles" value={kg(t.circlesKg)} icon={CircleDashed} color="#4338ca"
@@ -204,10 +209,10 @@ const RmImsCoilLineage = () => {
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Metric label="Item" value={r.skuCode} sub={r.itemName} />
           <Metric label="Batch no" value={r.batchNo || '—'} hint={H.batchNo} />
-          <Metric label="Received" value={kg(r.receivedWeightKg)} sub={day(r.receivedDate)} />
+          <Metric label={isManual ? 'Total coil weight' : 'Received'} value={kg(r.receivedWeightKg)} sub={day(r.receivedDate)} />
           <Metric label="Rate" value={r.unitCost ? `₹${num(r.unitCost)} / kg` : '—'}
             hint="The rate actually paid for THIS coil, off its own goods receipt — not the item's average cost." />
-          <Metric label="GRN" value={r.grnNo || '—'} sub={r.indentCode ? `Indent ${r.indentCode}` : null} />
+          <Metric label="GRN" value={r.grnNo || (isManual ? 'None — manual entry' : '—')} sub={r.indentCode ? `Indent ${r.indentCode}` : null} />
           <Metric label="PO" value={r.poNo || '—'} sub={r.piNo ? `PI ${r.piNo}` : null} />
           <Metric label="Supplier" value={r.supplier || '—'} />
           <Metric label="Average yield" value={t.avgYieldPct != null ? `${num(t.avgYieldPct)}%` : '—'}

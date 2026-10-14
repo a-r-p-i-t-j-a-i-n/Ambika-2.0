@@ -200,6 +200,28 @@ export const rmConvertSchema = Joi.object({
    * changed is what the service does with that meaning, not the wire format.
    */
   manualFallback: Joi.boolean().default(false),
+  /**
+   * "Manual Entry — No GRN": a physical coil with no goods receipt, kept
+   * traceable (unlike `manualFallback`, which names no coil at all).
+   *
+   *   manualCoilId  a coil already entered manually — a later round of it.
+   *   manualCoil    a coil entered for the first time: its batch number and the
+   *                 ORIGINAL weight of the whole coil (not this round's cut).
+   *
+   * At most one way of naming the coil per cut — see the oxor below.
+   */
+  manualCoilId: objectId.allow('', null),
+  manualCoil: Joi.object({
+    batchNo: Joi.string().trim().min(1).max(60).required().messages({
+      'any.required': 'Enter the batch number of the coil.',
+      'string.empty': 'Enter the batch number of the coil.',
+    }),
+    totalWeightKg: Joi.number().greater(0).required().messages({
+      'any.required': 'Enter the total weight of the whole coil.',
+      'number.base': 'Total coil weight must be a number.',
+      'number.greater': 'Total coil weight must be greater than zero.',
+    }),
+  }).allow(null),
   coilWeightKg: Joi.number().greater(0).required(),
   rate:       Joi.number().min(0),
   /**
@@ -241,7 +263,15 @@ export const rmConvertSchema = Joi.object({
     // Still required: yield and scrap are weight-based.
     weightKg:    Joi.number().greater(0).required(),
   })).min(1).required(),
-});
+})
+  // A cut names its coil ONE way. Sending a receipt and a manual coil (or a
+  // manual coil and "No receipt available") is a confused client, not a choice.
+  .custom((v, helpers) => {
+    const ways = [v.coilReceiptId, v.manualCoilId, v.manualCoil, v.manualFallback === true]
+      .filter((x) => x !== undefined && x !== null && x !== '' && x !== false);
+    return ways.length > 1 ? helpers.error('any.invalid') : v;
+  })
+  .messages({ 'any.invalid': 'Name the coil one way only: a received coil (GRN), a manual-entry coil, or "No receipt available".' });
 
 export const rmMovementQuerySchema = Joi.object({
   search:  Joi.string().max(120).allow('', null),
@@ -287,7 +317,20 @@ export const rmReceivedCoilsQuerySchema = Joi.object({
   // Cut Coils only: offer just the coils the Coil → Circle sheet maps. Off by
   // default so Stock In's duplicate-batch check still sees every coil.
   circleMapped: Joi.boolean().default(false),
+  // The "Select GRN / Received Coil" dropdown: only receipts of a COMPLETED,
+  // stock-posted GRN (or the historical GRN register import). Off by default,
+  // so the batch-number lookup keeps finding exactly what it always found.
+  grnOnly: Joi.boolean().default(false),
   limit:     Joi.number().integer().min(1).max(100),
+}).unknown(true);
+
+/**
+ * Manual Entry — No GRN: is this batch number already a coil?
+ * Answers with the manual coil it names (to continue its rounds) or the goods
+ * receipt that already carries it (which must be cut from its GRN instead).
+ */
+export const rmManualCoilLookupQuerySchema = Joi.object({
+  batchNo: Joi.string().trim().min(1).max(60).required(),
 }).unknown(true);
 
 /**

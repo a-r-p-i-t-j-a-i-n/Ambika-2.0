@@ -4,6 +4,9 @@ import InventoryStock, { DEFAULT_WAREHOUSE } from './inventoryStock.model.js';
 import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.model.js';
 import CoilConversion from './coilConversion.model.js';
 import ScrapRecord, { SCRAP_LOCATIONS } from './scrapRecord.model.js';
+// A physical coil with no goods receipt ("Manual Entry — No GRN"). Identity and
+// original weight only — see the model header for why it is not a receipt.
+import ManualCoil, { manualBatchKey } from './manualCoil.model.js';
 // Round numbering and the running remaining weight. Pure arithmetic kept out of
 // this file on purpose, so the client's worked example can be asserted without
 // a database — see the header of coilLineage.js for why nothing is stored.
@@ -939,6 +942,94 @@ export const rmImsService = {
     );
   },
 
+  /**
+   * Does ANY coil's goods receipt already carry this batch number?
+   *
+   * Manual Entry exists for coils WITHOUT a receipt, so a batch that has one
+   * must be cut from it. Unlike `_resolveCoilReceipt` this is not scoped to a
+   * SKU: the operator may have picked the wrong grade in manual mode, and the
+   * coil still has a receipt. Exact match first (indexed), then the anchored
+   * case-insensitive retry, the same two-step the resolver uses.
+   */
+  async _findReceiptForBatch(rawBatchNo, session) {
+    const batchNo = String(rawBatchNo || '').trim();
+    if (!batchNo) return null;
+    const pick = (session ? (q) => q.session(session) : (q) => q);
+    const base = { txnType: TXN_TYPE.GRN_IN, isDeleted: { $ne: true } };
+    const fields = 'movementNumber batchNo skuId skuCode skuName refType refNumber warehouse';
+    const exact = await pick(InventoryMovement.findOne({ ...base, batchNo }).select(fields)).lean();
+    if (exact) return exact;
+    const anchored = new RegExp(`^${batchNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    return pick(InventoryMovement.findOne({ ...base, batchNo: anchored }).select(fields)).lean();
+  },
+
+  /**
+   * One manual coil as the Cut Coils form shows it: original weight, what its
+   * rounds have cut, what is left, and its status — all derived from its own
+   * CoilConversions with the same helpers a GRN coil's lineage uses.
+   */
+  async _manualCoilFacts(mc) {
+    const conversions = await CoilConversion.find({ manualCoilId: mc._id, isDeleted: { $ne: true } })
+      .select('coilWeightKg conversionDate').lean();
+    const cutKg = round2(conversions.reduce((s, c) => s + Number(c.coilWeightKg || 0), 0));
+    const state = ledgerCoilState({
+      receivedKg: mc.originalWeightKg, roundsCutKg: cutKg, ledgerAvailableKg: Number(mc.originalWeightKg) - cutKg,
+    });
+    const lastCutAt = conversions.reduce((d, c) => (!d || new Date(c.conversionDate) > d ? new Date(c.conversionDate) : d), null);
+    return {
+      id: mc._id,
+      manualCoilId: mc._id,
+      source: 'MANUAL',
+      batchNo: mc.batchNo,
+      skuId: mc.coilSkuId,
+      skuCode: mc.coilSkuCode,
+      skuName: mc.coilSkuName,
+      unit: mc.unit || 'KGS',
+      originalWeightKg: round2(mc.originalWeightKg),
+      cutKg,
+      availableKg: state.availableKg,
+      rounds: conversions.length,
+      status: state.status,
+      overCut: state.overCut,
+      warehouse: mc.warehouse || '',
+      rate: round2(mc.rate),
+      enteredAt: mc.createdAt,
+      lastCutAt,
+    };
+  },
+
+  /**
+   * Manual Entry — No GRN: what does this batch number already name?
+   *
+   *   manualCoil  the manual coil it identifies (continue its rounds), or null
+   *   grnReceipt  a goods receipt already carrying it — manual entry is refused
+   *               for such a coil, and the screen says where to cut it instead
+   *
+   * Read-only.
+   */
+  async lookupManualCoil(query = {}) {
+    const batchNo = String(query.batchNo || '').trim();
+    if (!batchNo) throw new AppError('Enter a batch number.', 400);
+    const [mc, receipt] = await Promise.all([
+      ManualCoil.findOne({ batchKey: manualBatchKey(batchNo), isDeleted: { $ne: true } }).lean(),
+      this._findReceiptForBatch(batchNo),
+    ]);
+    return {
+      manualCoil: mc ? await this._manualCoilFacts(mc) : null,
+      grnReceipt: receipt
+        ? {
+          movementId: receipt._id,
+          batchNo: receipt.batchNo,
+          skuId: receipt.skuId,
+          skuCode: receipt.skuCode,
+          skuName: receipt.skuName,
+          grnNumber: ['GRN', 'EXCEL_GRN'].includes(receipt.refType) ? (receipt.refNumber || '') : '',
+          warehouse: receipt.warehouse || '',
+        }
+        : null,
+    };
+  },
+
   async convert(payload, user) {
     const coil = await SKU.findById(payload.coilSkuId).select('code name unit itemType').lean();
     if (!coil) throw new AppError('Coil SKU not found', 404);
@@ -974,6 +1065,35 @@ export const rmImsService = {
     // no coil has no such figure, so there is nothing for FULL to resolve to.
     if (cuttingType === 'FULL' && manualFallback) {
       throw new AppError('Full cutting needs the physical coil (its batch number): a full cut takes exactly what that coil has left. Use Partial cutting for a cut with no receipt.', 400);
+    }
+
+    /**
+     * "Manual Entry — No GRN": a physical coil with no goods receipt that is
+     * still TRACED — unlike manualFallback above, which names no coil at all.
+     *
+     *   manualCoilId → a later round of a coil already entered manually.
+     *   manualCoil   → the coil's first round: its batch number and the
+     *                  original weight of the WHOLE coil.
+     *
+     * A cut names its coil one way only. rmConvertSchema refuses a mix at the
+     * route; this repeats it for every other caller of the service.
+     */
+    const manualCoilId = payload.manualCoilId || null;
+    const manualCoilNew = payload.manualCoil || null;
+    const manualMode = !!(manualCoilId || manualCoilNew);
+    if ((manualCoilId && manualCoilNew) || (manualMode && (payload.coilReceiptId || manualFallback))) {
+      throw new AppError('Name the coil one way only: a received coil (GRN), a manual-entry coil, or "No receipt available".', 400);
+    }
+    if (manualCoilId && !mongoose.Types.ObjectId.isValid(String(manualCoilId))) {
+      throw new AppError('That is not a manual coil reference.', 400);
+    }
+    const newManualBatch = manualCoilNew ? String(manualCoilNew.batchNo || '').trim() : '';
+    const newManualTotal = manualCoilNew ? Number(manualCoilNew.totalWeightKg) : 0;
+    if (manualCoilNew) {
+      if (!newManualBatch) throw new AppError('Enter the batch number of the coil.', 400);
+      if (!Number.isFinite(newManualTotal) || newManualTotal <= 0) {
+        throw new AppError('Total coil weight must be greater than zero — it is the weight of the whole coil.', 400);
+      }
     }
 
     /* ── Is this coil approved to produce these circles? ──
@@ -1041,6 +1161,9 @@ export const rmImsService = {
       throw new AppError('This conversion is already being saved. Give it a moment, then refresh.', 409);
     }
 
+    // A manual coil this request created, so a failed cut can take it back out
+    // where there is no transaction to roll it back (standalone mongod).
+    let createdManualCoilId = null;
     try {
       // Taken before the transaction on purpose: a rolled-back cut leaves a gap
       // in the numbering, which is harmless, where a number issued inside the
@@ -1085,6 +1208,11 @@ export const rmImsService = {
             _id: payload.coilReceiptId, isDeleted: { $ne: true },
           }).session(session).lean();
           if (!receipt) throw new AppError('That received coil no longer exists. Search for it again.', 404);
+        } else if (manualMode) {
+          // Bound below to its ManualCoil, never to a receipt — and never
+          // auto-resolved from the batch number, which is what the final
+          // branch would otherwise do with a cut that names no receipt.
+          receiptBinding = 'MANUAL_COIL';
         } else if (manualFallback) {
           // Nothing to bind, and that is what the operator said. The cut is
           // recorded unlinked and reports as Untraceable, which is honest.
@@ -1097,8 +1225,89 @@ export const rmImsService = {
         // FULL with no coil bound (neither named nor resolvable) has nothing to
         // resolve to. manualFallback is refused before the session; this is
         // the same rule for any other way of arriving without a receipt.
-        if (cuttingType === 'FULL' && !receipt) {
+        if (cuttingType === 'FULL' && !receipt && !manualMode) {
           throw new AppError('Full cutting needs the physical coil (its batch number).', 400);
+        }
+
+        /**
+         * ── A MANUAL-ENTRY COIL (no goods receipt) ─────────────────────────
+         *
+         * The same per-coil rules a GRN coil gets, from a different source for
+         * the coil's size: its ORIGINAL weight is what the operator entered for
+         * the whole coil (stored once, on the ManualCoil), and what is left is
+         * that minus every round already cut from it — the same subtraction
+         * coilLineage.js does for a GRN coil. There is no batch ledger to read:
+         * the coil never came in through a receipt, so its batch has no IN.
+         *
+         * The item-level stock check further down still applies unchanged, so
+         * choosing Manual Entry instead of the coil's GRN cannot skip a check.
+         */
+        let manualCoil = null;
+        if (manualMode) {
+          if (manualCoilId) {
+            manualCoil = await ManualCoil.findOne({ _id: manualCoilId, isDeleted: { $ne: true } })
+              .session(session).lean();
+            if (!manualCoil) throw new AppError('That manual coil no longer exists. Type its batch number again.', 404);
+            if (String(manualCoil.coilSkuId) !== String(coil._id)) {
+              throw new AppError(`Manual coil ${manualCoil.batchNo} is ${manualCoil.coilSkuCode}, not ${coil.code}. Its coil cannot change between rounds.`, 400);
+            }
+          } else {
+            // One identity per batch number. Entering the same coil twice
+            // would give it two original weights and split its rounds.
+            const existing = await ManualCoil.findOne({ batchKey: manualBatchKey(newManualBatch), isDeleted: { $ne: true } })
+              .session(session).lean();
+            if (existing) {
+              throw new AppError(
+                `Batch ${existing.batchNo} is already a manual coil (${existing.coilSkuCode}, ${kgText(existing.originalWeightKg)} KG originally). `
+                + 'Continue cutting that coil instead of entering it again — type its batch number and it is filled in.',
+                409,
+              );
+            }
+            // A coil that HAS a goods receipt is cut from it. Allowing a manual
+            // entry for it would give one physical coil two identities and let
+            // the per-coil remaining check be skipped by switching modes.
+            const grnHit = await rmImsService._findReceiptForBatch(newManualBatch, session);
+            if (grnHit) {
+              throw new AppError(
+                `Batch ${grnHit.batchNo} already has a goods receipt (${grnHit.refNumber || grnHit.movementNumber}, ${grnHit.skuCode}). `
+                + 'Select it under "Select Existing GRN / Received Coil" instead of entering it manually.',
+                409,
+              );
+            }
+          }
+
+          const originalKg = manualCoil ? Number(manualCoil.originalWeightKg) : newManualTotal;
+          let cutSoFar = 0;
+          if (manualCoil) {
+            const [prior] = await CoilConversion.aggregate([
+              { $match: { manualCoilId: manualCoil._id, isDeleted: { $ne: true } } },
+              { $group: { _id: null, kg: { $sum: '$coilWeightKg' } } },
+            ]).session(session);
+            cutSoFar = Number(prior?.kg || 0);
+          }
+          const available = round2(originalKg - cutSoFar);
+          const label = manualCoil ? manualCoil.batchNo : newManualBatch;
+
+          if (cuttingType === 'FULL') {
+            if (available <= EPS) {
+              throw new AppError(`Physical coil ${label} is already fully cut — 0 KG remaining, so there is nothing left for a full cut.`, 400);
+            }
+            if (Math.abs(coilWeight - available) > EPS) {
+              throw new AppError(
+                `Physical coil ${label} now has ${kgText(available)} KG remaining, not ${kgText(coilWeight)} KG — it changed since the form loaded. Enter the batch number again to refresh, then save the full cut.`,
+                409,
+              );
+            }
+            coilWeight = available;
+          }
+          if (!allowNegative && coilWeight > available) {
+            throw new AppError(
+              available > 0
+                ? `Only ${kgText(available)} KG is available from this physical coil (${label}), but ${kgText(coilWeight)} KG was entered for this round. Cut less, or turn on "Allow cutting more coil than we hold".`
+                : `Physical coil ${label} is fully cut — 0 KG is available. Turn on "Allow cutting more coil than we hold" to override.`,
+              400,
+            );
+          }
         }
 
         if (receipt) {
@@ -1177,11 +1386,43 @@ export const rmImsService = {
           }
         }
 
+        /*
+         * Every check has passed, so the manual coil can now be written: the
+         * first round creates its identity, a later round touches it (see
+         * `lastRoundSavedAt` in the model — two rounds of one coil saved at
+         * the same instant then conflict instead of both passing the check).
+         */
+        if (manualMode && !manualCoil) {
+          const fromPayload = String(payload.warehouse || '').trim().toUpperCase();
+          const [created] = await ManualCoil.create([{
+            batchNo: newManualBatch,
+            batchKey: manualBatchKey(newManualBatch),
+            coilSkuId: coil._id, coilSkuCode: coil.code, coilSkuName: coil.name, unit: coil.unit || 'KGS',
+            originalWeightKg: newManualTotal,
+            warehouse: SCRAP_LOCATIONS.includes(fromPayload) ? fromPayload : null,
+            rate: Number(payload.rate || 0),
+            lastRoundSavedAt: new Date(),
+            createdBy: user?._id,
+          }], session ? { session } : undefined);
+          createdManualCoilId = created._id;
+          manualCoil = created.toObject();
+        } else if (manualCoil) {
+          await ManualCoil.updateOne(
+            { _id: manualCoil._id },
+            { $set: { lastRoundSavedAt: new Date(), updatedBy: user?._id } },
+            session ? { session } : undefined,
+          );
+        }
+
         // The coil's own identity and its own price win over anything typed.
-        const batchNo = receipt ? receipt.batchNo : (payload.batchNo || '');
+        const batchNo = receipt ? receipt.batchNo
+          : manualCoil ? manualCoil.batchNo
+            : (payload.batchNo || '');
         const rate = receipt && !(Number(payload.rate) > 0)
           ? round2(receipt.unitCost)
-          : Number(payload.rate || 0);
+          : manualCoil && !(Number(payload.rate) > 0)
+            ? round2(manualCoil.rate)
+            : Number(payload.rate || 0);
 
         /* ── 1) Consume the coil ── */
         // A coil is stocked BY WEIGHT, so its `quantity` already is its kilograms
@@ -1247,6 +1488,8 @@ export const rmImsService = {
           // Null unless a physical coil was named — see the model.
           coilReceiptId: receipt ? receipt._id : null,
           coilReceiptNumber: receipt ? (receipt.movementNumber || '') : '',
+          // Null unless the coil is a manual entry (no goods receipt).
+          manualCoilId: manualCoil ? manualCoil._id : null,
           // Undefined, not '', so the unique index stays sparse for callers
           // that send no id.
           clientRequestId: key || undefined,
@@ -1284,7 +1527,9 @@ export const rmImsService = {
          * record are exactly that, which is why this is a rule and not a
          * convenience.
          */
-        const scrapLocation = resolveScrapLocation(receipt, payload.warehouse);
+        // A manual coil stands in for the receipt as the location fallback —
+        // it carries the location the operator gave on its first round.
+        const scrapLocation = resolveScrapLocation(receipt || manualCoil, payload.warehouse);
         const [scrapDoc] = await ScrapRecord.create([{
           // No sourceRef — that identity belongs to the workbook import and
           // this record did not come from there.
@@ -1310,6 +1555,7 @@ export const rmImsService = {
           conversionId: doc._id,
           conversionNumber: doc.conversionNumber,
           coilReceiptId: receipt ? receipt._id : null,
+          manualCoilId: manualCoil ? manualCoil._id : null,
           clientRequestId: key || undefined,
           remarks: scrapLocation ? '' : 'Cutting location was not recorded on this conversion; defaulted to PLG01.',
           createdBy: user?._id,
@@ -1356,13 +1602,36 @@ export const rmImsService = {
         // cut. `coilReceiptId` on the document already records the only part
         // that matters afterwards: whether the lineage exists. The screen uses
         // this to say "we linked this to coil X for you" on an auto-bind.
-        return { ...doc.toObject(), receiptBinding };
+        return {
+          ...doc.toObject(),
+          receiptBinding,
+          manualCoil: manualCoil
+            ? {
+              id: manualCoil._id, batchNo: manualCoil.batchNo,
+              originalWeightKg: round2(manualCoil.originalWeightKg), created: !!createdManualCoilId,
+            }
+            : undefined,
+        };
       });
 
       // One coil out, one row per circle in.
       if (claim.claimed) await inventoryService.settleRequestKey(key, 1 + circles.length);
       return saved;
     } catch (e) {
+      // A manual coil created by THIS request whose cut did not land is taken
+      // back out: inside a transaction it was already rolled back, but on a
+      // standalone mongod it would otherwise stay behind as an identity with
+      // an original weight and no round — and block re-entering the coil.
+      if (createdManualCoilId) {
+        const used = await CoilConversion.exists({ manualCoilId: createdManualCoilId }).catch(() => true);
+        if (!used) await ManualCoil.deleteOne({ _id: createdManualCoilId }).catch(() => {});
+      }
+      // Two people entered the same new manual coil at once; the database let
+      // one through. The other is told plainly instead of seeing a raw E11000.
+      if (e?.code === 11000 && e?.keyPattern?.batchKey) {
+        if (claim.claimed) await inventoryService.releaseRequestKey(key);
+        throw new AppError(`Batch ${newManualBatch} was just entered as a manual coil. Type its batch number again to continue that coil.`, 409);
+      }
       // Request keys are disposable — they expire after seven days. A retry
       // that arrives later than that gets past the claim and is caught by the
       // unique index instead. The cut is already recorded, so this is a replay
@@ -1442,6 +1711,20 @@ export const rmImsService = {
       }
     } else {
       for (const d of docs) d.receipt = null;
+    }
+    // A cut of a manual-entry coil (no goods receipt) is traceable to that
+    // coil, but has no GRN/PO/supplier — so it says "manual entry" and nothing
+    // more, rather than borrowing receipt fields it does not have.
+    const manualIds = docs.map((d) => d.manualCoilId).filter(Boolean);
+    const manualBy = new Map(manualIds.length
+      ? (await ManualCoil.find({ _id: { $in: manualIds } }).select('batchNo originalWeightKg warehouse createdAt').lean())
+        .map((m) => [String(m._id), m])
+      : []);
+    for (const d of docs) {
+      const m = d.manualCoilId ? manualBy.get(String(d.manualCoilId)) : null;
+      d.manualCoil = m
+        ? { batchNo: m.batchNo, originalWeightKg: round2(m.originalWeightKg), warehouse: m.warehouse || '', enteredAt: m.createdAt }
+        : null;
     }
 
     const a = agg[0] || {};
@@ -1590,8 +1873,55 @@ export const rmImsService = {
       ? { availableWeight: { $gte: 0 } }   // spent coils yes, impossible ones no
       : { availableWeight: { $gt: EPS } };
 
+    /**
+     * `grnOnly` — the "Select GRN / Received Coil" dropdown.
+     *
+     * Only a receipt that a COMPLETED goods receipt actually posted to RM stock:
+     *   refType GRN        the GRN must exist, not be deleted, have posted its
+     *                      stock, and carry a received status (never DRAFT or
+     *                      CANCELLED). grnService.complete() is the only writer
+     *                      of these, but the dropdown checks rather than assumes.
+     *   refType EXCEL_GRN  the client's historical GRN register, imported as
+     *                      posted receipts; there is no GRN document to check.
+     * Any other GRN_IN (a test fixture, a hand-made row) is left out of the
+     * dropdown. The batch-number lookup does not pass this flag and keeps
+     * finding exactly what it always found.
+     */
+    const grnStages = query.grnOnly ? [
+      { $match: { refType: { $in: ['GRN', 'EXCEL_GRN'] } } },
+      {
+        $lookup: {
+          from: GoodsReceiptNote.collection.name,
+          localField: 'refId',
+          foreignField: '_id',
+          pipeline: [{ $project: { grnStatus: 1, stockPosted: 1, isDeleted: 1 } }],
+          as: 'grnDoc',
+        },
+      },
+      {
+        $match: {
+          $or: [
+            { refType: 'EXCEL_GRN' },
+            {
+              refType: 'GRN',
+              grnDoc: {
+                $elemMatch: {
+                  isDeleted: { $ne: true },
+                  stockPosted: true,
+                  grnStatus: { $in: ['RECEIVED', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'] },
+                },
+              },
+            },
+          ],
+        },
+      },
+      { $addFields: { grnStatus: { $arrayElemAt: ['$grnDoc.grnStatus', 0] } } },
+      { $project: { grnDoc: 0 } },
+    ] : [];
+
     const [agg] = await InventoryMovement.aggregate([
       { $match: filter },
+      ...grnStages,
       { $sort: { movementDate: -1, createdAt: -1 } },
       {
         // Everything that ever happened to this batch — the receipt, the cuts
@@ -1677,6 +2007,11 @@ export const rmImsService = {
         unitCost: round2(m.unitCost),
         warehouse: m.warehouse || DEFAULT_WAREHOUSE,
         grnNumber: m.refType === 'GRN' ? (m.refNumber || grn?.grnNumber || '') : '',
+        // Where the receipt came from: a GRN raised in the app, or the
+        // historical GRN register import (whose own number is in refNumber).
+        grnSource: m.refType === 'GRN' ? 'GRN' : m.refType === 'EXCEL_GRN' ? 'EXCEL_GRN' : '',
+        grnRegisterNumber: m.refType === 'EXCEL_GRN' ? (m.refNumber || '') : '',
+        grnStatus: m.grnStatus || '',
         poNumber: m.poNumber || '',
         indentNumber: grn?.indentNumber || '',
         piNumber: m.piNumber || grn?.piNumber || '',
@@ -1782,7 +2117,13 @@ export const rmImsService = {
     }
 
     const receipt = await InventoryMovement.findOne({ _id: receiptId, isDeleted: { $ne: true } }).lean();
-    if (!receipt) throw new AppError('That received coil no longer exists.', 404);
+    if (!receipt) {
+      // Not a receipt — perhaps a manual-entry coil (no GRN). Same page, same
+      // shape, same round arithmetic; only the coil's size comes from its entry.
+      const mc = await ManualCoil.findOne({ _id: receiptId, isDeleted: { $ne: true } }).lean();
+      if (mc) return this._getManualCoilLineage(mc);
+      throw new AppError('That received coil no longer exists.', 404);
+    }
     if (receipt.txnType !== TXN_TYPE.GRN_IN) {
       throw new AppError('That reference is not a goods receipt, so it does not identify a physical coil.', 400);
     }
@@ -1855,6 +2196,7 @@ export const rmImsService = {
     return {
       receipt: {
         movementId: receipt._id,
+        source: 'GRN',
         movementNumber: receipt.movementNumber,
         batchNo: receipt.batchNo || '',
         skuId: receipt.skuId,
@@ -1897,6 +2239,60 @@ export const rmImsService = {
       },
       rounds,
       otherMovements,
+    };
+  },
+
+  /**
+   * A MANUAL-ENTRY coil's cutting history, in exactly the shape of a GRN
+   * coil's (above), so the coil page, Cut Coils and Scrap read it unchanged.
+   *
+   * The differences are the honest ones: the original weight is what the
+   * operator entered for the whole coil, there is no GRN/PO/supplier to show
+   * (and none is made up), and there is no batch ledger to compare against —
+   * the coil never came in through a receipt — so "available" is its original
+   * weight minus its own rounds, the figure convert() checks a new round against.
+   */
+  async _getManualCoilLineage(mc) {
+    const conversions = await CoilConversion.find({ manualCoilId: mc._id, isDeleted: { $ne: true } }).lean();
+    const conversionIds = conversions.map((c) => c._id);
+    const scrapRecords = conversionIds.length
+      ? await ScrapRecord.find({ conversionId: { $in: conversionIds }, isDeleted: { $ne: true } }).lean()
+      : [];
+    const { rounds, totals } = deriveRounds({
+      receivedKg: mc.originalWeightKg,
+      conversions,
+      scrapByConversionId: new Map(scrapRecords.map((s) => [String(s.conversionId), s])),
+    });
+    const availableKg = round2(Number(mc.originalWeightKg) - totals.cutKg);
+    return {
+      receipt: {
+        movementId: mc._id,
+        manualCoilId: mc._id,
+        source: 'MANUAL',
+        movementNumber: '',
+        batchNo: mc.batchNo,
+        skuId: mc.coilSkuId,
+        skuCode: mc.coilSkuCode || '',
+        itemName: mc.coilSkuName || '',
+        unit: mc.unit || 'KGS',
+        receivedWeightKg: round2(mc.originalWeightKg),
+        unitCost: round2(mc.rate),
+        grnNo: '',
+        poNo: '',
+        indentCode: '',
+        piNo: '',
+        supplier: '',
+        receivedDate: mc.createdAt,
+        warehouse: mc.warehouse || '',
+      },
+      totals: {
+        ...totals,
+        ledgerAvailableKg: availableKg,
+        reconciles: true,
+        coil: ledgerCoilState({ receivedKg: mc.originalWeightKg, roundsCutKg: totals.cutKg, ledgerAvailableKg: availableKg }),
+      },
+      rounds,
+      otherMovements: [],
     };
   },
 
@@ -1951,8 +2347,17 @@ export const rmImsService = {
     if (query.location) post.push({ $match: { locations: String(query.location).toUpperCase() } });
     if (query.status) post.push({ $match: { status: String(query.status).toUpperCase() } });
 
+    // A round names its physical coil by its receipt OR — for a coil with no
+    // goods receipt — by its manual entry. Never both, so the coil key is
+    // simply whichever of the two the conversion carries.
     const [agg] = await CoilConversion.aggregate([
-      { $match: { coilReceiptId: { $type: 'objectId' }, isDeleted: { $ne: true } } },
+      {
+        $match: {
+          $or: [{ coilReceiptId: { $type: 'objectId' } }, { manualCoilId: { $type: 'objectId' } }],
+          isDeleted: { $ne: true },
+        },
+      },
+      { $addFields: { coilKey: { $ifNull: ['$coilReceiptId', '$manualCoilId'] } } },
       // Where each round was cut — on its ScrapRecord (one per conversion).
       {
         $lookup: {
@@ -1966,7 +2371,8 @@ export const rmImsService = {
       { $addFields: { location: { $arrayElemAt: ['$sr.location', 0] } } },
       {
         $group: {
-          _id: '$coilReceiptId',
+          _id: '$coilKey',
+          isManual: { $max: { $cond: [{ $eq: [{ $type: '$coilReceiptId' }, 'objectId'] }, 0, 1] } },
           cutKg: { $sum: '$coilWeightKg' },
           circlesKg: { $sum: '$circlesWeightKg' },
           scrapKg: { $sum: '$scrapKg' },
@@ -1993,7 +2399,28 @@ export const rmImsService = {
           as: 'rc',
         },
       },
-      { $addFields: { receipt: { $arrayElemAt: ['$rc', 0] } } },
+      // A manual coil's entry, shaped like a receipt so every stage below reads
+      // one `receipt` field. Its "quantity" is the original weight entered.
+      {
+        $lookup: {
+          from: ManualCoil.collection.name,
+          localField: '_id',
+          foreignField: '_id',
+          pipeline: [{
+            $project: {
+              batchNo: 1, skuId: '$coilSkuId', skuCode: '$coilSkuCode', skuName: '$coilSkuName',
+              quantity: '$originalWeightKg', warehouse: 1, movementNumber: { $literal: '' }, movementDate: '$createdAt',
+              refType: { $literal: 'MANUAL' }, refNumber: { $literal: '' }, vendorName: { $literal: '' }, isDeleted: 1,
+            },
+          }],
+          as: 'mc',
+        },
+      },
+      {
+        $addFields: {
+          receipt: { $cond: [{ $eq: ['$isManual', 1] }, { $arrayElemAt: ['$mc', 0] }, { $arrayElemAt: ['$rc', 0] }] },
+        },
+      },
       // The batch's whole ledger, keyed on (batchNo, skuId) — the same join
       // listReceivedCoils uses, served by the { batchNo, skuId } index.
       {
@@ -2017,10 +2444,19 @@ export const rmImsService = {
       {
         $addFields: {
           receivedKg: { $ifNull: ['$receipt.quantity', 0] },
+          // A manual coil has no receipt behind its batch, so its batch ledger
+          // is only cuts; what it has left is its original weight minus its
+          // rounds — the same figure convert() checks a new round against.
           ledgerAvailableKg: {
-            $subtract: [
-              { $ifNull: [{ $arrayElemAt: ['$led.inQty', 0] }, 0] },
-              { $ifNull: [{ $arrayElemAt: ['$led.outQty', 0] }, 0] },
+            $cond: [
+              { $eq: ['$isManual', 1] },
+              { $subtract: [{ $ifNull: ['$receipt.quantity', 0] }, '$cutKg'] },
+              {
+                $subtract: [
+                  { $ifNull: [{ $arrayElemAt: ['$led.inQty', 0] }, 0] },
+                  { $ifNull: [{ $arrayElemAt: ['$led.outQty', 0] }, 0] },
+                ],
+              },
             ],
           },
         },
@@ -2040,7 +2476,7 @@ export const rmImsService = {
           },
         },
       },
-      { $project: { rc: 0, led: 0 } },
+      { $project: { rc: 0, mc: 0, led: 0 } },
       ...post,
       { $sort: { lastCutAt: -1, lastSavedAt: -1, _id: -1 } },
       {
@@ -2073,8 +2509,14 @@ export const rmImsService = {
         receivedKg: g.receivedKg, roundsCutKg: g.cutKg, ledgerAvailableKg: g.ledgerAvailableKg,
       });
       const locations = (g.locations || []).filter(Boolean).sort();
+      const manual = g.isManual === 1;
       return {
-        coilReceiptId: g._id,
+        // `coilId` is the physical coil whichever way it is identified, and is
+        // what the coil page opens; the two specific ids say which way.
+        coilId: g._id,
+        coilSource: manual ? 'MANUAL' : 'GRN',
+        coilReceiptId: manual ? null : g._id,
+        manualCoilId: manual ? g._id : null,
         receiptNumber: rc?.movementNumber || '',
         receiptMissing: !rc || rc.isDeleted === true,
         batchNo: rc?.batchNo || '',
@@ -2106,8 +2548,8 @@ export const rmImsService = {
     const stats = agg?.stats?.[0] || {};
     const [untraced] = await CoilConversion.aggregate([
       // `coilReceiptId: null` matches both null and ABSENT — the historical
-      // imports never had the field at all.
-      { $match: { isDeleted: { $ne: true }, coilReceiptId: null } },
+      // imports never had the field at all. A manual-entry coil IS traceable.
+      { $match: { isDeleted: { $ne: true }, coilReceiptId: null, manualCoilId: null } },
       { $group: { _id: null, records: { $sum: 1 }, cutKg: { $sum: '$coilWeightKg' }, scrapKg: { $sum: '$scrapKg' } } },
     ]);
 

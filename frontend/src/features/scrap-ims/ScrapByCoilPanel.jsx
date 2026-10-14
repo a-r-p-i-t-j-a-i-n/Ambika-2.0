@@ -112,8 +112,9 @@ const ScrapByCoilPanel = ({ filters = {}, limit = 25 }) => {
             )}
             {rows.map((c, i) => (
               <TableRow
-                key={c.coilReceiptId} hover sx={{ cursor: 'pointer' }}
-                onClick={() => navigate(`/rm-ims/coil/${c.coilReceiptId}`)}
+                key={c.coilId || c.coilReceiptId} hover sx={{ cursor: 'pointer' }}
+                onClick={() => navigate(`/rm-ims/coil/${c.coilId || c.coilReceiptId}`)}
+                data-testid="scrap-by-coil-row" data-batch={c.batchNo}
               >
                 <TableCell align="center" sx={{ width: 58, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>
                   {page * rowsPerPage + i + 1}
@@ -123,7 +124,7 @@ const ScrapByCoilPanel = ({ filters = {}, limit = 25 }) => {
                     {c.batchNo || '—'}
                   </Typography>
                   <Typography sx={{ fontSize: '0.63rem', color: O2D.faint, fontFamily: 'ui-monospace, monospace' }}>
-                    {c.movementNumber || ''}
+                    {c.coilSource === 'MANUAL' ? 'Manual entry · no GRN' : (c.movementNumber || '')}
                   </Typography>
                 </TableCell>
                 <TableCell sx={{ maxWidth: 200 }}>

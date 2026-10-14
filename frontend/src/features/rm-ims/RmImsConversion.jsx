@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, Button, Autocomplete, IconButton, MenuItem,
   FormControlLabel, Switch, Table, TableHead, TableBody, TableRow, TableCell, CircularProgress,
-  Tooltip, LinearProgress, Radio, RadioGroup, FormControl, FormLabel,
+  Tooltip, LinearProgress, Radio, RadioGroup, FormControl, FormLabel, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import {
   Recycle, Plus, Trash2, Save, Disc3, CircleDashed, AlertTriangle, Info, Scissors, ArrowUpRight,
+  Receipt, Pencil,
 } from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
 import { useNavigate } from 'react-router-dom';
@@ -21,7 +22,7 @@ import {
 } from './rmImsMeta';
 import {
   useGetRmOverviewQuery, useGetRmConversionsQuery, useGetRmReceivedCoilsQuery,
-  useGetRmCircleOptionsQuery, useGetRmCoilLineageQuery, useRmConvertMutation,
+  useGetRmCircleOptionsQuery, useGetRmCoilLineageQuery, useRmConvertMutation, useLookupRmManualCoilQuery,
 } from '../../store/api/rmImsApi';
 import CuttingHistoryPanel from './CuttingHistoryPanel';
 
@@ -67,6 +68,23 @@ const RmImsConversion = () => {
   const [convert, { isLoading }] = useRmConvertMutation();
 
   const [coil, setCoil] = useState(null);
+  /**
+   * HOW THE PHYSICAL COIL IS IDENTIFIED.
+   *
+   *   GRN     a received coil — picked from the "Select GRN / Received Coil"
+   *           dropdown, or found by typing its batch number (both bind the same
+   *           receipt, from the same lookup).
+   *   MANUAL  "Manual Entry — No GRN": a coil with no goods receipt, entered
+   *           with its own batch number and the ORIGINAL weight of the whole
+   *           coil, so it stays traceable round after round.
+   */
+  const [coilMode, setCoilMode] = useState('GRN');
+  // Manual Entry: the weight of the WHOLE coil, typed only for a coil entered
+  // for the first time. A coil already entered keeps the weight it was saved with.
+  const [manualTotal, setManualTotal] = useState('');
+  // What the operator is typing into the GRN dropdown — a server-side search.
+  const [grnQuery, setGrnQuery] = useState('');
+  const [debouncedGrnQuery, setDebouncedGrnQuery] = useState('');
   // The received coil the typed batch number resolved to, when it resolved to
   // one. Extra knowledge about the same cut — it replaces nothing on screen.
   const [receipt, setReceipt] = useState(null);
@@ -107,7 +125,9 @@ const RmImsConversion = () => {
   // available" — starts the round over, with neither option selected. The
   // choice is kept together with the coil it was made for, so it simply reads
   // as "not chosen" for any other coil; no effect has to reset it.
-  const coilKey = `${receipt?.id || ''}|${head.manualFallback ? 'manual' : ''}`;
+  // A manual coil is identified by its batch number (one manual coil per
+  // batch), so a different batch typed in Manual Entry is a different coil.
+  const coilKey = `${receipt?.id || ''}|${head.manualFallback ? 'manual' : ''}|${coilMode === 'MANUAL' ? `mc:${head.batchNo.trim().toUpperCase()}` : ''}`;
   const cutType = cutChoice.coilKey === coilKey ? cutChoice.type : null;
   const setCutType = (type) => setCutChoice({ coilKey: type ? coilKey : null, type });
 
@@ -166,16 +186,21 @@ const RmImsConversion = () => {
 
   // A batch number is an identifier, not a phrase — below a few characters it
   // would match half the floor, so it is not worth asking the server.
-  const lookupTerm = debouncedBatch.length >= 4 ? debouncedBatch : '';
+  // Manual Entry looks the batch up as a MANUAL coil instead (below), so the
+  // received-coil lookup only runs while a received coil is being chosen.
+  const lookupTerm = coilMode === 'GRN' && debouncedBatch.length >= 4 ? debouncedBatch : '';
   const { data: lookupRes, isFetching: lookingUp } = useGetRmReceivedCoilsQuery(
     { q: lookupTerm, limit: 5, circleMapped: true }, { skip: !lookupTerm },
   );
 
   // Only an exact batch match counts. A near miss must not quietly fill the
-  // form with a different coil's weight and rate.
-  const foundOpen = useMemo(() => (lookupRes?.data || [])
-    .find((r) => r.batchNo?.toLowerCase() === lookupTerm.toLowerCase()) || null,
-  [lookupRes, lookupTerm]);
+  // form with a different coil's weight and rate. Where one batch number is on
+  // two receipts, the coil already bound (e.g. picked in the GRN dropdown)
+  // stays the answer rather than being swapped for the other receipt.
+  const foundOpen = useMemo(() => {
+    const exact = (lookupRes?.data || []).filter((r) => r.batchNo?.toLowerCase() === lookupTerm.toLowerCase());
+    return exact.find((r) => String(r.id) === String(receipt?.id)) || exact[0] || null;
+  }, [lookupRes, lookupTerm, receipt]);
   /**
    * A coil cut down to nothing is still a physical coil with a history.
    *
@@ -206,6 +231,56 @@ const RmImsConversion = () => {
   // What this effect last wrote into these fields, so it can tell its own
   // value apart from one the operator typed or picked.
   const autoFilled = useRef({ rate: '', warehouse: '' });
+
+  /**
+   * Bind one received coil and fill the form from it.
+   *
+   * ONE routine for both ways of choosing a received coil — typing its batch
+   * number (the effect below) and picking it in the "Select GRN / Received
+   * Coil" dropdown — so the two can never fill the form differently. The data
+   * is the same too: both come from /rm-ims/received-coils.
+   */
+  const applyReceipt = (found) => {
+    appliedCoil.current = found.id;
+    setReceipt(found);
+    setCutChoice({ coilKey: null, type: null }); // a newly linked coil starts a new round
+    const match = coils.find((c) => String(c.skuId) === String(found.skuId));
+    if (match) setCoil(match);
+    const rate = String(found.unitCost ?? '');
+    // Where this coil's own GRN recorded it as received — the authority for
+    // "Received At", never guessed from the SKU. Blank when the receipt itself
+    // carries no location (an old GRN posted before Received At existed).
+    const warehouse = found.warehouse || '';
+    // What was auto-filled for the PREVIOUS coil, captured now: the updater
+    // below runs later, after `autoFilled` already holds this coil's values,
+    // and comparing against those would keep the previous coil's rate and
+    // location on screen as if the operator had typed them.
+    const prev = autoFilled.current;
+    setHead((h) => ({
+      ...h,
+      // "Cut this round" is deliberately NOT filled in. A coil is often cut
+      // over several rounds, and pre-filling everything that is left turned
+      // every save into a full cut unless the operator noticed and corrected
+      // it. The operator types this round's weight (or presses "Use all").
+      // A weight typed for the PREVIOUS coil is cleared, so switching coils
+      // never carries one coil's round onto another.
+      coilWeightKg: '',
+      //
+      // The rate is filled, but only into a field the operator has not already
+      // filled in: the lookup takes a moment, and a value typed while it is in
+      // flight must not be replaced when the answer comes back.
+      rate: (h.rate === '' || h.rate === prev.rate) ? rate : h.rate,
+      // Same guard, for the same reason — and it matters more here, because
+      // this field decides whose scrap stock gets the offcut. Only applied
+      // while the dropdown still shows either the untouched default or this
+      // effect's own last answer; a location the operator picked themselves
+      // (including while this lookup was still in flight) is left alone.
+      warehouse: (warehouse && (h.warehouse === DEFAULT_RECEIVED_AT || h.warehouse === prev.warehouse))
+        ? warehouse : h.warehouse,
+    }));
+    autoFilled.current = { rate, warehouse };
+  };
+
   useEffect(() => {
     /**
      * THE SELECTED COIL STAYS SELECTED.
@@ -222,37 +297,122 @@ const RmImsConversion = () => {
      */
     if (!found) { appliedCoil.current = null; return; }
     if (appliedCoil.current === found.id) return;
-    appliedCoil.current = found.id;
-    setReceipt(found);
-    setCutChoice({ coilKey: null, type: null }); // a newly linked coil starts a new round
-    const match = coils.find((c) => String(c.skuId) === String(found.skuId));
-    if (match) setCoil(match);
-    const rate = String(found.unitCost ?? '');
-    // Where this coil's own GRN recorded it as received — the authority for
-    // "Received At", never guessed from the SKU. Blank when the receipt itself
-    // carries no location (an old GRN posted before Received At existed).
-    const warehouse = found.warehouse || '';
+    // Already bound — picked in the GRN dropdown a moment ago, and the batch
+    // lookup has now caught up with the same coil. Nothing to re-fill.
+    if (String(receipt?.id) === String(found.id)) { appliedCoil.current = found.id; return; }
+    applyReceipt(found);
+  }, [found, coils]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── THE "SELECT GRN / RECEIVED COIL" DROPDOWN ──────────────────────────
+   *
+   * Real receipts from the database, never a list kept here: only coils a
+   * COMPLETED, stock-posted GRN brought in (`grnOnly`), only grades that can be
+   * cut here (`circleMapped`), and only coils with weight left — a fully cut
+   * coil cannot be cut again. The typed text is searched on the server (GRN
+   * number, batch number, coil code or name), so a coil that is not among the
+   * first page is still one search away.
+   */
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedGrnQuery(grnQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [grnQuery]);
+  const grnList = useGetRmReceivedCoilsQuery(
+    { q: debouncedGrnQuery || undefined, limit: 50, circleMapped: true, grnOnly: true },
+    { skip: coilMode !== 'GRN' },
+  );
+  const receiptInList = !!receipt && (grnList.data?.data || []).some((o) => String(o.id) === String(receipt.id));
+  const grnOptions = useMemo(() => {
+    const list = grnList.data?.data || [];
+    // The bound coil is always among the options, so the dropdown can show it
+    // as selected even when it is not in this page of results (found by batch
+    // number, or a search typed since).
+    return receipt && !receiptInList ? [...list, receipt] : list;
+  }, [grnList.data, receipt, receiptInList]);
+  // …but while a search is typed it is hidden unless it matches, so the
+  // first result is always a coil the search actually found.
+  const grnFilter = (opts) => (receipt && !receiptInList && debouncedGrnQuery
+    ? opts.filter((o) => String(o.id) !== String(receipt.id)) : opts);
+  const grnMeta = grnList.data?.meta || {};
+  const grnNoOptions = grnList.isError
+    ? `Could not load received coils — ${grnList.error?.data?.message || 'the server did not answer'}. Close and reopen to retry.`
+    : grnList.isFetching ? 'Loading received coils…'
+      : debouncedGrnQuery ? `No received coil with weight left matches "${debouncedGrnQuery}".`
+        : 'No completed GRN has a coil with weight left to cut.';
+  const grnLabel = (o) => (o ? [o.grnNumber || o.grnRegisterNumber || o.movementNumber, o.batchNo, o.skuCode].filter(Boolean).join(' · ') : '');
+
+  /* ── MANUAL ENTRY — NO GRN: what does the typed batch already name? ───────
+   *
+   * A manual coil already entered (continue its rounds, with the original
+   * weight it was saved with), or a goods receipt (manual entry is refused —
+   * that coil is cut from its GRN). Neither means a new manual coil.
+   */
+  const manualTerm = coilMode === 'MANUAL' ? debouncedBatch : '';
+  const manualLookup = useLookupRmManualCoilQuery({ batchNo: manualTerm }, { skip: !manualTerm });
+  // Only an answer for the batch currently typed counts — never the previous one's.
+  const manualSettled = coilMode === 'MANUAL' && !!manualTerm && manualTerm === head.batchNo.trim()
+    && !manualLookup.isFetching && manualLookup.originalArgs?.batchNo === manualTerm && !manualLookup.isError;
+  const existingManual = manualSettled ? (manualLookup.currentData?.data || null) : null;
+  const grnConflict = manualSettled ? (manualLookup.currentData?.meta?.grnReceipt || null) : null;
+  const manualTotalNum = Number(manualTotal);
+  const manualTotalBad = manualTotal !== '' && !(Number.isFinite(manualTotalNum) && manualTotalNum > 0);
+  // A brand-new manual coil, complete enough to cut: batch, grade, total weight.
+  const manualNewReady = manualSettled && !existingManual && !grnConflict && !!coil && manualTotalNum > 0 && !manualTotalBad;
+
+  // Fill the form once per manual coil, exactly as a received coil does.
+  const appliedManual = useRef(null);
+  useEffect(() => {
+    if (!existingManual) { appliedManual.current = null; return; }
+    if (appliedManual.current === String(existingManual.id)) return;
+    appliedManual.current = String(existingManual.id);
+    setCutChoice({ coilKey: null, type: null });
+    const match = coils.find((c) => String(c.skuId) === String(existingManual.skuId));
+    setCoil(match || null);
+    setManualTotal('');
+    const rate = existingManual.rate ? String(existingManual.rate) : '';
+    const warehouse = existingManual.warehouse || '';
+    const prev = autoFilled.current; // see applyReceipt: read before it is overwritten
     setHead((h) => ({
       ...h,
-      // "Cut this round" is deliberately NOT filled in. A coil is often cut
-      // over several rounds, and pre-filling everything that is left turned
-      // every save into a full cut unless the operator noticed and corrected
-      // it. The operator types this round's weight (or presses "Use all").
-      //
-      // The rate is filled, but only into a field the operator has not already
-      // filled in: the lookup takes a moment, and a value typed while it is in
-      // flight must not be replaced when the answer comes back.
-      rate: (h.rate === '' || h.rate === autoFilled.current.rate) ? rate : h.rate,
-      // Same guard, for the same reason — and it matters more here, because
-      // this field decides whose scrap stock gets the offcut. Only applied
-      // while the dropdown still shows either the untouched default or this
-      // effect's own last answer; a location the operator picked themselves
-      // (including while this lookup was still in flight) is left alone.
-      warehouse: (warehouse && (h.warehouse === DEFAULT_RECEIVED_AT || h.warehouse === autoFilled.current.warehouse))
+      coilWeightKg: '',
+      rate: (h.rate === '' || h.rate === prev.rate) ? rate : h.rate,
+      warehouse: (warehouse && (h.warehouse === DEFAULT_RECEIVED_AT || h.warehouse === prev.warehouse))
         ? warehouse : h.warehouse,
     }));
     autoFilled.current = { rate, warehouse };
-  }, [found, coils]);
+  }, [existingManual, coils]);
+
+  /**
+   * Switch between choosing a received coil and entering one manually.
+   *
+   * Everything that described the previous coil goes — its binding, grade,
+   * weights, round choice, rate, location and circle rows — so nothing from one
+   * mode can ride into a cut saved in the other. The batch text is kept: it is
+   * what the operator is holding, and the other mode looks it up afresh (a GRN
+   * batch typed in Manual Entry is offered back to its GRN, for instance).
+   */
+  const switchMode = (mode) => {
+    if (!mode || mode === coilMode) return;
+    setCoilMode(mode);
+    setReceipt(null);
+    appliedCoil.current = null;
+    appliedManual.current = null;
+    setCoil(null);
+    setCutChoice({ coilKey: null, type: null });
+    setManualTotal('');
+    setGrnQuery('');
+    setHead((h) => ({
+      ...h, coilWeightKg: '', rate: '', manualFallback: false, warehouse: DEFAULT_RECEIVED_AT,
+    }));
+    autoFilled.current = { rate: '', warehouse: '' };
+    setCircles([blankCircle()]);
+  };
+
+  // Unbind the received coil — the "Clear coil" button and clearing the dropdown.
+  const clearReceipt = () => {
+    setReceipt(null);
+    setCutChoice({ coilKey: null, type: null });
+    appliedCoil.current = null;
+  };
 
   /**
    * Does the typed text still describe the coil that is actually bound?
@@ -265,7 +425,17 @@ const RmImsConversion = () => {
     && receipt.batchNo?.toLowerCase() !== head.batchNo.trim().toLowerCase();
 
   const unmappedBatch = found ? null : (lookupRes?.meta?.unmappedBatch || null);
-  const batchHint = (lookingUp || lookingUpSpent) ? 'Looking this coil up…'
+  const manualTyped = head.batchNo.trim();
+  const manualHint = !manualTyped ? 'Required. Type the batch number written on the coil.'
+    : manualLookup.isError ? 'Could not check this batch number — the server did not answer. Try again.'
+      : !manualSettled ? 'Checking this batch number…'
+        : grnConflict ? `Batch ${grnConflict.batchNo} already has a goods receipt${grnConflict.grnNumber ? ` (${grnConflict.grnNumber})` : ''} — select it under "Select Existing GRN / Received Coil" instead.`
+          : existingManual ? `Manual coil already entered: ${existingManual.skuCode} · ${num(existingManual.originalWeightKg)} kg in total · ${num(existingManual.availableKg)} kg remaining. This cut continues it.`
+            : 'New manual coil — choose its coil and enter its total weight.';
+  const manualHintColor = (manualLookup.isError || grnConflict) ? STOCK_TOKENS.OUT_OF_STOCK.color
+    : existingManual ? STOCK_TOKENS.OK.color : O2D.sub;
+  const batchHint = coilMode === 'MANUAL' ? manualHint
+    : (lookingUp || lookingUpSpent) ? 'Looking this coil up…'
     : batchDrifted ? `Still linked to coil ${receipt.batchNo}. Clear it below to cut a different coil.`
       : receipt ? `${receipt.skuName} · ${num(receipt.availableWeight)} kg available to cut · ₹${num(receipt.unitCost)}/kg${receipt.grnNumber ? ` · ${receipt.grnNumber}` : ''}`
         : head.manualFallback ? 'Not being traced to a coil — you ticked "No receipt available".'
@@ -274,7 +444,8 @@ const RmImsConversion = () => {
           : (lookupTerm && !lookingUp && unmappedBatch) ? `Batch ${unmappedBatch.batchNo} is a ${unmappedBatch.skuCode} (${unmappedBatch.skuName}) coil. No approved circle sizes are configured for it, so it cannot be cut here.`
           : (lookupTerm && !lookingUp) ? 'No received coil with this batch number. Check it, or tick "No receipt available" below.'
             : 'Identifies the physical coil, so its scrap can be traced back to it.';
-  const batchHintColor = batchDrifted ? STOCK_TOKENS.LOW.color
+  const batchHintColor = coilMode === 'MANUAL' ? manualHintColor
+    : batchDrifted ? STOCK_TOKENS.LOW.color
     : receipt ? STOCK_TOKENS.OK.color
       : (lookupTerm && !lookingUp && !receipt) ? STOCK_TOKENS.LOW.color : O2D.sub;
 
@@ -351,7 +522,37 @@ const RmImsConversion = () => {
       otherOutKg: linFresh ? lin.totals.coil.otherOutKg : 0,
       status: linFresh ? lin.totals.coil.status : cuttingStatusOf({ cutKg: alreadyCutKg, remainingKg: availableKg }),
     };
-  })() : null;
+  })()
+    /*
+     * A MANUAL coil — the same four figures, from its own entry. Total is the
+     * weight entered for the whole coil (stored on its first round, never
+     * recalculated); remaining is that minus its rounds, the very figure the
+     * server checks this round against. A coil entered for the first time has
+     * cut nothing yet, so all of it remains.
+     */
+    : existingManual ? {
+      originalKg: round2(existingManual.originalWeightKg),
+      availableKg: round2(existingManual.availableKg),
+      alreadyCutKg: round2(existingManual.originalWeightKg - existingManual.availableKg),
+      rounds: existingManual.rounds,
+      roundsCutKg: round2(existingManual.cutKg),
+      otherOutKg: 0,
+      status: existingManual.status,
+      manual: true,
+    }
+      : manualNewReady ? {
+        originalKg: round2(manualTotalNum),
+        availableKg: round2(manualTotalNum),
+        alreadyCutKg: 0,
+        rounds: 0,
+        roundsCutKg: 0,
+        otherOutKg: 0,
+        status: cuttingStatusOf({ cutKg: 0, remainingKg: manualTotalNum }),
+        manual: true,
+        isNew: true,
+      } : null;
+  // Which coil this round belongs to, for labels — whichever way it was named.
+  const coilLabel = receipt?.batchNo || existingManual?.batchNo || (coilFacts?.manual ? head.batchNo.trim() : '');
 
   /**
    * CUT THIS ROUND — where the weight comes from.
@@ -379,7 +580,9 @@ const RmImsConversion = () => {
   const overCut = scrap < 0;
   // No coil to cut yet: no physical coil linked and "No receipt available" not
   // ticked. The round's controls stay disabled until one of those is true.
-  const noCoil = !receipt && !head.manualFallback;
+  // In Manual Entry there is a coil once its entry is complete (batch, grade
+  // and total weight) or the batch names a manual coil already entered.
+  const noCoil = coilMode === 'MANUAL' ? !coilFacts : (!receipt && !head.manualFallback);
   // Once there is a coil, Full or Partial must be chosen on purpose — never
   // pre-selected. ("No receipt available" can only be Partial.)
   const cutTypeMissing = !noCoil && !cutType;
@@ -394,6 +597,13 @@ const RmImsConversion = () => {
   // the coil has. Allowed — that switch is a deliberate business option — but
   // never silent: the resulting negative balance is spelled out below.
   const overdrawn = !!coil && coilWt > available && head.allowNegative;
+  /**
+   * A manual coil still comes OUT OF RM STOCK, by grade, exactly as the server
+   * checks it — choosing Manual Entry is not a way round the stock check. Its
+   * own remaining weight (above) is the first limit; this is the second.
+   */
+  const gradeOnHand = Number(coil?.onHand || 0);
+  const gradeShort = coilMode === 'MANUAL' && !!coil && coilWt > 0 && coilWt > gradeOnHand && !head.allowNegative;
   // What this round leaves behind, for the "after this round" summary.
   const after = coilFacts && coilWt > 0 ? (() => {
     const remainingKg = round2(coilFacts.availableKg - coilWt);
@@ -418,7 +628,8 @@ const RmImsConversion = () => {
   const coilFactsTiles = (
     <Box data-testid="coil-facts" sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1, mt: receipt ? 1 : 1.5 }}>
       {[
-        ['Total coil weight', coilFacts ? `${num(coilFacts.originalKg)} kg` : '—', O2D.ink, 'What this coil weighed on its goods receipt.'],
+        ['Total coil weight', coilFacts ? `${num(coilFacts.originalKg)} kg` : '—', O2D.ink,
+          coilFacts?.manual ? 'Entered for the whole coil — it has no goods receipt.' : 'What this coil weighed on its goods receipt.'],
         ['Already cut', coilFacts ? `${num(coilFacts.alreadyCutKg)} kg` : '—', O2D.body,
           !coilFacts ? 'Every earlier round of this coil.'
             : coilFacts.rounds == null ? 'Loading this coil\'s rounds…'
@@ -457,9 +668,9 @@ const RmImsConversion = () => {
    * keyed three pallets of circles. "No receipt available" satisfies it, which
    * is the point: the lineage can still be given up, but only on purpose.
    */
-  const lineageMissing = !receipt && !head.manualFallback;
+  const lineageMissing = coilMode === 'MANUAL' ? !coilFacts : (!receipt && !head.manualFallback);
   const ready = !!coil && coilWt > 0 && validCircles.length > 0 && !missingPcs.length
-    && !overCut && !shortCoil && !blockedCircles.length && !lineageMissing
+    && !overCut && !shortCoil && !gradeShort && !blockedCircles.length && !lineageMissing
     && !cutTypeMissing && !fullImpossible;
   const band = yieldBand(yieldPct);
   const activeLocation = RECEIVED_AT_OPTIONS.find((w) => w.value === head.warehouse);
@@ -476,7 +687,7 @@ const RmImsConversion = () => {
    * override is named and its consequence spelled out below, instead of being
    * one more dropdown a busy operator can click past without noticing.
    */
-  const receiptLocation = receipt?.warehouse ? String(receipt.warehouse).toUpperCase() : null;
+  const receiptLocation = coilMode === 'GRN' && receipt?.warehouse ? String(receipt.warehouse).toUpperCase() : null;
   const locationOverridden = !!receiptLocation && receiptLocation !== head.warehouse;
 
   const submit = async () => {
@@ -485,6 +696,7 @@ const RmImsConversion = () => {
     if (fullImpossible) return enqueueSnackbar('This coil is already fully cut — nothing is left for a full cut.', { variant: 'error' });
     if (!(coilWt > 0)) return enqueueSnackbar('Enter how much of the coil is cut this round (more than 0 kg).', { variant: 'warning' });
     if (shortCoil) return enqueueSnackbar(`Only ${num(available)} KG is available from this physical coil.`, { variant: 'error' });
+    if (gradeShort) return enqueueSnackbar(`Only ${num(gradeOnHand)} KG of ${coil.skuCode} is in RM stock. Turn on "Allow cutting more coil than we hold" to override.`, { variant: 'error' });
     if (missingPcs.length) return enqueueSnackbar('Enter the number of pieces for every circle produced.', { variant: 'warning' });
     if (!validCircles.length) return enqueueSnackbar('Add at least one circle with pieces and a weight.', { variant: 'warning' });
     if (blockedCircles.length) {
@@ -495,10 +707,13 @@ const RmImsConversion = () => {
     }
     if (lineageMissing) {
       return enqueueSnackbar(
-        'Say which physical coil this is — pick it by batch number, or tick "No receipt available" if it genuinely has none.',
+        coilMode === 'MANUAL'
+          ? 'Enter the batch number, the coil and the total weight of the whole coil.'
+          : 'Say which physical coil this is — pick it by batch number, or tick "No receipt available" if it genuinely has none.',
         { variant: 'warning' },
       );
     }
+    const manual = coilMode === 'MANUAL';
     try {
       /**
        * The SELECTED RECEIPT is the parent, full stop.
@@ -513,11 +728,18 @@ const RmImsConversion = () => {
       const res = await convert({
         conversionDate: head.conversionDate, batchNo: head.batchNo || undefined,
         clientRequestId: requestId,
-        coilReceiptId: receipt ? receipt.id : undefined,
+        coilReceiptId: !manual && receipt ? receipt.id : undefined,
         // Only meaningful with no receipt, and only ever true because the
         // operator ticked it. Sent explicitly so the server never has to infer
         // intent from an absent field.
-        manualFallback: !receipt && head.manualFallback ? true : undefined,
+        manualFallback: !manual && !receipt && head.manualFallback ? true : undefined,
+        // Manual Entry — No GRN: a later round names the coil already entered;
+        // a first round sends its batch and the weight of the WHOLE coil, and
+        // the server records the coil together with this round.
+        manualCoilId: manual && existingManual ? existingManual.id : undefined,
+        manualCoil: manual && !existingManual
+          ? { batchNo: head.batchNo.trim(), totalWeightKg: manualTotalNum }
+          : undefined,
         // Only meaningful for a linked coil. FULL makes the server take the
         // coil's remaining weight — and refuse if it differs from `coilWeightKg`.
         cuttingType: cutType || undefined,
@@ -539,9 +761,13 @@ const RmImsConversion = () => {
       if (saved.receiptBinding === 'AUTO' && saved.coilReceiptId) {
         enqueueSnackbar(`Linked to coil ${saved.batchNo || ''} from its goods receipt — open the coil to see every round.`, { variant: 'info' });
       }
+      if (saved.manualCoil?.created) {
+        enqueueSnackbar(`Manual coil ${saved.manualCoil.batchNo} recorded at ${num(saved.manualCoil.originalWeightKg)} kg. Type its batch number to cut its next round.`, { variant: 'info' });
+      }
       // The lineage is one click away while the cut is still on the operator's
       // mind, instead of something to go and find later.
-      setLastCut(saved.coilReceiptId ? { receiptId: saved.coilReceiptId, batchNo: saved.batchNo || '' } : null);
+      const coilId = saved.coilReceiptId || saved.manualCoilId;
+      setLastCut(coilId ? { receiptId: coilId, batchNo: saved.batchNo || '' } : null);
       setCoil(null);
       setReceipt(null);
       setRequestId(newRequestId());
@@ -573,6 +799,10 @@ const RmImsConversion = () => {
       }));
       setCircles([blankCircle()]);
       setCutType(null);
+      // The manual coil's total belongs to the coil just saved. Its next round
+      // reads the stored total back; a different coil starts blank.
+      setManualTotal('');
+      appliedManual.current = null;
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not save the conversion.', { variant: 'error' }); }
   };
 
@@ -595,18 +825,108 @@ const RmImsConversion = () => {
 
       {/* ── Step 1 — the coil ── */}
       <Panel>
-        <StepHead n={1} title="Which coil is being cut?" hint="Pick the physical coil by its batch number, then say how much of it is cut in this round." done={!!coil && coilWt > 0} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 2fr 1fr' }, gap: 1.25, mt: 1.25 }}>
+        <StepHead n={1} title="Which coil is being cut?"
+          hint={coilMode === 'MANUAL'
+            ? 'Enter the coil that has no goods receipt — its batch number, coil and total weight — then say how much of it is cut in this round.'
+            : 'Pick the physical coil from its GRN, or by its batch number, then say how much of it is cut in this round.'}
+          done={!!coil && coilWt > 0} />
+
+        {/* ── How the coil is identified ── */}
+        <ToggleButtonGroup exclusive size="small" value={coilMode} onChange={(_, v) => switchMode(v)}
+          aria-label="How the coil is identified" sx={{ mt: 1.25, flexWrap: 'wrap' }}>
+          <ToggleButton value="GRN" data-testid="mode-grn" sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', gap: 0.75, px: 1.5 }}>
+            <Receipt size={14} /> Select Existing GRN / Received Coil
+          </ToggleButton>
+          <ToggleButton value="MANUAL" data-testid="mode-manual" sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', gap: 0.75, px: 1.5 }}>
+            <Pencil size={14} /> Manual Entry — No GRN
+          </ToggleButton>
+        </ToggleButtonGroup>
+
+        {/* ── SELECT GRN / RECEIVED COIL ─────────────────────────────────────
+            Another way to choose the SAME physical coil the batch number finds:
+            picking here binds the receipt and puts its batch number in the
+            box below; typing a batch there shows its coil here. */}
+        {coilMode === 'GRN' && (
+          <Autocomplete
+            data-testid="grn-coil-picker"
+            sx={{ mt: 1.25 }}
+            size="small"
+            options={grnOptions}
+            value={receipt}
+            filterOptions={grnFilter}
+            loading={grnList.isFetching}
+            loadingText="Loading received coils…"
+            noOptionsText={grnNoOptions}
+            onInputChange={(_, v, reason) => {
+              if (reason === 'input') setGrnQuery(v);
+              else if (reason === 'clear' || reason === 'reset') setGrnQuery('');
+            }}
+            onChange={(_, v) => {
+              if (!v) { clearReceipt(); return; }
+              applyReceipt(v);
+              // The batch box follows, and is looked up at once rather than after
+              // the typing debounce, so a stale lookup can never re-bind the coil
+              // that was selected before this one.
+              setHead((h) => ({ ...h, batchNo: v.batchNo || '' }));
+              setDebouncedBatch(String(v.batchNo || '').trim());
+            }}
+            getOptionLabel={grnLabel}
+            isOptionEqualToValue={(a, b) => String(a.id) === String(b?.id)}
+            renderOption={(props, o) => (
+              <li {...props} key={o.id}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }}>
+                    {o.grnNumber || o.grnRegisterNumber || o.movementNumber}
+                    <Box component="span" sx={{ fontWeight: 600, color: O2D.body }}> · Batch {o.batchNo}</Box>
+                    <Box component="span" sx={{ fontWeight: 500, color: O2D.sub }}> · {o.skuCode} — {o.skuName}</Box>
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.68rem', color: O2D.sub, fontVariantNumeric: 'tabular-nums' }}>
+                    {[
+                      o.receivedDate && `Received ${dayjs(o.receivedDate).format('DD MMM YYYY')}`,
+                      o.warehouse && `at ${o.warehouse}`,
+                      `Original ${num(o.receivedWeight)} kg`,
+                      `Remaining ${num(o.availableWeight)} kg${o.partiallyCut ? ' (partly cut)' : ''}`,
+                      o.grnSource === 'EXCEL_GRN' && 'historical GRN register',
+                    ].filter(Boolean).join(' · ')}
+                  </Typography>
+                </Box>
+              </li>
+            )}
+            renderInput={(p) => (
+              <TextField {...p} label="Select GRN / Received Coil"
+                placeholder="Search GRN number, batch number or coil…"
+                helperText={grnList.isError
+                  ? 'Could not load received coils. You can still type the batch number below.'
+                  : grnList.data
+                    ? `${num(grnMeta.available ?? grnOptions.length)} received coil${grnMeta.available === 1 ? '' : 's'} with weight left${debouncedGrnQuery ? ` match "${debouncedGrnQuery}"` : ''}${grnMeta.truncated ? ' — first 50 shown, search to narrow' : ''}. Fully cut coils are not listed.`
+                    : 'Only coils from completed GRNs posted to RM stock are listed.'}
+                FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: grnList.isError ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }}
+                InputProps={{
+                  ...p.InputProps,
+                  startAdornment: <><Receipt size={14} style={{ marginLeft: 6, marginRight: 2, opacity: 0.55 }} />{p.InputProps.startAdornment}</>,
+                  endAdornment: <>{grnList.isFetching ? <CircularProgress size={13} /> : null}{p.InputProps.endAdornment}</>,
+                }} />
+            )}
+          />
+        )}
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: coilMode === 'MANUAL' ? '1fr 2fr 1fr 1fr' : '1fr 2fr 1fr' }, gap: 1.25, mt: 1.25 }}>
           {/* Batch number first: it is how the operator identifies the physical
               coil, and typing it looks the coil up and fills in the rest. */}
           <TextField size="small" label="Batch number" value={head.batchNo}
             onChange={(e) => setHead((h) => ({ ...h, batchNo: e.target.value }))}
-            placeholder="Optional"
-            InputProps={{ endAdornment: lookingUp ? <CircularProgress size={13} /> : null }}
+            placeholder={coilMode === 'MANUAL' ? 'Required' : 'Optional'}
+            required={coilMode === 'MANUAL'}
+            error={coilMode === 'MANUAL' && !!grnConflict}
+            inputProps={{ 'data-testid': 'batch-input' }}
+            InputProps={{ endAdornment: (lookingUp || (coilMode === 'MANUAL' && manualLookup.isFetching)) ? <CircularProgress size={13} /> : null }}
             helperText={batchHint}
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: batchHintColor, mx: 0 } }} />
           <Autocomplete
             size="small" options={coils} value={coil}
+            // A manual coil already entered keeps the coil it was entered as:
+            // its grade cannot change between rounds (the server refuses it too).
+            disabled={coilMode === 'MANUAL' && !!existingManual}
             // Picking a coil GRADE never fills the rate. The rate is what was
             // paid for one physical coil, so it comes from that coil's own
             // goods receipt when its batch number is entered — never from the
@@ -640,7 +960,72 @@ const RmImsConversion = () => {
           <TextField size="small" type="date" label="Date cut" value={head.conversionDate}
             onChange={(e) => setHead((h) => ({ ...h, conversionDate: e.target.value }))}
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
+          {/* Manual Entry only: the weight of the WHOLE physical coil — not
+              this round's cut. Typed once, on the coil's first round; a coil
+              already entered shows the weight it was saved with, locked. */}
+          {coilMode === 'MANUAL' && (
+            <TextField size="small" type="number" label="Total coil weight (kg)"
+              required={!existingManual}
+              value={existingManual ? String(round2(existingManual.originalWeightKg)) : manualTotal}
+              onChange={(e) => { setManualTotal(e.target.value); setCutChoice({ coilKey: null, type: null }); }}
+              disabled={!!existingManual || !!grnConflict}
+              error={manualTotalBad}
+              inputProps={{ min: 0, step: 'any', 'data-testid': 'manual-total-input' }}
+              helperText={existingManual ? 'Recorded on this coil\'s first round — it does not change.'
+                : manualTotalBad ? 'Enter the coil\'s weight — a number above 0 kg.'
+                  : 'The whole coil before any cutting — not this round\'s cut.'}
+              FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: manualTotalBad ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }} />
+          )}
         </Box>
+
+        {/* The batch already has a goods receipt: it is cut from its GRN. */}
+        {coilMode === 'MANUAL' && grnConflict && (
+          <Paper elevation={0} data-testid="manual-grn-conflict" sx={{
+            mt: 1.5, borderRadius: '8px', px: 1.5, py: 1,
+            border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+          }}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={15} /></Box>
+              <Typography sx={{ fontSize: '0.76rem', color: STOCK_TOKENS.OUT_OF_STOCK.color, flex: '1 1 320px' }}>
+                <b>Batch {grnConflict.batchNo} has a goods receipt{grnConflict.grnNumber ? ` (${grnConflict.grnNumber}, ${grnConflict.skuCode})` : ` (${grnConflict.skuCode})`}.</b>{' '}
+                A coil with a GRN is cut from its GRN, so its weight and history stay in one place — it cannot be entered manually.
+              </Typography>
+              <Button size="small" variant="outlined" onClick={() => switchMode('GRN')}
+                sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem' }}>
+                Cut it from its GRN
+              </Button>
+            </Stack>
+          </Paper>
+        )}
+
+        {/* ── WHICH MANUAL COIL THIS CUT BELONGS TO ── */}
+        {coilMode === 'MANUAL' && coilFacts && (
+          <Paper elevation={0} data-testid="manual-coil-banner" sx={{
+            mt: 1.5, borderRadius: '8px', px: 1.5, py: 1,
+            border: `1px solid ${STOCK_TOKENS.OK.border}`, bgcolor: STOCK_TOKENS.OK.tint,
+          }}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Box sx={{ color: STOCK_TOKENS.OK.color, display: 'flex' }}><Pencil size={15} /></Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: O2D.ink }}>
+                  Manual coil {coilLabel} · {coil?.skuCode || existingManual?.skuCode} · no GRN
+                </Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
+                  {existingManual
+                    ? `Entered ${dayjs(existingManual.enteredAt).format('DD MMM YYYY')} · ${existingManual.rounds} round${existingManual.rounds === 1 ? '' : 's'} so far. This cut continues the same coil.`
+                    : 'A new manual coil. It is recorded with its total weight when this round is saved, and its later rounds continue from it.'}
+                </Typography>
+              </Box>
+              {existingManual && (
+                <Button size="small" endIcon={<ArrowUpRight size={13} />} sx={{ ml: { sm: 'auto' }, textTransform: 'none', fontWeight: 700, fontSize: '0.72rem' }}
+                  onClick={() => navigate(`/rm-ims/coil/${existingManual.id}`)}>
+                  View this coil's history
+                </Button>
+              )}
+            </Stack>
+            {coilFactsTiles}
+          </Paper>
+        )}
         {/* ── WHICH PHYSICAL COIL THIS CUT BELONGS TO ──────────────────────
             The scrap this cut leaves is traced back through here and nowhere
             else, so the state of that link is stated on the form rather than
@@ -674,7 +1059,7 @@ const RmImsConversion = () => {
                   View this coil's history
                 </Button>
                 <Button size="small" color="inherit"
-                  onClick={() => { setReceipt(null); setCutChoice({ coilKey: null, type: null }); appliedCoil.current = null; }}
+                  onClick={clearReceipt}
                   sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.sub }}>
                   Clear coil
                 </Button>
@@ -685,7 +1070,7 @@ const RmImsConversion = () => {
         )}
         {/* No coil yet: the same three figures, shown as "—", so the operator
             sees what will be filled in rather than a gap in the form. */}
-        {!receipt && coilFactsTiles}
+        {!receipt && !(coilMode === 'MANUAL' && coilFacts) && coilFactsTiles}
 
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.5 }}>
           <TextField select size="small" label="Received At" value={head.warehouse}
@@ -702,9 +1087,13 @@ const RmImsConversion = () => {
           </TextField>
           <TextField size="small" type="number" label="Rate (₹ per kg)" value={head.rate}
             onChange={(e) => setHead((h) => ({ ...h, rate: e.target.value }))}
-            helperText={receipt
-              ? `From this coil's goods receipt (₹${num(receipt.unitCost)}/kg). Used to value the circles produced.`
-              : 'Filled from the coil\'s goods receipt once its batch number is entered. Used to value the circles produced.'}
+            helperText={coilMode === 'MANUAL'
+              ? (existingManual?.rate
+                ? `From this coil's manual entry (₹${num(existingManual.rate)}/kg). Used to value the circles produced.`
+                : 'The rate paid for this coil, where known. Used to value the circles produced.')
+              : receipt
+                ? `From this coil's goods receipt (₹${num(receipt.unitCost)}/kg). Used to value the circles produced.`
+                : 'Filled from the coil\'s goods receipt once its batch number is entered. Used to value the circles produced.'}
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
         </Box>
 
@@ -759,16 +1148,19 @@ const RmImsConversion = () => {
             disabled={noCoil || cutTypeMissing}
             placeholder={noCoil ? 'Choose the coil first' : cutTypeMissing ? 'Choose Full or Partial first' : undefined}
             InputLabelProps={noCoil || cutTypeMissing ? { shrink: true } : undefined}
-            error={shortCoil || badWeight}
+            error={shortCoil || gradeShort || badWeight}
             inputProps={{ min: 0, step: 'any', readOnly: isFull }}
             sx={isFull ? { '& .MuiInputBase-root': { bgcolor: O2D.surfaceAlt } } : { '& .MuiInputBase-root': { bgcolor: O2D.surface } }}
             helperText={(
               <>
-                {noCoil ? 'Enter the batch number above to choose the coil.'
+                {noCoil ? (coilMode === 'MANUAL'
+                  ? 'Enter the batch number, coil and total coil weight above first.'
+                  : 'Enter the batch number above to choose the coil.')
                   : cutTypeMissing ? 'Choose the cutting type to enter this round\'s weight.'
                   : isFull ? `Full cutting — the whole remaining ${num(coilFacts.availableKg)} kg, set by the system.`
                     : badWeight ? 'Enter a weight above 0 kg. '
                       : shortCoil ? `Only ${num(available)} KG is available from this physical coil. `
+                        : gradeShort ? `Only ${num(gradeOnHand)} KG of ${coil.skuCode} is in RM stock. `
                         : coilFacts ? `Up to ${num(coilFacts.availableKg)} kg remaining. `
                           : (coil ? `${num(coil.onHand)} in store. ` : 'Pick a coil first. ')}
                 {/* "Use all" is Full cutting — the same calculation, not a copy. */}
@@ -780,7 +1172,7 @@ const RmImsConversion = () => {
                 )}
               </>
             )}
-            FormHelperTextProps={{ component: 'div', sx: { fontSize: '0.66rem', color: (shortCoil || badWeight) ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }} />
+            FormHelperTextProps={{ component: 'div', sx: { fontSize: '0.66rem', color: (shortCoil || gradeShort || badWeight) ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }} />
 
           {/* AFTER THIS ROUND — what the round takes and leaves on the coil.
               Derived, before saving; the status is the coil's, from weights. */}
@@ -840,7 +1232,7 @@ const RmImsConversion = () => {
 
         {/* No physical coil linked yet — last in Step 1, after the fields, so
             it reads as the closing reminder rather than splitting the form. */}
-        {!receipt && (
+        {coilMode === 'GRN' && !receipt && (
           <Paper elevation={0} sx={{
             mt: 1.5, borderRadius: '8px', px: 1.5, py: 1,
             border: `1px solid ${head.manualFallback ? O2D.line : STOCK_TOKENS.LOW.border}`,
@@ -861,6 +1253,11 @@ const RmImsConversion = () => {
                     ? 'Its scrap will show under “Untraceable” in Scrap IMS, and nobody will be able to ask how much scrap came off this coil. Only use this for a coil that genuinely has no goods receipt.'
                     : 'Type the batch number above to find the coil. Scrap can only be traced back to a coil that was named here.'}
                 </Typography>
+                {/* The traceable alternative for a coil with no GRN at all. */}
+                <Box component="button" type="button" onClick={() => switchMode('MANUAL')}
+                  sx={{ mt: 0.4, p: 0, border: 0, bgcolor: 'transparent', color: O2D.brand, fontWeight: 700, fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline' }}>
+                  Coil has no GRN? Use Manual Entry — No GRN to keep it traceable
+                </Box>
               </Box>
               <FormControlLabel
                 sx={{ ml: { sm: 'auto' }, mr: 0 }}
@@ -1071,7 +1468,7 @@ const RmImsConversion = () => {
           {coilFacts && (
             <>
               <Typography sx={{ mt: 1.25, fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: O2D.sub }}>
-                After this round{after ? ` · round ${after.roundNo} of coil ${receipt.batchNo}` : ''}
+                After this round{after ? ` · round ${after.roundNo} of coil ${coilLabel}` : ''}
               </Typography>
               <Stack direction="row" spacing={1} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap alignItems="stretch" data-testid="after-round">
                 {[
@@ -1118,6 +1515,20 @@ const RmImsConversion = () => {
                 <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
                 <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
                   The circles weigh {num(Math.abs(scrap))}kg more than the coil. Metal cannot be created — check the weights.
+                </Typography>
+              </Stack>
+            </Paper>
+          )}
+          {!overCut && !shortCoil && gradeShort && (
+            <Paper elevation={0} data-testid="grade-short-warning" sx={{
+              mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
+              border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+            }}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
+                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
+                  Only {num(gradeOnHand)} KG of {coil.skuCode} is in RM stock, and a manual coil is still taken out of stock.
+                  Correct "Cut this round", or turn on "Allow cutting more coil than we hold" above.
                 </Typography>
               </Stack>
             </Paper>
@@ -1238,7 +1649,22 @@ const RmImsConversion = () => {
                   </TableCell>
                   {/* Traceable back to the delivery, where the cut recorded it. */}
                   <TableCell sx={{ maxWidth: 190 }}>
-                    {c.receipt ? (
+                    {c.manualCoil ? (
+                      // A manual-entry coil: traceable to the coil, with no
+                      // GRN, PO or supplier — and none is shown.
+                      <Tooltip arrow slotProps={O2D_TIP}
+                        title={`Manual entry — no goods receipt · ${num(c.manualCoil.originalWeightKg)} kg in total${c.manualCoil.warehouse ? ` · ${c.manualCoil.warehouse}` : ''}`}>
+                        <Box
+                          role="button" tabIndex={0}
+                          onClick={() => navigate(`/rm-ims/coil/${c.manualCoilId}`)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(`/rm-ims/coil/${c.manualCoilId}`); }}
+                          sx={{ minWidth: 0, cursor: 'pointer', borderRadius: '4px', '&:hover .lin': { textDecoration: 'underline' } }}
+                        >
+                          <Typography noWrap className="lin" sx={{ fontSize: '0.74rem', fontWeight: 700, color: O2D.brand }}>Manual entry</Typography>
+                          <Typography noWrap sx={{ fontSize: '0.64rem', color: O2D.sub }}>no GRN · {c.manualCoil.batchNo}</Typography>
+                        </Box>
+                      </Tooltip>
+                    ) : c.receipt ? (
                       <Tooltip arrow slotProps={O2D_TIP} title={[
                         c.receipt.grnNumber && `GRN ${c.receipt.grnNumber}`,
                         c.receipt.poNumber && `PO ${c.receipt.poNumber}`,

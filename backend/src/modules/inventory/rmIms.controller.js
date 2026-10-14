@@ -87,4 +87,12 @@ export const rmImsController = {
     const { circles, ...meta } = await rmImsService.listCircleOptions(req.query);
     res.json(ApiResponse.ok('Approved circle sizes for this coil', circles, meta));
   }),
+
+  // Manual Entry — No GRN. `manualCoil` is the coil this batch already names
+  // (null for a new one); a goods receipt carrying the batch travels as meta,
+  // because the screen must refuse manual entry for it and say why.
+  lookupManualCoil: asyncHandler(async (req, res) => {
+    const { manualCoil, ...meta } = await rmImsService.lookupManualCoil(req.query);
+    res.json(ApiResponse.ok('Manual coil lookup', manualCoil, meta));
+  }),
 };

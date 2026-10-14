@@ -74,7 +74,7 @@ const ScrapImsList = () => {
   return (
     <ScrapShell
       icon={Recycle}
-      title="Scrap register"
+      title="Scrap master data"
       subtitle="Every coil cut on record — what it produced, what was left, and whether it was checked."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!rows.length}
@@ -153,7 +153,7 @@ const ScrapImsList = () => {
                 <TableRow><TableCell colSpan={12} sx={{ border: 0 }}>
                   {/* A failed load is said as a failure, never as "no match". */}
                   <EmptyNote icon={Search}
-                    title={isError ? 'Could not load the scrap register.' : 'No scrap records match these filters'}
+                    title={isError ? 'Could not load the scrap master data.' : 'No scrap records match these filters'}
                     hint={isError ? (error?.data?.message || 'The server did not answer. Refresh the page to try again.')
                       : 'Try clearing the location or check filter, or searching a different batch.'} />
                 </TableCell></TableRow>
@@ -176,12 +176,12 @@ const ScrapImsList = () => {
                       coil, so there is nothing honest to open, and it says so
                       on hover instead of pretending to be a link. */}
                   <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                    {r.coilReceiptId ? (
+                    {(r.coilReceiptId || r.manualCoilId) ? (
                       <Tooltip arrow slotProps={O2D_TIP} title="Open this physical coil — every round it was cut in, what each round produced, and how much coil was left after it">
                         <Box
                           role="button" tabIndex={0}
-                          onClick={() => navigate(`/rm-ims/coil/${r.coilReceiptId}`)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(`/rm-ims/coil/${r.coilReceiptId}`); }}
+                          onClick={() => navigate(`/rm-ims/coil/${r.coilReceiptId || r.manualCoilId}`)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(`/rm-ims/coil/${r.coilReceiptId || r.manualCoilId}`); }}
                           sx={{
                             display: 'inline-flex', alignItems: 'center', gap: 0.5, cursor: 'pointer',
                             color: O2D.brand, fontWeight: 700,

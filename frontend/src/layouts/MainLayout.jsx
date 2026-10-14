@@ -133,7 +133,7 @@ const navSectionsFull = [
             path: '/scrap-ims',
             children: [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/scrap-ims' },
-              { text: 'Scrap Register',        icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
+              { text: 'Scrap Master Data',     icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
               // Scrap grouped by the physical coil it came off — "how much
               // scrap came off THAT coil". The module's own strip lists it too,
               // but this sidebar is how people actually navigate, and a page
@@ -293,7 +293,7 @@ const navSectionsSimple = [
             path: '/scrap-ims',
             children: [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/scrap-ims' },
-              { text: 'Scrap Register',        icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
+              { text: 'Scrap Master Data',     icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
               // Scrap grouped by the physical coil it came off — "how much
               // scrap came off THAT coil". The module's own strip lists it too,
               // but this sidebar is how people actually navigate, and a page

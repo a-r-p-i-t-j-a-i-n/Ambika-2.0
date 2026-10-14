@@ -336,7 +336,7 @@ const main = async () => {
   /* ── [21]-[23] the rest of Scrap IMS still renders ── */
   console.log('\n── Regression: other scrap screens ──');
   await go('/scrap-ims/records');
-  check('[21] Scrap Register renders', /Scrap register|register/i.test(await text()));
+  check('[21] Scrap Register renders', /Scrap master data|Scrap register|register/i.test(await text()));
   await go('/scrap-ims/by-coil');
   check('[23] Scrap by physical coil renders', /Scrap by physical coil/.test(await text()));
   await go('/scrap-ims');
