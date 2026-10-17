@@ -1,11 +1,11 @@
 /** Purchase FMS workflow step resolver.
- *  Returns an ordered step array for the full GRN → QC → Invoice → Voucher → Tally → Payment pipeline.
+ *  Returns an ordered step array for the full GRN & QC → Invoice → Voucher → Tally → Payment pipeline.
+ *  GRN and Incoming QC are ONE step: the QC is entered on the GRN page, directly under the GRN.
  *  Each caller passes the single entity it is currently displaying; prior steps are inferred as completed.
  */
 
 const STEPS_TEMPLATE = () => [
-  { key: 'grn',     label: 'GRN',            state: 'pending', sublabel: '' },
-  { key: 'qc',      label: 'Incoming QC',    state: 'pending', sublabel: '' },
+  { key: 'grnqc',   label: 'GRN & QC',       state: 'pending', sublabel: '' },
   { key: 'invoice', label: 'Vendor Invoice', state: 'pending', sublabel: '' },
   { key: 'voucher', label: 'Voucher',        state: 'pending', sublabel: '' },
   { key: 'tally',   label: 'Tally Entry',   state: 'pending', sublabel: '' },
@@ -50,41 +50,47 @@ const tallyState = (status) => {
   return 'active';
 };
 
+/**
+ * The combined GRN & QC step: done only once the GRN is completed AND its QC is
+ * done. Until the GRN is completed it follows the GRN; after that, the QC (a
+ * still-pending QC keeps the step active).
+ */
+const grnQcState = (grnStatus, qcStatus) => {
+  const g = grnState(grnStatus);
+  if (g !== 'completed') return g;
+  const q = qcState(qcStatus);
+  return q === 'pending' ? 'active' : q;
+};
+
 export function resolveWorkflowSteps({ grn, qc, invoice, voucher, tallyEntry } = {}) {
   const steps = STEPS_TEMPLATE();
 
   if (grn) {
-    steps[0].state = grnState(grn.grnStatus);
+    steps[0].state = grnQcState(grn.grnStatus, grn.qcStatus);
     steps[0].sublabel = grn.grnNumber || '';
-    if (grn.qcStatus) {
-      steps[1].state = qcState(grn.qcStatus);
-    }
     return steps;
   }
 
   if (qc) {
-    steps[0].state = 'completed';
-    steps[1].state = qcState(qc.qcStatus);
-    steps[1].sublabel = qc.qcNumber || '';
+    steps[0].state = qcState(qc.qcStatus) === 'pending' ? 'active' : qcState(qc.qcStatus);
+    steps[0].sublabel = qc.grnNumber || qc.qcNumber || '';
     return steps;
   }
 
   if (invoice) {
     steps[0].state = 'completed';
-    steps[1].state = 'completed';
-    steps[2].state = invoiceState(invoice.invoiceStatus);
-    steps[2].sublabel = invoice.invoiceNumber || '';
+    steps[1].state = invoiceState(invoice.invoiceStatus);
+    steps[1].sublabel = invoice.invoiceNumber || '';
     return steps;
   }
 
   if (voucher) {
     steps[0].state = 'completed';
     steps[1].state = 'completed';
-    steps[2].state = 'completed';
-    steps[3].state = voucherState(voucher.voucherStatus);
-    steps[3].sublabel = voucher.voucherNumber || '';
+    steps[2].state = voucherState(voucher.voucherStatus);
+    steps[2].sublabel = voucher.voucherNumber || '';
     if (voucher.tallyEntryStatus) {
-      steps[4].state = tallyState(voucher.tallyEntryStatus);
+      steps[3].state = tallyState(voucher.tallyEntryStatus);
     }
     return steps;
   }
@@ -93,9 +99,8 @@ export function resolveWorkflowSteps({ grn, qc, invoice, voucher, tallyEntry } =
     steps[0].state = 'completed';
     steps[1].state = 'completed';
     steps[2].state = 'completed';
-    steps[3].state = 'completed';
-    steps[4].state = tallyState(tallyEntry.tallyEntryStatus);
-    steps[4].sublabel = tallyEntry.entryNumber || '';
+    steps[3].state = tallyState(tallyEntry.tallyEntryStatus);
+    steps[3].sublabel = tallyEntry.entryNumber || '';
     return steps;
   }
 

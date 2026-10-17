@@ -70,6 +70,14 @@ const run = async () => {
   const go = async (u) => { await page.goto(`${APP}${u}`, { waitUntil: 'domcontentloaded' }); await ready(); };
   const body = async () => flat(await page.locator('body').innerText());
   const waitText = async (rx, ms = 15000) => { const end = Date.now() + ms; while (Date.now() < end) { if (rx.test(await body())) return true; await page.waitForTimeout(250); } return false; };
+  // Cut Coils opens on its history; its form is a dialog opened from "+ Coil to Circle".
+  const F = page.getByTestId('coil-to-circle-dialog');
+  const openCutForm = async () => {
+    if (await F.count()) return;
+    await page.getByTestId('open-coil-to-circle').click();
+    await F.waitFor({ state: 'visible', timeout: 10000 });
+    await page.waitForTimeout(800);
+  };
 
   await go('/');
   await page.waitForLoadState('load').catch(() => {});
@@ -133,13 +141,20 @@ const run = async () => {
   /* ── Empty states ── */
   section('Empty states');
   await go('/rm-ims/conversion');
-  check('Cutting History, nothing cut yet: "No physical coil has been cut here yet"', await waitText(/No physical coil has been cut here yet/));
-  const facts = flat(await page.getByTestId('coil-facts').innerText());
-  check('no coil chosen: Total / Already cut / Remaining read "—"', /Total coil weight —/i.test(facts) && /Already cut —/i.test(facts) && /Remaining weight —/i.test(facts), facts);
-  check('"No physical coil chosen yet." is shown', /No physical coil chosen yet\./.test(await body()));
-  await page.getByLabel(/batch number/i).first().fill('NO-SUCH-BATCH-123');
-  check('an unknown batch says so — "No received coil with this batch number"', await waitText(/No received coil with this batch number/));
-  await page.getByLabel(/batch number/i).first().fill('');
+  check('Coil to Circle history, nothing cut yet: "No physical coil has been cut yet"', await waitText(/No physical coil has been cut yet/));
+  await openCutForm();
+  check('no coil chosen: the coil cards are hidden, not shown with "—"', (await F.getByTestId('coil-facts').count()) === 0);
+  check('no "No physical coil chosen yet." panel — one line under the Batch Number field instead',
+    !/No physical coil chosen yet/.test(await body()) && /Type the batch number on the coil, or pick it from the list/.test(await body()));
+  check('…one Batch Number field — no "Select Existing GRN" / "Manual Entry — No GRN" mode buttons, no separate GRN selector',
+    (await F.getByTestId('mode-grn').count()) === 0 && (await F.getByTestId('mode-manual').count()) === 0 && (await F.getByTestId('grn-coil-picker').count()) === 0);
+  check('…and the rest of the form is still on screen with no coil (cutting type, cut weight, circles, Save)',
+    await F.getByRole('radio', { name: /partial cutting/i }).first().isVisible() && await F.getByLabel(/^cut this round/i).first().isVisible()
+      && await F.locator('table tbody tr').first().isVisible() && await F.getByRole('button', { name: /save this conversion/i }).isVisible());
+  await F.getByLabel(/batch number/i).first().fill('NO-SUCH-BATCH-123');
+  check('an unknown batch says so, inline — "No matching coil/GRN found. Enter the coil details manually."',
+    await waitText(/No matching coil\/GRN found\. Enter the coil details manually\./));
+  await F.getByLabel(/batch number/i).first().fill('');
   await go('/scrap-ims/records');
   check('Scrap Register with no scrap: an empty-state message, not a blank table', await waitText(/No scrap records/i));
   await go('/scrap-ims/by-coil');
@@ -166,15 +181,29 @@ const run = async () => {
   /* ── Disabled states (Cut Coils, Scrap Out) ── */
   section('Disabled states');
   await go('/rm-ims/conversion');
-  await waitText(/Cutting History/);
-  check('Cut Coils, no coil: Full cutting disabled', await page.getByRole('radio', { name: /full cutting/i }).isDisabled());
-  check('…Partial cutting disabled', await page.getByRole('radio', { name: /partial cutting/i }).isDisabled());
-  check('…"Cut this round" disabled', await page.getByLabel(/^cut this round/i).first().isDisabled());
-  check('…Save disabled', await page.getByRole('button', { name: /save this conversion/i }).isDisabled());
-  await page.getByRole('checkbox', { name: /No receipt available/i }).check().catch(async () => { await page.getByText('No receipt available').click(); });
+  await waitText(/Coil to Circle history/);
+  await openCutForm();
+  check('Cut Coils, no coil: Full cutting disabled', await F.getByRole('radio', { name: /full cutting/i }).isDisabled());
+  check('…Partial cutting disabled', await F.getByRole('radio', { name: /partial cutting/i }).isDisabled());
+  check('…"Cut this round" disabled', await F.getByLabel(/^cut this round/i).first().isDisabled());
+  check('…Save disabled', await F.getByRole('button', { name: /save this conversion/i }).isDisabled());
+  // "No receipt available" is for a coil with no batch number: offered only
+  // while the batch is blank, and an explicit tick there, never inferred.
+  check('…"No receipt available" is offered while the batch is blank, unticked',
+    (await F.getByRole('checkbox', { name: /No receipt available/i }).count()) === 1
+      && !(await F.getByRole('checkbox', { name: /No receipt available/i }).isChecked()));
+  await F.getByRole('checkbox', { name: /No receipt available/i }).check();
   await page.waitForTimeout(300);
-  check('with "No receipt available": Full stays disabled (it needs a physical coil), Partial is enabled',
-    await page.getByRole('radio', { name: /full cutting/i }).isDisabled() && !(await page.getByRole('radio', { name: /partial cutting/i }).isDisabled()));
+  check('with "No receipt available" ticked it says the cut will not be traceable — and the round waits for the coil being cut',
+    /will not be traceable to a coil/i.test(await body()) && await F.getByRole('radio', { name: /partial cutting/i }).isDisabled());
+  const grade = F.getByRole('combobox', { name: /coil being cut/i }).first();
+  await grade.click();
+  await page.waitForTimeout(500);
+  const gradeOpts = page.locator('ul[role="listbox"] li[role="option"]');
+  if (await gradeOpts.count()) await gradeOpts.first().click();
+  await page.waitForTimeout(400);
+  check('with "No receipt available" and a coil: Full stays disabled (it needs a physical coil), Partial is enabled',
+    await F.getByRole('radio', { name: /full cutting/i }).isDisabled() && !(await F.getByRole('radio', { name: /partial cutting/i }).isDisabled()));
   await go('/scrap-ims/scrap-out');
   await waitText(/Scrap Out History/);
   check('Scrap Out with nothing entered: Issue scrap disabled', await page.getByRole('button', { name: /issue scrap/i }).isDisabled());
@@ -183,17 +212,18 @@ const run = async () => {
   /* ── Error messages: readable and tied to the field ── */
   section('Error messages');
   await go('/rm-ims/conversion');
-  await waitText(/Cutting History/);
-  await page.getByLabel(/batch number/i).first().fill('E2E-UI-RACE-001');
+  await waitText(/Coil to Circle history/);
+  await openCutForm();
+  await F.getByLabel(/batch number/i).first().fill('E2E-UI-RACE-001');
   await page.waitForTimeout(3000);
-  await page.getByRole('radio', { name: /partial cutting/i }).check();
-  await page.getByLabel(/^cut this round/i).first().fill('600');
+  await F.getByRole('radio', { name: /partial cutting/i }).check();
+  await F.getByLabel(/^cut this round/i).first().fill('600');
   await page.waitForTimeout(400);
-  const cutHelp = flat(await page.getByLabel(/^cut this round/i).first().locator('xpath=ancestor::div[contains(@class,"MuiFormControl")][1]').innerText());
+  const cutHelp = flat(await F.getByLabel(/^cut this round/i).first().locator('xpath=ancestor::div[contains(@class,"MuiFormControl")][1]').innerText());
   check('over-cut on the field itself: "Only 500 KG is available from this physical coil."', /Only 500 KG is available from this physical coil\./.test(cutHelp), cutHelp);
-  await page.getByLabel(/^cut this round/i).first().fill('-5');
+  await F.getByLabel(/^cut this round/i).first().fill('-5');
   await page.waitForTimeout(300);
-  check('a negative weight: "Enter a weight above 0 kg." on the field', /Enter a weight above 0 kg/.test(flat(await page.getByLabel(/^cut this round/i).first().locator('xpath=ancestor::div[contains(@class,"MuiFormControl")][1]').innerText())));
+  check('a negative weight: "Enter a weight above 0 kg." on the field', /Enter a weight above 0 kg/.test(flat(await F.getByLabel(/^cut this round/i).first().locator('xpath=ancestor::div[contains(@class,"MuiFormControl")][1]').innerText())));
   await go('/scrap-ims/scrap-out');
   await waitText(/Scrap Out History/);
   await page.locator('[data-testid="scrap-out-qty"]').fill('5');
@@ -203,8 +233,9 @@ const run = async () => {
   /* ── Tooltips ── */
   section('Tooltips');
   await go('/rm-ims/conversion');
-  await waitText(/Past conversions/);
-  const help = page.locator('table thead svg').first();
+  await waitText(/Coil to Circle history/);
+  await openCutForm();
+  const help = F.locator('table thead svg').first();
   await help.scrollIntoViewIfNeeded().catch(() => {});
   await help.hover().catch(() => {});
   await page.waitForTimeout(800);

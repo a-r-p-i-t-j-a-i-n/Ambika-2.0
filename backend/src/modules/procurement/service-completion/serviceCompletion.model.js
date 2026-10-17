@@ -4,12 +4,14 @@ import { baseSchemaFields, baseSchemaOptions } from '../../../database/BaseSchem
 const { Schema, model } = mongoose;
 
 /**
- * Service Completion — Purchase FMS Step 1.8A.
+ * Service Completion — former Purchase FMS Step 1.8A (retired; history only).
  *
  * For INTERNAL_SERVICE indents (servicing/repair/maintenance/AMC/licenses) that
- * skip the PO/PI/Advance/Follow-up/GRN chain. Once the quotation is approved the
- * indent is SERVICE_PENDING; recording a Service Completion confirms the work was
- * done and makes it eligible for Incoming QC (source = SERVICE, no inventory).
+ * skip the PO/PI/Advance/Follow-up/GRN chain. Recording a Service Completion used
+ * to confirm the work was done and make the indent eligible for Incoming QC.
+ * The step was removed: a SERVICE_PENDING indent now goes straight to Incoming QC
+ * (source = SERVICE), which records the completion evidence and verdict. Existing
+ * records are kept and stay linked to their QC; no new ones are created.
  */
 export const SERVICE_COMPLETION_STATUS = {
   PENDING:   'PENDING',

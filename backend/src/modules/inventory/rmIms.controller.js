@@ -80,6 +80,11 @@ export const rmImsController = {
     res.json(ApiResponse.ok('Cutting history', docs, summary));
   }),
 
+  getCuttingHistoryCircles: asyncHandler(async (_req, res) => {
+    const docs = await rmImsService.listCuttingHistoryCircles();
+    res.json(ApiResponse.ok('Circle SKUs produced by traceable cutting rounds', docs));
+  }),
+
   // The circle sizes approved for one coil. `circles` is the list the dropdown
   // offers; the rest travels as meta because it is what the screen needs to
   // explain an EMPTY list rather than leave the operator staring at one.

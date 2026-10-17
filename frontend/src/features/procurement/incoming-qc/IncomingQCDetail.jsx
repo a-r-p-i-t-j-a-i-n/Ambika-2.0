@@ -17,6 +17,7 @@ import {
   useGetVendorInvoicesByQcQuery,
 } from '../../../store/api/procurementApi';
 import { QcStatusChip, QcResultChip, fmtDate } from './qcMeta';
+import { fileHref } from '../indents/indentMeta';
 import IncomingQCFormDialog from './IncomingQCFormDialog';
 import IncomingQCCompleteDialog from './IncomingQCCompleteDialog';
 import IncomingQCPdfPreview from './IncomingQCPdfPreview';
@@ -44,7 +45,7 @@ const SectionCard = ({ icon, title, children }) => (
 const IncomingQCDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const goBack = useSmartBack('/purchase-fms/incoming-qc');
+  const goBack = useSmartBack('/purchase-fms/grn?view=qc');
   const { enqueueSnackbar } = useSnackbar();
 
   const { data, isLoading } = useGetIncomingQcByIdQuery(id);
@@ -71,7 +72,7 @@ const IncomingQCDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Incoming QC not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/incoming-qc')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/grn?view=qc')}>Back to list</Button>
       </Box>
     );
   }
@@ -84,7 +85,15 @@ const IncomingQCDetail = () => {
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
   const goGrn = () => qc.grnId && navigate(`/procurement/grns/${qc.grnId}`);
+  // A GRN's QC is entered on the GRN page, directly under the GRN.
+  const onGrnPage = editable && Boolean(qc.grnId);
+  const openGrnQc = () => navigate(`/procurement/grns/${qc.grnId}#qc`);
   const nextStep = (() => {
+    if (onGrnPage) {
+      return { tone: 'info', title: 'Next: complete this QC on the GRN page',
+        desc: 'Incoming QC is recorded directly under its GRN — open the GRN to resume this draft.',
+        primary: { label: 'Open GRN & QC', icon: <ClipboardCheck size={16} />, onClick: openGrnQc } };
+    }
     if (editable) {
       return { tone: 'info', title: 'Next: complete the QC inspection (Step 1.9)',
         desc: 'Record accepted / rejected quantities and the overall result, then complete the QC.',
@@ -129,13 +138,14 @@ const IncomingQCDetail = () => {
             <QcStatusChip status={qc.qcStatus} />
             <QcResultChip result={qc.overallResult} />
           </Box>
-          <Typography variant="body2" color="text.secondary">{qc.vendorName} · GRN {qc.grnNumber || '—'} · {fmtDate(qc.qcDate)}</Typography>
+          <Typography variant="body2" color="text.secondary">{qc.vendorName} · {isService ? `Indent ${qc.indentNumber || '—'}` : `GRN ${qc.grnNumber || '—'}`} · {fmtDate(qc.qcDate)}</Typography>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           {qc.grnId && <Button variant="outlined" startIcon={<PackageCheck size={16} />} onClick={() => navigate(`/procurement/grns/${qc.grnId}`)}>View GRN</Button>}
-          {editable && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {editable && <Button variant="contained" color="success" startIcon={<ClipboardCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete QC</Button>}
+          {onGrnPage && <Button variant="contained" startIcon={<ClipboardCheck size={16} />} onClick={openGrnQc}>Open GRN &amp; QC</Button>}
+          {editable && !onGrnPage && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
+          {editable && !onGrnPage && <Button variant="contained" color="success" startIcon={<ClipboardCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete QC</Button>}
           {qc.qcPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>QC Report</Button>}
           {qcPassed && existingInvoice && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${existingInvoice._id}`)}>View Invoice</Button>}
           {qcPassed && !existingInvoice && <Button variant="contained" startIcon={<ReceiptText size={16} />} onClick={() => setInvoiceOpen(true)}>Create Invoice</Button>}
@@ -197,8 +207,18 @@ const IncomingQCDetail = () => {
             <SectionCard icon={<Building2 size={18} />} title="Service · Indent · Vendor">
               <Grid container spacing={2}>
                 <Grid item xs={6} sm={4}><Field label="Vendor / Provider" value={qc.vendorName || '—'} /></Grid>
-                <Grid item xs={6} sm={4}><Field label="Service Completion" value={qc.serviceCompletionNumber || '—'} /></Grid>
-                <Grid item xs={6} sm={4}><Field label="Indent" value={qc.indentNumber || '—'} /></Grid>
+                {/* Legacy QCs raised through the retired Service Completion step */}
+                {qc.serviceCompletionNumber ? <Grid item xs={6} sm={4}><Field label="Service Completion" value={qc.serviceCompletionNumber} /></Grid> : null}
+                <Grid item xs={6} sm={4}>
+                  <Field label="Indent" value={qc.indentId
+                    ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/indents/${qc.indentId}`)}>{qc.indentNumber || 'View'}</Box>
+                    : (qc.indentNumber || '—')} />
+                </Grid>
+                {qc.qcReportDocument?.fileUrl ? (
+                  <Grid item xs={6} sm={4}>
+                    <Field label="Service Report" value={<Box component="a" href={fileHref(qc.qcReportDocument.fileUrl)} target="_blank" rel="noopener" sx={{ color: 'primary.main', fontWeight: 700 }}>{qc.qcReportDocument.fileName || 'View'}</Box>} />
+                  </Grid>
+                ) : null}
                 <Grid item xs={6} sm={4}><Field label="Requested / Accepted / Rejected" value={`${qc.totalReceived} / ${qc.totalAccepted} / ${qc.totalRejected}`} /></Grid>
               </Grid>
             </SectionCard>
@@ -215,6 +235,12 @@ const IncomingQCDetail = () => {
                 </Grid>
                 <Grid item xs={6} sm={4}><Field label="Indent" value={qc.indentNumber || '—'} /></Grid>
                 <Grid item xs={6} sm={4}><Field label="Received / Accepted / Rejected" value={`${qc.totalReceived} / ${qc.totalAccepted} / ${qc.totalRejected}`} /></Grid>
+                {qc.totalRework > 0 ? <Grid item xs={6} sm={4}><Field label="Rework (earlier form)" value={qc.totalRework} /></Grid> : null}
+                {qc.qcReportDocument?.fileUrl ? (
+                  <Grid item xs={6} sm={4}>
+                    <Field label="QC Report / Photo" value={<Box component="a" href={fileHref(qc.qcReportDocument.fileUrl)} target="_blank" rel="noopener" sx={{ color: 'primary.main', fontWeight: 700 }}>{qc.qcReportDocument.fileName || 'View'}</Box>} />
+                  </Grid>
+                ) : null}
               </Grid>
             </SectionCard>
           )}
@@ -238,6 +264,7 @@ const IncomingQCDetail = () => {
                       <TableCell>Remarks</TableCell>
                     ) : (
                       <>
+                        <TableCell>Remark</TableCell>
                         <TableCell>Defect</TableCell>
                         <TableCell>Severity</TableCell>
                         <TableCell>Reject Movement</TableCell>
@@ -259,6 +286,7 @@ const IncomingQCDetail = () => {
                         <TableCell><Typography variant="body2" color="text.secondary">{it.qcRemarks || '—'}</Typography></TableCell>
                       ) : (
                         <>
+                          <TableCell><Typography variant="body2" color="text.secondary">{it.qcRemarks || '—'}</Typography></TableCell>
                           <TableCell>{it.defectType || '—'}</TableCell>
                           <TableCell>{it.defectSeverity ? <Chip size="small" variant="outlined" label={it.defectSeverity} /> : '—'}</TableCell>
                           <TableCell><Typography variant="body2" color="text.secondary">{it.inventoryMovementNumber || '—'}</Typography></TableCell>

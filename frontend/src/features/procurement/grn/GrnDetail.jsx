@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import { useSelector } from 'react-redux';
 import {
@@ -17,16 +17,20 @@ import {
   useGetGrnByIdQuery,
   useCancelGrnMutation,
   useGetInventoryMovementsByRefQuery,
+  useGetIncomingQcsByGrnQuery,
 } from '../../../store/api/procurementApi';
-import { GrnStatusChip, QcStatusChip, howReceivedLabel, fmtINR, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
+import { GrnStatusChip, howReceivedLabel, fmtINR, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
 import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
 import GrnPdfPreview from './GrnPdfPreview';
-import { QcResultChip } from '../incoming-qc/qcMeta';
-import IncomingQCFormDialog from '../incoming-qc/IncomingQCFormDialog';
+import GrnQcSection from './GrnQcSection';
+import GrnQcStatusChip from './GrnQcStatusChip';
+import { inventoryTypeLabel } from './inventoryType';
+import { resolveGrnQcStage } from './grnQcStage';
+import { pickGrnQc } from '../incoming-qc/qcForm';
 import MdApprovalCard from '../approvals/MdApprovalCard';
-import { Eye, ClipboardCheck } from 'lucide-react';
+import { ClipboardCheck } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
@@ -48,6 +52,18 @@ const SectionCard = ({ icon, title, children }) => (
   </Paper>
 );
 
+// Divides the page into its two parts: the GRN (A) and its Incoming QC (B).
+const PageSection = ({ letter, title, subtitle }) => (
+  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, flexWrap: 'wrap', borderBottom: `2px solid ${PFMS.line}`, pb: 1 }}>
+    <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: PFMS.ink }}>
+      <Box component="span" sx={{ color: 'primary.main', mr: 1 }}>{letter}</Box>{title}
+    </Typography>
+    {subtitle && <Typography variant="body2" color="text.secondary">{subtitle}</Typography>}
+  </Box>
+);
+
+const scrollToId = (elId) => document.getElementById(elId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
 const GrnDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -64,12 +80,24 @@ const GrnDetail = () => {
   const isCompleted = grn && isGrnCompleted(grn);
   const { data: movRes } = useGetInventoryMovementsByRefQuery({ refType: 'GRN', refId: id }, { skip: !isCompleted });
   const movements = movRes?.data || [];
+  // The GRN's QC records — the open draft (to resume) or the completed QC. The
+  // GRN itself only learns its qcId on completion, so drafts are found here.
+  const { data: qcRes } = useGetIncomingQcsByGrnQuery(id, { skip: !isCompleted });
+  const qc = pickGrnQc(qcRes?.data || []);
 
   const [formOpen, setFormOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
-  const [qcFormOpen, setQcFormOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // Links into the QC (e.g. from the PO page or the QC list) use #qc.
+  const { hash } = useLocation();
+  const loaded = Boolean(grn);
+  useEffect(() => {
+    if (hash !== '#qc' || !loaded) return undefined;
+    const t = setTimeout(() => scrollToId('grn-qc-section'), 300);
+    return () => clearTimeout(t);
+  }, [hash, loaded]);
 
   if (isLoading) return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
   if (!grn) {
@@ -93,38 +121,39 @@ const GrnDetail = () => {
   };
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
-  const qcDone = ['PASSED', 'FAILED', 'PARTIAL'].includes(grn.qcStatus);
+  const qcStage = resolveGrnQcStage(grn, qc);
+  const toQcSection = () => scrollToId('grn-qc-section');
   const nextStep = (() => {
     if (isDraft) {
       return { tone: 'info', title: 'Next: complete the GRN & post stock',
-        desc: 'Confirm the received quantities and post the goods into inventory.',
+        desc: 'Confirm the received quantities and post the goods into inventory. Incoming QC (below) opens after the MD signs the GRN.',
         primary: { label: 'Complete & Post Stock', icon: <PackageCheck size={16} />, onClick: () => setCompleteOpen(true) },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
-    if (grn.grnStatus === 'CANCELLED') return null;
-    if (isCompleted && grn.qcStatus === 'PENDING' && grn.qcId) {
-      // QC created but not completed — send the user to finish it.
-      return { tone: 'info', title: 'QC created — next: complete the inspection (Step 1.9)',
-        desc: 'Open the QC to record accepted / rejected quantities and complete it.',
-        primary: { label: 'Open QC', icon: <ClipboardCheck size={16} />, onClick: () => navigate(`/procurement/incoming-qc/${grn.qcId}`) } };
-    }
-    if (isCompleted && grn.qcStatus === 'PENDING' && grn.approvalStatus !== 'MD_APPROVED') {
+    if (qcStage.key === 'CANCELLED') return null;
+    if (qcStage.key === 'AWAITING_MD') {
       // MD Digital Approval gate — QC cannot start until this GRN is signed.
       return { tone: 'info', title: 'Awaiting MD Approval',
-        desc: 'Incoming QC can only start once the Managing Director has digitally signed this GRN — see the MD Approval card below.',
-        primary: null };
+        desc: 'Incoming QC (section B) unlocks once the Managing Director has digitally signed this GRN.',
+        primary: { label: 'Go to MD Approval', icon: <ArrowRight size={16} />, onClick: () => scrollToId('grn-md-approval') } };
     }
-    if (isCompleted && grn.qcStatus === 'PENDING') {
-      return { tone: 'success', title: 'Goods received — next: run Incoming QC (Step 1.9)',
-        desc: 'Inspect the received material and record the QC result.',
-        primary: { label: 'Create QC', icon: <ClipboardCheck size={16} />, onClick: () => setQcFormOpen(true) },
+    if (qcStage.key === 'QC_DRAFT') {
+      return { tone: 'info', title: `QC draft ${qc.qcNumber} saved — finish the inspection below`,
+        desc: 'Record accepted / rejected / rework quantities and complete the QC.',
+        primary: { label: 'Resume QC', icon: <ClipboardCheck size={16} />, onClick: toQcSection } };
+    }
+    if (qcStage.key === 'QC_READY') {
+      return { tone: 'success', title: 'Goods received & signed — next: Incoming QC (below)',
+        desc: 'Inspect the received material and record the QC result in section B.',
+        primary: { label: 'Start QC', icon: <ClipboardCheck size={16} />, onClick: toQcSection },
         secondary: grn.poId ? { label: 'View PO', onClick: () => navigate(`/procurement/purchase-orders/${grn.poId}`) } : null };
     }
-    if (isCompleted && qcDone) {
+    if (['QC_DONE', 'QC_DONE_LEGACY'].includes(qcStage.key)) {
+      const qcId = qc?._id || grn.qcId;
       return { tone: 'success', title: 'QC complete — next: record the Vendor Invoice',
         desc: 'Capture the vendor’s tax invoice to proceed to payment & accounting.',
         primary: { label: 'Go to Vendor Invoices', icon: <ReceiptText size={16} />, onClick: () => navigate('/purchase-fms/vendor-invoices') },
-        secondary: grn.qcId ? { label: 'View QC', onClick: () => navigate(`/procurement/incoming-qc/${grn.qcId}`) } : null };
+        secondary: qcId ? { label: 'View QC', onClick: () => navigate(`/procurement/incoming-qc/${qcId}`) } : null };
     }
     return null;
   })();
@@ -149,7 +178,7 @@ const GrnDetail = () => {
             <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{grn.grnNumber}</Typography>
             {grn.uniqueId && <Chip size="small" variant="outlined" label={grn.uniqueId} sx={{ fontWeight: 700 }} />}
             <GrnStatusChip status={grn.grnStatus} />
-            {grn.stockPosted && <QcStatusChip status={grn.qcStatus} />}
+            <span data-testid="grn-hero-qc-status"><GrnQcStatusChip stage={qcStage} /></span>
             {isCompleted && (
               <Chip size="small" variant="outlined" icon={<Lock size={13} />} label="Completed · Read-only"
                 title="Stock has been posted — this GRN can no longer be edited or deleted"
@@ -204,6 +233,10 @@ const GrnDetail = () => {
       <FmsDoerCard entityType="GRN" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
+        <Grid item xs={12}>
+          <PageSection letter="A" title="GRN Details" subtitle="Goods received against the PO · stock · MD approval" />
+        </Grid>
+
         {/* GRN + PO info */}
         <Grid item xs={12} md={6}>
           <SectionCard icon={<FileText size={18} />} title="GRN Information">
@@ -221,7 +254,13 @@ const GrnDetail = () => {
               {/* Shown beside Warehouse on purpose: they are different things.
                   Warehouse is the GRN's own store (MAIN); Received At is where
                   the Raw Material landed, and is what the RM movement uses. */}
-              <Grid item xs={6} sm={4}><Field label="Add to RM Stock" value={grn.addToRmStock ? 'Yes' : 'No'} /></Grid>
+              {/* GRNs raised before Inventory Type existed show their recorded
+                  "Add to RM Stock" choice as it was — never reinterpreted. */}
+              <Grid item xs={6} sm={4}>
+                <Field label="Inventory Type" value={grn.inventoryType
+                  ? inventoryTypeLabel(grn.inventoryType)
+                  : `— (earlier GRN · Add to RM Stock: ${grn.addToRmStock ? 'Yes' : 'No'})`} />
+              </Grid>
               <Grid item xs={6} sm={4}><Field label="Received At" value={grn.rmReceivedAtLocation || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Completed At" value={fmtDate(grn.completedAt)} /></Grid>
               {grn.remarks ? <Grid item xs={12}><Field label="Remarks" value={grn.remarks} /></Grid> : null}
@@ -357,7 +396,7 @@ const GrnDetail = () => {
 
         {/* MD Digital Approval & Signature */}
         {isCompleted && (
-          <Grid item xs={12}>
+          <Grid item xs={12} id="grn-md-approval" sx={{ scrollMarginTop: 80 }}>
             <MdApprovalCard
               documentType="GRN"
               documentId={grn._id}
@@ -369,32 +408,13 @@ const GrnDetail = () => {
           </Grid>
         )}
 
-        {/* Step 1.9 — Incoming QC */}
-        {isCompleted && (
-          <Grid item xs={12}>
-            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-                <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
-                  <ClipboardCheck size={18} /> Incoming QC
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  {grn.qcStatus === 'PENDING' && grn.approvalStatus === 'MD_APPROVED' && (
-                    <Button size="small" variant="contained" startIcon={<ClipboardCheck size={14} />} onClick={() => setQcFormOpen(true)}>Create QC</Button>
-                  )}
-                  {grn.qcId && (
-                    <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => navigate(`/procurement/incoming-qc/${grn.qcId}`)}>View QC</Button>
-                  )}
-                </Box>
-              </Box>
-              <Grid container spacing={2}>
-                <Grid item xs={6} sm={3}><Field label="QC Status" value={<QcStatusChip status={grn.qcStatus} />} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="QC Number" value={grn.qcNumber || '—'} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="QC Result" value={grn.qcStatus === 'PENDING' ? '—' : <QcResultChip result={grn.qcStatus === 'PASSED' ? 'PASS' : grn.qcStatus === 'FAILED' ? 'FAIL' : grn.qcStatus === 'PARTIAL' ? 'PARTIAL_PASS' : ''} />} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="QC Completed" value={fmtDate(grn.qcCompletedAt)} /></Grid>
-              </Grid>
-            </Paper>
-          </Grid>
-        )}
+        {/* Section B — Step 1.9 Incoming QC, directly under the GRN */}
+        <Grid item xs={12} sx={{ mt: 1 }}>
+          <PageSection letter="B" title="Incoming QC" subtitle="Step 1.9 · Accepted / rejected / rework against the received quantity" />
+        </Grid>
+        <Grid item xs={12}>
+          <GrnQcSection grn={grn} isMd={isMd} />
+        </Grid>
 
         {/* Timeline */}
         {grn.activityTimeline?.length ? (
@@ -421,7 +441,6 @@ const GrnDetail = () => {
       <GrnDeleteDialog open={deleteOpen} grn={grn}
         onClose={(deleted) => { setDeleteOpen(false); if (deleted) navigate('/purchase-fms/grn'); }} />
       <GrnPdfPreview open={pdfOpen} grn={grn} onClose={() => setPdfOpen(false)} />
-      <IncomingQCFormDialog open={qcFormOpen} presetGrn={grn} onClose={() => setQcFormOpen(false)} />
     </Box>
   );
 };

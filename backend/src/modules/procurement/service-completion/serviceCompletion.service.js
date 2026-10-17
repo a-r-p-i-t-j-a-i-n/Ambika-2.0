@@ -29,8 +29,19 @@ const markIndentCompleted = async (indentId, sc, user) => {
   } catch (err) { logger.error(`[service-completion] indent status update failed: ${err.message}`); }
 };
 
+// Step 1.8A was removed from Purchase FMS: an approved internal-service indent
+// now goes straight to Incoming QC (see incomingQcService.createFromService).
+// Existing records stay readable and keep their QC linkage; no new ones are made.
+export const SERVICE_COMPLETION_RETIRED_MESSAGE =
+  'Service Completion is no longer a separate step — start the service QC from the indent (Incoming QC)';
+
 export const serviceCompletionService = {
-  async create(data, user) {
+  async create() {
+    throw new AppError(SERVICE_COMPLETION_RETIRED_MESSAGE, 410);
+  },
+
+  // Pre-removal create flow, kept unreachable for reference/rollback only.
+  async _legacyCreate(data, user) {
     const indent = await PurchaseIndent.findOne({ _id: data.indentId, isDeleted: { $ne: true } });
     if (!indent) throw new AppError('Indent not found', 404);
     if (indent.requestType !== INDENT_REQUEST_TYPE.INTERNAL_SERVICE) {

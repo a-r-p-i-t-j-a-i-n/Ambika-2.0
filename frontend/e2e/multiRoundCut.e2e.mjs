@@ -6,7 +6,7 @@
  * Coil MR-UI-B001 (2,000 kg, PLG01) is cut twice, 1,000 kg each time, exactly
  * as an operator would: type the batch, read what the coil has left, enter
  * "Cut this round", the circles, save — then do it again. In between and after,
- * the Cutting History under the form must update itself: one row for the coil,
+ * the Coil to Circle history must update itself: one row for the coil,
  * Partially → Fully cut, rounds 1 → 2, and the rounds in order on expand.
  *
  * Nothing is asserted from a toast. backend/src/scripts/e2eMultiRoundFixture.js
@@ -83,41 +83,48 @@ const run = async () => {
   await go(`${APP}/rm-ims/conversion`);
   await page.waitForTimeout(2500);
 
-  /* ── Cutting History sits on the SAME page, below the form ── */
-  const historyHeading = page.getByText('Cutting History', { exact: true });
-  check('"Cutting History" is on the Cut Coils page', (await historyHeading.count()) === 1);
-  check('…with the required subtitle', (await page.getByText('See how much of each physical coil was cut, what was produced, what remains, and every cutting round.').count()) === 1);
-  const saveBox = await page.getByRole('button', { name: /save this conversion/i }).boundingBox();
-  const histBox = await historyHeading.boundingBox();
-  check('…BELOW the form (under the Save button)', !!saveBox && !!histBox && histBox.y > saveBox.y, `${saveBox?.y} < ${histBox?.y}`);
+  /* ── The page opens on the history; the form opens from "+ Coil to Circle" ── */
+  const historyHeading = page.getByText('Coil to Circle history', { exact: true });
+  check('the Cut Coils page opens on its history', (await historyHeading.count()) === 1);
+  check('…and the form is closed until "+ Coil to Circle"', (await page.getByRole('button', { name: /save this conversion/i }).count()) === 0);
+  // Every form control lives in the dialog — the page behind it has its own
+  // "Batch number" filter, so nothing here is looked up page-wide.
+  const F = page.getByTestId('coil-to-circle-dialog');
+  const openCutForm = async () => {
+    if (await F.count()) return;
+    await page.getByTestId('open-coil-to-circle').click();
+    await F.waitFor({ state: 'visible', timeout: 10000 });
+    await page.waitForTimeout(500);
+  };
   const historyRow = () => page.locator(`[data-testid="cut-history-row"][data-batch="${BATCH}"]`);
   check('the uncut coil is not in the history yet', (await historyRow().count()) === 0);
   await page.getByTestId('cut-history-untraceable').waitFor({ timeout: 15000 }).catch(() => {});
   check('the untraceable older cuts are stated, not hidden', /1 older cut/.test(await page.getByTestId('cut-history-untraceable').innerText()),
     await page.getByTestId('cut-history-untraceable').innerText());
   await shot('01-open');
+  await openCutForm();
 
-  const batch = page.getByLabel(/batch number/i).first();
-  const cutField = page.getByLabel(/^cut this round/i).first();
-  const facts = () => page.getByTestId('coil-facts').innerText().then(flat);
-  const afterRound = () => page.getByTestId('after-round').innerText().then(flat);
-  const thisRound = () => page.getByTestId('this-round').innerText().then(flat);
-  const saveBtn = page.getByRole('button', { name: /save this conversion/i });
+  const batch = F.getByLabel(/batch number/i).first();
+  const cutField = F.getByLabel(/^cut this round/i).first();
+  const facts = () => F.getByTestId('coil-facts').innerText().then(flat);
+  const afterRound = () => F.getByTestId('after-round').innerText().then(flat);
+  const thisRound = () => F.getByTestId('this-round').innerText().then(flat);
+  const saveBtn = F.getByRole('button', { name: /save this conversion/i });
 
   const pickCircle = async (pcs, kg) => {
-    const input = page.locator('table tbody tr').nth(0).locator('input[placeholder]').first();
+    const input = F.locator('table tbody tr').nth(0).locator('input[placeholder]').first();
     await input.click();
     await page.waitForTimeout(400);
     await page.locator('ul[role="listbox"] li[role="option"]').first().click();
     await page.waitForTimeout(250);
-    const row = page.locator('table tbody tr').nth(0);
+    const row = F.locator('table tbody tr').nth(0);
     await row.locator('input[type="number"]').nth(0).fill(String(pcs));
     await row.locator('input[type="number"]').nth(1).fill(String(kg));
   };
 
   /* ── Rate comes from the coil's own receipt, never from the grade ── */
-  const rateField = page.getByLabel(/^rate/i).first();
-  const gradeBox = page.getByRole('combobox', { name: /coil being cut/i }).first();
+  const rateField = F.getByLabel(/^rate/i).first();
+  const gradeBox = F.getByRole('combobox', { name: /coil being cut/i }).first();
   const pickGrade = async (code) => {
     await gradeBox.click();
     await gradeBox.fill(code);
@@ -125,21 +132,26 @@ const run = async () => {
     await page.locator('ul[role="listbox"] li[role="option"]').first().click();
     await page.waitForTimeout(400);
   };
-  /* ── Before any coil is chosen: information shows "—", the round is locked ── */
+  /* ── Before any coil is chosen: no coil cards at all, the round is locked ── */
   {
-    const f0 = flat(await page.getByTestId('coil-facts').innerText());
-    check('no coil: Total coil weight / Already cut / Remaining weight all read "—"',
-      /Total coil weight —/i.test(f0) && /Already cut —/i.test(f0) && /Remaining weight —/i.test(f0), f0);
+    check('no coil: the Total coil weight / Already cut / Remaining weight / Cutting status cards are hidden',
+      (await F.getByTestId('coil-facts').count()) === 0);
     check('no coil: Full and Partial cutting are both disabled',
-      await page.getByRole('radio', { name: /full cutting/i }).isDisabled() && await page.getByRole('radio', { name: /partial cutting/i }).isDisabled());
-    check('no coil: "Cut this round" is disabled', await page.getByLabel(/^cut this round/i).first().isDisabled());
-    check('no coil: "No physical coil chosen yet." is shown', /No physical coil chosen yet\./.test(await page.locator('body').innerText()));
+      await F.getByRole('radio', { name: /full cutting/i }).isDisabled() && await F.getByRole('radio', { name: /partial cutting/i }).isDisabled());
+    check('no coil: "Cut this round" is disabled', await F.getByLabel(/^cut this round/i).first().isDisabled());
+    // The yellow "No physical coil chosen yet." panel is gone — its guidance
+    // is one line under the batch number — and nothing else went with it.
+    check('no coil: no "No physical coil chosen yet." panel; the batch number says what to do',
+      !/No physical coil chosen yet/.test(await F.innerText()) && /Type the batch number on the coil, or pick it from the list/.test(await F.innerText()));
+    check('no coil: the rest of the form is still on screen (rate, round outcome, circles, Save)',
+      (await rateField.count()) === 1 && (await F.getByTestId('round-outcome').count()) === 1
+        && (await F.locator('table tbody tr').count()) === 1 && (await saveBtn.count()) === 1 && await saveBtn.isDisabled());
     await shot('00-no-coil');
   }
 
   await pickGrade('JSL204-07');
   check('picking a coil GRADE does not fill the rate', (await rateField.inputValue()) === '', await rateField.inputValue());
-  check('a coil grade alone is not a physical coil: the round stays locked', await page.getByLabel(/^cut this round/i).first().isDisabled());
+  check('a coil grade alone is not a physical coil: the round stays locked', await F.getByLabel(/^cut this round/i).first().isDisabled());
 
   /* ── ROUND 1 ── */
   await batch.fill(BATCH);
@@ -152,12 +164,12 @@ const run = async () => {
   check('round 1 — status Not cut (derived, not chosen)', /Cutting status Not cut/i.test(f), f);
   check('"Cut this round" is NOT pre-filled with the whole coil', (await cutField.inputValue()) === '', await cutField.inputValue());
   check('the physical-coil STATUS is not something the operator can set (no status control)',
-    (await page.getByRole('checkbox', { name: /fully cut|partially cut/i }).count()) === 0
-    && (await page.getByRole('combobox', { name: /fully cut|partially cut|cut status/i }).count()) === 0);
+    (await F.getByRole('checkbox', { name: /fully cut|partially cut/i }).count()) === 0
+    && (await F.getByRole('combobox', { name: /fully cut|partially cut|cut status/i }).count()) === 0);
 
   // Cutting TYPE is the operator's choice for this round — offered, never pre-selected.
-  const fullRadio = page.getByRole('radio', { name: /full cutting/i });
-  const partialRadio = page.getByRole('radio', { name: /partial cutting/i });
+  const fullRadio = F.getByRole('radio', { name: /full cutting/i });
+  const partialRadio = F.getByRole('radio', { name: /partial cutting/i });
   check('Cutting type offers Full cutting and Partial cutting', (await fullRadio.count()) === 1 && (await partialRadio.count()) === 1);
   check('…neither is pre-selected', !(await fullRadio.isChecked()) && !(await partialRadio.isChecked()));
   check('…and the weight cannot be entered until one is chosen', await cutField.isDisabled());
@@ -189,7 +201,7 @@ const run = async () => {
   check('after this round: Partial · Total 2,000 · Already cut 0 · This round 1,000 · Remaining 1,000 · Partially cut',
     /Cutting type Partial/i.test(a) && /Total coil 2,000 kg/i.test(a) && /Already cut 0 kg/i.test(a) && /This round 1,000 kg/i.test(a)
       && /Remaining 1,000 kg/i.test(a) && /Partially cut/i.test(a), a);
-  const o1 = flat(await page.getByTestId('round-outcome').innerText());
+  const o1 = flat(await F.getByTestId('round-outcome').innerText());
   check('beside the field, After this round: Cut this round 1,000 · Remaining weight 1,000 · Status Partially cut',
     /Cut this round 1,000 kg Remaining weight 1,000 kg Status Partially cut/i.test(o1), o1);
   check('…labelled as round 1 of this coil', new RegExp(`round 1 of coil ${BATCH}`, 'i').test(flat(await page.locator('body').innerText())));
@@ -197,14 +209,16 @@ const run = async () => {
   await saveBtn.click();
   await page.waitForTimeout(4000);
   check('round 1 saves', /saved/i.test(await page.locator('body').innerText()));
-  check('the form resets after saving', (await cutField.inputValue()) === '' && (await batch.inputValue()) === '');
+  check('the form closes after saving', (await F.count()) === 0);
 
   let hr = flat(await historyRow().innerText().catch(() => ''));
-  check('Cutting History now has the coil: total cut 1,000, remaining 1,000, Partially cut, 1 round',
-    (await historyRow().count()) === 1 && /2,000 1,000 850 150 85% 1,000 Partially cut PLG01 1$/.test(hr), hr);
+  check('the history now has the coil: total cut 1,000, 170 pcs, remaining 1,000, Partially cut, 1 round',
+    (await historyRow().count()) === 1 && /PLG01 · Plant 2,000 1,000 170 850 150 85% 1,000 Partially cut 1 round$/.test(hr), hr);
   await shot('04-round1-saved');
 
   /* ── ROUND 2 — the SAME physical coil ── */
+  await openCutForm();
+  check('the next round starts from an empty form', (await cutField.inputValue()) === '' && (await batch.inputValue()) === '');
   await batch.fill(BATCH);
   await page.waitForTimeout(3000);
   f = await facts();
@@ -239,8 +253,8 @@ const run = async () => {
 
   hr = flat(await historyRow().innerText().catch(() => ''));
   check('still ONE history row for the coil', (await historyRow().count()) === 1);
-  check('history row: total cut 2,000, circles 1,670, scrap 330, weighted yield 83.5%, remaining 0, Fully cut, 2 rounds',
-    /2,000 2,000 1,670 330 83\.5% 0 Fully cut PLG01 2$/.test(hr), hr);
+  check('history row: total cut 2,000, 334 pcs, circles 1,670, scrap 330, weighted yield 83.5%, remaining 0, Fully cut, 2 rounds',
+    /PLG01 · Plant 2,000 2,000 334 1,670 330 83\.5% 0 Fully cut 2 rounds$/.test(hr), hr);
 
   /* ── Expand the coil: every round, in order ── */
   await historyRow().click();
@@ -255,6 +269,8 @@ const run = async () => {
   await shot('06-history-expanded');
 
   /* ── A fully cut coil is still findable, and says so ── */
+  await historyRow().click(); // close the rounds again
+  await openCutForm();
   await batch.fill(BATCH);
   await page.waitForTimeout(4000);
   f = await facts().catch(() => '');
@@ -263,14 +279,19 @@ const run = async () => {
   check('…and Full cutting is unavailable — nothing is left to take', await fullRadio.isDisabled());
   await shot('07-fully-cut-lookup');
   check('the batch filled the rate again (₹170)', (await rateField.inputValue()) === '170', await rateField.inputValue());
-  await pickGrade('JSL204-07');
-  check('changing the coil grade unlinks the batch and clears ITS rate — no grade rate takes its place',
-    (await rateField.inputValue()) === '', await rateField.inputValue());
+  // A bound coil's grade is its receipt's own, so it cannot be swapped for
+  // another grade; "Clear coil" is how the batch is unlinked.
+  check('the bound coil\'s grade is locked to its receipt', await gradeBox.isDisabled());
+  await F.getByRole('button', { name: /clear coil/i }).click();
+  await page.waitForTimeout(400);
+  check('clearing the coil unlinks the batch and clears ITS rate — no grade rate takes its place',
+    (await rateField.inputValue()) === '' && (await batch.inputValue()) === '', await rateField.inputValue());
 
   /* ── A FRESH coil cut completely in ONE round (Full cutting) ── */
   const FULL_BATCH = 'MR-UI-FULL';
   await batch.fill(FULL_BATCH);
   await page.waitForTimeout(3000);
+  check('the next coil fills ITS OWN rate from its goods receipt (₹170)', (await rateField.inputValue()) === '170', await rateField.inputValue());
   f = await facts();
   check('fresh coil: Total 2,000 · Already cut 0 · Remaining 2,000', /Total coil weight 2,000 kg/i.test(f) && /Already cut 0 kg/i.test(f) && /Remaining weight 2,000 kg/i.test(f), f);
   await fullRadio.check();
@@ -278,15 +299,15 @@ const run = async () => {
   check('Full cutting sets "Cut this round" to the whole 2,000 kg', (await cutField.inputValue()) === '2000', await cutField.inputValue());
   // Two circle sizes in one round: 1,000 + 700 = 1,700 kg out of 2,000.
   await pickCircle(200, 1000);
-  await page.getByRole('button', { name: /add another circle size/i }).click();
+  await F.getByRole('button', { name: /add another circle size/i }).click();
   await page.waitForTimeout(300);
   {
-    const input = page.locator('table tbody tr').nth(1).locator('input[placeholder]').first();
+    const input = F.locator('table tbody tr').nth(1).locator('input[placeholder]').first();
     await input.click();
     await page.waitForTimeout(400);
     await page.locator('ul[role="listbox"] li[role="option"]').nth(1).click();
     await page.waitForTimeout(250);
-    const row = page.locator('table tbody tr').nth(1);
+    const row = F.locator('table tbody tr').nth(1);
     await row.locator('input[type="number"]').nth(0).fill('140');
     await row.locator('input[type="number"]').nth(1).fill('700');
   }
@@ -302,8 +323,8 @@ const run = async () => {
   check('the one-round full cut saves', /saved/i.test(await page.locator('body').innerText()));
   const fullRow = page.locator(`[data-testid="cut-history-row"][data-batch="${FULL_BATCH}"]`);
   const fr = flat(await fullRow.innerText().catch(() => ''));
-  check('history: the coil is Fully cut in 1 round — 2,000 cut, 1,700 out, 300 scrap, 85%, 0 left',
-    /2,000 2,000 1,700 300 85% 0 Fully cut PLG01 1$/.test(fr), fr);
+  check('history: the coil is Fully cut in 1 round — 2,000 cut, 340 pcs, 1,700 out, 300 scrap, 85%, 0 left',
+    /PLG01 · Plant 2,000 2,000 340 1,700 300 85% 0 Fully cut 1 round$/.test(fr), fr);
   await fullRow.click();
   await page.waitForTimeout(1500);
   const fRounds = (await page.getByTestId('cut-round-row').allInnerTexts()).map(flat).filter((t) => /2,000 kg 1,700 kg/.test(t));

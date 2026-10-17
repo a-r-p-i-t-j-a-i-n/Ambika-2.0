@@ -41,7 +41,6 @@ import PurchaseOrderPiNotRequiredDialog from './PurchaseOrderPiNotRequiredDialog
 import { GrnStatusChip } from '../grn/grnMeta';
 import GrnFormDialog from '../grn/GrnFormDialog';
 import GrnCompleteDialog from '../grn/GrnCompleteDialog';
-import IncomingQCFormDialog from '../incoming-qc/IncomingQCFormDialog';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 
@@ -154,7 +153,6 @@ const PurchaseOrderDetail = () => {
   // Step 1.8 — goods receipt notes against this PO.
   const [grnFormOpen, setGrnFormOpen] = useState(false);
   const [grnCompleteOpen, setGrnCompleteOpen] = useState(false);
-  const [qcFormOpen, setQcFormOpen] = useState(false);
   const grnRelevant = Boolean(data?.data) &&
     ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(data.data.poStatus);
   const { data: grnRes } = useGetGrnsByPoQuery(id, { skip: !grnRelevant });
@@ -177,7 +175,7 @@ const PurchaseOrderDetail = () => {
   const totalOrdered = (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0);
   // GRN-state gate — drives the Next Action / Quick Actions once a GRN exists:
   // Draft → Complete GRN; Partial-received with pending qty → Create Next GRN;
-  // Partial/Fully received with QC still pending → Create Incoming QC.
+  // Partial/Fully received with QC still pending → Open GRN & QC (QC sits on the GRN page).
   const grnGate = (() => {
     if (!activeGrn) return null;
     if (activeGrn.grnStatus === 'DRAFT') {
@@ -201,9 +199,10 @@ const PurchaseOrderDetail = () => {
         primary: { label: 'View GRN', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/grns/${activeGrn._id}`) },
       };
     }
+    // QC is entered on the GRN page, directly under the GRN (one combined step).
     return {
-      tone: 'success', text: 'Goods received — run Incoming QC to inspect the material.',
-      primary: { label: 'Create Incoming QC', icon: <ClipboardCheck size={16} />, onClick: () => setQcFormOpen(true) },
+      tone: 'success', text: 'Goods received — run Incoming QC on the GRN page.',
+      primary: { label: 'Open GRN & QC', icon: <ClipboardCheck size={16} />, onClick: () => navigate(`/procurement/grns/${activeGrn._id}#qc`) },
     };
   })();
 
@@ -817,7 +816,6 @@ const PurchaseOrderDetail = () => {
 
       <GrnFormDialog open={grnFormOpen} presetPo={po} onClose={() => setGrnFormOpen(false)} />
       <GrnCompleteDialog open={grnCompleteOpen} grn={activeGrn} onClose={() => setGrnCompleteOpen(false)} />
-      <IncomingQCFormDialog open={qcFormOpen} presetGrn={activeGrn} onClose={() => setQcFormOpen(false)} />
 
     </Box>
   );

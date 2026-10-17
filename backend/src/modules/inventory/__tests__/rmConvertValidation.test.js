@@ -95,6 +95,25 @@ test('cutting-history query: location and status are restricted to the derived v
   assert.ok(v({ limit: 201 }).error);
 });
 
+test('cutting-history query: batch, entry type, circle SKU and date range', () => {
+  const v = (q) => rmCuttingHistoryQuerySchema.validate(q);
+  const ok = v({
+    batchNo: ' AB-12 ', entryType: 'manual', circleSkuId: '0123456789abcdef01234567',
+    from: '2026-03-01', to: '2026-03-31',
+  });
+  assert.equal(ok.error, undefined);
+  assert.equal(ok.value.batchNo, 'AB-12');
+  assert.equal(ok.value.entryType, 'MANUAL');
+  // One day is a valid range; either end may be left open.
+  assert.equal(v({ from: '2026-03-05', to: '2026-03-05' }).error, undefined);
+  assert.equal(v({ from: '2026-03-05' }).error, undefined);
+  assert.equal(v({ to: '2026-03-05' }).error, undefined);
+  assert.match(v({ from: '2026-04-01', to: '2026-03-31' }).error.message, /From date cannot be after To date/);
+  assert.ok(v({ from: '01-03-2026' }).error);
+  assert.ok(v({ circleSkuId: 'not-an-id' }).error);
+  assert.ok(v({ entryType: 'EXCEL' }).error);
+});
+
 // ── Cutting type ─────────────────────────────────────────────────────────────
 test('cuttingType: FULL / PARTIAL accepted (any case), absent still accepted, anything else refused', () => {
   assert.equal(validate({}).error, undefined);

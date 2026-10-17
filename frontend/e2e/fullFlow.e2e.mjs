@@ -172,15 +172,17 @@ const main = async () => {
     check('the Coil row demands a Batch No', (await dlg.getByLabel(/Batch No \*/).count()) > 0);
     await batchField.fill(p.batch);
 
-    // Received At + Add to RM Stock, on the form where the GRN is raised.
+    // Inventory Type (it replaced "Add to RM Stock") + Received At, on the form
+    // where the GRN is raised. Received At is asked for only for Raw Material.
+    check('Received At is not asked for before an Inventory Type is chosen', (await dlg.getByRole('combobox', { name: /Received At/i }).count()) === 0);
+    await pickSelect('Inventory Type', /^Raw Material \(RM\)$/);
+    check('Inventory Type is "Raw Material (RM)" on the form — the coil goes to RM stock', /Raw Material \(RM\)/.test(await comboText('Inventory Type')), await comboText('Inventory Type'));
     await pickSelect('Received At', new RegExp(p.at));
     check(`Received At is set to ${p.at}`, new RegExp(p.at).test(await comboText('Received At')));
-    const formBox = dlg.locator('input[type="checkbox"]').first();
-    await formBox.check();
-    check('"Add to RM Stock" is ticked on the form', await formBox.isChecked());
     await shot(`02-grn-form-${p.batch}`);
 
-    await dlg.getByRole('button', { name: /^create grn$/i }).click();
+    // The form's submit is "Save GRN" (it then stays open for Incoming QC).
+    await dlg.getByRole('button', { name: /^save grn$/i }).click();
     await page.waitForTimeout(3500);
     check('the GRN is created as a draft', (await page.getByText(/created \(draft\)/i).count()) > 0);
 
@@ -202,11 +204,9 @@ const main = async () => {
     await page.getByRole('button', { name: /complete & post stock/i }).first().click();
     await page.waitForTimeout(900);
 
-    const cdlg = page.getByRole('dialog');
-    const rmBox = cdlg.locator('input[type="checkbox"]').nth(1);
-    // The choice made on the form must be inherited by the dialog.
-    check('the dialog inherits "Add to RM Stock" from the form', await rmBox.isChecked());
-    if (!(await rmBox.isChecked())) await rmBox.check();
+    // The choices made on the form must be inherited by the dialog.
+    check('the dialog inherits Inventory Type = Raw Material (RM) from the form',
+      /Raw Material \(RM\)/.test(await comboText('Inventory Type')), await comboText('Inventory Type'));
     check(`the dialog inherits Received At = ${p.at}`,
       new RegExp(p.at).test(await comboText('Received At')), await comboText('Received At'));
     await shot(`03-grn-complete-${p.batch}`);
@@ -231,31 +231,42 @@ const main = async () => {
   await shot('05-rm-stock');
 
   /* ══ PART 4 — Batch lookup + Cut Coils ══ */
-  const circleInput = (row) => page.locator('table tbody tr').nth(row).locator('input[placeholder]').first();
+  // Cut Coils opens on its history; the form is a dialog opened from
+  // "+ Coil to Circle", so every form control is looked up inside it.
+  const F = page.getByTestId('coil-to-circle-dialog');
+  const openCutForm = async () => {
+    if (await F.count()) return;
+    await page.getByTestId('open-coil-to-circle').click();
+    await F.waitFor({ state: 'visible', timeout: 10000 });
+    await page.waitForTimeout(800);
+  };
+  const circleInput = (row) => F.locator('table tbody tr').nth(row).locator('input[placeholder]').first();
   const openCircleOptions = async (row) => {
     await circleInput(row).click();
     await page.waitForTimeout(700);
     const opts = await page.locator('ul[role="listbox"] li[role="option"]').allInnerTexts().catch(() => []);
     return opts;
   };
-  const closeMenu = async () => { await page.keyboard.press('Escape'); await page.waitForTimeout(200); };
+  const closeMenu = async () => { if (await page.locator('ul[role="listbox"], .MuiAutocomplete-popper').count()) await page.keyboard.press('Escape'); await page.waitForTimeout(200); };
 
   for (const [i, r] of ROUNDS.entries()) {
     const p = PURCHASES.find((x) => x.batch === r.batch);
     section(`Part 4/6 — Cut ${r.batch} round (${r.coilKg} kg -> ${r.circle})`);
     await go(`${APP}/rm-ims/conversion`);
     await page.waitForTimeout(2500);
+    await openCutForm();
 
     // Batch lookup — identify the physical coil.
-    await page.getByLabel(/batch number/i).first().fill(r.batch);
+    await F.getByLabel(/batch number/i).first().fill(r.batch);
     await page.waitForTimeout(3200);
     const idBody = (await body()).replace(/\s+/g, ' ');
     check(`${r.batch} identifies a received coil`, /kg available to cut/.test(idBody),
       (idBody.match(/Cutting coil[^|]{0,70}/) || [''])[0]);
     check('…and it is the right coil', idBody.includes(r.batch));
-    // "No receipt available" must NOT be needed — this is the traceable path.
-    const fallback = page.locator('input[type="checkbox"]').first();
-    check('the untraceable fallback is OFF', (await fallback.isChecked()) === false);
+    // "No receipt available" must NOT be needed — this is the traceable path,
+    // where it is not even offered.
+    check('the untraceable fallback is not in play on the GRN path',
+      (await F.getByRole('checkbox', { name: /No receipt available/i }).count()) === 0);
     await shot(`06-cut-${r.batch}-${i}-identified`);
 
     // The circle dropdown must offer only this coil's approved sizes.
@@ -271,12 +282,12 @@ const main = async () => {
     check(`${r.circle} can be selected`, (await circleInput(0).inputValue()).includes(r.circle),
       await circleInput(0).inputValue());
 
-    const row0 = page.locator('table tbody tr').nth(0);
+    const row0 = F.locator('table tbody tr').nth(0);
     await row0.locator('input[type="number"]').nth(0).fill(String(r.pcs));
     await row0.locator('input[type="number"]').nth(1).fill(String(r.kg));
     // A linked coil asks for the cutting type first; this run types the weight.
-    await page.getByRole('radio', { name: /partial cutting/i }).first().check();
-    await page.getByLabel(/^cut this round/i).first().fill(String(r.coilKg));
+    await F.getByRole('radio', { name: /partial cutting/i }).first().check();
+    await F.getByLabel(/^cut this round/i).first().fill(String(r.coilKg));
     await page.waitForTimeout(900);
 
     const calc = (await body()).replace(/\s+/g, ' ');
@@ -284,7 +295,7 @@ const main = async () => {
     check(`yield computes to ${r.yield}%`, calc.includes(String(r.yield)));
     await shot(`07-cut-${r.batch}-${i}-ready`);
 
-    await page.getByRole('button', { name: /save this conversion/i }).last().click();
+    await F.getByRole('button', { name: /save this conversion/i }).click();
     const saved = await page.getByText(/saved against coil|conversion .*saved|cut saved/i).first()
       .waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
     check('the conversion saves', saved);
@@ -389,16 +400,24 @@ const main = async () => {
   const apiErrorsBefore = apiErrors.length;
   await go(`${APP}/rm-ims/conversion`);
   await page.waitForTimeout(2500);
-  await page.getByLabel(/batch number/i).first().fill('NO-SUCH-BATCH-ZZZ');
+  await openCutForm();
+  await F.getByLabel(/batch number/i).first().fill('NO-SUCH-BATCH-ZZZ');
   await page.waitForTimeout(3200);
   const negBody = (await body()).replace(/\s+/g, ' ');
   check('A. an unknown batch identifies no coil', !/kg available to cut/.test(negBody));
-  check('A. the screen asks for a coil or the explicit fallback',
-    /No receipt available|not being traced|pick the/i.test(negBody));
-  const saveDisabled = await page.getByRole('button', { name: /save this conversion/i }).last().isDisabled();
+  check('A. the Batch Number field says no coil/GRN has that batch and asks for the coil details in the same form',
+    /No matching coil\/GRN found\. Enter the coil details manually\./i.test(negBody)
+      && await F.getByRole('combobox', { name: /coil being cut/i }).first().isEnabled() && await F.getByTestId('manual-total-input').isEnabled());
+  const saveDisabled = await F.getByRole('button', { name: /save this conversion/i }).isDisabled();
   check('A. saving is blocked while no coil is identified', saveDisabled);
-  check('C. "No receipt available" stays an explicit, unticked choice',
-    (await page.locator('input[type="checkbox"]').first().isChecked()) === false);
+  // An unmatched batch is a NEW (traceable) coil, never a batchless one.
+  const noReceipt = F.getByRole('checkbox', { name: /No receipt available/i });
+  check('C. "No receipt available" is never inferred from a failed lookup — not offered while a batch is typed',
+    (await noReceipt.count()) === 0);
+  await F.getByLabel(/batch number/i).first().fill('');
+  await page.waitForTimeout(600);
+  check('C. …and for a coil with no batch number it is an explicit, unticked choice',
+    (await noReceipt.count()) === 1 && (await noReceipt.isChecked()) === false);
   await shot('12-negative-unknown-batch');
 
   // D. duplicate GRN completion

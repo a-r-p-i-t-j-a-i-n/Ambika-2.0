@@ -39,6 +39,8 @@ const QcChip = ({ value }) => {
   return <Chip size="small" label={c.label} sx={{ bgcolor: alpha(c.bg, 0.12), color: c.bg, fontWeight: 700 }} />;
 };
 
+// Read-only history of the retired Service Completion step (former 1.8A). Not in
+// the Purchase FMS stepper; "Create QC" stays so legacy completed records can proceed.
 const ServiceCompletionList = () => {
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
@@ -58,7 +60,7 @@ const ServiceCompletionList = () => {
     try {
       await createQc({ serviceCompletionId: row._id }).unwrap();
       enqueueSnackbar('Service QC created', { variant: 'success' });
-      navigate('/purchase-fms/incoming-qc');
+      navigate('/purchase-fms/grn?view=qc');
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to create QC', { variant: 'error' });
     }
@@ -100,7 +102,7 @@ const ServiceCompletionList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, ...pfmsPageSx }}>
       <Box>
         <Typography sx={pfmsTitleSx}>Service Completions ({stats.total || 0})</Typography>
-        <Typography sx={pfmsSubtitleSx}>Step 1.8A · Internal service / repair / maintenance completion</Typography>
+        <Typography sx={pfmsSubtitleSx}>History · This step was removed — internal-service indents now go straight to Incoming QC</Typography>
       </Box>
 
       <Grid container spacing={2}>

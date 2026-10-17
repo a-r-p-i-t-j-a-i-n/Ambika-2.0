@@ -288,15 +288,35 @@ export const rmConversionsQuerySchema = Joi.object({
 /**
  * Cutting History — one row per physical coil. Status is DERIVED on the server,
  * so filtering by it is a question, never an instruction.
+ *
+ * Two kinds of filter, and the difference matters (see listCuttingHistory):
+ *   coil-level   search, batchNo, entryType, status — about the coil itself;
+ *   round-level  from/to, circleSkuId, location — a coil is listed when at
+ *                least ONE of its rounds satisfies all of them together.
+ *
+ * `from` / `to` are calendar days (YYYY-MM-DD, read in IST), the same shape
+ * every other IMS history screen sends.
  */
+const isoDay = Joi.string().trim().pattern(/^\d{4}-\d{2}-\d{2}$/)
+  .messages({ 'string.pattern.base': '{#label} must be a date (YYYY-MM-DD)' });
 export const rmCuttingHistoryQuerySchema = Joi.object({
   search:   Joi.string().trim().max(120).allow('', null),
+  batchNo:  Joi.string().trim().max(80).allow('', null),
+  entryType: Joi.string().trim().uppercase().valid('GRN', 'MANUAL').allow('', null)
+    .messages({ 'any.only': 'Entry type must be GRN or MANUAL' }),
   location: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow('', null)
     .messages({ 'any.only': `Location must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` }),
   status:   Joi.string().trim().uppercase().valid('NOT_CUT', 'PARTIALLY_CUT', 'FULLY_CUT').allow('', null),
+  circleSkuId: objectId.allow('', null)
+    .messages({ 'string.pattern.base': 'Circle SKU is not a valid id' }),
+  from:     isoDay.allow('', null).label('From date'),
+  to:       isoDay.allow('', null).label('To date'),
   page:     Joi.number().integer().min(1),
   limit:    Joi.number().integer().min(1).max(200),
-}).unknown(true);
+}).unknown(true).custom((v, helpers) => (
+  // Compared as strings: both are YYYY-MM-DD, which sorts as it reads.
+  v.from && v.to && v.from > v.to ? helpers.message('From date cannot be after To date') : v
+));
 
 /**
  * Finding the physical coil that is about to be cut.
@@ -309,6 +329,9 @@ export const rmCuttingHistoryQuerySchema = Joi.object({
  */
 export const rmReceivedCoilsQuerySchema = Joi.object({
   q:         Joi.string().trim().max(120).allow('', null),
+  // An EXACT batch number (any case) — how Cut Coils resolves the coil the
+  // operator typed, so a short batch is never lost behind partial matches.
+  batchNo:   Joi.string().trim().max(120).allow('', null),
   skuId:     objectId.allow('', null),
   warehouse: Joi.string().trim().max(40).allow('', null),
   // Fully-cut coils are hidden by default — they cannot be cut again. Kept

@@ -58,11 +58,12 @@ export const ENTITY_TYPES = {
     link: (d) => `/procurement/grns/${d._id}`,
     terminated: (d) => d.isDeleted || d.grnStatus === 'CANCELLED',
   },
+  // Retired step — kept so existing tasks pointing at Service Completions resolve.
   SERVICE_COMPLETION: {
     label: 'Service Completion', model: ServiceCompletion,
     ref: (d) => d.scNumber || '',
     summary: (d) => d.vendorName || '',
-    link: () => '/purchase-fms/service-completion',
+    link: () => '/procurement/service-completions',
     terminated: (d) => d.isDeleted || d.status === 'CANCELLED',
   },
   QC: {
@@ -184,21 +185,18 @@ const PURCHASE_STEPS = [
       poStatus: { $in: ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED'] },
     })],
   },
-  {
-    key: 'SERVICE_COMPLETION', code: '1.8A', label: 'Service Completion',
-    description: 'Internal-service indent awaiting service completion.',
-    permissions: [],
-    sources: [byFilter('INDENT', { overallStatus: 'SERVICE_PENDING' })],
-  },
+  // The former Step 1.8A (Service Completion) was removed: an approved
+  // internal-service indent now waits directly at Incoming QC.
   {
     key: 'INCOMING_QC', code: '1.9', label: 'Incoming QC',
-    description: 'Received (MD-signed) GRN or completed service awaiting QC.',
+    description: 'Received (MD-signed) GRN or approved internal-service indent awaiting QC.',
     permissions: [],
     sources: [
       // QC can only start once the GRN is MD-signed (existing gate), so an
       // unsigned GRN is not yet waiting on the QC doer.
       byFilter('GRN', { grnStatus: { $in: ['PARTIAL_RECEIVED', 'FULLY_RECEIVED'] }, qcStatus: 'PENDING', approvalStatus: 'MD_APPROVED' }),
-      byFilter('SERVICE_COMPLETION', { status: 'COMPLETED', qcStatus: 'PENDING' }),
+      // SERVICE_COMPLETED = legacy indents completed under the retired step, QC not done yet.
+      byFilter('INDENT', { requestType: 'INTERNAL_SERVICE', overallStatus: { $in: ['SERVICE_PENDING', 'SERVICE_COMPLETED'] } }),
     ],
   },
   {

@@ -44,6 +44,9 @@ router.get('/coil/:receiptId/lineage', validate(rmCoilLineageParamSchema, 'param
 // Every physical coil cut so far, one row per coil — the list under the Cut
 // Coils form. Read-only and derived, like the lineage it drills into.
 router.get('/cutting-history', validate(rmCuttingHistoryQuerySchema, 'query'), c.getCuttingHistory);
+// The circle SKUs those coils' rounds actually produced — the Cutting History
+// "Circle SKU" filter offers these, so it never offers a size with no rows.
+router.get('/cutting-history/circles', c.getCuttingHistoryCircles);
 
 router.get('/policy/:skuId', validate(rmSkuParamSchema, 'params'), c.getPolicy);
 router.put('/policy/:skuId', validate(rmSkuParamSchema, 'params'), validate(rmPolicySchema), c.upsertPolicy);

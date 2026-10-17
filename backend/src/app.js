@@ -167,7 +167,7 @@ app.use('/api/v1/rm-ims', rmImsRoutes); // RM IMS — Raw Material (Coil + Circl
 app.use('/api/v1/fg-ims', fgImsRoutes); // FG IMS — Finished Goods inventory (Production In / Dispatch Out)
 app.use('/api/v1/scrap-ims', scrapImsRoutes); // Scrap IMS — cut-by-cut scrap register + scrap stock (Scrap In / Scrap Out)
 app.use('/api/v1/procurement/grns', grnRoutes); // Purchase FMS — Goods Receipt Notes (Step 1.8)
-app.use('/api/v1/procurement/service-completions', serviceCompletionRoutes); // Purchase FMS — Service Completion (Step 1.8A)
+app.use('/api/v1/procurement/service-completions', serviceCompletionRoutes); // Purchase FMS — Service Completion (former Step 1.8A; retired — history + legacy records only)
 app.use('/api/v1/procurement/incoming-qc', incomingQcRoutes); // Purchase FMS — Incoming QC (Step 1.9)
 app.use('/api/v1/procurement/vendor-invoices', vendorInvoiceRoutes); // Purchase FMS — Vendor Invoices (Step 1.10)
 app.use('/api/v1/procurement/vouchers', voucherRoutes); // Purchase FMS — Vouchers (Step 1.11)

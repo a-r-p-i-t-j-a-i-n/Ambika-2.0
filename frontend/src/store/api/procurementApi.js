@@ -319,7 +319,7 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', { type: 'Grn', id }],
     }),
 
-    // ── Service Completions (Step 1.8A — internal-service indents) ──
+    // ── Service Completions (former Step 1.8A — retired, history only; no create) ──
     getServiceCompletions: builder.query({
       query: (params = {}) => ({ url: '/procurement/service-completions', params }),
       providesTags: ['ServiceCompletion'],
@@ -331,10 +331,6 @@ export const procurementApi = baseApi.injectEndpoints({
     getServiceCompletionById: builder.query({
       query: (id) => `/procurement/service-completions/${id}`,
       providesTags: (_r, _e, id) => [{ type: 'ServiceCompletion', id }],
-    }),
-    createServiceCompletion: builder.mutation({
-      query: (body) => ({ url: '/procurement/service-completions', method: 'POST', body }),
-      invalidatesTags: ['ServiceCompletion', 'ServiceCompletionStats', 'Indent', 'IndentStats'],
     }),
     updateServiceCompletion: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/service-completions/${id}`, method: 'PATCH', body }),
@@ -645,7 +641,6 @@ export const {
   useGetServiceCompletionsQuery,
   useGetServiceCompletionStatsQuery,
   useGetServiceCompletionByIdQuery,
-  useCreateServiceCompletionMutation,
   useUpdateServiceCompletionMutation,
   useCompleteServiceCompletionMutation,
   useCancelServiceCompletionMutation,

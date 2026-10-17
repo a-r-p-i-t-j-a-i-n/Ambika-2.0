@@ -37,6 +37,23 @@ export const GRN_QC_STATUS = {
   PARTIAL:  'PARTIAL',
 };
 
+/**
+ * Which inventory module a GRN receives into — one per GRN.
+ *   RM                    Raw Material IMS (coils / circles) — posts at "Received At"
+ *   CONSUMABLE_PACKAGING  Consumable & Packaging IMS (and every other purchasable
+ *                         non-RM type) — posts at the GRN's own store, as before
+ * Finished Goods are produced in-house and never purchased (purchase-item-guard),
+ * so they are not an option here.
+ */
+export const GRN_INVENTORY_TYPE = {
+  RM: 'RM',
+  CONSUMABLE_PACKAGING: 'CONSUMABLE_PACKAGING',
+};
+export const GRN_INVENTORY_TYPE_LABEL = {
+  RM: 'Raw Material (RM)',
+  CONSUMABLE_PACKAGING: 'Consumable & Packaging',
+};
+
 const grnDocumentSchema = new Schema({
   fileName:   { type: String, default: '' },
   fileUrl:    { type: String, default: '' },
@@ -117,6 +134,10 @@ const grnSchema = new Schema({
   qcId:          { type: Schema.Types.ObjectId, ref: 'IncomingQC', default: null },
   qcNumber:      { type: String, trim: true, default: '' },
   qcCompletedAt: { type: Date, default: null },
+  // Short-lived lock held while a QC for this GRN is being created or completed,
+  // so two requests can never both create (or both complete) a QC for one GRN
+  // (see incomingQc.service). Expires on its own, so a crash cannot strand it.
+  qcLockAt:      { type: Date, default: null },
   stockPosted: { type: Boolean, default: false }, // idempotency guard
 
   /**
@@ -131,6 +152,14 @@ const grnSchema = new Schema({
    * is then plainly "not opted in" rather than "something went wrong".
    */
   addToRmStock: { type: Boolean, default: false },
+
+  /**
+   * The Inventory Type chosen on the GRN (replaces the "Add to RM Stock"
+   * checkbox in the UI). null on GRNs raised before it existed — those keep
+   * their recorded addToRmStock and are never reinterpreted. When set,
+   * addToRmStock is derived from it (RM ⇒ true) so existing readers still work.
+   */
+  inventoryType: { type: String, enum: [...Object.values(GRN_INVENTORY_TYPE), null], default: null },
 
   /**
    * "Received At" for the RM lines — where the material physically landed.

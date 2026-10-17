@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import PDFDocument from 'pdfkit';
-import GoodsReceiptNote, { GRN_STATUS, GRN_QC_STATUS, HOW_ITEM_RECEIVED } from './grn.model.js';
+import GoodsReceiptNote, {
+  GRN_STATUS, GRN_QC_STATUS, HOW_ITEM_RECEIVED, GRN_INVENTORY_TYPE, GRN_INVENTORY_TYPE_LABEL,
+} from './grn.model.js';
 import VendorPurchaseOrder, { PO_STATUS, PO_FOLLOWUP_STATUS, PO_PI_STATUS } from '../purchase-order/purchaseOrder.model.js';
 import PurchaseFollowUp from '../follow-up/followUp.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
@@ -50,24 +52,74 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
  */
 const RM_KIND_LABEL = { RAW_MATERIAL: 'Coil', CIRCLE: 'Circle' };
 
-const assertRmBatchNumbers = async (lines = []) => {
-  const received = (lines || []).filter((l) => round2(l.receivedQty) > 0);
-  if (!received.length) return;
-
+/**
+ * SKU item type for each received line, from the SKU master (by skuId, else
+ * code). A line with no SKU match returns '' — unclassifiable, so the rules
+ * below leave it alone (silence is not evidence of being RM or not).
+ */
+const resolveLineTypes = async (lines = []) => {
   const up = (v) => String(v || '').trim().toUpperCase();
-  const ids = [...new Set(received.map((l) => l.skuId).filter(Boolean).map(String))];
-  const codes = [...new Set(received.map((l) => up(l.skuCode)).filter(Boolean))];
-  if (!ids.length && !codes.length) return;
-
+  const ids = [...new Set(lines.map((l) => l.skuId).filter(Boolean).map(String))];
+  const codes = [...new Set(lines.map((l) => up(l.skuCode)).filter(Boolean))];
+  if (!ids.length && !codes.length) return () => '';
   const or = [];
   if (ids.length) or.push({ _id: { $in: ids } });
   if (codes.length) or.push({ code: { $in: codes } });
   const skus = await SKU.find({ $or: or }).select('_id code itemType').lean();
   const byId = new Map(skus.map((s) => [String(s._id), s.itemType]));
   const byCode = new Map(skus.map((s) => [up(s.code), s.itemType]));
-  // A line with no SKU match cannot be classified, so it is left alone — the
-  // SKU master is the authority and silence is not evidence of being RM.
-  const typeOf = (l) => (l.skuId && byId.get(String(l.skuId))) || byCode.get(up(l.skuCode)) || '';
+  return (l) => (l.skuId && byId.get(String(l.skuId))) || byCode.get(up(l.skuCode)) || '';
+};
+
+/**
+ * One Inventory Type per GRN. Pure — returns the received lines that do NOT
+ * belong to the chosen type:
+ *   RM                    every received line must be Raw Material / Circle
+ *   CONSUMABLE_PACKAGING  no received line may be Raw Material / Circle (any
+ *                         other purchasable type posts here, as it always has)
+ * Lines whose type is unknown ('') are not judged. A PO mixing both kinds is
+ * received on separate GRNs (lines not being received stay at 0 qty).
+ */
+export const findInventoryTypeConflicts = ({ lines = [], typeOf, inventoryType }) => {
+  if (!inventoryType) return [];
+  return lines.filter((l) => round2(l.receivedQty) > 0).filter((l) => {
+    const t = typeOf(l);
+    if (!t) return false;
+    const isRm = RM_ITEM_TYPES.includes(t);
+    return inventoryType === GRN_INVENTORY_TYPE.RM ? !isRm : isRm;
+  });
+};
+
+/** The operator-facing refusal for findInventoryTypeConflicts. */
+export const inventoryTypeConflictMessage = (conflicts, inventoryType) => {
+  const names = conflicts.map((l) => `"${l.itemName}"`).join(', ');
+  const chosen = GRN_INVENTORY_TYPE_LABEL[inventoryType] || inventoryType;
+  const other = inventoryType === GRN_INVENTORY_TYPE.RM
+    ? GRN_INVENTORY_TYPE_LABEL.CONSUMABLE_PACKAGING : GRN_INVENTORY_TYPE_LABEL.RM;
+  return `Inventory Type is "${chosen}", but ${names} ${conflicts.length > 1 ? 'are' : 'is'} not ${inventoryType === GRN_INVENTORY_TYPE.RM ? 'Raw Material' : 'Consumable & Packaging'}. `
+    + `Set ${conflicts.length > 1 ? 'their' : 'its'} received qty to 0 here and receive ${conflicts.length > 1 ? 'them' : 'it'} on a separate GRN with Inventory Type "${other}".`;
+};
+
+const assertInventoryType = async (lines = [], inventoryType) => {
+  if (!inventoryType) return;
+  const received = (lines || []).filter((l) => round2(l.receivedQty) > 0);
+  if (!received.length) return;
+  const conflicts = findInventoryTypeConflicts({ lines: received, typeOf: await resolveLineTypes(received), inventoryType });
+  if (conflicts.length) throw new AppError(inventoryTypeConflictMessage(conflicts, inventoryType), 400);
+};
+
+/**
+ * The RM fields implied by an Inventory Type: RM ⇒ RM lines post (addToRmStock)
+ * at "Received At"; Consumable & Packaging ⇒ no RM posting and no RM location.
+ */
+const rmFieldsFor = (inventoryType, location) => (inventoryType === GRN_INVENTORY_TYPE.RM
+  ? { addToRmStock: true, rmReceivedAtLocation: location || DEFAULT_RM_RECEIVED_AT }
+  : { addToRmStock: false, rmReceivedAtLocation: null });
+
+const assertRmBatchNumbers = async (lines = []) => {
+  const received = (lines || []).filter((l) => round2(l.receivedQty) > 0);
+  if (!received.length) return;
+  const typeOf = await resolveLineTypes(received);
 
   const missing = received.filter((l) => RM_ITEM_TYPES.includes(typeOf(l)) && !String(l.batchNo || '').trim());
   if (!missing.length) return;
@@ -508,6 +560,7 @@ export const grnService = {
 
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
+    await assertInventoryType(sourceItems, data.inventoryType);
     const { lines, totals } = computeLines(sourceItems);
 
     const grnNumber = await generateGrnNumber(data.grnDate || new Date());
@@ -531,11 +584,12 @@ export const grnService = {
       // The RM choice, captured when the GRN is raised rather than only at
       // completion. `warehouse` above is the GRN's own store and stays MAIN —
       // the two are never mapped onto each other.
-      addToRmStock: !!data.addToRmStock,
-      // Kept whatever the operator chose, independently of the opt-in: where
-      // the goods landed is a fact about the receipt. It used to be nulled when
-      // the box was unticked, which silently discarded a recorded location.
-      rmReceivedAtLocation: data.rmReceivedAtLocation || null,
+      // The Inventory Type decides the RM handling; a caller that predates it
+      // (no inventoryType) keeps the old opt-in semantics unchanged.
+      inventoryType: data.inventoryType || null,
+      ...(data.inventoryType
+        ? rmFieldsFor(data.inventoryType, data.rmReceivedAtLocation)
+        : { addToRmStock: !!data.addToRmStock, rmReceivedAtLocation: data.rmReceivedAtLocation || null }),
       howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
       challanDocument: data.challanDocument?.fileUrl ? { ...data.challanDocument, uploadedAt: new Date() } : undefined,
       invoiceDocument: data.invoiceDocument?.fileUrl ? { ...data.invoiceDocument, uploadedAt: new Date() } : undefined,
@@ -621,8 +675,14 @@ export const grnService = {
       throw new AppError('This GRN has been digitally signed by the MD and is locked for editing', 400);
     }
     if (!isOpenDraft(grn)) throw new AppError('Only draft GRNs can be edited', 400);
-    const { items, challanDocument, invoiceDocument, ...rest } = data;
+    const { items, challanDocument, invoiceDocument, inventoryType, ...rest } = data;
     Object.assign(grn, rest);
+    if (inventoryType) {
+      grn.inventoryType = inventoryType;
+      Object.assign(grn, rmFieldsFor(inventoryType, data.rmReceivedAtLocation || grn.rmReceivedAtLocation));
+    }
+    // Every save is checked against the GRN's Inventory Type (lines as sent, or as stored).
+    await assertInventoryType(items || grn.items, grn.inventoryType);
     if (challanDocument) grn.challanDocument = challanDocument.fileUrl ? { ...challanDocument, uploadedAt: new Date() } : {};
     if (invoiceDocument) grn.invoiceDocument = invoiceDocument.fileUrl ? { ...invoiceDocument, uploadedAt: new Date() } : {};
     if (items) {
@@ -709,7 +769,7 @@ export const grnService = {
   /** complete() body — runs with the GRN claimed and the PO posting lock held. */
   async _completeLocked(grn, data, user, releaseClaim) {
     let po; let pi; let receivedLines; let planFor; let rmLines;
-    let addToRmStock; let receivedAtLocation; let rmLocation;
+    let addToRmStock; let receivedAtLocation; let rmLocation; let inventoryType;
     try {
       po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
       if (!po) throw new AppError('Linked Purchase Order not found', 404);
@@ -765,11 +825,25 @@ export const grnService = {
       // Both can be chosen when the GRN is raised and confirmed again here, so
       // the request wins only when it actually says something. An omitted field
       // inherits what the GRN already carries.
-      addToRmStock = data.addToRmStock !== undefined ? !!data.addToRmStock : !!grn.addToRmStock;
-      // receivedAtLocation = where the goods landed (recorded either way, never
-      // invented); rmLocation = where the RM movement posts (only when opted in,
-      // and only then does the default stand in).
-      receivedAtLocation = data.rmReceivedAtLocation || grn.rmReceivedAtLocation || null;
+      inventoryType = data.inventoryType || grn.inventoryType || null;
+      if (inventoryType) {
+        // One Inventory Type per GRN — refuse before anything posts (the claim is
+        // handed back below), never route a line into the wrong module.
+        const conflicts = findInventoryTypeConflicts({
+          lines: receivedLines, typeOf: (l) => itemTypeBySku.get(String(l.skuId)) || '', inventoryType,
+        });
+        if (conflicts.length) throw new AppError(inventoryTypeConflictMessage(conflicts, inventoryType), 400);
+        ({ addToRmStock, rmReceivedAtLocation: receivedAtLocation } = rmFieldsFor(
+          inventoryType, data.rmReceivedAtLocation || grn.rmReceivedAtLocation,
+        ));
+      } else {
+        // GRN raised before Inventory Type existed: its recorded opt-in, unchanged.
+        addToRmStock = data.addToRmStock !== undefined ? !!data.addToRmStock : !!grn.addToRmStock;
+        // receivedAtLocation = where the goods landed (recorded either way, never
+        // invented); rmLocation = where the RM movement posts (only when opted in,
+        // and only then does the default stand in).
+        receivedAtLocation = data.rmReceivedAtLocation || grn.rmReceivedAtLocation || null;
+      }
       rmLocation = addToRmStock ? (receivedAtLocation || DEFAULT_RM_RECEIVED_AT) : null;
 
       // An RM line with the box unticked is still RECEIVED — it updates the PO,
@@ -867,6 +941,7 @@ export const grnService = {
         grn.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
         grn.stockPosted = true;               // already claimed above; kept explicit
         grn.addToRmStock = addToRmStock;      // the operator's choice, on the record
+        if (inventoryType) grn.inventoryType = inventoryType;
         // Record where the goods landed, not merely where stock went.
         grn.rmReceivedAtLocation = addToRmStock ? rmLocation : receivedAtLocation;
         grn.receivedAt = new Date();
@@ -876,7 +951,8 @@ export const grnService = {
         grn.updatedBy = user?._id;
         grn.activityTimeline.push({
           action: 'COMPLETE',
-          description: buildCompletionNote(grn.grnStatus, rmLines.length, addToRmStock, rmLocation),
+          description: buildCompletionNote(grn.grnStatus, rmLines.length, addToRmStock, rmLocation)
+            + (inventoryType ? ` · Inventory Type: ${GRN_INVENTORY_TYPE_LABEL[inventoryType]}` : ''),
           actorId: user?._id,
         });
         await grn.save(opts);
@@ -894,6 +970,7 @@ export const grnService = {
     // What the caller tells the operator. Counted from what was actually
     // decided, so the UI can never claim RM stock moved when no RM line did.
     grn.$locals.rmSummary = {
+      inventoryType,
       addToRmStock,
       rmReceivedAtLocation: rmLocation,
       rmLineCount: rmLines.length,

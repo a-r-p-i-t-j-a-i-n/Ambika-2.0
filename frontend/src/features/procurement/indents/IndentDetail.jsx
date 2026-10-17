@@ -21,7 +21,7 @@ import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
-import ServiceCompletionDialog from '../service-completions/ServiceCompletionDialog';
+import { useStartServiceQc, canStartServiceQc } from './useStartServiceQc';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
@@ -174,7 +174,7 @@ const IndentDetail = () => {
   const [comparativeOpen, setComparativeOpen] = useState(false);
   const [quotationOpen, setQuotationOpen] = useState(false);
   const [poDrawerOpen, setPoDrawerOpen] = useState(false);
-  const [serviceOpen, setServiceOpen] = useState(false);
+  const { startServiceQc, starting: startingServiceQc } = useStartServiceQc();
 
   if (isLoading) {
     return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
@@ -239,10 +239,10 @@ const IndentDetail = () => {
         desc: 'Mark the approved quotation for each item.',
         primary: { label: 'Approved Quotation 1.03', icon: <FileCheck2 size={16} />, onClick: () => setQuotationOpen(true) } };
     }
-    if (isService && indent.overallStatus === 'SERVICE_PENDING') {
-      return { tone: 'info', title: 'Next: Mark Service Completed (Step 1.8A)',
-        desc: 'This is an internal-service indent — record completion to continue.',
-        primary: { label: 'Mark Service Completed', icon: <CheckCircle2 size={16} />, onClick: () => setServiceOpen(true) } };
+    if (canStartServiceQc(indent)) {
+      return { tone: 'info', title: 'Next: Service QC (Step 1.9)',
+        desc: 'This is an internal-service indent — once the work is done, check it in Incoming QC (attach the service report there).',
+        primary: { label: 'Start Service QC', icon: <CheckCircle2 size={16} />, onClick: () => startServiceQc(indent) } };
     }
     if (!isService && indent.overallStatus === 'QUOTATION_APPROVED') {
       return { tone: 'success', title: 'Quotation approved — create a Purchase Order',
@@ -303,8 +303,8 @@ const IndentDetail = () => {
           {isPending && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
           {isApproved && !quoteDone && <Button variant="contained" startIcon={<FileText size={16} />} onClick={() => setComparativeOpen(true)}>Receive Quote / Comparative</Button>}
           {step12Done && !quotationDone && !quoteSkipped && <Button variant="contained" color="success" startIcon={<FileCheck2 size={16} />} onClick={() => setQuotationOpen(true)}>Approved Quotation 1.03</Button>}
-          {indent.requestType === 'INTERNAL_SERVICE' && indent.overallStatus === 'SERVICE_PENDING' && (
-            <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setServiceOpen(true)}>Mark Service Completed</Button>
+          {canStartServiceQc(indent) && (
+            <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} disabled={startingServiceQc} onClick={() => startServiceQc(indent)}>Start Service QC</Button>
           )}
         </Box>
       </Box>
@@ -513,7 +513,6 @@ const IndentDetail = () => {
       <IndentApprovalDialog open={approvalOpen} indent={indent} onClose={() => setApprovalOpen(false)} />
       <QuoteComparativeDialog open={comparativeOpen} indent={indent} onClose={() => setComparativeOpen(false)} />
       <QuotationApprovalDialog open={quotationOpen} indent={indent} onClose={() => setQuotationOpen(false)} />
-      <ServiceCompletionDialog open={serviceOpen} indent={indent} onClose={() => setServiceOpen(false)} />
       <PurchaseOrderFormDrawer open={poDrawerOpen} presetIndent={indent} onClose={() => setPoDrawerOpen(false)} />
     </Box>
   );

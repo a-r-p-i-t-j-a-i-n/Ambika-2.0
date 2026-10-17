@@ -27,7 +27,7 @@ import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
 import BulkIndentApprovalDialog from './BulkIndentApprovalDialog';
-import ServiceCompletionDialog from '../service-completions/ServiceCompletionDialog';
+import { useStartServiceQc, canStartServiceQc } from './useStartServiceQc';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
 
 // Map the Step-1.2 statusDone (or legacy quoteStep) to a chip state.
@@ -66,7 +66,7 @@ const IndentList = () => {
   const [comparativeOpen, setComparativeOpen] = useState(false);
   const [quotationOpen, setQuotationOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [serviceOpen, setServiceOpen] = useState(false);
+  const { startServiceQc } = useStartServiceQc();
   const [poDrawerOpen, setPoDrawerOpen] = useState(false);
   const [poPresetIndent, setPoPresetIndent] = useState(null);
   const [activeIndent, setActiveIndent] = useState(null);
@@ -134,9 +134,9 @@ const IndentList = () => {
     if (r.overallStatus === 'QUOTATION_APPROVED' && r.requestType !== 'INTERNAL_SERVICE') {
       a.push({ key: 'createPo', label: 'Create Vendor PO', icon: <ShoppingBag size={16} />, fn: () => { setPoPresetIndent(r); setPoDrawerOpen(true); closeMenu(); } });
     }
-    // Internal-service indents: mark the service done (Step 1.8A) once approved.
-    if (r.requestType === 'INTERNAL_SERVICE' && r.overallStatus === 'SERVICE_PENDING') {
-      a.push({ key: 'service', label: 'Mark Service Completed', icon: <CheckCircle2 size={16} />, fn: () => { setActiveIndent(r); setServiceOpen(true); closeMenu(); } });
+    // Internal-service indents go straight to the service QC (Step 1.9) once approved.
+    if (canStartServiceQc(r)) {
+      a.push({ key: 'serviceQc', label: 'Start Service QC', icon: <CheckCircle2 size={16} />, fn: () => { closeMenu(); startServiceQc(r); } });
     }
     return a;
   };
@@ -320,7 +320,6 @@ const IndentList = () => {
       <QuotationApprovalDialog open={quotationOpen} indent={activeIndent} onClose={() => { setQuotationOpen(false); setActiveIndent(null); }} />
       <BulkIndentApprovalDialog open={bulkOpen} onClose={() => setBulkOpen(false)}
         onReceiveQuote={(ind) => { setBulkOpen(false); setActiveIndent(ind); setComparativeOpen(true); }} />
-      <ServiceCompletionDialog open={serviceOpen} indent={activeIndent} onClose={() => { setServiceOpen(false); setActiveIndent(null); }} />
       <PurchaseOrderFormDrawer open={poDrawerOpen} presetIndent={poPresetIndent} onClose={() => { setPoDrawerOpen(false); setPoPresetIndent(null); }} />
     </Box>
   );

@@ -1270,7 +1270,7 @@ export const rmImsService = {
             if (grnHit) {
               throw new AppError(
                 `Batch ${grnHit.batchNo} already has a goods receipt (${grnHit.refNumber || grnHit.movementNumber}, ${grnHit.skuCode}). `
-                + 'Select it under "Select Existing GRN / Received Coil" instead of entering it manually.',
+                + 'Type its batch number and pick its goods receipt instead of entering it manually.',
                 409,
               );
             }
@@ -1808,7 +1808,16 @@ export const rmImsService = {
      */
     const coilSkus = query.circleMapped ? allCoilSkus.filter((s) => isCoilMapped(s.code)) : allCoilSkus;
     let unmappedBatch = null;
-    const typed = String(query.q || '').trim();
+    /*
+     * `batchNo` — an EXACT batch number (any case). `q` matches anywhere in the
+     * batch, GRN, PO, coil or supplier and is cut to `limit` newest-first, so a
+     * short batch ("A1") could be pushed out of the page by the newer batches
+     * that merely contain it ("A10", "XA12"…). Cut Coils resolves the coil the
+     * operator typed with this instead, so an exact match can never be missed;
+     * `q` stays the broad search for the dropdown.
+     */
+    const exactBatch = String(query.batchNo || '').trim();
+    const typed = exactBatch || String(query.q || '').trim();
     if (query.circleMapped && typed) {
       const unmappedIds = allCoilSkus.filter((s) => !isCoilMapped(s.code)).map((s) => s._id);
       if (unmappedIds.length) {
@@ -1835,6 +1844,7 @@ export const rmImsService = {
       batchNo: { $nin: ['', null] },
       isDeleted: { $ne: true },
     };
+    if (exactBatch) filter.batchNo = new RegExp(`^${exactBatch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
     if (query.skuId) filter.skuId = new mongoose.Types.ObjectId(query.skuId);
     if (query.warehouse) filter.warehouse = query.warehouse;
 
@@ -2042,7 +2052,7 @@ export const rmImsService = {
      */
     let unbatchedReceipts = null;
     let batchesWithoutReceipt = null;
-    if (!q) {
+    if (!q && !exactBatch) {
       const coilIds = coilSkus.map((s) => s._id);
       const [unbatched, orphans] = await Promise.all([
         InventoryMovement.countDocuments({
@@ -2323,17 +2333,52 @@ export const rmImsService = {
    * own ScrapRecord: `plantScrapKg` (PLG01 — Ambika's scrap stock) and
    * `jobWorkScrapKg` (JW001 — stayed with the job worker, never stock).
    *
+   * ── FILTERS: ABOUT THE COIL, OR ABOUT ITS ROUNDS ───────────────────────────
+   * Coil-level (search, batchNo, entryType, status) keep or drop a whole coil.
+   * Round-level (from/to on the cutting date, circleSkuId, location) are asked
+   * of each round, and a coil is listed when at least ONE round satisfies all
+   * of them together — "cut at JW001 in March, producing this circle" means
+   * one such round, not three different rounds that each tick one box.
+   *
+   * A listed coil still shows its WHOLE figures (every round), never just the
+   * rounds that matched — summing only the matching rounds would misstate the
+   * coil's total cut, remaining weight and status. What the matching rounds
+   * add up to is reported separately, in `matchedRounds` per row and in
+   * `summary.matching` overall, so a period's totals never double-count.
+   *
    * Read-only and derived: one aggregation, nothing stored.
    */
   async listCuttingHistory(query = {}) {
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(Math.max(1, Number(query.limit) || 25), 200);
 
+    // ── Round-level: asked of each conversion, before grouping. ──
+    const roundConds = [];
+    // The cutting date is a calendar day; read it in IST, like every other
+    // IMS history filter (scrapIms.service.js).
+    if (query.from) roundConds.push({ $gte: ['$conversionDate', new Date(`${query.from}T00:00:00.000+05:30`)] });
+    if (query.to) roundConds.push({ $lte: ['$conversionDate', new Date(`${query.to}T23:59:59.999+05:30`)] });
+    if (query.circleSkuId) {
+      roundConds.push({
+        $in: [new mongoose.Types.ObjectId(String(query.circleSkuId)), { $ifNull: ['$circles.circleSkuId', []] }],
+      });
+    }
+    // Where the ROUND was cut — its own ScrapRecord, never the coil's receipt.
+    if (query.location) roundConds.push({ $eq: ['$location', String(query.location).toUpperCase()] });
+    const roundFiltered = roundConds.length > 0;
+    const m = (field) => ({ $sum: { $cond: [{ $eq: ['$roundMatch', 1] }, field, 0] } });
+
+    // ── Coil-level: asked of the grouped coil. ──
+    // Matched against the COIL, after grouping — matching conversions first
+    // would sum only the rounds that happened to match and misstate the coil.
+    const early = [];
+    if (roundFiltered) early.push({ $match: { matchedRounds: { $gt: 0 } } });
+    const entryType = String(query.entryType || '').toUpperCase();
+    if (entryType === 'GRN' || entryType === 'MANUAL') early.push({ $match: { isManual: entryType === 'MANUAL' ? 1 : 0 } });
+
     const post = [];
     const s = String(query.search || '').trim();
     if (s) {
-      // Matched against the COIL, after grouping — matching conversions first
-      // would sum only the rounds that happened to match and misstate the coil.
       const r = rx(s);
       post.push({
         $match: {
@@ -2344,7 +2389,8 @@ export const rmImsService = {
         },
       });
     }
-    if (query.location) post.push({ $match: { locations: String(query.location).toUpperCase() } });
+    const b = String(query.batchNo || '').trim();
+    if (b) post.push({ $match: { 'receipt.batchNo': rx(b) } });
     if (query.status) post.push({ $match: { status: String(query.status).toUpperCase() } });
 
     // A round names its physical coil by its receipt OR — for a coil with no
@@ -2369,22 +2415,35 @@ export const rmImsService = {
         },
       },
       { $addFields: { location: { $arrayElemAt: ['$sr.location', 0] } } },
+      // 1 when this round satisfies every round-level filter (always 1 with none).
+      { $addFields: { roundMatch: roundFiltered ? { $cond: [{ $and: roundConds }, 1, 0] } : 1 } },
       {
         $group: {
           _id: '$coilKey',
           isManual: { $max: { $cond: [{ $eq: [{ $type: '$coilReceiptId' }, 'objectId'] }, 0, 1] } },
           cutKg: { $sum: '$coilWeightKg' },
           circlesKg: { $sum: '$circlesWeightKg' },
+          circlesPcs: { $sum: { $sum: '$circles.pcs' } },
           scrapKg: { $sum: '$scrapKg' },
           plantScrapKg: { $sum: { $cond: [{ $eq: ['$location', 'PLG01'] }, '$scrapKg', 0] } },
           jobWorkScrapKg: { $sum: { $cond: [{ $eq: ['$location', 'JW001'] }, '$scrapKg', 0] } },
           rounds: { $sum: 1 },
           locations: { $addToSet: '$location' },
+          circleCodes: { $push: '$circles.circleSkuCode' },
           firstCutAt: { $min: '$conversionDate' },
           lastCutAt: { $max: '$conversionDate' },
           lastSavedAt: { $max: '$createdAt' },
+          // The rounds that satisfied the round-level filters, and what they add up to.
+          matchedRounds: { $sum: '$roundMatch' },
+          matchedCutKg: m('$coilWeightKg'),
+          matchedCirclesKg: m('$circlesWeightKg'),
+          matchedCirclesPcs: m({ $sum: '$circles.pcs' }),
+          matchedScrapKg: m('$scrapKg'),
+          matchedPlantScrapKg: m({ $cond: [{ $eq: ['$location', 'PLG01'] }, '$scrapKg', 0] }),
+          matchedJobWorkScrapKg: m({ $cond: [{ $eq: ['$location', 'JW001'] }, '$scrapKg', 0] }),
         },
       },
+      ...early,
       {
         $lookup: {
           from: 'inventorymovements',
@@ -2491,9 +2550,17 @@ export const rmImsService = {
               fullyCut: { $sum: { $cond: [{ $eq: ['$status', CUT_STATUS.FULLY_CUT] }, 1, 0] } },
               cutKg: { $sum: '$cutKg' },
               circlesKg: { $sum: '$circlesKg' },
+              circlesPcs: { $sum: '$circlesPcs' },
               scrapKg: { $sum: '$scrapKg' },
               plantScrapKg: { $sum: '$plantScrapKg' },
               jobWorkScrapKg: { $sum: '$jobWorkScrapKg' },
+              matchedRounds: { $sum: '$matchedRounds' },
+              matchedCutKg: { $sum: '$matchedCutKg' },
+              matchedCirclesKg: { $sum: '$matchedCirclesKg' },
+              matchedCirclesPcs: { $sum: '$matchedCirclesPcs' },
+              matchedScrapKg: { $sum: '$matchedScrapKg' },
+              matchedPlantScrapKg: { $sum: '$matchedPlantScrapKg' },
+              matchedJobWorkScrapKg: { $sum: '$matchedJobWorkScrapKg' },
             },
           }],
         },
@@ -2540,6 +2607,12 @@ export const rmImsService = {
         overCut: ledger.overCut || row.remainingKg < -EPS,
         location: locations.length > 1 ? 'MIXED' : (locations[0] || null),
         locations,
+        // Pieces across every circle size the coil produced, and which sizes.
+        circlesPcs: round2(g.circlesPcs),
+        circleSkuCodes: [...new Set((g.circleCodes || []).flat().filter(Boolean))].sort(),
+        // How many of the coil's rounds satisfied the round-level filters —
+        // equal to `rounds` when none is applied.
+        matchedRounds: g.matchedRounds || 0,
         firstCutAt: g.firstCutAt || null,
         lastCutAt: g.lastCutAt || null,
       };
@@ -2562,11 +2635,30 @@ export const rmImsService = {
         fullyCut: stats.fullyCut || 0,
         cutKg: round2(stats.cutKg),
         circlesKg: round2(stats.circlesKg),
+        circlesPcs: round2(stats.circlesPcs),
         scrapKg: round2(stats.scrapKg),
         plantScrapKg: round2(stats.plantScrapKg),
         jobWorkScrapKg: round2(stats.jobWorkScrapKg),
         // Weighted over everything listed, like every coil-level yield here.
         yieldPct: stats.cutKg > 0 ? round2((stats.circlesKg / stats.cutKg) * 100) : null,
+        /**
+         * Only the ROUNDS that satisfied the round-level filters, across the
+         * listed coils — "how much was cut in this period / at this location".
+         * Each round is counted once and a coil's original weight never enters
+         * it, so nothing is double-counted. Identical to the coil totals above
+         * when no round-level filter is applied.
+         */
+        roundFiltered,
+        matching: {
+          rounds: stats.matchedRounds || 0,
+          cutKg: round2(stats.matchedCutKg),
+          circlesKg: round2(stats.matchedCirclesKg),
+          circlesPcs: round2(stats.matchedCirclesPcs),
+          scrapKg: round2(stats.matchedScrapKg),
+          plantScrapKg: round2(stats.matchedPlantScrapKg),
+          jobWorkScrapKg: round2(stats.matchedJobWorkScrapKg),
+          yieldPct: stats.matchedCutKg > 0 ? round2((stats.matchedCirclesKg / stats.matchedCutKg) * 100) : null,
+        },
         untraceable: {
           records: untraced?.records || 0,
           cutKg: round2(untraced?.cutKg),
@@ -2575,6 +2667,50 @@ export const rmImsService = {
         pagination: { page, limit, total: stats.coils || 0 },
       },
     };
+  },
+
+  /**
+   * The circle SKUs the Cutting History's rounds actually produced — what its
+   * "Circle SKU" filter offers.
+   *
+   * Only rounds that name a physical coil, the same set the history lists, so
+   * every option returns at least one coil. Codes and names are read from the
+   * SKU master where it still has the item (the conversion's own copy is the
+   * fallback), and the list is bounded by the number of circle SKUs, not by
+   * the number of cuts.
+   */
+  async listCuttingHistoryCircles() {
+    const rows = await CoilConversion.aggregate([
+      {
+        $match: {
+          $or: [{ coilReceiptId: { $type: 'objectId' } }, { manualCoilId: { $type: 'objectId' } }],
+          isDeleted: { $ne: true },
+        },
+      },
+      { $unwind: '$circles' },
+      { $match: { 'circles.circleSkuId': { $type: 'objectId' } } },
+      {
+        $group: {
+          _id: '$circles.circleSkuId',
+          code: { $last: '$circles.circleSkuCode' },
+          name: { $last: '$circles.circleSkuName' },
+          rounds: { $addToSet: '$_id' },
+        },
+      },
+    ]);
+    const skus = await SKU.find({ _id: { $in: rows.map((r) => r._id) } }).select('code name').lean();
+    const byId = new Map(skus.map((s) => [String(s._id), s]));
+    return rows
+      .map((r) => {
+        const s = byId.get(String(r._id));
+        return {
+          skuId: String(r._id),
+          skuCode: s?.code || r.code || '',
+          skuName: s?.name || r.name || '',
+          rounds: r.rounds.length,
+        };
+      })
+      .sort((a, b) => a.skuCode.localeCompare(b.skuCode));
   },
 
   /**

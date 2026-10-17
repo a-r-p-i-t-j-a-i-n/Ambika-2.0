@@ -8,7 +8,7 @@ import { PFMS } from './pfmsTheme';
 import {
   useGetIndentStatsQuery, useGetPurchaseOrderStatsQuery, useGetFollowUpStatsQuery,
   useGetProformaInvoiceStatsQuery, useGetAdvancePaymentStatsQuery, useGetGrnStatsQuery,
-  useGetServiceCompletionStatsQuery, useGetIncomingQcStatsQuery, useGetVendorInvoiceStatsQuery,
+  useGetVendorInvoiceStatsQuery,
   useGetVoucherStatsQuery, useGetTallyEntryStatsQuery, useGetFinalPaymentStatsQuery,
 } from '../../store/api/procurementApi';
 
@@ -22,9 +22,7 @@ const PurchaseOrderList     = lazyWithRetry(() => import('./purchase-orders/Purc
 const FollowUpList          = lazyWithRetry(() => import('./follow-ups/FollowUpList'));
 const ProformaInvoiceList   = lazyWithRetry(() => import('./proforma-invoices/ProformaInvoiceList'));
 const AdvancePaymentList    = lazyWithRetry(() => import('./advance-payments/AdvancePaymentList'));
-const GrnList                = lazyWithRetry(() => import('./grn/GrnList'));
-const ServiceCompletionList = lazyWithRetry(() => import('./service-completions/ServiceCompletionList'));
-const IncomingQCList        = lazyWithRetry(() => import('./incoming-qc/IncomingQCList'));
+const GrnQcStep             = lazyWithRetry(() => import('./grn/GrnQcStep'));
 const VendorInvoiceList     = lazyWithRetry(() => import('./vendor-invoices/VendorInvoiceList'));
 const VoucherList           = lazyWithRetry(() => import('./vouchers/VoucherList'));
 const TallyEntryList        = lazyWithRetry(() => import('./tally-entry/TallyEntryList'));
@@ -33,15 +31,17 @@ const FinalPaymentList      = lazyWithRetry(() => import('./final-payments/Final
 // The 9 steps the workflow was scoped around, plus the remaining procurement
 // screens (10-14) that already lived under the old sidebar dropdown — kept
 // reachable here so nothing that existed before becomes orphaned.
+// Service Completion (former 1.8A) was removed: internal-service indents go
+// straight to Incoming QC. Its history stays at /procurement/service-completions.
+// GRN and Incoming QC are ONE step: the QC form sits on the GRN page, under the
+// GRN. The QC records list (history, drafts, service QCs) is a tab inside it.
 export const PURCHASE_FMS_STEPS = [
   { slug: 'purchase-indents',    label: 'Purchase Indents',    Component: IndentList },
   { slug: 'purchase-orders',     label: 'Purchase Orders',     Component: PurchaseOrderList },
   { slug: 'material-follow-ups', label: 'Material Follow-ups', Component: FollowUpList },
   { slug: 'pi-forms',            label: 'PI Forms',            Component: ProformaInvoiceList },
   { slug: 'advance-payments',    label: 'Advance Payments',    Component: AdvancePaymentList },
-  { slug: 'grn',                 label: 'Goods Receipt (GRN)', Component: GrnList },
-  { slug: 'service-completion',  label: 'Service Completion',  Component: ServiceCompletionList },
-  { slug: 'incoming-qc',         label: 'Incoming QC',         Component: IncomingQCList },
+  { slug: 'grn',                 label: 'GRN & QC',            Component: GrnQcStep },
   { slug: 'vendor-invoices',     label: 'Vendor Invoices',     Component: VendorInvoiceList },
   { slug: 'payment-vouchers',    label: 'Payment Vouchers',    Component: VoucherList },
   { slug: 'tally-entries',       label: 'Tally Entries',       Component: TallyEntryList },
@@ -59,8 +59,6 @@ const useStepCounts = () => {
   const { data: piStats } = useGetProformaInvoiceStatsQuery();
   const { data: advanceStats } = useGetAdvancePaymentStatsQuery();
   const { data: grnStats } = useGetGrnStatsQuery();
-  const { data: serviceStats } = useGetServiceCompletionStatsQuery();
-  const { data: qcStats } = useGetIncomingQcStatsQuery();
   const { data: invoiceStats } = useGetVendorInvoiceStatsQuery();
   const { data: voucherStats } = useGetVoucherStatsQuery();
   const { data: tallyStats } = useGetTallyEntryStatsQuery();
@@ -73,8 +71,6 @@ const useStepCounts = () => {
     'pi-forms':            piStats?.data?.total,
     'advance-payments':    advanceStats?.data?.totalPayments,
     'grn':                 grnStats?.data?.total,
-    'service-completion':  serviceStats?.data?.total,
-    'incoming-qc':         qcStats?.data?.total,
     'vendor-invoices':     invoiceStats?.data?.total,
     'payment-vouchers':    voucherStats?.data?.total,
     'tally-entries':       tallyStats?.data?.total,
@@ -87,6 +83,9 @@ const PurchaseFmsHub = () => {
   const navigate = useNavigate();
   const activeIndex = PURCHASE_FMS_STEPS.findIndex((s) => s.slug === step);
   const counts = useStepCounts();
+
+  // The former separate Incoming QC step (bookmarks, back-links) → its records tab.
+  if (step === 'incoming-qc') return <Navigate to="/purchase-fms/grn?view=qc" replace />;
 
   // Unknown/missing step (e.g. a stale bookmark) — land on the first step
   // rather than rendering nothing.

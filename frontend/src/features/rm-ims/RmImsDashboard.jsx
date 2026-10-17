@@ -96,7 +96,7 @@ const RmImsDashboard = () => {
       subtitle="Coils and circles — what you hold, what it's worth, and what needs buying."
       actions={(
         <Stack direction="row" spacing={0.75}>
-          <Button size="small" variant="outlined" startIcon={<Recycle size={14} />} onClick={() => navigate('/rm-ims/conversion')}
+          <Button size="small" variant="outlined" startIcon={<Recycle size={14} />} onClick={() => navigate('/rm-ims/conversion?new=1')}
             sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
             Cut a coil
           </Button>

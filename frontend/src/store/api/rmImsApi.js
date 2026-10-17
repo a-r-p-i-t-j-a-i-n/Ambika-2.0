@@ -80,6 +80,15 @@ export const rmImsApi = baseApi.injectEndpoints({
       providesTags: ['RmConversion', 'RmMovement'],
     }),
     /**
+     * The circle SKUs the Cutting History's rounds actually produced — the
+     * options of its "Circle SKU" filter. A new cut can add a size, so it is
+     * tagged like the history itself.
+     */
+    getRmCuttingHistoryCircles: builder.query({
+      query: () => '/rm-ims/cutting-history/circles',
+      providesTags: ['RmConversion'],
+    }),
+    /**
      * The circle sizes the identified coil is approved to produce.
      *
      * The client's mapping lives on the server and is asked for per coil, so
@@ -142,6 +151,7 @@ export const {
   useGetRmReceivedCoilsQuery,
   useGetRmCoilLineageQuery,
   useGetRmCuttingHistoryQuery,
+  useGetRmCuttingHistoryCirclesQuery,
   useGetRmCircleOptionsQuery,
   useLookupRmManualCoilQuery,
   useUpsertRmPolicyMutation,

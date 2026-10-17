@@ -173,10 +173,18 @@ const vCreate = (v) => createGrnSchema.validate({ poId: PO_ID, ...v }, { abortEa
 const vUpdate = (v) => updateGrnSchema.validate(v, { abortEarly: false, stripUnknown: true });
 
 test('create accepts the opt-in and the location, and normalises case', () => {
-  const { error, value } = vCreate({ addToRmStock: true, rmReceivedAtLocation: 'jw001' });
+  // Inventory Type is now required on every new GRN (it replaced the checkbox).
+  const { error, value } = vCreate({ inventoryType: 'RM', addToRmStock: true, rmReceivedAtLocation: 'jw001' });
   assert.equal(error, undefined);
   assert.equal(value.addToRmStock, true);
   assert.equal(value.rmReceivedAtLocation, 'JW001');
+});
+
+test('create: Inventory Type is required and limited to RM / Consumable & Packaging', () => {
+  assert.match(vCreate({}).error?.message || '', /Select the Inventory Type/);
+  assert.ok(vCreate({ inventoryType: 'FG' }).error, 'Finished Goods are never purchased');
+  assert.equal(vCreate({ inventoryType: 'CONSUMABLE_PACKAGING' }).error, undefined);
+  assert.match(vCreate({ inventoryType: 'RM' }).error?.message || '', /Received At is required for a Raw Material/);
 });
 
 test('create: Received At is required once the box is ticked', () => {
@@ -186,11 +194,9 @@ test('create: Received At is required once the box is ticked', () => {
 });
 
 test('create: a GRN that is not opted in needs no location at all', () => {
-  const { error, value } = vCreate({ addToRmStock: false });
+  const { error, value } = vCreate({ inventoryType: 'CONSUMABLE_PACKAGING', addToRmStock: false });
   assert.equal(error, undefined);
   assert.equal(value.addToRmStock, false);
-  // And a plain GRN that never mentions either field still saves.
-  assert.equal(vCreate({}).error, undefined);
 });
 
 test('create: MAIN is the GRN store, never a Received At', () => {

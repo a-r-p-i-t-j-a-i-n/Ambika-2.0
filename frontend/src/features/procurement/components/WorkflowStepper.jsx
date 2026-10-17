@@ -35,7 +35,7 @@ const WorkflowStepper = ({ steps = [], sx = {} }) => {
   if (!steps.length) return null;
 
   return (
-    <Box sx={{
+    <Box data-testid="workflow-stepper" sx={{
       ...pfmsCardSx, p: 2.5,
       ...sx,
     }}>

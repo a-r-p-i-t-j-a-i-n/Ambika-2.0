@@ -43,14 +43,16 @@ const SKUS = [
 
 /** The GRNs the browser test completes, one per scenario. */
 const GRNS = [
+  // A draft from before Inventory Type existed that mixes a coil with a bolt —
+  // one Inventory Type per GRN, so completing it is refused and nothing posts.
   { tag: 'OFF', lines: [['E2E-COIL-A', 500, 'BATCH-E2E-OFF'], ['E2E-BOLT-A', 200, '']] },
-  { tag: 'PLG', lines: [['E2E-COIL-A', 500, 'BATCH-E2E-PLG'], ['E2E-CIRC-A', 300, 'BATCH-E2E-CIRC'], ['E2E-BOLT-A', 200, '']] },
+  // Raw Material only (coil + circle) — completed as Inventory Type RM at PLG01.
+  { tag: 'PLG', lines: [['E2E-COIL-A', 500, 'BATCH-E2E-PLG'], ['E2E-CIRC-A', 300, 'BATCH-E2E-CIRC']] },
   { tag: 'JW',  lines: [['E2E-COIL-A', 400, 'BATCH-E2E-JW']] },
   { tag: 'DUP', lines: [['E2E-COIL-A', 600, 'BATCH-E2E-DUP']] },
-  // The choice was made on the GRN FORM and saved with the draft. Completion
-  // then sends neither field, so the stored choice has to be inherited — the
-  // half of the feature that was missing until now.
-  { tag: 'INHERIT', lines: [['E2E-COIL-A', 250, 'BATCH-E2E-INHERIT']], addToRmStock: true, rmReceivedAtLocation: 'JW001' },
+  // The choice was made on the GRN FORM and saved with the draft (Inventory Type
+  // RM, Received At JW001). Completion must inherit it.
+  { tag: 'INHERIT', lines: [['E2E-COIL-A', 250, 'BATCH-E2E-INHERIT']], inventoryType: 'RM', addToRmStock: true, rmReceivedAtLocation: 'JW001' },
 ];
 
 const connect = async () => {
@@ -92,6 +94,7 @@ const seed = async () => {
       warehouse: 'MAIN', // the GRN's own store — must never become a Received At
       // Set only for the INHERIT scenario; every other GRN is seeded exactly as
       // a draft raised without the RM opt-in.
+      inventoryType: g.inventoryType || null,
       addToRmStock: !!g.addToRmStock,
       rmReceivedAtLocation: g.rmReceivedAtLocation || null,
       grnStatus: GRN_STATUS.DRAFT, stockPosted: false,
@@ -180,33 +183,23 @@ const verify = async () => {
 
   console.log('\nDatabase verification');
 
-  // ── Checkbox OFF ──
+  // ── Mixed coil + bolt GRN: one Inventory Type per GRN → refused ──
   const off = byGrn('GRN-E2E-OFF'); const offM = movsOf('GRN-E2E-OFF');
-  check('OFF: GRN completed', !!off && off.stockPosted === true && off.grnStatus !== 'DRAFT', off?.grnStatus);
-  check('OFF: zero RM movements', offM.filter((m) => RM.includes(m.skuCode)).length === 0,
-    `${offM.filter((m) => RM.includes(m.skuCode)).length} RM`);
-  check('OFF: non-RM line still posted', offM.some((m) => m.skuCode === 'E2E-BOLT-A'), `${offM.length} total`);
-  check('OFF: opt-out recorded', off?.addToRmStock === false, `addToRmStock=${off?.addToRmStock}`);
-  // Received At is a property of the receipt, not of the posting: the location
-  // the operator chose must survive even though no stock was posted. It used to
-  // be nulled here, throwing that choice away.
-  check('OFF: Received At is still recorded even though nothing posted',
-    ['PLG01', 'JW001'].includes(off?.rmReceivedAtLocation), `loc=${off?.rmReceivedAtLocation}`);
-  check('OFF: no RM stock balance created', !stock.some((s) => RM.includes(s.skuCode) && ['PLG01', 'JW001'].includes(s.warehouse) && s.qtyOnHand > 0 && s.skuCode === 'E2E-COIL-A' && s.warehouse === 'PLG01' && s.qtyOnHand === 500 && offM.length === 0));
+  check('MIXED: completion refused — GRN still an open draft', !!off && off.grnStatus === 'DRAFT' && !off.stockPosted, off?.grnStatus);
+  check('MIXED: nothing posted at all', offM.length === 0, `${offM.length} movement(s)`);
 
-  // ── Checkbox ON + PLG01 ──
+  // ── Inventory Type RM + PLG01 ──
   const plg = byGrn('GRN-E2E-PLG'); const plgM = movsOf('GRN-E2E-PLG');
   const coil = plgM.find((m) => m.skuCode === 'E2E-COIL-A');
   const circ = plgM.find((m) => m.skuCode === 'E2E-CIRC-A');
-  const bolt = plgM.find((m) => m.skuCode === 'E2E-BOLT-A');
-  check('ON: one movement per received line', plgM.length === 3, `${plgM.length}`);
+  check('ON: one movement per received line', plgM.length === 2, `${plgM.length}`);
   check('ON: txnType is GRN_IN', plgM.every((m) => m.txnType === 'GRN_IN'));
-  check('ON: correct SKUs', !!coil && !!circ && !!bolt);
+  check('ON: correct SKUs', !!coil && !!circ);
+  check('ON: Inventory Type RM recorded on the GRN', plg?.inventoryType === 'RM', plg?.inventoryType);
   check('ON: correct quantity', coil?.quantity === 500 && circ?.quantity === 300, `${coil?.quantity}/${circ?.quantity}`);
   check('ON: correct UOM', coil?.unit === 'KGS' && circ?.unit === 'PCS', `${coil?.unit}/${circ?.unit}`);
   check('ON: correct batch', coil?.batchNo === 'BATCH-E2E-PLG' && circ?.batchNo === 'BATCH-E2E-CIRC', coil?.batchNo);
   check('ON: Received At = PLG01 on RM lines', coil?.warehouse === 'PLG01' && circ?.warehouse === 'PLG01', `${coil?.warehouse}/${circ?.warehouse}`);
-  check('ON: non-RM keeps MAIN (no MAIN→PLG01 mapping)', bolt?.warehouse === 'MAIN', bolt?.warehouse);
   check('ON: GRN warehouse still MAIN', plg?.warehouse === 'MAIN', plg?.warehouse);
   check('ON: GRN reference on movement', coil?.refType === 'GRN' && coil?.refNumber === 'GRN-E2E-PLG');
   check('ON: Received At recorded on GRN', plg?.addToRmStock === true && plg?.rmReceivedAtLocation === 'PLG01',
@@ -241,6 +234,15 @@ const verify = async () => {
   // ── Duplicate submit ──
   const dupM = movsOf('GRN-E2E-DUP');
   check('DUP: exactly one movement after repeated submits', dupM.length === 1, `${dupM.length} movement(s)`);
+
+  // ── GRNs raised through the form with an Inventory Type ──
+  const formGrns = grns.filter((g) => g.poNumber === 'PO-E2E-FORM');
+  check('FORM: one coil GRN saved — Inventory Type RM, Received At JW001 (the C&P attempt was refused)',
+    formGrns.length === 1 && formGrns[0].inventoryType === 'RM' && formGrns[0].rmReceivedAtLocation === 'JW001' && formGrns[0].addToRmStock === true,
+    JSON.stringify(formGrns.map((g) => [g.inventoryType, g.rmReceivedAtLocation])));
+  const otherGrn = grns.find((g) => g.poNumber === 'PO-E2E-OTHER');
+  check('OTHER: bolt GRN saved as Consumable & Packaging, no RM location', otherGrn?.inventoryType === 'CONSUMABLE_PACKAGING' && otherGrn?.rmReceivedAtLocation === null,
+    `${otherGrn?.inventoryType}/${otherGrn?.rmReceivedAtLocation}`);
 
   // ── Manual Stock In (performed through the UI) ──
   const manualNew = movs.filter((m) => m.batchNo === 'MANUAL-TEST-BATCH-001');

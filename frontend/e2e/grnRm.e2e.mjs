@@ -132,43 +132,35 @@ const main = async () => {
     await page.waitForTimeout(600);
   };
 
-  // ── Scenario A — checkbox OFF ──────────────────────────────────────────────
-  console.log('\n── Scenario A: GRN completed with "Add to RM Stock" OFF ──');
+  // ── Scenario A — a mixed coil + bolt GRN is refused (one Inventory Type per GRN) ──
+  console.log('\n── Scenario A: mixed coil + bolt GRN → refused, nothing posts ──');
   await openGrn('OFF');
   await openCompleteDialog();
 
-  // Scoped to the dialog: the GRN Detail page behind it now also prints an
-  // "Add to RM Stock" field, so an unscoped match is ambiguous.
   const dlg = page.getByRole('dialog');
-  const rmBox = dlg.locator('input[type="checkbox"]').nth(1); // after allow-over-receipt
-  check('"Add to RM Stock" is present in the dialog',
-    await dlg.getByText('Add to RM Stock', { exact: true }).isVisible());
-  check('it is OFF by default', (await rmBox.isChecked()) === false);
-  // Received At only appears once the opt-in is on — nothing to mis-set while off.
-  // Received At is a separate decision from the opt-in, so it stays on screen
-  // whether the box is ticked or not.
-  check('Received At is visible even while the box is OFF', (await comboCount(page, 'Received At')) > 0);
-  check('the help text explains what ticking it does',
-    await dlg.getByText(/automatically be added to RM stock/i).first().isVisible());
-  await shot('02-dialog-off');
-
+  check('the Complete dialog asks for the Inventory Type (no "Add to RM Stock" checkbox)',
+    (await comboCount(page, 'Inventory Type')) > 0 && (await dlg.getByText('Add to RM Stock', { exact: true }).count()) === 0);
+  // A GRN raised before Inventory Type existed is not given one by assumption.
+  check('an earlier GRN opens with no Inventory Type chosen', !/Raw Material|Consumable/.test(await comboText(page, 'Inventory Type')));
+  check('Received At only appears for Raw Material', (await comboCount(page, 'Received At')) === 0);
+  await shot('02-dialog-inventory-type');
+  await pickSelect(page, 'Inventory Type', 'Raw Material (RM)');
   await page.getByRole('button', { name: /complete & post stock/i }).last().click();
-  // Wait for the toast rather than sleeping a fixed amount: completion now does
-  // one more SKU lookup (the Coil/Circle batch guard), and a fixed 2.5s became
-  // marginal. notistack auto-dismisses, so poll for it instead.
-  const offToast = await page.getByText(/GRN saved successfully/i).first()
+  const mixedErr = await page.getByText(/"E2E Bolt M8" is not Raw Material/).first()
     .waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
-  check('success message does NOT claim RM stock was updated', offToast,
-    offToast ? '"GRN saved successfully."' : 'expected message not found');
-  await shot('03-off-completed');
+  check('completing a mixed GRN as RM is refused, naming the bolt', mixedErr);
+  check('…and the dialog stays open (nothing posted)', (await page.getByRole('dialog').count()) > 0);
+  await shot('03-mixed-refused');
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForTimeout(500);
 
-  // ── Scenario B — checkbox ON, PLG01 ────────────────────────────────────────
-  console.log('\n── Scenario B: "Add to RM Stock" ON, Received At = PLG01 ──');
+  // ── Scenario B — Inventory Type RM, PLG01 ──────────────────────────────────
+  console.log('\n── Scenario B: Inventory Type RM, Received At = PLG01 ──');
   await openGrn('PLG');
   await openCompleteDialog();
-  await page.getByRole('dialog').locator('input[type="checkbox"]').nth(1).check();
+  await pickSelect(page, 'Inventory Type', 'Raw Material (RM)');
   await page.waitForTimeout(400);
-  check('Received At appears once the box is ticked', (await comboCount(page, 'Received At')) > 0);
+  check('Received At appears once Raw Material is chosen', (await comboCount(page, 'Received At')) > 0);
   const defaultLoc = await comboText(page, 'Received At');
   check('Received At defaults to PLG01', /PLG01/.test(defaultLoc || ''), (defaultLoc || '').trim());
   await shot('04-dialog-on-plg01');
@@ -191,7 +183,7 @@ const main = async () => {
   console.log('\n── Scenario B2: Received At = JW001 ──');
   await openGrn('JW');
   await openCompleteDialog();
-  await page.getByRole('dialog').locator('input[type="checkbox"]').nth(1).check();
+  await pickSelect(page, 'Inventory Type', 'Raw Material (RM)');
   await page.waitForTimeout(400);
   await pickSelect(page, 'Received At', /JW001/);
   const jwSel = await comboText(page, 'Received At');
@@ -206,23 +198,17 @@ const main = async () => {
   // ── The GRN FORM itself carries both controls ──────────────────────────────
   // This is the acceptance condition: the fields must be on the screen where a
   // GRN is raised, not only inside the Complete dialog.
-  console.log('\n── GRN create form: Add to RM Stock + Received At ──');
+  console.log('\n── GRN create form: Inventory Type + Received At ──');
   await go(`${APP}/procurement/grns`);
   await page.waitForTimeout(1500);
   await page.getByRole('button', { name: /new grn|create grn|^grn$/i }).first().click();
   await page.waitForTimeout(1200);
 
-  check('the GRN form shows "Add to RM Stock"',
-    (await page.getByText('Add to RM Stock', { exact: true }).count()) > 0);
-  // The acceptance condition: visible with the box UNTICKED, which is how the
-  // form opens.
-  const formBox = page.getByRole('dialog').locator('input[type="checkbox"]').first();
-  check('the box is unticked when the form opens', (await formBox.isChecked()) === false);
-  check('Received At is visible with the box UNTICKED',
-    (await comboCount(page, 'Received At')) > 0);
-  check('Received At defaults to PLG01 while unticked',
-    /PLG01/.test(await comboText(page, 'Received At')));
-  await shot('20-grn-form-unticked-received-at-visible');
+  check('the GRN form shows "Inventory Type" (no "Add to RM Stock" checkbox)',
+    (await comboCount(page, 'Inventory Type')) > 0 && (await page.getByText('Add to RM Stock', { exact: true }).count()) === 0);
+  check('no Inventory Type is pre-selected', !/Raw Material|Consumable/.test(await comboText(page, 'Inventory Type')));
+  check('Received At is not asked until Raw Material is chosen', (await comboCount(page, 'Received At')) === 0);
+  await shot('20-grn-form-inventory-type');
 
   // Pick the PO seeded for exactly this purpose.
   await page.getByRole('combobox', { name: /purchase order/i }).first().click();
@@ -230,23 +216,11 @@ const main = async () => {
   await page.getByRole('option', { name: /PO-E2E-FORM/ }).click();
   await page.waitForTimeout(1200);
 
-  // Choose the location BEFORE ticking, to prove the two are independent.
+  await pickSelect(page, 'Inventory Type', 'Raw Material (RM)');
+  check('Raw Material shows Received At, defaulting to PLG01', (await comboCount(page, 'Received At')) > 0
+    && /PLG01/.test(await comboText(page, 'Received At')));
   await pickSelect(page, 'Received At', /JW001/);
-  check('JW001 is selectable while still unticked', /JW001/.test(await comboText(page, 'Received At')));
-
-  // Toggle ON → OFF → ON; the field must stay on screen and keep its value.
-  await formBox.check();
-  await page.waitForTimeout(400);
-  check('still visible after ticking', (await comboCount(page, 'Received At')) > 0);
-  check('value survives ticking', /JW001/.test(await comboText(page, 'Received At')));
-  await formBox.uncheck();
-  await page.waitForTimeout(400);
-  check('still visible after unticking', (await comboCount(page, 'Received At')) > 0);
-  check('value survives unticking', /JW001/.test(await comboText(page, 'Received At')));
-  await formBox.check();
-  await page.waitForTimeout(400);
-  check('still visible after re-ticking', (await comboCount(page, 'Received At')) > 0);
-  check('value survives the full ON→OFF→ON toggle', /JW001/.test(await comboText(page, 'Received At')));
+  check('JW001 is selectable', /JW001/.test(await comboText(page, 'Received At')));
   // ── Batch Number is mandatory for Coil / Circle ──────────────────────────
   // PO-E2E-FORM carries a RAW_MATERIAL line, so its row must demand a batch.
   const batchField = page.getByRole('dialog').getByLabel(/^Batch No/);
@@ -260,7 +234,7 @@ const main = async () => {
   await shot('26-grn-form-coil-batch-required');
 
   // Saving with it empty must be blocked, with a business-readable reason.
-  await page.getByRole('dialog').getByRole('button', { name: /^create grn$/i }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^save grn$/i }).click();
   await page.waitForTimeout(1500);
   check('an empty Coil batch blocks submission',
     (await page.getByText(/Batch Number is required for Coil/i).count()) > 0);
@@ -271,7 +245,7 @@ const main = async () => {
   await page.waitForTimeout(300);
   await shot('21-grn-form-filled');
 
-  await page.getByRole('dialog').getByRole('button', { name: /^create grn$/i }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^save grn$/i }).click();
   await page.waitForTimeout(3500);
   check('the GRN saves once a batch is given', (await page.getByText(/created \(draft\)/i).count()) > 0);
   await shot('22-grn-form-saved');
@@ -296,7 +270,7 @@ const main = async () => {
     await go(`${APP}/procurement/grns/${formGrnId}`);
     await page.waitForTimeout(2200);
     const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-    check('GRN detail shows Add to RM Stock = Yes', /Add to RM Stock\s*Yes/i.test(body), body.slice(0, 0) || '');
+    check('GRN detail shows Inventory Type = Raw Material (RM)', /Inventory Type\s*Raw Material \(RM\)/i.test(body));
     check('GRN detail shows Received At = JW001', /Received At\s*JW001/i.test(body));
     check('Warehouse is still shown separately as MAIN', /Warehouse\s*MAIN/i.test(body));
     await shot('23-grn-detail-persisted');
@@ -304,9 +278,8 @@ const main = async () => {
     check('the saved GRN is listed', false, 'row for PO-E2E-FORM not found');
   }
 
-  // ── A completion that sends neither field inherits the form's choice ───────
-  // ── Saving with the box UNTICKED must still record the location ───────────
-  console.log('\n── GRN form: unticked + PLG01 is still persisted ──');
+  // ── A coil cannot be received as Consumable & Packaging ────────────────────
+  console.log('\n── GRN form: a coil under Consumable & Packaging is refused ──');
   await go(`${APP}/procurement/grns`);
   await page.waitForTimeout(1500);
   await page.getByRole('button', { name: /new grn|create grn|^grn$/i }).first().click();
@@ -315,31 +288,17 @@ const main = async () => {
   await page.waitForTimeout(800);
   await page.getByRole('option', { name: /PO-E2E-FORM/ }).click();
   await page.waitForTimeout(1200);
-
-  const box2 = page.getByRole('dialog').locator('input[type="checkbox"]').first();
-  check('second GRN opens unticked', (await box2.isChecked()) === false);
-  check('Received At visible on the unticked form', (await comboCount(page, 'Received At')) > 0);
-  await pickSelect(page, 'Received At', /PLG01/);
-  // Still a Coil line, so still needs a batch — the rule is independent of the
-  // Add to RM Stock checkbox.
+  await pickSelect(page, 'Inventory Type', 'Consumable & Packaging');
+  // Still a Coil line, so still needs a batch — the batch rule is independent.
   await page.getByRole('dialog').getByLabel(/^Batch No/).fill('BATCH-FORM-COIL-2');
   await page.waitForTimeout(300);
-  await shot('25-grn-form-unticked-plg01');
-  await page.getByRole('dialog').getByRole('button', { name: /^create grn$/i }).click();
-  await page.waitForTimeout(3500);
-  check('an unticked GRN saves', (await page.getByText(/created \(draft\)/i).count()) > 0);
-
-  const bothGrns = await page.evaluate(async () => {
-    const res = await fetch('http://localhost:5099/api/v1/procurement/grns?limit=100&sort=-createdAt', {
-      headers: { authorization: `Bearer ${localStorage.getItem('token')}` },
-    }).then((r) => r.json()).catch(() => null);
-    return (res?.data || [])
-      .filter((g) => g.poNumber === 'PO-E2E-FORM')
-      .map((g) => ({ addToRmStock: g.addToRmStock, loc: g.rmReceivedAtLocation }));
-  });
-  const unticked = bothGrns.find((g) => g.addToRmStock === false);
-  check('the unticked GRN kept its Received At (not nulled)',
-    unticked?.loc === 'PLG01', JSON.stringify(bothGrns));
+  await page.getByRole('dialog').getByRole('button', { name: /^save grn$/i }).click();
+  await page.waitForTimeout(1500);
+  check('a coil saved as Consumable & Packaging is refused with a clear message',
+    (await page.getByText(/is not Consumable & Packaging/).count()) > 0 && (await page.getByText(/created \(draft\)/i).count()) === 0);
+  await shot('25-grn-form-coil-as-cp-refused');
+  await page.getByRole('dialog').getByRole('button', { name: /^cancel$/i }).click();
+  await page.waitForTimeout(500);
 
   // ── A non-RM product must NOT have become mandatory ───────────────────────
   console.log('\n── Other products: Batch No stays optional ──');
@@ -359,7 +318,8 @@ const main = async () => {
   await shot('28-grn-form-other-optional');
 
   // And it must save with the batch left empty, exactly as before.
-  await page.getByRole('dialog').getByRole('button', { name: /^create grn$/i }).click();
+  await pickSelect(page, 'Inventory Type', 'Consumable & Packaging');
+  await page.getByRole('dialog').getByRole('button', { name: /^save grn$/i }).click();
   await page.waitForTimeout(3500);
   check('a non-RM GRN saves with no batch number',
     (await page.getByText(/created \(draft\)/i).count()) > 0);
@@ -369,8 +329,8 @@ const main = async () => {
   console.log('\n── Inherit: complete without re-sending the choice ──');
   await openGrn('INHERIT');
   await openCompleteDialog();
-  check('the dialog is pre-ticked from the GRN',
-    (await page.getByRole('dialog').locator('input[type="checkbox"]').nth(1).isChecked()) === true);
+  check('the dialog is pre-filled with the GRN\'s Inventory Type (Raw Material)',
+    /Raw Material \(RM\)/.test(await comboText(page, 'Inventory Type')));
   check('the dialog pre-fills the GRN\'s Received At (JW001)',
     /JW001/.test(await comboText(page, 'Received At')));
   await shot('24-complete-prefilled');
@@ -382,7 +342,7 @@ const main = async () => {
   console.log('\n── Duplicate submit: double-click Complete ──');
   await openGrn('DUP');
   await openCompleteDialog();
-  await page.getByRole('dialog').locator('input[type="checkbox"]').nth(1).check();
+  await pickSelect(page, 'Inventory Type', 'Raw Material (RM)');
   await page.waitForTimeout(300);
   const submit = page.getByRole('button', { name: /complete & post stock/i }).last();
   // Two clicks as fast as the browser will deliver them.
@@ -517,6 +477,10 @@ const main = async () => {
   // Cut Coils must still work — its scrap-location rule was changed.
   await go(`${APP}/rm-ims/conversion`);
   await page.waitForTimeout(2000);
+  // The Cut Coils form opens from "+ Coil to Circle" (the page itself is its history).
+  await page.getByTestId('open-coil-to-circle').click();
+  await page.getByTestId('coil-to-circle-dialog').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(600);
   check('Cut Coils still offers its Received At selector', (await comboCount(page, 'Received At')) > 0);
 
   await browser.close();

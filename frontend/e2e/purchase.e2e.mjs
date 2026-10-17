@@ -280,10 +280,17 @@ const run = async () => {
   await page.waitForTimeout(1200);
   const d = dialog();
   await d.getByLabel(/^Batch No/).first().fill('E2E-UI-RACE-001');
+  // Inventory Type replaced the "Add to RM Stock" checkbox: "Raw Material (RM)"
+  // sends the coil to RM stock, at the "Received At" asked for only then.
+  const invType = d.getByRole('combobox', { name: /Inventory Type/ });
+  check('the GRN form asks for an Inventory Type, and no Received At until Raw Material is chosen',
+    (await invType.count()) === 1 && (await d.getByRole('combobox', { name: /Received At/i }).count()) === 0);
+  await invType.click();
+  await page.getByRole('option', { name: 'Raw Material (RM)', exact: true }).click();
   await d.getByRole('combobox', { name: /Received At/i }).first().click();
   await page.getByRole('option', { name: /PLG01/ }).click();
-  await d.locator('input[type="checkbox"]').first().check();
-  await d.getByRole('button', { name: /^create grn$/i }).click();
+  // The form's submit is "Save GRN" (it then stays open for Incoming QC).
+  await d.getByRole('button', { name: /^save grn$/i }).click();
   check('GRN draft created', await toast(/created \(draft\)/i));
   const g = ((await apiGet('/procurement/grns?limit=10&sort=-createdAt'))?.data || [])[0];
 

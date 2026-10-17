@@ -30,10 +30,12 @@ const qcItemSchema = Joi.object({
   qcRemarks:      Joi.string().trim().max(500).allow('', null),
 });
 
-// QC is created from EITHER a GRN (goods) OR a completed service. Exactly one
-// source id is required.
+// QC is created from EITHER a GRN (goods) OR an approved internal-service indent
+// (indentId; serviceCompletionId for legacy Service Completion records). Exactly
+// one source id is required.
 export const createQcSchema = Joi.object({
   grnId:               objectId,
+  indentId:            objectId,
   serviceCompletionId: objectId,
   qcDate:           Joi.date().optional(),
   checkedByName:    Joi.string().trim().max(120).allow('', null),
@@ -42,7 +44,7 @@ export const createQcSchema = Joi.object({
   photos:           Joi.array().items(Joi.string().trim().max(1000)).default([]),
   remarks:          Joi.string().trim().max(1000).allow('', null),
   items:            Joi.array().items(qcItemSchema).min(1).optional(),
-}).xor('grnId', 'serviceCompletionId');
+}).xor('grnId', 'indentId', 'serviceCompletionId');
 
 export const updateQcSchema = Joi.object({
   qcDate:           Joi.date(),
@@ -58,6 +60,8 @@ export const completeQcSchema = Joi.object({
   // For service QC (no item splits) the result is supplied directly.
   overallResult: Joi.string().valid(...Object.values(QC_RESULT)),
   remarks: Joi.string().trim().max(1000).allow('', null),
+  // Service QC: optional service report.
+  qcReportDocument: qcDocumentSchema,
 });
 
 export const cancelQcSchema = Joi.object({

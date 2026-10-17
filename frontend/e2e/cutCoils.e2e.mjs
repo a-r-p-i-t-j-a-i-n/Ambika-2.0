@@ -70,8 +70,22 @@ const shot = async (page, name) => {
   await page.screenshot({ path: path.join(SHOTS, `cutcoils-${name}.png`), fullPage: true });
 };
 
+/**
+ * The Coil to Circle form. The page opens on its history and the form is a
+ * dialog opened from "+ Coil to Circle" — and the page behind it has its own
+ * tables and a "Batch number" filter — so every form control is looked up
+ * inside the dialog.
+ */
+const form = (page) => page.getByTestId('coil-to-circle-dialog');
+const openCutForm = async (page) => {
+  if (await form(page).count()) return;
+  await page.getByTestId('open-coil-to-circle').click();
+  await form(page).waitFor({ state: 'visible', timeout: 10000 });
+  await page.waitForTimeout(800);
+};
+
 /** The circle Autocomplete on a given row (0-based). */
-const circleInput = (page, row) => page.locator('table tbody tr').nth(row)
+const circleInput = (page, row) => form(page).locator('table tbody tr').nth(row)
   .locator('input[placeholder]').first();
 
 /** Open a row's circle picker and read back every option it offers. */
@@ -93,12 +107,17 @@ const readNoOptions = async (page) => {
   return (await box.count()) ? (await box.first().innerText()).trim() : null;
 };
 
-const closeMenu = async (page) => { await page.keyboard.press('Escape'); await page.waitForTimeout(150); };
+// Escape only when a dropdown is open: with none open it would reach the
+// form's dialog, which Escape closes.
+const closeMenu = async (page) => {
+  if (await page.locator('ul[role="listbox"], .MuiAutocomplete-popper').count()) await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+};
 
 /** With a physical coil linked, the round's cutting type (Full / Partial) must be
  *  chosen before its weight can be typed. These runs type the weight: Partial. */
 const choosePartial = async (page) => {
-  const r = page.getByRole('radio', { name: /partial cutting/i });
+  const r = form(page).getByRole('radio', { name: /partial cutting/i });
   if (await r.count()) { await r.first().check(); await page.waitForTimeout(150); }
 };
 
@@ -138,8 +157,15 @@ const run = async () => {
 
   /* ── 1. Open Cut Coils ── */
   await go(`${APP}/rm-ims/conversion`);
-  await page.waitForTimeout(2500);
+  // Wait for the page itself rather than a fixed pause — a cold dev-server
+  // load can take longer than 2.5 s.
+  await page.getByRole('table', { name: 'Coil to Circle history' }).waitFor({ timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(1000);
   check('Cut Coils page opens', /cut coils/i.test(await page.locator('body').innerText()));
+  check('…on its history, with the form closed', (await page.getByRole('table', { name: 'Coil to Circle history' }).count()) === 1
+    && (await form(page).count()) === 0);
+  await openCutForm(page);
+  const F = form(page);
   await shot(page, '01-open');
 
   /* ── 2. Before a coil is identified, the dropdown offers nothing ── */
@@ -154,9 +180,9 @@ const run = async () => {
   await shot(page, '02-before-coil');
 
   /* ── 3. Identify the coil by batch number ── */
-  const batchField = page.locator('input').filter({ hasNot: page.locator('[type=date]') }).nth(2);
+  const batchField = F.locator('input').filter({ hasNot: page.locator('[type=date]') }).nth(2);
   // Find the batch field by its label rather than by position.
-  const batch = page.getByLabel(/batch number/i).first();
+  const batch = F.getByLabel(/batch number/i).first();
   const target = (await batch.count()) ? batch : batchField;
   await target.fill('E2E-BATCH-JSL204-07');
   await page.waitForTimeout(3000);
@@ -179,7 +205,7 @@ const run = async () => {
   /* ── 5. Pick one, and fill the line ── */
   await page.locator('ul[role="listbox"] li[role="option"]').first().click();
   await page.waitForTimeout(300);
-  const row0 = page.locator('table tbody tr').nth(0);
+  const row0 = F.locator('table tbody tr').nth(0);
   await row0.locator('input[type="number"]').nth(0).fill('40');
   await row0.locator('input[type="number"]').nth(1).fill('50');
   // The Autocomplete holds its choice in the input's VALUE, not in the row's
@@ -188,7 +214,7 @@ const run = async () => {
   check('an approved circle can be selected', /JSL204-07-700/.test(picked), picked);
 
   /* ── 6. A SECOND row is restricted the same way ── */
-  await page.getByRole('button', { name: /add another circle size/i }).click();
+  await F.getByRole('button', { name: /add another circle size/i }).click();
   await page.waitForTimeout(400);
   const r2 = await openCircleOptions(page, 1);
   const got2 = codesFrom(r2.options);
@@ -198,12 +224,12 @@ const run = async () => {
 
   await page.locator('ul[role="listbox"] li[role="option"]').nth(1).click();
   await page.waitForTimeout(300);
-  const row1 = page.locator('table tbody tr').nth(1);
+  const row1 = F.locator('table tbody tr').nth(1);
   await row1.locator('input[type="number"]').nth(0).fill('25');
   await row1.locator('input[type="number"]').nth(1).fill('35');
 
   /* ── 7. The coil weight, and the arithmetic on screen ── */
-  const weight = page.getByLabel(/^cut this round/i).first();
+  const weight = F.getByLabel(/^cut this round/i).first();
   await choosePartial(page);
   await weight.fill('100');
   await page.waitForTimeout(600);
@@ -218,7 +244,7 @@ const run = async () => {
   const comboText = async (locator) => ((await locator.textContent()) || '').trim();
 
   /* ── 7a. "Scrap checked?" offers exactly two states — no location hiding in it ── */
-  const scrapCheckedBox = page.getByRole('combobox', { name: /scrap checked/i }).first();
+  const scrapCheckedBox = F.getByRole('combobox', { name: /scrap checked/i }).first();
   await scrapCheckedBox.click();
   await page.waitForTimeout(250);
   const scrapOpts = (await page.locator('ul[role="listbox"] li[role="option"]').allInnerTexts())
@@ -234,7 +260,7 @@ const run = async () => {
   await shot(page, '06a-scrap-checked-options');
 
   /* ── 7b. "Received At" auto-filled this coil's GRN location (PLG01) ── */
-  const receivedAtBox = page.getByRole('combobox', { name: /received at/i }).first();
+  const receivedAtBox = F.getByRole('combobox', { name: /received at/i }).first();
   check('"Received At" auto-filled PLG01 from this coil\'s own GRN — never guessed from the SKU',
     (await comboText(receivedAtBox)) === 'PLG01 — Plant', await comboText(receivedAtBox));
   let bodyNow = await page.locator('body').innerText();
@@ -270,7 +296,7 @@ const run = async () => {
   /* ── 8. Switching the coil drops sizes the new coil cannot produce ── */
   await target.fill('E2E-BATCH-JSL204-08');
   await page.waitForTimeout(3500);
-  const afterSwitch = await page.locator('table tbody tr').nth(0).innerText();
+  const afterSwitch = await F.locator('table tbody tr').nth(0).innerText();
   check('changing the coil clears circles the new coil cannot produce',
     !/JSL204-07-700/.test(afterSwitch), afterSwitch.replace(/\s+/g, ' ').slice(0, 70));
   const r3 = await openCircleOptions(page, 0);
@@ -285,7 +311,8 @@ const run = async () => {
   // coil already bound in place, so this starts with nothing bound.
   await go(`${APP}/rm-ims/conversion`);
   await page.waitForTimeout(2500);
-  const coilBox = page.getByRole('combobox', { name: /coil being cut/i }).first();
+  await openCutForm(page);
+  const coilBox = F.getByRole('combobox', { name: /coil being cut/i }).first();
   await coilBox.click();
   await page.waitForTimeout(600);
   const coilOpts = (await page.locator('ul[role="listbox"] li[role="option"]').allInnerTexts()).join(' | ');
@@ -305,7 +332,7 @@ const run = async () => {
   await closeMenu(page);
 
   // The unmapped coil's batch WAS received — say so, rather than "not received".
-  await page.getByLabel(/batch number/i).first().fill('E2E-BATCH-JSL204-06');
+  await F.getByLabel(/batch number/i).first().fill('E2E-BATCH-JSL204-06');
   await page.waitForTimeout(3500);
   const unmappedBody = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
   check('an unmapped coil\'s batch says it cannot be cut here, and why',
@@ -314,7 +341,7 @@ const run = async () => {
   check('…and selects no coil, so no circle can be picked',
     (await circleInput(page, 0).isDisabled()));
   await shot(page, '08-unmapped-coil');
-  await page.getByLabel(/batch number/i).first().fill('');
+  await F.getByLabel(/batch number/i).first().fill('');
 
   /* ── 9a. A coil received at JW001 auto-fills JW001, and a cut from it still
      saves — but must create no Ambika scrap stock. The real oracle for "no
@@ -323,9 +350,10 @@ const run = async () => {
      TOLD this is a job-work cut, and that saving it works end to end. ── */
   await go(`${APP}/rm-ims/conversion`);
   await page.waitForTimeout(2500);
-  await page.getByLabel(/batch number/i).first().fill('E2E-BATCH-JSL202-08-JW');
+  await openCutForm(page);
+  await F.getByLabel(/batch number/i).first().fill('E2E-BATCH-JSL202-08-JW');
   await page.waitForTimeout(3500);
-  const jwReceivedAt = page.getByRole('combobox', { name: /received at/i }).first();
+  const jwReceivedAt = F.getByRole('combobox', { name: /received at/i }).first();
   check('a coil received at JW001 auto-fills "JW001 — Job work" — not guessed from the SKU, not left at the PLG01 default',
     (await comboText(jwReceivedAt)) === 'JW001 — Job work', await comboText(jwReceivedAt));
   const jwBody = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
@@ -338,26 +366,29 @@ const run = async () => {
     codesFrom(jwCircle.options).some((c) => c.startsWith('JSL202-08')), codesFrom(jwCircle.options).join(', '));
   await page.locator('ul[role="listbox"] li[role="option"]').first().click();
   await page.waitForTimeout(300);
-  await page.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(0).fill('100');
-  await page.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(1).fill('150');
+  await F.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(0).fill('100');
+  await F.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(1).fill('150');
   await choosePartial(page);
-  await page.getByLabel(/^cut this round/i).first().fill('200');
+  await F.getByLabel(/^cut this round/i).first().fill('200');
   await page.waitForTimeout(600);
   await shot(page, '08b-jw001-ready-to-save');
-  await page.getByRole('button', { name: /save (this )?conversion|save/i }).last().click();
+  await F.getByRole('button', { name: /save (this )?conversion/i }).click();
   await page.waitForTimeout(4000);
   const jwSaved = await page.locator('body').innerText();
   check('a JW001 (job-work) cut saves just like a PLG01 one — the conversion itself is unaffected',
     /saved|yield/i.test(jwSaved) && !/could not save/i.test(jwSaved),
     (jwSaved.match(/Conversion [^\n]*/) || [''])[0].slice(0, 90));
 
+  check('…and the form closes after the save', (await F.count()) === 0);
+
   /* ── 10. Complete a valid conversion ── */
+  await openCutForm(page);
   await target.fill('E2E-BATCH-JSL204-07');
   await page.waitForTimeout(3500);
   // Step 9 reloaded the form, so it has ONE circle row. Add the second one
   // here rather than counting `table tbody tr` — that also counts the recent-
   // conversions table below, which is how a phantom second row was assumed.
-  await page.getByRole('button', { name: /add another circle size/i }).click();
+  await F.getByRole('button', { name: /add another circle size/i }).click();
   await page.waitForTimeout(300);
   const rows = 2;
   const pick = await openCircleOptions(page, 0);
@@ -366,15 +397,15 @@ const run = async () => {
     codesFrom(pick.options).join(', '));
   await page.locator('ul[role="listbox"] li[role="option"]').first().click();
   await page.waitForTimeout(300);
-  await page.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(0).fill('40');
-  await page.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(1).fill('50');
+  await F.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(0).fill('40');
+  await F.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(1).fill('50');
   if (rows > 1) {
     const pick2 = await openCircleOptions(page, 1);
     if (codesFrom(pick2.options).length) {
       await page.locator('ul[role="listbox"] li[role="option"]').nth(1).click();
       await page.waitForTimeout(250);
-      await page.locator('table tbody tr').nth(1).locator('input[type="number"]').nth(0).fill('25');
-      await page.locator('table tbody tr').nth(1).locator('input[type="number"]').nth(1).fill('35');
+      await F.locator('table tbody tr').nth(1).locator('input[type="number"]').nth(0).fill('25');
+      await F.locator('table tbody tr').nth(1).locator('input[type="number"]').nth(1).fill('35');
     } else { await closeMenu(page); }
   }
   await choosePartial(page);
@@ -382,7 +413,7 @@ const run = async () => {
   await page.waitForTimeout(800);
   await shot(page, '09-before-save');
 
-  const saveBtn = page.getByRole('button', { name: /save (this )?conversion|save/i }).last();
+  const saveBtn = F.getByRole('button', { name: /save (this )?conversion/i });
   await saveBtn.click();
   await page.waitForTimeout(4000);
   const afterSave = await page.locator('body').innerText();

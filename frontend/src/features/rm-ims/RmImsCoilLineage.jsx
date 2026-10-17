@@ -428,7 +428,7 @@ const RmImsCoilLineage = () => {
 
       {/* ── Where to go next ── */}
       <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-        <Button size="small" variant="outlined" startIcon={<Scissors size={14} />} onClick={() => navigate('/rm-ims/conversion')}
+        <Button size="small" variant="outlined" startIcon={<Scissors size={14} />} onClick={() => navigate('/rm-ims/conversion?new=1')}
           sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
           Cut this coil
         </Button>

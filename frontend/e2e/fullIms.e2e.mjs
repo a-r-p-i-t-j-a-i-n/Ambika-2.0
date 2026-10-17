@@ -125,20 +125,26 @@ const run = async () => {
     const dlgText = flat(await dlg.innerText());
     check(`the line comes across from the PO (${p.lines[0].qty} ${p.lines[0].sku})`, dlgText.includes(String(p.lines[0].qty)) || dlgText.includes(p.lines[0].qty.toLocaleString('en-IN')), dlgText.slice(0, 140));
     check('the coil line marks Batch No as required', (await dlg.getByLabel(/Batch No \*/).count()) > 0);
-    // Batch is mandatory: Create stays refused without it.
+    // Inventory Type replaced the "Add to RM Stock" checkbox: "Raw Material (RM)"
+    // sends the coil to RM stock, at the "Received At" asked for only then.
+    check('Received At is not asked for before an Inventory Type is chosen', (await dlg.getByRole('combobox', { name: /Received At/i }).count()) === 0);
+    await combo('Inventory Type').click();
+    await page.getByRole('option', { name: 'Raw Material (RM)', exact: true }).click();
+    await page.waitForTimeout(200);
+    // Batch is mandatory: saving stays refused without it.
     await combo('Received At').click();
     await page.getByRole('option', { name: new RegExp(p.at) }).click();
     await page.waitForTimeout(200);
-    const formBox = dlg.locator('input[type="checkbox"]').first();
-    await formBox.check();
-    await dlg.getByRole('button', { name: /^create grn$/i }).click();
+    // The form's submit is "Save GRN" (it then stays open for Incoming QC).
+    await dlg.getByRole('button', { name: /^save grn$/i }).click();
     await page.waitForTimeout(1500);
     check('creating without a batch number is refused', (await page.getByText(/created \(draft\)/i).count()) === 0
       && /batch/i.test(flat(await page.locator('body').innerText())));
     await dlg.getByLabel(/^Batch No/).first().fill(p.batch);
-    check(`Received At = ${p.at} and Add to RM Stock ticked on the form`, new RegExp(p.at).test(flat(await combo('Received At').textContent())) && await formBox.isChecked());
+    check(`Received At = ${p.at} and Inventory Type = Raw Material (RM) on the form`,
+      new RegExp(p.at).test(flat(await combo('Received At').textContent())) && /Raw Material \(RM\)/.test(flat(await combo('Inventory Type').textContent())));
     await shot(`03-grn-form-${p.key}`);
-    await dlg.getByRole('button', { name: /^create grn$/i }).click();
+    await dlg.getByRole('button', { name: /^save grn$/i }).click();
     check('GRN created as a draft', await toast(/created \(draft\)/i));
     const list = await apiGet('/procurement/grns?limit=100&sort=-createdAt');
     const g = (list?.data || []).find((x) => x.poNumber === po);
@@ -151,9 +157,7 @@ const run = async () => {
     await waitText(new RegExp(rxEsc(g.grnNumber)));
     await page.getByRole('button', { name: /complete & post stock/i }).first().click();
     await page.waitForTimeout(900);
-    const cdlg = page.getByRole('dialog');
-    const rmBox = cdlg.locator('input[type="checkbox"]').nth(1);
-    check('completion inherits "Add to RM Stock" from the GRN', await rmBox.isChecked());
+    check('completion inherits Inventory Type = Raw Material (RM) from the GRN', /Raw Material \(RM\)/.test(flat(await combo('Inventory Type').textContent())));
     check(`completion inherits Received At = ${p.at} (not the completion date)`, new RegExp(p.at).test(flat(await combo('Received At').textContent())));
     await page.getByRole('button', { name: /complete & post stock/i }).last().click();
     check('completion reports RM stock updated', await toast(/RM stock updated successfully/i));
@@ -197,17 +201,28 @@ const run = async () => {
 
   /* ══ Cut Coils ══ */
   await go('/rm-ims/conversion');
-  await waitText(/Cutting History/);
-  const batch = page.getByLabel(/batch number/i).first();
-  const cutField = page.getByLabel(/^cut this round/i).first();
-  const fullRadio = page.getByRole('radio', { name: /full cutting/i });
-  const partialRadio = page.getByRole('radio', { name: /partial cutting/i });
-  const saveBtn = page.getByRole('button', { name: /save this conversion/i });
-  const facts = async () => flat(await page.getByTestId('coil-facts').innerText());
-  const thisRound = async () => flat(await page.getByTestId('this-round').innerText());
-  const afterRound = async () => flat(await page.getByTestId('after-round').innerText());
+  await waitText(/Coil to Circle history/);
+  // The page opens on its history; the form is a dialog opened from
+  // "+ Coil to Circle" that closes after every save. Form controls are looked
+  // up inside it, and picking a batch reopens it when needed.
+  const F = page.getByTestId('coil-to-circle-dialog');
+  const openCutForm = async () => {
+    if (await F.count()) return;
+    await page.getByTestId('open-coil-to-circle').click();
+    await F.waitFor({ state: 'visible', timeout: 10000 });
+    await page.waitForTimeout(800);
+  };
+  await openCutForm();
+  const batch = F.getByLabel(/batch number/i).first();
+  const cutField = F.getByLabel(/^cut this round/i).first();
+  const fullRadio = F.getByRole('radio', { name: /full cutting/i });
+  const partialRadio = F.getByRole('radio', { name: /partial cutting/i });
+  const saveBtn = F.getByRole('button', { name: /save this conversion/i });
+  const facts = async () => flat(await F.getByTestId('coil-facts').innerText());
+  const thisRound = async () => flat(await F.getByTestId('this-round').innerText());
+  const afterRound = async () => flat(await F.getByTestId('after-round').innerText());
   const historyRow = (b) => page.locator(`[data-testid="cut-history-row"][data-batch="${b}"]`);
-  const circleInput = (i) => page.locator('table tbody tr').nth(i).locator('input[placeholder]').first();
+  const circleInput = (i) => F.locator('table tbody tr').nth(i).locator('input[placeholder]').first();
   const circleCodes = async (i) => {
     await circleInput(i).click();
     await page.waitForTimeout(600);
@@ -218,25 +233,25 @@ const run = async () => {
   const fillCircles = async (circles) => {
     for (let i = 0; i < circles.length; i += 1) {
       const [code, pcs, kg] = circles[i];
-      if (i > 0 && (await page.locator('table tbody tr').nth(i).locator('input[placeholder]').count()) === 0) {
-        await page.getByRole('button', { name: /add another circle size/i }).click();
+      if (i > 0 && (await F.locator('table tbody tr').nth(i).locator('input[placeholder]').count()) === 0) {
+        await F.getByRole('button', { name: /add another circle size/i }).click();
         await page.waitForTimeout(300);
       }
       await circleInput(i).click();
       await page.waitForTimeout(500);
       await page.locator('ul[role="listbox"] li[role="option"]').filter({ hasText: code }).first().click();
       await page.waitForTimeout(250);
-      const row = page.locator('table tbody tr').nth(i);
+      const row = F.locator('table tbody tr').nth(i);
       await row.locator('input[type="number"]').nth(0).fill(String(pcs));
       await row.locator('input[type="number"]').nth(1).fill(String(kg));
     }
     await page.waitForTimeout(500);
   };
-  const pickBatch = async (b) => { await batch.fill(''); await page.waitForTimeout(400); await batch.fill(b); await page.waitForTimeout(3200); };
+  const pickBatch = async (b) => { await openCutForm(); await batch.fill(''); await page.waitForTimeout(400); await batch.fill(b); await page.waitForTimeout(3200); };
   const save = async () => { await saveBtn.click(); return toast(/Conversion .* saved/i); };
 
   section('Cut Coils — the coil list and the mapping');
-  const coilBox = page.getByRole('combobox', { name: /coil being cut/i }).first();
+  const coilBox = F.getByRole('combobox', { name: /coil being cut/i }).first();
   await coilBox.click();
   await coilBox.fill('QA-E2E');
   await page.waitForTimeout(600);
@@ -263,7 +278,7 @@ const run = async () => {
   check('round 1 saves', await save());
   await page.waitForTimeout(1500);
   let hr = flat(await historyRow('E2E-FULL-COIL-001').innerText().catch(() => ''));
-  check('history: 2,000 · 1,000 cut · 850 · 150 · 85% · 1,000 left · Partially cut · PLG01 · 1 round', /2,000 1,000 850 150 85% 1,000 Partially cut PLG01 1$/.test(hr), hr);
+  check('history: 2,000 · 1,000 cut · 850 · 150 · 85% · 1,000 left · Partially cut · PLG01 · 1 round', /PLG01 · Plant 2,000 1,000 [\d,]+ 850 150 85% 1,000 Partially cut 1 round$/.test(hr), hr);
 
   /* ── Coil 1, round 2: Full ── */
   section('Coil 1 — round 2, Full');
@@ -281,7 +296,7 @@ const run = async () => {
   check('round 2 saves', await save());
   await page.waitForTimeout(1500);
   hr = flat(await historyRow('E2E-FULL-COIL-001').innerText().catch(() => ''));
-  check('history: 2,000 cut · 1,720 · 280 · weighted 86% · 0 left · Fully cut · 2 rounds', /2,000 2,000 1,720 280 86% 0 Fully cut PLG01 2$/.test(hr), hr);
+  check('history: 2,000 cut · 1,720 · 280 · weighted 86% · 0 left · Fully cut · 2 rounds', /PLG01 · Plant 2,000 2,000 [\d,]+ 1,720 280 86% 0 Fully cut 2 rounds$/.test(hr), hr);
   await historyRow('E2E-FULL-COIL-001').click();
   await page.waitForTimeout(1500);
   let rr = (await page.getByTestId('cut-round-row').allInnerTexts()).map(flat);
@@ -315,7 +330,7 @@ const run = async () => {
   check('JW001 round 2 saves', await save());
   await page.waitForTimeout(1500);
   hr = flat(await historyRow('E2E-FULL-COIL-002').innerText().catch(() => ''));
-  check('history: 2,500 · 1,500 cut · 1,230 · 270 (with job worker) · 82% · 1,000 left · Partially cut · JW001 · 2', /2,500 1,500 1,230 270 with job worker 82% 1,000 Partially cut JW001 2$/.test(hr), hr);
+  check('history: 2,500 · 1,500 cut · 1,230 · 270 (with job worker) · 82% · 1,000 left · Partially cut · JW001 · 2', /JW001 · Job work 2,500 1,500 [\d,]+ 1,230 270 with job worker 82% 1,000 Partially cut 2 rounds$/.test(hr), hr);
 
   /* ── Coil 3: Partial, then a STALE Full, then the real Full ── */
   section('Coil 3 (E2E-FULL-COIL-003, 1,500 kg PLG01) — stale Full');
@@ -349,7 +364,7 @@ const run = async () => {
   check('the corrected Full (400) saves', await save());
   await page.waitForTimeout(1500);
   hr = flat(await historyRow('E2E-FULL-COIL-003').innerText().catch(() => ''));
-  check('history: 1,500 · 1,500 cut · 1,275 · 225 · 85% · 0 left · Fully cut · 3 rounds', /1,500 1,500 1,275 225 85% 0 Fully cut PLG01 3$/.test(hr), hr);
+  check('history: 1,500 · 1,500 cut · 1,275 · 225 · 85% · 0 left · Fully cut · 3 rounds', /PLG01 · Plant 1,500 1,500 [\d,]+ 1,275 225 85% 0 Fully cut 3 rounds$/.test(hr), hr);
   await historyRow('E2E-FULL-COIL-003').click();
   await page.waitForTimeout(1500);
   rr = (await page.getByTestId('cut-round-row').allInnerTexts()).map(flat);

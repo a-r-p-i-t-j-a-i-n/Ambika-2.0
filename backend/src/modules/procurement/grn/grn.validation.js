@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import { PAGINATION } from '../../../config/constants.js';
-import { GRN_STATUS, HOW_ITEM_RECEIVED } from './grn.model.js';
+import { GRN_STATUS, HOW_ITEM_RECEIVED, GRN_INVENTORY_TYPE } from './grn.model.js';
 import { RM_RECEIVED_AT_LOCATIONS, DEFAULT_RM_RECEIVED_AT } from '../../inventory/inventoryStock.model.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
@@ -27,6 +27,29 @@ const rmReceivedAtOnSave = Joi.any().when('addToRmStock', {
     }),
   otherwise: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow(null, '').optional()
     .messages({ 'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` }),
+});
+
+/**
+ * Inventory Type — which module the GRN receives into (one per GRN). Finished
+ * Goods are never purchased, so only these two exist (see GRN_INVENTORY_TYPE).
+ */
+const inventoryTypeField = Joi.string().valid(...Object.values(GRN_INVENTORY_TYPE)).messages({
+  'any.only': 'Inventory Type must be Raw Material (RM) or Consumable & Packaging',
+  'any.required': 'Select the Inventory Type for the received material',
+});
+
+/**
+ * Received At on save: required for an RM GRN; ignored (may be empty) for a
+ * Consumable & Packaging one; the legacy opt-in rule when no Inventory Type is sent.
+ */
+const rmReceivedAtField = Joi.any().when('inventoryType', {
+  is: GRN_INVENTORY_TYPE.RM,
+  then: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).required()
+    .messages({
+      'any.required': 'Received At is required for a Raw Material (RM) GRN.',
+      'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}`,
+    }),
+  otherwise: rmReceivedAtOnSave,
 });
 
 const grnDocumentSchema = Joi.object({
@@ -62,10 +85,12 @@ export const createGrnSchema = Joi.object({
   receivedBy:      Joi.string().trim().max(120).allow('', null),
   preparedBy:      Joi.string().trim().max(120).allow('', null),
   warehouse:       Joi.string().trim().max(40).allow('', null),
-  // The operator's RM choice, captured when the GRN is raised. Both are
-  // optional so a GRN that has nothing to do with Raw Material saves unchanged.
+  // Required for every new GRN — it decides which IMS module the stock lands in.
+  // addToRmStock is no longer sent by the form (derived from inventoryType);
+  // still accepted so an older caller is not rejected outright.
+  inventoryType:        inventoryTypeField.required(),
   addToRmStock:         Joi.boolean(),
-  rmReceivedAtLocation: rmReceivedAtOnSave,
+  rmReceivedAtLocation: rmReceivedAtField,
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)).default(HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED),
   challanDocument: grnDocumentSchema.default(null),
   invoiceDocument: grnDocumentSchema.default(null),
@@ -104,10 +129,11 @@ export const updateGrnSchema = Joi.object({
   receivedBy:      Joi.string().trim().max(120).allow('', null),
   preparedBy:      Joi.string().trim().max(120).allow('', null),
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)),
-  // No default on either: a PATCH that does not mention them must leave the
-  // saved choice alone rather than silently resetting it to "not opted in".
+  // No default on any: a PATCH that does not mention them must leave the
+  // saved choice alone rather than silently resetting it.
+  inventoryType:        inventoryTypeField,
   addToRmStock:         Joi.boolean(),
-  rmReceivedAtLocation: rmReceivedAtOnSave,
+  rmReceivedAtLocation: rmReceivedAtField,
   challanDocument: grnDocumentSchema,
   invoiceDocument: grnDocumentSchema,
   remarks:         Joi.string().trim().max(1000).allow('', null),
@@ -135,6 +161,10 @@ export const completeGrnSchema = Joi.object({
   // with false for any caller that omits the field. The service resolves the
   // fallback against the stored GRN instead.
   addToRmStock: Joi.boolean(),
+
+  // Inventory Type confirmed at completion (falls back to the GRN's own). When
+  // set it decides the RM handling and addToRmStock is derived from it.
+  inventoryType: inventoryTypeField,
 
   // "Received At" for those RM lines — the same list the RM Stock In screen
   // validates against, imported rather than restated. Not defaulted, for the

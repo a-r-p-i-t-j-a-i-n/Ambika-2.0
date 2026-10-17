@@ -4,7 +4,7 @@ import PDFDocument from 'pdfkit';
 import IncomingQC, { QC_STATUS, QC_RESULT, QC_SOURCE_TYPE } from './incomingQc.model.js';
 import GoodsReceiptNote, { GRN_STATUS, GRN_QC_STATUS } from '../grn/grn.model.js';
 import ServiceCompletion, { SERVICE_COMPLETION_STATUS, SERVICE_QC_STATUS } from '../service-completion/serviceCompletion.model.js';
-import PurchaseIndent, { INDENT_OVERALL_STATUS } from '../indent/indent.model.js';
+import PurchaseIndent, { INDENT_OVERALL_STATUS, INDENT_REQUEST_TYPE } from '../indent/indent.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
@@ -22,6 +22,114 @@ const findOrThrow = async (id) => {
   const qc = await IncomingQC.findOne({ _id: id, isDeleted: { $ne: true } });
   if (!qc) throw new AppError('Incoming QC not found', 404);
   return qc;
+};
+
+// ── Per-GRN QC lock ──────────────────────────────────────────────────────────
+// Creating a QC was "is there one already? → create": two requests arriving
+// together both saw "no" and both created. Completing two different QCs of one
+// GRN (historical duplicates) had the same gap. Both now run while holding a
+// short-lived lock on the GRN — the same pattern as the PO's grnPostingLockAt
+// and the PI's advanceAllocationLockAt. The lock expires on its own, so a crash
+// mid-request can never strand the GRN.
+const GRN_QC_LOCK_TTL_MS = 2 * 60 * 1000;
+const GRN_QC_LOCK_WAIT_MS = 3000;
+const GRN_QC_LOCK_POLL_MS = 150;
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+
+/** Take the GRN's QC lock, waiting briefly for a concurrent holder. Returns the lock stamp, or null. */
+export const acquireGrnQcLock = async (grnId, { waitMs = GRN_QC_LOCK_WAIT_MS } = {}) => {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const now = new Date();
+    const res = await GoodsReceiptNote.updateOne(
+      {
+        _id: grnId,
+        $or: [{ qcLockAt: null }, { qcLockAt: { $lt: new Date(now.getTime() - GRN_QC_LOCK_TTL_MS) } }],
+      },
+      { $set: { qcLockAt: now } },
+    );
+    if (res.modifiedCount === 1) return now;
+    if (Date.now() >= deadline) return null;
+    await sleep(GRN_QC_LOCK_POLL_MS);
+  }
+};
+
+/** Release only the lock this request took (a stale one may have been re-taken by someone else). */
+export const releaseGrnQcLock = (grnId, lockedAt) => GoodsReceiptNote.updateOne(
+  { _id: grnId, qcLockAt: lockedAt },
+  { $set: { qcLockAt: null } },
+).catch((err) => logger.error(`[qc] failed to release QC lock on GRN ${grnId}: ${err.message}`));
+
+const withGrnQcLock = async (grnId, work) => {
+  const lockedAt = await acquireGrnQcLock(grnId);
+  if (!lockedAt) throw new AppError('A QC for this GRN is being saved by another request right now. Please try again in a moment.', 409);
+  try {
+    return await work();
+  } finally {
+    await releaseGrnQcLock(grnId, lockedAt);
+  }
+};
+
+const sameId = (a, b) => a != null && b != null && String(a) === String(b);
+const sameBatch = (a, b) => String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase();
+
+/**
+ * Where each REJECTED QC line's stock actually is. Pure.
+ *
+ * The rejection must leave from the stock the GRN actually posted — the line's
+ * own GRN_IN receipt — never from the GRN's nominal store. The chain is:
+ *
+ *   QC line ─grnItemId→ GRN line ─movementId→ GRN_IN movement (warehouse, batch)
+ *
+ * A GRN line with no receipt posted no stock (e.g. Raw Material with "Add to RM
+ * Stock" unticked), so its rejection has nothing to move out. Anything that
+ * cannot be matched with certainty is reported as an error rather than guessed.
+ *
+ * @param qcItems   QC lines (rejectedQty, grnItemId, skuId, batchNo, itemName)
+ * @param grnItems  the GRN's lines (_id, skuId, batchNo, movementId)
+ * @param receipts  the GRN's GRN_IN movements (_id, skuId, batchNo, warehouse)
+ * @returns {{ steps: object[], errors: string[] }}
+ *   steps: { item, post: true, skuId, warehouse, batchNo, receiptId } | { item, post: false, reason: 'NOT_POSTED' }
+ */
+export const planRejectStockOut = ({ qcItems = [], grnItems = [], receipts = [] }) => {
+  const steps = [];
+  const errors = [];
+  const claimedReceiptIds = new Set(grnItems.map((g) => g.movementId).filter(Boolean).map(String));
+
+  for (const item of qcItems) {
+    if (!(round2(item.rejectedQty) > 0)) continue;
+    const name = item.itemName || item.skuCode || 'item';
+
+    // 1) The GRN line this QC line inspected.
+    let grnItem = grnItems.find((g) => sameId(g._id, item.grnItemId));
+    if (!grnItem && !item.grnItemId) {
+      const bySku = grnItems.filter((g) => sameId(g.skuId, item.skuId) && sameBatch(g.batchNo, item.batchNo));
+      if (bySku.length === 1) [grnItem] = bySku;
+    }
+    if (!grnItem) { errors.push(`"${name}": cannot be matched to a line of its GRN`); continue; }
+
+    // 2) That line's own receipt.
+    let receipt = null;
+    if (grnItem.movementId) {
+      receipt = receipts.find((m) => sameId(m._id, grnItem.movementId));
+      if (!receipt) { errors.push(`"${name}": its stock receipt (${grnItem.movementNumber || grnItem.movementId}) was not found`); continue; }
+    } else {
+      // Lines that predate the movementId link: find the receipt by SKU + batch,
+      // among receipts no other line already owns. None → the line never posted.
+      const candidates = receipts.filter((m) => !claimedReceiptIds.has(String(m._id))
+        && sameId(m.skuId, grnItem.skuId) && sameBatch(m.batchNo, grnItem.batchNo));
+      if (candidates.length > 1) { errors.push(`"${name}": more than one stock receipt matches — cannot tell which one to reverse`); continue; }
+      [receipt] = candidates;
+    }
+
+    if (!receipt) { steps.push({ item, post: false, reason: 'NOT_POSTED' }); continue; }
+    if (item.skuId && !sameId(receipt.skuId, item.skuId)) { errors.push(`"${name}": the SKU differs from its stock receipt`); continue; }
+    // The receipt is the stock being reversed, so its SKU / store / batch are used as-is.
+    steps.push({
+      item, post: true, skuId: receipt.skuId, warehouse: receipt.warehouse, batchNo: receipt.batchNo || '', receiptId: receipt._id,
+    });
+  }
+  return { steps, errors };
 };
 
 const computeTotals = (items = []) => {
@@ -122,23 +230,59 @@ export const buildQcPdfBuffer = (qc, company = {}) => new Promise((resolve, reje
   } catch (err) { reject(err); }
 });
 
+// Internal-service indents become QC-eligible once the quotation is approved
+// (SERVICE_PENDING). SERVICE_COMPLETED is the legacy state left by the retired
+// Service Completion step (1.8A) — still eligible so those indents can proceed.
+export const SERVICE_QC_ELIGIBLE_INDENT_STATUSES = [
+  INDENT_OVERALL_STATUS.SERVICE_PENDING,
+  INDENT_OVERALL_STATUS.SERVICE_COMPLETED,
+];
+
+/** Why an indent cannot start a service QC, or null when it can. Pure. */
+export const serviceQcBlocker = (indent, existingQc = null) => {
+  if (!indent) return 'Indent not found';
+  if (indent.requestType !== INDENT_REQUEST_TYPE.INTERNAL_SERVICE) return 'Service QC is only for internal-service indents';
+  if (!SERVICE_QC_ELIGIBLE_INDENT_STATUSES.includes(indent.overallStatus)) return 'Approve the quotation before starting the service QC';
+  if (existingQc) return `A QC (${existingQc.qcNumber}) already exists for this service`;
+  return null;
+};
+
 export const incomingQcService = {
-  // QC from a completed internal service — no goods, no inventory, quality only.
+  // QC for an internal service — no goods, no inventory, quality only. Started
+  // directly from the approved indent; a legacy Service Completion id is still
+  // accepted and resolves to its indent.
   async createFromService(data, user) {
-    const sc = await ServiceCompletion.findOne({ _id: data.serviceCompletionId, isDeleted: { $ne: true } });
-    if (!sc) throw new AppError('Service completion not found', 404);
-    if (sc.status !== SERVICE_COMPLETION_STATUS.COMPLETED) {
-      throw new AppError('Incoming QC can only be created for a completed service', 400);
+    let sc = null;
+    let indentId = data.indentId;
+    if (data.serviceCompletionId) {
+      sc = await ServiceCompletion.findOne({ _id: data.serviceCompletionId, isDeleted: { $ne: true } });
+      if (!sc) throw new AppError('Service completion not found', 404);
+      if (sc.status !== SERVICE_COMPLETION_STATUS.COMPLETED) {
+        throw new AppError('Incoming QC can only be created for a completed service', 400);
+      }
+      if (sc.qcStatus !== SERVICE_QC_STATUS.PENDING) {
+        throw new AppError('This service has already been QC-checked', 400);
+      }
+      indentId = sc.indentId;
     }
-    if (sc.qcStatus !== SERVICE_QC_STATUS.PENDING) {
-      throw new AppError('This service has already been QC-checked', 400);
+
+    const indent = await PurchaseIndent.findOne({ _id: indentId, isDeleted: { $ne: true } }).lean();
+    const existing = indent && await IncomingQC.findOne({
+      indentId: indent._id, sourceType: QC_SOURCE_TYPE.SERVICE,
+      isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED },
+    }).lean();
+    const blocker = serviceQcBlocker(indent, existing);
+    if (blocker) throw new AppError(blocker, indent ? 400 : 404);
+
+    // Keep the link to a legacy Service Completion recorded for this indent, if any.
+    if (!sc) {
+      sc = await ServiceCompletion.findOne({
+        indentId: indent._id, isDeleted: { $ne: true }, status: { $ne: SERVICE_COMPLETION_STATUS.CANCELLED },
+      });
     }
-    const existing = await IncomingQC.findOne({ serviceCompletionId: sc._id, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } }).lean();
-    if (existing) throw new AppError(`A QC (${existing.qcNumber}) already exists for this service`, 400);
 
     // Load the indent's items so the inspection table is populated (no goods, no
     // inventory — these are the requested service line items, all accepted by default).
-    const indent = await PurchaseIndent.findOne({ _id: sc.indentId, isDeleted: { $ne: true } }).lean();
     const indentItems = indent?.items?.length
       ? indent.items
       : (indent?.productNameRevised
@@ -159,14 +303,20 @@ export const incomingQcService = {
     });
     const { lines, totals } = computeTotals(sourceItems);
 
+    // Service provider: legacy SC's provider, else the indent's vendor, else the
+    // vendor approved on the quotation (Step 1.3).
+    const approvedVendor = indent.quotationApprovalStep?.approvedVendors?.[0];
+    const vendorId = sc?.vendorId || indent.vendorId || approvedVendor?.vendorId || undefined;
+    const vendorName = sc?.vendorName || indent.vendorName || approvedVendor?.vendorName || '';
+
     const qcNumber = await generateQcNumber(data.qcDate || new Date());
     const qc = await IncomingQC.create({
       qcNumber,
       qcDate: data.qcDate || new Date(),
       sourceType: QC_SOURCE_TYPE.SERVICE,
-      serviceCompletionId: sc._id, serviceCompletionNumber: sc.scNumber,
-      indentId: sc.indentId, indentNumber: sc.indentNumber,
-      vendorId: sc.vendorId, vendorName: sc.vendorName,
+      serviceCompletionId: sc?._id, serviceCompletionNumber: sc?.scNumber || '',
+      indentId: indent._id, indentNumber: indent.indentNumber,
+      vendorId, vendorName,
       checkedBy: user?._id, checkedByName: data.checkedByName || user?.name || '',
       preparedBy: data.preparedBy || user?.name || '',
       qcStatus: QC_STATUS.DRAFT,
@@ -176,14 +326,14 @@ export const incomingQcService = {
       ...totals,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `Service QC created for ${sc.scNumber}`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `Service QC created for ${sc?.scNumber || indent.indentNumber}`, actorId: user?._id }],
     });
     return qc;
   },
 
   async create(data, user) {
-    // Route to the service-source path when a service completion is referenced.
-    if (data.serviceCompletionId) return this.createFromService(data, user);
+    // Route to the service-source path for an internal-service indent (or a legacy service completion).
+    if (data.indentId || data.serviceCompletionId) return this.createFromService(data, user);
 
     const grn = await GoodsReceiptNote.findOne({ _id: data.grnId, isDeleted: { $ne: true } });
     if (!grn) throw new AppError('GRN not found', 404);
@@ -196,8 +346,17 @@ export const incomingQcService = {
     if (grn.approvalStatus !== 'MD_APPROVED') {
       throw new AppError('GRN must be MD Approved before Incoming QC can be created', 400);
     }
+
+    // One QC per GRN: the duplicate check and the insert run under the GRN's QC
+    // lock, so a concurrent request waits and then finds this QC instead of
+    // creating a second one. Released on success and on failure alike.
+    return withGrnQcLock(grn._id, () => this._createForGrnLocked(grn, data, user));
+  },
+
+  /** create() for a GRN — runs holding the GRN's QC lock. */
+  async _createForGrnLocked(grn, data, user) {
     const existing = await IncomingQC.findOne({ grnId: grn._id, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } }).lean();
-    if (existing) throw new AppError(`A QC (${existing.qcNumber}) already exists for this GRN`, 400);
+    if (existing) throw new AppError(`A QC (${existing.qcNumber}) already exists for this GRN`, 409);
 
     // Rule 3: auto-load received lines from the GRN (default all accepted).
     const sourceItems = data.items?.length ? data.items : (grn.items || [])
@@ -327,17 +486,21 @@ export const incomingQcService = {
       qc.stockPosted = true; // terminal marker — nothing to post for a service
       qc.completedAt = completedAt;
       if (data.remarks) qc.remarks = data.remarks;
+      // Service report (evidence the work was done) — replaces the retired Service Completion upload.
+      if (data.qcReportDocument?.fileUrl) qc.qcReportDocument = { ...data.qcReportDocument, uploadedAt: new Date() };
       qc.updatedBy = user?._id;
       qc.activityTimeline.push({ action: 'COMPLETE', description: `Service QC completed — ${result}`, actorId: user?._id });
       await qc.save();
 
-      // Mirror onto the service completion.
-      const scQc = result === QC_RESULT.PASS ? SERVICE_QC_STATUS.PASSED
-        : result === QC_RESULT.FAIL ? SERVICE_QC_STATUS.FAILED
-        : SERVICE_QC_STATUS.PARTIAL;
-      try {
-        await ServiceCompletion.updateOne({ _id: qc.serviceCompletionId }, { $set: { qcStatus: scQc, qcId: qc._id, qcNumber: qc.qcNumber, qcCompletedAt: completedAt } });
-      } catch (err) { logger.error(`[qc] service-completion update failed: ${err.message}`); }
+      // Mirror onto the legacy service completion, when this QC has one.
+      if (qc.serviceCompletionId) {
+        const scQc = result === QC_RESULT.PASS ? SERVICE_QC_STATUS.PASSED
+          : result === QC_RESULT.FAIL ? SERVICE_QC_STATUS.FAILED
+          : SERVICE_QC_STATUS.PARTIAL;
+        try {
+          await ServiceCompletion.updateOne({ _id: qc.serviceCompletionId }, { $set: { qcStatus: scQc, qcId: qc._id, qcNumber: qc.qcNumber, qcCompletedAt: completedAt } });
+        } catch (err) { logger.error(`[qc] service-completion update failed: ${err.message}`); }
+      }
 
       // Reflect the QC verdict on the indent.
       const indentStatus = result === QC_RESULT.PASS ? INDENT_OVERALL_STATUS.SERVICE_QC_PASSED
@@ -373,35 +536,108 @@ export const incomingQcService = {
     // Rule 5: derive result.
     const { qcStatus, overallResult } = deriveResult(qc.items);
 
-    // Rule 6 & 7: rejected qty → decreaseStock (accepted stays; rework held).
-    for (const it of qc.items) {
-      const rejected = round2(it.rejectedQty);
-      if (rejected > 0 && it.skuId) {
+    if (!qc.grnId) throw new AppError('This QC is not linked to a GRN', 400);
+    // Held through the GRN update, so two QCs of one GRN cannot complete together.
+    await withGrnQcLock(qc.grnId, () => this._completeGrnQcLocked(qc, data, user, { qcStatus, overallResult }));
+
+    // PDF (non-fatal).
+    try {
+      const { qcPdfUrl, qcPdfFileName } = await this.generatePdf(id);
+      qc.qcPdfUrl = qcPdfUrl;
+      qc.qcPdfFileName = qcPdfFileName;
+    } catch (err) { logger.error(`[qc] PDF generation failed for ${qc.qcNumber}: ${err.message}`); }
+
+    return qc;
+  },
+
+  /** complete() for a GRN QC — runs holding the GRN's QC lock. */
+  async _completeGrnQcLocked(qc, data, user, { qcStatus, overallResult }) {
+    // A GRN gets one QC result. A second (historical duplicate) draft must not
+    // complete on top of it and move the rejected stock out again.
+    const done = await IncomingQC.findOne({
+      grnId: qc.grnId, _id: { $ne: qc._id }, isDeleted: { $ne: true },
+      qcStatus: { $in: [QC_STATUS.PASSED, QC_STATUS.FAILED, QC_STATUS.PARTIAL] },
+    }).select('qcNumber').lean();
+    if (done) {
+      throw new AppError(`This GRN already has a completed QC (${done.qcNumber}). ${qc.qcNumber} is a duplicate — cancel it instead of completing it.`, 409);
+    }
+
+    // Where each rejected line's stock really is: its own GRN_IN receipt.
+    const grn = await GoodsReceiptNote.findById(qc.grnId).select('grnNumber items').lean();
+    if (!grn) throw new AppError('The GRN for this QC was not found', 404);
+    const receipts = (await inventoryService.getMovementsByRef('GRN', grn._id))
+      .filter((m) => m.txnType === 'GRN_IN' && m.movementType === 'IN');
+    const { steps, errors } = planRejectStockOut({ qcItems: qc.items, grnItems: grn.items || [], receipts });
+    if (errors.length) {
+      throw new AppError(`Cannot complete QC — the rejected stock cannot be traced to its receipt: ${errors.join('; ')}`, 409);
+    }
+
+    // Claim the completion atomically (same pattern as GRN complete): only the
+    // request that flips stockPosted false→true posts the rejected-qty movements.
+    // A double-click, retry or second tab is told it is already completed instead
+    // of passing the checks above at the same moment and posting the stock-out twice.
+    const claim = await IncomingQC.updateOne(
+      { _id: qc._id, stockPosted: { $ne: true }, qcStatus: { $in: [QC_STATUS.DRAFT, QC_STATUS.IN_PROGRESS] } },
+      { $set: { stockPosted: true } },
+    );
+    if (!claim.modifiedCount) throw new AppError('QC is already completed', 400);
+
+    try {
+      // Rule 6 & 7: rejected qty → decreaseStock (accepted stays; rework held),
+      // from the store + batch its receipt posted to. Lines whose receipt never
+      // posted (e.g. RM not added to RM stock) have no stock to move out.
+      const notes = [];
+      for (const step of steps) {
+        const it = step.item;
+        const rejected = round2(it.rejectedQty);
+        if (!step.post) {
+          notes.push(`${it.itemName}: ${rejected} rejected — no stock-out, the GRN never added this line to stock`);
+          continue;
+        }
         const { movement } = await inventoryService.decreaseStock({
-          skuId: it.skuId, skuCode: it.skuCode, skuName: it.itemName, unit: it.unit,
-          warehouse: qc.warehouse,
+          skuId: step.skuId, skuCode: it.skuCode, skuName: it.itemName, unit: it.unit,
+          warehouse: step.warehouse,
           quantity: rejected,
           txnType: 'QC_REJECT_OUT', sourceModule: 'PURCHASE_FMS',
           refType: 'INCOMING_QC', refId: qc._id, refNumber: qc.qcNumber,
-          batchNo: it.batchNo || '',
+          batchNo: step.batchNo,
           vendorId: qc.vendorId, vendorName: qc.vendorName,
           poId: qc.poId, poNumber: qc.poNumber, piId: qc.piId, piNumber: qc.piNumber,
           remarks: 'Stock moved out due to incoming QC rejection',
           performedBy: user, movementDate: qc.qcDate,
-        }, { allowNegative: true });
+        }, { allowNegative: true }); // unchanged policy for QC rejects — see below
         it.inventoryMovementId = movement._id;
         it.inventoryMovementNumber = movement.movementNumber;
+        // Negative is still allowed (existing QC-reject rule), but never silent:
+        // it means the material was used from that store before QC rejected it.
+        if (round2(movement.balanceAfter) < 0) {
+          notes.push(`${it.itemName}: stock at ${step.warehouse} went negative (${movement.balanceAfter}) — material was issued before QC`);
+        }
       }
-    }
 
-    qc.qcStatus = qcStatus;
-    qc.overallResult = overallResult;
-    qc.stockPosted = true;
-    qc.completedAt = new Date();
-    if (data.remarks) qc.remarks = data.remarks;
-    qc.updatedBy = user?._id;
-    qc.activityTimeline.push({ action: 'COMPLETE', description: `QC completed — ${overallResult}`, actorId: user?._id });
-    await qc.save();
+      qc.qcStatus = qcStatus;
+      qc.overallResult = overallResult;
+      qc.stockPosted = true;
+      qc.completedAt = new Date();
+      if (data.remarks) qc.remarks = data.remarks;
+      qc.updatedBy = user?._id;
+      qc.activityTimeline.push({ action: 'COMPLETE', description: `QC completed — ${overallResult}`, actorId: user?._id });
+      for (const note of notes) qc.activityTimeline.push({ action: 'STOCK_NOTE', description: note, actorId: user?._id });
+      await qc.save();
+    } catch (err) {
+      // Nothing posted → hand the QC back (still draft) so it can be completed
+      // again. Movements written → keep it claimed so a retry can't post twice.
+      const posted = await inventoryService.getMovementsByRef('INCOMING_QC', qc._id).catch(() => [{}]);
+      if (!posted.length) {
+        await IncomingQC.updateOne(
+          { _id: qc._id, qcStatus: { $in: [QC_STATUS.DRAFT, QC_STATUS.IN_PROGRESS] } },
+          { $set: { stockPosted: false } },
+        ).catch(() => {});
+      } else {
+        logger.error(`[qc] ${qc.qcNumber}: completion failed part-way (${posted.length} movement(s) written) — QC left claimed: ${err.message}`);
+      }
+      throw err;
+    }
 
     // Rule 8: update the GRN qcStatus + linkage.
     const grnQcStatus = qcStatus === QC_STATUS.PASSED ? GRN_QC_STATUS.PASSED
@@ -413,15 +649,6 @@ export const incomingQcService = {
         { $set: { qcStatus: grnQcStatus, qcId: qc._id, qcNumber: qc.qcNumber, qcCompletedAt: new Date() } },
       );
     } catch (err) { logger.error(`[qc] GRN update failed for ${qc.grnId}: ${err.message}`); }
-
-    // PDF (non-fatal).
-    try {
-      const { qcPdfUrl, qcPdfFileName } = await this.generatePdf(id);
-      qc.qcPdfUrl = qcPdfUrl;
-      qc.qcPdfFileName = qcPdfFileName;
-    } catch (err) { logger.error(`[qc] PDF generation failed for ${qc.qcNumber}: ${err.message}`); }
-
-    return qc;
   },
 
   async generatePdf(id) {

@@ -5,11 +5,13 @@ import {
   Checkbox, FormControlLabel,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { X, Save, PackageCheck, Building2, FileText, Eye, Upload, ExternalLink } from 'lucide-react';
+import { X, Save, PackageCheck, Building2, FileText, Eye, Upload, ExternalLink, ClipboardCheck, Lock } from 'lucide-react';
+import { useSelector } from 'react-redux';
 import { useSnackbar } from 'notistack';
 import {
   useGetPurchaseOrdersQuery,
   useGetGrnByIdQuery,
+  useGetIncomingQcsByGrnQuery,
   useCreateGrnMutation,
   useUpdateGrnMutation,
   usePreviewGrnPdfMutation,
@@ -20,7 +22,15 @@ import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchContr
 // the form and the server can never disagree about what counts as RM.
 import { useGetRmOverviewQuery } from '../../../store/api/rmImsApi';
 import { fileHref } from '../indents/indentMeta';
-import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel } from './grnMeta';
+import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel, isGrnCompleted } from './grnMeta';
+import { resolveGrnQcStage } from './grnQcStage';
+import GrnQcStatusChip from './GrnQcStatusChip';
+import GrnQcSection from './GrnQcSection';
+import StatusChip from '../components/StatusChip';
+import { pickGrnQc } from '../incoming-qc/qcForm';
+import {
+  INVENTORY_TYPE_OPTIONS, INVENTORY_TYPE_HELP, inventoryTypeConflicts, inventoryTypeConflictText,
+} from './inventoryType';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
@@ -60,15 +70,25 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const [savedGrn, setSavedGrn] = useState(null);
   const current = grn || savedGrn;
   const isEdit = Boolean(current?._id);
+  const isMd = useSelector((s) => s.auth.isRoot);
+
+  // The saved GRN as the server has it now (it moves on as the user completes it,
+  // the MD signs it and QC is done — all without leaving this form).
+  const { data: savedFreshRes } = useGetGrnByIdQuery(savedGrn?._id, { skip: !open || !savedGrn?._id || Boolean(grnProp) });
+  const liveGrn = grnProp ? grn : (savedFreshRes?.data || savedGrn);
+  const { data: qcRes } = useGetIncomingQcsByGrnQuery(liveGrn?._id, { skip: !open || !isGrnCompleted(liveGrn) });
+  const qcStage = resolveGrnQcStage(liveGrn, pickGrnQc(qcRes?.data || []));
+  // Once completed (stock posted) or MD-signed, the GRN is read-only for good —
+  // the server refuses edits; here the fields stop accepting them and Save goes.
+  const grnLocked = Boolean(liveGrn?._id) && (isGrnCompleted(liveGrn) || liveGrn.approvalStatus === 'MD_APPROVED' || liveGrn.grnStatus === 'CANCELLED');
 
   const [po, setPo] = useState(null);
   const [header, setHeader] = useState({
     grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '',
     vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '',
-    // Raw Material opt-in and the location it lands at. Both ride along in
-    // buildPayload()'s `...header` spread, so create, update and preview all
-    // carry them without a second code path.
-    addToRmStock: false, rmReceivedAtLocation: DEFAULT_RECEIVED_AT,
+    // Inventory Type (required — decides the IMS module) and, for Raw Material,
+    // where it landed. Both ride along in buildPayload()'s `...header` spread.
+    inventoryType: '', rmReceivedAtLocation: DEFAULT_RECEIVED_AT,
   });
   const [items, setItems] = useState([]);
   const [doc, setDoc] = useState(null);
@@ -133,7 +153,9 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         invoiceDate: grn.invoiceDate ? grn.invoiceDate.slice(0, 10) : '',
         vehicleNumber: grn.vehicleNumber || '', receivedBy: grn.receivedBy || '', preparedBy: grn.preparedBy || '',
         howItemReceived: grn.howItemReceived || 'FULL_MATERIAL_RECEIVED', remarks: grn.remarks || '',
-        addToRmStock: !!grn.addToRmStock,
+        // A draft raised before Inventory Type existed opens with none chosen —
+        // its old checkbox is not reinterpreted; the operator picks the type.
+        inventoryType: grn.inventoryType || '',
         rmReceivedAtLocation: grn.rmReceivedAtLocation || DEFAULT_RECEIVED_AT,
       });
       setDoc(grn.challanDocument?.fileUrl ? { ...grn.challanDocument } : null);
@@ -144,7 +166,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         invoiceQty: it.invoiceQty, receivedQty: it.receivedQty, rate: it.rate, batchNo: it.batchNo || '', remarks: it.remarks || '',
       })));
     } else {
-      setHeader({ grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '', vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '', addToRmStock: false, rmReceivedAtLocation: DEFAULT_RECEIVED_AT });
+      setHeader({ grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '', vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '', inventoryType: '', rmReceivedAtLocation: DEFAULT_RECEIVED_AT });
       setDoc(null);
       if (presetPo) { setPo(presetPo); setItems(linesFromPo(presetPo)); }
       else { setPo(null); setItems([]); }
@@ -201,16 +223,25 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       enqueueSnackbar(`Batch Number is required for ${rmKindOf(noBatch)}.`, { variant: 'warning' });
       return false;
     }
-    // Mirrors the server rule: opting a GRN in to RM stock without saying where
-    // the material landed would leave the movement with no location.
-    if (header.addToRmStock && !header.rmReceivedAtLocation) {
-      enqueueSnackbar('Choose a Received At location for "Add to RM Stock"', { variant: 'warning' }); return false;
+    // Inventory Type: required, and one per GRN (the server enforces both too).
+    if (!header.inventoryType) {
+      enqueueSnackbar('Select the Inventory Type for the received material', { variant: 'warning' }); return false;
+    }
+    const conflicts = inventoryTypeConflicts(validItems, header.inventoryType, (it) => Boolean(rmKindOf(it)));
+    if (conflicts.length) {
+      enqueueSnackbar(inventoryTypeConflictText(conflicts, header.inventoryType), { variant: 'warning' }); return false;
+    }
+    // An RM receipt must say where the material landed (its stock posts there).
+    if (header.inventoryType === 'RM' && !header.rmReceivedAtLocation) {
+      enqueueSnackbar('Choose a Received At location for the Raw Material', { variant: 'warning' }); return false;
     }
     return true;
   };
 
   const buildPayload = () => ({
     ...header,
+    // Received At belongs to Raw Material only; Consumable & Packaging posts at the GRN's store.
+    rmReceivedAtLocation: header.inventoryType === 'RM' ? header.rmReceivedAtLocation : null,
     invoiceDate: header.invoiceDate || undefined,
     challanDocument: doc ? { fileName: doc.fileName, fileUrl: doc.fileUrl, fileType: doc.fileType } : undefined,
     items: validItems.map((it) => ({
@@ -222,7 +253,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     })),
   });
 
-  const handleSubmit = async () => {
+  // `stay`: save without closing (used before "Complete GRN + QC" posts stock).
+  const handleSubmit = async ({ stay = false } = {}) => {
     if (!validateForm()) return false;
     const payload = buildPayload();
     try {
@@ -235,6 +267,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
           return true;
         }
         enqueueSnackbar('GRN updated', { variant: 'success' });
+        if (stay) return true;
       } else {
         const res = await createGrn({ ...payload, poId: po._id }).unwrap();
         setSavedGrn(res?.data || null);
@@ -315,12 +348,27 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
               </Typography>
             )}
           </Box>
+          {/* Incoming QC status — always in view; details in the Incoming QC panel below. */}
+          <Box data-testid="grn-form-qc-badge" title={qcStage.desc}
+            sx={{
+              ml: 1, px: 1.25, py: 0.5, borderRadius: '8px',
+              border: '1px solid rgba(255,255,255,0.35)', bgcolor: 'rgba(255,255,255,0.12)',
+              display: { xs: 'none', sm: 'flex' }, flexDirection: 'column',
+            }}>
+            <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: 'rgba(255,255,255,0.75)', lineHeight: 1.2 }}>
+              Incoming QC
+            </Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: '#fff', lineHeight: 1.3 }}>{qcStage.label}</Typography>
+          </Box>
         </Box>
-        <IconButton onClick={() => onClose?.(false)} sx={{ color: '#fff' }}><X size={20} /></IconButton>
+        <IconButton onClick={() => onClose?.(Boolean(savedGrn), savedGrn)} sx={{ color: '#fff' }}><X size={20} /></IconButton>
       </Box>
 
       {/* Body */}
       <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.surfaceAlt }}>
+        {/* The GRN part. Read-only once completed / signed (the server refuses edits). */}
+        <Box data-testid="grn-form-grn-part" aria-disabled={grnLocked || undefined}
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, ...(grnLocked ? { pointerEvents: 'none', opacity: 0.8 } : {}) }}>
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
             <FileText size={18} /> GRN Header
@@ -362,41 +410,34 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             <Grid item xs={6} sm={3}><TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
 
-            {/* ── Raw Material opt-in ──────────────────────────────────────
-                Off unless the operator ticks it. Unticked, Raw Material lines
-                are still received against the PO — they simply post no stock.
-                Every other item type is unaffected either way.
-
-                Received At is a SEPARATE decision and is always shown: it
-                records where the material physically landed, which is true of
-                the receipt whether or not the stock is posted. It used to be
-                hidden until the box was ticked, which wrongly implied the two
-                were one choice and threw away a location the operator had
-                already picked. */}
+            {/* ── Inventory Type (replaces the "Add to RM Stock" checkbox) ──
+                Required, one per GRN. It decides where the stock lands when the
+                GRN is completed: Raw Material → RM IMS at "Received At";
+                Consumable & Packaging → the GRN's store, as before. */}
             <Grid item xs={12} sm={6}>
-              <FormControlLabel
-                control={(
-                  <Checkbox
-                    checked={header.addToRmStock}
-                    onChange={(e) => setHeader((h) => ({ ...h, addToRmStock: e.target.checked }))}
-                  />
-                )}
-                label={<Typography sx={{ fontWeight: 700, fontSize: '0.88rem' }}>Add to RM Stock</Typography>}
-              />
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 4, mt: -0.5 }}>
-                When checked, the received Raw Material quantity is added to RM stock as this GRN is completed.
-              </Typography>
-            </Grid>
-            <Grid item xs={6} sm={3}>
               <TextField
-                label="Received At *" select fullWidth
-                value={header.rmReceivedAtLocation}
-                onChange={(e) => setHeader((h) => ({ ...h, rmReceivedAtLocation: e.target.value }))}
-                helperText="Where the material physically landed. Recorded whether or not RM stock is posted."
+                label="Inventory Type *" select fullWidth required
+                value={header.inventoryType}
+                onChange={(e) => setHeader((h) => ({ ...h, inventoryType: e.target.value }))}
+                helperText={INVENTORY_TYPE_HELP}
+                error={!header.inventoryType && validItems.length > 0 && Boolean(po)}
+                inputProps={{ 'data-testid': 'grn-inventory-type' }}
               >
-                {RECEIVED_AT_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+                {INVENTORY_TYPE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
               </TextField>
             </Grid>
+            {header.inventoryType === 'RM' && (
+              <Grid item xs={6} sm={3}>
+                <TextField
+                  label="Received At *" select fullWidth
+                  value={header.rmReceivedAtLocation}
+                  onChange={(e) => setHeader((h) => ({ ...h, rmReceivedAtLocation: e.target.value }))}
+                  helperText="Where the Raw Material physically landed — its RM stock posts here."
+                >
+                  {RECEIVED_AT_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+                </TextField>
+              </Grid>
+            )}
           </Grid>
 
           {po ? (
@@ -538,26 +579,56 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             </Button>
           )}
         </Box>
+        </Box>
+
+        {/* Incoming QC — directly under the GRN, on this same form. Before the GRN
+            exists there is nothing to inspect; once saved, the real QC form. */}
+        {!liveGrn?._id ? (
+          <Paper elevation={0} sx={SECTION} data-testid="grn-form-qc-placeholder">
+            <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main', mb: 1 }}>
+              <ClipboardCheck size={18} /> Incoming QC
+            </Typography>
+            <Typography variant="body2" color="text.secondary">Save GRN first to enter QC details.</Typography>
+          </Paper>
+        ) : (
+          <Box>
+            <Box data-testid="grn-form-saved-summary" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+              <Typography variant="body2" fontWeight={800}>{liveGrn.grnNumber}</Typography>
+              <StatusChip status={liveGrn.grnStatus} />
+              <GrnQcStatusChip stage={qcStage} />
+              {grnLocked && <Chip size="small" variant="outlined" icon={<Lock size={12} />} label="GRN read-only" sx={{ fontWeight: 700 }} />}
+            </Box>
+            <GrnQcSection grn={liveGrn} isMd={isMd} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
+          </Box>
+        )}
       </Box>
 
       {/* Footer */}
       <Divider />
       <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#fff' }}>
         <Typography variant="caption" color="text.secondary">
-          {validItems.length} item(s) · received {totals.received} · {fmtINR(totals.value)} · stock posts on Complete
+          {grnLocked
+            ? 'GRN completed — read-only'
+            : `${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)} · stock posts on Complete`}
+          {' · '}Incoming QC: <b>{qcStage.label}</b>
         </Typography>
         <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <Button variant="outlined" onClick={() => onClose?.(Boolean(savedGrn))} disabled={saving || previewing || uploading}>
+          {/* Second arg = the draft created in this session, so the caller can open it. */}
+          <Button variant="outlined" onClick={() => onClose?.(Boolean(savedGrn), savedGrn)} disabled={saving || previewing || uploading}>
             {savedGrn ? 'Close' : 'Cancel'}
           </Button>
-          <Button variant="outlined" startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
-            onClick={handlePreview} disabled={saving || previewing || uploading}>
-            Preview PDF
-          </Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-            onClick={handleSubmit} disabled={saving || previewing || uploading}>
-            {isEdit ? 'Save Changes' : 'Create GRN'}
-          </Button>
+          {!grnLocked && (
+            <Button variant="outlined" startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
+              onClick={handlePreview} disabled={saving || previewing || uploading}>
+              Preview PDF
+            </Button>
+          )}
+          {!grnLocked && (
+            <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+              onClick={() => handleSubmit()} disabled={saving || previewing || uploading}>
+              Save GRN
+            </Button>
+          )}
         </Box>
       </Box>
 
@@ -572,7 +643,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         onClose={closePreview}
         onSaveDraft={confirmFromPreview}
         onApproveSubmit={confirmFromPreview}
-        approveLabel={isEdit ? 'Save Changes' : 'Create GRN'}
+        approveLabel="Save GRN"
       />
     </Dialog>
   );

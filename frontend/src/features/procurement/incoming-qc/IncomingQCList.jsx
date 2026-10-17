@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, ClipboardCheck, Ban, FileDown,
+  Search, MoreVertical, Eye, Pencil, ClipboardCheck, Ban, FileDown,
   ShieldCheck, Hourglass, BadgeCheck, ShieldX, ShieldAlert,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -75,11 +75,19 @@ const IncomingQCList = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // A GRN's QC is entered on the GRN page (directly under the GRN), so a GRN
+  // draft is resumed there; service QCs (no GRN) keep editing from here.
+  const onResumeOnGrn = (r) => { navigate(`/procurement/grns/${r.grnId}#qc`); closeMenu(); };
+
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus)) {
-      a.push({ key: 'edit', label: 'Edit', icon: <Pencil size={16} />, fn: () => onEdit(r) });
-      a.push({ key: 'complete', label: 'Complete QC', icon: <ClipboardCheck size={16} />, fn: () => onComplete(r) });
+      if (r.grnId) {
+        a.push({ key: 'resume', label: 'Resume on GRN page', icon: <ClipboardCheck size={16} />, fn: () => onResumeOnGrn(r) });
+      } else {
+        a.push({ key: 'edit', label: 'Edit', icon: <Pencil size={16} />, fn: () => onEdit(r) });
+        a.push({ key: 'complete', label: 'Complete QC', icon: <ClipboardCheck size={16} />, fn: () => onComplete(r) });
+      }
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
     }
     if (r.qcPdfUrl) a.push({ key: 'pdf', label: 'Download QC Report', icon: <FileDown size={16} />, fn: () => onPdf(r) });
@@ -106,12 +114,11 @@ const IncomingQCList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Incoming QC ({stats.total || 0})</Typography>
+          <Typography sx={pfmsTitleSx}>QC Records ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
-            Step 1.9 · Inspect received material — rejected qty moves out of stock
+            A GRN&apos;s QC is done on the GRN page, under the GRN · service QCs start from the indent
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditQc(null); setFormOpen(true); }}>New QC</Button>
       </Box>
 
       <Grid container spacing={2}>

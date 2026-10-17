@@ -6,7 +6,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, PackageCheck, Ban, FileDown,
-  FileStack, PackageOpen, Boxes, Hourglass, Trash2, Lock,
+  FileStack, PackageOpen, Boxes, Hourglass, Trash2, Lock, ClipboardCheck,
 } from 'lucide-react';
 import { usePermissions } from '../../../hooks/usePermission';
 import { useNavigate } from 'react-router-dom';
@@ -19,6 +19,8 @@ import {
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { GrnStatusChip, GRN_STATUSES, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
+import GrnQcStatusChip from './GrnQcStatusChip';
+import { resolveGrnQcStage } from './grnQcStage';
 import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
@@ -88,6 +90,9 @@ const GrnList = () => {
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
       if (canDeleteGrn) a.push({ key: 'delete', label: 'Delete Draft', icon: <Trash2 size={16} />, fn: () => onDelete(r), danger: true });
     }
+    if (isGrnCompleted(r)) {
+      a.push({ key: 'qc', label: 'Incoming QC', icon: <ClipboardCheck size={16} />, fn: () => { navigate(`/procurement/grns/${r._id}#qc`); closeMenu(); } });
+    }
     if (r.grnPdfUrl) a.push({ key: 'pdf', label: 'Download GRN PDF', icon: <FileDown size={16} />, fn: () => onPdf(r) });
     return a;
   };
@@ -101,6 +106,12 @@ const GrnList = () => {
       renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 160,
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
+    // GRN and QC are one step — the QC (done on the GRN page) shows beside its GRN,
+    // early in the row so it stays on screen on a laptop-width grid. Same resolver
+    // as the GRN page; the list has no QC record loaded, so a GRN whose QC is not
+    // completed reads "QC Pending" — never "done".
+    { field: 'qcStatus', headerName: 'QC', width: 170, sortable: false,
+      renderCell: (p) => <GrnQcStatusChip stage={resolveGrnQcStage(p.row)} /> },
     { field: 'items', headerName: 'ITEMS', width: 75, align: 'right', headerAlign: 'right', sortable: false,
       valueGetter: (_v, row) => (row.items || []).length },
     { field: 'totalInvoiceQty', headerName: 'INVOICE QTY', width: 110, align: 'right', headerAlign: 'right' },
@@ -132,9 +143,9 @@ const GrnList = () => {
       {/* Header */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Goods Receipt Notes ({stats.total || 0})</Typography>
+          <Typography sx={pfmsTitleSx}>GRN &amp; QC ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
-            Step 1.8 · Receive material — completing a GRN posts stock to inventory
+            Receive material, then inspect it — the QC form is on each GRN page, under the GRN
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditGrn(null); setFormOpen(true); }}>
@@ -205,7 +216,11 @@ const GrnList = () => {
       </Menu>
 
       {/* Form + dialogs */}
-      <GrnFormDialog open={formOpen} grn={editGrn} onClose={() => { setFormOpen(false); setEditGrn(null); }} />
+      <GrnFormDialog open={formOpen} grn={editGrn} onClose={(_saved, created) => {
+        setFormOpen(false); setEditGrn(null);
+        // A new GRN opens on its page, where Complete, MD approval and the QC section sit together.
+        if (created?._id && !editGrn) navigate(`/procurement/grns/${created._id}`);
+      }} />
       <GrnCompleteDialog open={completeOpen} grn={activeGrn} onClose={() => { setCompleteOpen(false); setActiveGrn(null); }} />
       <GrnDeleteDialog open={Boolean(deleteTarget)} grn={deleteTarget} onClose={() => setDeleteTarget(null)} />
     </Box>

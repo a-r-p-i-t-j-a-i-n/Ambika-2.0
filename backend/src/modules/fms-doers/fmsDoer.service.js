@@ -286,6 +286,18 @@ export const fmsDoerService = {
         if (await this._resolveTask(t, actor)) resolved += 1;
       }
     }
+
+    // Open tasks on a step that no longer exists in the catalog (e.g. the retired
+    // Service Completion step) would never be reconciled — close them.
+    const now = new Date();
+    const retired = await FmsTask.updateMany(
+      { fmsKey: fms.key, status: FMS_TASK_STATUS.OPEN, stepKey: { $nin: fms.steps.map((s) => s.key) } },
+      {
+        $set: { status: FMS_TASK_STATUS.CLOSED, completedAt: now, closedReason: 'Step removed from the workflow' },
+        $push: { history: { action: 'CLOSED', at: now, note: 'Step removed from the workflow' } },
+      },
+    );
+    resolved += retired.modifiedCount || 0;
     return { opened, resolved };
   },
 

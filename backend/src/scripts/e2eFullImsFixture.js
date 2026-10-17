@@ -395,10 +395,13 @@ const api = async () => {
     check('[G7] over-receipt GRN', false, `create refused: ${g7.error.message}`);
   } else {
     const g7id = idOf(g7);
-    await refused('[G7] completing an over-receipt with NO remarks (fails after the completion claim)', () => grnService.complete(g7id, {}, user), /remarks/i);
+    // An over-receipt must be explicitly allowed ("Allow over-receipt") AND carry remarks.
+    await refused('[G7] completing an over-receipt WITHOUT "Allow over-receipt"', () => grnService.complete(g7id, {}, user), /Allow over-receipt/i);
+    await refused('[G7] completing an allowed over-receipt with NO remarks (fails after the completion claim)',
+      () => grnService.complete(g7id, { allowOverReceipt: true }, user), /remarks/i);
     const g7doc = await GoodsReceiptNote.findById(g7id).lean();
     check('[G7] …the claim is released: stockPosted back to false, still DRAFT', g7doc.stockPosted === false && g7doc.grnStatus === 'DRAFT', `${g7doc.stockPosted}/${g7doc.grnStatus}`);
-    await grnService.complete(g7id, { remarks: 'E2E: extra 50 kg delivered and accepted' }, user);
+    await grnService.complete(g7id, { allowOverReceipt: true, remarks: 'E2E: extra 50 kg delivered and accepted' }, user);
     eq('[G7] …and the corrected completion then posts once (150 kg)',
       (await InventoryMovement.find({ refId: g7id, txnType: TXN_TYPE.GRN_IN }).lean()).map((m) => m.quantity), [150]);
   }

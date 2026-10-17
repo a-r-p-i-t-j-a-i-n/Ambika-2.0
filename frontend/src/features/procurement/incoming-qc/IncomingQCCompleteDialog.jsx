@@ -1,14 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
-  Box, Typography, CircularProgress, Alert, Grid, Chip,
+  Box, Typography, CircularProgress, Alert, Grid, Chip, IconButton,
   FormControl, FormLabel, RadioGroup, FormControlLabel, Radio,
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
 } from '@mui/material';
-import { ClipboardCheck, Wrench } from 'lucide-react';
+import { ClipboardCheck, Wrench, Upload, FileText, X } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useCompleteIncomingQcMutation } from '../../../store/api/procurementApi';
+import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { QcResultChip } from './qcMeta';
+
+const REPORT_ACCEPT = '.pdf,image/*,.doc,.docx';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -32,11 +35,23 @@ const IncomingQCCompleteDialog = ({ open, onClose, qc }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [remarks, setRemarks] = useState('');
   const [serviceResult, setServiceResult] = useState(''); // service QC: chosen by user
+  const [report, setReport] = useState(null); // service QC: optional service report
+  const reportRef = useRef(null);
   const [completeQc, { isLoading }] = useCompleteIncomingQcMutation();
+  const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
 
   const isService = qc?.sourceType === 'SERVICE';
 
-  useEffect(() => { if (open) { setRemarks(''); setServiceResult(''); } }, [open]);
+  useEffect(() => { if (open) { setRemarks(''); setServiceResult(''); setReport(null); } }, [open]);
+
+  const onPickReport = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const d = (await uploadDoc(f).unwrap())?.data || {};
+      setReport({ fileName: d.fileName || f.name, fileUrl: d.url, fileType: d.mimeType || f.type });
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Upload failed', { variant: 'error' }); }
+  };
 
   const items = qc?.items || [];
   const result = expectedResult(items);
@@ -51,6 +66,7 @@ const IncomingQCCompleteDialog = ({ open, onClose, qc }) => {
         id: qc._id,
         remarks: remarks.trim(),
         ...(isService ? { overallResult: serviceResult } : {}),
+        ...(isService && report?.fileUrl ? { qcReportDocument: { fileName: report.fileName, fileUrl: report.fileUrl, fileType: report.fileType } } : {}),
       }).unwrap();
       enqueueSnackbar('Incoming QC completed', { variant: 'success' });
       onClose?.(true);
@@ -122,17 +138,33 @@ const IncomingQCCompleteDialog = ({ open, onClose, qc }) => {
                 {qc?.preparedBy && <Typography variant="caption" color="text.secondary">Prepared By: <b>{qc.preparedBy}</b></Typography>}
               </Box>
             )}
-            <Alert severity="info" sx={{ mb: 2 }}>Service QC validates work quality only — no stock / inventory is affected.</Alert>
-            <TextField label="QC Remarks" fullWidth multiline minRows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
+            <Alert severity="info" sx={{ mb: 2 }}>Service QC confirms the work was done and validates its quality — no stock / inventory is affected.</Alert>
+            <TextField label="QC Remarks" fullWidth multiline minRows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)}
+              placeholder="What was done? Any issues?" sx={{ mb: 2 }} />
+            <FormLabel sx={{ fontSize: '0.8rem', fontWeight: 700, display: 'block', mb: 1 }}>Service Report (optional)</FormLabel>
+            <input ref={reportRef} type="file" accept={REPORT_ACCEPT} hidden onChange={onPickReport} />
+            {report ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: '10px' }}>
+                <FileText size={16} />
+                <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0 }} noWrap title={report.fileName}>{report.fileName || 'Service report'}</Typography>
+                <IconButton size="small" color="error" onClick={() => setReport(null)}><X size={15} /></IconButton>
+              </Box>
+            ) : (
+              <Button variant="outlined" size="small" startIcon={uploading ? <CircularProgress size={14} /> : <Upload size={14} />}
+                onClick={() => reportRef.current?.click()} disabled={uploading}>
+                {uploading ? 'Uploading…' : 'Upload Report'}
+              </Button>
+            )}
           </>
         ) : (
           <>
             <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9' }}>
               <Grid container spacing={1}>
-                <Grid item xs={3}><Stat label="Received" value={qc?.totalReceived} color="text.primary" /></Grid>
-                <Grid item xs={3}><Stat label="Accepted" value={qc?.totalAccepted} color="#0f766e" /></Grid>
-                <Grid item xs={3}><Stat label="Rejected" value={qc?.totalRejected} color="#be123c" /></Grid>
-                <Grid item xs={3}><Stat label="Rework" value={qc?.totalRework} color="#b45309" /></Grid>
+                <Grid item xs={qc?.totalRework > 0 ? 3 : 4}><Stat label="Received" value={qc?.totalReceived} color="text.primary" /></Grid>
+                <Grid item xs={qc?.totalRework > 0 ? 3 : 4}><Stat label="Accepted" value={qc?.totalAccepted} color="#0f766e" /></Grid>
+                <Grid item xs={qc?.totalRework > 0 ? 3 : 4}><Stat label="Rejected" value={qc?.totalRejected} color="#be123c" /></Grid>
+                {/* Rework is no longer entered; shown only for a record that still has it. */}
+                {qc?.totalRework > 0 && <Grid item xs={3}><Stat label="Rework" value={qc?.totalRework} color="#b45309" /></Grid>}
               </Grid>
             </Box>
             <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -149,10 +181,10 @@ const IncomingQCCompleteDialog = ({ open, onClose, qc }) => {
         )}
       </DialogContent>
       <DialogActions sx={{ p: 2, gap: 1 }}>
-        <Button onClick={() => onClose?.(false)} disabled={isLoading}>Cancel</Button>
+        <Button onClick={() => onClose?.(false)} disabled={isLoading || uploading}>Cancel</Button>
         <Button variant="contained" color="success"
           startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <ClipboardCheck size={16} />}
-          onClick={handleComplete} disabled={isLoading}>
+          onClick={handleComplete} disabled={isLoading || uploading}>
           Complete QC
         </Button>
       </DialogActions>

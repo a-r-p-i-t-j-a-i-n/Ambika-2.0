@@ -972,7 +972,7 @@ export const indentService = {
       remarks: data.remarks || '',
     };
     // Internal-service indents skip the PO/PI/GRN chain — an approved quotation
-    // goes straight to SERVICE_PENDING (awaiting Step 1.8A Service Completion).
+    // goes straight to SERVICE_PENDING (awaiting the service Incoming QC, Step 1.9).
     const isService = indent.requestType === INDENT_REQUEST_TYPE.INTERNAL_SERVICE;
     const overallStatus = statusDone === QUOTATION_APPROVAL_STATUS.YES
       ? (isService ? INDENT_OVERALL_STATUS.SERVICE_PENDING : INDENT_OVERALL_STATUS.QUOTATION_APPROVED)
