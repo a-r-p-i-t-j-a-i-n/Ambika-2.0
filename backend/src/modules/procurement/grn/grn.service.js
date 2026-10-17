@@ -385,7 +385,7 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
     doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(grn.grnNumber || '', liX, cardTop + 22, { width: cardInnerW });
     doc.font('Helvetica').fontSize(8.5).fill(navy)
       .text(`Date: ${fmtDate(grn.grnDate)}`, liX, cardTop + 40)
-      .text(`PO No: ${grn.poNumber || '—'}`, liX, cardTop + 53)
+      .text(`PO No: ${grn.isWithoutPo ? 'Without PO' : (grn.poNumber || '—')}`, liX, cardTop + 53)
       .text(`Challan No: ${grn.challanNumber || '—'}`, liX, cardTop + 66);
 
     // RIGHT — SUPPLIER (fixed label column → labels + values align, address wraps)
@@ -508,6 +508,7 @@ registerApprovalDocument('GRN', {
 
 export const grnService = {
   async create(data, user) {
+    if (data.isWithoutPo) return this.createWithoutPo(data, user);
     const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } });
     if (!po) throw new AppError('Purchase Order not found', 404);
 
@@ -604,6 +605,67 @@ export const grnService = {
     return grn;
   },
 
+  /**
+   * Create a GRN with no Purchase Order at all — vendor and items are entered
+   * by hand instead of sourced from a PO. None of the PO-gated rules in
+   * create() apply (follow-up status, PI settlement, final material date):
+   * there is no PO lifecycle to be gated against. Every PO-derived figure on
+   * each line (orderedQty, previouslyReceivedQty, pendingBeforeGrn, extraQty,
+   * pendingQty) is fixed at 0/N-A — never fabricated — so the over-receipt gate
+   * in complete() (which exists to catch receiving beyond a PO's pending qty)
+   * never fires for a receipt that has no PO to be "over" against.
+   */
+  async createWithoutPo(data, user) {
+    const sourceItems = (data.items || []).map((it) => ({
+      skuId: it.skuId || undefined, skuCode: it.skuCode?.trim() || '', itemName: it.itemName.trim(),
+      unit: it.unit || 'Pcs', orderedQty: 0, previouslyReceivedQty: 0,
+      invoiceQty: round2(it.invoiceQty ?? it.receivedQty), receivedQty: round2(it.receivedQty),
+      rate: round2(it.rate), batchNo: it.batchNo?.trim() || '', remarks: it.remarks?.trim() || '',
+    }));
+    if (!sourceItems.length) throw new AppError('Add at least one item to receive', 400);
+
+    await assertPurchasable(sourceItems);
+    await assertRmBatchNumbers(sourceItems);
+    await assertInventoryType(sourceItems, data.inventoryType);
+    const { lines, totals } = computeLines(sourceItems);
+    // No PO to compare against — these columns are not applicable, never derived.
+    lines.forEach((l) => { l.orderedQty = 0; l.previouslyReceivedQty = 0; l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
+
+    const grnNumber = await generateGrnNumber(data.grnDate || new Date());
+    const uniqueId = await generateGrnUniqueId();
+
+    const grn = await GoodsReceiptNote.create({
+      grnNumber, uniqueId,
+      grnDate: data.grnDate || new Date(),
+      poId: null, poNumber: '', isWithoutPo: true,
+      piId: undefined, piNumber: '', indentId: undefined, indentNumber: '',
+      vendorId: data.vendorId, vendorName: data.vendorName.trim(),
+      vendorGST: data.vendorGST || '', vendorAddress: data.vendorAddress || '', vendorPhone: data.vendorPhone || '',
+      challanNumber: data.challanNumber || '',
+      invoiceNumber: data.invoiceNumber || '',
+      invoiceDate: data.invoiceDate || null,
+      vehicleNumber: data.vehicleNumber || '',
+      receivedBy: data.receivedBy || user?.name || '',
+      preparedBy: data.preparedBy || user?.name || '',
+      warehouse: data.warehouse || 'MAIN',
+      inventoryType: data.inventoryType || null,
+      ...(data.inventoryType
+        ? rmFieldsFor(data.inventoryType, data.rmReceivedAtLocation)
+        : { addToRmStock: !!data.addToRmStock, rmReceivedAtLocation: data.rmReceivedAtLocation || null }),
+      howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
+      challanDocument: data.challanDocument?.fileUrl ? { ...data.challanDocument, uploadedAt: new Date() } : undefined,
+      invoiceDocument: data.invoiceDocument?.fileUrl ? { ...data.invoiceDocument, uploadedAt: new Date() } : undefined,
+      items: lines,
+      ...totals,
+      grnStatus: GRN_STATUS.DRAFT,
+      qcStatus: GRN_QC_STATUS.PENDING,
+      remarks: data.remarks || '',
+      createdBy: user?._id,
+      activityTimeline: [{ action: 'CREATE', description: 'GRN created without a Purchase Order (W/O PO)', actorId: user?._id }],
+    });
+    return grn;
+  },
+
   async getAll(query) {
     const features = new ApiFeatures(GoodsReceiptNote.find({ isDeleted: { $ne: true } }), query)
       .filter().search(['grnNumber', 'poNumber', 'vendorName', 'invoiceNumber', 'uniqueId'])
@@ -616,8 +678,9 @@ export const grnService = {
       .populate('createdBy', 'name').lean();
     if (!grn) throw new AppError('GRN not found', 404);
     // An open draft's "already received / pending" snapshot goes stale as other
-    // GRNs on the same PO complete — show it against the current PO state.
-    if (isOpenDraft(grn)) {
+    // GRNs on the same PO complete — show it against the current PO state. A
+    // W/O PO GRN has no PO to refresh against; its lines are final as saved.
+    if (isOpenDraft(grn) && !grn.isWithoutPo) {
       try {
         const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).lean();
         if (po) {
@@ -675,8 +738,21 @@ export const grnService = {
       throw new AppError('This GRN has been digitally signed by the MD and is locked for editing', 400);
     }
     if (!isOpenDraft(grn)) throw new AppError('Only draft GRNs can be edited', 400);
-    const { items, challanDocument, invoiceDocument, inventoryType, ...rest } = data;
+    const {
+      items, challanDocument, invoiceDocument, inventoryType,
+      vendorId, vendorName, vendorGST, vendorAddress, vendorPhone,
+      ...rest
+    } = data;
     Object.assign(grn, rest);
+    // Vendor snapshot is editable only on a W/O PO draft — a PO-backed GRN's
+    // vendor always mirrors its PO and is never edited independently of it.
+    if (grn.isWithoutPo) {
+      if (vendorId !== undefined) grn.vendorId = vendorId || undefined;
+      if (vendorName !== undefined) grn.vendorName = vendorName || '';
+      if (vendorGST !== undefined) grn.vendorGST = vendorGST || '';
+      if (vendorAddress !== undefined) grn.vendorAddress = vendorAddress || '';
+      if (vendorPhone !== undefined) grn.vendorPhone = vendorPhone || '';
+    }
     if (inventoryType) {
       grn.inventoryType = inventoryType;
       Object.assign(grn, rmFieldsFor(inventoryType, data.rmReceivedAtLocation || grn.rmReceivedAtLocation));
@@ -688,11 +764,19 @@ export const grnService = {
     if (items) {
       await assertPurchasable(items);
       await assertRmBatchNumbers(items);
-      const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).lean();
-      if (!po) throw new AppError('Linked Purchase Order not found', 404);
-      const { lines, totals } = await refreshLines(po, items);
-      grn.items = lines;
-      Object.assign(grn, totals);
+      if (grn.isWithoutPo) {
+        const sourceItems = items.map((it) => ({ ...it, orderedQty: 0, previouslyReceivedQty: 0 }));
+        const { lines, totals } = computeLines(sourceItems);
+        lines.forEach((l) => { l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
+        grn.items = lines;
+        Object.assign(grn, totals);
+      } else {
+        const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).lean();
+        if (!po) throw new AppError('Linked Purchase Order not found', 404);
+        const { lines, totals } = await refreshLines(po, items);
+        grn.items = lines;
+        Object.assign(grn, totals);
+      }
     }
     grn.updatedBy = user?._id;
     grn.activityTimeline.push({ action: 'UPDATE', description: 'Draft GRN updated', actorId: user?._id });
@@ -753,16 +837,21 @@ export const grnService = {
     if (existing.length) throw new AppError('Inventory movements already exist for this GRN', 400);
 
     // Serialise completions per PO: of two GRNs racing for the same remaining
-    // qty, the second waits for (and is validated against) the first.
-    const poLockedAt = await acquirePoLock(grn.poId);
-    if (!poLockedAt) {
-      await releaseClaim();
-      throw new AppError('Another GRN for this PO is being completed right now. Please try again in a moment.', 409);
+    // qty, the second waits for (and is validated against) the first. A W/O PO
+    // GRN has no PO to serialise against — the claim above already makes this
+    // GRN's own completion safe against concurrent/double-submission.
+    let poLockedAt = null;
+    if (grn.poId) {
+      poLockedAt = await acquirePoLock(grn.poId);
+      if (!poLockedAt) {
+        await releaseClaim();
+        throw new AppError('Another GRN for this PO is being completed right now. Please try again in a moment.', 409);
+      }
     }
     try {
       return await this._completeLocked(grn, data, user, releaseClaim);
     } finally {
-      await releasePoLock(grn.poId, poLockedAt);
+      if (grn.poId) await releasePoLock(grn.poId, poLockedAt);
     }
   },
 
@@ -771,14 +860,25 @@ export const grnService = {
     let po; let pi; let receivedLines; let planFor; let rmLines;
     let addToRmStock; let receivedAtLocation; let rmLocation; let inventoryType;
     try {
-      po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
-      if (!po) throw new AppError('Linked Purchase Order not found', 404);
+      if (grn.isWithoutPo) {
+        // No PO to re-derive figures against — the lines are final as saved,
+        // beyond re-deriving amount/short/extra from the stored qty/rate.
+        po = null;
+        const sourceItems = grn.items.map((it) => ({ ...plain(it), orderedQty: 0, previouslyReceivedQty: 0 }));
+        const { lines, totals } = computeLines(sourceItems);
+        lines.forEach((l) => { l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
+        grn.items = lines;
+        Object.assign(grn, totals);
+      } else {
+        po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
+        if (!po) throw new AppError('Linked Purchase Order not found', 404);
 
-      // Re-derive ordered / already-received / pending from the current DB state
-      // — the draft's snapshot may predate other GRNs completed on this PO.
-      const { lines, totals } = await refreshLines(po, grn.items);
-      grn.items = lines;
-      Object.assign(grn, totals);
+        // Re-derive ordered / already-received / pending from the current DB state
+        // — the draft's snapshot may predate other GRNs completed on this PO.
+        const { lines, totals } = await refreshLines(po, grn.items);
+        grn.items = lines;
+        Object.assign(grn, totals);
+      }
 
       receivedLines = grn.items.filter((it) => round2(it.receivedQty) > 0);
       if (!receivedLines.length) throw new AppError('Enter a received quantity on at least one item', 400);
@@ -922,22 +1022,26 @@ export const grnService = {
           }
         }
 
-        // ── 2) + 4) PO quantities and status ──
-        applyToPo(po);
-        for (let attempt = 1; ; attempt += 1) {
-          try {
-            await po.save(opts);
-            break;
-          } catch (err) {
-            if (!isVersionConflict(err) || attempt >= 4) throw err;
-            po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).session(session || null);
-            applyToPo(po);
+        // ── 2) + 4) PO quantities and status — nothing to roll for a W/O PO GRN ──
+        if (po) {
+          applyToPo(po);
+          for (let attempt = 1; ; attempt += 1) {
+            try {
+              await po.save(opts);
+              break;
+            } catch (err) {
+              if (!isVersionConflict(err) || attempt >= 4) throw err;
+              po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).session(session || null);
+              applyToPo(po);
+            }
           }
         }
         if (pi) { pi.updatedBy = user?._id; await pi.save(opts); }
 
         // ── 5) Finalize GRN + QC handoff ──
-        grn.grnStatus = poFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED;
+        // A W/O PO GRN has no PO to be "partial" or "full" against — RECEIVED is
+        // the terminal status for it (already QC-eligible, see GRN_QC_ELIGIBLE).
+        grn.grnStatus = grn.isWithoutPo ? GRN_STATUS.RECEIVED : (poFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED);
         grn.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
         grn.stockPosted = true;               // already claimed above; kept explicit
         grn.addToRmStock = addToRmStock;      // the operator's choice, on the record
@@ -1018,7 +1122,7 @@ export const grnService = {
     const grnLike = {
       grnNumber: data.grnNumber || '(draft — generated on completion)',
       grnDate: data.grnDate || new Date(),
-      poNumber,
+      poNumber, isWithoutPo: !!data.isWithoutPo,
       challanNumber: data.challanNumber || '',
       invoiceNumber: data.invoiceNumber || '',
       howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,

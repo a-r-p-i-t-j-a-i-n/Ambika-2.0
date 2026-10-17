@@ -6,7 +6,7 @@ import {
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
 } from '@mui/material';
 import {
-  ArrowLeft, Pencil, ClipboardCheck, Ban, Boxes, Building2, FileText, PackageCheck, FileDown, ArrowRight,
+  ArrowLeft, Pencil, ClipboardCheck, Ban, Boxes, Building2, FileText, PackageCheck, FileDown,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -25,6 +25,7 @@ import VendorInvoiceFormDialog from '../vendor-invoices/VendorInvoiceFormDialog'
 import { ReceiptText } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
@@ -101,6 +102,14 @@ const IncomingQCDetail = () => {
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
     if (qc.qcStatus === 'CANCELLED') return null;
+    // Invoice pricing (rate/GST) is sourced from the PO line — a QC raised from
+    // a W/O PO GRN has none, so invoicing is not yet supported for it.
+    const isWithoutPo = qc.grnId && !qc.poId;
+    if (qcPassed && !existingInvoice && isWithoutPo) {
+      return { tone: 'info', title: 'QC passed — Vendor Invoice is not yet supported for a W/O PO GRN',
+        desc: 'Invoice pricing is sourced from the Purchase Order line, and this GRN has none. Contact an administrator if this material still needs to be invoiced.',
+        secondary: qc.grnId ? { label: 'View GRN', onClick: goGrn } : null };
+    }
     if (qcPassed && !existingInvoice) {
       return { tone: 'success', title: 'QC passed — next: record the Vendor Invoice (Step 1.10)',
         desc: 'Capture the vendor’s tax invoice for the accepted material to proceed to payment.',
@@ -120,12 +129,6 @@ const IncomingQCDetail = () => {
     }
     return null;
   })();
-
-  const NEXT_TONE = {
-    info:    { bg: alpha('#2563eb', 0.07), border: alpha('#2563eb', 0.35), fg: '#1d4ed8' },
-    success: { bg: alpha('#16a34a', 0.08), border: alpha('#16a34a', 0.35), fg: '#15803d' },
-    warn:    { bg: alpha('#f59e0b', 0.1),  border: alpha('#f59e0b', 0.45), fg: '#b45309' },
-  };
 
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
@@ -148,40 +151,12 @@ const IncomingQCDetail = () => {
           {editable && !onGrnPage && <Button variant="contained" color="success" startIcon={<ClipboardCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete QC</Button>}
           {qc.qcPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>QC Report</Button>}
           {qcPassed && existingInvoice && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${existingInvoice._id}`)}>View Invoice</Button>}
-          {qcPassed && !existingInvoice && <Button variant="contained" startIcon={<ReceiptText size={16} />} onClick={() => setInvoiceOpen(true)}>Create Invoice</Button>}
+          {qcPassed && !existingInvoice && !(qc.grnId && !qc.poId) && <Button variant="contained" startIcon={<ReceiptText size={16} />} onClick={() => setInvoiceOpen(true)}>Create Invoice</Button>}
           {editable && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
         </Box>
       </Box>
 
-      {/* What's next — adaptive, prominent call-to-action for the current stage */}
-      {nextStep && (() => {
-        const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
-        return (
-          <Paper elevation={0} sx={{
-            mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
-            display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
-          }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
-              <ArrowRight size={22} />
-            </Box>
-            <Box sx={{ minWidth: 220, flexGrow: 1 }}>
-              <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
-              <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{nextStep.title}</Typography>
-              <Typography variant="body2" color="text.secondary">{nextStep.desc}</Typography>
-            </Box>
-            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-              {nextStep.secondary && (
-                <Button variant="outlined" onClick={nextStep.secondary.onClick}>{nextStep.secondary.label}</Button>
-              )}
-              {nextStep.primary && (
-                <Button variant="contained" startIcon={nextStep.primary.icon} onClick={nextStep.primary.onClick}>
-                  {nextStep.primary.label}
-                </Button>
-              )}
-            </Box>
-          </Paper>
-        );
-      })()}
+      <NextStepBanner step={nextStep} />
 
       <FmsDoerCard entityType="QC" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
@@ -227,7 +202,7 @@ const IncomingQCDetail = () => {
               <Grid container spacing={2}>
                 <Grid item xs={6} sm={4}><Field label="Vendor" value={qc.vendorName || '—'} /></Grid>
                 <Grid item xs={6} sm={4}><Field label="GRN" value={qc.grnNumber || '—'} /></Grid>
-                <Grid item xs={6} sm={4}><Field label="PO" value={qc.poNumber || '—'} /></Grid>
+                <Grid item xs={6} sm={4}><Field label="PO" value={qc.grnId && !qc.poId ? 'Without PO' : (qc.poNumber || '—')} /></Grid>
                 <Grid item xs={6} sm={4}>
                   <Field label="PI" value={qc.piId
                     ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${qc.piId}`)}>{qc.piNumber || 'View'}</Box>

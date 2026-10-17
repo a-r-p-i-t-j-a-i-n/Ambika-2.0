@@ -164,11 +164,14 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
       if (isEdit) {
         await updateIndent({ id: indent._id, ...payload }).unwrap();
         enqueueSnackbar('Indent updated', { variant: 'success' });
+        onClose?.(true);
       } else {
-        await createIndent(payload).unwrap();
+        const res = await createIndent(payload).unwrap();
         enqueueSnackbar('Indent created', { variant: 'success' });
+        // Second arg = the newly created indent, so a caller that isn't
+        // already on the indent list (e.g. a Quick Action) can open it.
+        onClose?.(true, res?.data);
       }
-      onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save indent', { variant: 'error' });
     }

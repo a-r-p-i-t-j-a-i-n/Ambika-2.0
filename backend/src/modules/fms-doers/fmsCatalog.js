@@ -194,7 +194,8 @@ const PURCHASE_STEPS = [
     sources: [
       // QC can only start once the GRN is MD-signed (existing gate), so an
       // unsigned GRN is not yet waiting on the QC doer.
-      byFilter('GRN', { grnStatus: { $in: ['PARTIAL_RECEIVED', 'FULLY_RECEIVED'] }, qcStatus: 'PENDING', approvalStatus: 'MD_APPROVED' }),
+      // RECEIVED = a W/O PO GRN's terminal status (no PO to be "partial"/"full" against).
+      byFilter('GRN', { grnStatus: { $in: ['RECEIVED', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'] }, qcStatus: 'PENDING', approvalStatus: 'MD_APPROVED' }),
       // SERVICE_COMPLETED = legacy indents completed under the retired step, QC not done yet.
       byFilter('INDENT', { requestType: 'INTERNAL_SERVICE', overallStatus: { $in: ['SERVICE_PENDING', 'SERVICE_COMPLETED'] } }),
     ],

@@ -17,6 +17,7 @@ import {
   useGetPurchaseOrderQuery,
   useCancelPurchaseOrderMutation,
   useGetFollowUpsByPoQuery,
+  useCreateFollowUpMutation,
   useGetProformaInvoicesByPoQuery,
 
   useGetGrnsByPoQuery,
@@ -29,7 +30,7 @@ import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
-import { PoFollowUpChip, FuStatusChip, fmtDate as fmtFuDate } from '../follow-ups/fuMeta';
+import { PoFollowUpChip, FuStatusChip, FuTypeChip, fmtDate as fmtFuDate } from '../follow-ups/fuMeta';
 import FollowUpFormDrawer from '../follow-ups/FollowUpFormDrawer';
 import FollowUpDoneDialog from '../follow-ups/FollowUpDoneDialog';
 import FollowUpReadyForGrnDialog from '../follow-ups/FollowUpReadyForGrnDialog';
@@ -111,6 +112,7 @@ const PurchaseOrderDetail = () => {
   const po = data?.data;
   const [cancelPo] = useCancelPurchaseOrderMutation();
   const [generatePoPdf, { isLoading: pdfGenerating }] = useGeneratePurchaseOrderPdfMutation();
+  const [createFollowUp, { isLoading: startingFollowUp }] = useCreateFollowUpMutation();
 
   const [formOpen, setFormOpen] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
@@ -226,22 +228,71 @@ const PurchaseOrderDetail = () => {
   const canRelease = po.approvalStatus === 'APPROVED' && po.releaseStatus !== 'RELEASED';
   const canCancel = !['FULLY_RECEIVED', 'CLOSED', 'CANCELLED'].includes(po.poStatus);
 
+  // ── Delivery indicator — derived only from PO status + the currently
+  // effective expected date (final commitment > revised/next > original),
+  // never from follow-up notes or a new status enum. ──
+  const effectiveExpectedDate = po.finalMaterialDate || nextFollowUpDate || po.expectedDeliveryDate || null;
+  const deliveryStatus = (() => {
+    if (po.poStatus === 'FULLY_RECEIVED') return { label: 'Fully Received', color: 'success' };
+    if (po.poStatus === 'PARTIAL_RECEIVED') return { label: 'Partially Received', color: 'warning' };
+    if (po.poStatus !== 'RELEASED_TO_VENDOR' || !effectiveExpectedDate) return null;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const exp = new Date(effectiveExpectedDate); exp.setHours(0, 0, 0, 0);
+    if (exp.getTime() === today.getTime()) return { label: 'Due Today', color: 'warning' };
+    if (exp.getTime() < today.getTime()) return { label: 'Overdue', color: 'error' };
+    return { label: 'Upcoming', color: 'info' };
+  })();
+  // Routine delivery follow-ups close once the PO is fully received — matches
+  // the backend's own eligibility gate (followUpService.create), not a new rule.
+  const deliveryFollowUpsClosed = po.poStatus === 'FULLY_RECEIVED';
+
   // ── Unified follow-up action (Issue 1 — one button, not two entry points) ──
-  // - no follow-up yet              → Create Follow-up
-  // - open cycle (pending/resched)  → Update Follow-up / Follow-up Again
+  // - open cycle (pending/resched)        → Update Follow-up / Follow-up Again
+  // - no active record, PO already has an
+  //   Expected Delivery Date              → Update Follow-up (the first record
+  //   is created transparently, skipping the bare "New Material Follow-up"
+  //   form — the PO already carries the vendor's delivery commitment, so
+  //   there's nothing that form would ask for that isn't already known)
+  // - no active record AND no Expected
+  //   Delivery Date (legacy PO predating
+  //   the mandatory field)                → Create Follow-up (asks for a
+  //   Planned Date explicitly, since there is nothing to default it from)
   // - DONE + final date but the PO mirror hasn't flipped yet (legacy edge case)
   //   → Mark Ready for GRN
-  // - material confirmed            → done (chip, no button)
-  const activeFollowUp = lastFollowUp && ['PENDING', 'RESCHEDULED'].includes(lastFollowUp.followUpStatus) ? lastFollowUp : null;
+  // - material confirmed                  → done (chip, no button)
+  //
+  // "Current" record = the one PENDING/RESCHEDULED follow-up, found by scanning
+  // every record for this PO (same pattern as `readyFollowUp` above), NOT just
+  // the most-recently-created one — in normal operation there is at most one
+  // active record at a time (the backend now rejects creating a second), but
+  // this stays correct even against stale/legacy data where that invariant
+  // didn't hold.
+  const activeFollowUp = followUps.find((f) => ['PENDING', 'RESCHEDULED'].includes(f.followUpStatus)) || null;
+
+  const startOrContinueFollowUp = async () => {
+    if (activeFollowUp) { setFuActiveTarget(activeFollowUp); setFuDoneOpen(true); return; }
+    try {
+      const res = await createFollowUp({ poId: po._id, plannedAt: po.expectedDeliveryDate }).unwrap();
+      setFuActiveTarget(res?.data);
+      setFuDoneOpen(true);
+    } catch (err) {
+      // The backend's own duplicate guard is the actual race-safety net — if
+      // two clicks/tabs both land here, the loser gets this message rather
+      // than a second active follow-up ever existing.
+      enqueueSnackbar(err?.data?.message || 'Failed to start the follow-up', { variant: 'error' });
+    }
+  };
+
   const followUpPrimary = po.followUpStatus === 'READY_FOR_GRN'
     ? { label: 'Ready for GRN', done: true }
     : readyFollowUp
       ? { label: 'Mark Ready for GRN', icon: <PackageCheck size={14} />, onClick: () => setFuReadyOpen(true) }
-      : activeFollowUp
+      : (activeFollowUp || po.expectedDeliveryDate)
         ? {
-            label: activeFollowUp.followUpStatus === 'RESCHEDULED' ? 'Follow-up Again' : 'Update Follow-up',
-            icon: <PhoneCall size={14} />,
-            onClick: () => { setFuActiveTarget(activeFollowUp); setFuDoneOpen(true); },
+            label: activeFollowUp?.followUpStatus === 'RESCHEDULED' ? 'Follow-up Again' : 'Update Follow-up',
+            icon: startingFollowUp ? <CircularProgress size={14} color="inherit" /> : <PhoneCall size={14} />,
+            onClick: startOrContinueFollowUp,
+            disabled: startingFollowUp,
           }
         : { label: 'Create Follow-up', icon: <PhoneCall size={14} />, onClick: () => setFuFormOpen(true) };
 
@@ -266,7 +317,7 @@ const PurchaseOrderDetail = () => {
           text: activeFollowUp || readyFollowUp
             ? 'Continue chasing the vendor for a confirmed delivery date.'
             : 'Start tracking the vendor delivery with a material follow-up.',
-          primary: { label: followUpPrimary.label, icon: followUpPrimary.icon, onClick: followUpPrimary.onClick },
+          primary: { label: followUpPrimary.label, icon: followUpPrimary.icon, onClick: followUpPrimary.onClick, disabled: followUpPrimary.disabled },
         };
       }
       if (canCreatePi) {
@@ -334,7 +385,7 @@ const PurchaseOrderDetail = () => {
     if (po.followUpStatus !== 'READY_FOR_GRN') {
       return {
         text: 'GRN is blocked because material delivery has not been confirmed yet.',
-        button: { label: followUpPrimary.label, onClick: followUpPrimary.onClick },
+        button: { label: followUpPrimary.label, onClick: followUpPrimary.onClick, disabled: followUpPrimary.disabled },
       };
     }
     if (!po.finalMaterialDate) {
@@ -433,6 +484,7 @@ const PurchaseOrderDetail = () => {
               )}
               {nextAction.primary && (
                 <Button variant="contained" size="small" startIcon={nextAction.primary.icon} onClick={nextAction.primary.onClick}
+                  disabled={nextAction.primary.disabled}
                   sx={{ bgcolor: TONE_COLOR[nextAction.tone], '&:hover': { bgcolor: TONE_COLOR[nextAction.tone] } }}>
                   {nextAction.primary.label}
                 </Button>
@@ -445,7 +497,7 @@ const PurchaseOrderDetail = () => {
             <Box sx={{ mt: 2, pt: 2, borderTop: '1px dashed', borderColor: 'divider', display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
               <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', mr: 0.5 }}>Quick actions:</Typography>
               {fuRelevant && !followUpPrimary.done && (
-                <Button size="small" variant="text" startIcon={<PhoneCall size={13} />} onClick={followUpPrimary.onClick}>
+                <Button size="small" variant="text" startIcon={<PhoneCall size={13} />} onClick={followUpPrimary.onClick} disabled={followUpPrimary.disabled}>
                   {followUpPrimary.label}
                 </Button>
               )}
@@ -542,40 +594,87 @@ const PurchaseOrderDetail = () => {
           </SectionCard>
         </Grid>
 
-        {/* Step 1.5 — Material Follow-up (only meaningful for released POs) */}
+        {/* Step 1.5 — Vendor Delivery Follow-ups (only meaningful for released POs).
+            This replaces the former standalone "Material Follow-ups" hub step —
+            PO detail is now the primary place to record and review them. */}
         {(po.poStatus === 'RELEASED_TO_VENDOR' || po.followUpStatus !== 'NOT_STARTED') && (
           <Grid item xs={12}>
             <Paper sx={{ ...pfmsCardSx, p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
-                  <PhoneCall size={18} /> Material Follow-up
+                  <PhoneCall size={18} /> Vendor Delivery Follow-ups
                 </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {deliveryStatus && <Chip size="small" color={deliveryStatus.color} label={deliveryStatus.label} sx={{ fontWeight: 700 }} />}
                   {/* One primary follow-up action — label/target adapts to the current cycle. */}
-                  {followUpPrimary.done ? (
+                  {deliveryFollowUpsClosed ? (
+                    <Chip size="small" variant="outlined" label="Follow-ups closed — fully received" sx={{ fontWeight: 700 }} />
+                  ) : followUpPrimary.done ? (
                     <Chip size="small" color="success" icon={<CheckCircle2 size={14} />} label="Ready for GRN" sx={{ fontWeight: 700 }} />
                   ) : (
-                    <Button size="small" variant="contained" startIcon={followUpPrimary.icon} onClick={followUpPrimary.onClick}>
+                    <Button size="small" variant="contained" startIcon={followUpPrimary.icon} onClick={followUpPrimary.onClick} disabled={followUpPrimary.disabled}>
                       {followUpPrimary.label}
                     </Button>
                   )}
                   <Button size="small" variant="outlined" startIcon={<Eye size={14} />}
-                    onClick={() => navigate('/purchase-fms/material-follow-ups')}>
-                    View Follow-ups
+                    onClick={() => navigate('/procurement/follow-ups')}>
+                    All Follow-ups
                   </Button>
                 </Box>
               </Box>
-              <Grid container spacing={2}>
-                <Grid item xs={6} sm={2.4}><Field label="Follow-up Status" value={<PoFollowUpChip status={po.followUpStatus} />} /></Grid>
-                <Grid item xs={6} sm={2.4}><Field label="Expected Delivery" value={fmtFuDate(po.expectedDeliveryDate)} /></Grid>
-                <Grid item xs={6} sm={2.4}><Field label="Ready For GRN" value={fmtFuDate(po.readyForGrnAt)} /></Grid>
-                <Grid item xs={6} sm={2.4}>
+              <Grid container spacing={2} sx={{ mb: followUps.length ? 2.5 : 0 }}>
+                <Grid item xs={6} sm={2}><Field label="Follow-up Status" value={<PoFollowUpChip status={po.followUpStatus} />} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Original Expected" value={fmtFuDate(po.expectedDeliveryDate)} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Revised / Next Expected" value={nextFollowUpDate ? fmtFuDate(nextFollowUpDate) : 'Not revised'} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Final Committed" value={po.finalMaterialDate ? fmtFuDate(po.finalMaterialDate) : 'Not committed yet'} /></Grid>
+                <Grid item xs={6} sm={2}>
                   <Field label="Last Follow-up" value={lastFollowUp
                     ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><FuStatusChip status={lastFollowUp.followUpStatus} /><Typography variant="caption" color="text.secondary">{fmtFuDate(lastFollowUp.actualAt || lastFollowUp.plannedAt)}</Typography></Box>
                     : '—'} />
                 </Grid>
-                <Grid item xs={6} sm={2.4}><Field label="Next Follow-up" value={fmtFuDate(nextFollowUpDate)} /></Grid>
+                <Grid item xs={6} sm={2}><Field label="Next Scheduled" value={activeFollowUp?.plannedAt ? fmtFuDate(activeFollowUp.plannedAt) : '—'} /></Grid>
               </Grid>
+
+              {/* Full delivery commitment history — every follow-up cycle recorded
+                  against this PO, newest first (already sorted -createdAt by the API). */}
+              {followUps.length > 0 && (
+                <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '10px' }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Follow-up No</TableCell>
+                        <TableCell>Type</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Planned</TableCell>
+                        <TableCell>Actual</TableCell>
+                        <TableCell>Next / Final Date</TableCell>
+                        <TableCell>Remarks</TableCell>
+                        <TableCell>By</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {followUps.map((fu) => (
+                        <TableRow key={fu._id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(`/procurement/follow-ups/${fu._id}`)}>
+                          <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{fu.followUpNumber}</Typography></TableCell>
+                          <TableCell><FuTypeChip type={fu.followUpType} /></TableCell>
+                          <TableCell><FuStatusChip status={fu.followUpStatus} /></TableCell>
+                          <TableCell>{fmtFuDate(fu.plannedAt)}</TableCell>
+                          <TableCell>{fmtFuDate(fu.actualAt)}</TableCell>
+                          <TableCell>
+                            {fu.finalMaterialDate
+                              ? <Typography variant="body2" sx={{ color: '#15803d', fontWeight: 600 }}>Final: {fmtFuDate(fu.finalMaterialDate)}</Typography>
+                              : fu.nextFollowUpDate
+                                ? <Typography variant="body2" sx={{ color: '#b45309' }}>Next: {fmtFuDate(fu.nextFollowUpDate)}</Typography>
+                                : '—'}
+                          </TableCell>
+                          <TableCell><Typography variant="body2" color="text.secondary" noWrap sx={{ maxWidth: 180 }}>{fu.remarks || '—'}</Typography></TableCell>
+                          <TableCell><Typography variant="body2" color="text.secondary" noWrap>{fu.performedByName || '—'}</Typography></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
             </Paper>
           </Grid>
         )}
@@ -669,7 +768,7 @@ const PurchaseOrderDetail = () => {
                   <AlertTriangle size={16} color="#dc2626" />
                   <Typography variant="body2" sx={{ fontWeight: 600, color: '#991b1b', flexGrow: 1 }}>{grnBlock.text}</Typography>
                   {grnBlock.button && (
-                    <Button size="small" variant="contained" color="error" onClick={grnBlock.button.onClick}>{grnBlock.button.label}</Button>
+                    <Button size="small" variant="contained" color="error" onClick={grnBlock.button.onClick} disabled={grnBlock.button.disabled}>{grnBlock.button.label}</Button>
                   )}
                 </Box>
               )}

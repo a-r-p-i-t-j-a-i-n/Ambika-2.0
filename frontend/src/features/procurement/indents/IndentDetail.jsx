@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, Send, CheckCircle2, FileText, FileCheck2,
-  ClipboardList, User, Building2, Hash, ExternalLink, ShoppingBag, ArrowRight,
+  ClipboardList, User, Building2, Hash, ExternalLink, ShoppingBag,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -24,6 +24,7 @@ import QuotationApprovalDialog from './QuotationApprovalDialog';
 import { useStartServiceQc, canStartServiceQc } from './useStartServiceQc';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
+import NextStepBanner from '../components/NextStepBanner';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
@@ -264,12 +265,6 @@ const IndentDetail = () => {
     return null;
   })();
 
-  const NEXT_TONE = {
-    info:    { bg: alpha('#2563eb', 0.07), border: alpha('#2563eb', 0.35), fg: '#1d4ed8' },
-    success: { bg: alpha('#16a34a', 0.08), border: alpha('#16a34a', 0.35), fg: '#15803d' },
-    warn:    { bg: alpha('#f59e0b', 0.1),  border: alpha('#f59e0b', 0.45), fg: '#b45309' },
-  };
-
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
@@ -309,35 +304,7 @@ const IndentDetail = () => {
         </Box>
       </Box>
 
-      {/* What's next — adaptive, prominent call-to-action for the current stage */}
-      {nextStep && (() => {
-        const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
-        return (
-          <Paper elevation={0} sx={{
-            mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
-            display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
-          }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
-              <ArrowRight size={22} />
-            </Box>
-            <Box sx={{ minWidth: 220, flexGrow: 1 }}>
-              <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
-              <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{nextStep.title}</Typography>
-              <Typography variant="body2" color="text.secondary">{nextStep.desc}</Typography>
-            </Box>
-            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-              {nextStep.secondary && (
-                <Button variant="outlined" onClick={nextStep.secondary.onClick}>{nextStep.secondary.label}</Button>
-              )}
-              {nextStep.primary && (
-                <Button variant="contained" startIcon={nextStep.primary.icon} onClick={nextStep.primary.onClick}>
-                  {nextStep.primary.label}
-                </Button>
-              )}
-            </Box>
-          </Paper>
-        );
-      })()}
+      <NextStepBanner step={nextStep} />
 
       <FmsDoerCard entityType="INDENT" entityId={id} />
       <Grid container spacing={2}>

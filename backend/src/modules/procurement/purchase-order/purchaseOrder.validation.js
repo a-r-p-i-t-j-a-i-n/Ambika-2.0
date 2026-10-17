@@ -52,6 +52,10 @@ export const createPoSchema = Joi.object({
   poFormatType:  poFormatType,
   saveMode:      saveMode,
   poDate:        Joi.date().optional(),
+  // The vendor's initial delivery commitment, captured at PO creation — distinct
+  // from the auto-estimated fallback the service computes at release time
+  // (releasedAt + leadTime) for POs that somehow still lack one (legacy data).
+  expectedDeliveryDate: Joi.date().required(),
   vendorName:    Joi.string().trim().max(200).allow('', null),
   vendorGST:     Joi.string().trim().max(20).allow('', null),
   vendorPAN:     Joi.string().trim().max(20).allow('', null),
@@ -72,6 +76,7 @@ export const createMultiPoSchema = Joi.object({
   vendorId:      objectId.required(),
   poFormatType:  poFormatType,
   poDate:        Joi.date().optional(),
+  expectedDeliveryDate: Joi.date().required(),
   vendorName:    Joi.string().trim().max(200).allow('', null),
   vendorGST:     Joi.string().trim().max(20).allow('', null),
   vendorPAN:     Joi.string().trim().max(20).allow('', null),
@@ -110,6 +115,7 @@ export const previewPoSchema = Joi.object({
   poFormatType:  poFormatType,
   poNumber:      Joi.string().trim().max(60).allow('', null),
   poDate:        Joi.date().optional(),
+  expectedDeliveryDate: Joi.date().allow('', null),
   vendorName:    Joi.string().trim().max(200).allow('', null),
   vendorGST:     Joi.string().trim().max(20).allow('', null),
   vendorPAN:     Joi.string().trim().max(20).allow('', null),
@@ -128,6 +134,7 @@ export const previewPoSchema = Joi.object({
 export const updatePoSchema = Joi.object({
   poFormatType:  Joi.string().valid('JSL', 'OTHER'),
   poDate:        Joi.date(),
+  expectedDeliveryDate: Joi.date(),
   vendorId:      objectId,
   vendorName:    Joi.string().trim().max(200).allow('', null),
   vendorGST:     Joi.string().trim().max(20).allow('', null),

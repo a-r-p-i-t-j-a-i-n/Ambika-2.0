@@ -130,7 +130,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const [approvedVendors, setApprovedVendors] = useState([]); // from Step 1.3 (multi-vendor)
   const [approvedVendorId, setApprovedVendorId] = useState('');
   const [header, setHeader] = useState({
-    poDate: todayStr(), leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '',
+    poDate: todayStr(), expectedDeliveryDate: '', leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '',
   });
   const [items, setItems] = useState([emptyItem()]);
 
@@ -208,6 +208,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       setVendor(v || { _id: sourcePo.vendorId?._id || sourcePo.vendorId, name: sourcePo.vendorName });
       setHeader({
         poDate: isRevise ? todayStr() : (sourcePo.poDate ? sourcePo.poDate.slice(0, 10) : todayStr()),
+        expectedDeliveryDate: sourcePo.expectedDeliveryDate ? sourcePo.expectedDeliveryDate.slice(0, 10) : '',
         leadTime: sourcePo.leadTime || '', deliveryTerms: sourcePo.deliveryTerms || '',
         paymentTerms: sourcePo.paymentTerms || '', creditPeriod: sourcePo.creditPeriod || 0,
         remarks: sourcePo.remarks || '',
@@ -235,7 +236,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       setIndent(null); setVendor(null); setApprovedVendors([]); setApprovedVendorId('');
       setSelectedApprovedItems([]);
       setPoFormatType('OTHER');
-      setHeader({ poDate: todayStr(), leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '' });
+      setHeader({ poDate: todayStr(), expectedDeliveryDate: '', leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '' });
       setItems([emptyItem()]);
       // Preset multi-vendor (Step 1.3) indents keep the legacy approved-vendor path;
       // simple/item-level preset indents are pre-selected in the item-picker once the
@@ -589,6 +590,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     vendorId: vendor?._id,
     poFormatType,
     poDate: header.poDate,
+    expectedDeliveryDate: header.expectedDeliveryDate,
     vendorName: vendor?.name || '',
     vendorGST: vendor?.gstNo || '',
     vendorPAN: vendor?.panNo || '',
@@ -652,6 +654,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   // saveMode: 'DRAFT' (default) | 'DIRECT' — only meaningful for a new PO.
   const handleSubmit = async (saveMode = 'DRAFT') => {
     if (!vendor?._id) { enqueueSnackbar('Vendor is mandatory', { variant: 'warning' }); return; }
+    if (!header.expectedDeliveryDate) { enqueueSnackbar('Expected Delivery Date is required', { variant: 'warning' }); return; }
     if (approvedItemMode) {
       if (!selectedApprovedItems.length) { enqueueSnackbar('Select at least one approved item', { variant: 'warning' }); return; }
     } else if (!isEdit && !isRevise && !indent?._id) {
@@ -686,10 +689,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
     setPendingMode(saveMode);
     try {
+      let created;
       if (isRevise) {
         // New draft PO from the cancelled one — source indents derived server-side.
         const res = await revisePo({ id: reviseFrom._id, ...payload }).unwrap();
         enqueueSnackbar(`Revised PO ${poDisplayNumber(res?.data)} saved as draft`, { variant: 'success' });
+        created = res?.data;
       } else if (isEdit) {
         await updatePo({ id: po._id, ...payload }).unwrap();
         enqueueSnackbar('Purchase order updated', { variant: 'success' });
@@ -697,11 +702,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         // Item-wise: one vendor, hand-picked approved items (source indents derived).
         const res = await createFromItems({ ...payload, saveMode: direct ? 'DIRECT' : 'DRAFT' }).unwrap();
         notifyCreated(res?.data);
+        created = res?.data;
       } else {
         const res = await createPo({ ...payload, indentId: indent._id, saveMode: direct ? 'DIRECT' : 'DRAFT' }).unwrap();
         notifyCreated(res?.data);
+        created = res?.data;
       }
-      onClose?.(true);
+      // Second arg = the newly created/revised PO, so a caller that isn't
+      // already on the PO list (e.g. a Quick Action) can open it.
+      onClose?.(true, created);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save purchase order', { variant: 'error' });
     } finally {
@@ -897,19 +906,24 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
             <ShoppingBag size={18} /> PO Terms
           </Typography>
           <Grid container spacing={2}>
-            <Grid item xs={6} sm={3}>
+            <Grid item xs={6} sm={2.4}>
               <DateInputDDMMYYYY label="PO Date" fullWidth value={header.poDate}
                 onChange={(val) => setHeader((h) => ({ ...h, poDate: val }))} />
             </Grid>
-            <Grid item xs={6} sm={3}>
+            <Grid item xs={6} sm={2.4}>
+              <DateInputDDMMYYYY label="Expected Delivery Date *" fullWidth required value={header.expectedDeliveryDate}
+                onChange={(val) => setHeader((h) => ({ ...h, expectedDeliveryDate: val }))}
+                error={!header.expectedDeliveryDate} helperText={!header.expectedDeliveryDate ? 'Required' : ''} />
+            </Grid>
+            <Grid item xs={6} sm={2.4}>
               <TextField label="Lead Time" fullWidth value={header.leadTime} placeholder="e.g. 7 days"
                 onChange={(e) => setHeader((h) => ({ ...h, leadTime: e.target.value }))} />
             </Grid>
-            <Grid item xs={6} sm={3}>
+            <Grid item xs={6} sm={2.4}>
               <TextField label="Credit Period (Days)" type="number" fullWidth value={header.creditPeriod}
                 onChange={(e) => setHeader((h) => ({ ...h, creditPeriod: e.target.value }))} inputProps={{ min: 0 }} />
             </Grid>
-            <Grid item xs={6} sm={3}>
+            <Grid item xs={6} sm={2.4}>
               <TextField label="Payment Terms" fullWidth value={header.paymentTerms}
                 onChange={(e) => setHeader((h) => ({ ...h, paymentTerms: e.target.value }))} />
             </Grid>

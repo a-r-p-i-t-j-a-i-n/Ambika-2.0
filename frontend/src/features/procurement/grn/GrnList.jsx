@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
+  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -36,6 +36,7 @@ const GrnList = () => {
   const [search, setSearch] = useState('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [poNumber, setPoNumber] = useState('');
+  const [poTypeFilter, setPoTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -56,6 +57,7 @@ const GrnList = () => {
     search: search || undefined,
     vendorId: vendorFilter?._id || undefined,
     poNumber: poNumber || undefined,
+    isWithoutPo: poTypeFilter || undefined,
     grnStatus: statusFilter || undefined,
     ...(from ? { 'grnDate[gte]': `${from}T00:00:00` } : {}),
     ...(to ? { 'grnDate[lte]': `${to}T23:59:59` } : {}),
@@ -103,7 +105,9 @@ const GrnList = () => {
     { field: 'grnDate', headerName: 'GRN DATE', width: 100,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'poNumber', headerName: 'PO NUMBER', width: 140,
-      renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
+      renderCell: (p) => (p.row.isWithoutPo
+        ? <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} />
+        : <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography>) },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 160,
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
     // GRN and QC are one step — the QC (done on the GRN page) shows beside its GRN,
@@ -177,6 +181,11 @@ const GrnList = () => {
           renderInput={(params) => <TextField {...params} label="Vendor" />}
         />
         <TextField size="small" label="PO Number" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} sx={{ minWidth: 150 }} />
+        <TextField size="small" select label="PO Type" value={poTypeFilter} onChange={(e) => setPoTypeFilter(e.target.value)} sx={{ minWidth: 150 }}>
+          <MenuItem value="">All</MenuItem>
+          <MenuItem value="false">Against PO</MenuItem>
+          <MenuItem value="true">Without PO</MenuItem>
+        </TextField>
         <TextField size="small" select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 160 }}>
           <MenuItem value="">All</MenuItem>
           {GRN_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}

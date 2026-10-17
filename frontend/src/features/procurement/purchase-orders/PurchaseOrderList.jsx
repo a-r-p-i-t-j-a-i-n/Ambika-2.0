@@ -121,6 +121,8 @@ const PurchaseOrderList = () => {
       ) },
     { field: 'poDate', headerName: 'PO DATE', width: 100,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
+    { field: 'expectedDeliveryDate', headerName: 'EXPECTED DELIVERY', width: 140,
+      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'indentNumber', headerName: 'INDENT / ITEM REF', width: 165, sortable: false,
       renderCell: (p) => {
         // Prefer item-level references stamped on the PO lines; fall back to the

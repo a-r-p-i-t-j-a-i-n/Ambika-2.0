@@ -22,6 +22,7 @@ import ProformaInvoiceApprovalDialog from './ProformaInvoiceApprovalDialog';
 import ProformaInvoicePdfPreview from './ProformaInvoicePdfPreview';
 import { PaymentStatusChip, modeLabel } from '../advance-payments/apMeta';
 import AdvancePaymentFormDialog from '../advance-payments/AdvancePaymentFormDialog';
+import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
@@ -79,6 +80,28 @@ const ProformaInvoiceDetail = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // ── "What's next?" — single, obvious call-to-action for the current stage. ──
+  const nextStep = (() => {
+    if (pi.piStatus === 'CANCELLED') return null;
+    if (editable) {
+      return { tone: 'info', title: 'Next: approve this Proforma Invoice (Step 1.6)',
+        desc: 'Review the PI document and items, then approve it to proceed to advance payment.',
+        primary: { label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, onClick: () => setApprovalOpen(true) },
+        secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
+    }
+    if (pi.piStatus === 'READY_FOR_ADVANCE_PAYMENT') {
+      return { tone: 'success', title: 'PI approved — next: record the advance payment (Step 1.7)',
+        desc: 'Record the advance payment against this PI to proceed toward GRN.',
+        primary: { label: 'Record Advance Payment', icon: <Wallet size={16} />, onClick: () => setPaymentOpen(true) } };
+    }
+    if (pi.piStatus === 'PAYMENT_COMPLETED') {
+      return { tone: 'success', title: 'Advance payment complete — next: receive the goods (GRN)',
+        desc: 'Open the Purchase Order to create the Goods Receipt Note once material delivery is confirmed.',
+        primary: pi.poId ? { label: 'Open Purchase Order', icon: <ShoppingBag size={16} />, onClick: () => navigate(`/procurement/purchase-orders/${pi.poId}`) } : null };
+    }
+    return null;
+  })();
+
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
@@ -119,6 +142,8 @@ const ProformaInvoiceDetail = () => {
           {cancellable && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
         </Box>
       </Box>
+
+      <NextStepBanner step={nextStep} />
 
       <FmsDoerCard entityType="PI" entityId={id} />
       <Grid container spacing={3}>

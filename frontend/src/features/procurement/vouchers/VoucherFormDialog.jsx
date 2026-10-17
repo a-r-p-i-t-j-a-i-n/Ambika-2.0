@@ -11,6 +11,7 @@ import {
   useGetVendorInvoicesQuery,
   useCreateVoucherMutation,
   useUpdateVoucherMutation,
+  usePostVoucherMutation,
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fmtINR, EXPENSE_CATEGORIES } from './voucherMeta';
@@ -59,8 +60,9 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
 
   const [createVoucher, { isLoading: creating }] = useCreateVoucherMutation();
   const [updateVoucher, { isLoading: updating }] = useUpdateVoucherMutation();
+  const [postVoucher, { isLoading: posting }] = usePostVoucherMutation();
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
-  const busy = creating || updating;
+  const busy = creating || updating || posting;
 
   useEffect(() => {
     if (!open) return;
@@ -110,12 +112,11 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
     } catch (err) { enqueueSnackbar(err?.data?.message || 'Upload failed', { variant: 'error' }); }
   };
 
-  const submit = async () => {
-    let payload;
+  const buildPayload = () => {
     if (isExpense) {
-      if (!ef.expenseCategory) return enqueueSnackbar('Select an expense category', { variant: 'warning' });
-      if (!ef.partyName.trim()) return enqueueSnackbar('Party name is required', { variant: 'warning' });
-      payload = {
+      if (!ef.expenseCategory) { enqueueSnackbar('Select an expense category', { variant: 'warning' }); return null; }
+      if (!ef.partyName.trim()) { enqueueSnackbar('Party name is required', { variant: 'warning' }); return null; }
+      return {
         voucherType: 'EXPENSE',
         voucherDate: ef.voucherDate || undefined,
         expenseCategory: ef.expenseCategory,
@@ -129,15 +130,44 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
         paymentTerms: ef.paymentTerms.trim() || undefined, dueDate: ef.dueDate || undefined, preparedBy: ef.preparedBy.trim() || undefined,
         remarks: ef.remarks.trim() || undefined,
       };
-    } else {
-      if (!pf.invoiceId) return enqueueSnackbar('Select an invoice', { variant: 'warning' });
-      payload = { voucherType: 'PURCHASE', invoiceId: pf.invoiceId, voucherDate: pf.voucherDate || undefined, remarks: pf.remarks.trim() || undefined };
     }
+    if (!pf.invoiceId) { enqueueSnackbar('Select an invoice', { variant: 'warning' }); return null; }
+    return { voucherType: 'PURCHASE', invoiceId: pf.invoiceId, voucherDate: pf.voucherDate || undefined, remarks: pf.remarks.trim() || undefined };
+  };
+
+  // `direct`: create, then immediately post (Draft → Posted) in the same
+  // action — reusing the exact same post() call the voucher detail page's own
+  // "Post Voucher" button makes. Posting is NOT approval: it only moves the
+  // voucher into the MD-approval queue (unchanged, still mandatory before
+  // Tally Entry) and never records a payment — Final Payment remains the only
+  // place that happens. Only offered for a brand-new voucher (`!isEdit`).
+  const submit = async (direct = false) => {
+    const payload = buildPayload();
+    if (!payload) return;
     try {
-      if (isEdit) await updateVoucher({ id: voucher._id, ...payload }).unwrap();
-      else await createVoucher(payload).unwrap();
-      enqueueSnackbar(isEdit ? 'Voucher updated' : 'Voucher created', { variant: 'success' });
-      onClose?.(true);
+      if (isEdit) {
+        await updateVoucher({ id: voucher._id, ...payload }).unwrap();
+        enqueueSnackbar('Voucher updated', { variant: 'success' });
+        onClose?.(true);
+        return;
+      }
+      const res = await createVoucher(payload).unwrap();
+      if (direct && res?.data?._id) {
+        try {
+          await postVoucher({ id: res.data._id }).unwrap();
+          enqueueSnackbar('Voucher created and posted — pending MD approval', { variant: 'success' });
+        } catch (err) {
+          // The voucher itself was created successfully as a draft — only the
+          // immediate post failed. Nothing is lost; it's visible in the list
+          // and can be posted from its own detail page.
+          enqueueSnackbar(err?.data?.message || 'Voucher created as a draft, but posting failed — post it from the voucher page', { variant: 'error' });
+        }
+      } else {
+        enqueueSnackbar('Voucher created', { variant: 'success' });
+      }
+      // Second arg = the newly created voucher, so a caller that isn't
+      // already on the voucher list (e.g. a Quick Action) can open it.
+      onClose?.(true, res?.data);
     } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to save voucher', { variant: 'error' }); }
   };
 
@@ -274,8 +304,15 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
       </DialogContent>
       <DialogActions sx={{ p: 2, gap: 1 }}>
         <Button onClick={() => onClose?.(false)} disabled={busy}>Cancel</Button>
-        <Button variant="contained" onClick={submit} disabled={busy || uploading} startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <Banknote size={16} />}>
-          {isEdit ? 'Save' : 'Create Voucher'}
+        {!isEdit && (
+          <Button variant="outlined" onClick={() => submit(false)} disabled={busy || uploading}
+            startIcon={(creating && !posting) ? <CircularProgress size={16} color="inherit" /> : <Banknote size={16} />}>
+            Save as Draft
+          </Button>
+        )}
+        <Button variant="contained" onClick={() => submit(!isEdit)} disabled={busy || uploading}
+          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <Banknote size={16} />}>
+          {isEdit ? 'Save' : 'Save Directly'}
         </Button>
       </DialogActions>
     </Dialog>
