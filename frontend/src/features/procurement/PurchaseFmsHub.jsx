@@ -1,16 +1,24 @@
-import React, { Suspense } from 'react';
-import { Box, Typography } from '@mui/material';
+import React, { Suspense, useState } from 'react';
+import { Box, Typography, Paper, Button } from '@mui/material';
 import { useNavigate, useParams, Navigate } from 'react-router-dom';
+import { ClipboardList, ShoppingBag, PackageCheck, Banknote } from 'lucide-react';
 import { lazyWithRetry } from '../../utils/lazyWithRetry';
 import AppLoader from '../../components/AppLoader';
 import PurchaseFmsStepper from './components/PurchaseFmsStepper';
-import { PFMS } from './pfmsTheme';
+import { PFMS, pfmsCardSx } from './pfmsTheme';
 import {
-  useGetIndentStatsQuery, useGetPurchaseOrderStatsQuery, useGetFollowUpStatsQuery,
+  useGetIndentStatsQuery, useGetPurchaseOrderStatsQuery,
   useGetProformaInvoiceStatsQuery, useGetAdvancePaymentStatsQuery, useGetGrnStatsQuery,
   useGetVendorInvoiceStatsQuery,
-  useGetVoucherStatsQuery, useGetTallyEntryStatsQuery, useGetFinalPaymentStatsQuery,
+  useGetTallyEntryStatsQuery, useGetFinalPaymentStatsQuery,
 } from '../../store/api/procurementApi';
+// Quick Actions reuse the exact same creation dialogs each module's own list
+// page already uses — same form, same validation, same mutations, same
+// Draft/Direct behaviour. No separate creation logic exists here.
+import IndentFormDrawer from './indents/IndentFormDrawer';
+import PurchaseOrderFormDrawer from './purchase-orders/PurchaseOrderFormDrawer';
+import GrnFormDialog from './grn/GrnFormDialog';
+import VoucherFormDialog from './vouchers/VoucherFormDialog';
 
 // Each step reuses the existing, fully-functional screen for that module —
 // same components, APIs, tables, forms, filters and actions as before. This
@@ -19,12 +27,10 @@ import {
 // Purchase (see MainLayout) and are no longer part of this stepper.
 const IndentList            = lazyWithRetry(() => import('./indents/IndentList'));
 const PurchaseOrderList     = lazyWithRetry(() => import('./purchase-orders/PurchaseOrderList'));
-const FollowUpList          = lazyWithRetry(() => import('./follow-ups/FollowUpList'));
 const ProformaInvoiceList   = lazyWithRetry(() => import('./proforma-invoices/ProformaInvoiceList'));
 const AdvancePaymentList    = lazyWithRetry(() => import('./advance-payments/AdvancePaymentList'));
 const GrnQcStep             = lazyWithRetry(() => import('./grn/GrnQcStep'));
 const VendorInvoiceList     = lazyWithRetry(() => import('./vendor-invoices/VendorInvoiceList'));
-const VoucherList           = lazyWithRetry(() => import('./vouchers/VoucherList'));
 const TallyEntryList        = lazyWithRetry(() => import('./tally-entry/TallyEntryList'));
 const FinalPaymentList      = lazyWithRetry(() => import('./final-payments/FinalPaymentList'));
 
@@ -35,17 +41,33 @@ const FinalPaymentList      = lazyWithRetry(() => import('./final-payments/Final
 // straight to Incoming QC. Its history stays at /procurement/service-completions.
 // GRN and Incoming QC are ONE step: the QC form sits on the GRN page, under the
 // GRN. The QC records list (history, drafts, service QCs) is a tab inside it.
+// Vendor Invoices (former step 7) and Payment Vouchers (former step 8) are
+// now ONE hub step: Vendor Invoices & Payments. This is a UI/presentation
+// merge only — VendorInvoice and VendorVoucher remain separate backend
+// models, statuses, routes and permissions, unchanged. The invoice list
+// (VendorInvoiceList) is the unified list, with a Voucher column and
+// workflow filter chips added; a given invoice's voucher is then managed
+// in place on VendorInvoiceDetail via the shared VoucherPanel. Standalone
+// Voucher screens (incl. Expense vouchers, which have no invoice) keep
+// their own routes — see the 'payment-vouchers' redirect below.
+//
+// Material Follow-ups (former step 1.5) is no longer its own hub entry —
+// vendor delivery follow-ups are now managed directly on the Purchase Order
+// detail page (see PurchaseOrderDetail.jsx's "Vendor Delivery Follow-ups"
+// panel), which is the UI/presentation-layer home for them now. This is a
+// navigation change only: the PurchaseFollowUp model, its APIs, and the
+// standalone /procurement/follow-ups routes are all unchanged, and the
+// backend FMS-doer catalog's MATERIAL_FOLLOWUP step (fmsCatalog.js) is
+// untouched — it is a task-assignment concern, not a UI navigation one.
 export const PURCHASE_FMS_STEPS = [
-  { slug: 'purchase-indents',    label: 'Purchase Indents',    Component: IndentList },
-  { slug: 'purchase-orders',     label: 'Purchase Orders',     Component: PurchaseOrderList },
-  { slug: 'material-follow-ups', label: 'Material Follow-ups', Component: FollowUpList },
-  { slug: 'pi-forms',            label: 'PI Forms',            Component: ProformaInvoiceList },
-  { slug: 'advance-payments',    label: 'Advance Payments',    Component: AdvancePaymentList },
-  { slug: 'grn',                 label: 'GRN & QC',            Component: GrnQcStep },
-  { slug: 'vendor-invoices',     label: 'Vendor Invoices',     Component: VendorInvoiceList },
-  { slug: 'payment-vouchers',    label: 'Payment Vouchers',    Component: VoucherList },
-  { slug: 'tally-entries',       label: 'Tally Entries',       Component: TallyEntryList },
-  { slug: 'final-payments',      label: 'Final Payments',      Component: FinalPaymentList },
+  { slug: 'purchase-indents',       label: 'Purchase Indents',        Component: IndentList },
+  { slug: 'purchase-orders',        label: 'Purchase Orders',         Component: PurchaseOrderList },
+  { slug: 'pi-forms',               label: 'PI Forms',                Component: ProformaInvoiceList },
+  { slug: 'advance-payments',       label: 'Advance Payments',        Component: AdvancePaymentList },
+  { slug: 'grn',                    label: 'GRN & QC',                Component: GrnQcStep },
+  { slug: 'invoices-payments',      label: 'Vendor Invoices & Payments', Component: VendorInvoiceList },
+  { slug: 'tally-entries',          label: 'Tally Entries',           Component: TallyEntryList },
+  { slug: 'final-payments',         label: 'Final Payments',          Component: FinalPaymentList },
 ];
 
 // Each step's own stats endpoint (already used by that step's KPI cards) —
@@ -55,37 +77,99 @@ export const PURCHASE_FMS_STEPS = [
 const useStepCounts = () => {
   const { data: indentStats } = useGetIndentStatsQuery();
   const { data: poStats } = useGetPurchaseOrderStatsQuery();
-  const { data: followUpStats } = useGetFollowUpStatsQuery();
   const { data: piStats } = useGetProformaInvoiceStatsQuery();
   const { data: advanceStats } = useGetAdvancePaymentStatsQuery();
   const { data: grnStats } = useGetGrnStatsQuery();
   const { data: invoiceStats } = useGetVendorInvoiceStatsQuery();
-  const { data: voucherStats } = useGetVoucherStatsQuery();
   const { data: tallyStats } = useGetTallyEntryStatsQuery();
   const { data: finalStats } = useGetFinalPaymentStatsQuery();
 
   return {
     'purchase-indents':    indentStats?.data?.total,
     'purchase-orders':     poStats?.data?.total,
-    'material-follow-ups': followUpStats?.data?.total,
     'pi-forms':            piStats?.data?.total,
     'advance-payments':    advanceStats?.data?.totalPayments,
     'grn':                 grnStats?.data?.total,
-    'vendor-invoices':     invoiceStats?.data?.total,
-    'payment-vouchers':    voucherStats?.data?.total,
+    // Represents the unified Vendor Invoices & Payments step by invoice
+    // count — the list itself is invoice-rows-first (see VendorInvoiceList),
+    // with each invoice's voucher shown/managed inline.
+    'invoices-payments':   invoiceStats?.data?.total,
     'tally-entries':       tallyStats?.data?.total,
     'final-payments':      finalStats?.data?.total,
   };
 };
+
+// ── Quick Actions — create a record from anywhere in Purchase FMS without
+// first navigating to its step. Each button opens the EXACT SAME dialog the
+// module's own list page uses, with no preset source record — every one of
+// these dialogs already supports picking its own eligible source (approved
+// indent, eligible PO, payment-pending invoice) or an empty state explaining
+// why none exist, so no new selection UI or validation is introduced here.
+// None of the four creation endpoints carry a dedicated permission today
+// (confirmed earlier this session — only each module's DELETE route does),
+// so these buttons are shown to any authenticated Purchase FMS user, exactly
+// matching each list page's own "New X" button today. The backend remains
+// authoritative regardless of what's shown here.
+const QUICK_ACTIONS = [
+  { key: 'indent',  label: 'Create Indent',          icon: ClipboardList },
+  { key: 'po',      label: 'Create Purchase Order',  icon: ShoppingBag },
+  { key: 'grn',     label: 'Create GRN',             icon: PackageCheck },
+  { key: 'voucher', label: 'Create Passing Voucher', icon: Banknote },
+];
+
+const QuickActions = ({ open, onOpen }) => (
+  <Paper sx={{ ...pfmsCardSx, p: { xs: 1.5, md: 2 }, mb: 2 }}>
+    <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: 'text.secondary', mb: 1 }}>
+      Quick Actions
+    </Typography>
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.25 }}>
+      {QUICK_ACTIONS.map((action) => (
+        <Button key={action.key} variant="outlined" startIcon={<action.icon size={16} />}
+          onClick={() => onOpen(action.key)} disabled={open === action.key}
+          sx={{ flex: { xs: '1 1 calc(50% - 10px)', sm: '0 1 auto' }, fontWeight: 700 }}>
+          + {action.label}
+        </Button>
+      ))}
+    </Box>
+  </Paper>
+);
 
 const PurchaseFmsHub = () => {
   const { step } = useParams();
   const navigate = useNavigate();
   const activeIndex = PURCHASE_FMS_STEPS.findIndex((s) => s.slug === step);
   const counts = useStepCounts();
+  // Which Quick Action dialog is open, if any — null | 'indent' | 'po' | 'grn' | 'voucher'.
+  const [openQuick, setOpenQuick] = useState(null);
+
+  // Closing a Quick Action dialog: if it created a new record, open that
+  // record's own detail page — the same "go straight to what you just made"
+  // behaviour the GRN list's own "New GRN" button already has, extended
+  // consistently to all four, since from the hub there's no list on screen
+  // that would otherwise show the new row.
+  const closeQuick = (detailPath) => (_saved, created) => {
+    setOpenQuick(null);
+    if (created?._id) navigate(`/procurement/${detailPath}/${created._id}`);
+  };
 
   // The former separate Incoming QC step (bookmarks, back-links) → its records tab.
   if (step === 'incoming-qc') return <Navigate to="/purchase-fms/grn?view=qc" replace />;
+
+  // The former separate Vendor Invoices (step 7) and Payment Vouchers (step 8)
+  // hub slugs → the merged Vendor Invoices & Payments step, so old bookmarks
+  // and links keep working. The standalone /procurement/vouchers... routes
+  // are unaffected — this only redirects the Purchase FMS hub slug.
+  if (step === 'vendor-invoices' || step === 'payment-vouchers') {
+    return <Navigate to="/purchase-fms/invoices-payments" replace />;
+  }
+
+  // The former separate Material Follow-ups hub slug → Purchase Orders, which
+  // is now the primary place to manage delivery follow-ups (see comment above
+  // PURCHASE_FMS_STEPS). The standalone /procurement/follow-ups list/detail
+  // routes are unaffected — this only redirects the Purchase FMS hub slug.
+  if (step === 'material-follow-ups') {
+    return <Navigate to="/purchase-fms/purchase-orders" replace />;
+  }
 
   // Unknown/missing step (e.g. a stale bookmark) — land on the first step
   // rather than rendering nothing.
@@ -107,6 +191,7 @@ const PurchaseFmsHub = () => {
       </Box>
 
       <Box sx={{ px: { xs: 1.5, md: 3 } }}>
+        <QuickActions open={openQuick} onOpen={setOpenQuick} />
         <PurchaseFmsStepper
           steps={PURCHASE_FMS_STEPS}
           activeIndex={activeIndex}
@@ -120,6 +205,13 @@ const PurchaseFmsHub = () => {
           <ActiveComponent />
         </Suspense>
       </Box>
+
+      {/* Quick Action dialogs — the exact same components each module's own
+          list page renders, with no preset source record. */}
+      <IndentFormDrawer open={openQuick === 'indent'} onClose={closeQuick('indents')} />
+      <PurchaseOrderFormDrawer open={openQuick === 'po'} onClose={closeQuick('purchase-orders')} />
+      <GrnFormDialog open={openQuick === 'grn'} onClose={closeQuick('grns')} />
+      <VoucherFormDialog open={openQuick === 'voucher'} onClose={closeQuick('vouchers')} />
     </Box>
   );
 };

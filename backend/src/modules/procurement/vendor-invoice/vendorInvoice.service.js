@@ -128,6 +128,13 @@ const loadAndValidateQcs = async (qcIdList) => {
     if (!QC_INVOICEABLE.includes(qc.qcStatus)) {
       throw new AppError(`QC ${qc.qcNumber} is not invoiceable — Incoming QC must be PASSED or PARTIAL`, 400);
     }
+    // A GRN raised without a PO (W/O PO) has no PO rate/GST for an invoice line
+    // to be priced against — explicitly refused rather than silently invoicing
+    // at ₹0. uniq() below drops falsy poIds, so this would otherwise slip past
+    // the "same PO" check entirely instead of being caught.
+    if (qc.grnId && !qc.poId) {
+      throw new AppError(`QC ${qc.qcNumber} was raised from a GRN with no Purchase Order (W/O PO) — Vendor Invoice is not yet supported for GRNs without a PO`, 400);
+    }
   }
   const vendorIds = uniq(qcs.map((q) => q.vendorId));
   if (vendorIds.length > 1) throw new AppError('All selected GRNs/QCs must belong to the same vendor', 400);
@@ -241,6 +248,9 @@ export const vendorInvoiceService = {
       isDeleted: { $ne: true },
       qcStatus: { $in: QC_INVOICEABLE },
       grnId: { $ne: null }, // material QCs only (service QCs have no GRN/PO)
+      // Excludes QCs sourced from a W/O PO GRN — see loadAndValidateQcs for why
+      // Vendor Invoice does not yet support a GRN with no PO.
+      poId: { $ne: null },
     };
     if (query.vendorId) filter.vendorId = query.vendorId;
     if (query.poId) filter.poId = query.poId;

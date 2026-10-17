@@ -18,6 +18,7 @@ import {
   useCancelGrnMutation,
   useGetInventoryMovementsByRefQuery,
   useGetIncomingQcsByGrnQuery,
+  useGetVendorInvoicesByQcQuery,
 } from '../../../store/api/procurementApi';
 import { GrnStatusChip, howReceivedLabel, fmtINR, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
 import GrnFormDialog from './GrnFormDialog';
@@ -29,10 +30,12 @@ import GrnQcStatusChip from './GrnQcStatusChip';
 import { inventoryTypeLabel } from './inventoryType';
 import { resolveGrnQcStage } from './grnQcStage';
 import { pickGrnQc } from '../incoming-qc/qcForm';
+import VendorInvoiceFormDialog from '../vendor-invoices/VendorInvoiceFormDialog';
 import MdApprovalCard from '../approvals/MdApprovalCard';
 import { ClipboardCheck } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
@@ -84,11 +87,15 @@ const GrnDetail = () => {
   // GRN itself only learns its qcId on completion, so drafts are found here.
   const { data: qcRes } = useGetIncomingQcsByGrnQuery(id, { skip: !isCompleted });
   const qc = pickGrnQc(qcRes?.data || []);
+  const qcPassed = qc && ['PASSED', 'PARTIAL'].includes(qc.qcStatus);
+  const { data: invByQcRes } = useGetVendorInvoicesByQcQuery(qc?._id, { skip: !qcPassed || !qc?._id });
+  const existingInvoice = (invByQcRes?.data || [])[0] || null;
 
   const [formOpen, setFormOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
 
   // Links into the QC (e.g. from the PO page or the QC list) use #qc.
   const { hash } = useLocation();
@@ -148,8 +155,32 @@ const GrnDetail = () => {
         primary: { label: 'Start QC', icon: <ClipboardCheck size={16} />, onClick: toQcSection },
         secondary: grn.poId ? { label: 'View PO', onClick: () => navigate(`/procurement/purchase-orders/${grn.poId}`) } : null };
     }
-    if (['QC_DONE', 'QC_DONE_LEGACY'].includes(qcStage.key)) {
-      const qcId = qc?._id || grn.qcId;
+    if (qcStage.key === 'QC_DONE') {
+      // Vendor Invoice pricing (rate/GST) comes from the PO line — a W/O PO GRN
+      // has none, so invoicing is not yet supported for it (see
+      // vendorInvoiceService.loadAndValidateQcs). Said plainly rather than
+      // letting the user open the invoice form and hit a server error.
+      if (grn.isWithoutPo) {
+        return { tone: 'info', title: 'QC complete — Vendor Invoice is not yet supported for a W/O PO GRN',
+          desc: 'Invoice pricing is sourced from the Purchase Order line, and this GRN has none. Contact an administrator if this material still needs to be invoiced.',
+          secondary: { label: 'View QC', onClick: () => navigate(`/procurement/incoming-qc/${qc._id}`) } };
+      }
+      // Preset the invoice creation flow from this QC — same pattern as
+      // Incoming QC Detail's own "Create Invoice" entry point, rather than
+      // dropping the user onto the generic Vendor Invoices list.
+      if (existingInvoice) {
+        return { tone: 'success', title: 'Vendor Invoice recorded — track payment & accounting',
+          desc: 'Follow it through approval and the payment voucher in Vendor Invoices & Payments.',
+          primary: { label: 'View Invoice', icon: <ReceiptText size={16} />, onClick: () => navigate(`/procurement/vendor-invoices/${existingInvoice._id}`) },
+          secondary: { label: 'View QC', onClick: () => navigate(`/procurement/incoming-qc/${qc._id}`) } };
+      }
+      return { tone: 'success', title: 'QC complete — next: record the Vendor Invoice',
+        desc: 'Capture the vendor’s tax invoice for the accepted material to proceed to payment.',
+        primary: { label: 'Create Invoice', icon: <ReceiptText size={16} />, onClick: () => setInvoiceOpen(true) },
+        secondary: { label: 'View QC', onClick: () => navigate(`/procurement/incoming-qc/${qc._id}`) } };
+    }
+    if (qcStage.key === 'QC_DONE_LEGACY') {
+      const qcId = grn.qcId;
       return { tone: 'success', title: 'QC complete — next: record the Vendor Invoice',
         desc: 'Capture the vendor’s tax invoice to proceed to payment & accounting.',
         primary: { label: 'Go to Vendor Invoices', icon: <ReceiptText size={16} />, onClick: () => navigate('/purchase-fms/vendor-invoices') },
@@ -157,11 +188,6 @@ const GrnDetail = () => {
     }
     return null;
   })();
-
-  const NEXT_TONE = {
-    info:    { bg: alpha('#2563eb', 0.07), border: alpha('#2563eb', 0.35), fg: '#1d4ed8' },
-    success: { bg: alpha('#16a34a', 0.08), border: alpha('#16a34a', 0.35), fg: '#15803d' },
-  };
 
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
@@ -184,9 +210,12 @@ const GrnDetail = () => {
                 title="Stock has been posted — this GRN can no longer be edited or deleted"
                 sx={{ fontWeight: 700, color: PFMS.sub, borderColor: PFMS.line, '& .MuiChip-icon': { color: PFMS.sub } }} />
             )}
+            {grn.isWithoutPo && (
+              <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} />
+            )}
           </Box>
           <Typography variant="body2" color="text.secondary">
-            {grn.vendorName} · PO {grn.poNumber || '—'} · {fmtDate(grn.grnDate)}
+            {grn.vendorName} · {grn.isWithoutPo ? 'Without PO' : `PO ${grn.poNumber || '—'}`} · {fmtDate(grn.grnDate)}
           </Typography>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
@@ -200,35 +229,7 @@ const GrnDetail = () => {
         </Box>
       </Box>
 
-      {/* What's next — adaptive, prominent call-to-action for the current stage */}
-      {nextStep && (() => {
-        const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
-        return (
-          <Paper elevation={0} sx={{
-            mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
-            display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
-          }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
-              <ArrowRight size={22} />
-            </Box>
-            <Box sx={{ minWidth: 220, flexGrow: 1 }}>
-              <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
-              <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{nextStep.title}</Typography>
-              <Typography variant="body2" color="text.secondary">{nextStep.desc}</Typography>
-            </Box>
-            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-              {nextStep.secondary && (
-                <Button variant="outlined" onClick={nextStep.secondary.onClick}>{nextStep.secondary.label}</Button>
-              )}
-              {nextStep.primary && (
-                <Button variant="contained" startIcon={nextStep.primary.icon} onClick={nextStep.primary.onClick}>
-                  {nextStep.primary.label}
-                </Button>
-              )}
-            </Box>
-          </Paper>
-        );
-      })()}
+      <NextStepBanner step={nextStep} />
 
       <FmsDoerCard entityType="GRN" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
@@ -276,7 +277,7 @@ const GrnDetail = () => {
               <Grid item xs={6} sm={4}><Field label="GST" value={grn.vendorGST || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Phone" value={grn.vendorPhone || '—'} /></Grid>
               <Grid item xs={12} sm={4}><Field label="Address" value={grn.vendorAddress || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="PO Number" value={grn.poNumber || '—'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="PO Number" value={grn.isWithoutPo ? 'Without PO' : (grn.poNumber || '—')} /></Grid>
               <Grid item xs={6} sm={4}>
                 <Field label="PI Number" value={grn.piId
                   ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${grn.piId}`)}>{grn.piNumber || 'View PI'}</Box>
@@ -320,23 +321,27 @@ const GrnDetail = () => {
                     // Item-wise receipt status, derived from this line's own pending/extra
                     // qty (never from the PO or GRN as a whole) — an item is only "Fully
                     // Received" once ITS pending-after-GRN qty is zero.
-                    const itemStatus = (it.extraQty || 0) > 0
-                      ? { label: 'Extra Received', color: '#c2410c' }
-                      : (it.pendingQty || 0) > 0
-                        ? { label: 'Partially Received', color: '#b45309' }
-                        : { label: 'Fully Received', color: '#0f766e' };
+                    // A W/O PO line has no PO to compare against — ordered/already
+                    // received/pending are not applicable, never fabricated as 0.
+                    const itemStatus = grn.isWithoutPo
+                      ? { label: 'Received', color: '#0f766e' }
+                      : (it.extraQty || 0) > 0
+                        ? { label: 'Extra Received', color: '#c2410c' }
+                        : (it.pendingQty || 0) > 0
+                          ? { label: 'Partially Received', color: '#b45309' }
+                          : { label: 'Fully Received', color: '#0f766e' };
                     return (
                       <TableRow key={it._id || i} hover>
                         <TableCell>{i + 1}</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
                         <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
-                        <TableCell align="right">{it.orderedQty}</TableCell>
-                        <TableCell align="right">{it.previouslyReceivedQty || 0}</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 700, color: pendingBeforeGrn > 0 ? '#b45309' : '#0f766e' }}>{pendingBeforeGrn}</TableCell>
+                        <TableCell align="right">{grn.isWithoutPo ? 'N/A' : it.orderedQty}</TableCell>
+                        <TableCell align="right">{grn.isWithoutPo ? 'N/A' : (it.previouslyReceivedQty || 0)}</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700, color: pendingBeforeGrn > 0 ? '#b45309' : '#0f766e' }}>{grn.isWithoutPo ? 'N/A' : pendingBeforeGrn}</TableCell>
                         <TableCell align="right">{it.invoiceQty}</TableCell>
                         <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.receivedQty}</TableCell>
                         <TableCell align="right" sx={{ color: it.shortQty > 0 ? '#b45309' : 'text.secondary' }}>{it.shortQty || 0}</TableCell>
-                        <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{it.pendingQty || 0}</TableCell>
+                        <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{grn.isWithoutPo ? 'N/A' : (it.pendingQty || 0)}</TableCell>
                         <TableCell>
                           <Chip size="small" label={itemStatus.label} sx={{ fontWeight: 700, color: itemStatus.color, bgcolor: alpha(itemStatus.color, 0.1) }} />
                         </TableCell>
@@ -441,6 +446,11 @@ const GrnDetail = () => {
       <GrnDeleteDialog open={deleteOpen} grn={grn}
         onClose={(deleted) => { setDeleteOpen(false); if (deleted) navigate('/purchase-fms/grn'); }} />
       <GrnPdfPreview open={pdfOpen} grn={grn} onClose={() => setPdfOpen(false)} />
+      <VendorInvoiceFormDialog
+        open={invoiceOpen}
+        presetQc={qc ? { _id: qc._id, qcNumber: qc.qcNumber, vendorName: qc.vendorName || grn.vendorName, grnNumber: qc.grnNumber || grn.grnNumber, poNumber: qc.poNumber || grn.poNumber, piId: qc.piId } : null}
+        onClose={() => setInvoiceOpen(false)}
+      />
     </Box>
   );
 };

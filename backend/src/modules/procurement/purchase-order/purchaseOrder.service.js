@@ -423,6 +423,7 @@ export const buildOtherPoPdfBuffer = (po, company = {}) => new Promise((resolve,
     doc.font('Helvetica').fontSize(8.5).fill(navy);
     [
       `PO Date: ${fmtDate(po.poDate)}`,
+      `Expected Delivery: ${fmtDate(po.expectedDeliveryDate)}`,
       `Indent No: ${po.indentNumber || '—'}`,
       `Lead Time: ${po.leadTime || '—'}`,
       `Credit Period: ${po.creditPeriod ? `${po.creditPeriod} days` : '—'}`,
@@ -611,6 +612,7 @@ export const buildJslPoPdfBuffer = (po, company = {}) => new Promise((resolve, r
     doc.font('Helvetica').fontSize(8.5).fill(navy);
     [
       `PO Date: ${fmtDate(po.poDate)}`,
+      `Expected Delivery: ${fmtDate(po.expectedDeliveryDate)}`,
       `Indent No: ${po.indentNumber || '—'}`,
       `GSTIN: ${po.vendorGST || '—'}`,
       `Delivery Terms: ${po.deliveryTerms || '—'}`,
@@ -863,6 +865,7 @@ export const purchaseOrderService = {
       deliveryTerms: data.deliveryTerms || '',
       paymentTerms: data.paymentTerms || '',
       leadTime: data.leadTime || '',
+      expectedDeliveryDate: data.expectedDeliveryDate || null,
       remarks: data.remarks || '',
       items: lines,
       ...totals,
@@ -994,6 +997,7 @@ export const purchaseOrderService = {
       deliveryTerms: data.deliveryTerms || '',
       paymentTerms: data.paymentTerms || '',
       leadTime: data.leadTime || '',
+      expectedDeliveryDate: data.expectedDeliveryDate || null,
       remarks: data.remarks || '',
       items: lines,
       ...totals,
@@ -1047,6 +1051,7 @@ export const purchaseOrderService = {
       poNumber: data.poNumber || 'DRAFT — PREVIEW',
       poFormatType,
       poDate: data.poDate || new Date(),
+      expectedDeliveryDate: data.expectedDeliveryDate || null,
       ...vendorSnapshot(party, data),
       deliveryTerms: data.deliveryTerms || '',
       paymentTerms: data.paymentTerms || '',
@@ -1256,9 +1261,14 @@ export const purchaseOrderService = {
     po.releasedAt = new Date();
     // Step 1.5 — open the material follow-up window.
     po.followUpStatus = PO_FOLLOWUP_STATUS.PENDING;
-    const leadDays = parseLeadDays(po.leadTime);
-    if (leadDays > 0) {
-      po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
+    // The vendor's initial commitment is captured at PO creation now (required);
+    // this auto-estimate is only a fallback for legacy POs that somehow still
+    // have none by release time — it must never overwrite a real commitment.
+    if (!po.expectedDeliveryDate) {
+      const leadDays = parseLeadDays(po.leadTime);
+      if (leadDays > 0) {
+        po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
+      }
     }
     if (data.supplierAcknowledgement) po.supplierAcknowledgement = data.supplierAcknowledgement;
     if (data.remarks) po.remarks = data.remarks;
@@ -1330,9 +1340,12 @@ export const purchaseOrderService = {
         po.releasedById = user?._id;
         po.releasedAt = new Date();
         po.followUpStatus = PO_FOLLOWUP_STATUS.PENDING;
-        const leadDays = parseLeadDays(po.leadTime);
-        if (leadDays > 0) {
-          po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
+        // See release(): never overwrite a user-provided commitment.
+        if (!po.expectedDeliveryDate) {
+          const leadDays = parseLeadDays(po.leadTime);
+          if (leadDays > 0) {
+            po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
+          }
         }
         po.updatedBy = user?._id;
         po.activityTimeline.push({ action: 'RELEASE', description: 'PO released to vendor (bulk release)', actorId: user?._id });

@@ -95,12 +95,25 @@ const grnSchema = new Schema({
   grnDate:   { type: Date, default: Date.now },
 
   // ── PO / PI / Indent linkage ──
-  poId:         { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', required: true, index: true },
+  // poId is required UNLESS isWithoutPo is true — a GRN raised with no Purchase
+  // Order at all (e.g. an emergency / walk-in receipt). See isWithoutPo below.
+  poId:         { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', default: null, index: true },
   poNumber:     { type: String, trim: true, index: true },
   piId:         { type: Schema.Types.ObjectId, ref: 'ProformaInvoice' },
   piNumber:     { type: String, trim: true, default: '' },
   indentId:     { type: Schema.Types.ObjectId, ref: 'PurchaseIndent' },
   indentNumber: { type: String, trim: true, default: '' },
+
+  /**
+   * A GRN raised with no Purchase Order behind it at all — vendor and items are
+   * entered by hand instead of sourced from a PO. Every PO-derived figure
+   * (orderedQty, previouslyReceivedQty, pendingQty, extraQty) is fixed at 0 for
+   * such a GRN's lines, since there is nothing to compare the receipt against.
+   * Kept as an explicit flag (rather than inferred from `!poId`) so intent is
+   * never guessed from a null — the same pattern as the Follow-up module's
+   * isActiveFollowUp.
+   */
+  isWithoutPo:  { type: Boolean, default: false, index: true },
 
   // ── Vendor snapshot ──
   vendorId:      { type: Schema.Types.ObjectId, ref: 'Party', index: true },

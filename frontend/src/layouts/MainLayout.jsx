@@ -371,12 +371,17 @@ const PAGE_TITLES = {
   // Purchase FMS — unified workflow page (step navigation lives inside it)
   '/purchase-fms/purchase-indents':    'Purchase FMS — Purchase Indents',
   '/purchase-fms/purchase-orders':     'Purchase FMS — Purchase Orders',
-  '/purchase-fms/material-follow-ups': 'Purchase FMS — Material Follow-ups',
+  // Old step slug — kept so a title still resolves for the instant before
+  // PurchaseFmsHub's redirect to purchase-orders takes effect.
+  '/purchase-fms/material-follow-ups': 'Purchase FMS — Purchase Orders',
   '/purchase-fms/pi-forms':            'Purchase FMS — PI Forms',
   '/purchase-fms/advance-payments':    'Purchase FMS — Advance Payments',
   '/purchase-fms/grn':                 'Purchase FMS — GRN & QC',
-  '/purchase-fms/vendor-invoices':     'Purchase FMS — Vendor Invoices',
-  '/purchase-fms/payment-vouchers':    'Purchase FMS — Payment Vouchers',
+  '/purchase-fms/invoices-payments':   'Purchase FMS — Vendor Invoices & Payments',
+  // Old step slugs — kept so a title still resolves for the instant before
+  // PurchaseFmsHub's redirect to invoices-payments takes effect.
+  '/purchase-fms/vendor-invoices':     'Purchase FMS — Vendor Invoices & Payments',
+  '/purchase-fms/payment-vouchers':    'Purchase FMS — Vendor Invoices & Payments',
   '/purchase-fms/tally-entries':       'Purchase FMS — Tally Entries',
   '/purchase-fms/final-payments':      'Purchase FMS — Final Payments',
   '/purchase-fms':                     'Purchase FMS',

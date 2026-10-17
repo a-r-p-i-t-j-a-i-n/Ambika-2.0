@@ -76,7 +76,29 @@ const grnItemSchema = Joi.object({
 });
 
 export const createGrnSchema = Joi.object({
-  poId:            objectId.required(),
+  // A GRN raised with no PO behind it at all — vendor + items are entered by
+  // hand instead of sourced from a PO. See grn.model.js's isWithoutPo.
+  isWithoutPo:     Joi.boolean().default(false),
+  poId: Joi.when('isWithoutPo', {
+    is: true,
+    then: objectId.allow('', null).optional(),
+    otherwise: objectId.required(),
+  }),
+  // Vendor snapshot — sourced from the PO on a normal GRN; entered by hand (and
+  // required) when there is no PO to source it from.
+  vendorId: Joi.when('isWithoutPo', {
+    is: true,
+    then: objectId.required().messages({ 'any.required': 'Select a vendor for this GRN' }),
+    otherwise: objectId.allow('', null).optional(),
+  }),
+  vendorName: Joi.when('isWithoutPo', {
+    is: true,
+    then: Joi.string().trim().min(1).max(300).required().messages({ 'any.required': 'Vendor name is required' }),
+    otherwise: Joi.string().trim().max(300).allow('', null),
+  }),
+  vendorGST:       Joi.string().trim().max(60).allow('', null),
+  vendorAddress:   Joi.string().trim().max(500).allow('', null),
+  vendorPhone:     Joi.string().trim().max(30).allow('', null),
   grnDate:         Joi.date().optional(),
   challanNumber:   Joi.string().trim().max(120).allow('', null),
   invoiceNumber:   Joi.string().trim().max(120).allow('', null),
@@ -95,7 +117,13 @@ export const createGrnSchema = Joi.object({
   challanDocument: grnDocumentSchema.default(null),
   invoiceDocument: grnDocumentSchema.default(null),
   remarks:         Joi.string().trim().max(1000).allow('', null),
-  items:           Joi.array().items(grnItemSchema).min(1).optional(),
+  // Auto-loaded from the PO when omitted on a normal GRN; a W/O PO GRN has no PO
+  // to load from, so its items must be entered explicitly.
+  items: Joi.when('isWithoutPo', {
+    is: true,
+    then: Joi.array().items(grnItemSchema).min(1).required().messages({ 'array.min': 'Add at least one item to receive' }),
+    otherwise: Joi.array().items(grnItemSchema).min(1).optional(),
+  }),
 });
 
 // Preview-only: render the PDF from current form data without saving. Lenient by
@@ -121,6 +149,13 @@ export const previewGrnPdfSchema = Joi.object({
 }).unknown(true);
 
 export const updateGrnSchema = Joi.object({
+  // Editable only on a W/O PO draft (the service ignores these on a PO-backed
+  // GRN, whose vendor snapshot always comes from the PO).
+  vendorId:        objectId.allow('', null),
+  vendorName:      Joi.string().trim().max(300).allow('', null),
+  vendorGST:       Joi.string().trim().max(60).allow('', null),
+  vendorAddress:   Joi.string().trim().max(500).allow('', null),
+  vendorPhone:     Joi.string().trim().max(30).allow('', null),
   grnDate:         Joi.date(),
   challanNumber:   Joi.string().trim().max(120).allow('', null),
   invoiceNumber:   Joi.string().trim().max(120).allow('', null),
@@ -192,6 +227,7 @@ export const grnQuerySchema = Joi.object({
   vendorId:     objectId,
   poId:         objectId,
   poNumber:     Joi.string().max(60),
+  isWithoutPo:  Joi.boolean(),
   grnStatus:    Joi.string().valid(...Object.values(GRN_STATUS)),
   populate:     Joi.string(),
   grnDate:      Joi.object().unknown(true),

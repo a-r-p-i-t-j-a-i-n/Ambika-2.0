@@ -17,6 +17,7 @@ import {
 import { fileHref } from '../indents/indentMeta';
 import { PaymentStatusChip, paymentModeLabel, fmtINR, fmtDate } from './paymentMeta';
 import PdfViewerModal from '../common/PdfViewerModal';
+import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
@@ -59,6 +60,27 @@ const FinalPaymentDetail = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // ── "What's next?" — Final Payment is the last Purchase FMS step: there is
+  // no further entity to create. A remaining balance loops back to the
+  // Voucher (where the next payment is recorded); no balance means the
+  // workflow is finished for this voucher. ──
+  const nextStep = (() => {
+    if (!p.voucherId) return null;
+    if (p.paymentStatus === 'CANCELLED') {
+      return { tone: 'info', title: 'Payment cancelled — amount reversed',
+        desc: 'The balance has been restored on the voucher. Record a new payment there if needed.',
+        primary: { label: 'View Voucher', icon: <Banknote size={16} />, onClick: () => navigate(`/procurement/vouchers/${p.voucherId}`) } };
+    }
+    if (Number(p.balanceAfterPayment) > 0) {
+      return { tone: 'warn', title: 'Balance remains — continue on the voucher',
+        desc: `${fmtINR(p.balanceAfterPayment)} is still pending. Record the next payment from the voucher.`,
+        primary: { label: 'Go to Voucher', icon: <Banknote size={16} />, onClick: () => navigate(`/procurement/vouchers/${p.voucherId}`) } };
+    }
+    return { tone: 'success', title: 'Workflow complete — voucher fully settled',
+      desc: 'No further payment is due for this voucher.',
+      primary: { label: 'View Voucher', icon: <Banknote size={16} />, onClick: () => navigate(`/procurement/vouchers/${p.voucherId}`) } };
+  })();
+
   // Open the stored receipt in the modal, or generate one on demand (e.g. older payments).
   const handleReceipt = async () => {
     if (p.paymentPdfUrl) { setReceiptUrl(p.paymentPdfUrl); setReceiptOpen(true); return; }
@@ -97,6 +119,8 @@ const FinalPaymentDetail = () => {
           {p.paymentStatus !== 'CANCELLED' && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel} disabled={cancelling}>Cancel</Button>}
         </Box>
       </Box>
+
+      <NextStepBanner step={nextStep} />
 
       <Grid container spacing={3}>
         <Grid item xs={12} md={7}>

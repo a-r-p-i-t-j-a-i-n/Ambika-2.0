@@ -19,8 +19,10 @@ import { VoucherStatusChip } from '../vouchers/voucherMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
 import VoucherFormDialog from '../vouchers/VoucherFormDialog';
+import VoucherPanel from '../vouchers/VoucherPanel';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
@@ -55,6 +57,7 @@ const VendorInvoiceDetail = () => {
   const voucherRelevant = inv && ['PAYMENT_PENDING', 'PAYMENT_COMPLETED'].includes(inv.invoiceStatus);
   const { data: vouRes } = useGetVouchersByInvoiceQuery(id, { skip: !voucherRelevant });
   const liveVoucher = (vouRes?.data || []).find((v) => v.voucherStatus !== 'CANCELLED') || null;
+  const cancelledVouchers = (vouRes?.data || []).filter((v) => v.voucherStatus === 'CANCELLED');
 
   const [formOpen, setFormOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -73,6 +76,29 @@ const VendorInvoiceDetail = () => {
   const canEdit = ['DRAFT', 'RECEIVED', 'APPROVED', 'PAYMENT_PENDING'].includes(inv.invoiceStatus);
   const canApproveReject = ['DRAFT', 'RECEIVED'].includes(inv.invoiceStatus);
   const canCreateVoucher = inv.invoiceStatus === 'PAYMENT_PENDING' && !liveVoucher;
+
+  // ── "What's next?" — single, obvious call-to-action for the current stage. ──
+  const nextStep = (() => {
+    if (inv.invoiceStatus === 'REJECTED') return null;
+    if (canApproveReject) {
+      return { tone: 'info', title: 'Next: approve this Vendor Invoice (Step 1.10)',
+        desc: 'Review the invoice and its linked GRN/QC, then approve it to raise a payment voucher.',
+        primary: { label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, onClick: () => setApprovalOpen(true) },
+        secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
+    }
+    if (canCreateVoucher) {
+      return { tone: 'success', title: 'Invoice approved — next: create the Payment Voucher (Step 1.11)',
+        desc: 'Raise a voucher for this invoice to move it toward MD approval and payment.',
+        primary: { label: 'Create Voucher', icon: <Banknote size={16} />, onClick: () => setVoucherFormOpen(true) } };
+    }
+    if (inv.invoiceStatus === 'PAYMENT_COMPLETED') {
+      return { tone: 'success', title: 'Payment complete — workflow finished for this invoice',
+        desc: 'This invoice has been fully paid.',
+        primary: liveVoucher ? { label: 'View Voucher', icon: <Banknote size={16} />, onClick: () => navigate(`/procurement/vouchers/${liveVoucher._id}`) } : null };
+    }
+    // PAYMENT_PENDING with a live voucher — its own panel (below) is the next step.
+    return null;
+  })();
 
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
@@ -96,6 +122,8 @@ const VendorInvoiceDetail = () => {
           {liveVoucher && <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate(`/procurement/vouchers/${liveVoucher._id}`)}>View Voucher</Button>}
         </Box>
       </Box>
+
+      <NextStepBanner step={nextStep} />
 
       <FmsDoerCard entityType="INVOICE" entityId={id} />
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
@@ -235,6 +263,50 @@ const VendorInvoiceDetail = () => {
               <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="primary.main" fontWeight={700}>NET PAYABLE</Typography><Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(inv.netPayableAmount)}</Typography></Box>
             </Box>
           </SectionCard>
+        </Grid>
+
+        {/* Payment Voucher — master-detail: the invoice's voucher managed in place */}
+        <Grid item xs={12}>
+          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 800, color: PFMS.ink, mb: 1.5 }}>
+            <Banknote size={18} /> Payment Voucher
+          </Typography>
+          {liveVoucher ? (
+            <VoucherPanel
+              voucherId={liveVoucher._id}
+              embedded
+              showBackButton={false}
+              showWorkflowStepper={false}
+              showInvoiceLink={false}
+            />
+          ) : (
+            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
+              {inv.invoiceStatus === 'REJECTED' ? (
+                <Typography color="text.secondary">Invoice rejected — no voucher can be created.</Typography>
+              ) : inv.invoiceStatus === 'PAYMENT_COMPLETED' ? (
+                <Typography color="text.secondary">Invoice payment completed.</Typography>
+              ) : inv.invoiceStatus === 'PAYMENT_PENDING' ? (
+                <Box>
+                  <Chip label="Voucher Not Created" variant="outlined" sx={{ fontWeight: 700, mb: 1.5 }} />
+                  <Typography color="text.secondary">
+                    This invoice is approved and awaiting a payment voucher. Use <b>Create Voucher</b> above to raise one.
+                  </Typography>
+                </Box>
+              ) : (
+                <Typography color="text.secondary">Approve this invoice to enable voucher creation.</Typography>
+              )}
+              {cancelledVouchers.length > 0 && (
+                <Box sx={{ mt: 2, pt: 2, borderTop: '1px dashed', borderColor: 'divider' }}>
+                  <Typography variant="caption" fontWeight={700} color="text.secondary">PREVIOUS (CANCELLED) VOUCHERS</Typography>
+                  {cancelledVouchers.map((cv) => (
+                    <Box key={cv._id} sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.75 }}>
+                      <Typography variant="body2" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 600 }} onClick={() => navigate(`/procurement/vouchers/${cv._id}`)}>{cv.voucherNumber}</Typography>
+                      <VoucherStatusChip status={cv.voucherStatus} />
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </Paper>
+          )}
         </Grid>
 
         {/* Approval + remarks */}

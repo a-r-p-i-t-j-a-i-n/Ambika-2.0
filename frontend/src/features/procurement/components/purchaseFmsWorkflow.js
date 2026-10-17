@@ -15,7 +15,8 @@ const STEPS_TEMPLATE = () => [
 const grnState = (status) => {
   if (!status) return 'pending';
   if (status === 'CANCELLED') return 'error';
-  if (['PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(status)) return 'completed';
+  // RECEIVED = a W/O PO GRN's terminal status (no PO to be "partial"/"full" against).
+  if (['RECEIVED', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(status)) return 'completed';
   return 'active';
 };
 
@@ -101,6 +102,9 @@ export function resolveWorkflowSteps({ grn, qc, invoice, voucher, tallyEntry } =
     steps[2].state = 'completed';
     steps[3].state = tallyState(tallyEntry.tallyEntryStatus);
     steps[3].sublabel = tallyEntry.entryNumber || '';
+    // Once the tally entry is done, the pipeline's final step becomes active —
+    // previously left at its 'pending' default, so it never lit up here.
+    if (steps[3].state === 'completed') steps[4].state = 'active';
     return steps;
   }
 

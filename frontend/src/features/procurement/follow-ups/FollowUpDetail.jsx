@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, CheckCircle2, CalendarClock, PackageCheck, PhoneCall,
-  Building2, FileText, MessageSquare, ExternalLink, ShoppingBag, ArrowRight,
+  Building2, FileText, MessageSquare, ExternalLink, ShoppingBag,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useGetFollowUpByIdQuery } from '../../../store/api/procurementApi';
@@ -14,6 +14,7 @@ import { FuStatusChip, FuTypeChip, fmtDate, fmtDelay } from './fuMeta';
 import FollowUpDoneDialog from './FollowUpDoneDialog';
 import FollowUpRescheduleDialog from './FollowUpRescheduleDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
+import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
@@ -90,11 +91,6 @@ const FollowUpDetail = () => {
     return null;
   })();
 
-  const NEXT_TONE = {
-    info:    { bg: alpha('#2563eb', 0.07), border: alpha('#2563eb', 0.35), fg: '#1d4ed8' },
-    success: { bg: alpha('#16a34a', 0.08), border: alpha('#16a34a', 0.35), fg: '#15803d' },
-  };
-
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
       {/* Hero */}
@@ -133,35 +129,7 @@ const FollowUpDetail = () => {
         </Box>
       </Box>
 
-      {/* What's next — adaptive, prominent call-to-action for the current stage */}
-      {nextStep && (() => {
-        const t = NEXT_TONE[nextStep.tone] || NEXT_TONE.info;
-        return (
-          <Paper elevation={0} sx={{
-            mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
-            display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
-          }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
-              <ArrowRight size={22} />
-            </Box>
-            <Box sx={{ minWidth: 220, flexGrow: 1 }}>
-              <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
-              <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{nextStep.title}</Typography>
-              <Typography variant="body2" color="text.secondary">{nextStep.desc}</Typography>
-            </Box>
-            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-              {nextStep.secondary && (
-                <Button variant="outlined" onClick={nextStep.secondary.onClick}>{nextStep.secondary.label}</Button>
-              )}
-              {nextStep.primary && (
-                <Button variant="contained" startIcon={nextStep.primary.icon} onClick={nextStep.primary.onClick}>
-                  {nextStep.primary.label}
-                </Button>
-              )}
-            </Box>
-          </Paper>
-        );
-      })()}
+      <NextStepBanner step={nextStep} />
 
       <Grid container spacing={3}>
         {/* Plan vs actual */}

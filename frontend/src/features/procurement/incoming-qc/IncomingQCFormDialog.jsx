@@ -113,7 +113,9 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
     <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'center' }}>
       <Building2 size={16} color="#1d4ed8" />
       <Typography variant="caption" fontWeight={700}>{grn.vendorName || qc?.vendorName || '—'}</Typography>
-      {(grn.poNumber || qc?.poNumber) && <Chip size="small" variant="outlined" label={`PO ${grn.poNumber || qc?.poNumber}`} sx={{ fontWeight: 700 }} />}
+      {grn.isWithoutPo
+        ? <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} />
+        : (grn.poNumber || qc?.poNumber) && <Chip size="small" variant="outlined" label={`PO ${grn.poNumber || qc?.poNumber}`} sx={{ fontWeight: 700 }} />}
       {(grn.piNumber || qc?.piNumber) && <Chip size="small" variant="outlined" label={`PI ${grn.piNumber || qc?.piNumber}`} sx={{ fontWeight: 700 }} />}
     </Box>
   ) : null;

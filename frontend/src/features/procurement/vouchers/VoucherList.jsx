@@ -18,7 +18,15 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { VoucherStatusChip, VoucherTypeChip, VOUCHER_STATUSES, VOUCHER_TYPES, EXPENSE_CATEGORIES, fmtINR, fmtDate } from './voucherMeta';
 import VoucherFormDialog from './VoucherFormDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
+import PurchaseFmsStepper from '../components/PurchaseFmsStepper';
+import { PURCHASE_FMS_STEPS } from '../PurchaseFmsHub';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+
+// This standalone page (also reachable outside the Purchase FMS hub, e.g. for
+// Expense vouchers, which have no invoice) still belongs under the hub's
+// unified "Vendor Invoices & Payments" step — show the same step rail here
+// for workflow context/navigation, same as pages opened through the hub.
+const PFMS_STEP_INDEX = PURCHASE_FMS_STEPS.findIndex((s) => s.slug === 'invoices-payments');
 
 const VoucherList = () => {
   const navigate = useNavigate();
@@ -85,6 +93,12 @@ const VoucherList = () => {
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditVoucher(null); setFormOpen(true); }}>New Voucher</Button>
       </Box>
+
+      <PurchaseFmsStepper
+        steps={PURCHASE_FMS_STEPS}
+        activeIndex={PFMS_STEP_INDEX}
+        onStepClick={(slug) => navigate(`/purchase-fms/${slug}`)}
+      />
 
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<FileStack size={20} />} label="Total"          value={stats.total}         color="#2563eb" /></Grid>

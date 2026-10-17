@@ -35,11 +35,28 @@ const setPoFollowUpStatus = async (poId, patch) => {
 
 export const followUpService = {
   async create(data, user) {
-    // Rule 1: follow-ups exist only for released POs.
+    // Rule 1: follow-ups exist only for released POs with outstanding material —
+    // a partial receipt still has pending quantity to chase, so it stays
+    // eligible; a full receipt does not (no GRN/receipt logic changes here,
+    // this only gates which POs this module will create a new follow-up for).
     const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } });
     if (!po) throw new AppError('Purchase Order not found', 404);
-    if (po.poStatus !== PO_STATUS.RELEASED_TO_VENDOR) {
-      throw new AppError('Follow-ups can only be created for a PO that is RELEASED_TO_VENDOR', 400);
+    if (![PO_STATUS.RELEASED_TO_VENDOR, PO_STATUS.PARTIAL_RECEIVED].includes(po.poStatus)) {
+      throw new AppError('Follow-ups can only be created for a released PO with outstanding material', 400);
+    }
+
+    // Rule 2: at most one active (PENDING/RESCHEDULED) follow-up per PO. A
+    // concluded cycle (DONE/READY_FOR_GRN/CLOSED) does not block a fresh one,
+    // but an already-active cycle must be continued (mark-done/reschedule),
+    // not duplicated — this is the server-side guarantee behind the UI's own
+    // "update the existing one instead of creating a new one" rule, so it
+    // holds even against a double-click race or a caller that skips that check.
+    const existingActive = await PurchaseFollowUp.findOne({
+      poId: po._id, isDeleted: { $ne: true },
+      followUpStatus: { $in: [FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED] },
+    }).select('followUpNumber').lean();
+    if (existingActive) {
+      throw new AppError(`An active follow-up (${existingActive.followUpNumber}) already exists for this PO — update it instead of creating a new one`, 400);
     }
 
     // Rule 3: plannedAt defaults to expectedDeliveryDate (releasedAt + leadTime).
@@ -52,25 +69,46 @@ export const followUpService = {
     }
 
     const followUpNumber = await generateFollowUpNumber();
-    const fu = await PurchaseFollowUp.create({
-      followUpNumber,
-      poId: po._id,
-      poNumber: po.poNumber,
-      indentId: po.indentId,
-      indentNumber: po.indentNumber,
-      vendorId: po.vendorId,
-      vendorName: po.vendorName,
-      vendorEmail: po.vendorEmail,
-      vendorPhone: po.vendorPhone,
-      plannedAt,
-      followUpType: data.followUpType || FOLLOWUP_TYPE.CALL,
-      remarks: data.remarks || '',
-      formLink: data.formLink || '',
-      performedBy: user?._id,
-      performedByName: user?.name || '',
-      createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `Follow-up created for ${po.poNumber}`, actorId: user?._id }],
-    });
+    let fu;
+    try {
+      fu = await PurchaseFollowUp.create({
+        followUpNumber,
+        poId: po._id,
+        poNumber: po.poNumber,
+        indentId: po.indentId,
+        indentNumber: po.indentNumber,
+        vendorId: po.vendorId,
+        vendorName: po.vendorName,
+        vendorEmail: po.vendorEmail,
+        vendorPhone: po.vendorPhone,
+        plannedAt,
+        followUpType: data.followUpType || FOLLOWUP_TYPE.CALL,
+        remarks: data.remarks || '',
+        formLink: data.formLink || '',
+        isActiveFollowUp: true,
+        performedBy: user?._id,
+        performedByName: user?.name || '',
+        createdBy: user?._id,
+        activityTimeline: [{ action: 'CREATE', description: `Follow-up created for ${po.poNumber}`, actorId: user?._id }],
+      });
+    } catch (err) {
+      // The findOne check above is a fast, friendly pre-check — it cannot by
+      // itself prevent a race between two concurrent requests (classic
+      // check-then-create TOCTOU). The partial unique index on
+      // { poId, isActiveFollowUp: true } is the actual atomic guarantee: if
+      // another request's create() won that race in between, this insert is
+      // rejected by MongoDB itself (E11000) rather than both succeeding.
+      if (err?.code === 11000 && err?.keyPattern?.poId) {
+        const winner = await PurchaseFollowUp.findOne({
+          poId: po._id, isDeleted: { $ne: true }, isActiveFollowUp: true,
+        }).select('followUpNumber').lean();
+        throw new AppError(
+          `An active follow-up (${winner?.followUpNumber || 'another one'}) already exists for this PO — update it instead of creating a new one`,
+          400,
+        );
+      }
+      throw err;
+    }
 
     // PO mirror: follow-up cycle is now actively running.
     await setPoFollowUpStatus(po._id, { followUpStatus: PO_FOLLOWUP_STATUS.IN_PROGRESS });
@@ -142,6 +180,9 @@ export const followUpService = {
     fu.isDeleted = true;
     fu.deletedAt = new Date();
     fu.deletedBy = user?._id;
+    // The partial unique index only inspects isActiveFollowUp, not isDeleted —
+    // without this, a soft-deleted active record would still block a new one.
+    fu.isActiveFollowUp = false;
     fu.activityTimeline.push({ action: 'DELETE', description: 'Follow-up deleted', actorId: user?._id });
     return fu.save();
   },
@@ -179,6 +220,7 @@ export const followUpService = {
       fu.followUpStatus = FOLLOWUP_STATUS.READY_FOR_GRN;
       fu.finalMaterialDate = new Date(data.finalMaterialDate);
       fu.nextFollowUpDate = null;
+      fu.isActiveFollowUp = false; // cycle concluded — frees the PO for a future follow-up, if ever needed
       fu.activityTimeline.push({ action: 'READY_FOR_GRN', description: 'Final Material Date confirmed — ready for GRN', actorId: user?._id });
       await fu.save();
       // PO mirror — unlocks the GRN gate.
@@ -196,6 +238,7 @@ export const followUpService = {
       fu.followUpStatus = FOLLOWUP_STATUS.RESCHEDULED;
       fu.nextFollowUpDate = new Date(data.nextFollowUpDate);
       fu.plannedAt = fu.nextFollowUpDate; // the next planned contact
+      fu.isActiveFollowUp = true; // still the active cycle for this PO
       fu.activityTimeline.push({ action: 'RESCHEDULED', description: `Follow-up continued — next on ${fu.nextFollowUpDate.toDateString()}`, actorId: user?._id });
       return fu.save();
     }
@@ -203,6 +246,7 @@ export const followUpService = {
     // Neither date (legacy / unexpected) → close the cycle as done.
     fu.statusDone = 'YES';
     fu.followUpStatus = FOLLOWUP_STATUS.DONE;
+    fu.isActiveFollowUp = false; // cycle concluded — frees the PO for a future follow-up
     fu.activityTimeline.push({ action: 'DONE', description: 'Follow-up marked done', actorId: user?._id });
     return fu.save();
   },
@@ -215,6 +259,7 @@ export const followUpService = {
     }
     fu.followUpStatus = FOLLOWUP_STATUS.RESCHEDULED;
     fu.nextFollowUpDate = new Date(data.nextFollowUpDate);
+    fu.isActiveFollowUp = true; // still the active cycle for this PO
     if (data.followUpType) fu.followUpType = data.followUpType;
     if (data.remarks) fu.remarks = data.remarks;
     fu.communicationLog.push(logEntry(data.followUpType || fu.followUpType, data.message || `Rescheduled to ${new Date(data.nextFollowUpDate).toDateString()}`, user));
@@ -244,6 +289,7 @@ export const followUpService = {
 
     fu.followUpStatus = FOLLOWUP_STATUS.READY_FOR_GRN;
     fu.finalMaterialDate = new Date(finalMaterialDate);
+    fu.isActiveFollowUp = false; // cycle concluded — frees the PO for a future follow-up, if ever needed
     if (data.remarks) fu.remarks = data.remarks;
     fu.updatedBy = user?._id;
     fu.activityTimeline.push({ action: 'READY_FOR_GRN', description: 'Material declared ready for GRN', actorId: user?._id });

@@ -86,7 +86,7 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
         <Box sx={{ mb: 2, p: 1.5, borderRadius: '10px', bgcolor: PFMS.surfaceAlt }}>
           <Typography variant="body2" fontWeight={700}>{grn?.vendorName}</Typography>
           <Typography variant="caption" color="text.secondary">
-            PO {grn?.poNumber || '—'} · {grn?.items?.length || 0} item(s) · qty {grn?.totalReceivedQty} · {fmtINR(grn?.totalValue)}
+            {grn?.isWithoutPo ? 'Without PO' : `PO ${grn?.poNumber || '—'}`} · {grn?.items?.length || 0} item(s) · qty {grn?.totalReceivedQty} · {fmtINR(grn?.totalValue)}
           </Typography>
         </Box>
         <Alert severity="warning" sx={{ mb: 2 }}>

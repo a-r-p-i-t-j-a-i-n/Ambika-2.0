@@ -13,12 +13,14 @@ import { useSnackbar } from 'notistack';
 import {
   useGetTallyEntryByIdQuery,
   useCancelTallyEntryMutation,
+  useGetVoucherByIdQuery,
 } from '../../../store/api/procurementApi';
 import { TallyStatusChip, CHECKLIST_ITEMS, CHECKLIST_TOTAL, checklistProgress, fmtDate } from './tallyMeta';
 import TallyEntryFormDialog from './TallyEntryFormDialog';
 import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
@@ -47,6 +49,12 @@ const TallyEntryDetail = () => {
   const [completeOpen, setCompleteOpen] = useState(false);
   const [cancelEntry, { isLoading: cancelling }] = useCancelTallyEntryMutation();
 
+  // Final Payment is only ever created from the Voucher page (VoucherPanel),
+  // so "next" here always points there — with the live balance if we can get
+  // it (the tally entry itself doesn't carry the voucher's balanceAmount).
+  const isTallyCompleted = t?.tallyEntryStatus === 'COMPLETED';
+  const { data: voucherRes } = useGetVoucherByIdQuery(t?.voucherId, { skip: !isTallyCompleted || !t?.voucherId });
+
   if (isLoading) return <Box sx={{ display: 'grid', placeItems: 'center', height: '70vh' }}><CircularProgress /></Box>;
   if (!t) {
     return (
@@ -64,6 +72,20 @@ const TallyEntryDetail = () => {
     try { await cancelEntry({ id: t._id }).unwrap(); enqueueSnackbar('Tally entry cancelled', { variant: 'info' }); }
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
+
+  // ── "What's next?" — single, obvious call-to-action for the current stage. ──
+  const voucher = voucherRes?.data || null;
+  const nextStep = (() => {
+    if (t.tallyEntryStatus !== 'COMPLETED' || !t.voucherId) return null;
+    if (voucher && Number(voucher.balanceAmount) <= 0) {
+      return { tone: 'success', title: 'Workflow complete — voucher fully settled',
+        desc: 'No further payment is due for this voucher.',
+        primary: { label: 'View Voucher', icon: <Banknote size={16} />, onClick: () => navigate(`/procurement/vouchers/${t.voucherId}`) } };
+    }
+    return { tone: 'success', title: 'Tally entry complete — next: record the Final Payment (Step 1.13)',
+      desc: 'Final Payment is recorded on the voucher — open it to make the payment.',
+      primary: { label: 'Go to Voucher — Make Payment', icon: <Banknote size={16} />, onClick: () => navigate(`/procurement/vouchers/${t.voucherId}`) } };
+  })();
 
   return (
     <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
@@ -86,6 +108,8 @@ const TallyEntryDetail = () => {
           {isPending && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setCompleteOpen(true)}>Complete</Button>}
         </Box>
       </Box>
+
+      <NextStepBanner step={nextStep} />
 
       <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
       <Grid container spacing={3}>
