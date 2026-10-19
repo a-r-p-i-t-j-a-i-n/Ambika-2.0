@@ -137,12 +137,15 @@ export const buildExpenseVoucherPdfBuffer = (v, company = {}, mdSig = null) => n
 
     let y = drawHeader(doc, company, 'EXPENSE VOUCHER');
     const half = W / 2 - 8;
-    const lY = infoRows(doc, PAGE.m, y, half, [
+    const leftRows = [
       ['Voucher No', v.voucherNumber], ['Voucher Date', fmtDate(v.voucherDate)],
       ['Expense Category', v.expenseCategory], ['Party Name', v.partyName || v.vendorName],
-    ]);
+    ];
+    if (v.vendorId) leftRows.push(['Vendor (Master)', v.vendorName]);
+    const lY = infoRows(doc, PAGE.m, y, half, leftRows);
     const rY = infoRows(doc, PAGE.m + half + 16, y, half, [
-      ['Invoice No', v.expenseInvoiceNo], ['Invoice Date', fmtDate(v.expenseInvoiceDate)],
+      ['Reference', 'Direct Bill — Without PO / GRN'],
+      ['Vendor Bill No', v.expenseInvoiceNo], ['Bill Date', fmtDate(v.expenseInvoiceDate)],
       ['Payment Terms', v.paymentTerms], ['Due Date', fmtDate(v.dueDate)],
     ]);
     const boxH = Math.max(lY, rY) - y + 6;
@@ -151,12 +154,15 @@ export const buildExpenseVoucherPdfBuffer = (v, company = {}, mdSig = null) => n
     y += boxH + 24;
 
     doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('AMOUNT DETAILS', PAGE.m, y); y += 6;
+    const taxRows = v.gstRatePercent
+      ? [['Taxable Amount', INR(v.taxableAmount)], [`GST @ ${v.gstRatePercent}%`, INR(v.taxAmount)]]
+      : [['Tax Amount', INR(v.taxAmount)]];
     y = totalsBlock(doc, y + 8, [
       ['Basic Value', INR(v.basicValue)],
       ['Freight Charges', INR(v.freightCharges)],
       ['Packing & Forwarding', INR(v.packingForwardingCharges)],
       ['Other Charges', INR(v.otherCharges)],
-      ['Tax Amount', INR(v.taxAmount)],
+      ...taxRows,
       ['Add TCS', INR(v.tcsAmount)],
       ['Less TDS', INR(v.tdsAmount)],
       ['Less Advance Payment', INR(v.advanceAmount)],

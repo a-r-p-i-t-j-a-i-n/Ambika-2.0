@@ -13,7 +13,12 @@ const paymentProofSchema = Joi.object({
 const expenseFields = {
   expenseCategory:    Joi.string().trim().max(120),
   partyName:          Joi.string().trim().max(200),
-  expenseInvoiceNo:   Joi.string().trim().max(120).allow('', null),
+  // Vendor-master link (Direct Bill Passing) — optional; a payee not in the
+  // master can still be entered as free-text partyName.
+  vendorId:           objectId.allow('', null),
+  expenseInvoiceNo:   Joi.string().trim().max(120).allow('', null)
+    // Required once this is a vendor-master-linked bill.
+    .when('vendorId', { is: objectId.required(), then: Joi.required() }),
   expenseInvoiceDate: Joi.date().allow('', null),
   invoiceDocument:    Joi.object({ fileUrl: Joi.string().allow('', null), fileName: Joi.string().allow('', null) }).allow(null),
   basicValue:               Joi.number().min(0),
@@ -21,6 +26,9 @@ const expenseFields = {
   packingForwardingCharges: Joi.number().min(0),
   otherCharges:             Joi.number().min(0),
   taxAmount:                Joi.number().min(0),
+  // Explicit GST breakout — when both are given, the backend derives taxAmount.
+  taxableAmount:            Joi.number().min(0),
+  gstRatePercent:           Joi.number().min(0).max(100),
   tcsAmount:                Joi.number().min(0),
   tdsAmount:                Joi.number().min(0),
   advanceAmount:            Joi.number().min(0),

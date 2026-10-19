@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import VendorVoucher, { VOUCHER_STATUS, VOUCHER_TYPE } from './voucher.model.js';
 import VendorInvoice, { INVOICE_STATUS } from '../vendor-invoice/vendorInvoice.model.js';
+import Party from '../../clients/party.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generatePurchaseVoucherNumber, generateExpenseVoucherNumber } from '../../../utils/docNumberGenerator.js';
@@ -20,6 +21,44 @@ const computeExpenseTotal = (d = {}) => round2(
   round2(d.basicValue) + round2(d.freightCharges) + round2(d.packingForwardingCharges)
   + round2(d.otherCharges) + round2(d.taxAmount) + round2(d.tcsAmount)
   - round2(d.tdsAmount) - round2(d.advanceAmount),
+);
+
+// Authoritative GST amount from an explicit taxable amount + rate — the backend
+// never trusts a client-submitted tax amount when both of these are given.
+export const computeGstAmount = (taxableAmount, gstRatePercent) => round2(round2(taxableAmount) * round2(gstRatePercent) / 100);
+
+/**
+ * Resolve the EXPENSE voucher's vendor linkage (Direct Bill Passing):
+ * if a vendorId is given, load it from the Party master and use its name
+ * authoritatively; otherwise keep the free-text partyName as-is (a payee not
+ * in the master, e.g. a one-off ad-hoc expense).
+ */
+const resolveExpenseVendor = async (data) => {
+  if (!data.vendorId) return { vendorId: undefined, vendorName: data.partyName || '' };
+  const party = await Party.findOne({ _id: data.vendorId, isDeleted: { $ne: true } }).lean();
+  if (!party) throw new AppError('Vendor not found', 404);
+  return { vendorId: party._id, vendorName: party.name };
+};
+
+/** Reject a vendor-linked bill whose number repeats an existing, live voucher for the same vendor. */
+const assertNoDuplicateBill = async (vendorId, expenseInvoiceNo, excludeId) => {
+  if (!vendorId || !expenseInvoiceNo?.trim()) return;
+  const existing = await VendorVoucher.findOne({
+    _id: { $ne: excludeId },
+    vendorId,
+    voucherType: VOUCHER_TYPE.EXPENSE,
+    expenseInvoiceNo: new RegExp(`^${expenseInvoiceNo.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+    isDeleted: { $ne: true },
+    voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED },
+  }).lean();
+  if (existing) throw new AppError(`A bill (${existing.voucherNumber}) with this number already exists for this vendor`, 400);
+};
+
+/** Authoritative tax amount: derived from taxable amount + GST rate when given, else the submitted flat amount. */
+const resolveExpenseTax = (data) => (
+  (data.taxableAmount || data.gstRatePercent)
+    ? computeGstAmount(data.taxableAmount, data.gstRatePercent)
+    : round2(data.taxAmount)
 );
 
 const findOrThrow = async (id) => {
@@ -118,18 +157,22 @@ export const voucherService = {
     return voucher;
   },
 
-  // ── EXPENSE — direct company expense (no invoice/PO/GRN/QC). ──
+  // ── EXPENSE — direct company expense / Direct Bill Passing (no PO/GRN/invoice). ──
   async createExpense(data, user) {
     if (!data.expenseCategory) throw new AppError('Expense category is required', 400);
-    const total = computeExpenseTotal(data);
+    const { vendorId, vendorName } = await resolveExpenseVendor(data);
+    await assertNoDuplicateBill(vendorId, data.expenseInvoiceNo);
+    const taxAmount = resolveExpenseTax(data);
+    const total = computeExpenseTotal({ ...data, taxAmount });
     const voucherNumber = await generateExpenseVoucherNumber(data.voucherDate || new Date());
 
     const voucher = await VendorVoucher.create({
       voucherNumber,
       voucherType: VOUCHER_TYPE.EXPENSE,
       voucherDate: data.voucherDate || new Date(),
-      vendorName: data.partyName || '', // mirror so list search/display works
-      partyName: data.partyName || '',
+      vendorId,
+      vendorName: vendorName || data.partyName || '', // mirror so list search/display works
+      partyName: data.partyName || vendorName || '',
       expenseCategory: data.expenseCategory,
       expenseInvoiceNo: data.expenseInvoiceNo || '',
       expenseInvoiceDate: data.expenseInvoiceDate || null,
@@ -140,7 +183,9 @@ export const voucherService = {
       freightCharges: round2(data.freightCharges),
       packingForwardingCharges: round2(data.packingForwardingCharges),
       otherCharges: round2(data.otherCharges),
-      taxAmount: round2(data.taxAmount),
+      taxAmount,
+      taxableAmount: round2(data.taxableAmount),
+      gstRatePercent: round2(data.gstRatePercent),
       tcsAmount: round2(data.tcsAmount),
       tdsAmount: round2(data.tdsAmount),
       advanceAmount: round2(data.advanceAmount),
@@ -217,6 +262,15 @@ export const voucherService = {
     if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) throw new AppError('Only draft vouchers can be edited', 400);
     // Never accept payment/status mutations here — those belong to Step 1.13.
     const { paidAmount, balanceAmount, voucherStatus, ...rest } = data;
+    // Expense vouchers: re-resolve the vendor link, re-check for a duplicate
+    // bill number, and re-derive the GST amount from the (possibly edited) data.
+    if (v.voucherType === VOUCHER_TYPE.EXPENSE) {
+      const { vendorId, vendorName } = await resolveExpenseVendor({ ...v.toObject(), ...rest });
+      await assertNoDuplicateBill(vendorId, rest.expenseInvoiceNo ?? v.expenseInvoiceNo, v._id);
+      rest.vendorId = vendorId;
+      rest.vendorName = vendorName || rest.partyName || v.partyName || '';
+      rest.taxAmount = resolveExpenseTax({ ...v.toObject(), ...rest });
+    }
     Object.assign(v, rest);
     // Expense vouchers: recompute the total from the (possibly edited) amounts.
     if (v.voucherType === VOUCHER_TYPE.EXPENSE) {

@@ -111,7 +111,9 @@ const VendorInvoiceDetail = () => {
             <InvoiceStatusChip status={inv.invoiceStatus} />
             {inv.debitNoteRequired && <Chip size="small" color="warning" variant="outlined" label="Debit Note" sx={{ fontWeight: 700 }} />}
           </Box>
-          <Typography variant="body2" color="text.secondary">{inv.vendorName} · GRN {inv.grnNumber || '—'} · {fmtDate(inv.invoiceDate)}</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {inv.vendorName} · GRN {(inv.grnNumbers?.length ? inv.grnNumbers : [inv.grnNumber]).filter(Boolean).join(', ') || '—'} · {fmtDate(inv.invoiceDate)}
+          </Typography>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>

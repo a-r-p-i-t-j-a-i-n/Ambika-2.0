@@ -75,9 +75,12 @@ const voucherSchema = new Schema({
   balanceAmount:    { type: Number, default: 0 }, // netPayable − paidAmount
 
   // ── Expense voucher (voucherType = EXPENSE) ──
+  // Also doubles as the "Direct Bill Passing" flow: expenseCategory already
+  // covers office/repair/maintenance/service bills, and vendorId optionally
+  // links the payee to the vendor master instead of a free-text partyName.
   expenseCategory:   { type: String, trim: true, default: '' },
   partyName:         { type: String, trim: true, default: '' },
-  expenseInvoiceNo:  { type: String, trim: true, default: '' }, // optional
+  expenseInvoiceNo:  { type: String, trim: true, default: '' }, // optional unless vendorId is set
   expenseInvoiceDate:{ type: Date, default: null },             // optional
   invoiceDocument:   { fileUrl: { type: String, default: '' }, fileName: { type: String, default: '' } },
   basicValue:                 { type: Number, default: 0 },
@@ -85,6 +88,10 @@ const voucherSchema = new Schema({
   packingForwardingCharges:   { type: Number, default: 0 },
   otherCharges:               { type: Number, default: 0 },
   taxAmount:                  { type: Number, default: 0 },
+  // Explicit GST breakout — when both are set, taxAmount is derived from them
+  // authoritatively on the backend (see voucher.service.js computeGstAmount).
+  taxableAmount:               { type: Number, default: 0, min: 0 },
+  gstRatePercent:              { type: Number, default: 0, min: 0, max: 100 },
   tcsAmount:                  { type: Number, default: 0 },
   tdsAmount:                  { type: Number, default: 0 },
   advanceAmount:              { type: Number, default: 0 }, // advance payment deduction
