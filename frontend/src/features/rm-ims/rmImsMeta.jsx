@@ -16,7 +16,7 @@ export const RM_NAV = [
   { label: 'Stock list',  short: 'Stock',    path: '/rm-ims/stock',      icon: Layers },
   { label: 'Stock In',    short: 'In',       path: '/rm-ims/stock-in',   icon: PackagePlus },
   { label: 'Stock Out',   short: 'Out',      path: '/rm-ims/stock-out',  icon: PackageMinus },
-  { label: 'Cut coils',   short: 'Cut',      path: '/rm-ims/conversion', icon: Recycle },
+  { label: 'Coil to Circle', short: 'Cut',   path: '/rm-ims/conversion', icon: Recycle },
   { label: 'Buying list', short: 'Buy',      path: '/rm-ims/reorder',    icon: ShoppingCart },
   { label: 'History',     short: 'History',  path: '/rm-ims/movements',  icon: History },
 ];

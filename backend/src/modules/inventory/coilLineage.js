@@ -183,6 +183,11 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
       // intent cannot be recovered from weights. Null where it was never
       // captured (every cut made before it existed); never guessed.
       cuttingType: c.cuttingType || null,
+      // "Scrap checked?" as recorded on the conversion, and when the round was
+      // saved (the cutting date above is the day it was cut). Stored, not
+      // derived; null where the record has neither.
+      scrapVerified: c.scrapVerified || null,
+      savedAt: c.createdAt || null,
 
       scrapRecordId: scrap?._id || null,
       disposition: scrap?.disposition || null,

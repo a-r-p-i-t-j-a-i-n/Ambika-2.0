@@ -11,7 +11,7 @@ import {
   rmPolicySchema, rmReceiveSchema, rmIssueSchema, rmConvertSchema,
   rmMovementQuerySchema, rmConversionsQuerySchema, rmReceivedCoilsQuerySchema,
   rmCircleOptionsQuerySchema, rmCoilLineageParamSchema, rmCuttingHistoryQuerySchema,
-  rmManualCoilLookupQuerySchema,
+  rmManualCoilLookupQuerySchema, rmCuttingCirclesQuerySchema, rmConversionLedgerQuerySchema,
 } from './rmIms.validation.js';
 
 const router = Router();
@@ -44,9 +44,15 @@ router.get('/coil/:receiptId/lineage', validate(rmCoilLineageParamSchema, 'param
 // Every physical coil cut so far, one row per coil — the list under the Cut
 // Coils form. Read-only and derived, like the lineage it drills into.
 router.get('/cutting-history', validate(rmCuttingHistoryQuerySchema, 'query'), c.getCuttingHistory);
+// Every recorded cut in ONE table: a row per physical coil (its rounds on
+// expand) and a row per cut that names no coil — the Coil to Circle page's
+// history. Read-only and derived.
+router.get('/conversion-ledger', validate(rmConversionLedgerQuerySchema, 'query'), c.getConversionLedger);
 // The circle SKUs those coils' rounds actually produced — the Cutting History
 // "Circle SKU" filter offers these, so it never offers a size with no rows.
-router.get('/cutting-history/circles', c.getCuttingHistoryCircles);
+// `?scope=all`: the circles of EVERY recorded cut, the imported ones included —
+// what the All conversions "Circle SKU" filter offers.
+router.get('/cutting-history/circles', validate(rmCuttingCirclesQuerySchema, 'query'), c.getCuttingHistoryCircles);
 
 router.get('/policy/:skuId', validate(rmSkuParamSchema, 'params'), c.getPolicy);
 router.put('/policy/:skuId', validate(rmSkuParamSchema, 'params'), validate(rmPolicySchema), c.upsertPolicy);

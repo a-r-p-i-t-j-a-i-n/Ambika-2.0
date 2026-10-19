@@ -80,9 +80,16 @@ export const rmImsController = {
     res.json(ApiResponse.ok('Cutting history', docs, summary));
   }),
 
-  getCuttingHistoryCircles: asyncHandler(async (_req, res) => {
-    const docs = await rmImsService.listCuttingHistoryCircles();
-    res.json(ApiResponse.ok('Circle SKUs produced by traceable cutting rounds', docs));
+  getConversionLedger: asyncHandler(async (req, res) => {
+    const { docs, summary } = await rmImsService.listConversionLedger(req.query);
+    res.json(ApiResponse.ok('Conversion ledger', docs, summary));
+  }),
+
+  getCuttingHistoryCircles: asyncHandler(async (req, res) => {
+    const docs = await rmImsService.listCuttingHistoryCircles(req.query);
+    res.json(ApiResponse.ok(req.query.scope === 'all'
+      ? 'Circle SKUs produced by every recorded cut'
+      : 'Circle SKUs produced by traceable cutting rounds', docs));
   }),
 
   // The circle sizes approved for one coil. `circles` is the list the dropdown

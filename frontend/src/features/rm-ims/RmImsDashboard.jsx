@@ -237,7 +237,7 @@ const RmImsDashboard = () => {
           actions={conversions.length > 0 && (
             <Button size="small" endIcon={<ArrowRight size={13} />} onClick={() => navigate('/rm-ims/conversion')}
               sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.brand }}>
-              All conversions
+              Coil to Circle history
             </Button>
           )}
           dense

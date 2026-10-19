@@ -80,12 +80,23 @@ export const rmImsApi = baseApi.injectEndpoints({
       providesTags: ['RmConversion', 'RmMovement'],
     }),
     /**
+     * The Coil to Circle page's one table — every recorded cut: a row per
+     * physical coil (its rounds on expand) and a row per cut that names no
+     * coil. Tagged like the history: a cut changes both its rows and the
+     * coil's remaining weight.
+     */
+    getRmConversionLedger: builder.query({
+      query: (params = {}) => ({ url: '/rm-ims/conversion-ledger', params }),
+      providesTags: ['RmConversion', 'RmMovement'],
+    }),
+    /**
      * The circle SKUs the Cutting History's rounds actually produced — the
      * options of its "Circle SKU" filter. A new cut can add a size, so it is
      * tagged like the history itself.
      */
     getRmCuttingHistoryCircles: builder.query({
-      query: () => '/rm-ims/cutting-history/circles',
+      // `{ scope: 'all' }` — every recorded cut's circles (All conversions).
+      query: (params) => ({ url: '/rm-ims/cutting-history/circles', params: params || undefined }),
       providesTags: ['RmConversion'],
     }),
     /**
@@ -152,6 +163,7 @@ export const {
   useGetRmCoilLineageQuery,
   useGetRmCuttingHistoryQuery,
   useGetRmCuttingHistoryCirclesQuery,
+  useGetRmConversionLedgerQuery,
   useGetRmCircleOptionsQuery,
   useLookupRmManualCoilQuery,
   useUpsertRmPolicyMutation,

@@ -255,6 +255,216 @@ export const deriveMetrics = (policy = {}, stock = {}, ctx = {}) => {
   };
 };
 
+/**
+ * From a GROUPED physical coil — `{ _id: coil key, isManual, cutKg }` — to its
+ * receipt (or manual entry), its batch ledger and its cutting STATUS.
+ *
+ * One rule, used by every screen that asks: the Coil to Circle History lists
+ * and filters coils with it, and All conversions filters cuts by the status of
+ * the coil they came from with the very same stages, so the two can never
+ * disagree about which coils are "Partially cut" or "Fully cut".
+ */
+const coilStateStages = () => [
+  {
+    $lookup: {
+      from: 'inventorymovements',
+      localField: '_id',
+      foreignField: '_id',
+      pipeline: [{
+        $project: {
+          batchNo: 1, skuId: 1, skuCode: 1, skuName: 1, quantity: 1, warehouse: 1, movementNumber: 1,
+          movementDate: 1, refType: 1, refNumber: 1, vendorName: 1, isDeleted: 1, poNumber: 1, unitCost: 1,
+        },
+      }],
+      as: 'rc',
+    },
+  },
+  // A manual coil's entry, shaped like a receipt so every stage below reads
+  // one `receipt` field. Its "quantity" is the original weight entered.
+  {
+    $lookup: {
+      from: ManualCoil.collection.name,
+      localField: '_id',
+      foreignField: '_id',
+      pipeline: [{
+        $project: {
+          batchNo: 1, skuId: '$coilSkuId', skuCode: '$coilSkuCode', skuName: '$coilSkuName',
+          quantity: '$originalWeightKg', warehouse: 1, movementNumber: { $literal: '' }, movementDate: '$createdAt',
+          refType: { $literal: 'MANUAL' }, refNumber: { $literal: '' }, vendorName: { $literal: '' }, isDeleted: 1,
+          poNumber: { $literal: '' }, unitCost: '$rate',
+        },
+      }],
+      as: 'mc',
+    },
+  },
+  {
+    $addFields: {
+      receipt: { $cond: [{ $eq: ['$isManual', 1] }, { $arrayElemAt: ['$mc', 0] }, { $arrayElemAt: ['$rc', 0] }] },
+    },
+  },
+  // The batch's whole ledger, keyed on (batchNo, skuId) — the same join
+  // listReceivedCoils uses, served by the { batchNo, skuId } index.
+  {
+    $lookup: {
+      from: 'inventorymovements',
+      let: { b: '$receipt.batchNo', k: '$receipt.skuId' },
+      pipeline: [
+        { $match: { $expr: { $and: [{ $eq: ['$batchNo', '$$b'] }, { $eq: ['$skuId', '$$k'] }] } } },
+        { $match: { isDeleted: { $ne: true } } },
+        {
+          $group: {
+            _id: null,
+            inQty: { $sum: { $cond: [{ $eq: ['$movementType', MOVEMENT_TYPE.IN] }, '$quantity', 0] } },
+            outQty: { $sum: { $cond: [{ $eq: ['$movementType', MOVEMENT_TYPE.OUT] }, '$quantity', 0] } },
+          },
+        },
+      ],
+      as: 'led',
+    },
+  },
+  {
+    $addFields: {
+      receivedKg: { $ifNull: ['$receipt.quantity', 0] },
+      // A manual coil has no receipt behind its batch, so its batch ledger
+      // is only cuts; what it has left is its original weight minus its
+      // rounds — the same figure convert() checks a new round against.
+      ledgerAvailableKg: {
+        $cond: [
+          { $eq: ['$isManual', 1] },
+          { $subtract: [{ $ifNull: ['$receipt.quantity', 0] }, '$cutKg'] },
+          {
+            $subtract: [
+              { $ifNull: [{ $arrayElemAt: ['$led.inQty', 0] }, 0] },
+              { $ifNull: [{ $arrayElemAt: ['$led.outQty', 0] }, 0] },
+            ],
+          },
+        ],
+      },
+    },
+  },
+  // Status in the pipeline only so it can be FILTERED on; the same rule as
+  // cuttingStatus/ledgerCoilState, which recompute it for the rows below.
+  {
+    $addFields: {
+      status: {
+        $switch: {
+          branches: [
+            { case: { $lte: [{ $subtract: ['$receivedKg', '$ledgerAvailableKg'] }, EPS] }, then: CUT_STATUS.NOT_CUT },
+            { case: { $gt: ['$ledgerAvailableKg', EPS] }, then: CUT_STATUS.PARTIALLY_CUT },
+          ],
+          default: CUT_STATUS.FULLY_CUT,
+        },
+      },
+    },
+  },
+  { $project: { rc: 0, mc: 0, led: 0 } },
+];
+
+/**
+ * Where each CUT was made — `location` on every conversion: its own
+ * ScrapRecord (one per conversion), or, for a cut imported from the client's
+ * workbook, that import's own "Summary Scrap" row (…|CONVERSION|… ↔
+ * …|SCRAP|…). Null where neither records one. A cut that is not an import gets
+ * a key no scrap record carries, so its second lookup matches nothing.
+ *
+ * Used by All conversions (listConversions) and the conversion ledger
+ * (listConversionLedger), so a cut is placed the same way in both.
+ */
+const cutLocationStages = () => {
+  const scrapLocation = (as, localField, foreignField) => ({
+    $lookup: {
+      from: 'scraprecords',
+      localField,
+      foreignField,
+      pipeline: [{ $match: { isDeleted: { $ne: true } } }, { $project: { location: 1 } }],
+      as,
+    },
+  });
+  return [
+    scrapLocation('srOwn', '_id', 'conversionId'),
+    {
+      $addFields: {
+        importScrapRef: {
+          $cond: [
+            { $regexMatch: { input: { $ifNull: ['$sourceRef', ''] }, regex: /\|CONVERSION\|/ } },
+            { $replaceOne: { input: '$sourceRef', find: '|CONVERSION|', replacement: '|SCRAP|' } },
+            '-',
+          ],
+        },
+      },
+    },
+    scrapLocation('srImport', 'importScrapRef', 'sourceRef'),
+    {
+      $addFields: {
+        location: { $ifNull: [{ $arrayElemAt: ['$srOwn.location', 0] }, { $ifNull: [{ $arrayElemAt: ['$srImport.location', 0] }, null] }] },
+      },
+    },
+    { $project: { srOwn: 0, srImport: 0, importScrapRef: 0 } },
+  ];
+};
+
+/**
+ * One PHYSICAL COIL as a table row — from a coil grouped and run through
+ * coilStateStages (`{ _id: coil key, isManual, receipt, receivedKg,
+ * ledgerAvailableKg, cutKg, circlesKg, circlesPcs, scrapKg, plantScrapKg,
+ * jobWorkScrapKg, rounds, locations, circleCodes, matchedRounds, firstCutAt,
+ * lastCutAt }`).
+ *
+ * Shared by the Coil to Circle History (listCuttingHistory) and the conversion
+ * ledger (listConversionLedger), so a coil reads the same in both.
+ */
+const coilHistoryRow = (g) => {
+  const rc = g.receipt || null;
+  const row = summariseCoilRow({
+    receivedKg: g.receivedKg, cutKg: g.cutKg, circlesKg: g.circlesKg, scrapKg: g.scrapKg, rounds: g.rounds,
+  });
+  const ledger = ledgerCoilState({
+    receivedKg: g.receivedKg, roundsCutKg: g.cutKg, ledgerAvailableKg: g.ledgerAvailableKg,
+  });
+  const locations = (g.locations || []).filter(Boolean).sort();
+  const manual = g.isManual === 1;
+  return {
+    // `coilId` is the physical coil whichever way it is identified, and is
+    // what the coil page opens; the two specific ids say which way.
+    coilId: g._id,
+    coilSource: manual ? 'MANUAL' : 'GRN',
+    coilReceiptId: manual ? null : g._id,
+    manualCoilId: manual ? g._id : null,
+    receiptNumber: rc?.movementNumber || '',
+    receiptMissing: !rc || rc.isDeleted === true,
+    batchNo: rc?.batchNo || '',
+    skuId: rc?.skuId || null,
+    skuCode: rc?.skuCode || '',
+    itemName: rc?.skuName || '',
+    receivedAt: rc?.warehouse || '',
+    receivedDate: rc?.movementDate || null,
+    grnNo: rc?.refType === 'GRN' ? (rc.refNumber || '') : '',
+    supplier: rc?.vendorName || '',
+    ...row,
+    yieldPct: row.avgYieldPct,
+    plantScrapKg: round2(g.plantScrapKg),
+    jobWorkScrapKg: round2(g.jobWorkScrapKg),
+    ledgerAvailableKg: ledger.availableKg,
+    otherOutKg: ledger.otherOutKg,
+    reconciles: Math.abs(ledger.availableKg - row.remainingKg) <= EPS,
+    // The coil's status follows the ledger (see listCuttingHistory);
+    // `row.status` from summariseCoilRow is the rounds-only view and is
+    // overwritten.
+    status: ledger.status,
+    overCut: ledger.overCut || row.remainingKg < -EPS,
+    location: locations.length > 1 ? 'MIXED' : (locations[0] || null),
+    locations,
+    // Pieces across every circle size the coil produced, and which sizes.
+    circlesPcs: round2(g.circlesPcs),
+    circleSkuCodes: [...new Set((g.circleCodes || []).flat().filter(Boolean))].sort(),
+    // How many of the coil's rounds satisfied the round-level filters —
+    // equal to `rounds` when none is applied.
+    matchedRounds: g.matchedRounds || 0,
+    firstCutAt: g.firstCutAt || null,
+    lastCutAt: g.lastCutAt || null,
+  };
+};
+
 export const rmImsService = {
   RM_ITEM_TYPES,
 
@@ -1647,36 +1857,135 @@ export const rmImsService = {
   },
 
 
+  /**
+   * ALL CONVERSIONS — every recorded cut, one row per cut, newest first.
+   *
+   * The only list that shows EVERY cut, the ones naming no physical coil too
+   * (the spreadsheet imports and "No receipt available"), which the Coil to
+   * Circle History never turns into rounds.
+   *
+   * ── FILTERS — THE HISTORY'S OWN, WITH THE SAME MEANING ────────────────────
+   *   batchNo      the cut's batch number contains the text (any case);
+   *   from / to    the day it was cut, read in IST;
+   *   circleSkuId  it produced that circle;
+   *   location     where it was cut: its own ScrapRecord — the history's rule —
+   *                or, for a cut imported from the client's workbook, the
+   *                location on that cut's own "Summary Scrap" row (the two
+   *                importers key the same cut by the same batch number:
+   *                …|CONVERSION|<batch> and …|SCRAP|<batch>). A cut with
+   *                neither has no recorded location and is never filed under
+   *                one; it is listed whenever no location is asked for;
+   *   entryType    the coil it names: GRN, MANUAL — or NONE, no coil at all;
+   *   status       the CURRENT cutting status of the coil it came from, by the
+   *                history's own rule (coilStateStages) — a cut that names no
+   *                coil has no coil status, so it cannot match one;
+   *   search       batch, conversion number, coil code or name, and for a GRN
+   *                cut its GRN / receipt number and supplier.
+   * Filters combine (AND). Each row is still exactly one cut.
+   *
+   * ── PAGES AND TOTALS ───────────────────────────────────────────────────────
+   * Sorted newest cut first — date, then when it was saved, then its id — so
+   * cuts sharing a date keep one fixed order and a page never repeats or skips
+   * a row. The totals are aggregated over EVERY cut the filters match, never
+   * just the page shown: once they were summed from the page, so "coil
+   * consumed" and "average yield" silently described the newest 50 cuts while
+   * claiming to describe all of them.
+   *
+   * `page` is optional: a caller that sends only `limit` gets the newest
+   * `limit` cuts, exactly as before.
+   */
   async listConversions(query = {}) {
-    const filter = { isDeleted: { $ne: true } };
-    if (query.search) {
-      const r = rx(query.search);
-      filter.$or = [{ conversionNumber: r }, { batchNo: r }, { coilSkuCode: r }, { coilSkuName: r }];
+    const paged = query.page != null && query.page !== '';
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(Math.max(1, Number(query.limit) || (paged ? 25 : 100)), 500);
+
+    // ── About the cut itself: plain field matches, asked first. ──
+    const match = { isDeleted: { $ne: true } };
+    if (query.from || query.to) {
+      match.conversionDate = {};
+      if (query.from) match.conversionDate.$gte = new Date(`${query.from}T00:00:00.000+05:30`);
+      if (query.to) match.conversionDate.$lte = new Date(`${query.to}T23:59:59.999+05:30`);
     }
-    const limit = Math.min(Number(query.limit) || 100, 500);
-    // The rows shown are a PAGE; the totals are not. They used to be summed from
-    // that page, so "coil consumed" and "average yield" silently described the
-    // newest 50 cuts while claiming to describe all of them — unnoticeable while
-    // one conversion existed, an order of magnitude out once the history landed.
-    // The totals now come from their own aggregation over the whole filtered set.
-    const [docs, agg] = await Promise.all([
-      CoilConversion.find(filter).sort({ conversionDate: -1, createdAt: -1 }).limit(limit).lean(),
-      CoilConversion.aggregate([
-        { $match: filter },
+    if (query.circleSkuId) match['circles.circleSkuId'] = new mongoose.Types.ObjectId(String(query.circleSkuId));
+    const batch = String(query.batchNo || '').trim();
+    if (batch) match.batchNo = rx(batch);
+    const entryType = String(query.entryType || '').toUpperCase();
+    if (entryType === 'GRN') match.coilReceiptId = { $type: 'objectId' };
+    else if (entryType === 'MANUAL') match.manualCoilId = { $type: 'objectId' };
+    // `null` matches both null and ABSENT — the imports never had the fields.
+    else if (entryType === 'NONE') { match.coilReceiptId = null; match.manualCoilId = null; }
+    // ── About the coil it was cut from: its status, by the history's rule. ──
+    const status = String(query.status || '').toUpperCase();
+    if (status) {
+      const keys = await this._coilKeysWithStatus(status);
+      match.$and = [{ $or: [{ coilReceiptId: { $in: keys } }, { manualCoilId: { $in: keys } }] }];
+    }
+    const location = String(query.location || '').toUpperCase();
+    const search = String(query.search || '').trim();
+    const filtered = !!(query.from || query.to || query.circleSkuId || batch || entryType || status || location || search);
+
+    const [agg] = await CoilConversion.aggregate([
+      { $match: match },
+      ...cutLocationStages(),
+      ...(location ? [{ $match: { location } }] : []),
+      ...(search ? [
         {
-          $group: {
-            _id: null,
-            coilKg:   { $sum: '$coilWeightKg' },
-            circlesKg: { $sum: '$circlesWeightKg' },
-            scrapKg:  { $sum: '$scrapKg' },
-            // Averaged per CUT, so a batch that produced six circle sizes counts
-            // once — the same weight every other batch gets.
-            avgYield: { $avg: '$yieldRatioPct' },
-            count:    { $sum: 1 },
+          $lookup: {
+            from: 'inventorymovements',
+            localField: 'coilReceiptId',
+            foreignField: '_id',
+            pipeline: [{ $project: { movementNumber: 1, refNumber: 1, vendorName: 1 } }],
+            as: 'rcpt',
           },
         },
-      ]),
-    ]);
+        {
+          $match: {
+            $or: [
+              { batchNo: rx(search) }, { conversionNumber: rx(search) }, { coilSkuCode: rx(search) }, { coilSkuName: rx(search) },
+              { 'rcpt.refNumber': rx(search) }, { 'rcpt.movementNumber': rx(search) }, { 'rcpt.vendorName': rx(search) },
+            ],
+          },
+        },
+      ] : []),
+      { $sort: { conversionDate: -1, createdAt: -1, _id: -1 } },
+      {
+        $facet: {
+          rows: [
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            { $project: { rcpt: 0 } },
+          ],
+          stats: [{
+            $group: {
+              _id: null,
+              coilKg: { $sum: '$coilWeightKg' },
+              circlesKg: { $sum: '$circlesWeightKg' },
+              scrapKg: { $sum: '$scrapKg' },
+              // Averaged per CUT, so a batch that produced six circle sizes
+              // counts once — the same weight every other batch gets.
+              avgYield: { $avg: '$yieldRatioPct' },
+              count: { $sum: 1 },
+              // Matching cuts that name no physical coil.
+              untraceable: {
+                $sum: {
+                  $cond: [{
+                    $or: [
+                      { $eq: [{ $type: '$coilReceiptId' }, 'objectId'] },
+                      { $eq: [{ $type: '$manualCoilId' }, 'objectId'] },
+                    ],
+                  }, 0, 1],
+                },
+              },
+            },
+          }],
+        },
+      },
+    ]).option({ allowDiskUse: true });
+    const docs = agg?.rows || [];
+    const a = agg?.stats?.[0] || {};
+    // With filters, how many cuts there are in all — so "12 of 485" can be said.
+    const allCount = filtered ? await CoilConversion.countDocuments({ isDeleted: { $ne: true } }) : (a.count || 0);
+
     /**
      * Where each cut's coil came from.
      *
@@ -1727,7 +2036,7 @@ export const rmImsService = {
         : null;
     }
 
-    const a = agg[0] || {};
+    const count = a.count || 0;
     return {
       docs,
       totals: {
@@ -1737,12 +2046,47 @@ export const rmImsService = {
         avgYield: round2(a.avgYield || 0),
         // How many of the listed cuts can be traced back to a goods receipt.
         traceable: docs.filter((d) => d.receipt).length,
-        // How many cuts the totals cover, so the screen can say so rather than
-        // letting the reader assume they match the rows below.
-        conversionCount: a.count || 0,
+        // How many cuts the totals cover — every cut the filters match — so
+        // the screen can say so rather than letting the reader assume they
+        // match the rows on the page.
+        conversionCount: count,
+        // …how many of those name no physical coil…
+        untraceable: a.untraceable || 0,
+        // …whether any filter is applied, and how many cuts there are in all.
+        filtered,
+        allCount,
         shown: docs.length,
+        pagination: { page, limit, total: count, pages: Math.ceil(count / limit) },
       },
     };
+  },
+
+  /**
+   * The physical coils whose CURRENT cutting status is `status` — by the
+   * Coil to Circle History's own rule (coilStateStages), so a cut filtered by
+   * "Partially cut" in All conversions is a cut of a coil the history itself
+   * shows as Partially cut.
+   */
+  async _coilKeysWithStatus(status) {
+    const rows = await CoilConversion.aggregate([
+      {
+        $match: {
+          $or: [{ coilReceiptId: { $type: 'objectId' } }, { manualCoilId: { $type: 'objectId' } }],
+          isDeleted: { $ne: true },
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ['$coilReceiptId', '$manualCoilId'] },
+          isManual: { $max: { $cond: [{ $eq: [{ $type: '$coilReceiptId' }, 'objectId'] }, 0, 1] } },
+          cutKg: { $sum: '$coilWeightKg' },
+        },
+      },
+      ...coilStateStages(),
+      { $match: { status: String(status).toUpperCase() } },
+      { $project: { _id: 1 } },
+    ]).option({ allowDiskUse: true });
+    return rows.map((r) => r._id);
   },
 
   /** Movement history scoped to RM (coil + circle) SKUs. */
@@ -2444,98 +2788,7 @@ export const rmImsService = {
         },
       },
       ...early,
-      {
-        $lookup: {
-          from: 'inventorymovements',
-          localField: '_id',
-          foreignField: '_id',
-          pipeline: [{
-            $project: {
-              batchNo: 1, skuId: 1, skuCode: 1, skuName: 1, quantity: 1, warehouse: 1, movementNumber: 1,
-              movementDate: 1, refType: 1, refNumber: 1, vendorName: 1, isDeleted: 1,
-            },
-          }],
-          as: 'rc',
-        },
-      },
-      // A manual coil's entry, shaped like a receipt so every stage below reads
-      // one `receipt` field. Its "quantity" is the original weight entered.
-      {
-        $lookup: {
-          from: ManualCoil.collection.name,
-          localField: '_id',
-          foreignField: '_id',
-          pipeline: [{
-            $project: {
-              batchNo: 1, skuId: '$coilSkuId', skuCode: '$coilSkuCode', skuName: '$coilSkuName',
-              quantity: '$originalWeightKg', warehouse: 1, movementNumber: { $literal: '' }, movementDate: '$createdAt',
-              refType: { $literal: 'MANUAL' }, refNumber: { $literal: '' }, vendorName: { $literal: '' }, isDeleted: 1,
-            },
-          }],
-          as: 'mc',
-        },
-      },
-      {
-        $addFields: {
-          receipt: { $cond: [{ $eq: ['$isManual', 1] }, { $arrayElemAt: ['$mc', 0] }, { $arrayElemAt: ['$rc', 0] }] },
-        },
-      },
-      // The batch's whole ledger, keyed on (batchNo, skuId) — the same join
-      // listReceivedCoils uses, served by the { batchNo, skuId } index.
-      {
-        $lookup: {
-          from: 'inventorymovements',
-          let: { b: '$receipt.batchNo', k: '$receipt.skuId' },
-          pipeline: [
-            { $match: { $expr: { $and: [{ $eq: ['$batchNo', '$$b'] }, { $eq: ['$skuId', '$$k'] }] } } },
-            { $match: { isDeleted: { $ne: true } } },
-            {
-              $group: {
-                _id: null,
-                inQty: { $sum: { $cond: [{ $eq: ['$movementType', MOVEMENT_TYPE.IN] }, '$quantity', 0] } },
-                outQty: { $sum: { $cond: [{ $eq: ['$movementType', MOVEMENT_TYPE.OUT] }, '$quantity', 0] } },
-              },
-            },
-          ],
-          as: 'led',
-        },
-      },
-      {
-        $addFields: {
-          receivedKg: { $ifNull: ['$receipt.quantity', 0] },
-          // A manual coil has no receipt behind its batch, so its batch ledger
-          // is only cuts; what it has left is its original weight minus its
-          // rounds — the same figure convert() checks a new round against.
-          ledgerAvailableKg: {
-            $cond: [
-              { $eq: ['$isManual', 1] },
-              { $subtract: [{ $ifNull: ['$receipt.quantity', 0] }, '$cutKg'] },
-              {
-                $subtract: [
-                  { $ifNull: [{ $arrayElemAt: ['$led.inQty', 0] }, 0] },
-                  { $ifNull: [{ $arrayElemAt: ['$led.outQty', 0] }, 0] },
-                ],
-              },
-            ],
-          },
-        },
-      },
-      // Status in the pipeline only so it can be FILTERED on; the same rule as
-      // cuttingStatus/ledgerCoilState, which recompute it for the rows below.
-      {
-        $addFields: {
-          status: {
-            $switch: {
-              branches: [
-                { case: { $lte: [{ $subtract: ['$receivedKg', '$ledgerAvailableKg'] }, EPS] }, then: CUT_STATUS.NOT_CUT },
-                { case: { $gt: ['$ledgerAvailableKg', EPS] }, then: CUT_STATUS.PARTIALLY_CUT },
-              ],
-              default: CUT_STATUS.FULLY_CUT,
-            },
-          },
-        },
-      },
-      { $project: { rc: 0, mc: 0, led: 0 } },
+      ...coilStateStages(),
       ...post,
       { $sort: { lastCutAt: -1, lastSavedAt: -1, _id: -1 } },
       {
@@ -2567,56 +2820,7 @@ export const rmImsService = {
       },
     ]).option({ allowDiskUse: true });
 
-    const docs = (agg?.rows || []).map((g) => {
-      const rc = g.receipt || null;
-      const row = summariseCoilRow({
-        receivedKg: g.receivedKg, cutKg: g.cutKg, circlesKg: g.circlesKg, scrapKg: g.scrapKg, rounds: g.rounds,
-      });
-      const ledger = ledgerCoilState({
-        receivedKg: g.receivedKg, roundsCutKg: g.cutKg, ledgerAvailableKg: g.ledgerAvailableKg,
-      });
-      const locations = (g.locations || []).filter(Boolean).sort();
-      const manual = g.isManual === 1;
-      return {
-        // `coilId` is the physical coil whichever way it is identified, and is
-        // what the coil page opens; the two specific ids say which way.
-        coilId: g._id,
-        coilSource: manual ? 'MANUAL' : 'GRN',
-        coilReceiptId: manual ? null : g._id,
-        manualCoilId: manual ? g._id : null,
-        receiptNumber: rc?.movementNumber || '',
-        receiptMissing: !rc || rc.isDeleted === true,
-        batchNo: rc?.batchNo || '',
-        skuId: rc?.skuId || null,
-        skuCode: rc?.skuCode || '',
-        itemName: rc?.skuName || '',
-        receivedAt: rc?.warehouse || '',
-        receivedDate: rc?.movementDate || null,
-        grnNo: rc?.refType === 'GRN' ? (rc.refNumber || '') : '',
-        supplier: rc?.vendorName || '',
-        ...row,
-        yieldPct: row.avgYieldPct,
-        plantScrapKg: round2(g.plantScrapKg),
-        jobWorkScrapKg: round2(g.jobWorkScrapKg),
-        ledgerAvailableKg: ledger.availableKg,
-        otherOutKg: ledger.otherOutKg,
-        reconciles: Math.abs(ledger.availableKg - row.remainingKg) <= EPS,
-        // The coil's status follows the ledger (see the header); `row.status`
-        // from summariseCoilRow is the rounds-only view and is overwritten.
-        status: ledger.status,
-        overCut: ledger.overCut || row.remainingKg < -EPS,
-        location: locations.length > 1 ? 'MIXED' : (locations[0] || null),
-        locations,
-        // Pieces across every circle size the coil produced, and which sizes.
-        circlesPcs: round2(g.circlesPcs),
-        circleSkuCodes: [...new Set((g.circleCodes || []).flat().filter(Boolean))].sort(),
-        // How many of the coil's rounds satisfied the round-level filters —
-        // equal to `rounds` when none is applied.
-        matchedRounds: g.matchedRounds || 0,
-        firstCutAt: g.firstCutAt || null,
-        lastCutAt: g.lastCutAt || null,
-      };
-    });
+    const docs = (agg?.rows || []).map(coilHistoryRow);
 
     const stats = agg?.stats?.[0] || {};
     const [untraced] = await CoilConversion.aggregate([
@@ -2670,6 +2874,339 @@ export const rmImsService = {
   },
 
   /**
+   * THE CONVERSION LEDGER — every recorded cut, in one table.
+   *
+   * Two kinds of row, newest cut first, paged together on the server:
+   *
+   *   COIL       one PHYSICAL COIL (a GRN receipt or a manual coil) — exactly
+   *              the Coil to Circle History's row (coilHistoryRow): whole-coil
+   *              figures, its status and remaining weight; its rounds are the
+   *              lineage endpoint, opened on demand.
+   *   UNLINKED   one cut that names NO physical coil (a workbook import, or a
+   *              "No receipt available" cut) — listed as itself, with what its
+   *              own record holds. Never attached to a coil by its batch
+   *              number: that would be a guess shown as a fact.
+   *
+   * Every non-deleted conversion belongs to exactly one row: a round of the
+   * one coil it names, or its own UNLINKED row — so nothing is listed twice
+   * and nothing is left out.
+   *
+   * ── FILTERS: ASKED OF EACH CUT ─────────────────────────────────────────────
+   * Each filter keeps the meaning it had on BOTH screens it replaces, so
+   * nothing either one found is lost:
+   *   from / to     the cutting date, IST calendar days
+   *   circleSkuId   a circle size the cut produced
+   *   location      where the cut was made (cutLocationStages)
+   *   batchNo       the coil's batch (its receipt / manual entry) or the cut's own
+   *   search        the coil's receipt — batch, SKU, item, receipt number, GRN,
+   *                 supplier — or the cut's own batch, SKU, item, conversion no.
+   * A COIL row is listed when at least ONE of its rounds satisfies all of them
+   * together, and still shows the whole coil. Two are about the row:
+   *   entryType     the record type — GRN / MANUAL / COIL (either: every
+   *                 physical coil) / NONE (unlinked rows) / all. Applied after
+   *                 `segments` is counted, so each record type can say how many
+   *                 rows it holds under the other filters.
+   *   status        the coil's cutting status — a cut with no coil has none, so
+   *                 it never matches one.
+   *
+   * ── TOTALS ─────────────────────────────────────────────────────────────────
+   * Over every row the filters match, never one page. Cut-level figures add up
+   * each MATCHING cut once (a coil's matching rounds, plus the matching
+   * unlinked cuts); coil-level figures are counts of coils, so no weight is
+   * ever added from a coil row and again from its rounds.
+   *
+   * Read-only and derived: one aggregation, nothing stored.
+   */
+  async listConversionLedger(query = {}) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(Math.max(1, Number(query.limit) || 10), 200);
+    const entryType = String(query.entryType || '').toUpperCase();
+    const status = String(query.status || '').toUpperCase();
+    const location = String(query.location || '').toUpperCase();
+    const batch = String(query.batchNo || '').trim();
+    const search = String(query.search || '').trim();
+    const filtered = !!(query.from || query.to || query.circleSkuId || location || batch || search || entryType || status);
+
+    // A cut with no coil has no status, so it can match only without one. The
+    // record type is a filter on the finished rows (`ofType`, below).
+    const wantUnlinked = !status;
+    const ofType = {
+      GRN: { kind: 'COIL', isManual: 0 },
+      MANUAL: { kind: 'COIL', isManual: 1 },
+      COIL: { kind: 'COIL' },
+      NONE: { kind: 'UNLINKED' },
+    }[entryType] || null;
+
+    // A cut names its coil by its receipt or its manual entry; one that names
+    // neither (null, absent or anything else) is unlinked. Complements, so
+    // every conversion falls on exactly one side.
+    const names = [{ coilReceiptId: { $type: 'objectId' } }, { manualCoilId: { $type: 'objectId' } }];
+    // What each cut contributes to its row, kept per cut so the filters below
+    // can be asked of each one.
+    const cutSnapshot = {
+      id: '$_id',
+      conversionNumber: '$conversionNumber',
+      date: '$conversionDate',
+      savedAt: '$createdAt',
+      batchNo: '$batchNo',
+      coilSkuCode: '$coilSkuCode',
+      coilSkuName: '$coilSkuName',
+      cutKg: '$coilWeightKg',
+      circlesKg: '$circlesWeightKg',
+      pcs: { $sum: '$circles.pcs' },
+      scrapKg: '$scrapKg',
+      yieldPct: '$yieldRatioPct',
+      location: '$location',
+      circleIds: '$circles.circleSkuId',
+    };
+
+    const coilRows = [
+      { $match: { isDeleted: { $ne: true }, $or: names } },
+      ...cutLocationStages(),
+      { $addFields: { coilKey: { $cond: [{ $eq: [{ $type: '$coilReceiptId' }, 'objectId'] }, '$coilReceiptId', '$manualCoilId'] } } },
+      {
+        $group: {
+          _id: '$coilKey',
+          isManual: { $max: { $cond: [{ $eq: [{ $type: '$coilReceiptId' }, 'objectId'] }, 0, 1] } },
+          cutKg: { $sum: '$coilWeightKg' },
+          circlesKg: { $sum: '$circlesWeightKg' },
+          circlesPcs: { $sum: { $sum: '$circles.pcs' } },
+          scrapKg: { $sum: '$scrapKg' },
+          plantScrapKg: { $sum: { $cond: [{ $eq: ['$location', 'PLG01'] }, '$scrapKg', 0] } },
+          jobWorkScrapKg: { $sum: { $cond: [{ $eq: ['$location', 'JW001'] }, '$scrapKg', 0] } },
+          rounds: { $sum: 1 },
+          locations: { $addToSet: '$location' },
+          circleCodes: { $push: '$circles.circleSkuCode' },
+          firstCutAt: { $min: '$conversionDate' },
+          lastCutAt: { $max: '$conversionDate' },
+          lastSavedAt: { $max: '$createdAt' },
+          cuts: { $push: cutSnapshot },
+        },
+      },
+      ...coilStateStages(),
+      ...(status ? [{ $match: { status } }] : []),
+      { $addFields: { kind: 'COIL' } },
+    ];
+    const unlinkedRows = [
+      { $match: { isDeleted: { $ne: true }, $nor: names } },
+      ...cutLocationStages(),
+      {
+        $project: {
+          kind: { $literal: 'UNLINKED' },
+          firstCutAt: '$conversionDate',
+          lastCutAt: '$conversionDate',
+          lastSavedAt: '$createdAt',
+          cuts: [cutSnapshot],
+          cut: {
+            conversionNumber: '$conversionNumber',
+            conversionDate: '$conversionDate',
+            createdAt: '$createdAt',
+            batchNo: '$batchNo',
+            coilSkuCode: '$coilSkuCode',
+            coilSkuName: '$coilSkuName',
+            coilWeightKg: '$coilWeightKg',
+            circlesWeightKg: '$circlesWeightKg',
+            scrapKg: '$scrapKg',
+            yieldRatioPct: '$yieldRatioPct',
+            circles: '$circles',
+            scrapVerified: '$scrapVerified',
+            cuttingType: '$cuttingType',
+            rate: '$rate',
+            sourceRef: '$sourceRef',
+            remarks: '$remarks',
+            location: '$location',
+          },
+        },
+      },
+    ];
+    const source = wantUnlinked
+      ? [...coilRows, { $unionWith: { coll: CoilConversion.collection.name, pipeline: unlinkedRows } }]
+      : coilRows;
+
+    // ── The per-cut filters, asked of every cut of every row. ──
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const like = (input, s) => ({ $regexMatch: { input: { $toString: { $ifNull: [input, ''] } }, regex: esc(s), options: 'i' } });
+    const conds = [];
+    if (query.from) conds.push({ $gte: ['$$c.date', new Date(`${query.from}T00:00:00.000+05:30`)] });
+    if (query.to) conds.push({ $lte: ['$$c.date', new Date(`${query.to}T23:59:59.999+05:30`)] });
+    if (query.circleSkuId) {
+      conds.push({ $in: [new mongoose.Types.ObjectId(String(query.circleSkuId)), { $ifNull: ['$$c.circleIds', []] }] });
+    }
+    if (location) conds.push({ $eq: ['$$c.location', location] });
+    if (batch) conds.push({ $or: [like('$receipt.batchNo', batch), like('$$c.batchNo', batch)] });
+    if (search) {
+      conds.push({
+        $or: [
+          ...['batchNo', 'skuCode', 'skuName', 'movementNumber', 'refNumber', 'vendorName'].map((f) => like(`$receipt.${f}`, search)),
+          ...['batchNo', 'conversionNumber', 'coilSkuCode', 'coilSkuName'].map((f) => like(`$$c.${f}`, search)),
+        ],
+      });
+    }
+    const cutFiltered = conds.length > 0;
+    const sumWhere = (loc) => ({
+      $sum: { $map: { input: '$matched', as: 'c', in: { $cond: [{ $eq: ['$$c.location', loc] }, '$$c.scrapKg', 0] } } },
+    });
+    const isKind = (k) => ({ $eq: ['$kind', k] });
+
+    const [agg] = await CoilConversion.aggregate([
+      ...source,
+      { $addFields: { matched: cutFiltered ? { $filter: { input: '$cuts', as: 'c', cond: { $and: conds } } } : '$cuts' } },
+      ...(cutFiltered ? [{ $match: { 'matched.0': { $exists: true } } }] : []),
+      {
+        $addFields: {
+          matchedRounds: { $size: '$matched' },
+          matchedIds: '$matched.id',
+          mCutKg: { $sum: '$matched.cutKg' },
+          mCirclesKg: { $sum: '$matched.circlesKg' },
+          mCirclesPcs: { $sum: '$matched.pcs' },
+          mScrapKg: { $sum: '$matched.scrapKg' },
+          mPlantScrapKg: sumWhere('PLG01'),
+          mJobWorkScrapKg: sumWhere('JW001'),
+          mYieldSum: { $sum: '$matched.yieldPct' },
+        },
+      },
+      // Newest cut first; then the last save; then the id — a fixed order, so
+      // a page never repeats or skips a row, however many share a date.
+      { $sort: { lastCutAt: -1, lastSavedAt: -1, _id: -1 } },
+      {
+        $facet: {
+          rows: [...(ofType ? [{ $match: ofType }] : []), { $skip: (page - 1) * limit }, { $limit: limit }, { $project: { cuts: 0, matched: 0 } }],
+          // How many rows each record type holds under every OTHER filter.
+          segments: [{
+            $group: {
+              _id: null,
+              all: { $sum: 1 },
+              coils: { $sum: { $cond: [isKind('COIL'), 1, 0] } },
+              grn: { $sum: { $cond: [{ $and: [isKind('COIL'), { $eq: ['$isManual', 0] }] }, 1, 0] } },
+              manual: { $sum: { $cond: [{ $and: [isKind('COIL'), { $eq: ['$isManual', 1] }] }, 1, 0] } },
+              unlinked: { $sum: { $cond: [isKind('UNLINKED'), 1, 0] } },
+            },
+          }],
+          stats: [...(ofType ? [{ $match: ofType }] : []), {
+            $group: {
+              _id: null,
+              entries: { $sum: 1 },
+              coils: { $sum: { $cond: [isKind('COIL'), 1, 0] } },
+              partiallyCut: { $sum: { $cond: [{ $eq: ['$status', CUT_STATUS.PARTIALLY_CUT] }, 1, 0] } },
+              fullyCut: { $sum: { $cond: [{ $eq: ['$status', CUT_STATUS.FULLY_CUT] }, 1, 0] } },
+              unlinked: { $sum: { $cond: [isKind('UNLINKED'), 1, 0] } },
+              unlinkedCutKg: { $sum: { $cond: [isKind('UNLINKED'), '$mCutKg', 0] } },
+              cuts: { $sum: '$matchedRounds' },
+              cutKg: { $sum: '$mCutKg' },
+              circlesKg: { $sum: '$mCirclesKg' },
+              circlesPcs: { $sum: '$mCirclesPcs' },
+              scrapKg: { $sum: '$mScrapKg' },
+              plantScrapKg: { $sum: '$mPlantScrapKg' },
+              jobWorkScrapKg: { $sum: '$mJobWorkScrapKg' },
+              yieldSum: { $sum: '$mYieldSum' },
+            },
+          }],
+        },
+      },
+    ]).option({ allowDiskUse: true });
+
+    const docs = (agg?.rows || []).map((g) => {
+      // Which of the row's cuts the filters matched — so an opened coil can
+      // dim exactly the rounds the totals left out.
+      const matchedConversionIds = cutFiltered ? (g.matchedIds || []).map(String) : null;
+      if (g.kind === 'UNLINKED') {
+        const c = g.cut || {};
+        const circles = (c.circles || []).map((x) => ({
+          circleSkuId: x.circleSkuId || null,
+          skuCode: x.circleSkuCode || '',
+          itemName: x.circleSkuName || '',
+          sizeLabel: x.sizeLabel || '',
+          pcs: Number(x.pcs || 0),
+          weightKg: round2(x.weightKg),
+        }));
+        const scrapKg = round2(c.scrapKg);
+        return {
+          kind: 'UNLINKED',
+          id: String(g._id),
+          conversionId: g._id,
+          conversionNumber: c.conversionNumber || '',
+          date: c.conversionDate || null,
+          savedAt: c.createdAt || null,
+          // A workbook import carries its source row; a cut saved with "No
+          // receipt available" carries nothing.
+          origin: c.sourceRef ? 'IMPORT' : 'NO_RECEIPT',
+          sourceRef: c.sourceRef || '',
+          batchNo: c.batchNo || '',
+          skuCode: c.coilSkuCode || '',
+          itemName: c.coilSkuName || '',
+          location: c.location || null,
+          cutKg: round2(c.coilWeightKg),
+          circlesKg: round2(c.circlesWeightKg),
+          circlesPcs: round2(circles.reduce((s, x) => s + x.pcs, 0)),
+          scrapKg,
+          plantScrapKg: c.location === 'PLG01' ? scrapKg : 0,
+          jobWorkScrapKg: c.location === 'JW001' ? scrapKg : 0,
+          yieldPct: c.yieldRatioPct != null ? round2(c.yieldRatioPct) : null,
+          circles,
+          circleSkuCodes: [...new Set(circles.map((x) => x.skuCode).filter(Boolean))].sort(),
+          scrapVerified: c.scrapVerified || null,
+          cuttingType: c.cuttingType || null,
+          rate: Number(c.rate) > 0 ? round2(c.rate) : null,
+          remarks: c.remarks || '',
+          rounds: 1,
+          matchedRounds: g.matchedRounds || 0,
+          matchedConversionIds,
+        };
+      }
+      return {
+        kind: 'COIL',
+        id: String(g._id),
+        ...coilHistoryRow(g),
+        matchedRounds: g.matchedRounds || 0,
+        matchedConversionIds,
+        // Source details the coil row keeps for its tooltip.
+        poNumber: g.receipt?.poNumber || '',
+        unitCost: Number(g.receipt?.unitCost) > 0 ? round2(g.receipt.unitCost) : null,
+      };
+    });
+
+    const s = agg?.stats?.[0] || {};
+    const seg = agg?.segments?.[0] || {};
+    const allCuts = await CoilConversion.countDocuments({ isDeleted: { $ne: true } });
+    const total = s.entries || 0;
+    return {
+      docs,
+      summary: {
+        filtered,
+        cutFiltered,
+        // Rows per record type under every filter but the record type itself.
+        segments: {
+          all: seg.all || 0, coils: seg.coils || 0, grn: seg.grn || 0, manual: seg.manual || 0, unlinked: seg.unlinked || 0,
+        },
+        // ── Rows, and the coils among them ──
+        entries: total,
+        coils: s.coils || 0,
+        partiallyCut: s.partiallyCut || 0,
+        fullyCut: s.fullyCut || 0,
+        unlinked: s.unlinked || 0,
+        // ── Every matching CUT, each once ──
+        cuts: s.cuts || 0,
+        coilCuts: (s.cuts || 0) - (s.unlinked || 0),
+        unlinkedCutKg: round2(s.unlinkedCutKg),
+        cutKg: round2(s.cutKg),
+        circlesKg: round2(s.circlesKg),
+        circlesPcs: round2(s.circlesPcs),
+        scrapKg: round2(s.scrapKg),
+        plantScrapKg: round2(s.plantScrapKg),
+        jobWorkScrapKg: round2(s.jobWorkScrapKg),
+        // Scrap of matching cuts with no recorded location (some imports).
+        unplacedScrapKg: round2((s.scrapKg || 0) - (s.plantScrapKg || 0) - (s.jobWorkScrapKg || 0)),
+        // Weighted (circles ÷ cut), like the coil rows; and the plain average
+        // per cut, as All conversions reported it.
+        yieldPct: s.cutKg > 0 ? round2((s.circlesKg / s.cutKg) * 100) : null,
+        avgYieldPct: s.cuts > 0 ? round2(s.yieldSum / s.cuts) : null,
+        allCuts,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      },
+    };
+  },
+
+  /**
    * The circle SKUs the Cutting History's rounds actually produced — what its
    * "Circle SKU" filter offers.
    *
@@ -2678,11 +3215,15 @@ export const rmImsService = {
    * SKU master where it still has the item (the conversion's own copy is the
    * fallback), and the list is bounded by the number of circle SKUs, not by
    * the number of cuts.
+   *
+   * `scope: 'all'` — every recorded cut, the imported ones included: what All
+   * conversions filters by, so a size only an older cut produced is offered.
    */
-  async listCuttingHistoryCircles() {
+  async listCuttingHistoryCircles(query = {}) {
+    const everyCut = String(query.scope || '').toLowerCase() === 'all';
     const rows = await CoilConversion.aggregate([
       {
-        $match: {
+        $match: everyCut ? { isDeleted: { $ne: true } } : {
           $or: [{ coilReceiptId: { $type: 'objectId' } }, { manualCoilId: { $type: 'objectId' } }],
           isDeleted: { $ne: true },
         },
