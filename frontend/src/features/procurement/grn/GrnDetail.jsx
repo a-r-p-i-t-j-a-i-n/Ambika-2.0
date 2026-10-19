@@ -25,7 +25,7 @@ import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
 import GrnPdfPreview from './GrnPdfPreview';
-import GrnQcSection from './GrnQcSection';
+import { GrnQcSections } from './GrnQcSection';
 import GrnQcStatusChip from './GrnQcStatusChip';
 import { inventoryTypeLabel } from './inventoryType';
 import { resolveGrnQcStage } from './grnQcStage';
@@ -215,12 +215,16 @@ const GrnDetail = () => {
             )}
           </Box>
           <Typography variant="body2" color="text.secondary">
-            {grn.vendorName} · {grn.isWithoutPo ? 'Without PO' : `PO ${grn.poNumber || '—'}`} · {fmtDate(grn.grnDate)}
+            {grn.vendorName} · {grn.isWithoutPo ? 'Without PO' : `PO ${(grn.poNumbers?.length ? grn.poNumbers : [grn.poNumber]).filter(Boolean).join(', ') || '—'}`} · {fmtDate(grn.grnDate)}
           </Typography>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          {grn.poId && <Button variant="outlined" startIcon={<ShoppingBag size={16} />} onClick={() => navigate(`/procurement/purchase-orders/${grn.poId}`)}>View PO</Button>}
+          {(grn.poIds?.length ? grn.poIds : (grn.poId ? [grn.poId] : [])).map((pid, i) => (
+            <Button key={pid} variant="outlined" startIcon={<ShoppingBag size={16} />} onClick={() => navigate(`/procurement/purchase-orders/${pid}`)}>
+              View PO{(grn.poNumbers?.length > 1) ? ` ${grn.poNumbers[i] || ''}` : ''}
+            </Button>
+          ))}
           {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={<PackageCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete &amp; Post Stock</Button>}
           {grn.grnPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>{isLocked ? 'View Signed PDF' : 'GRN PDF'}</Button>}
@@ -277,7 +281,10 @@ const GrnDetail = () => {
               <Grid item xs={6} sm={4}><Field label="GST" value={grn.vendorGST || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Phone" value={grn.vendorPhone || '—'} /></Grid>
               <Grid item xs={12} sm={4}><Field label="Address" value={grn.vendorAddress || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="PO Number" value={grn.isWithoutPo ? 'Without PO' : (grn.poNumber || '—')} /></Grid>
+              <Grid item xs={6} sm={4}>
+                <Field label={`PO Number${(grn.poNumbers?.length || 0) > 1 ? 's' : ''}`}
+                  value={grn.isWithoutPo ? 'Without PO' : ((grn.poNumbers?.length ? grn.poNumbers : [grn.poNumber]).filter(Boolean).join(', ') || '—')} />
+              </Grid>
               <Grid item xs={6} sm={4}>
                 <Field label="PI Number" value={grn.piId
                   ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${grn.piId}`)}>{grn.piNumber || 'View PI'}</Box>
@@ -298,6 +305,7 @@ const GrnDetail = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>#</TableCell>
+                    {(grn.poNumbers?.length || 0) > 1 && <TableCell>PO</TableCell>}
                     <TableCell>Description</TableCell>
                     <TableCell>SKU</TableCell>
                     <TableCell align="right">Ordered</TableCell>
@@ -333,6 +341,9 @@ const GrnDetail = () => {
                     return (
                       <TableRow key={it._id || i} hover>
                         <TableCell>{i + 1}</TableCell>
+                        {(grn.poNumbers?.length || 0) > 1 && (
+                          <TableCell><Typography variant="body2" color="text.secondary">{it.poNumber || '—'}</Typography></TableCell>
+                        )}
                         <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
                         <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
                         <TableCell align="right">{grn.isWithoutPo ? 'N/A' : it.orderedQty}</TableCell>
@@ -418,7 +429,7 @@ const GrnDetail = () => {
           <PageSection letter="B" title="Incoming QC" subtitle="Step 1.9 · Accepted / rejected / rework against the received quantity" />
         </Grid>
         <Grid item xs={12}>
-          <GrnQcSection grn={grn} isMd={isMd} />
+          <GrnQcSections grn={grn} isMd={isMd} />
         </Grid>
 
         {/* Timeline */}

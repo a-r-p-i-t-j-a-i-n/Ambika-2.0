@@ -63,6 +63,11 @@ const grnDocumentSchema = new Schema({
 
 const grnItemSchema = new Schema({
   poItemId:   { type: Schema.Types.ObjectId }, // PO line _id (match-back)
+  // Which PO this line belongs to (multi-PO GRN) — resolved server-side from
+  // poItemId/skuCode against the selected POs, never trusted from the client.
+  // Single-PO GRNs carry the one poId here too, same as the header's.
+  poId:       { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', default: null },
+  poNumber:   { type: String, trim: true, default: '' },
   skuId:      { type: Schema.Types.ObjectId, ref: 'SKU' },
   skuCode:    { type: String, trim: true, uppercase: true, default: '' },
   itemName:   { type: String, required: true, trim: true },
@@ -97,8 +102,15 @@ const grnSchema = new Schema({
   // ── PO / PI / Indent linkage ──
   // poId is required UNLESS isWithoutPo is true — a GRN raised with no Purchase
   // Order at all (e.g. an emergency / walk-in receipt). See isWithoutPo below.
+  // Multi-PO GRN: poId/poNumber are the PRIMARY (first selected) PO, kept for
+  // every reader that only knows about one PO; poIds/poNumbers carry the full
+  // set. Same pattern as indentId+indentIds on the PO model, or qcId+qcIds on
+  // the Vendor Invoice. piId/indentId likewise mirror the primary PO only —
+  // display/snapshot fields, not something GRN itself gates on.
   poId:         { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', default: null, index: true },
   poNumber:     { type: String, trim: true, index: true },
+  poIds:        { type: [{ type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder' }], default: [] },
+  poNumbers:    { type: [String], default: [] },
   piId:         { type: Schema.Types.ObjectId, ref: 'ProformaInvoice' },
   piNumber:     { type: String, trim: true, default: '' },
   indentId:     { type: Schema.Types.ObjectId, ref: 'PurchaseIndent' },
@@ -143,9 +155,14 @@ const grnSchema = new Schema({
   // ── Status & QC handoff ──
   grnStatus:   { type: String, enum: Object.values(GRN_STATUS), default: GRN_STATUS.DRAFT, index: true },
   qcStatus:    { type: String, enum: Object.values(GRN_QC_STATUS), default: GRN_QC_STATUS.PENDING, index: true },
-  // Step 1.9 — Incoming QC linkage (additive)
+  // Step 1.9 — Incoming QC linkage (additive). A multi-PO GRN gets one QC per
+  // PO (see incomingQc.service.js) — qcId/qcNumber are the PRIMARY (earliest)
+  // QC for back-compat; qcIds/qcNumbers carry every QC. A single-PO GRN has
+  // exactly one, so these always stay in lockstep with qcId/qcNumber.
   qcId:          { type: Schema.Types.ObjectId, ref: 'IncomingQC', default: null },
   qcNumber:      { type: String, trim: true, default: '' },
+  qcIds:         { type: [{ type: Schema.Types.ObjectId, ref: 'IncomingQC' }], default: [] },
+  qcNumbers:     { type: [String], default: [] },
   qcCompletedAt: { type: Date, default: null },
   // Short-lived lock held while a QC for this GRN is being created or completed,
   // so two requests can never both create (or both complete) a QC for one GRN

@@ -27,10 +27,10 @@ const baseWopo = {
   items: [{ itemName: 'Bolt M8', skuId: SKU_ID, receivedQty: 10 }],
 };
 
-test('a normal (PO-based) create still requires poId — unchanged default behaviour', () => {
+test('a normal (PO-based) create still requires a PO (poId or poIds) — unchanged default behaviour', () => {
   const { error } = createGrnSchema.validate({ inventoryType: 'CONSUMABLE_PACKAGING' });
   assert.ok(error);
-  assert.match(error.message, /poId/);
+  assert.match(error.message, /Purchase Order/);
 });
 
 test('isWithoutPo defaults to false when omitted', () => {

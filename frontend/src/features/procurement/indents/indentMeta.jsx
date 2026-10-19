@@ -4,15 +4,35 @@ import StatusChip from '../components/StatusChip';
 /** Dropdown option sets shared across the Indent screens. */
 export const UNITS = ['Pcs', 'Kg', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
 
+// The SKU master stores units as entered during import (e.g. "KGS", "LTR",
+// "MTR", "NOS" — see sku.model.js's `unit` field comment), which don't match
+// UNITS' display casing/spelling. Maps those known shorthands onto the
+// dropdown's canonical labels so picking a Product doesn't silently lose its
+// real unit (e.g. "KGS" collapsing to "Pcs").
+const UNIT_ALIASES = {
+  PCS: 'Pcs', PC: 'Pcs', NOS: 'Pcs', NO: 'Pcs',
+  KG: 'Kg', KGS: 'Kg', KILOGRAM: 'Kg', KILOGRAMS: 'Kg',
+  METER: 'Meter', METERS: 'Meter', METRE: 'Meter', METRES: 'Meter', MTR: 'Meter', MTRS: 'Meter',
+  ROLL: 'Roll', ROLLS: 'Roll',
+  BOX: 'Box', BOXES: 'Box',
+  SET: 'Set', SETS: 'Set',
+  LITRE: 'Litre', LITRES: 'Litre', LITER: 'Litre', LITERS: 'Litre', LTR: 'Litre', LTRS: 'Litre',
+  DOZEN: 'Dozen', DOZ: 'Dozen',
+};
+
 /**
- * Map a stored unit to its canonical UNITS casing (legacy data may hold "PCS",
- * "kg", etc.). Falls back to the first option so the select never goes
- * out-of-range. Returns '' for empty input.
+ * Map a stored unit to its canonical UNITS casing/spelling. Checks UNITS
+ * itself first (legacy data may already hold "PCS", "kg", etc.), then known
+ * aliases. Returns '' for empty or unrecognized input — callers decide
+ * whether to fall back, rather than this guessing and overwriting the
+ * master's real value with the wrong unit.
  */
 export const normalizeUnit = (u) => {
   if (!u) return '';
-  const match = UNITS.find((opt) => opt.toLowerCase() === String(u).trim().toLowerCase());
-  return match || UNITS[0];
+  const raw = String(u).trim();
+  const exact = UNITS.find((opt) => opt.toLowerCase() === raw.toLowerCase());
+  if (exact) return exact;
+  return UNIT_ALIASES[raw.toUpperCase()] || '';
 };
 export const DEPARTMENTS = ['Stores', 'Production', 'QC', 'Admin', 'Maintenance', 'Packing'];
 

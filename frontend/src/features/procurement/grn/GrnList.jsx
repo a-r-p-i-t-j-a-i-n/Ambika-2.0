@@ -104,10 +104,18 @@ const GrnList = () => {
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'grnDate', headerName: 'GRN DATE', width: 100,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
-    { field: 'poNumber', headerName: 'PO NUMBER', width: 140,
-      renderCell: (p) => (p.row.isWithoutPo
-        ? <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} />
-        : <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography>) },
+    { field: 'poNumber', headerName: 'PO NUMBER', width: 150, sortable: false,
+      renderCell: (p) => {
+        if (p.row.isWithoutPo) return <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} />;
+        const nums = p.row.poNumbers?.length ? p.row.poNumbers : [p.value];
+        const [first, ...rest] = nums.filter(Boolean);
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+            <Typography variant="body2" fontWeight={600} noWrap>{first || '—'}</Typography>
+            {rest.length > 0 && <Chip size="small" label={`+${rest.length} more`} title={rest.join(', ')} sx={{ fontWeight: 700, height: 18 }} />}
+          </Box>
+        );
+      } },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 160,
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
     // GRN and QC are one step — the QC (done on the GRN page) shows beside its GRN,

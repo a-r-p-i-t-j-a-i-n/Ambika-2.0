@@ -35,6 +35,9 @@ const qcItemSchema = Joi.object({
 // one source id is required.
 export const createQcSchema = Joi.object({
   grnId:               objectId,
+  // Which PO's items to inspect — required only when grnId's GRN covers more
+  // than one PO (a single-PO or W/O PO GRN resolves it on its own).
+  poId:                objectId.allow('', null),
   indentId:            objectId,
   serviceCompletionId: objectId,
   qcDate:           Joi.date().optional(),

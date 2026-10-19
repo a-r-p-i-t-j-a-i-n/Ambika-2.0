@@ -163,10 +163,12 @@ const PurchaseOrderDetail = () => {
   // its own lifecycle (Draft → complete → QC) must resolve before a fresh
   // "Create GRN" is offered again.
   const activeGrn = grns.find((g) => g.grnStatus !== 'CANCELLED') || null;
-  // GRN gate: material confirmed (READY_FOR_GRN + Final Material Date) and PI settled.
+  // GRN gate: material confirmed (READY_FOR_GRN + Final Material Date) and PI
+  // settled. NOT_RECEIVED (no PI — optional) is settled too, same as the
+  // backend's isPiSettledForGrn (grn.service.js) — only an in-progress PI blocks.
   const grnGateMet = data?.data?.followUpStatus === 'READY_FOR_GRN'
     && Boolean(data?.data?.finalMaterialDate)
-    && ['PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'].includes(data?.data?.piStatus);
+    && ['NOT_RECEIVED', 'PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'].includes(data?.data?.piStatus);
   // A new PO needs the full gate; one already partially received keeps receiving (back-compat).
   // Blocked while the active GRN is still a draft — it must be completed first.
   const canCreateGrn = activeGrn?.grnStatus !== 'DRAFT' && (
@@ -320,13 +322,9 @@ const PurchaseOrderDetail = () => {
           primary: { label: followUpPrimary.label, icon: followUpPrimary.icon, onClick: followUpPrimary.onClick, disabled: followUpPrimary.disabled },
         };
       }
-      if (canCreatePi) {
-        return {
-          tone: 'warning', text: 'Material delivery is confirmed — complete the Proforma Invoice before creating a GRN.',
-          primary: { label: 'Create PI', icon: <FileText size={16} />, onClick: () => setPiFormOpen(true) },
-          secondary: canMarkPiNotRequired ? { label: 'Mark PI Not Required', onClick: () => setPiNotReqOpen(true) } : null,
-        };
-      }
+      // A PI that was actually created and hasn't finished still needs
+      // resolving — these are the only cases that legitimately block GRN now
+      // that PI itself is optional (see grnGateMet / isPiSettledForGrn).
       if (livePi && canApprovePi) {
         return {
           tone: 'warning', text: 'The Proforma Invoice is waiting for approval.',
@@ -346,11 +344,26 @@ const PurchaseOrderDetail = () => {
         };
       }
       if (grnGate) return grnGate;
+      // No PI in progress (none created, explicitly skipped, or already paid)
+      // — GRN can proceed. A PI remains available as an optional action, not a gate.
       if (canCreateGrn) {
         return {
           tone: 'success',
-          text: isPiNotRequired ? 'PI was marked Not Required — create the GRN to receive stock.' : 'Payment is complete — create the GRN to receive stock.',
+          text: livePi?.piStatus === 'PAYMENT_COMPLETED'
+            ? 'Payment is complete — create the GRN to receive stock.'
+            : isPiNotRequired
+              ? 'PI was marked Not Required — create the GRN to receive stock.'
+              : 'Material delivery is confirmed — create the GRN to receive stock. A Proforma Invoice is optional and can still be added later.',
           primary: { label: 'Create GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnFormOpen(true) },
+          secondary: canCreatePi ? { label: 'Create PI', onClick: () => setPiFormOpen(true) } : null,
+        };
+      }
+      if (canCreatePi) {
+        return {
+          tone: 'info',
+          text: 'Material delivery is confirmed. A Proforma Invoice is optional — create one only if this vendor needs it.',
+          primary: { label: 'Create PI', icon: <FileText size={16} />, onClick: () => setPiFormOpen(true) },
+          secondary: canMarkPiNotRequired ? { label: 'Mark PI Not Required', onClick: () => setPiNotReqOpen(true) } : null,
         };
       }
       return { tone: 'info', text: 'Waiting on the next step.', primary: null };
