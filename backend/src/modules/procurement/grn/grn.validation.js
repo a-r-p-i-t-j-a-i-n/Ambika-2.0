@@ -79,10 +79,18 @@ export const createGrnSchema = Joi.object({
   // A GRN raised with no PO behind it at all — vendor + items are entered by
   // hand instead of sourced from a PO. See grn.model.js's isWithoutPo.
   isWithoutPo:     Joi.boolean().default(false),
+  // One PO (legacy) OR many POs (multi-PO GRN, same vendor — enforced in the
+  // service, which needs DB-loaded vendor data). At least one is required
+  // unless isWithoutPo. Mirrors createInvoiceSchema's qcId/qcIds precedent.
   poId: Joi.when('isWithoutPo', {
     is: true,
     then: objectId.allow('', null).optional(),
-    otherwise: objectId.required(),
+    otherwise: objectId.optional(),
+  }),
+  poIds: Joi.when('isWithoutPo', {
+    is: true,
+    then: Joi.array().items(objectId).optional(),
+    otherwise: Joi.array().items(objectId).min(1).optional(),
   }),
   // Vendor snapshot — sourced from the PO on a normal GRN; entered by hand (and
   // required) when there is no PO to source it from.
@@ -124,7 +132,12 @@ export const createGrnSchema = Joi.object({
     then: Joi.array().items(grnItemSchema).min(1).required().messages({ 'array.min': 'Add at least one item to receive' }),
     otherwise: Joi.array().items(grnItemSchema).min(1).optional(),
   }),
-});
+}).custom((value, helpers) => {
+  if (!value.isWithoutPo && !value.poId && !(value.poIds && value.poIds.length)) {
+    return helpers.message('Select at least one Purchase Order');
+  }
+  return value;
+}, 'at least one PO unless W/O PO');
 
 // Preview-only: render the PDF from current form data without saving. Lenient by
 // design (works for both new + edit forms); the service derives totals/vendor itself.

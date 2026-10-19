@@ -3,6 +3,7 @@ import path from 'path';
 import PDFDocument from 'pdfkit';
 import IncomingQC, { QC_STATUS, QC_RESULT, QC_SOURCE_TYPE } from './incomingQc.model.js';
 import GoodsReceiptNote, { GRN_STATUS, GRN_QC_STATUS } from '../grn/grn.model.js';
+import VendorPurchaseOrder from '../purchase-order/purchaseOrder.model.js';
 import ServiceCompletion, { SERVICE_COMPLETION_STATUS, SERVICE_QC_STATUS } from '../service-completion/serviceCompletion.model.js';
 import PurchaseIndent, { INDENT_OVERALL_STATUS, INDENT_REQUEST_TYPE } from '../indent/indent.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
@@ -72,6 +73,38 @@ const withGrnQcLock = async (grnId, work) => {
 
 const sameId = (a, b) => a != null && b != null && String(a) === String(b);
 const sameBatch = (a, b) => String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase();
+
+/**
+ * Recompute a GRN's aggregate QC status from ALL of its (non-cancelled) QCs.
+ * A single-PO GRN has exactly one QC, so this collapses to exactly the old
+ * direct-mirror behaviour. A multi-PO GRN has one QC per PO (see create()
+ * below): the GRN stays PENDING until every PO has a resolved QC; once all
+ * are resolved, PASSED only if every one passed, FAILED only if every one
+ * failed, else PARTIAL. qcId/qcNumber stay the PRIMARY (earliest) QC for
+ * back-compat; qcIds/qcNumbers carry the full set.
+ */
+const recomputeGrnQcStatus = async (grnId) => {
+  const grn = await GoodsReceiptNote.findById(grnId).select('poIds poId isWithoutPo').lean();
+  if (!grn) return;
+  const expectedGroups = grn.isWithoutPo ? 1 : Math.max(1, grn.poIds?.length || (grn.poId ? 1 : 1));
+  const qcs = await IncomingQC.find({ grnId, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } })
+    .sort('createdAt').select('_id qcNumber qcStatus').lean();
+  const resolved = (s) => [QC_STATUS.PASSED, QC_STATUS.FAILED, QC_STATUS.PARTIAL].includes(s);
+  let grnQcStatus = GRN_QC_STATUS.PENDING;
+  if (qcs.length >= expectedGroups && qcs.every((q) => resolved(q.qcStatus))) {
+    if (qcs.every((q) => q.qcStatus === QC_STATUS.PASSED)) grnQcStatus = GRN_QC_STATUS.PASSED;
+    else if (qcs.every((q) => q.qcStatus === QC_STATUS.FAILED)) grnQcStatus = GRN_QC_STATUS.FAILED;
+    else grnQcStatus = GRN_QC_STATUS.PARTIAL;
+  }
+  await GoodsReceiptNote.updateOne({ _id: grnId }, {
+    $set: {
+      qcStatus: grnQcStatus,
+      qcId: qcs[0]?._id || null, qcNumber: qcs[0]?.qcNumber || '',
+      qcIds: qcs.map((q) => q._id), qcNumbers: qcs.map((q) => q.qcNumber),
+      qcCompletedAt: grnQcStatus !== GRN_QC_STATUS.PENDING ? new Date() : null,
+    },
+  });
+};
 
 /**
  * Where each REJECTED QC line's stock actually is. Pure.
@@ -347,20 +380,35 @@ export const incomingQcService = {
       throw new AppError('GRN must be MD Approved before Incoming QC can be created', 400);
     }
 
-    // One QC per GRN: the duplicate check and the insert run under the GRN's QC
-    // lock, so a concurrent request waits and then finds this QC instead of
-    // creating a second one. Released on success and on failure alike.
+    // One QC per (GRN, PO): the duplicate check and the insert run under the
+    // GRN's QC lock, so a concurrent request waits and then finds this QC
+    // instead of creating a second one. Released on success and on failure alike.
     return withGrnQcLock(grn._id, () => this._createForGrnLocked(grn, data, user));
   },
 
   /** create() for a GRN — runs holding the GRN's QC lock. */
   async _createForGrnLocked(grn, data, user) {
-    const existing = await IncomingQC.findOne({ grnId: grn._id, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } }).lean();
-    if (existing) throw new AppError(`A QC (${existing.qcNumber}) already exists for this GRN`, 409);
+    // Which PO's items to inspect. A single-PO (or W/O PO) GRN defaults to its
+    // one PO unambiguously; a multi-PO GRN requires the caller to say which.
+    const poIds = grn.poIds?.length ? grn.poIds : (grn.poId ? [grn.poId] : []);
+    let targetPoId = data.poId || (poIds.length <= 1 ? poIds[0] : null);
+    if (poIds.length > 1 && !targetPoId) {
+      throw new AppError('This GRN covers multiple Purchase Orders — select which PO\'s items to inspect', 400);
+    }
+    if (targetPoId && poIds.length && !poIds.some((id) => String(id) === String(targetPoId))) {
+      throw new AppError('That PO is not part of this GRN', 400);
+    }
 
-    // Rule 3: auto-load received lines from the GRN (default all accepted).
-    const sourceItems = data.items?.length ? data.items : (grn.items || [])
-      .filter((it) => round2(it.receivedQty) > 0)
+    const existing = await IncomingQC.findOne({
+      grnId: grn._id, poId: targetPoId || null, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED },
+    }).lean();
+    if (existing) throw new AppError(`A QC (${existing.qcNumber}) already exists for this GRN${targetPoId ? ' / PO' : ''}`, 409);
+
+    // Rule 3: auto-load received lines from the GRN (default all accepted),
+    // scoped to the target PO's own lines on a multi-PO GRN.
+    const grnLines = (grn.items || []).filter((it) => round2(it.receivedQty) > 0
+      && (!targetPoId || poIds.length <= 1 || String(it.poId) === String(targetPoId)));
+    const sourceItems = data.items?.length ? data.items : grnLines
       .map((it) => ({
         grnItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
         batchNo: it.batchNo || '', receivedQty: it.receivedQty, shortQty: it.shortQty || 0,
@@ -371,13 +419,27 @@ export const incomingQcService = {
     const { lines, totals } = computeTotals(sourceItems);
     const qcNumber = await generateQcNumber(data.qcDate || new Date());
 
+    // On a multi-PO GRN, a non-primary PO may carry its own PI/indent — look it
+    // up fresh rather than assume the GRN header's primary-only snapshot applies.
+    let piId = grn.piId; let piNumber = grn.piNumber;
+    let indentId = grn.indentId; let indentNumber = grn.indentNumber;
+    if (targetPoId && String(targetPoId) !== String(grn.poId)) {
+      const targetPo = await VendorPurchaseOrder.findById(targetPoId).select('piId piNumber indentId indentNumber poNumber').lean();
+      if (targetPo) {
+        piId = targetPo.piId; piNumber = targetPo.piNumber || '';
+        indentId = targetPo.indentId; indentNumber = targetPo.indentNumber || '';
+      }
+    }
+    const poIdIdx = targetPoId ? (grn.poIds || []).findIndex((id) => String(id) === String(targetPoId)) : -1;
+    const targetPoNumber = poIdIdx >= 0 ? (grn.poNumbers?.[poIdIdx] || grn.poNumber) : grn.poNumber;
+
     const qc = await IncomingQC.create({
       qcNumber,
       qcDate: data.qcDate || new Date(),
       grnId: grn._id, grnNumber: grn.grnNumber,
-      poId: grn.poId, poNumber: grn.poNumber,
-      piId: grn.piId, piNumber: grn.piNumber,
-      indentId: grn.indentId, indentNumber: grn.indentNumber,
+      poId: targetPoId || grn.poId, poNumber: targetPoNumber,
+      piId, piNumber,
+      indentId, indentNumber,
       vendorId: grn.vendorId, vendorName: grn.vendorName,
       warehouse: grn.warehouse || 'MAIN',
       checkedBy: user?._id, checkedByName: data.checkedByName || user?.name || '',
@@ -389,7 +451,7 @@ export const incomingQcService = {
       ...totals,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `QC created for ${grn.grnNumber}`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `QC created for ${grn.grnNumber}${targetPoNumber ? ` (${targetPoNumber})` : ''}`, actorId: user?._id }],
     });
     return qc;
   },
@@ -639,15 +701,9 @@ export const incomingQcService = {
       throw err;
     }
 
-    // Rule 8: update the GRN qcStatus + linkage.
-    const grnQcStatus = qcStatus === QC_STATUS.PASSED ? GRN_QC_STATUS.PASSED
-      : qcStatus === QC_STATUS.FAILED ? GRN_QC_STATUS.FAILED
-      : GRN_QC_STATUS.PARTIAL;
+    // Rule 8: update the GRN's aggregate qcStatus + linkage.
     try {
-      await GoodsReceiptNote.updateOne(
-        { _id: qc.grnId },
-        { $set: { qcStatus: grnQcStatus, qcId: qc._id, qcNumber: qc.qcNumber, qcCompletedAt: new Date() } },
-      );
+      await recomputeGrnQcStatus(qc.grnId);
     } catch (err) { logger.error(`[qc] GRN update failed for ${qc.grnId}: ${err.message}`); }
   },
 

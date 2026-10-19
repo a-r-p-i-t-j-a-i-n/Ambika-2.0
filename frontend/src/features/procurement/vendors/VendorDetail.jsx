@@ -4,7 +4,7 @@ import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
   Box, Paper, Stack, Typography, alpha, useTheme, Button, IconButton, Chip,
   Table, TableBody, TableCell, TableHead, TableRow, Skeleton, Grid, Dialog, DialogTitle,
-  DialogContent, DialogActions, TextField, Tooltip,
+  DialogContent, DialogActions, TextField, Tooltip, Autocomplete,
 } from '@mui/material';
 import {
   ArrowLeft, Store, Plus, Pencil, Trash2, Mail, Phone, MapPin, Package, X,
@@ -12,10 +12,17 @@ import {
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useGetVendorByIdQuery, useUpdateVendorMutation, useGetVendorPricingHistoryQuery } from '../../../store/api/vendorApi';
+import { useGetSkuLookupQuery } from '../../../store/api/skuApi';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 const SOURCE_LABEL = { VENDOR_MASTER: 'Vendor Master', PURCHASE_ORDER: 'Purchase Order' };
+
+// Purchase FMS rule: Finished Goods are sell-side only — a vendor never supplies
+// them. Mirrors IndentFormDrawer.jsx's isPurchasableSku so the picker here can't
+// offer a product this vendor could never actually be a source for.
+const FG_BLOCKED = new Set(['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT']);
+const isPurchasableSku = (s) => !FG_BLOCKED.has(String(s?.itemType || '').toUpperCase());
 
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
@@ -59,7 +66,7 @@ const Field = ({ icon: Icon, label, value }) => (
   </Stack>
 );
 
-const emptyProduct = { productName: '', skuCode: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' };
+const emptyProduct = { productName: '', skuCode: '', skuId: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' };
 
 const VendorDetail = () => {
   const theme = useTheme();
@@ -75,6 +82,11 @@ const VendorDetail = () => {
   const [prodDialog, setProdDialog] = useState(null);
   const [editVendor, setEditVendor] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+
+  // SKU master — source of truth for a product's Unit, same as the Indent
+  // form. Only fetched while the Add/Edit Product dialog is actually open.
+  const { data: skuRes, isLoading: skusLoading } = useGetSkuLookupQuery({ limit: 2000 }, { skip: !prodDialog });
+  const skuOptions = (skuRes?.data || []).filter(isPurchasableSku);
 
   const { data: historyRes, isFetching: historyLoading } = useGetVendorPricingHistoryQuery({ id }, { skip: !historyOpen });
   const history = historyRes?.data || [];
@@ -95,7 +107,7 @@ const VendorDetail = () => {
     const d = prodDialog.draft;
     if (!d.productName.trim()) { enqueueSnackbar('Product name is required', { variant: 'warning' }); return; }
     const cleanProd = {
-      productName: d.productName.trim(), skuCode: (d.skuCode || '').trim(), unit: d.unit || 'Pcs',
+      productName: d.productName.trim(), skuCode: (d.skuCode || '').trim(), skuId: d.skuId || null, unit: d.unit || 'Pcs',
       rate: Number(d.rate || 0), gstRate: Number(d.gstRate || 0), notes: (d.notes || '').trim(),
     };
     const list = products.map((p) => ({ ...p }));
@@ -211,7 +223,7 @@ const VendorDetail = () => {
                   <TableCell align="right">{p.gstRate || 0}%</TableCell>
                   <TableCell sx={{ color: 'text.secondary', maxWidth: 200, whiteSpace: 'normal' }}>{p.notes || '—'}</TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Edit"><IconButton size="small" onClick={() => setProdDialog({ mode: 'edit', index: i, draft: { productName: p.productName || '', skuCode: p.skuCode || '', unit: p.unit || 'Pcs', rate: p.rate ?? '', gstRate: p.gstRate ?? '', notes: p.notes || '' } })}><Pencil size={15} /></IconButton></Tooltip>
+                    <Tooltip title="Edit"><IconButton size="small" onClick={() => setProdDialog({ mode: 'edit', index: i, draft: { productName: p.productName || '', skuCode: p.skuCode || '', skuId: p.skuId || '', unit: p.unit || 'Pcs', rate: p.rate ?? '', gstRate: p.gstRate ?? '', notes: p.notes || '' } })}><Pencil size={15} /></IconButton></Tooltip>
                     <Tooltip title="Remove"><IconButton size="small" color="error" onClick={() => deleteProduct(i)}><Trash2 size={15} /></IconButton></Tooltip>
                   </TableCell>
                 </TableRow>
@@ -237,8 +249,34 @@ const VendorDetail = () => {
         <DialogContent dividers>
           {prodDialog && (
             <Grid container spacing={1.5} sx={{ mt: 0 }}>
-              <Grid item xs={12}><TextField fullWidth size="small" label="Product Name *" value={prodDialog.draft.productName} onChange={(e) => setProdDialog((s) => ({ ...s, draft: { ...s.draft, productName: e.target.value } }))} /></Grid>
-              <Grid item xs={6}><TextField fullWidth size="small" label="SKU Code" value={prodDialog.draft.skuCode} onChange={(e) => setProdDialog((s) => ({ ...s, draft: { ...s.draft, skuCode: e.target.value } }))} /></Grid>
+              <Grid item xs={12}>
+                <Autocomplete
+                  size="small"
+                  freeSolo
+                  options={skuOptions}
+                  loading={skusLoading}
+                  getOptionLabel={(o) => (typeof o === 'string' ? o : o.name || '')}
+                  value={prodDialog.draft.productName}
+                  onInputChange={(_e, v, reason) => {
+                    // A free-typed name is no longer the picked SKU — clear the
+                    // link so Unit stays whatever the user has, not a stale SKU's.
+                    if (reason === 'input') setProdDialog((s) => ({ ...s, draft: { ...s.draft, productName: v, skuId: '' } }));
+                  }}
+                  onChange={(_e, val) => {
+                    if (val && typeof val === 'object') {
+                      // Auto-fill SKU Code + Unit from the SKU master on pick — same
+                      // source Indent uses — but both stay editable right after.
+                      setProdDialog((s) => ({ ...s, draft: {
+                        ...s.draft, productName: val.name, skuCode: val.code || '', skuId: val._id || '', unit: val.unit || s.draft.unit,
+                      } }));
+                    }
+                  }}
+                  renderInput={(params) => (
+                    <TextField {...params} fullWidth label="Product Name *" placeholder="Pick a SKU or type a name" />
+                  )}
+                />
+              </Grid>
+              <Grid item xs={6}><TextField fullWidth size="small" label="SKU Code" value={prodDialog.draft.skuCode} onChange={(e) => setProdDialog((s) => ({ ...s, draft: { ...s.draft, skuCode: e.target.value, skuId: '' } }))} /></Grid>
               <Grid item xs={6}><TextField fullWidth size="small" label="Unit" value={prodDialog.draft.unit} onChange={(e) => setProdDialog((s) => ({ ...s, draft: { ...s.draft, unit: e.target.value } }))} /></Grid>
               <Grid item xs={6}><TextField fullWidth size="small" type="number" label="Rate ₹" value={prodDialog.draft.rate} onChange={(e) => setProdDialog((s) => ({ ...s, draft: { ...s.draft, rate: e.target.value } }))} InputProps={{ startAdornment: <IndianRupee size={13} style={{ marginRight: 4 }} /> }} /></Grid>
               <Grid item xs={6}><TextField fullWidth size="small" type="number" label="GST %" value={prodDialog.draft.gstRate} onChange={(e) => setProdDialog((s) => ({ ...s, draft: { ...s.draft, gstRate: e.target.value } }))} /></Grid>

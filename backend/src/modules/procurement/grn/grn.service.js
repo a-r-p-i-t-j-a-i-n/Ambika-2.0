@@ -227,25 +227,51 @@ const computeLines = (items = []) => {
 // GRN states whose received qty counts toward the PO (stock already posted).
 const POSTED_GRN_STATUSES = [GRN_STATUS.RECEIVED, GRN_STATUS.PARTIAL_RECEIVED, GRN_STATUS.FULLY_RECEIVED];
 
-/** Match a GRN line back to its PO line (by PO line _id, else by SKU code). */
-const matchPoItem = (poItems = [], line) =>
-  poItems.find((p) => line.poItemId && String(p._id) === String(line.poItemId))
-  || poItems.find((p) => p.skuCode && line.skuCode
-    && String(p.skuCode).trim().toUpperCase() === String(line.skuCode).trim().toUpperCase());
+/**
+ * Match a GRN line back to its PO line, across one or more POs (multi-PO GRN).
+ * A line's poItemId is a PO-line's own _id, globally unique, so it can only
+ * ever match the one PO that owns it — no ambiguity even across several POs.
+ * Only a legacy/manual line with no poItemId falls back to a SKU-code scan,
+ * tried PO by PO in selection order (first match wins) — this is the only
+ * path where two POs offering an identical SKU could otherwise collide.
+ * Returns { po, item } or null.
+ */
+const matchAcrossPos = (pos = [], line) => {
+  if (line.poItemId) {
+    for (const po of pos) {
+      const item = (po.items || []).find((p) => String(p._id) === String(line.poItemId));
+      if (item) return { po, item };
+    }
+  }
+  for (const po of pos) {
+    const item = (po.items || []).find((p) => p.skuCode && line.skuCode
+      && String(p.skuCode).trim().toUpperCase() === String(line.skuCode).trim().toUpperCase());
+    if (item) return { po, item };
+  }
+  return null;
+};
 
 /**
- * Received qty per PO line, summed from the PO's completed GRNs — the source of
- * truth for "already received" (drafts and cancelled GRNs never count).
+ * Received qty per PO line, summed from the completed GRNs of one or more POs
+ * — the source of truth for "already received" (drafts and cancelled GRNs
+ * never count). Keyed by `${poId}|${poItemId}` so identical SKUs on different
+ * POs never collide.
  */
-const receivedByPoLine = async (po) => {
+const receivedByPoLines = async (pos = []) => {
+  const poIds = pos.map((p) => p._id);
   const grns = await GoodsReceiptNote.find({
-    poId: po._id, isDeleted: { $ne: true }, grnStatus: { $in: POSTED_GRN_STATUSES },
+    $or: [{ poId: { $in: poIds } }, { poIds: { $in: poIds } }],
+    isDeleted: { $ne: true }, grnStatus: { $in: POSTED_GRN_STATUSES },
   }).select('items.poItemId items.skuCode items.receivedQty').lean();
-  const received = new Map((po.items || []).map((p) => [String(p._id), 0]));
+  const received = new Map();
+  for (const po of pos) for (const p of (po.items || [])) received.set(`${po._id}|${p._id}`, 0);
   for (const g of grns) {
     for (const l of g.items || []) {
-      const p = matchPoItem(po.items, l);
-      if (p) received.set(String(p._id), round2(received.get(String(p._id)) + (Number(l.receivedQty) || 0)));
+      const m = matchAcrossPos(pos, l);
+      if (m) {
+        const key = `${m.po._id}|${m.item._id}`;
+        received.set(key, round2((received.get(key) || 0) + (Number(l.receivedQty) || 0)));
+      }
     }
   }
   return received;
@@ -253,20 +279,23 @@ const receivedByPoLine = async (po) => {
 
 /**
  * Rebuild GRN lines with ordered / previously-received qty taken from the
- * current PO + completed GRNs — never from the client. Only the physical
+ * current PO(s) + completed GRNs — never from the client. Only the physical
  * receipt fields (invoice/received qty, batch, remarks) come from `items`.
+ * Each line is resolved against whichever of `pos` it actually belongs to and
+ * stamped with that PO's own poId/poNumber.
  */
-const snapshotFromPo = (po, received, items = []) => {
+const snapshotFromPos = (pos, received, items = []) => {
   const seen = new Set();
   return items.map((it) => {
-    const p = matchPoItem(po.items, it);
-    if (!p) throw new AppError(`"${it.itemName}" is not a line on PO ${po.poNumber || ''}`.trim(), 400);
-    const key = String(p._id);
+    const m = matchAcrossPos(pos, it);
+    if (!m) throw new AppError(`"${it.itemName}" is not a line on any selected PO`, 400);
+    const { po, item: p } = m;
+    const key = `${po._id}|${p._id}`;
     if (seen.has(key)) throw new AppError(`"${p.itemName}" appears more than once in this GRN`, 400);
     seen.add(key);
     return {
       ...it,
-      poItemId: p._id,
+      poItemId: p._id, poId: po._id, poNumber: po.poNumber,
       skuId: it.skuId || p.skuId, skuCode: it.skuCode || p.skuCode, unit: it.unit || p.unit,
       orderedQty: p.quantity || 0,
       previouslyReceivedQty: received.get(key) || 0,
@@ -276,31 +305,43 @@ const snapshotFromPo = (po, received, items = []) => {
 
 const plain = (doc) => (typeof doc?.toObject === 'function' ? doc.toObject() : doc);
 
-/** Re-derive a GRN's PO-based figures against the current database state. */
-const refreshLines = async (po, items) => {
-  const received = await receivedByPoLine(po);
-  return computeLines(snapshotFromPo(po, received, (items || []).map(plain)));
+/** Re-derive a GRN's PO-based figures against the current database state (one or more POs). */
+const refreshLines = async (pos, items) => {
+  const received = await receivedByPoLines(pos);
+  return computeLines(snapshotFromPos(pos, received, (items || []).map(plain)));
 };
 
 const PO_LOCK_TTL_MS = 2 * 60 * 1000;
 
-/** Claim the per-PO GRN posting lock; null when another completion holds it. */
-const acquirePoLock = async (poId) => {
+/**
+ * Claim the per-PO GRN posting lock for every given PO at once — an
+ * all-or-nothing atomic `updateMany` claim (the same idiom
+ * `withQcInvoiceLock` uses for a set of QCs), not a sequential loop, so there
+ * is no lock-ordering/deadlock concern between two multi-PO GRNs sharing POs.
+ * Returns the claim timestamp, or null if not every PO could be claimed (and
+ * releases whatever was claimed this attempt).
+ */
+const acquirePoLocks = async (poIds) => {
+  if (!poIds.length) return null;
   const now = new Date();
-  const res = await VendorPurchaseOrder.updateOne(
+  const res = await VendorPurchaseOrder.updateMany(
     {
-      _id: poId,
+      _id: { $in: poIds },
       $or: [{ grnPostingLockAt: null }, { grnPostingLockAt: { $lt: new Date(now.getTime() - PO_LOCK_TTL_MS) } }],
     },
     { $set: { grnPostingLockAt: now } },
   );
-  return res.modifiedCount === 1 ? now : null;
+  if (res.modifiedCount !== poIds.length) {
+    await VendorPurchaseOrder.updateMany({ _id: { $in: poIds }, grnPostingLockAt: now }, { $set: { grnPostingLockAt: null } }).catch(() => {});
+    return null;
+  }
+  return now;
 };
 
-const releasePoLock = (poId, lockedAt) => VendorPurchaseOrder.updateOne(
-  { _id: poId, grnPostingLockAt: lockedAt },
+const releasePoLocks = (poIds, lockedAt) => VendorPurchaseOrder.updateMany(
+  { _id: { $in: poIds }, grnPostingLockAt: lockedAt },
   { $set: { grnPostingLockAt: null } },
-).catch((err) => logger.error(`[grn] failed to release PO lock ${poId}: ${err.message}`));
+).catch((err) => logger.error(`[grn] failed to release PO lock(s) ${poIds.join(',')}: ${err.message}`));
 
 const isVersionConflict = (err) => err?.name === 'VersionError' || err?.name === 'ParallelSaveError';
 
@@ -383,9 +424,12 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
     // LEFT — GRN DETAILS
     doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('GRN DETAILS', liX, cardTop + 9);
     doc.font('Helvetica-Bold').fontSize(11).fill(navy).text(grn.grnNumber || '', liX, cardTop + 22, { width: cardInnerW });
+    const poNoLabel = grn.isWithoutPo
+      ? 'Without PO'
+      : ((grn.poNumbers?.length ? grn.poNumbers : [grn.poNumber]).filter(Boolean).join(', ') || '—');
     doc.font('Helvetica').fontSize(8.5).fill(navy)
       .text(`Date: ${fmtDate(grn.grnDate)}`, liX, cardTop + 40)
-      .text(`PO No: ${grn.isWithoutPo ? 'Without PO' : (grn.poNumber || '—')}`, liX, cardTop + 53)
+      .text(`PO No: ${poNoLabel}`, liX, cardTop + 53, { width: cardInnerW })
       .text(`Challan No: ${grn.challanNumber || '—'}`, liX, cardTop + 66);
 
     // RIGHT — SUPPLIER (fixed label column → labels + values align, address wraps)
@@ -416,15 +460,21 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
     drawHead();
     const nameCol = cols.find((c) => c.key === 'name');
     const PADY = 5;
+    // A multi-PO GRN shows each line's own PO number — a single-PO (or W/O PO)
+    // GRN's layout is completely unaffected (nothing extra is ever drawn).
+    const isMultiPo = !grn.isWithoutPo && (grn.poNumbers?.length || 0) > 1;
     (grn.items || []).forEach((it, i) => {
-      // Measure the description: item name (primary) + optional batch line
+      // Measure the description: item name (primary) + optional batch / PO line
       // (secondary). Row height auto-adjusts so long names wrap cleanly.
       const itemName = it.itemName || '';
-      const batchStr = it.batchNo ? `Batch: ${it.batchNo}` : '';
+      const subParts = [];
+      if (isMultiPo && it.poNumber) subParts.push(`PO: ${it.poNumber}`);
+      if (it.batchNo) subParts.push(`Batch: ${it.batchNo}`);
+      const subStr = subParts.join('  ·  ');
       doc.font('Helvetica').fontSize(8.5);
       const nameH = doc.heightOfString(itemName, { width: nameCol.w - 8 });
-      const batchH = batchStr ? 10 : 0;
-      const rowH = Math.max(18, nameH + batchH + PADY * 2 - 2);
+      const subH = subStr ? 10 : 0;
+      const rowH = Math.max(18, nameH + subH + PADY * 2 - 2);
 
       if (y + rowH > 770) { doc.addPage(); y = M; drawHead(); }
       if (i % 2 === 1) doc.rect(M, y, W, rowH).fill('#f8fafc');
@@ -434,8 +484,8 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
       cols.forEach((c) => {
         if (c.key === 'name') {
           doc.font('Helvetica').fontSize(8.5).fill(navy).text(itemName, x + 4, y + PADY, { width: c.w - 8 });
-          if (batchStr) {
-            doc.font('Helvetica').fontSize(7).fill('#64748b').text(batchStr, x + 8, y + PADY + nameH + 1, { width: c.w - 12 });
+          if (subStr) {
+            doc.font('Helvetica').fontSize(7).fill('#64748b').text(subStr, x + 8, y + PADY + nameH + 1, { width: c.w - 12 });
           }
         } else {
           doc.font('Helvetica').fontSize(8.5).fill(navy).text(cells[c.key], x + 4, y + PADY, { width: c.w - 8, align: c.align, ellipsis: true });
@@ -515,56 +565,67 @@ registerApprovalDocument('GRN', {
 export const isPiSettledForGrn = (piStatus) =>
   [PO_PI_STATUS.NOT_RECEIVED, PO_PI_STATUS.PAYMENT_COMPLETED, PO_PI_STATUS.PI_NOT_REQUIRED].includes(piStatus);
 
+const uniq = (arr) => [...new Set(arr.filter(Boolean).map(String))];
+
 export const grnService = {
   async create(data, user) {
     if (data.isWithoutPo) return this.createWithoutPo(data, user);
-    const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } });
-    if (!po) throw new AppError('Purchase Order not found', 404);
 
-    // Rule 1: gate — material followed up to READY_FOR_GRN AND the PI step is settled.
-    if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || !isPiSettledForGrn(po.piStatus)) {
-      throw new AppError('GRN can only be created when the PO is READY_FOR_GRN and its PI is completed or marked Not Required', 400);
+    // One PO (legacy) or many (multi-PO GRN) — all must share one vendor.
+    const rawIds = data.poIds?.length ? data.poIds : (data.poId ? [data.poId] : []);
+    if (!rawIds.length) throw new AppError('Select at least one Purchase Order', 400);
+    const poIdList = uniq(rawIds);
+    if (poIdList.length !== rawIds.length) throw new AppError('The same Purchase Order was selected more than once', 400);
+
+    const pos = await VendorPurchaseOrder.find({ _id: { $in: poIdList }, isDeleted: { $ne: true } });
+    if (pos.length !== poIdList.length) throw new AppError('One or more selected Purchase Orders were not found', 404);
+    if (uniq(pos.map((p) => p.vendorId)).length > 1) {
+      throw new AppError('All selected Purchase Orders must belong to the same vendor', 400);
     }
 
-    // Rule 1b: material delivery must be confirmed — the PO must have reached the
-    // ready-for-GRN gate AND carry a Final Material Date (on the PO, or on the
-    // latest completed follow-up for back-compat). A PO already partially received
-    // is exempt so in-flight receiving is never blocked.
-    if (po.poStatus !== PO_STATUS.PARTIAL_RECEIVED) {
-      let hasFinalMaterialDate = !!(po.readyForGrnAt && po.finalMaterialDate);
-      if (po.readyForGrnAt && !po.finalMaterialDate) {
-        const fu = await PurchaseFollowUp.findOne({
-          poId: po._id, isDeleted: { $ne: true }, finalMaterialDate: { $ne: null },
-        }).sort('-updatedAt').select('finalMaterialDate').lean();
-        hasFinalMaterialDate = !!fu?.finalMaterialDate;
+    // Rule 1/1b: gate each PO independently — material followed up to
+    // READY_FOR_GRN, PI settled, Final Material Date present, not already fully
+    // received. A multi-PO GRN only proceeds once every selected PO qualifies.
+    for (const po of pos) {
+      if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || !isPiSettledForGrn(po.piStatus)) {
+        throw new AppError(`PO ${po.poNumber}: GRN can only be created when the PO is READY_FOR_GRN and its PI is completed or marked Not Required`, 400);
       }
-      if (!hasFinalMaterialDate) {
-        throw new AppError('Final Material Date is required before creating a GRN.', 400);
+      if (po.poStatus !== PO_STATUS.PARTIAL_RECEIVED) {
+        let hasFinalMaterialDate = !!(po.readyForGrnAt && po.finalMaterialDate);
+        if (po.readyForGrnAt && !po.finalMaterialDate) {
+          const fu = await PurchaseFollowUp.findOne({
+            poId: po._id, isDeleted: { $ne: true }, finalMaterialDate: { $ne: null },
+          }).sort('-updatedAt').select('finalMaterialDate').lean();
+          hasFinalMaterialDate = !!fu?.finalMaterialDate;
+        }
+        if (!hasFinalMaterialDate) {
+          throw new AppError(`PO ${po.poNumber}: Final Material Date is required before creating a GRN.`, 400);
+        }
+      }
+      if (po.poStatus === PO_STATUS.FULLY_RECEIVED) {
+        throw new AppError(`PO ${po.poNumber} is already fully received`, 400);
       }
     }
 
-    if (po.poStatus === PO_STATUS.FULLY_RECEIVED) {
-      throw new AppError('This PO is already fully received', 400);
-    }
-
-    // Rule 2: auto-load lines from the PO (pending only). Ordered / already
-    // received qty always come from the PO + its completed GRNs, never the client.
-    const received = await receivedByPoLine(po);
-    const sourceItems = data.items?.length ? snapshotFromPo(po, received, data.items) : (po.items || [])
-      .filter((it) => round2((it.quantity || 0) - (received.get(String(it._id)) || 0)) > 0)
+    // Rule 2: auto-load lines from every PO (pending only). Ordered / already
+    // received qty always come from the POs + their completed GRNs, never the client.
+    const received = await receivedByPoLines(pos);
+    const sourceItems = data.items?.length ? snapshotFromPos(pos, received, data.items) : pos.flatMap((po) => (po.items || [])
+      .filter((it) => round2((it.quantity || 0) - (received.get(`${po._id}|${it._id}`) || 0)) > 0)
       .map((it) => {
-        const prev = received.get(String(it._id)) || 0;
+        const prev = received.get(`${po._id}|${it._id}`) || 0;
         const pending = round2((it.quantity || 0) - prev);
         return {
           // For JSL, itemName is the "Grade Width Finish" label that should be
           // shown as the Item Description; itemDescription only holds the raw
           // indent item name and is not used for display.
-          poItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
+          poItemId: it._id, poId: po._id, poNumber: po.poNumber,
+          skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
           orderedQty: it.quantity, previouslyReceivedQty: prev,
           invoiceQty: pending, receivedQty: pending, rate: it.rate, batchNo: '', remarks: '',
         };
-      });
-    if (!sourceItems.length) throw new AppError('Nothing left to receive on this PO', 400);
+      }));
+    if (!sourceItems.length) throw new AppError('Nothing left to receive on the selected PO(s)', 400);
 
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
@@ -574,14 +635,16 @@ export const grnService = {
     const grnNumber = await generateGrnNumber(data.grnDate || new Date());
     const uniqueId = await generateGrnUniqueId();
 
+    const primary = pos[0];
     const grn = await GoodsReceiptNote.create({
       grnNumber, uniqueId,
       grnDate: data.grnDate || new Date(),
-      poId: po._id, poNumber: po.poNumber,
-      piId: po.piId || undefined, piNumber: po.piNumber || '',
-      indentId: po.indentId, indentNumber: po.indentNumber,
-      vendorId: po.vendorId, vendorName: po.vendorName, vendorGST: po.vendorGST,
-      vendorAddress: po.vendorAddress, vendorPhone: po.vendorPhone,
+      poId: primary._id, poNumber: primary.poNumber,
+      poIds: pos.map((p) => p._id), poNumbers: pos.map((p) => p.poNumber),
+      piId: primary.piId || undefined, piNumber: primary.piNumber || '',
+      indentId: primary.indentId, indentNumber: primary.indentNumber,
+      vendorId: primary.vendorId, vendorName: primary.vendorName, vendorGST: primary.vendorGST,
+      vendorAddress: primary.vendorAddress, vendorPhone: primary.vendorPhone,
       challanNumber: data.challanNumber || '',
       invoiceNumber: data.invoiceNumber || '',
       invoiceDate: data.invoiceDate || null,
@@ -607,7 +670,7 @@ export const grnService = {
       qcStatus: GRN_QC_STATUS.PENDING,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `GRN created for ${po.poNumber}`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `GRN created for ${pos.map((p) => p.poNumber).join(', ')}`, actorId: user?._id }],
     });
     return grn;
   },
@@ -689,20 +752,25 @@ export const grnService = {
     // W/O PO GRN has no PO to refresh against; its lines are final as saved.
     if (isOpenDraft(grn) && !grn.isWithoutPo) {
       try {
-        const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).lean();
-        if (po) {
-          const { lines, totals } = await refreshLines(po, grn.items);
+        const poIds = grn.poIds?.length ? grn.poIds : [grn.poId];
+        const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean();
+        if (pos.length) {
+          const { lines, totals } = await refreshLines(pos, grn.items);
           Object.assign(grn, totals, { items: lines });
         }
       } catch (err) {
-        logger.warn(`[grn] could not refresh draft ${grn.grnNumber} against its PO: ${err.message}`);
+        logger.warn(`[grn] could not refresh draft ${grn.grnNumber} against its PO(s): ${err.message}`);
       }
     }
     return grn;
   },
 
   async getByPo(poId) {
-    return GoodsReceiptNote.find({ poId, isDeleted: { $ne: true } }).sort('-createdAt').lean();
+    // A multi-PO GRN must still show up on every one of its POs' own pages —
+    // not just its primary (first-selected) PO.
+    return GoodsReceiptNote.find({
+      $or: [{ poId }, { poIds: poId }], isDeleted: { $ne: true },
+    }).sort('-createdAt').lean();
   },
 
   async getStats() {
@@ -778,9 +846,10 @@ export const grnService = {
         grn.items = lines;
         Object.assign(grn, totals);
       } else {
-        const po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).lean();
-        if (!po) throw new AppError('Linked Purchase Order not found', 404);
-        const { lines, totals } = await refreshLines(po, items);
+        const poIds = grn.poIds?.length ? grn.poIds : [grn.poId];
+        const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean();
+        if (!pos.length) throw new AppError('Linked Purchase Order not found', 404);
+        const { lines, totals } = await refreshLines(pos, items);
         grn.items = lines;
         Object.assign(grn, totals);
       }
@@ -847,42 +916,44 @@ export const grnService = {
     // qty, the second waits for (and is validated against) the first. A W/O PO
     // GRN has no PO to serialise against — the claim above already makes this
     // GRN's own completion safe against concurrent/double-submission.
+    const poIds = grn.poIds?.length ? grn.poIds : (grn.poId ? [grn.poId] : []);
     let poLockedAt = null;
-    if (grn.poId) {
-      poLockedAt = await acquirePoLock(grn.poId);
+    if (poIds.length) {
+      poLockedAt = await acquirePoLocks(poIds);
       if (!poLockedAt) {
         await releaseClaim();
-        throw new AppError('Another GRN for this PO is being completed right now. Please try again in a moment.', 409);
+        throw new AppError('Another GRN for one of these PO(s) is being completed right now. Please try again in a moment.', 409);
       }
     }
     try {
       return await this._completeLocked(grn, data, user, releaseClaim);
     } finally {
-      if (grn.poId) await releasePoLock(grn.poId, poLockedAt);
+      if (poIds.length) await releasePoLocks(poIds, poLockedAt);
     }
   },
 
-  /** complete() body — runs with the GRN claimed and the PO posting lock held. */
+  /** complete() body — runs with the GRN claimed and the PO posting lock(s) held. */
   async _completeLocked(grn, data, user, releaseClaim) {
-    let po; let pi; let receivedLines; let planFor; let rmLines;
+    let pos = []; let piById; let piForLine; let receivedLines; let planFor; let rmLines;
     let addToRmStock; let receivedAtLocation; let rmLocation; let inventoryType;
     try {
       if (grn.isWithoutPo) {
         // No PO to re-derive figures against — the lines are final as saved,
         // beyond re-deriving amount/short/extra from the stored qty/rate.
-        po = null;
+        pos = [];
         const sourceItems = grn.items.map((it) => ({ ...plain(it), orderedQty: 0, previouslyReceivedQty: 0 }));
         const { lines, totals } = computeLines(sourceItems);
         lines.forEach((l) => { l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
         grn.items = lines;
         Object.assign(grn, totals);
       } else {
-        po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } });
-        if (!po) throw new AppError('Linked Purchase Order not found', 404);
+        const poIds = grn.poIds?.length ? grn.poIds : [grn.poId];
+        pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } });
+        if (!pos.length) throw new AppError('Linked Purchase Order not found', 404);
 
         // Re-derive ordered / already-received / pending from the current DB state
-        // — the draft's snapshot may predate other GRNs completed on this PO.
-        const { lines, totals } = await refreshLines(po, grn.items);
+        // — the draft's snapshot may predate other GRNs completed on these PO(s).
+        const { lines, totals } = await refreshLines(pos, grn.items);
         grn.items = lines;
         Object.assign(grn, totals);
       }
@@ -961,7 +1032,19 @@ export const grnService = {
       planFor = new Map(plan.map((p) => [p.line, p]));
       rmLines = plan.filter((p) => p.isRm).map((p) => p.line);
 
-      pi = grn.piId ? await ProformaInvoice.findOne({ _id: grn.piId, isDeleted: { $ne: true } }) : null;
+      // Resolve each touched PO's own PI (different POs on one GRN may carry
+      // different PIs) — one lookup per distinct piId, not per line.
+      const piIds = uniq(pos.map((p) => p.piId));
+      const piDocs = piIds.length
+        ? await ProformaInvoice.find({ _id: { $in: piIds }, isDeleted: { $ne: true } })
+        : [];
+      piById = new Map(piDocs.map((d) => [String(d._id), d]));
+      const poByPoId = new Map(pos.map((p) => [String(p._id), p]));
+      /** The PI (if any) for the PO a given received line belongs to. */
+      piForLine = (line) => {
+        const po = poByPoId.get(String(line.poId));
+        return po?.piId ? piById.get(String(po.piId)) : null;
+      };
     } catch (err) {
       await releaseClaim();
       throw err;
@@ -970,22 +1053,31 @@ export const grnService = {
     // PO lines: receivedQty / pendingQty = completed GRNs + this GRN. Absolute
     // values (not increments), so re-applying on a fresh copy after a concurrent
     // write elsewhere on the PO is safe. Runs for EVERY received line, posted or
-    // not: the goods arrived against the order either way.
-    const priorReceived = new Map(receivedLines.map((l) => [String(l.poItemId), round2(l.previouslyReceivedQty)]));
-    let poFullyReceived = false;
+    // not: the goods arrived against the order either way. Keyed by
+    // `${poId}|${poItemId}` so two POs' identical line ids never collide
+    // (poItemId is already globally unique, but the key stays explicit).
+    const priorReceived = new Map(receivedLines.map((l) => [`${l.poId}|${l.poItemId}`, round2(l.previouslyReceivedQty)]));
+    // One flag per PO — the GRN is only FULLY_RECEIVED once every PO it
+    // touches is itself fully received (resolves the multi-PO status gap).
+    const poFullyReceivedById = new Map();
+    /** Apply this GRN's received lines for ONE PO onto that PO's own document. */
     const applyToPo = (doc) => {
-      for (const line of receivedLines) {
-        const poItem = matchPoItem(doc.items, line);
+      const lines = receivedLines.filter((l) => String(l.poId) === String(doc._id));
+      for (const line of lines) {
+        const poItem = doc.items.find((p) => String(p._id) === String(line.poItemId));
         if (!poItem) continue;
-        poItem.receivedQty = round2((priorReceived.get(String(line.poItemId)) || 0) + line.receivedQty);
+        poItem.receivedQty = round2((priorReceived.get(`${line.poId}|${line.poItemId}`) || 0) + line.receivedQty);
         poItem.pendingQty = Math.max(0, round2((poItem.quantity || 0) - poItem.receivedQty));
       }
       // ── 4) Roll PO status (Rules 4 & 5) ──
-      poFullyReceived = doc.items.every((p) => round2((p.quantity || 0) - (p.receivedQty || 0)) <= 0);
-      doc.poStatus = poFullyReceived ? PO_STATUS.FULLY_RECEIVED : PO_STATUS.PARTIAL_RECEIVED;
+      const fully = doc.items.every((p) => round2((p.quantity || 0) - (p.receivedQty || 0)) <= 0);
+      poFullyReceivedById.set(String(doc._id), fully);
+      doc.poStatus = fully ? PO_STATUS.FULLY_RECEIVED : PO_STATUS.PARTIAL_RECEIVED;
       doc.updatedBy = user?._id;
       doc.activityTimeline.push({ action: 'GRN_RECEIVED', description: `${grn.grnNumber} received (${grn.totalReceivedQty})`, actorId: user?._id });
     };
+
+    const touchedPiIds = new Set();
 
     // ── One unit of work ─────────────────────────────────────────────────────
     // Every movement, both documents' quantities and the GRN's own status land
@@ -998,6 +1090,8 @@ export const grnService = {
         for (const line of receivedLines) {
           // ── 1) Post stock — strictly through inventoryService ──
           const step = planFor.get(line);
+          const linePo = pos.find((p) => String(p._id) === String(line.poId));
+          const linePi = piForLine ? piForLine(line) : null;
           if (step.post) {
             const { movement } = await inventoryService.increaseStock({
               skuId: line.skuId, skuCode: line.skuCode, skuName: line.itemName, unit: line.unit,
@@ -1010,7 +1104,10 @@ export const grnService = {
               refType: 'GRN', refId: grn._id, refNumber: grn.grnNumber,
               batchNo: line.batchNo || '',
               vendorId: grn.vendorId, vendorName: grn.vendorName,
-              poId: grn.poId, poNumber: grn.poNumber, piId: grn.piId, piNumber: grn.piNumber,
+              // Stamp the movement with THIS line's own PO/PI, not the GRN
+              // header's primary — distinct POs on one GRN can differ.
+              poId: line.poId || grn.poId, poNumber: line.poNumber || grn.poNumber,
+              piId: linePo?.piId, piNumber: linePo?.piNumber,
               remarks: 'Stock added from Purchase GRN',
               performedBy: user, movementDate: grn.grnDate,
             }, opts);
@@ -1019,18 +1116,21 @@ export const grnService = {
           }
 
           // ── 3) PI line: receivedQty / balanceQty ──
-          if (pi) {
-            const piItem = pi.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode)
-              || pi.items.find((p) => p.itemName === line.itemName);
+          if (linePi) {
+            const piItem = linePi.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode)
+              || linePi.items.find((p) => p.itemName === line.itemName);
             if (piItem) {
               piItem.receivedQty = round2((piItem.receivedQty || 0) + line.receivedQty);
               piItem.balanceQty = Math.max(0, round2((piItem.quantity || 0) - piItem.receivedQty));
+              touchedPiIds.add(String(linePi._id));
             }
           }
         }
 
-        // ── 2) + 4) PO quantities and status — nothing to roll for a W/O PO GRN ──
-        if (po) {
+        // ── 2) + 4) PO quantities and status — nothing to roll for a W/O PO GRN,
+        // one save (with its own version-conflict retry) per distinct PO ──
+        for (let po of pos) {
+          const poId = po._id;
           applyToPo(po);
           for (let attempt = 1; ; attempt += 1) {
             try {
@@ -1038,17 +1138,24 @@ export const grnService = {
               break;
             } catch (err) {
               if (!isVersionConflict(err) || attempt >= 4) throw err;
-              po = await VendorPurchaseOrder.findOne({ _id: grn.poId, isDeleted: { $ne: true } }).session(session || null);
+              po = await VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }).session(session || null);
               applyToPo(po);
             }
           }
         }
-        if (pi) { pi.updatedBy = user?._id; await pi.save(opts); }
+        for (const piId of touchedPiIds) {
+          const piDoc = piById.get(piId);
+          piDoc.updatedBy = user?._id;
+          await piDoc.save(opts);
+        }
 
         // ── 5) Finalize GRN + QC handoff ──
         // A W/O PO GRN has no PO to be "partial" or "full" against — RECEIVED is
         // the terminal status for it (already QC-eligible, see GRN_QC_ELIGIBLE).
-        grn.grnStatus = grn.isWithoutPo ? GRN_STATUS.RECEIVED : (poFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED);
+        // FULLY_RECEIVED only once EVERY PO this GRN touches is itself fully
+        // received — a multi-PO GRN with one PO still partial stays PARTIAL.
+        const allPosFullyReceived = pos.length > 0 && pos.every((po) => poFullyReceivedById.get(String(po._id)));
+        grn.grnStatus = grn.isWithoutPo ? GRN_STATUS.RECEIVED : (allPosFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED);
         grn.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
         grn.stockPosted = true;               // already claimed above; kept explicit
         grn.addToRmStock = addToRmStock;      // the operator's choice, on the record
@@ -1117,11 +1224,15 @@ export const grnService = {
       vendorAddress: data.vendorAddress || '',
     };
     let poNumber = data.poNumber || '';
-    if (data.poId) {
-      const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } }).lean();
-      if (po) {
-        vendor = { vendorName: po.vendorName, vendorGST: po.vendorGST, vendorAddress: po.vendorAddress, vendorPhone: po.vendorPhone };
-        poNumber = po.poNumber || poNumber;
+    let poNumbers = [];
+    const previewPoIds = data.poIds?.length ? data.poIds : (data.poId ? [data.poId] : []);
+    if (previewPoIds.length) {
+      const pos = await VendorPurchaseOrder.find({ _id: { $in: previewPoIds }, isDeleted: { $ne: true } }).lean();
+      if (pos.length) {
+        const primary = pos[0];
+        vendor = { vendorName: primary.vendorName, vendorGST: primary.vendorGST, vendorAddress: primary.vendorAddress, vendorPhone: primary.vendorPhone };
+        poNumber = primary.poNumber || poNumber;
+        poNumbers = pos.map((p) => p.poNumber);
       }
     }
 
@@ -1129,7 +1240,7 @@ export const grnService = {
     const grnLike = {
       grnNumber: data.grnNumber || '(draft — generated on completion)',
       grnDate: data.grnDate || new Date(),
-      poNumber, isWithoutPo: !!data.isWithoutPo,
+      poNumber, poNumbers, isWithoutPo: !!data.isWithoutPo,
       challanNumber: data.challanNumber || '',
       invoiceNumber: data.invoiceNumber || '',
       howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,

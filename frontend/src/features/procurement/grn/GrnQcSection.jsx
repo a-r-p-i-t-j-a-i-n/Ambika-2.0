@@ -57,7 +57,7 @@ const pick = (it) => Object.fromEntries(ENTERED.map((f) => [f, it[f]]));
  * entries are kept on this device. Keyed by the QC id, so it re-seeds only when
  * the QC record itself appears — never on a refetch.
  */
-const GrnQcEditor = ({ grn, qc, stage, isMd, prepareGrn, onCompleteGrn, onSign, onRequestComplete, onConflict }) => {
+const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, onSign, onRequestComplete, onConflict }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [local] = useState(() => (qc ? {} : readLocal(grn._id)));
   const [header, setHeader] = useState(() => (qc ? headerFromQc(qc) : { ...emptyHeader(), ...(local.header || {}) }));
@@ -75,8 +75,9 @@ const GrnQcEditor = ({ grn, qc, stage, isMd, prepareGrn, onCompleteGrn, onSign, 
   const [updateQc, { isLoading: updating }] = useUpdateIncomingQcMutation();
   const working = creating || updating || uploading || busy;
 
-  // Before a QC record exists the lines follow the GRN; typed values ride on top.
-  const items = qc ? serverItems : mergeEnteredLines(linesFromGrn(grn), entered);
+  // Before a QC record exists the lines follow the GRN (scoped to this PO on a
+  // multi-PO GRN); typed values ride on top.
+  const items = qc ? serverItems : mergeEnteredLines(linesFromGrn(grn, poId), entered);
   const setItem = (idx, patch) => {
     if (qc) { setServerItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it))); return; }
     const line = items[idx];
@@ -99,7 +100,7 @@ const GrnQcEditor = ({ grn, qc, stage, isMd, prepareGrn, onCompleteGrn, onSign, 
     const payload = buildQcPayload({ header, items, doc });
     try {
       if (qcId) return (await updateQc({ id: qcId, ...payload }).unwrap())?.data || null;
-      const saved = (await createQc({ ...payload, grnId: grn._id }).unwrap())?.data || null;
+      const saved = (await createQc({ ...payload, grnId: grn._id, poId: poId || undefined }).unwrap())?.data || null;
       if (saved?._id) { setCreatedId(saved._id); clearLocal(grn._id); }
       return saved;
     } catch (err) {
@@ -195,15 +196,22 @@ const GrnQcEditor = ({ grn, qc, stage, isMd, prepareGrn, onCompleteGrn, onSign, 
  * and in the Create / Edit GRN form once the GRN is saved. Same QC record, APIs
  * and rules as before; it loads the GRN's QC itself, so both places behave alike.
  *
+ * A multi-PO GRN gets one QC per PO (see incomingQc.service.js) — the caller
+ * renders one <GrnQcSection poId poNumber /> per PO in that case (see
+ * GrnQcSections below); a single-PO / W/O PO GRN renders exactly one,
+ * unscoped, identical to before.
+ *
  *   grn         the saved GRN (live from the API)
  *   isMd        may sign the GRN (the server still enforces the MD role)
  *   prepareGrn  optional async () => boolean — save unsaved GRN edits first
+ *   poId        scope to one PO's QC on a multi-PO GRN (omit for single-PO/W-O-PO)
+ *   poNumber    that PO's number, for the section title
  */
-const GrnQcSection = ({ grn, isMd = false, prepareGrn }) => {
+const GrnQcSection = ({ grn, isMd = false, prepareGrn, poId, poNumber }) => {
   const navigate = useNavigate();
   const completedGrn = isGrnCompleted(grn);
   const { data: qcRes, isLoading: qcLoading, refetch } = useGetIncomingQcsByGrnQuery(grn._id, { skip: !completedGrn });
-  const qc = pickGrnQc(qcRes?.data || []);
+  const qc = pickGrnQc(qcRes?.data || [], poId);
   const stage = resolveGrnQcStage(grn, qc);
 
   const [grnCompleteOpen, setGrnCompleteOpen] = useState(false);
@@ -214,11 +222,11 @@ const GrnQcSection = ({ grn, isMd = false, prepareGrn }) => {
   const editing = ['GRN_DRAFT', 'AWAITING_MD', 'QC_READY', 'QC_DRAFT'].includes(stage.key);
 
   return (
-    <Paper id="grn-qc-section" sx={{ ...pfmsCardSx, p: { xs: 2, md: 3 }, scrollMarginTop: 80 }}>
+    <Paper id={poId ? `grn-qc-section-${poId}` : 'grn-qc-section'} sx={{ ...pfmsCardSx, p: { xs: 2, md: 3 }, scrollMarginTop: 80 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
-            <ClipboardCheck size={18} /> Incoming QC
+            <ClipboardCheck size={18} /> Incoming QC{poNumber ? ` — PO ${poNumber}` : ''}
           </Typography>
           {qc?.qcNumber && <Chip size="small" variant="outlined" label={qc.qcNumber} sx={{ fontWeight: 700 }} />}
           <span data-testid="grn-qc-status"><GrnQcStatusChip stage={stage} /></span>
@@ -248,7 +256,7 @@ const GrnQcSection = ({ grn, isMd = false, prepareGrn }) => {
           {stage.key === 'CANCELLED' && <Alert severity="info">{stage.desc}</Alert>}
 
           {editing && (
-            <GrnQcEditor key={qc?._id || 'new'} grn={grn} qc={stage.key === 'QC_DRAFT' ? qc : null} stage={stage} isMd={isMd}
+            <GrnQcEditor key={qc?._id || 'new'} grn={grn} qc={stage.key === 'QC_DRAFT' ? qc : null} poId={poId} stage={stage} isMd={isMd}
               prepareGrn={prepareGrn}
               onCompleteGrn={() => setGrnCompleteOpen(true)}
               onSign={() => setSignOpen(true)}
@@ -287,6 +295,25 @@ const GrnQcSection = ({ grn, isMd = false, prepareGrn }) => {
       <IncomingQCCompleteDialog open={Boolean(completeTarget)} qc={completeTarget} onClose={() => setCompleteTarget(null)} />
       {qc && <IncomingQCPdfPreview open={pdfOpen} qc={qc} onClose={() => setPdfOpen(false)} />}
     </Paper>
+  );
+};
+
+/**
+ * Renders the GRN's Incoming QC section(s) — one per PO on a multi-PO GRN
+ * (`grn.poIds.length > 1`), or exactly one, unscoped, for every single-PO or
+ * W/O PO GRN (identical to always rendering `<GrnQcSection grn={grn} />`,
+ * the only thing every pre-existing GRN ever does).
+ */
+export const GrnQcSections = ({ grn, ...rest }) => {
+  const poIds = grn?.poIds || [];
+  if (poIds.length <= 1) return <GrnQcSection grn={grn} {...rest} />;
+  const poNumbers = grn?.poNumbers || [];
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+      {poIds.map((poId, i) => (
+        <GrnQcSection key={poId} grn={grn} poId={poId} poNumber={poNumbers[i] || ''} {...rest} />
+      ))}
+    </Box>
   );
 };
 

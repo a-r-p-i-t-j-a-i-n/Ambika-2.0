@@ -20,9 +20,13 @@ export const headerFromQc = (qc) => ({
   remarks: qc?.remarks || '',
 });
 
-/** Received GRN lines → inspection rows (default: everything accepted). */
-export const linesFromGrn = (grn) => (grn?.items || [])
-  .filter((it) => round2(it.receivedQty) > 0)
+/**
+ * Received GRN lines → inspection rows (default: everything accepted).
+ * `poId` scopes to one PO's lines on a multi-PO GRN (each PO gets its own QC);
+ * omitted (or the GRN has one PO / none) it's every received line, unchanged.
+ */
+export const linesFromGrn = (grn, poId) => (grn?.items || [])
+  .filter((it) => round2(it.receivedQty) > 0 && (!poId || !it.poId || String(it.poId) === String(poId)))
   .map((it) => ({
     grnItemId: it._id, poItemId: it.poItemId || '', skuId: it.skuId || '', skuCode: it.skuCode || '', itemName: it.itemName,
     unit: it.unit || 'Pcs', batchNo: it.batchNo || '', receivedQty: round2(it.receivedQty),
@@ -114,9 +118,15 @@ export const buildQcPayload = ({ header, items, doc }) => ({
   })),
 });
 
-/** The GRN's live QC: the open draft if there is one, else the latest completed QC (cancelled ones ignored). */
-export const pickGrnQc = (qcs = []) => {
-  const live = qcs.filter((q) => q && !q.isDeleted && q.qcStatus !== 'CANCELLED');
+/**
+ * The GRN's live QC: the open draft if there is one, else the latest completed
+ * QC (cancelled ones ignored). `poId` scopes to one PO's QC on a multi-PO GRN
+ * (there can be more than one live QC at once, one per PO); omitted, this is
+ * the single candidate set a single-PO GRN has always had.
+ */
+export const pickGrnQc = (qcs = [], poId) => {
+  const live = qcs.filter((q) => q && !q.isDeleted && q.qcStatus !== 'CANCELLED'
+    && (!poId || !q.poId || String(q.poId) === String(poId)));
   return live.find((q) => ACTIVE_QC_STATUSES.includes(q.qcStatus))
     || live.find((q) => COMPLETED_QC_STATUSES.includes(q.qcStatus))
     || null;

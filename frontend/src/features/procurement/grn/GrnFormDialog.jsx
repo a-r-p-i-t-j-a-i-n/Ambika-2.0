@@ -31,7 +31,7 @@ import { fileHref } from '../indents/indentMeta';
 import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel, isGrnCompleted } from './grnMeta';
 import { resolveGrnQcStage } from './grnQcStage';
 import GrnQcStatusChip from './GrnQcStatusChip';
-import GrnQcSection from './GrnQcSection';
+import { GrnQcSections } from './GrnQcSection';
 import StatusChip from '../components/StatusChip';
 import { pickGrnQc } from '../incoming-qc/qcForm';
 import {
@@ -97,7 +97,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   // the server refuses edits; here the fields stop accepting them and Save goes.
   const grnLocked = Boolean(liveGrn?._id) && (isGrnCompleted(liveGrn) || liveGrn.approvalStatus === 'MD_APPROVED' || liveGrn.grnStatus === 'CANCELLED');
 
-  const [po, setPo] = useState(null);
+  // One or more compatible (same-vendor) POs — a GRN can now cover several at once.
+  const [pos, setPos] = useState([]);
   // 'PO' | 'WITHOUT_PO' — chosen only when creating; an existing GRN's mode is
   // fixed by its own isWithoutPo and never switches mid-edit.
   const [mode, setMode] = useState('PO');
@@ -138,7 +139,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const handleModeChange = (_e, val) => {
     if (!val || val === mode || isEdit) return;
     setMode(val);
-    setPo(null);
+    setPos([]);
     setWopoVendor(null);
     setHeader((h) => ({ ...h, vendorId: '', vendorName: '', vendorGST: '', vendorAddress: '', vendorPhone: '' }));
     setItems(val === 'WITHOUT_PO' ? [emptyWopoItem()] : []);
@@ -184,25 +185,35 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     p.poStatus !== 'FULLY_RECEIVED' && p.poStatus !== 'CANCELLED'
     && (Boolean(p.finalMaterialDate) || p.poStatus === 'PARTIAL_RECEIVED'));
 
-  const linesFromPo = (p) => (p?.items || [])
+  // Lines for ONE PO, tagged with that PO's own identity so a multi-PO GRN
+  // never loses which line came from where.
+  const linesFromOnePo = (p) => (p?.items || [])
     .map((it) => {
       const pending = round2((it.quantity || 0) - (it.receivedQty || 0));
       return {
         // For JSL, itemName is the "Grade Width Finish" label that should be
         // shown as the Item Description; itemDescription only holds the raw
         // indent item name and is not used for display.
-        poItemId: it._id, itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
+        poItemId: it._id, poId: p._id, poNumber: p.poNumber,
+        itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.quantity || 0, previouslyReceivedQty: it.receivedQty || 0,
         pendingBefore: pending, invoiceQty: pending, receivedQty: pending, rate: it.rate || 0, batchNo: '', remarks: '',
       };
     })
     .filter((l) => l.pendingBefore > 0);
 
+  // Lines across every selected PO, concatenated in selection order.
+  const linesFromPos = (list) => (list || []).flatMap((p) => linesFromOnePo(p));
+
   useEffect(() => {
     if (!open) return;
     setSavedGrn(null);
     if (grn) {
-      setPo(grn.isWithoutPo ? null : { _id: grn.poId, poNumber: grn.poNumber, vendorName: grn.vendorName });
+      // A multi-PO GRN carries poIds/poNumbers; a legacy single-PO GRN only has
+      // the primary poId/poNumber — both resolve to the same shape here.
+      const grnPoIds = grn.poIds?.length ? grn.poIds : (grn.poId ? [grn.poId] : []);
+      const grnPoNumbers = grn.poNumbers?.length ? grn.poNumbers : (grn.poNumber ? [grn.poNumber] : []);
+      setPos(grn.isWithoutPo ? [] : grnPoIds.map((id, i) => ({ _id: id, poNumber: grnPoNumbers[i] || grn.poNumber, vendorName: grn.vendorName })));
       setMode(grn.isWithoutPo ? 'WITHOUT_PO' : 'PO');
       setWopoVendor(grn.isWithoutPo
         ? { _id: grn.vendorId, name: grn.vendorName, gstNo: grn.vendorGST, location: grn.vendorAddress, phone: grn.vendorPhone }
@@ -222,7 +233,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       });
       setDoc(grn.challanDocument?.fileUrl ? { ...grn.challanDocument } : null);
       setItems((grn.items || []).map((it) => ({
-        poItemId: it.poItemId, itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
+        poItemId: it.poItemId, poId: it.poId || grn.poId, poNumber: it.poNumber || grn.poNumber,
+        itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.orderedQty, previouslyReceivedQty: it.previouslyReceivedQty,
         pendingBefore: round2((it.orderedQty || 0) - (it.previouslyReceivedQty || 0)),
         invoiceQty: it.invoiceQty, receivedQty: it.receivedQty, rate: it.rate, batchNo: it.batchNo || '', remarks: it.remarks || '',
@@ -236,13 +248,13 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       });
       setDoc(null);
       setWopoVendor(null);
-      if (presetPo) { setPo(presetPo); setItems(linesFromPo(presetPo)); }
-      else { setPo(null); setItems([]); }
+      if (presetPo) { setPos([presetPo]); setItems(linesFromOnePo(presetPo)); }
+      else { setPos([]); setItems([]); }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, grn, presetPo]);
 
-  const applyPo = (p) => { setPo(p); setItems(p ? linesFromPo(p) : []); };
+  const applyPos = (list) => { setPos(list || []); setItems(linesFromPos(list)); };
   const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
 
   const totals = useMemo(() => items.reduce((acc, it) => {
@@ -255,6 +267,18 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   }, { invoice: 0, received: 0, value: 0 }), [items]);
 
   const validItems = items.filter((it) => round2(it.receivedQty) > 0);
+
+  // Group PO-sourced rows by their own PO, keeping the flat index for edits —
+  // only rendered with a visible header when there's more than one PO.
+  const itemGroups = useMemo(() => {
+    const map = new Map();
+    items.forEach((it, idx) => {
+      const key = it.poId || it.poNumber || '—';
+      if (!map.has(key)) map.set(key, { poNumber: it.poNumber || '—', rows: [] });
+      map.get(key).rows.push({ it, idx });
+    });
+    return [...map.values()];
+  }, [items]);
 
   // ── Coil / Circle need a batch number ──────────────────────────────────────
   // Only these two. Every other purchased item keeps Batch No optional. The
@@ -279,7 +303,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const validateForm = ({ forFinalize = false } = {}) => {
     if (isWithoutPo) {
       if (!header.vendorName?.trim()) { enqueueSnackbar('Select a vendor first', { variant: 'warning' }); return false; }
-    } else if (!isEdit && !po?._id) { enqueueSnackbar('Select an eligible PO first', { variant: 'warning' }); return false; }
+    } else if (!isEdit && pos.length === 0) { enqueueSnackbar('Select at least one eligible PO', { variant: 'warning' }); return false; }
     if (validItems.length === 0) { enqueueSnackbar('Enter a received quantity on at least one item', { variant: 'warning' }); return false; }
     if (isWithoutPo) {
       const noName = validItems.find((it) => !it.itemName?.trim());
@@ -338,7 +362,11 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       unit: it.unit || 'Pcs', invoiceQty: round2(it.invoiceQty || it.receivedQty), receivedQty: round2(it.receivedQty),
       rate: round2(it.rate), batchNo: it.batchNo?.trim() || '', remarks: it.remarks?.trim() || '',
     } : {
-      poItemId: it.poItemId, itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
+      // poId isn't required by the server (it resolves each line's PO itself
+      // from poItemId/skuCode), but passing it through keeps the preview PDF
+      // and any client-side grouping accurate.
+      poItemId: it.poItemId, poId: it.poId || undefined, poNumber: it.poNumber || undefined,
+      itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
       skuId: it.skuId || undefined, unit: it.unit || 'Pcs',
       orderedQty: it.orderedQty, previouslyReceivedQty: it.previouslyReceivedQty,
       invoiceQty: round2(it.invoiceQty), receivedQty: round2(it.receivedQty),
@@ -362,7 +390,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         enqueueSnackbar('GRN updated', { variant: 'success' });
         if (stay) return true;
       } else {
-        const res = await createGrn(isWithoutPo ? payload : { ...payload, poId: po._id }).unwrap();
+        const res = await createGrn(isWithoutPo ? payload : { ...payload, poIds: pos.map((p) => p._id) }).unwrap();
         setSavedGrn(res?.data || null);
         enqueueSnackbar(`GRN ${res?.data?.grnNumber || ''} created (draft)`, { variant: 'success' });
         return true;
@@ -391,7 +419,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         const res = await updateGrn({ id: current._id, ...payload }).unwrap();
         savedId = (res?.data || current)._id;
       } else {
-        const res = await createGrn(isWithoutPo ? payload : { ...payload, poId: po._id }).unwrap();
+        const res = await createGrn(isWithoutPo ? payload : { ...payload, poIds: pos.map((p) => p._id) }).unwrap();
         savedId = res?.data?._id;
         setSavedGrn(res?.data || null);
       }
@@ -433,8 +461,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     try {
       const blob = await previewGrnPdf({
         ...buildPayload(),
-        poId: po?._id || undefined,
-        poNumber: po?.poNumber || undefined,
+        poIds: pos.map((p) => p._id),
+        poNumber: pos[0]?.poNumber || undefined,
         grnNumber: current?.grnNumber || undefined,
       }).unwrap();
       setPreviewUrl(URL.createObjectURL(blob));
@@ -548,18 +576,24 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                   />
                 )
               ) : isEdit || presetPo ? (
-                <TextField label="PO Number" fullWidth value={po?.poNumber || ''} disabled />
+                <TextField label="PO Number(s)" fullWidth value={pos.map((p) => p.poNumber).join(', ')} disabled />
               ) : (
                 <Autocomplete
+                  multiple
                   options={poOptions}
                   loading={posLoading}
-                  value={po}
+                  value={pos}
                   getOptionLabel={(o) => (o ? `${o.poNumber} — ${o.vendorName}` : '')}
                   isOptionEqualToValue={(o, v) => o._id === v._id}
-                  onChange={(_e, v) => applyPo(v)}
+                  // Once one PO is picked, only the same vendor's other POs stay
+                  // selectable (server re-enforces this regardless).
+                  getOptionDisabled={(o) => pos.length > 0 && pos[0].vendorId && o.vendorId
+                    && String(o.vendorId) !== String(pos[0].vendorId)}
+                  onChange={(_e, v) => applyPos(v)}
                   noOptionsText="No PO is ready for GRN (needs READY_FOR_GRN + payment completed)"
                   renderInput={(params) => (
-                    <TextField {...params} label="Purchase Order *" placeholder="READY_FOR_GRN + Payment Completed only"
+                    <TextField {...params} label="Purchase Order(s) *" placeholder="Same vendor — READY_FOR_GRN + Payment Completed only"
+                      helperText="Pick one or more compatible POs of the same vendor"
                       InputProps={{ ...params.InputProps, endAdornment: (<>{posLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
                   )}
                 />
@@ -592,7 +626,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                 value={header.inventoryType}
                 onChange={(e) => setHeader((h) => ({ ...h, inventoryType: e.target.value }))}
                 helperText={INVENTORY_TYPE_HELP}
-                error={!header.inventoryType && validItems.length > 0 && Boolean(po)}
+                error={!header.inventoryType && validItems.length > 0 && pos.length > 0}
                 inputProps={{ 'data-testid': 'grn-inventory-type' }}
               >
                 {INVENTORY_TYPE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
@@ -621,12 +655,13 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
               <Typography variant="caption" color="text.secondary">📞 {header.vendorPhone || '—'}</Typography>
               <Chip size="small" color="warning" variant="outlined" label="Without PO" sx={{ fontWeight: 700 }} />
             </Box>
-          ) : po ? (
+          ) : pos.length > 0 ? (
             <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'center' }}>
               <Building2 size={16} color="#1d4ed8" />
-              <Typography variant="caption" fontWeight={700}>{po.vendorName || grn?.vendorName || '—'}</Typography>
-              {(po.piNumber || grn?.piNumber) && <Chip size="small" variant="outlined" label={`PI ${po.piNumber || grn?.piNumber}`} sx={{ fontWeight: 700 }} />}
-              {(po.indentNumber || grn?.indentNumber) && <Chip size="small" variant="outlined" label={`Indent ${po.indentNumber || grn?.indentNumber}`} sx={{ fontWeight: 700 }} />}
+              <Typography variant="caption" fontWeight={700}>{pos[0].vendorName || grn?.vendorName || '—'}</Typography>
+              {(pos[0].piNumber || grn?.piNumber) && <Chip size="small" variant="outlined" label={`PI ${pos[0].piNumber || grn?.piNumber}`} sx={{ fontWeight: 700 }} />}
+              {(pos[0].indentNumber || grn?.indentNumber) && <Chip size="small" variant="outlined" label={`Indent ${pos[0].indentNumber || grn?.indentNumber}`} sx={{ fontWeight: 700 }} />}
+              {pos.length > 1 && <Chip size="small" color="info" variant="outlined" label={`${pos.length} POs`} sx={{ fontWeight: 700 }} />}
             </Box>
           ) : null}
         </Paper>
@@ -712,7 +747,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             </>
           ) : items.length === 0 ? (
             <Typography variant="body2" color="text.disabled" sx={{ py: 2 }}>
-              {po ? 'Nothing pending to receive on this PO.' : 'Select an eligible PO to load its items.'}
+              {pos.length > 0 ? 'Nothing pending to receive on the selected PO(s).' : 'Select one or more eligible POs to load their items.'}
             </Typography>
           ) : (
             <>
@@ -726,49 +761,61 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                 ))}
               </Box>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {items.map((it, idx) => {
-                  // Pending Qty is fixed (orderedQty − alreadyReceived), computed from the
-                  // PO — read-only and never recalculated off the in-progress receivedQty.
-                  const pendingBefore = round2(it.pendingBefore);
-                  const extra = round2(it.receivedQty) > pendingBefore;
-                  const extraQty = extra ? round2(it.receivedQty - pendingBefore) : 0;
-                  return (
-                    <Box key={idx} sx={{
-                      display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', md: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 1.12fr 1.08fr' },
-                      gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
-                      borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
-                      '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
-                    }}>
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
-                        <Typography variant="caption" color="text.disabled">{it.unit}</Typography>
+                {itemGroups.map((g, gi) => (
+                  <Box key={gi}>
+                    {pos.length > 1 && (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, mb: 0.5, bgcolor: alpha('#0b2545', 0.06), borderRadius: '8px' }}>
+                        <ShoppingBag size={13} color="#0b2545" />
+                        <Typography variant="caption" sx={{ fontWeight: 800 }}>PO {g.poNumber}</Typography>
                       </Box>
-                      <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
-                      <QtyCell label="Ordered Qty" value={it.orderedQty} />
-                      <QtyCell label="Already Received" value={it.previouslyReceivedQty} />
-                      <QtyCell label="Pending Qty" value={pendingBefore} color={pendingBefore > 0 ? '#b45309' : '#0f766e'} />
-                      <TextField size="small" type="number" label="Invoice Qty" value={it.invoiceQty}
-                        onChange={(e) => setItem(idx, { invoiceQty: e.target.value })}
-                        helperText={`Pending: ${pendingBefore}`}
-                        inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                      <TextField size="small" type="number" label="Received Qty" value={it.receivedQty} error={extra}
-                        onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
-                        helperText={extra ? `Pending: ${pendingBefore} · Extra ${extraQty}` : `Pending: ${pendingBefore}`}
-                        inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                      {/* Required for Coil and Circle only — every other item
-                          keeps the original optional field untouched. */}
-                      <TextField size="small"
-                        label={rmKindOf(it) ? 'Batch No *' : 'Batch No'}
-                        placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'optional'}
-                        value={it.batchNo}
-                        error={batchMissing(it) && round2(it.receivedQty) > 0}
-                        onChange={(e) => setItem(idx, { batchNo: e.target.value })} />
-                      <TextField size="small" label="Remarks" placeholder={extra ? 'required (extra)' : 'optional'} value={it.remarks}
-                        onChange={(e) => setItem(idx, { remarks: e.target.value })} error={extra && !it.remarks?.trim() && !header.remarks.trim()} />
+                    )}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1 }}>
+                      {g.rows.map(({ it, idx }) => {
+                        // Pending Qty is fixed (orderedQty − alreadyReceived), computed from the
+                        // PO — read-only and never recalculated off the in-progress receivedQty.
+                        const pendingBefore = round2(it.pendingBefore);
+                        const extra = round2(it.receivedQty) > pendingBefore;
+                        const extraQty = extra ? round2(it.receivedQty - pendingBefore) : 0;
+                        return (
+                          <Box key={idx} sx={{
+                            display: 'grid',
+                            gridTemplateColumns: { xs: '1fr', md: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 1.12fr 1.08fr' },
+                            gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
+                            borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
+                            '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
+                          }}>
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+                              <Typography variant="caption" color="text.disabled">{it.unit}</Typography>
+                            </Box>
+                            <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
+                            <QtyCell label="Ordered Qty" value={it.orderedQty} />
+                            <QtyCell label="Already Received" value={it.previouslyReceivedQty} />
+                            <QtyCell label="Pending Qty" value={pendingBefore} color={pendingBefore > 0 ? '#b45309' : '#0f766e'} />
+                            <TextField size="small" type="number" label="Invoice Qty" value={it.invoiceQty}
+                              onChange={(e) => setItem(idx, { invoiceQty: e.target.value })}
+                              helperText={`Pending: ${pendingBefore}`}
+                              inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
+                            <TextField size="small" type="number" label="Received Qty" value={it.receivedQty} error={extra}
+                              onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
+                              helperText={extra ? `Pending: ${pendingBefore} · Extra ${extraQty}` : `Pending: ${pendingBefore}`}
+                              inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
+                            {/* Required for Coil and Circle only — every other item
+                                keeps the original optional field untouched. */}
+                            <TextField size="small"
+                              label={rmKindOf(it) ? 'Batch No *' : 'Batch No'}
+                              placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'optional'}
+                              value={it.batchNo}
+                              error={batchMissing(it) && round2(it.receivedQty) > 0}
+                              onChange={(e) => setItem(idx, { batchNo: e.target.value })} />
+                            <TextField size="small" label="Remarks" placeholder={extra ? 'required (extra)' : 'optional'} value={it.remarks}
+                              onChange={(e) => setItem(idx, { remarks: e.target.value })} error={extra && !it.remarks?.trim() && !header.remarks.trim()} />
+                          </Box>
+                        );
+                      })}
                     </Box>
-                  );
-                })}
+                  </Box>
+                ))}
               </Box>
               <Divider sx={{ my: 2 }} />
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
@@ -853,7 +900,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
               <GrnQcStatusChip stage={qcStage} />
               {grnLocked && <Chip size="small" variant="outlined" icon={<Lock size={12} />} label="GRN read-only" sx={{ fontWeight: 700 }} />}
             </Box>
-            <GrnQcSection grn={liveGrn} isMd={isMd} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
+            <GrnQcSections grn={liveGrn} isMd={isMd} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
           </Box>
         )}
       </Box>
