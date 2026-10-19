@@ -280,11 +280,6 @@ export const rmMovementQuerySchema = Joi.object({
   limit:   Joi.number().integer().min(1).max(200),
 }).unknown(true);
 
-export const rmConversionsQuerySchema = Joi.object({
-  search: Joi.string().max(120).allow('', null),
-  limit:  Joi.number().integer().min(1).max(500),
-}).unknown(true);
-
 /**
  * Cutting History — one row per physical coil. Status is DERIVED on the server,
  * so filtering by it is a question, never an instruction.
@@ -315,6 +310,75 @@ export const rmCuttingHistoryQuerySchema = Joi.object({
   limit:    Joi.number().integer().min(1).max(200),
 }).unknown(true).custom((v, helpers) => (
   // Compared as strings: both are YYYY-MM-DD, which sorts as it reads.
+  v.from && v.to && v.from > v.to ? helpers.message('From date cannot be after To date') : v
+));
+
+/**
+ * All conversions — one row per CUT. The Coil to Circle History's filters, with
+ * the same names and the same meaning (see listConversions), asked of each cut:
+ *
+ *   batchNo, search        about the cut's batch / coil / GRN / supplier;
+ *   from/to, circleSkuId,   about the cut itself — the day it was cut (IST),
+ *   location               a circle it produced, where it was cut;
+ *   entryType, status      about the coil it was cut from.
+ *
+ * `entryType` has one value the history does not need: NONE — a cut that names
+ * no physical coil (the spreadsheet imports, "No receipt available"), which the
+ * history never lists and this table always does.
+ *
+ * `page` is optional: a caller that sends only `limit` gets the newest cuts, as
+ * before. `limit` stays at its old ceiling for those callers.
+ */
+export const rmConversionsQuerySchema = Joi.object({
+  search:   Joi.string().trim().max(120).allow('', null),
+  batchNo:  Joi.string().trim().max(80).allow('', null),
+  entryType: Joi.string().trim().uppercase().valid('GRN', 'MANUAL', 'NONE').allow('', null)
+    .messages({ 'any.only': 'Entry type must be GRN, MANUAL or NONE' }),
+  location: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow('', null)
+    .messages({ 'any.only': `Location must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` }),
+  status:   Joi.string().trim().uppercase().valid('NOT_CUT', 'PARTIALLY_CUT', 'FULLY_CUT').allow('', null),
+  circleSkuId: objectId.allow('', null)
+    .messages({ 'string.pattern.base': 'Circle SKU is not a valid id' }),
+  from:     isoDay.allow('', null).label('From date'),
+  to:       isoDay.allow('', null).label('To date'),
+  page:     Joi.number().integer().min(1),
+  limit:    Joi.number().integer().min(1).max(500),
+}).unknown(true).custom((v, helpers) => (
+  v.from && v.to && v.from > v.to ? helpers.message('From date cannot be after To date') : v
+));
+
+/**
+ * The circle SKUs a cutting table can filter by. Default: those produced by
+ * rounds that name a physical coil (the Coil to Circle History). `scope=all`:
+ * those produced by ANY recorded cut, the imported ones included (All
+ * conversions) — so a size only an older cut produced can still be found.
+ */
+export const rmCuttingCirclesQuerySchema = Joi.object({
+  scope: Joi.string().trim().lowercase().valid('all').allow('', null),
+}).unknown(true);
+
+/**
+ * The conversion ledger — every recorded cut in one table: a row per physical
+ * coil, and a row per cut that names no coil (rmImsService.listConversionLedger).
+ * The same filters, with the same meanings, as the two lists it unites;
+ * `entryType` NONE is the cuts with no physical coil, COIL every physical coil.
+ */
+export const rmConversionLedgerQuerySchema = Joi.object({
+  search:   Joi.string().trim().max(120).allow('', null),
+  batchNo:  Joi.string().trim().max(80).allow('', null),
+  // COIL: every physical coil (GRN or manual).
+  entryType: Joi.string().trim().uppercase().valid('GRN', 'MANUAL', 'COIL', 'NONE').allow('', null)
+    .messages({ 'any.only': 'Record type must be GRN, MANUAL, COIL or NONE' }),
+  location: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow('', null)
+    .messages({ 'any.only': `Location must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` }),
+  status:   Joi.string().trim().uppercase().valid('NOT_CUT', 'PARTIALLY_CUT', 'FULLY_CUT').allow('', null),
+  circleSkuId: objectId.allow('', null)
+    .messages({ 'string.pattern.base': 'Circle SKU is not a valid id' }),
+  from:     isoDay.allow('', null).label('From date'),
+  to:       isoDay.allow('', null).label('To date'),
+  page:     Joi.number().integer().min(1),
+  limit:    Joi.number().integer().min(1).max(200),
+}).unknown(true).custom((v, helpers) => (
   v.from && v.to && v.from > v.to ? helpers.message('From date cannot be after To date') : v
 ));
 

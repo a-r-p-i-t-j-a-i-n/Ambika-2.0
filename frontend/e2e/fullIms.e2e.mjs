@@ -219,8 +219,9 @@ const run = async () => {
   const partialRadio = F.getByRole('radio', { name: /partial cutting/i });
   const saveBtn = F.getByRole('button', { name: /save this conversion/i });
   const facts = async () => flat(await F.getByTestId('coil-facts').innerText());
-  const thisRound = async () => flat(await F.getByTestId('this-round').innerText());
-  const afterRound = async () => flat(await F.getByTestId('after-round').innerText());
+  // The round before saving: "After this round", beside the field. Scrap and
+  // yield are read from the history once saved (there is no step 3).
+  const outcome = async () => flat(await F.getByTestId('round-outcome').innerText());
   const historyRow = (b) => page.locator(`[data-testid="cut-history-row"][data-batch="${b}"]`);
   const circleInput = (i) => F.locator('table tbody tr').nth(i).locator('input[placeholder]').first();
   const circleCodes = async (i) => {
@@ -270,10 +271,8 @@ const run = async () => {
   await partialRadio.check();
   await cutField.fill(String(R.C1[0].cut));
   await fillCircles(R.C1[0].circles);
-  let t = await thisRound();
-  check('this round: Cut 1,000 · Circle output 850 · Scrap 150 · Yield 85%', /Cut 1,000 kg/i.test(t) && /Circle output 850 kg/i.test(t) && /Scrap 150 kg/i.test(t) && /Yield 85%/i.test(t), t);
-  let a = await afterRound();
-  check('after: Partial · Remaining 1,000 · Partially cut', /Cutting type Partial/i.test(a) && /Remaining 1,000 kg/i.test(a) && /Partially cut/i.test(a), a);
+  let o = await outcome();
+  check('after: Partial · Cut this round 1,000 · Remaining 1,000 · Partially cut', await partialRadio.isChecked() && /Cut this round 1,000 kg Remaining weight 1,000 kg Status Partially cut/i.test(o), o);
   await shot('07-c1-r1');
   check('round 1 saves', await save());
   await page.waitForTimeout(1500);
@@ -289,10 +288,8 @@ const run = async () => {
   await page.waitForTimeout(300);
   check('Full fills Cut this round = 1,000 automatically, read-only', (await cutField.inputValue()) === '1000' && !(await cutField.isEditable()));
   await fillCircles(R.C1[1].circles);
-  t = await thisRound();
-  check('this round: Circle output 870 · Scrap 130 · Yield 87%', /Circle output 870 kg/i.test(t) && /Scrap 130 kg/i.test(t) && /Yield 87%/i.test(t), t);
-  a = await afterRound();
-  check('after: Full · Remaining 0 · Fully cut', /Cutting type Full/i.test(a) && /Remaining 0 kg/i.test(a) && /Fully cut/i.test(a), a);
+  o = await outcome();
+  check('after: Full · Remaining 0 · Fully cut', await fullRadio.isChecked() && /Cut this round 1,000 kg Remaining weight 0 kg Status Fully cut/i.test(o), o);
   check('round 2 saves', await save());
   await page.waitForTimeout(1500);
   hr = flat(await historyRow('E2E-FULL-COIL-001').innerText().catch(() => ''));
@@ -300,8 +297,10 @@ const run = async () => {
   await historyRow('E2E-FULL-COIL-001').click();
   await page.waitForTimeout(1500);
   let rr = (await page.getByTestId('cut-round-row').allInnerTexts()).map(flat);
-  check('round 1: Partial · 1,000 · 850 · 150 · 85% · 1,000 left · Partial', /^1 \S+ \S+ Partial 1,000 kg 850 kg 150 kg 85% 1,000 kg Partial PLG01/.test(rr[0] || ''), rr[0]);
-  check('round 2: Full · 1,000 · 870 · 130 · 87% · 0 left · Fully cut', /^2 \S+ \S+ Full 1,000 kg 870 kg 130 kg 87% 0 kg Fully cut PLG01/.test(rr[1] || ''), rr[1]);
+  // Both rounds were cut at PLG01, which the coil row already says — so the
+  // rounds carry no Location column (`$`: nothing after the status).
+  check('round 1: Partial · 1,000 · 850 · 150 · 85% · 1,000 left · Partial', /^1 \S+ \S+ Partial 1,000 kg 850 kg 150 kg 85% 1,000 kg Partial$/.test(rr[0] || ''), rr[0]);
+  check('round 2: Full · 1,000 · 870 · 130 · 87% · 0 left · Fully cut', /^2 \S+ \S+ Full 1,000 kg 870 kg 130 kg 87% 0 kg Fully cut$/.test(rr[1] || ''), rr[1]);
   await shot('08-c1-history');
   await historyRow('E2E-FULL-COIL-001').click();
   await pickBatch('E2E-FULL-COIL-001');
@@ -315,8 +314,11 @@ const run = async () => {
   await partialRadio.check();
   await cutField.fill('1000');
   await fillCircles(R.C2[0].circles);
-  t = await thisRound();
-  check('round 1: 820 out · 180 scrap · 82%', /Circle output 820 kg/i.test(t) && /Scrap 180 kg/i.test(t) && /Yield 82%/i.test(t), t);
+  o = await outcome();
+  check('round 1: Cut this round 1,000 · Remaining 1,500 · Partially cut', /Cut this round 1,000 kg Remaining weight 1,500 kg Status Partially cut/i.test(o), o);
+  // 820 of 1,000 kg out: the 18% to scrap is flagged under the circles, not blocking.
+  check('round 1: 820 kg out of 1,000 — "18% of this coil is going to scrap", Save enabled',
+    /^18% of this coil is going to scrap/.test(flat(await F.getByTestId('low-yield-warning').innerText().catch(() => ''))) && await saveBtn.isEnabled());
   check('JW001 round 1 saves', await save());
   await page.waitForTimeout(1200);
   await pickBatch('E2E-FULL-COIL-002');
@@ -325,8 +327,8 @@ const run = async () => {
   await partialRadio.check();
   await cutField.fill('500');
   await fillCircles(R.C2[1].circles);
-  a = await afterRound();
-  check('after: Remaining 1,000 · Partially cut', /Remaining 1,000 kg/i.test(a) && /Partially cut/i.test(a), a);
+  o = await outcome();
+  check('after: Remaining 1,000 · Partially cut', /Remaining weight 1,000 kg Status Partially cut/i.test(o), o);
   check('JW001 round 2 saves', await save());
   await page.waitForTimeout(1500);
   hr = flat(await historyRow('E2E-FULL-COIL-002').innerText().catch(() => ''));

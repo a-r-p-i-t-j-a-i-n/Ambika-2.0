@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, Button, Autocomplete, IconButton, MenuItem,
   FormControlLabel, Switch, Checkbox, Table, TableHead, TableBody, TableRow, TableCell, CircularProgress,
-  Tooltip, LinearProgress, Radio, RadioGroup, FormControl, FormLabel,
+  Tooltip, Radio, RadioGroup, FormControl, FormLabel,
 } from '@mui/material';
 import {
   Plus, Trash2, Save, Disc3, CircleDashed, AlertTriangle, Scissors, ArrowUpRight,
@@ -14,7 +14,7 @@ import dayjs from 'dayjs';
 import { FIELD } from '../ims/imsFieldHelp';
 
 import {
-  Panel, TableScroll, Th, StepHead, YieldChip, yieldBand,
+  Panel, TableScroll, Th, StepHead,
   CutStatusChip, cuttingStatusOf,
   newRequestId,
   RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
@@ -666,7 +666,6 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
     return {
       remainingKg,
       totalCutKg,
-      roundNo: (coilFacts.rounds ?? 0) + 1,
       status: cuttingStatusOf({ cutKg: totalCutKg, remainingKg }),
     };
   })() : null;
@@ -680,7 +679,6 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
   const ready = identified && !!coil && coilWt > 0 && validCircles.length > 0 && !missingPcs.length
     && !overCut && !shortCoil && !gradeShort && !blockedCircles.length
     && !cutTypeMissing && !fullImpossible;
-  const band = yieldBand(yieldPct);
   const activeLocation = RECEIVED_AT_OPTIONS.find((w) => w.value === head.warehouse);
   /**
    * The operator has picked a DIFFERENT cutting location than the one this
@@ -1265,6 +1263,23 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
             onChange={(e) => setHead((h) => ({ ...h, allowNegative: e.target.checked }))} />}
           label={<Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>Allow cutting more coil than we hold</Typography>}
         />
+        {/* The override is allowed, never silent: the negative balance it
+            leaves is spelled out right under the switch that allowed it. */}
+        {!overCut && overdrawn && (
+          <Paper elevation={0} data-testid="overdrawn-warning" sx={{
+            mt: 0.75, borderRadius: '8px', px: 1.5, py: 1,
+            border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+          }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
+                Over-cut: this round takes {num(coilWt)} KG but only {num(available)} KG is available
+                {receipt ? ' from this physical coil' : ''}. Saving will leave {num(round2(available - coilWt))} KG
+                (over by {num(round2(coilWt - available))} KG), because "Allow cutting more coil than we hold" is on.
+              </Typography>
+            </Stack>
+          </Paper>
+        )}
 
         {/* ── Received At was changed away from the GRN's own record ───────
             Spelled out rather than silently accepted: this one field decides
@@ -1422,183 +1437,69 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
           sx={{ mt: 1.25, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', color: O2D.brand }}>
           Add another circle size
         </Button>
-      </Panel>
 
-      {/* ── Step 3 — the arithmetic, live ── */}
-      <Panel>
-        <StepHead n={3} title="Check the balance" hint="This round: coil cut, circles out, scrap — and what is left on the coil afterwards." done={ready} />
-        <Box sx={{ mt: 1.25 }}>
-          {/* A single bar reading left to right: usable circles, then scrap.
-              A reader sees the split without doing the division themselves.
-              Everything here is THIS ROUND's — scrap and yield are against
-              what was cut this round, never against the original coil. */}
-          <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 0.6 }}>
-            <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: O2D.sub, mr: 'auto' }}>
-              {coilWt > 0 ? `${num(circlesWeight)}kg of usable circles from ${num(coilWt)}kg cut this round` : 'Enter "Cut this round" to see the split'}
-            </Typography>
-            {coilWt > 0 && <YieldChip pct={yieldPct} />}
-          </Stack>
-          <LinearProgress
-            variant="determinate"
-            value={coilWt > 0 ? Math.min(100, Math.max(0, yieldPct)) : 0}
-            sx={{
-              height: 10, borderRadius: 5, bgcolor: overCut ? STOCK_TOKENS.OUT_OF_STOCK.bg : '#fef3c7',
-              '& .MuiLinearProgress-bar': { borderRadius: 5, bgcolor: band.color },
-            }}
-          />
-          <Typography sx={{ mt: 1, fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: O2D.sub }}>
-            This round
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap data-testid="this-round">
-            {[
-              ['Cut', `${num(coilWt)} kg`, O2D.body, 'The coil weight taken out of stock in this round.'],
-              ['Circle output', `${num(circlesWeight)} kg`, '#4338ca', 'The weight of circles this round produced.'],
-              ['Scrap', `${num(scrap)} kg`, overCut ? STOCK_TOKENS.OUT_OF_STOCK.color : '#b45309', 'Cut this round minus this round\'s circle weight.'],
-              ['Yield', `${num(yieldPct)}%`, band.color, 'This round\'s circle weight ÷ what was cut this round.'],
-            ].map(([label, value, color, hint]) => (
-              <Tooltip key={label} arrow slotProps={O2D_TIP} title={hint}>
-                <Box sx={{
-                  px: 1.25, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`,
-                  bgcolor: O2D.surface, minWidth: 106, cursor: 'help',
-                }}>
-                  <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>{label}</Typography>
-                  <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-                </Box>
-              </Tooltip>
-            ))}
-          </Stack>
-
-          {/* What the PHYSICAL COIL looks like once this round is saved. Only
-              for an identified coil — without one there is no coil to say
-              anything about. */}
-          {coilFacts && (
-            <>
-              <Typography sx={{ mt: 1.25, fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: O2D.sub }}>
-                After this round{after ? ` · round ${after.roundNo} of coil ${coilLabel}` : ''}
+        {/* What stops a round being saved because of its circles, said next to
+            the circles. The rest of the round's checks are on "Cut this round"
+            and the over-cut switch in step 1. */}
+        {missingPcs.length > 0 && (
+          <Paper elevation={0} data-testid="missing-pcs-warning" sx={{
+            mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
+            border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
+          }}>
+            <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex', pt: 0.15 }}><AlertTriangle size={16} /></Box>
+              <Typography sx={{ fontSize: '0.78rem', color: STOCK_TOKENS.REORDER.color }}>
+                <b>{missingPcs.length} circle line{missingPcs.length > 1 ? 's have' : ' has'} a weight but no piece count.</b>{' '}
+                Circles are stocked in pieces, so without it the weight would be added to a balance counted in pieces.
               </Typography>
-              <Stack direction="row" spacing={1} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap alignItems="stretch" data-testid="after-round">
-                {[
-                  ['Cutting type', cutType === 'FULL' ? 'Full' : cutType === 'PARTIAL' ? 'Partial' : '—', O2D.ink],
-                  ['Total coil', `${num(coilFacts.originalKg)} kg`, O2D.ink],
-                  ['Already cut', `${num(coilFacts.alreadyCutKg)} kg`, O2D.body],
-                  ['This round', `${num(coilWt)} kg`, O2D.body],
-                  ['Remaining', after ? `${num(after.remainingKg)} kg` : `${num(coilFacts.availableKg)} kg`,
-                    after && after.remainingKg < 0 ? STOCK_TOKENS.OUT_OF_STOCK.color : '#0f766e'],
-                ].map(([label, value, color]) => (
-                  <Box key={label} sx={{ px: 1.25, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, minWidth: 106 }}>
-                    <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>{label}</Typography>
-                    <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-                  </Box>
-                ))}
-                <Box sx={{ px: 1.25, py: 0.7, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, minWidth: 106 }}>
-                  <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>Physical coil status</Typography>
-                  <Box sx={{ mt: 0.35 }}><CutStatusChip status={after ? after.status : coilFacts.status} /></Box>
-                </Box>
-              </Stack>
-            </>
-          )}
-
-          {missingPcs.length > 0 && (
-            <Paper elevation={0} sx={{
-              mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
-            }}>
-              <Stack direction="row" spacing={1} alignItems="flex-start">
-                <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex', pt: 0.15 }}><AlertTriangle size={16} /></Box>
-                <Typography sx={{ fontSize: '0.78rem', color: STOCK_TOKENS.REORDER.color }}>
-                  <b>{missingPcs.length} circle line{missingPcs.length > 1 ? 's have' : ' has'} a weight but no piece count.</b>{' '}
-                  Circles are stocked in pieces, so without it the weight would be added to a balance counted in pieces.
-                </Typography>
-              </Stack>
-            </Paper>
-          )}
-          {overCut && (
-            <Paper elevation={0} sx={{
-              mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
-            }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
-                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
-                  The circles weigh {num(Math.abs(scrap))}kg more than the coil. Metal cannot be created — check the weights.
-                </Typography>
-              </Stack>
-            </Paper>
-          )}
-          {!overCut && !shortCoil && gradeShort && (
-            <Paper elevation={0} data-testid="grade-short-warning" sx={{
-              mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
-            }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
-                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
-                  Only {num(gradeOnHand)} KG of {coil.skuCode} is in RM stock, and a manual coil is still taken out of stock.
-                  Correct "Cut this round", or turn on "Allow cutting more coil than we hold" above.
-                </Typography>
-              </Stack>
-            </Paper>
-          )}
-          {!overCut && shortCoil && (
-            <Paper elevation={0} sx={{
-              mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
-            }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
-                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
-                  {receipt
-                    ? `Only ${num(available)} KG is available from this physical coil.`
-                    : `Only ${num(available)}kg of this coil is in stock.`}{' '}
-                  Correct "Cut this round", or turn on "Allow cutting more coil than we hold" above.
-                </Typography>
-              </Stack>
-            </Paper>
-          )}
-          {!overCut && overdrawn && (
-            <Paper elevation={0} data-testid="overdrawn-warning" sx={{
-              mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
-            }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
-                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
-                  Over-cut: this round takes {num(coilWt)} KG but only {num(available)} KG is available
-                  {receipt ? ' from this physical coil' : ''}. Saving will leave {num(round2(available - coilWt))} KG
-                  (over by {num(round2(coilWt - available))} KG), because "Allow cutting more coil than we hold" is on.
-                </Typography>
-              </Stack>
-            </Paper>
-          )}
-          {ready && yieldPct < 85 && (
-            <Paper elevation={0} sx={{
-              mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: '1px solid #fde68a', bgcolor: '#fffbeb',
-            }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Box sx={{ color: '#b45309', display: 'flex' }}><Scissors size={16} /></Box>
-                <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#b45309' }}>
-                  {num(100 - yieldPct)}% of this coil is going to scrap. Worth a look at the cutting pattern before saving.
-                </Typography>
-              </Stack>
-            </Paper>
-          )}
-
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1.5 }}>
-            {onCancel && (
-              <Button variant="outlined" onClick={onCancel} disabled={isLoading}
-                sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
-                Cancel
-              </Button>
-            )}
-            <Button variant="contained" disableElevation onClick={submit} disabled={isLoading || !ready}
-              startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
-              sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
-              Save this conversion
-            </Button>
-          </Stack>
-        </Box>
+            </Stack>
+          </Paper>
+        )}
+        {overCut && (
+          <Paper elevation={0} data-testid="over-cut-warning" sx={{
+            mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
+            border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+          }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
+                The circles weigh {num(Math.abs(scrap))}kg more than the coil. Metal cannot be created — check the weights.
+              </Typography>
+            </Stack>
+          </Paper>
+        )}
+        {ready && yieldPct < 85 && (
+          <Paper elevation={0} data-testid="low-yield-warning" sx={{
+            mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
+            border: '1px solid #fde68a', bgcolor: '#fffbeb',
+          }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Box sx={{ color: '#b45309', display: 'flex' }}><Scissors size={16} /></Box>
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#b45309' }}>
+                {num(100 - yieldPct)}% of this coil is going to scrap. Worth a look at the cutting pattern before saving.
+              </Typography>
+            </Stack>
+          </Paper>
+        )}
       </Panel>
+
+      {/* ── Save / Cancel — straight after the circles. The round's own figures
+          are beside "Cut this round" (After this round); scrap and yield are
+          worked out from the weights and shown in the history once saved. ── */}
+      {/* On a phone Save takes the rest of the row, so its label stays on one line. */}
+      <Stack direction="row" justifyContent="flex-end" spacing={1} data-testid="form-footer">
+        {onCancel && (
+          <Button variant="outlined" onClick={onCancel} disabled={isLoading}
+            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body, flexShrink: 0 }}>
+            Cancel
+          </Button>
+        )}
+        <Button variant="contained" disableElevation onClick={submit} disabled={isLoading || !ready}
+          startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
+          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand, whiteSpace: 'nowrap', flex: { xs: 1, sm: 'none' } }}>
+          Save this conversion
+        </Button>
+      </Stack>
     </Stack>
   );
 };

@@ -15,7 +15,8 @@
  *     failure, never as "no history";
  *   • pagination, S.No. across pages, the matching-record count;
  *   • GRN-linked and manual coils both listed; a multi-round coil is one row
- *     whose rounds open under it, its weight never counted twice.
+ *     whose rounds open under it, its weight never counted twice; the older
+ *     cut that names no coil (H-OLD) is a row of its own, counted once.
  *
  * The database is the oracle: backend/src/scripts/e2eCoilHistoryFixture.js
  * --verify checks what this run saved (exactly one round, nothing from the
@@ -90,6 +91,9 @@ const run = async () => {
   const rows = () => page.getByTestId('cut-history-row');
   const batchesShown = async () => (await rows().evaluateAll((els) => els.map((e) => e.dataset.batch)));
   const count = async () => flat(await page.getByTestId('history-count').innerText().catch(() => ''));
+  // Unfiltered: the 12 coils, and the one spreadsheet-era cut naming no coil
+  // (H-OLD), which is a row of its own.
+  const COUNT0 = '12 coils · 1 older cut';
   const cards = async () => flat(await page.getByTestId('history-cards').innerText().catch(() => ''));
   // Wait until the table has settled on an answer (not loading, not dimmed).
   const settle = async () => {
@@ -132,15 +136,17 @@ const run = async () => {
   check('1. the history table is visible', await page.getByRole('table', { name: 'Coil to Circle history' }).isVisible());
   check('1. the entry form is NOT open', (await dialog.count()) === 0 && (await page.getByTestId('coil-to-circle-form').count()) === 0);
   check('1. "+ Coil to Circle" is on screen', await page.getByTestId('open-coil-to-circle').isVisible());
-  check('14. 10 rows on page 1, 12 coils counted', (await rows().count()) === 10 && /^12 coils$/.test(await count()), await count());
+  check('14. 10 rows on page 1, 12 coils and the 1 older cut counted', (await rows().count()) === 10 && (await count()) === COUNT0, await count());
   const c0 = await cards();
-  check('cards: 12 physical coils · 14 rounds · 5,300 kg cut · 470 kg scrap', /Physical coils 12/i.test(c0) && /Cutting rounds 14/i.test(c0)
-    && /Coil weight cut 5,300 kg/i.test(c0) && /Scrap generated 470 kg/i.test(c0), c0);
-  check('cards: scrap split PLG01 / job worker (350 / 120)', /PLG01 350 kg · with job worker 120 kg/.test(c0), c0);
+  check('cards: 12 physical coils · 15 cuts (14 rounds + the older cut) · 5,900 kg cut · 560 kg scrap — each cut once',
+    /Physical coils 12/i.test(c0) && /Cuts 15 14 on physical coils · 1 with no physical coil/i.test(c0)
+    && /Coil weight cut 5,900 kg/i.test(c0) && /Scrap generated 560 kg/i.test(c0), c0);
+  check('cards: scrap split PLG01 / job worker (350 / 120); the older cut\'s 90 kg has no recorded location, and the line says so',
+    /PLG01 350 kg · with job worker 120 kg/.test(c0) && /90 kg of the scrap has no recorded cutting location/.test(flat(await page.getByTestId('history-totals-scope').innerText())), c0);
   const sno1 = await page.getByTestId('cut-history-sno').allInnerTexts();
   check('14. S.No. 1–10 on page 1', same(sno1, ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']), sno1.join(','));
   check('newest cut first: H-PLG-C, H-MAN-D, H-PLG-A, H-JW-B …', same((await batchesShown()).slice(0, 4), ['H-PLG-C', 'H-MAN-D', 'H-PLG-A', 'H-JW-B']));
-  check('the untraceable older cut is stated', /1 older cut \(600 kg\)/.test(flat(await page.getByTestId('cut-history-untraceable').innerText())));
+  check('the untraceable older cut is stated — a row of its own', /^1 row is a cut \(600 kg\) that names no physical coil/.test(flat(await page.getByTestId('cut-history-untraceable').innerText())));
   await shot('01-open');
 
   /* ── 15. GRN-linked and manual both listed, and told apart ── */
@@ -166,31 +172,33 @@ const run = async () => {
   /* ── 14. Pagination ── */
   await page.getByRole('button', { name: /go to next page/i }).click();
   await settle();
-  check('14. page 2: 2 rows, S.No. 11 and 12', (await rows().count()) === 2
-    && same(await page.getByTestId('cut-history-sno').allInnerTexts(), ['11', '12']));
-  check('14. count unchanged on page 2', /^12 coils$/.test(await count()));
+  const older = page.getByTestId('ledger-cut-row');
+  check('14. page 2: 2 coils, then the older cut H-OLD as the oldest row — S.No. 11, 12 and 13', (await rows().count()) === 2
+    && same(await page.getByTestId('cut-history-sno').allInnerTexts(), ['11', '12', '13'])
+    && (await older.count()) === 1 && (await older.getAttribute('data-batch')) === 'H-OLD' && (await older.getAttribute('data-origin')) === 'IMPORT');
+  check('14. count unchanged on page 2', (await count()) === COUNT0);
 
   /* ── 6. Batch number — partial, and resets to page 1 ── */
   await page.getByTestId('filter-batch').fill('plg');
   await settle();
   check('6. "plg" → H-PLG-C, H-PLG-A; back on page 1', same(await batchesShown(), ['H-PLG-C', 'H-PLG-A'])
     && same(await page.getByTestId('cut-history-sno').allInnerTexts(), ['1', '2']), (await batchesShown()).join(','));
-  check('6. count says "2 coils match"', /^2 coils match$/.test(await count()), await count());
+  check('6. count says "2 coils match" and how many of their cuts', /^2 coils match · \d+ matching cuts$/.test(await count()), await count());
   await page.getByTestId('filter-batch').fill('H-JW-B');
   await settle();
   check('6. exact batch → only H-JW-B', same(await batchesShown(), ['H-JW-B']));
   await reset();
-  check('11. Reset restores all 12', /^12 coils$/.test(await count()) && (await page.getByTestId('filter-batch').inputValue()) === '');
+  check('11. Reset restores all 12', (await count()) === COUNT0 && (await page.getByTestId('filter-batch').inputValue()) === '');
 
   /* ── 7. Date range on the cutting date ── */
   await page.getByTestId('filter-from').fill('2026-03-01');
   await page.getByTestId('filter-to').fill('2026-03-31');
   await settle();
   check('7. 01-03 → 31-03: H-MAN-D, H-PLG-A, H-JW-B', same(await batchesShown(), ['H-MAN-D', 'H-PLG-A', 'H-JW-B']), (await batchesShown()).join(','));
-  check('7. count: 3 coils match · 3 matching rounds', /^3 coils match · 3 matching rounds$/.test(await count()), await count());
+  check('7. count: 3 coils match · 3 matching cuts', /^3 coils match · 3 matching cuts$/.test(await count()), await count());
   const cMar = await cards();
-  check('7/16. cards add up only March rounds: 3 rounds · 2,300 kg cut (no coil counted twice)',
-    /Cutting rounds 3/i.test(cMar) && /Coil weight cut 2,300 kg/i.test(cMar) && /Rounds matching the filters/.test(cMar), cMar);
+  check('7/16. cards add up only March rounds: 3 cuts · 2,300 kg cut (no coil counted twice)',
+    /Cuts 3 Cuts matching the filters/i.test(cMar) && /Coil weight cut 2,300 kg/i.test(cMar), cMar);
   check('7. a two-round coil says "1 of 2 match"', /1 of 2 match/.test(flat(await aRow.innerText())));
   check('7. …and still shows its WHOLE coil (1,200 cut, 800 left)', /2,000 1,200 .* 800 Partially cut/.test(flat(await aRow.innerText())));
   await page.getByTestId('filter-from').fill('2026-04-01');
@@ -246,16 +254,16 @@ const run = async () => {
   await settle();
   check('12. "plg" + JW001 + 08-850 → the no-match message, not a blank table',
     (await rows().count()) === 0 && (await page.getByTestId('history-empty').isVisible())
-      && /No coil matches these filters/.test(flat(await page.getByTestId('history-empty').innerText())));
+      && /Nothing matches these filters/.test(flat(await page.getByTestId('history-empty').innerText())));
   check('12. count says 0', /^0 coils match/.test(await count()), await count());
   await shot('02-no-match');
   await reset();
-  check('11. Reset clears every filter', /^12 coils$/.test(await count()) && !(await page.getByTestId('filter-reset').isEnabled()));
+  check('11. Reset clears every filter', (await count()) === COUNT0 && !(await page.getByTestId('filter-reset').isEnabled()));
 
   /* ── More filters: entry type ── */
   await page.getByRole('button', { name: /more filters/i }).click();
   await page.waitForTimeout(300);
-  await pickSelect('Entry type', 'Manual entry (no GRN)');
+  await pickSelect('Entry type', 'Manual coils (no GRN)');
   check('entry type "Manual entry" → H-MAN-D only', same(await batchesShown(), ['H-MAN-D']));
   await pickSelect('Cutting status', 'Fully cut');
   check('manual + fully cut → none', (await rows().count()) === 0);
@@ -263,7 +271,8 @@ const run = async () => {
 
   /* ── 13. API failure is a failure, not "no history" ── */
   expectFailures = true;
-  await page.route('**/rm-ims/cutting-history?*', (route) => route.fulfill({
+  // What the history table reads: the conversion ledger.
+  await page.route('**/rm-ims/conversion-ledger?*', (route) => route.fulfill({
     status: 500, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'Simulated server failure (e2e)' }),
   }));
   await page.getByTestId('filter-batch').fill('zz-err');
@@ -275,7 +284,7 @@ const run = async () => {
     && (await page.getByTestId('history-cards').count()) === 0 && (await page.getByTestId('history-count').count()) === 0
     && (await rows().count()) === 0);
   await shot('03-api-failure');
-  await page.unroute('**/rm-ims/cutting-history?*');
+  await page.unroute('**/rm-ims/conversion-ledger?*');
   expectFailures = false;
   await page.getByRole('button', { name: /try again/i }).click();
   await settle();
@@ -378,8 +387,8 @@ const run = async () => {
   const uiText = flat(await ui.innerText().catch(() => ''));
   check('4. the table refreshed: UI-E01 first, 2,000 · 600 cut · 100 pcs · 550 kg · 50 scrap · 1,400 left · 1 round',
     (await batchesShown())[0] === 'UI-E01' && /2,000 600 100 550 50 91.67% 1,400 Partially cut 1 round$/.test(uiText), uiText);
-  check('4. count and cards refreshed: 13 coils · 15 rounds · 5,900 kg', /^13 coils$/.test(await count())
-    && /Cutting rounds 15/i.test(await cards()) && /Coil weight cut 5,900 kg/i.test(await cards()), `${await count()} | ${await cards()}`);
+  check('4. count and cards refreshed: 13 coils · 16 cuts (15 on physical coils) · 6,500 kg', (await count()) === '13 coils · 1 older cut'
+    && /Cuts 16 15 on physical coils/i.test(await cards()) && /Coil weight cut 6,500 kg/i.test(await cards()), `${await count()} | ${await cards()}`);
   await shot('06-saved');
 
   /* ── The "Cut a coil" shortcut opens the form ── */

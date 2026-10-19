@@ -20,7 +20,12 @@
  *   • a manual coil with no GRN is entered once (with its total weight), cut in
  *     three rounds across a page reload, and shows up in Cutting History, on
  *     its coil page and in Scrap by Physical Coil;
- *   • bad manual input cannot be saved.
+ *   • bad manual input cannot be saved;
+ *   • the form is two steps and a footer — no "Check the balance" step: the
+ *     checks it carried sit next to their inputs (circles, the over-cut
+ *     switch), and Save / Cancel follow the circles — with Save's loading
+ *     state, a refused save, a double-click, and the footer at desktop, laptop
+ *     and phone sizes.
  *
  * The database is the oracle: backend/src/scripts/e2eCoilToCircleFixture.js
  * --verify checks what this run saved.
@@ -64,14 +69,16 @@ const consoleErrors = [];
 const pageErrors = [];
 const apiErrors = [];
 const flat = (s) => (s || '').replace(/\s+/g, ' ').trim();
+// While a save is answered by a stubbed failure on purpose, its 5xx is not an error.
+let expectFailures = false;
 
 const run = async () => {
   const browser = await chromium.launch({ headless: true, executablePath: findChromium() });
   const page = await browser.newPage({ viewport: { width: 1600, height: 1100 } });
-  page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !expectFailures) consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => pageErrors.push(e.message));
   page.on('response', (r) => {
-    if (r.url().includes('/api/') && r.status() >= 400) apiErrors.push(`${r.status()} ${r.request().method()} ${r.url().replace(/.*\/api\/v1/, '')}`);
+    if (r.url().includes('/api/') && r.status() >= 400 && !expectFailures) apiErrors.push(`${r.status()} ${r.request().method()} ${r.url().replace(/.*\/api\/v1/, '')}`);
   });
   const shot = async (name) => {
     fs.mkdirSync(SHOTS, { recursive: true });
@@ -186,7 +193,6 @@ const run = async () => {
     'allow cutting more': await visible(F.getByText('Allow cutting more coil than we hold')),
     'circle output table': await visible(F.locator('table tbody tr input[placeholder]')),
     'add another circle size': await visible(F.getByRole('button', { name: /add another circle size/i })),
-    'this round (scrap/yield)': await visible(F.getByTestId('this-round')),
     cancel: await visible(F.getByRole('button', { name: /^cancel$/i })),
     save: await visible(saveBtn),
   };
@@ -196,6 +202,33 @@ const run = async () => {
   check('…with the round locked until a coil is identified: Full / Partial / "Cut this round" disabled, Save disabled',
     await F.getByRole('radio', { name: /full cutting/i }).isDisabled() && await F.getByRole('radio', { name: /partial cutting/i }).isDisabled()
       && await cutField.isDisabled() && !(await saveBtn.isEnabled()));
+
+  /* ── 0z. No step 3: the form is the coil, the circles, and a Save / Cancel footer ── */
+  check('step 3 "Check the balance" is gone — no heading, no balance bar, no Cut / Circle output / Scrap / Yield cards, no after-round cards',
+    !/Check the balance/.test(formText) && !/usable circles from|to see the split/.test(formText)
+      && (await F.getByTestId('this-round').count()) === 0 && (await F.getByTestId('after-round').count()) === 0
+      && (await F.locator('.MuiLinearProgress-root').count()) === 0);
+  const layout = await page.evaluate(() => {
+    const form = document.querySelector('[data-testid="coil-to-circle-form"]');
+    const footer = form?.querySelector(':scope > [data-testid="form-footer"]');
+    const btn = (re) => [...(footer?.querySelectorAll('button') || [])].find((b) => re.test(b.textContent.trim()));
+    const save = btn(/^Save this conversion$/);
+    const cancel = btn(/^Cancel$/);
+    const r = (el) => el.getBoundingClientRect();
+    const prev = footer?.previousElementSibling;
+    return {
+      parts: form?.children.length,
+      footerLast: !!footer && form.lastElementChild === footer,
+      afterCircles: !!prev && /What came out\?/.test(prev.textContent) && !!prev.querySelector('table'),
+      both: !!save && !!cancel,
+      sameRow: !!save && !!cancel && Math.abs(r(save).top - r(cancel).top) < 1,
+      cancelThenSave: !!save && !!cancel && r(cancel).right <= r(save).left,
+      rightAligned: !!save && Math.abs(r(save).right - r(footer).right) < 1.5,
+    };
+  });
+  check('the form is two steps and a footer; the footer comes straight after the circle output',
+    layout.parts === 3 && layout.footerLast && layout.afterCircles, JSON.stringify(layout));
+  check('…holding Cancel then Save on one row, right-aligned', layout.both && layout.sameRow && layout.cancelThenSave && layout.rightAligned, JSON.stringify(layout));
   await shot('00-open');
 
   /* ── 0a. The dropdown with the box empty: received coils with weight left ── */
@@ -352,6 +385,41 @@ const run = async () => {
   await cutField.fill('123');
   await pickCircle(10, 3);
   await settle(400);
+
+  /* ── 3a. What blocks a round is said next to its input, not in a step 3 ── */
+  const row0 = F.locator('table tbody tr').nth(0);
+  check('a 3 kg / 123 kg round can be saved, with the scrap advisory under the circles (not blocking)',
+    await saveBtn.isEnabled() && /going to scrap/.test(flat(await F.getByTestId('low-yield-warning').innerText().catch(() => ''))));
+  await row0.locator('input[type="number"]').nth(1).fill('130');
+  await settle(300);
+  const oc = flat(await F.getByTestId('over-cut-warning').innerText().catch(() => ''));
+  check('circles heavier than the cut (130 kg out of 123 kg): "Metal cannot be created" under the circles, Save disabled',
+    /The circles weigh 7kg more than the coil\. Metal cannot be created/.test(oc) && await saveBtn.isDisabled(), oc);
+  await row0.locator('input[type="number"]').nth(1).fill('3');
+  await row0.locator('input[type="number"]').nth(0).fill('');
+  await settle(300);
+  check('a circle weight with no piece count is flagged under the circles, Save disabled',
+    /1 circle line has a weight but no piece count/.test(flat(await F.getByTestId('missing-pcs-warning').innerText().catch(() => ''))) && await saveBtn.isDisabled());
+  await row0.locator('input[type="number"]').nth(0).fill('10');
+  await cutField.fill('1200');
+  await settle(300);
+  check('1,200 kg off a coil with 1,000 kg left: refused on the field itself, Save disabled',
+    /Only 1,000 KG is available from this physical coil/.test(flat(await F.textContent())) && await saveBtn.isDisabled());
+  const allowOver = F.getByLabel('Allow cutting more coil than we hold');
+  await allowOver.check();
+  await settle(300);
+  const od = flat(await F.getByTestId('overdrawn-warning').innerText().catch(() => ''));
+  const odUnderSwitch = await page.evaluate(() => /Allow cutting more coil than we hold/.test(
+    document.querySelector('[data-testid="overdrawn-warning"]')?.previousElementSibling?.textContent || ''));
+  check('"Allow cutting more coil than we hold" lets it through, and the over-cut is spelled out right under that switch',
+    await saveBtn.isEnabled() && /takes 1,200 KG but only 1,000 KG is available from this physical coil/.test(od) && /over by 200 KG/.test(od) && odUnderSwitch, od);
+  await allowOver.uncheck();
+  await cutField.fill('123');
+  await settle(300);
+  check('…switched off and back to 123 kg: no over-cut warning, Save enabled again',
+    (await F.getByTestId('overdrawn-warning').count()) === 0 && await saveBtn.isEnabled());
+  await shot('03a-inline-checks');
+
   check('a complete round on DEMO-CTC-003 can be saved…', await saveBtn.isEnabled());
   await startRecording();
   await batch.fill('DEMO-CTC-005');
@@ -383,10 +451,48 @@ const run = async () => {
   await pickCircle(700, 225);
   await settle(500);
   check('Save is enabled for a valid partial cut', await saveBtn.isEnabled());
+  // Every POST /convert this save makes, failed or not, with its submission id.
+  const convertBodies = [];
+  const onConvert = (r) => { if (r.method() === 'POST' && /\/rm-ims\/convert$/.test(r.url())) convertBodies.push(r.postDataJSON()); };
+  page.on('request', onConvert);
+  // A refused save first (stubbed — it never reaches the server).
+  expectFailures = true;
+  await page.route('**/rm-ims/convert', (route) => route.fulfill({
+    status: 500, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'Simulated refusal (e2e) — nothing saved' }),
+  }));
   await saveBtn.click();
+  await page.getByText(/Simulated refusal \(e2e\)/).first().waitFor({ timeout: 10000 }).catch(() => {});
+  // The toast can land a render before the button leaves its saving state.
+  for (let i = 0; i < 30 && !(await saveBtn.isEnabled()); i += 1) await page.waitForTimeout(100);
+  const refused = {
+    message: (await page.getByText(/Simulated refusal \(e2e\) — nothing saved/).count()) >= 1,
+    open: (await F.count()) === 1,
+    batch: await batch.inputValue(),
+    cut: await cutField.inputValue(),
+    partial: await F.getByLabel(/partial cutting/i).isChecked(),
+    circleKg: await F.locator('table tbody tr').nth(0).locator('input[type="number"]').nth(1).inputValue(),
+    saveEnabled: await saveBtn.isEnabled(),
+  };
+  check('a refused save shows the server\'s message and keeps the form open, every value as entered, Save enabled to retry',
+    refused.message && refused.open && refused.batch === 'DEMO-CTC-003' && refused.cut === '250' && refused.partial
+      && refused.circleKg === '225' && refused.saveEnabled, JSON.stringify(refused));
+  await page.unroute('**/rm-ims/convert');
+  expectFailures = false;
+  // The real save, held back 1.5 s so its loading state can be read — and double-clicked.
+  await page.route('**/rm-ims/convert', async (route) => { await new Promise((r) => { setTimeout(r, 1500); }); await route.continue(); });
+  await saveBtn.dblclick();
+  await page.waitForTimeout(300);
+  check('while saving: Save is disabled with a spinner, Cancel and the dialog\'s Close are disabled',
+    await saveBtn.isDisabled() && (await saveBtn.locator('.MuiCircularProgress-root').count()) === 1
+      && await F.getByRole('button', { name: /^cancel$/i }).isDisabled() && await page.getByTestId('close-coil-to-circle').isDisabled());
   await page.getByText(/Conversion .* saved/).first().waitFor({ timeout: 15000 }).catch(() => {});
   check('the cut saves', (await page.getByText(/Conversion .* saved/).count()) >= 1);
   await settle(1500);
+  await page.unroute('**/rm-ims/convert');
+  page.off('request', onConvert);
+  check('…the double-click sent ONE save, reusing the refused attempt\'s submission id',
+    convertBodies.length === 2 && !!convertBodies[0]?.clientRequestId && convertBodies[0].clientRequestId === convertBodies[1]?.clientRequestId,
+    `${convertBodies.length} POST /convert`);
   check('…the form closes after saving', (await F.count()) === 0);
   await openCutForm();
   check('…and the next one starts empty (batch empty, no coil)', (await batch.inputValue()) === '' && !(await cardsShown()));
@@ -516,6 +622,76 @@ const run = async () => {
   const sr = flat(await sRow.innerText().catch(() => ''));
   check('Scrap by Physical Coil identifies the manual coil (manual entry · 3 rounds)', /Manual entry · no GRN/.test(sr) && /\b3\b/.test(sr), sr.slice(0, 200));
   await shot('09-scrap-by-coil');
+
+  /* ── 10. The dialog at desktop, laptop and phone sizes: Save / Cancel never clipped ── */
+  const footerFit = () => page.evaluate(() => {
+    const paper = document.querySelector('[data-testid="coil-to-circle-dialog"]');
+    const content = paper.querySelector('.MuiDialogContent-root');
+    const footer = paper.querySelector('[data-testid="form-footer"]');
+    footer.scrollIntoView({ block: 'end' });
+    const c = content.getBoundingClientRect();
+    const b = [...footer.querySelectorAll('button')].map((x) => x.getBoundingClientRect());
+    return {
+      buttons: b.length,
+      inside: b.every((x) => x.top >= c.top - 0.5 && x.bottom <= c.bottom + 0.5 && x.left >= c.left - 0.5 && x.right <= c.right + 0.5),
+      inViewport: b.every((x) => x.left >= 0 && x.right <= window.innerWidth && x.bottom <= window.innerHeight),
+      noSideScroll: document.documentElement.scrollWidth <= window.innerWidth && content.scrollWidth <= content.clientWidth,
+      fullScreen: Math.abs(paper.getBoundingClientRect().width - window.innerWidth) < 1,
+      sameRow: b.length === 2 && Math.abs(b[0].top - b[1].top) < 1,
+      widths: b.map((x) => Math.round(x.width)),
+      heights: b.map((x) => Math.round(x.height)),
+      footerWidth: Math.round(footer.getBoundingClientRect().width),
+    };
+  });
+  for (const [w, h] of [[1600, 1100], [1280, 720], [390, 844]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await go(`${APP}/rm-ims/conversion`);
+    await settle(2000);
+    await openCutForm();
+    const fit = await footerFit();
+    check(`${w}×${h}: Cancel and Save are reachable at the end of the form, inside the dialog and the window — never clipped`,
+      fit.buttons === 2 && fit.inside && fit.inViewport && fit.sameRow, JSON.stringify(fit));
+    check(`${w}×${h}: nothing scrolls sideways (the circle table scrolls inside its own box)`, fit.noSideScroll, JSON.stringify(fit));
+    // Same height = neither label wrapped onto a second line.
+    check(`${w}×${h}: both labels fit on one line`, fit.heights[0] === fit.heights[1] && fit.heights[1] < 44, JSON.stringify(fit));
+    if (w < 600) {
+      check('phone: the dialog is full screen; Cancel and Save fill the footer row, Save taking the rest of it',
+        fit.fullScreen && fit.widths[1] > fit.widths[0] && fit.widths[0] + fit.widths[1] + 8 >= fit.footerWidth - 1, JSON.stringify(fit));
+    }
+    await page.screenshot({ path: path.join(SHOTS, `10-footer-${w}x${h}.png`) });
+    if (w >= 600) {
+      await page.getByTestId('close-coil-to-circle').click();
+      await settle(500);
+    }
+  }
+  // Usable, not only visible: a round entered and saved from the phone-width
+  // footer. The save is answered by a stub, so the database this spec's
+  // --verify reads is untouched.
+  await batch.fill('DEMO-CTC-005');
+  await settle(2500);
+  await F.getByLabel(/partial cutting/i).check();
+  await cutField.fill('100');
+  await pickCircle(10, 90);
+  await settle(400);
+  expectFailures = true;
+  await page.route('**/rm-ims/convert', (route) => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'Simulated outage (e2e, phone width)' }),
+  }));
+  await saveBtn.scrollIntoViewIfNeeded();
+  check('phone: a complete round enables Save in the footer', await saveBtn.isEnabled());
+  await saveBtn.click();
+  await page.getByText(/Simulated outage \(e2e, phone width\)/).first().waitFor({ timeout: 10000 }).catch(() => {});
+  check('phone: Save submits (stubbed refusal shown) and keeps the entry',
+    (await page.getByText(/Simulated outage \(e2e, phone width\)/).count()) >= 1 && (await cutField.inputValue()) === '100' && await saveBtn.isEnabled());
+  await page.unroute('**/rm-ims/convert');
+  expectFailures = false;
+  await F.getByRole('button', { name: /^cancel$/i }).click();
+  await settle(400);
+  check('phone: Cancel asks before discarding what was entered', await page.getByTestId('discard-dialog').isVisible());
+  await page.getByRole('button', { name: /^discard$/i }).click();
+  await settle(500);
+  check('…and Discard closes the form', (await F.count()) === 0);
+  await shot('10-phone-after-cancel');
 
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

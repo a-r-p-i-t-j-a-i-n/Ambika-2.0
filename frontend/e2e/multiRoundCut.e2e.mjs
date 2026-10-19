@@ -99,7 +99,10 @@ const run = async () => {
   const historyRow = () => page.locator(`[data-testid="cut-history-row"][data-batch="${BATCH}"]`);
   check('the uncut coil is not in the history yet', (await historyRow().count()) === 0);
   await page.getByTestId('cut-history-untraceable').waitFor({ timeout: 15000 }).catch(() => {});
-  check('the untraceable older cuts are stated, not hidden', /1 older cut/.test(await page.getByTestId('cut-history-untraceable').innerText()),
+  // The older cut naming no coil is a row of the table, and the footer says so.
+  check('the untraceable older cuts are stated, not hidden — listed as a row of their own',
+    /^1 row is a cut \([\d,.]+ kg\) that names no physical coil/.test(flat(await page.getByTestId('cut-history-untraceable').innerText()))
+      && (await page.getByTestId('ledger-cut-row').count()) === 1,
     await page.getByTestId('cut-history-untraceable').innerText());
   await shot('01-open');
   await openCutForm();
@@ -107,8 +110,9 @@ const run = async () => {
   const batch = F.getByLabel(/batch number/i).first();
   const cutField = F.getByLabel(/^cut this round/i).first();
   const facts = () => F.getByTestId('coil-facts').innerText().then(flat);
-  const afterRound = () => F.getByTestId('after-round').innerText().then(flat);
-  const thisRound = () => F.getByTestId('this-round').innerText().then(flat);
+  // The round's figures before saving: "After this round", beside the field.
+  // Scrap and yield are read from the history once saved (there is no step 3).
+  const outcome = () => F.getByTestId('round-outcome').innerText().then(flat);
   const saveBtn = F.getByRole('button', { name: /save this conversion/i });
 
   const pickCircle = async (pcs, kg) => {
@@ -194,17 +198,12 @@ const run = async () => {
   await cutField.fill('1000');
   await pickCircle(170, 850);
   await page.waitForTimeout(600);
-  const t1 = await thisRound();
-  check('this round: Cut 1,000 kg · Circle output 850 kg · Scrap 150 kg · Yield 85%',
-    /Cut 1,000 kg/i.test(t1) && /Circle output 850 kg/i.test(t1) && /Scrap 150 kg/i.test(t1) && /Yield 85%/i.test(t1), t1);
-  let a = await afterRound();
-  check('after this round: Partial · Total 2,000 · Already cut 0 · This round 1,000 · Remaining 1,000 · Partially cut',
-    /Cutting type Partial/i.test(a) && /Total coil 2,000 kg/i.test(a) && /Already cut 0 kg/i.test(a) && /This round 1,000 kg/i.test(a)
-      && /Remaining 1,000 kg/i.test(a) && /Partially cut/i.test(a), a);
-  const o1 = flat(await F.getByTestId('round-outcome').innerText());
+  check('no "Check the balance" step: no this-round / after-round summary cards',
+    !/Check the balance/.test(await F.innerText()) && (await F.getByTestId('this-round').count()) === 0 && (await F.getByTestId('after-round').count()) === 0);
+  let o = await outcome();
   check('beside the field, After this round: Cut this round 1,000 · Remaining weight 1,000 · Status Partially cut',
-    /Cut this round 1,000 kg Remaining weight 1,000 kg Status Partially cut/i.test(o1), o1);
-  check('…labelled as round 1 of this coil', new RegExp(`round 1 of coil ${BATCH}`, 'i').test(flat(await page.locator('body').innerText())));
+    /Cut this round 1,000 kg Remaining weight 1,000 kg Status Partially cut/i.test(o), o);
+  check('…Partial is the chosen cutting type, and the round can be saved', await partialRadio.isChecked() && await saveBtn.isEnabled());
   await shot('03-round1-ready');
   await saveBtn.click();
   await page.waitForTimeout(4000);
@@ -240,12 +239,13 @@ const run = async () => {
   check('…and the operator cannot type over it (read-only)', !(await cutField.isEditable()));
   await pickCircle(164, 820);
   await page.waitForTimeout(600);
-  a = await afterRound();
-  check('after round 2: Full · Already cut 1,000 · This round 1,000 · Remaining 0 · Fully cut',
-    /Cutting type Full/i.test(a) && /Already cut 1,000 kg/i.test(a) && /This round 1,000 kg/i.test(a) && /Remaining 0 kg/i.test(a) && /Fully cut/i.test(a), a);
-  check('…labelled as round 2 of this coil', new RegExp(`round 2 of coil ${BATCH}`, 'i').test(flat(await page.locator('body').innerText())));
-  const t2 = await thisRound();
-  check('round 2 scrap/yield are its own (180 kg, 82%), not against the original coil', /Scrap 180 kg/i.test(t2) && /Yield 82%/i.test(t2), t2);
+  o = await outcome();
+  check('after round 2: Full · Cut this round 1,000 · Remaining weight 0 · Fully cut',
+    await fullRadio.isChecked() && /Cut this round 1,000 kg Remaining weight 0 kg Status Fully cut/i.test(o), o);
+  // 820 of 1,000 kg: round 2's own yield (82%), not against the original coil.
+  const ly = flat(await F.getByTestId('low-yield-warning').innerText().catch(() => ''));
+  check('round 2\'s own scrap share (18%) is flagged under the circles — advisory, Save stays enabled',
+    /^18% of this coil is going to scrap/.test(ly) && await saveBtn.isEnabled(), ly);
   await shot('05-round2-ready');
   await saveBtn.click();
   await page.waitForTimeout(4000);
@@ -312,11 +312,11 @@ const run = async () => {
     await row.locator('input[type="number"]').nth(1).fill('700');
   }
   await page.waitForTimeout(600);
-  const t3 = await thisRound();
-  check('one Full round, two circle sizes: Cut 2,000 · Circle output 1,700 · Scrap 300 · Yield 85%',
-    /Cut 2,000 kg/i.test(t3) && /Circle output 1,700 kg/i.test(t3) && /Scrap 300 kg/i.test(t3) && /Yield 85%/i.test(t3), t3);
-  a = await afterRound();
-  check('after this round: Full · Remaining 0 · Fully cut', /Cutting type Full/i.test(a) && /Remaining 0 kg/i.test(a) && /Fully cut/i.test(a), a);
+  o = await outcome();
+  check('one Full round, two circle sizes: Cut this round 2,000 · Remaining weight 0 · Fully cut',
+    await fullRadio.isChecked() && /Cut this round 2,000 kg Remaining weight 0 kg Status Fully cut/i.test(o), o);
+  check('…1,700 of 2,000 kg (85%) raises no scrap advisory, and Save is enabled',
+    (await F.getByTestId('low-yield-warning').count()) === 0 && await saveBtn.isEnabled());
   await shot('08-full-one-round-ready');
   await saveBtn.click();
   await page.waitForTimeout(4000);
@@ -327,8 +327,14 @@ const run = async () => {
     /PLG01 · Plant 2,000 2,000 340 1,700 300 85% 0 Fully cut 1 round$/.test(fr), fr);
   await fullRow.click();
   await page.waitForTimeout(1500);
-  const fRounds = (await page.getByTestId('cut-round-row').allInnerTexts()).map(flat).filter((t) => /2,000 kg 1,700 kg/.test(t));
-  check('its single round shows cutting type Full and status Fully cut', /^1 \S+ \S+ Full 2,000 kg 1,700 kg 300 kg 85% 0 kg Fully cut/.test(fRounds[0] || ''), fRounds[0]);
+  // One round: the row above already IS it, so it opens to one details line —
+  // the cutting type chosen and its conversion — never a table repeating it.
+  const fDetails = flat(await page.getByTestId('round-details').innerText().catch(() => ''));
+  check('its single round opens to one details line: cutting type Full, its conversion number — no round table repeating the row',
+    (await page.getByTestId('round-details').count()) === 1
+      && flat(await page.getByTestId('round-details-type').innerText().catch(() => '')) === 'Full'
+      && /\S+\/\S+/.test(flat(await page.getByTestId('round-details-conversion').innerText().catch(() => '')))
+      && (await page.getByTestId('cut-round-row').count()) === 0 && !/2,000|1,700|Fully cut/.test(fDetails), fDetails);
   await shot('09-full-one-round-history');
 
   const unexpectedApi = apiErrors;

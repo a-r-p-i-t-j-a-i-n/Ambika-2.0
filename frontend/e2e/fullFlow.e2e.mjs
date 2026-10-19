@@ -290,15 +290,21 @@ const main = async () => {
     await F.getByLabel(/^cut this round/i).first().fill(String(r.coilKg));
     await page.waitForTimeout(900);
 
-    const calc = (await body()).replace(/\s+/g, ' ');
-    check(`scrap computes to ${r.scrap} kg on screen`, calc.includes(String(r.scrap)));
-    check(`yield computes to ${r.yield}%`, calc.includes(String(r.yield)));
+    // No "Check the balance" step: the round's cut is beside its field, and a
+    // scrap share above 15% (yield under 85%) is flagged under the circles.
+    const outcome = (await F.getByTestId('round-outcome').innerText()).replace(/\s+/g, ' ');
+    check(`the round takes ${r.coilKg} kg (After this round)`, new RegExp(`Cut this round ${r.coilKg.toLocaleString('en-IN')} kg`, 'i').test(outcome), outcome);
+    const lowYield = (await F.getByTestId('low-yield-warning').innerText().catch(() => '')).replace(/\s+/g, ' ');
+    check(r.yield < 85 ? `the ${r.scrap} kg scrap (${100 - r.yield}%) is flagged before saving` : 'no scrap advisory at 85% yield',
+      r.yield < 85 ? lowYield.startsWith(`${100 - r.yield}% of this coil is going to scrap`) : lowYield === '', lowYield);
     await shot(`07-cut-${r.batch}-${i}-ready`);
 
     await F.getByRole('button', { name: /save this conversion/i }).click();
     const saved = await page.getByText(/saved against coil|conversion .*saved|cut saved/i).first()
       .waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
     check('the conversion saves', saved);
+    const savedMsg = (await page.getByText(/Conversion .* saved — yield/).last().innerText().catch(() => '')).replace(/\s+/g, ' ');
+    check(`…with yield ${r.yield}% (worked out by the server)`, savedMsg.includes(`yield ${r.yield}%`), savedMsg);
     await page.waitForTimeout(1200);
     await shot(`08-cut-${r.batch}-${i}-saved`);
   }
