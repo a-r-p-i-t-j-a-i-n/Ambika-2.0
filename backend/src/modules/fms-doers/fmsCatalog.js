@@ -162,10 +162,9 @@ const PURCHASE_STEPS = [
   },
   {
     key: 'PROFORMA_INVOICE', code: '1.6', label: 'PI (Proforma Invoice)',
-    description: 'Released PO awaiting a PI, or a received PI awaiting approval.',
+    description: 'A received PI awaiting approval. PI is optional, so a released PO with no PI yet is not a task on its own.',
     permissions: [],
     sources: [
-      byFilter('PO', { poStatus: 'RELEASED_TO_VENDOR', piStatus: 'NOT_RECEIVED' }),
       byFilter('PI', { piStatus: { $in: ['DRAFT', 'RECEIVED'] } }),
     ],
   },
@@ -179,9 +178,12 @@ const PURCHASE_STEPS = [
     key: 'GRN', code: '1.8', label: 'GRN',
     description: 'PO ready for goods receipt.',
     permissions: [],
+    // piStatus values here must match grn.service.js's isPiSettledForGrn —
+    // NOT_RECEIVED (no PI, optional) is settled just like a completed or
+    // explicitly-skipped PI; only an in-progress PI still blocks.
     sources: [byFilter('PO', {
       followUpStatus: 'READY_FOR_GRN',
-      piStatus: { $in: ['PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'] },
+      piStatus: { $in: ['NOT_RECEIVED', 'PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'] },
       poStatus: { $in: ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED'] },
     })],
   },

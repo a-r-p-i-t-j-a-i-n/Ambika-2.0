@@ -506,16 +506,23 @@ registerApprovalDocument('GRN', {
   },
 });
 
+// GRN can proceed once the PI step is settled: either no PI was ever created
+// (NOT_RECEIVED — a PI is optional and can still be added later), it was
+// explicitly marked Not Required, or its advance payment is complete. A PI
+// that was actually created and is still in progress (PI_RECEIVED / PI_APPROVED
+// / READY_FOR_ADVANCE_PAYMENT) still blocks until it's resolved.
+// Kept in sync with fmsCatalog.js's GRN task filter — see its comment.
+export const isPiSettledForGrn = (piStatus) =>
+  [PO_PI_STATUS.NOT_RECEIVED, PO_PI_STATUS.PAYMENT_COMPLETED, PO_PI_STATUS.PI_NOT_REQUIRED].includes(piStatus);
+
 export const grnService = {
   async create(data, user) {
     if (data.isWithoutPo) return this.createWithoutPo(data, user);
     const po = await VendorPurchaseOrder.findOne({ _id: data.poId, isDeleted: { $ne: true } });
     if (!po) throw new AppError('Purchase Order not found', 404);
 
-    // Rule 1: gate — material followed up to READY_FOR_GRN AND the PI step is
-    // settled: either advance payment completed, or PI explicitly marked Not Required.
-    const piSettled = [PO_PI_STATUS.PAYMENT_COMPLETED, PO_PI_STATUS.PI_NOT_REQUIRED].includes(po.piStatus);
-    if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || !piSettled) {
+    // Rule 1: gate — material followed up to READY_FOR_GRN AND the PI step is settled.
+    if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || !isPiSettledForGrn(po.piStatus)) {
       throw new AppError('GRN can only be created when the PO is READY_FOR_GRN and its PI is completed or marked Not Required', 400);
     }
 
