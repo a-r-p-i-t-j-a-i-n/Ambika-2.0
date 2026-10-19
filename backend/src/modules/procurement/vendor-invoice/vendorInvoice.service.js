@@ -5,7 +5,38 @@ import VendorPurchaseOrder from '../purchase-order/purchaseOrder.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
+import { logger } from '../../../utils/logger.js';
 export { getAdvancePosition }; // re-exported for the controller / existing imports
+
+const QC_LOCK_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Run `work` holding a short-lived advisory lock on every selected QC, so two
+ * concurrent Vendor Invoice creates can never both invoice the same QC/GRN.
+ * Mirrors withPiAdvanceLock's TTL-claim pattern (piAdvance.js), but keyed on
+ * the QCs themselves rather than a PI — this also covers the case where the
+ * PO/QC has no PI at all, where withPiAdvanceLock is a no-op.
+ */
+const withQcInvoiceLock = async (qcIds, work) => {
+  const ids = [...new Set(qcIds.map(String))];
+  if (!ids.length) return work();
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - QC_LOCK_TTL_MS);
+  const res = await IncomingQC.updateMany(
+    { _id: { $in: ids }, $or: [{ invoiceLockAt: null }, { invoiceLockAt: { $lt: staleBefore } }] },
+    { $set: { invoiceLockAt: now } },
+  );
+  if (res.modifiedCount !== ids.length) {
+    await IncomingQC.updateMany({ _id: { $in: ids }, invoiceLockAt: now }, { $set: { invoiceLockAt: null } }).catch(() => {});
+    throw new AppError('One or more selected GRNs/QCs are being invoiced by another request right now. Please try again in a moment.', 409);
+  }
+  try {
+    return await work();
+  } finally {
+    await IncomingQC.updateMany({ _id: { $in: ids }, invoiceLockAt: now }, { $set: { invoiceLockAt: null } })
+      .catch((err) => logger.error(`[vendor-invoice] failed to release QC invoice lock: ${err.message}`));
+  }
+};
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -152,13 +183,19 @@ const findOrThrow = async (id) => {
 export const vendorInvoiceService = {
   async create(data, user, opts = {}) {
     // Accept one QC (legacy) or many (multi-GRN). All must share vendor + PO.
-    const qcIdList = uniq(data.qcIds?.length ? data.qcIds : (data.qcId ? [data.qcId] : []));
-    if (!qcIdList.length) throw new AppError('Select at least one QC / GRN', 400);
-    const qcs = await loadAndValidateQcs(qcIdList);
-    const first = qcs[0];
-    // The PI advance is allocated under the per-PI lock: read what is still
-    // unallocated, take this invoice's share, and persist it before releasing.
-    return withPiAdvanceLock(first.piId, () => this._createLocked(data, user, opts, qcs));
+    const rawIds = data.qcIds?.length ? data.qcIds : (data.qcId ? [data.qcId] : []);
+    if (!rawIds.length) throw new AppError('Select at least one QC / GRN', 400);
+    const qcIdList = uniq(rawIds);
+    if (qcIdList.length !== rawIds.length) throw new AppError('The same GRN/QC was selected more than once', 400);
+    // Lock every selected QC first (prevents two requests double-invoicing the
+    // same QC/GRN even when there's no PI to serialize on), then the PI's
+    // advance — read what is still unallocated, take this invoice's share, and
+    // persist it before releasing.
+    return withQcInvoiceLock(qcIdList, async () => {
+      const qcs = await loadAndValidateQcs(qcIdList);
+      const first = qcs[0];
+      return withPiAdvanceLock(first.piId, () => this._createLocked(data, user, opts, qcs));
+    });
   },
 
   async _createLocked(data, user, opts, qcs) {

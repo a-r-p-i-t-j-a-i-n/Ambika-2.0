@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, MenuItem,
   Box, Typography, Grid, CircularProgress, Alert, FormControl, FormLabel,
-  RadioGroup, FormControlLabel, Radio, IconButton,
+  RadioGroup, FormControlLabel, Radio, IconButton, Autocomplete,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { Banknote, Info, Upload, FileText, X, ExternalLink } from 'lucide-react';
@@ -13,6 +13,7 @@ import {
   useUpdateVoucherMutation,
   usePostVoucherMutation,
 } from '../../../store/api/procurementApi';
+import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fmtINR, EXPENSE_CATEGORIES } from './voucherMeta';
 import { fileHref } from '../indents/indentMeta';
@@ -26,8 +27,9 @@ const NO_SPIN = {
 const num = (n) => Number(n) || 0;
 const emptyPurchase = { invoiceId: '', voucherDate: '', remarks: '' };
 const emptyExpense = {
-  voucherDate: '', expenseCategory: '', partyName: '', expenseInvoiceNo: '', expenseInvoiceDate: '',
+  voucherDate: '', expenseCategory: '', vendorId: '', partyName: '', expenseInvoiceNo: '', expenseInvoiceDate: '',
   basicValue: '', freightCharges: '', packingForwardingCharges: '', otherCharges: '', taxAmount: '',
+  taxableAmount: '', gstRatePercent: '',
   tcsAmount: '', tdsAmount: '', advanceAmount: '', otherReason: '', paymentTerms: '', dueDate: '',
   preparedBy: '', remarks: '',
 };
@@ -58,6 +60,11 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
     return presetInvoice ? [presetInvoice] : list;
   }, [invRes, presetInvoice]);
 
+  // Vendor master, for linking a Direct Bill Passing expense to a real vendor
+  // instead of (or alongside) a free-typed party name.
+  const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' }, { skip: !open || !isExpense });
+  const partyOptions = partiesRes?.data || [];
+
   const [createVoucher, { isLoading: creating }] = useCreateVoucherMutation();
   const [updateVoucher, { isLoading: updating }] = useUpdateVoucherMutation();
   const [postVoucher, { isLoading: posting }] = usePostVoucherMutation();
@@ -71,10 +78,12 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
       setPf({ invoiceId: voucher.invoiceId || '', voucherDate: voucher.voucherDate ? voucher.voucherDate.slice(0, 10) : '', remarks: voucher.remarks || '' });
       setEf({
         voucherDate: voucher.voucherDate ? voucher.voucherDate.slice(0, 10) : '',
-        expenseCategory: voucher.expenseCategory || '', partyName: voucher.partyName || voucher.vendorName || '',
+        expenseCategory: voucher.expenseCategory || '', vendorId: voucher.vendorId || '', partyName: voucher.partyName || voucher.vendorName || '',
         expenseInvoiceNo: voucher.expenseInvoiceNo || '', expenseInvoiceDate: voucher.expenseInvoiceDate ? voucher.expenseInvoiceDate.slice(0, 10) : '',
         basicValue: voucher.basicValue ?? '', freightCharges: voucher.freightCharges ?? '', packingForwardingCharges: voucher.packingForwardingCharges ?? '',
-        otherCharges: voucher.otherCharges ?? '', taxAmount: voucher.taxAmount ?? '', tcsAmount: voucher.tcsAmount ?? '',
+        otherCharges: voucher.otherCharges ?? '', taxAmount: voucher.taxAmount ?? '',
+        taxableAmount: voucher.taxableAmount ?? '', gstRatePercent: voucher.gstRatePercent ?? '',
+        tcsAmount: voucher.tcsAmount ?? '',
         tdsAmount: voucher.tdsAmount ?? '', advanceAmount: voucher.advanceAmount ?? '', otherReason: voucher.otherReason || '',
         paymentTerms: voucher.paymentTerms || '', dueDate: voucher.dueDate ? voucher.dueDate.slice(0, 10) : '', preparedBy: voucher.preparedBy || '',
         remarks: voucher.remarks || '',
@@ -96,10 +105,15 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
 
   const setE = (k) => (e) => setEf((f) => ({ ...f, [k]: e.target.value }));
 
+  // When a taxable amount + GST rate are given, GST is derived (preview only —
+  // the backend always computes the authoritative amount the same way).
+  const gstAmount = useMemo(() => (
+    (num(ef.taxableAmount) || num(ef.gstRatePercent)) ? Math.round(num(ef.taxableAmount) * num(ef.gstRatePercent)) / 100 : num(ef.taxAmount)
+  ), [ef.taxableAmount, ef.gstRatePercent, ef.taxAmount]);
   const expenseTotal = useMemo(() => (
     num(ef.basicValue) + num(ef.freightCharges) + num(ef.packingForwardingCharges) + num(ef.otherCharges)
-    + num(ef.taxAmount) + num(ef.tcsAmount) - num(ef.tdsAmount) - num(ef.advanceAmount)
-  ), [ef]);
+    + gstAmount + num(ef.tcsAmount) - num(ef.tdsAmount) - num(ef.advanceAmount)
+  ), [ef, gstAmount]);
 
   const handleFile = async (e) => {
     const f = e.target.files?.[0]; e.target.value = '';
@@ -115,17 +129,21 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
   const buildPayload = () => {
     if (isExpense) {
       if (!ef.expenseCategory) { enqueueSnackbar('Select an expense category', { variant: 'warning' }); return null; }
-      if (!ef.partyName.trim()) { enqueueSnackbar('Party name is required', { variant: 'warning' }); return null; }
+      if (!ef.partyName.trim()) { enqueueSnackbar('Vendor / party name is required', { variant: 'warning' }); return null; }
+      if (ef.vendorId && !ef.expenseInvoiceNo.trim()) { enqueueSnackbar('Vendor Bill/Invoice No is required for a vendor-master bill', { variant: 'warning' }); return null; }
       return {
         voucherType: 'EXPENSE',
         voucherDate: ef.voucherDate || undefined,
         expenseCategory: ef.expenseCategory,
+        vendorId: ef.vendorId || undefined,
         partyName: ef.partyName.trim(),
         expenseInvoiceNo: ef.expenseInvoiceNo.trim() || undefined,
         expenseInvoiceDate: ef.expenseInvoiceDate || undefined,
         invoiceDocument: invoiceDoc ? { fileUrl: invoiceDoc.fileUrl, fileName: invoiceDoc.fileName } : undefined,
         basicValue: num(ef.basicValue), freightCharges: num(ef.freightCharges), packingForwardingCharges: num(ef.packingForwardingCharges),
-        otherCharges: num(ef.otherCharges), taxAmount: num(ef.taxAmount), tcsAmount: num(ef.tcsAmount),
+        otherCharges: num(ef.otherCharges), taxAmount: num(ef.taxAmount),
+        taxableAmount: num(ef.taxableAmount), gstRatePercent: num(ef.gstRatePercent),
+        tcsAmount: num(ef.tcsAmount),
         tdsAmount: num(ef.tdsAmount), advanceAmount: num(ef.advanceAmount), otherReason: ef.otherReason.trim() || undefined,
         paymentTerms: ef.paymentTerms.trim() || undefined, dueDate: ef.dueDate || undefined, preparedBy: ef.preparedBy.trim() || undefined,
         remarks: ef.remarks.trim() || undefined,
@@ -194,8 +212,13 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
           <FormLabel sx={{ fontSize: '0.8rem', fontWeight: 700 }}>Voucher Type *</FormLabel>
           <RadioGroup row value={voucherType} onChange={(e) => setVoucherType(e.target.value)}>
             <FormControlLabel value="PURCHASE" control={<Radio />} label="Purchase Voucher" disabled={isEdit} />
-            <FormControlLabel value="EXPENSE" control={<Radio />} label="Expense Voucher" disabled={isEdit} />
+            <FormControlLabel value="EXPENSE" control={<Radio />} label="Expense / Direct Bill (Without PO · GRN)" disabled={isEdit} />
           </RadioGroup>
+          {isExpense && (
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
+              Office, service, repair, maintenance or other vendor bills without a PO or GRN.
+            </Typography>
+          )}
         </FormControl>
 
         {isExpense ? (
@@ -209,13 +232,26 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
               </TextField>
             </Grid>
             <Grid item xs={12} sm={4}>
-              <TextField fullWidth size="small" label="Party Name *" value={ef.partyName} onChange={setE('partyName')} />
+              <Autocomplete
+                size="small" freeSolo
+                options={partyOptions}
+                getOptionLabel={(o) => (typeof o === 'string' ? o : o?.name || '')}
+                isOptionEqualToValue={(o, v) => o._id === v._id}
+                value={ef.vendorId ? (partyOptions.find((p) => p._id === ef.vendorId) || ef.partyName) : ef.partyName}
+                onChange={(_e, v) => {
+                  if (v && typeof v === 'object') setEf((f) => ({ ...f, vendorId: v._id, partyName: v.name || '' }));
+                  else setEf((f) => ({ ...f, vendorId: '', partyName: v || '' }));
+                }}
+                onInputChange={(_e, v, reason) => { if (reason === 'input') setEf((f) => ({ ...f, vendorId: '', partyName: v })); }}
+                renderInput={(params) => <TextField {...params} label="Vendor / Party Name *" helperText="Pick from the vendor master, or type a one-off party name" />}
+              />
             </Grid>
             <Grid item xs={12} sm={4}>
-              <TextField fullWidth size="small" label="Invoice No (optional)" value={ef.expenseInvoiceNo} onChange={setE('expenseInvoiceNo')} />
+              <TextField fullWidth size="small" label={ef.vendorId ? 'Vendor Bill/Invoice No *' : 'Vendor Bill/Invoice No (optional)'}
+                value={ef.expenseInvoiceNo} onChange={setE('expenseInvoiceNo')} />
             </Grid>
             <Grid item xs={12} sm={4}>
-              <DateInputDDMMYYYY fullWidth size="small" label="Invoice Date (optional)" value={ef.expenseInvoiceDate} onChange={(v) => setEf((f) => ({ ...f, expenseInvoiceDate: v }))} />
+              <DateInputDDMMYYYY fullWidth size="small" label="Bill Date (optional)" value={ef.expenseInvoiceDate} onChange={(v) => setEf((f) => ({ ...f, expenseInvoiceDate: v }))} />
             </Grid>
             <Grid item xs={12} sm={4}>
               <FormLabel sx={{ fontSize: '0.7rem', fontWeight: 700, display: 'block', mb: 0.5 }}>Invoice Upload</FormLabel>
@@ -236,7 +272,15 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
             {NumField('Freight Charges', 'freightCharges')}
             {NumField('Packing & Forwarding', 'packingForwardingCharges')}
             {NumField('Other Charges', 'otherCharges')}
-            {NumField('Tax Amount', 'taxAmount')}
+            {NumField('Taxable Amount', 'taxableAmount')}
+            {NumField('GST Rate %', 'gstRatePercent')}
+            {NumField('Tax Amount (if no GST rate)', 'taxAmount')}
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary">
+                Enter Taxable Amount + GST Rate % to compute GST automatically — leave Tax Amount blank in that case.
+                {(num(ef.taxableAmount) || num(ef.gstRatePercent)) ? ` GST amount: ${fmtINR(gstAmount)}.` : ''}
+              </Typography>
+            </Grid>
             {NumField('TCS (+)', 'tcsAmount')}
             {NumField('TDS (−)', 'tdsAmount')}
             {NumField('Advance Payment (−)', 'advanceAmount')}

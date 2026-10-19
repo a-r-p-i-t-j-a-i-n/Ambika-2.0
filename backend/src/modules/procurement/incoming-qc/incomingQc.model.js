@@ -123,6 +123,9 @@ const incomingQcSchema = new Schema({
   stockPosted: { type: Boolean, default: false }, // idempotency for reject movements
   completedAt: { type: Date, default: null },
   cancelledAt: { type: Date, default: null },
+  // Short-lived advisory lock (see vendorInvoice.service.js withQcInvoiceLock) so
+  // two concurrent Vendor Invoice creates can't both invoice this QC at once.
+  invoiceLockAt: { type: Date, default: null },
   remarks:     { type: String, trim: true, default: '' },
 }, baseSchemaOptions);
 

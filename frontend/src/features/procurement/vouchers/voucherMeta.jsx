@@ -9,7 +9,7 @@ export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH', '
 
 export const VOUCHER_TYPES = [
   { value: 'PURCHASE', label: 'Purchase Voucher', short: 'PUR' },
-  { value: 'EXPENSE', label: 'Expense Voucher', short: 'EXP' },
+  { value: 'EXPENSE', label: 'Expense / Direct Bill', short: 'EXP' },
 ];
 
 export const EXPENSE_CATEGORIES = [

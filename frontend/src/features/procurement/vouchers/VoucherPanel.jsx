@@ -283,10 +283,12 @@ const VoucherPanel = ({
             <Grid container spacing={2}>
               {isExpense ? (
                 <>
+                  <Grid item xs={12}><Chip size="small" label="Without PO / GRN" sx={{ fontWeight: 700 }} /></Grid>
                   <Grid item xs={6}><Field label="Party" value={v.partyName || v.vendorName || '—'} /></Grid>
+                  {v.vendorId && <Grid item xs={6}><Field label="Vendor (Master)" value={v.vendorName || '—'} /></Grid>}
                   <Grid item xs={6}><Field label="Category" value={v.expenseCategory || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="Invoice No" value={v.expenseInvoiceNo || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="Invoice Date" value={fmtDate(v.expenseInvoiceDate)} /></Grid>
+                  <Grid item xs={6}><Field label="Vendor Bill/Invoice No" value={v.expenseInvoiceNo || '—'} /></Grid>
+                  <Grid item xs={6}><Field label="Bill Date" value={fmtDate(v.expenseInvoiceDate)} /></Grid>
                   <Grid item xs={6}><Field label="Payment Terms" value={v.paymentTerms || '—'} /></Grid>
                   <Grid item xs={6}><Field label="Due Date" value={fmtDate(v.dueDate)} /></Grid>
                   {v.invoiceDocument?.fileUrl && (
@@ -316,7 +318,14 @@ const VoucherPanel = ({
                 <Grid item xs={6} sm={3}><Field label="Freight" value={fmtINR(v.freightCharges)} /></Grid>
                 <Grid item xs={6} sm={3}><Field label="Packing & Fwd" value={fmtINR(v.packingForwardingCharges)} /></Grid>
                 <Grid item xs={6} sm={3}><Field label="Other Charges" value={fmtINR(v.otherCharges)} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Tax Amount" value={fmtINR(v.taxAmount)} /></Grid>
+                {v.gstRatePercent ? (
+                  <>
+                    <Grid item xs={6} sm={3}><Field label="Taxable Amount" value={fmtINR(v.taxableAmount)} /></Grid>
+                    <Grid item xs={6} sm={3}><Field label={`GST @ ${v.gstRatePercent}%`} value={fmtINR(v.taxAmount)} /></Grid>
+                  </>
+                ) : (
+                  <Grid item xs={6} sm={3}><Field label="Tax Amount" value={fmtINR(v.taxAmount)} /></Grid>
+                )}
                 <Grid item xs={6} sm={3}><Field label="TCS (+)" value={fmtINR(v.tcsAmount)} /></Grid>
                 <Grid item xs={6} sm={3}><Field label="TDS (−)" value={fmtINR(v.tdsAmount)} /></Grid>
                 <Grid item xs={6} sm={3}><Field label="Advance (−)" value={fmtINR(v.advanceAmount)} /></Grid>

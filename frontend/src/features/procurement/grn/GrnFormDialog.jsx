@@ -276,7 +276,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const extraNeedsRemark = !isWithoutPo && validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore) && !it.remarks?.trim());
   const remarksRequired = extraNeedsRemark && !header.remarks.trim();
 
-  const validateForm = () => {
+  const validateForm = ({ forFinalize = false } = {}) => {
     if (isWithoutPo) {
       if (!header.vendorName?.trim()) { enqueueSnackbar('Select a vendor first', { variant: 'warning' }); return false; }
     } else if (!isEdit && !po?._id) { enqueueSnackbar('Select an eligible PO first', { variant: 'warning' }); return false; }
@@ -284,6 +284,17 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     if (isWithoutPo) {
       const noName = validItems.find((it) => !it.itemName?.trim());
       if (noName) { enqueueSnackbar('Every item needs a description', { variant: 'warning' }); return false; }
+      // A free-typed (not picked from the SKU list) item is allowed on a draft,
+      // but complete() requires every line to resolve to a real SKU before it
+      // can post stock — so finalizing one here would save the draft fine and
+      // then fail on the very next call. Catch it before either call fires.
+      if (forFinalize) {
+        const noSku = validItems.find((it) => !it.skuId);
+        if (noSku) {
+          enqueueSnackbar(`"${noSku.itemName}" must be picked from the SKU list (not just typed) before it can be finalized`, { variant: 'warning' });
+          return false;
+        }
+      }
     } else {
       // Extra-receive needs remarks (mirror backend rule). No "pending qty" exists
       // for a W/O PO line, so this never applies there.
@@ -372,7 +383,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   // conflicts, atomic posting lock) against the PO's live state — nothing
   // here lets the client's numbers decide what actually posts to inventory.
   const runSaveAndFinalize = async (allowOverReceipt) => {
-    if (!validateForm()) return;
+    if (!validateForm({ forFinalize: true })) return;
     const payload = buildPayload();
     let savedId;
     try {
@@ -404,7 +415,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   };
 
   const handleSaveAndFinalize = () => {
-    if (!validateForm()) return;
+    if (!validateForm({ forFinalize: true })) return;
     // No "pending qty" exists on a W/O PO line, so over-receipt never applies.
     const hasExtra = !isWithoutPo && validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore));
     if (hasExtra) { setOverReceiptConfirmOpen(true); return; }
