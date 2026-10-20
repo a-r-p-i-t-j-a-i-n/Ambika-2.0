@@ -88,7 +88,10 @@ const RmImsStockIn = () => {
 
   const [header, setHeader] = useState({
     date: dayjs().format('YYYY-MM-DD'),
-    reason: 'VENDOR_RECEIPT',
+    // No default: 'Opening stock' and 'Correction / adjustment' mean different
+    // things in History, so the operator picks one. A supplier delivery is not
+    // one of them — it comes in through its GRN's Incoming QC.
+    reason: '',
     customReason: '',
     warehouse: DEFAULT_RECEIVED_AT,
     reference: '',
@@ -151,9 +154,11 @@ const RmImsStockIn = () => {
   const activeLocation = RECEIVED_AT_OPTIONS.find((w) => w.value === header.warehouse);
   // "Other" has to say what it was, or History can never explain this movement.
   const needsCustomReason = header.reason === 'OTHER' && !header.customReason.trim();
+  const needsReason = !header.reason;
 
   const submit = async () => {
     if (!valid.length) return enqueueSnackbar('Add at least one item with a quantity.', { variant: 'warning' });
+    if (needsReason) return enqueueSnackbar('Pick a Reason. Material received from a supplier is not added here — raise a GRN and its Incoming QC adds the accepted quantity.', { variant: 'warning' });
     if (needsCustomReason) return enqueueSnackbar('Custom Reason is required when Reason is Other.', { variant: 'warning' });
     try {
       const res = await receive({
@@ -208,7 +213,10 @@ const RmImsStockIn = () => {
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
           <TextField select size="small" label="Reason" value={header.reason}
             onChange={(e) => setHeader((h) => ({ ...h, reason: e.target.value }))}
-            helperText={activeReason?.hint}
+            error={needsReason}
+            helperText={needsReason
+              ? 'Pick a reason — a supplier delivery is not entered here; its GRN + Incoming QC adds it.'
+              : activeReason?.hint}
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
             {STOCK_IN_REASON_OPTIONS.map((r) => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
           </TextField>
@@ -379,7 +387,7 @@ const RmImsStockIn = () => {
               <Chip size="small" label={`Worth ${inr(totalValue)}`}
                 sx={{ height: 24, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
             )}
-            <Button variant="contained" disableElevation onClick={submit} disabled={isLoading || !valid.length}
+            <Button variant="contained" disableElevation onClick={submit} disabled={isLoading || !valid.length || needsReason}
               startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
               sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
               Add to store

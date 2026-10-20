@@ -15,6 +15,7 @@ import { useGetSkuLookupQuery, useCreateSkuMutation } from '../../../store/api/s
 import { useGetEmployeesQuery } from '../../../store/api/authApi';
 import { UNITS, DEPARTMENTS, normalizeUnit } from './indentMeta';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
+import { TYPE_META, typeDestinationHint } from '../../masters/itemTypeMeta';
 
 // Purchase FMS rule: Finished Goods are sell-side only — never purchasable.
 const FG_BLOCKED = new Set(['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT']);
@@ -74,16 +75,23 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
   // ── Quick "add product" (creates a real SKU so it's reusable) ──
   const [createSku, { isLoading: creatingSku }] = useCreateSkuMutation();
   const [addOpen, setAddOpen] = useState(false);
-  const [newSku, setNewSku] = useState({ name: '', code: '', unit: 'Pcs', itemType: 'RAW_MATERIAL' });
+  // No Item Type is pre-selected: it decides which inventory module the item's
+  // purchased stock is posted to (RM IMS / C&P IMS / main store), so a buyer who
+  // skipped the field used to create a Raw Material SKU by accident.
+  const [newSku, setNewSku] = useState({ name: '', code: '', unit: 'Pcs', itemType: '' });
 
   const openAddProduct = () => {
-    setNewSku({ name: '', code: '', unit: 'Pcs', itemType: 'RAW_MATERIAL' });
+    setNewSku({ name: '', code: '', unit: 'Pcs', itemType: '' });
     setAddOpen(true);
   };
 
   const handleCreateProduct = async () => {
     if (!newSku.name.trim() || !newSku.code.trim()) {
       enqueueSnackbar('Product name and SKU code are required', { variant: 'warning' });
+      return;
+    }
+    if (!newSku.itemType) {
+      enqueueSnackbar('Select the Item Type — it decides where the purchased stock is posted', { variant: 'warning' });
       return;
     }
     try {
@@ -351,9 +359,12 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
               </TextField>
             </Grid>
             <Grid item xs={12}>
-              <TextField label="Item Type" select fullWidth value={newSku.itemType}
-                onChange={(e) => setNewSku((s) => ({ ...s, itemType: e.target.value }))}>
-                {ITEM_TYPES.map((t) => <MenuItem key={t} value={t}>{t.replace('_', ' ')}</MenuItem>)}
+              <TextField label="Item Type *" select fullWidth required value={newSku.itemType}
+                onChange={(e) => setNewSku((s) => ({ ...s, itemType: e.target.value }))}
+                error={!newSku.itemType}
+                helperText={newSku.itemType ? typeDestinationHint(newSku.itemType) : 'Required — decides which inventory module receives this item.'}
+                inputProps={{ 'data-testid': 'indent-new-sku-type' }}>
+                {ITEM_TYPES.map((t) => <MenuItem key={t} value={t}>{TYPE_META[t]?.label || t}</MenuItem>)}
               </TextField>
             </Grid>
           </Grid>

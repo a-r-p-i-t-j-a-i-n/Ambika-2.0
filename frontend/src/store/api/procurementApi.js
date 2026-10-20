@@ -312,7 +312,7 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     completeGrn: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/complete`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'InventoryStock', 'InventoryMovement', { type: 'Grn', id }],
+      invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'InventoryStock', 'InventoryMovement', 'RmOverview', 'RmDashboard', 'ImsOverview', 'ImsDashboard', { type: 'Grn', id }],
     }),
     cancelGrn: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/cancel`, method: 'POST', body }),
@@ -376,7 +376,7 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     completeIncomingQc: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/incoming-qc/${id}/complete`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['IncomingQc', 'IncomingQcStats', 'Grn', 'GrnStats', 'InventoryStock', 'InventoryMovement', 'ServiceCompletion', 'ServiceCompletionStats', 'Indent', 'IndentStats', { type: 'IncomingQc', id }],
+      invalidatesTags: (_r, _e, { id }) => ['IncomingQc', 'IncomingQcStats', 'Grn', 'GrnStats', 'InventoryStock', 'InventoryMovement', 'RmOverview', 'RmDashboard', 'ImsOverview', 'ImsDashboard', 'ServiceCompletion', 'ServiceCompletionStats', 'Indent', 'IndentStats', { type: 'IncomingQc', id }],
     }),
     cancelIncomingQc: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/incoming-qc/${id}/cancel`, method: 'POST', body }),

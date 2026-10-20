@@ -243,7 +243,12 @@ const verify = async () => {
     check(`GRN raised against ${p.poNumber}`, !!grn, grn?.grnNumber || 'none');
     if (!grn) continue;
     eq(`${grn.grnNumber} is completed`, grn.stockPosted, true);
-    eq(`${grn.grnNumber} addToRmStock`, grn.addToRmStock, true);
+    // Posted at QC, after the MD signature — not at GRN completion.
+    eq(`${grn.grnNumber} posting stage`, grn.stockPostingStage, 'QC_COMPLETION');
+    eq(`${grn.grnNumber} MD-signed`, grn.approvalStatus, 'MD_APPROVED');
+    eq(`${grn.grnNumber} QC passed`, grn.qcStatus, 'PASSED');
+    eq(`${grn.grnNumber} line routed to RM IMS`, grn.items?.[0]?.inventoryDestination, 'RM_IMS');
+    eq(`${grn.grnNumber} addToRmStock (has RM lines)`, grn.addToRmStock, true);
     eq(`${grn.grnNumber} Received At`, grn.rmReceivedAtLocation, p.receivedAt);
     eq(`${grn.grnNumber} line batch number`, grn.items?.[0]?.batchNo, p.batchNo);
 
@@ -259,6 +264,8 @@ const verify = async () => {
     eq(`${p.batchNo} GRN_IN refType`, m.refType, 'GRN');
     eq(`${p.batchNo} GRN_IN refNumber`, m.refNumber, grn.grnNumber);
     eq(`${p.batchNo} GRN_IN warehouse = Received At`, m.warehouse, p.receivedAt);
+    check(`${p.batchNo} GRN_IN dated at QC completion, after the GRN was completed`,
+      Math.abs(new Date(m.movementDate) - new Date(grn.items[0].stockPostedAt)) < 5 && new Date(m.createdAt) >= new Date(grn.completedAt));
     eq(`${p.batchNo} GRN_IN supplier`, m.vendorName, p.supplier);
     receipts[p.batchNo] = m;
   }
@@ -488,11 +495,11 @@ const negative = async () => {
   const stockBefore = (await InventoryStock.find({ skuCode: 'JSL204-07' }).lean())
     .reduce((s, r) => s + Number(r.qtyOnHand || 0), 0);
   try {
-    await grnService.complete(String(grn1._id), { addToRmStock: true, rmReceivedAtLocation: 'PLG01' }, user);
+    await grnService.complete(String(grn1._id), { rmReceivedAtLocation: 'PLG01' }, user);
     check('D. a second completion of the same GRN is refused', false, 'it was ACCEPTED');
   } catch (e) {
     check('D. a second completion of the same GRN is refused',
-      /already posted|Only draft GRNs/i.test(e.message), e.message);
+      /already been completed|Only draft GRNs/i.test(e.message), e.message);
   }
   eq('D. still exactly one GRN_IN for that GRN',
     await InventoryMovement.countDocuments({ refId: grn1._id, txnType: TXN_TYPE.GRN_IN }), grnInBefore);

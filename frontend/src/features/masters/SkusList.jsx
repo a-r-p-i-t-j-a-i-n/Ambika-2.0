@@ -26,7 +26,7 @@ import {
 
 // Item-type metadata — labels and colours now live in their own module so the
 // IMS stock list can share them without importing this screen.
-import { TYPE_META } from './itemTypeMeta';
+import { TYPE_META, typeDestinationHint } from './itemTypeMeta';
 
 const SKU_KINDS = [
   { key: '',              label: 'All Items',      icon: LayoutGrid },
@@ -37,7 +37,13 @@ const SKU_KINDS = [
   { key: 'CIRCLE',        label: 'Circles',        icon: Disc },
 ];
 
-const TYPE_OPTIONS = ['FINISHED_GOOD', 'RAW_MATERIAL', 'CONSUMABLE', 'PACKING', 'CIRCLE'];
+// Every Item Type the server accepts except Scrap (created by Scrap IMS, never
+// registered by hand). The Item Type decides where purchased stock is posted.
+const TYPE_OPTIONS = [
+  'FINISHED_GOOD', 'RAW_MATERIAL', 'CIRCLE', 'CONSUMABLE', 'PACKING', 'PACKAGING',
+  'CHEMICAL', 'INK', 'BUTTER_PAPER', 'SUBLIMATION_PAPER', 'STATIONERY', 'SPARE_PART', 'WIP_MATERIAL',
+  'SERVICE', 'JOB_WORK',
+];
 
 const sheetSkuItems = [
   { name: 'Dome Jar', code: 'DJ1500-204', category: 'Jar', pcsPerBox: 105, weightPerPc: 0.3307 },
@@ -145,7 +151,7 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
           value={form.itemType}
           onChange={(e) => updateField('itemType', e.target.value)}
           fullWidth
-          helperText="Finished goods are sold; raw material, consumables & packing are bought."
+          helperText={typeDestinationHint(form.itemType)}
         >
           {TYPE_OPTIONS.map((t) => (
             <MenuItem key={t} value={t}>{TYPE_META[t]?.label || t}</MenuItem>
@@ -264,7 +270,8 @@ const SkusList = () => {
     // the five labels, so 104 clears it with room to spare on any font stack.
     { field: 'itemType', headerName: 'Type', width: 150,
       renderCell: (p) => {
-        const m = TYPE_META[p.value] || TYPE_META.FINISHED_GOOD;
+        // An unknown value is shown as itself — never relabelled as a Finished Good.
+        const m = TYPE_META[p.value] || (p.value ? { label: p.value, color: '#475569' } : TYPE_META.FINISHED_GOOD);
         return <Pill color={m.color} minWidth={104}>{m.label}</Pill>;
       }
     },
@@ -419,7 +426,7 @@ const SkusList = () => {
               </Typography>
               <Typography sx={{ fontWeight: 600, fontSize: '0.86rem' }}>{deleteTarget.name}</Typography>
               <Typography sx={{ fontSize: '0.74rem', color: 'text.secondary', mt: 0.25 }}>
-                {TYPE_META[deleteTarget.itemType]?.label || 'Finished Good'}
+                {TYPE_META[deleteTarget.itemType]?.label || deleteTarget.itemType || 'Finished Good'}
                 {deleteTarget.category ? ` · ${deleteTarget.category}` : ''}
               </Typography>
             </Box>

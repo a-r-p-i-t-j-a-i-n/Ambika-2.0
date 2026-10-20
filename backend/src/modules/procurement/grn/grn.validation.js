@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { PAGINATION } from '../../../config/constants.js';
-import { GRN_STATUS, HOW_ITEM_RECEIVED, GRN_INVENTORY_TYPE } from './grn.model.js';
-import { RM_RECEIVED_AT_LOCATIONS, DEFAULT_RM_RECEIVED_AT } from '../../inventory/inventoryStock.model.js';
+import { GRN_STATUS, HOW_ITEM_RECEIVED } from './grn.model.js';
+import { RM_RECEIVED_AT_LOCATIONS } from '../../inventory/inventoryStock.model.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
@@ -13,44 +13,18 @@ const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
  * drift. It is NOT the GRN's own `warehouse` (MAIN) and NOT `receivedAt` (the
  * completion timestamp) — three different fields that read alike.
  *
- * Written as an explicit `when` with both branches spelled out rather than a
- * base schema plus `.when().then()`: concatenating `allow(null)` with
- * `required()` leaves null acceptable, which would let an opted-in GRN save
- * with no location at all.
+ * Only the VALUE is checked here. Whether it is required depends on the item
+ * types of the received lines, which only the SKU master knows, so the service
+ * enforces "required whenever a Raw Material line is received" — explicitly,
+ * with no default location standing in.
+ *
+ * The retired fields (`inventoryType`, `addToRmStock`) are no longer named by
+ * any schema: validate.js runs with stripUnknown, so an older client that still
+ * sends them is accepted and the fields are dropped — the destination is
+ * derived from the SKU master and never taken from the request.
  */
-const rmReceivedAtOnSave = Joi.any().when('addToRmStock', {
-  is: true,
-  then: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).required()
-    .messages({
-      'any.required': 'Received At is required when "Add to RM Stock" is ticked.',
-      'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}`,
-    }),
-  otherwise: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow(null, '').optional()
-    .messages({ 'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` }),
-});
-
-/**
- * Inventory Type — which module the GRN receives into (one per GRN). Finished
- * Goods are never purchased, so only these two exist (see GRN_INVENTORY_TYPE).
- */
-const inventoryTypeField = Joi.string().valid(...Object.values(GRN_INVENTORY_TYPE)).messages({
-  'any.only': 'Inventory Type must be Raw Material (RM) or Consumable & Packaging',
-  'any.required': 'Select the Inventory Type for the received material',
-});
-
-/**
- * Received At on save: required for an RM GRN; ignored (may be empty) for a
- * Consumable & Packaging one; the legacy opt-in rule when no Inventory Type is sent.
- */
-const rmReceivedAtField = Joi.any().when('inventoryType', {
-  is: GRN_INVENTORY_TYPE.RM,
-  then: Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).required()
-    .messages({
-      'any.required': 'Received At is required for a Raw Material (RM) GRN.',
-      'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}`,
-    }),
-  otherwise: rmReceivedAtOnSave,
-});
+const rmReceivedAtField = Joi.string().trim().uppercase().valid(...RM_RECEIVED_AT_LOCATIONS).allow(null, '')
+  .messages({ 'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}` });
 
 const grnDocumentSchema = Joi.object({
   fileName:   Joi.string().trim().max(300).allow('', null),
@@ -115,11 +89,7 @@ export const createGrnSchema = Joi.object({
   receivedBy:      Joi.string().trim().max(120).allow('', null),
   preparedBy:      Joi.string().trim().max(120).allow('', null),
   warehouse:       Joi.string().trim().max(40).allow('', null),
-  // Required for every new GRN — it decides which IMS module the stock lands in.
-  // addToRmStock is no longer sent by the form (derived from inventoryType);
-  // still accepted so an older caller is not rejected outright.
-  inventoryType:        inventoryTypeField.required(),
-  addToRmStock:         Joi.boolean(),
+  // Required (by the service) whenever a Raw Material line is received.
   rmReceivedAtLocation: rmReceivedAtField,
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)).default(HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED),
   challanDocument: grnDocumentSchema.default(null),
@@ -177,10 +147,7 @@ export const updateGrnSchema = Joi.object({
   receivedBy:      Joi.string().trim().max(120).allow('', null),
   preparedBy:      Joi.string().trim().max(120).allow('', null),
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)),
-  // No default on any: a PATCH that does not mention them must leave the
-  // saved choice alone rather than silently resetting it.
-  inventoryType:        inventoryTypeField,
-  addToRmStock:         Joi.boolean(),
+  // No default: a PATCH that does not mention it leaves the saved value alone.
   rmReceivedAtLocation: rmReceivedAtField,
   challanDocument: grnDocumentSchema,
   invoiceDocument: grnDocumentSchema,
@@ -200,30 +167,10 @@ export const completeGrnSchema = Joi.object({
   // Explicit consent to receive beyond the PO's current pending qty.
   allowOverReceipt: Joi.boolean().default(false),
 
-  // Opt-in: Raw Material / Circle lines post to inventory only when this is
-  // true.
-  //
-  // Deliberately NOT defaulted. Both fields can now be chosen when the GRN is
-  // raised, so "the request did not mention it" and "the operator turned it
-  // off" are different answers: a default here would overwrite the saved choice
-  // with false for any caller that omits the field. The service resolves the
-  // fallback against the stored GRN instead.
-  addToRmStock: Joi.boolean(),
-
-  // Inventory Type confirmed at completion (falls back to the GRN's own). When
-  // set it decides the RM handling and addToRmStock is derived from it.
-  inventoryType: inventoryTypeField,
-
-  // "Received At" for those RM lines — the same list the RM Stock In screen
-  // validates against, imported rather than restated. Not defaulted, for the
-  // same reason; the service falls back to the GRN's own value, then to
-  // DEFAULT_RM_RECEIVED_AT.
-  rmReceivedAtLocation: Joi.string().trim().uppercase()
-    .valid(...RM_RECEIVED_AT_LOCATIONS)
-    .allow(null, '')
-    .messages({
-      'any.only': `Received At must be one of: ${RM_RECEIVED_AT_LOCATIONS.join(', ')}`,
-    }),
+  // "Received At" for the RM lines, confirmed at completion. Not defaulted: the
+  // service falls back to the GRN's saved value and, when there is none and a
+  // Raw Material line is received, refuses — no location is ever assumed.
+  rmReceivedAtLocation: rmReceivedAtField,
 });
 
 export const cancelGrnSchema = Joi.object({

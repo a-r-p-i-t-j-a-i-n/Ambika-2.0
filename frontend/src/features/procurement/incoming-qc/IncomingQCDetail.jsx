@@ -242,7 +242,7 @@ const IncomingQCDetail = () => {
                         <TableCell>Remark</TableCell>
                         <TableCell>Defect</TableCell>
                         <TableCell>Severity</TableCell>
-                        <TableCell>Reject Movement</TableCell>
+                        <TableCell>Stock Movement</TableCell>
                       </>
                     )}
                   </TableRow>
@@ -264,7 +264,11 @@ const IncomingQCDetail = () => {
                           <TableCell><Typography variant="body2" color="text.secondary">{it.qcRemarks || '—'}</Typography></TableCell>
                           <TableCell>{it.defectType || '—'}</TableCell>
                           <TableCell>{it.defectSeverity ? <Chip size="small" variant="outlined" label={it.defectSeverity} /> : '—'}</TableCell>
-                          <TableCell><Typography variant="body2" color="text.secondary">{it.inventoryMovementNumber || '—'}</Typography></TableCell>
+                          {/* IN = this QC posted the accepted qty (QC-gated GRN); OUT = it moved the
+                              rejected qty back out (GRN completed before QC-gated posting). */}
+                          <TableCell data-testid="qc-line-movement"><Typography variant="body2" color="text.secondary">
+                            {it.stockInMovementNumber ? `IN ${it.stockInMovementNumber}` : it.inventoryMovementNumber ? `OUT ${it.inventoryMovementNumber}` : '—'}
+                          </Typography></TableCell>
                         </>
                       )}
                     </TableRow>
@@ -309,7 +313,7 @@ const IncomingQCDetail = () => {
                   </Table>
                 </TableContainer>
               ) : (
-                <Typography variant="body2" color="text.disabled">No rejected-qty movements (nothing rejected).</Typography>
+                <Typography variant="body2" color="text.disabled">No rejected-qty stock-out — nothing was rejected, or (on a QC-gated GRN) rejected quantities never entered stock.</Typography>
               )}
             </SectionCard>
           </Grid>

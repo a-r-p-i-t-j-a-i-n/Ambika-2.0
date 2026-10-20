@@ -26,6 +26,7 @@ import SKU from '../modules/skus/sku.model.js';
 import VendorPurchaseOrder from '../modules/procurement/purchase-order/purchaseOrder.model.js';
 import GoodsReceiptNote, { GRN_STATUS } from '../modules/procurement/grn/grn.model.js';
 import { grnService } from '../modules/procurement/grn/grn.service.js';
+import { completeGrnThroughQc } from './e2eGrnLifecycle.js';
 import InventoryMovement, { TXN_TYPE } from '../modules/inventory/inventoryMovement.model.js';
 import InventoryStock from '../modules/inventory/inventoryStock.model.js';
 import CoilConversion from '../modules/inventory/coilConversion.model.js';
@@ -107,7 +108,7 @@ const makeProbeGrn = async ({ tag, coil, kg, complete, cancel }) => {
     items: po.items.map((p) => ({ poItemId: p._id, skuId: p.skuId, skuCode: p.skuCode, itemName: p.itemName, unit: p.unit, orderedQty: kg, receivedQty: kg, rate: 150, batchNo: `DEMO-CTC-T-${tag}` })),
     totalReceivedQty: kg,
   });
-  if (complete) await grnService.complete(grn._id, { addToRmStock: true, rmReceivedAtLocation: 'PLG01' }, user);
+  if (complete) await completeGrnThroughQc(grn._id, user, { rmReceivedAtLocation: 'PLG01' });
   if (cancel) await grnService.cancel(grn._id, {}, user);
 };
 

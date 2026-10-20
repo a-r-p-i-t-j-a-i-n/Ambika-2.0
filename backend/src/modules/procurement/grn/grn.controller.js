@@ -49,13 +49,11 @@ export const grnController = {
 
   complete: asyncHandler(async (req, res) => {
     const grn = await grnService.complete(req.params.id, req.body, req.user);
-    // What actually happened to the RM lines, counted by the service rather
-    // than inferred by the screen - so the dialog can never report "RM stock
-    // updated" for a GRN that had no RM line on it, or that was not opted in.
+    // What actually happened, counted by the service rather than inferred by the
+    // screen: nothing is stocked yet — the lines wait for MD signature + QC.
     const rm = grn.$locals?.rmSummary || null;
-    const message = rm?.rmPostedCount
-      ? `GRN completed — stock posted; ${rm.rmPostedCount} RM line(s) added to RM stock at ${rm.rmReceivedAtLocation}`
-      : 'GRN completed — stock posted';
+    const message = `GRN completed — ${rm?.awaitingQcLineCount || 0} line(s) awaiting QC. `
+      + 'Stock posts after the MD signs the GRN and Incoming QC is completed.';
     res.json(ApiResponse.ok(message, { ...grn.toObject(), rmSummary: rm }));
   }),
 

@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { baseSchemaFields, baseSchemaOptions } from '../../../database/BaseSchema.js';
 import { RM_RECEIVED_AT_LOCATIONS } from '../../inventory/inventoryStock.model.js';
+import { INVENTORY_DESTINATION } from '../../skus/sku.model.js';
 
 const { Schema, model } = mongoose;
 
@@ -9,10 +10,11 @@ const { Schema, model } = mongoose;
  *
  * The first inventory-impacting module. A GRN can only be raised for a PO that
  * is READY_FOR_GRN (follow-up done) AND whose advance payment is complete.
- * On COMPLETE it increases stock via `inventoryService` (never touching the
- * inventory models directly), updates PO/PI received quantities, generates the
- * Goods Receiving & Inspection Report PDF, and sets qcStatus PENDING so the
- * future Incoming QC module (Step 1.9) can pick it up.
+ * On COMPLETE it updates PO/PI received quantities, fixes each line's inventory
+ * destination (from the SKU master), generates the Goods Receiving & Inspection
+ * Report PDF and sets qcStatus PENDING for Incoming QC (Step 1.9). Usable stock
+ * posts later, when that QC completes — see GRN_STOCK_POSTING_STAGE. GRNs
+ * completed before that change posted stock here, and keep their movements.
  */
 
 export const GRN_STATUS = {
@@ -54,6 +56,37 @@ export const GRN_INVENTORY_TYPE_LABEL = {
   CONSUMABLE_PACKAGING: 'Consumable & Packaging',
 };
 
+/**
+ * When a GRN's stock reaches usable inventory — one value per GRN, stamped by
+ * grnService.complete().
+ *
+ *   null / absent   LEGACY: completed before QC-gated posting existed. All
+ *                   received lines were posted as GRN_IN at completion and
+ *                   Incoming QC moves the rejected qty back out. Never reposted.
+ *   QC_COMPLETION   nothing posts at GRN completion; each line's ACCEPTED qty
+ *                   posts as GRN_IN when its Incoming QC completes (after the
+ *                   MD has signed the GRN). Rejected / rework never enter stock.
+ *
+ * Absent is deliberately the legacy value, so no migration is needed and no
+ * historical GRN can ever be read as "still has stock to post".
+ */
+export const GRN_STOCK_POSTING_STAGE = {
+  QC_COMPLETION: 'QC_COMPLETION',
+};
+
+/**
+ * Where one received line's stock stands (QC_COMPLETION GRNs only; null on
+ * legacy GRNs and on drafts).
+ *   AWAITING_QC  received, not yet usable — waiting for its Incoming QC
+ *   POSTED       QC completed; the accepted qty was posted (movementId set)
+ *   NOT_POSTED   QC completed with nothing accepted — nothing entered stock
+ */
+export const GRN_LINE_STOCK_STATUS = {
+  AWAITING_QC: 'AWAITING_QC',
+  POSTED: 'POSTED',
+  NOT_POSTED: 'NOT_POSTED',
+};
+
 const grnDocumentSchema = new Schema({
   fileName:   { type: String, default: '' },
   fileUrl:    { type: String, default: '' },
@@ -90,6 +123,20 @@ const grnItemSchema = new Schema({
   // Set after stock posting (back-reference to the ledger row).
   movementId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement' },
   movementNumber: { type: String, trim: true, default: '' },
+
+  // ── Inventory routing — derived by the server from the SKU master, never
+  // taken from the client (grnItemSchema in grn.validation does not accept
+  // them). Re-derived on every draft save and fixed at completion, so the
+  // posting at QC uses the destination decided when the goods were received.
+  itemTypeAtReceipt:    { type: String, trim: true, default: '' },
+  inventoryDestination: { type: String, enum: [...Object.values(INVENTORY_DESTINATION), null], default: null },
+  stockWarehouse:       { type: String, trim: true, default: '' }, // where the accepted qty posts
+
+  // ── QC-gated posting (see GRN_STOCK_POSTING_STAGE) — null on legacy GRNs ──
+  stockStatus:   { type: String, enum: [...Object.values(GRN_LINE_STOCK_STATUS), null], default: null },
+  postedQty:     { type: Number, default: 0, min: 0 },                         // accepted qty posted
+  postedQcId:    { type: Schema.Types.ObjectId, ref: 'IncomingQC', default: null },
+  stockPostedAt: { type: Date, default: null },
 }, { _id: true });
 
 const grnSchema = new Schema({
@@ -168,26 +215,27 @@ const grnSchema = new Schema({
   // so two requests can never both create (or both complete) a QC for one GRN
   // (see incomingQc.service). Expires on its own, so a crash cannot strand it.
   qcLockAt:      { type: Date, default: null },
-  stockPosted: { type: Boolean, default: false }, // idempotency guard
+  // Completion claim + idempotency guard: flipped false→true by complete()
+  // before anything is written. On a QC_COMPLETION GRN it means "receipt
+  // finalised", not "stock is in inventory" — see stockPostingStage.
+  stockPosted: { type: Boolean, default: false },
+
+  /** See GRN_STOCK_POSTING_STAGE. null = legacy (posted at GRN completion). */
+  stockPostingStage: { type: String, enum: [...Object.values(GRN_STOCK_POSTING_STAGE), null], default: null, index: true },
 
   /**
-   * "Add to RM Stock" — the operator's opt-in on the Complete dialog.
-   *
-   * Raw Material / Circle lines post to inventory ONLY when this is true. Every
-   * other item type (consumables, packaging, spares …) posts exactly as it
-   * always has, so this gates RM and nothing else.
-   *
-   * Defaults to false: the choice has to be made, never assumed. Recorded on
-   * the GRN so the ledger can be explained later — a GRN with no RM movements
-   * is then plainly "not opted in" rather than "something went wrong".
+   * "Add to RM Stock" — LEGACY opt-in. On a legacy GRN (stockPostingStage null)
+   * Raw Material / Circle lines posted ONLY when this was true; that record is
+   * kept and never reinterpreted. A QC_COMPLETION GRN always routes its RM
+   * lines to RM IMS, and complete() sets this to "has RM lines" so older
+   * readers still read it truthfully.
    */
   addToRmStock: { type: Boolean, default: false },
 
   /**
-   * The Inventory Type chosen on the GRN (replaces the "Add to RM Stock"
-   * checkbox in the UI). null on GRNs raised before it existed — those keep
-   * their recorded addToRmStock and are never reinterpreted. When set,
-   * addToRmStock is derived from it (RM ⇒ true) so existing readers still work.
+   * LEGACY: the Inventory Type an operator chose by hand (one per GRN). Retired
+   * — destinations are now derived per line from the SKU master. Kept read-only
+   * so historical GRNs still show what was chosen; new GRNs leave it null.
    */
   inventoryType: { type: String, enum: [...Object.values(GRN_INVENTORY_TYPE), null], default: null },
 

@@ -28,6 +28,14 @@ import GrnPdfPreview from './GrnPdfPreview';
 import { GrnQcSections } from './GrnQcSection';
 import GrnQcStatusChip from './GrnQcStatusChip';
 import { inventoryTypeLabel } from './inventoryType';
+import { destinationText } from './inventoryDestination';
+
+/** Where a QC-gated line's stock stands (legacy lines have no status). */
+const STOCK_STATUS = {
+  AWAITING_QC: { label: 'Awaiting QC', color: '#b45309' },
+  POSTED: { label: 'Posted', color: '#0f766e' },
+  NOT_POSTED: { label: 'Not posted', color: '#64748b' },
+};
 import { resolveGrnQcStage } from './grnQcStage';
 import { pickGrnQc } from '../incoming-qc/qcForm';
 import VendorInvoiceFormDialog from '../vendor-invoices/VendorInvoiceFormDialog';
@@ -116,7 +124,7 @@ const GrnDetail = () => {
     );
   }
 
-  // Draft = editable / deletable / completable. Once completed (stock posted)
+  // Draft = editable / deletable / completable. Once completed (receipt final)
   // the GRN is read-only for good — the server enforces the same rule.
   const isDraft = isGrnDraft(grn);
   // MD-signed GRNs are locked — editing/cancelling is blocked here (mirrors the
@@ -132,9 +140,9 @@ const GrnDetail = () => {
   const toQcSection = () => scrollToId('grn-qc-section');
   const nextStep = (() => {
     if (isDraft) {
-      return { tone: 'info', title: 'Next: complete the GRN & post stock',
-        desc: 'Confirm the received quantities and post the goods into inventory. Incoming QC (below) opens after the MD signs the GRN.',
-        primary: { label: 'Complete & Post Stock', icon: <PackageCheck size={16} />, onClick: () => setCompleteOpen(true) },
+      return { tone: 'info', title: 'Next action: Complete GRN',
+        desc: 'Confirm the received quantities. Incoming QC (below) opens after the MD signs the GRN; accepted quantities are posted to stock when the QC is completed.',
+        primary: { label: 'Complete GRN', icon: <PackageCheck size={16} />, onClick: () => setCompleteOpen(true) },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
     if (qcStage.key === 'CANCELLED') return null;
@@ -226,7 +234,7 @@ const GrnDetail = () => {
             </Button>
           ))}
           {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={<PackageCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete &amp; Post Stock</Button>}
+          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={<PackageCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete GRN</Button>}
           {grn.grnPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>{isLocked ? 'View Signed PDF' : 'GRN PDF'}</Button>}
           {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
           {isDraft && !isLocked && canDeleteGrn && <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} onClick={() => setDeleteOpen(true)}>Delete</Button>}
@@ -259,12 +267,17 @@ const GrnDetail = () => {
               {/* Shown beside Warehouse on purpose: they are different things.
                   Warehouse is the GRN's own store (MAIN); Received At is where
                   the Raw Material landed, and is what the RM movement uses. */}
-              {/* GRNs raised before Inventory Type existed show their recorded
-                  "Add to RM Stock" choice as it was — never reinterpreted. */}
+              {/* GRNs completed before automatic routing keep showing the manual
+                  choice they were posted under — never reinterpreted. Every other
+                  GRN routes each line from its SKU master and posts after QC. */}
               <Grid item xs={6} sm={4}>
-                <Field label="Inventory Type" value={grn.inventoryType
-                  ? inventoryTypeLabel(grn.inventoryType)
-                  : `— (earlier GRN · Add to RM Stock: ${grn.addToRmStock ? 'Yes' : 'No'})`} />
+                {isGrnCompleted(grn) && !grn.stockPostingStage ? (
+                  <Field label="Inventory Type (earlier GRN)" value={grn.inventoryType
+                    ? inventoryTypeLabel(grn.inventoryType)
+                    : `— (Add to RM Stock: ${grn.addToRmStock ? 'Yes' : 'No'})`} />
+                ) : (
+                  <Field label="Stock Posting" value="After MD signature + QC · destination per line from SKU master" />
+                )}
               </Grid>
               <Grid item xs={6} sm={4}><Field label="Received At" value={grn.rmReceivedAtLocation || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Completed At" value={fmtDate(grn.completedAt)} /></Grid>
@@ -317,7 +330,7 @@ const GrnDetail = () => {
                     <TableCell align="right">Pending After GRN</TableCell>
                     <TableCell>Item Status</TableCell>
                     <TableCell>Batch</TableCell>
-                    <TableCell>Movement</TableCell>
+                    <TableCell>Stock</TableCell>
                     <TableCell>Remarks</TableCell>
                   </TableRow>
                 </TableHead>
@@ -357,7 +370,19 @@ const GrnDetail = () => {
                           <Chip size="small" label={itemStatus.label} sx={{ fontWeight: 700, color: itemStatus.color, bgcolor: alpha(itemStatus.color, 0.1) }} />
                         </TableCell>
                         <TableCell>{it.batchNo || '—'}</TableCell>
-                        <TableCell><Typography variant="body2" color="text.secondary">{it.movementNumber || '—'}</Typography></TableCell>
+                        <TableCell data-testid="grn-line-stock">
+                          {it.inventoryDestination && (
+                            <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+                              {destinationText(it.inventoryDestination, it.stockWarehouse)}
+                            </Typography>
+                          )}
+                          {STOCK_STATUS[it.stockStatus] && (
+                            <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: STOCK_STATUS[it.stockStatus].color }}>
+                              {STOCK_STATUS[it.stockStatus].label}{it.stockStatus === 'POSTED' ? ` ${it.postedQty}` : ''}
+                            </Typography>
+                          )}
+                          <Typography variant="body2" color="text.secondary">{it.movementNumber || (it.inventoryDestination ? '' : '—')}</Typography>
+                        </TableCell>
                         <TableCell><Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography></TableCell>
                       </TableRow>
                     );
@@ -404,7 +429,7 @@ const GrnDetail = () => {
                   </Table>
                 </TableContainer>
               ) : (
-                <Typography variant="body2" color="text.disabled">No stock movements found for this GRN.</Typography>
+                <Typography variant="body2" color="text.disabled">{grn.stockPostingStage ? 'Nothing posted yet — accepted quantities are posted when the MD has signed and Incoming QC is completed.' : 'No stock movements found for this GRN.'}</Typography>
               )}
             </SectionCard>
           </Grid>

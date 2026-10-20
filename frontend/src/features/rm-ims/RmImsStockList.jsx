@@ -15,6 +15,7 @@ import {
 } from './rmImsMeta';
 import { useGetRmOverviewQuery, useUpsertRmPolicyMutation } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
+import AwaitingQcNote from '../ims/AwaitingQcNote';
 
 const H = FIELD.rm;
 
@@ -36,7 +37,14 @@ const NotConfigured = () => (
  * makes it checkable — a buyer can go and look. A typed number says so plainly,
  * so nobody mistakes somebody's estimate for a confirmed order.
  */
-const InTransitCell = ({ row: r }) => {
+const InTransitCell = ({ row: r }) => (
+  <Box sx={{ display: 'inline-block', textAlign: 'right' }}>
+    <InTransitFigure row={r} />
+    <AwaitingQcNote qty={r.awaitingQc} grnNumbers={r.awaitingQcGrnNumbers} fmt={num} />
+  </Box>
+);
+
+const InTransitFigure = ({ row: r }) => {
   if (!r.inTransit) return <Box component="span" sx={{ color: O2D.faint }}>—</Box>;
 
   if (r.inTransitSource === 'PO') {
@@ -45,7 +53,7 @@ const InTransitCell = ({ row: r }) => {
       `${num(r.inTransit)} pending on ${r.openPoCount} open purchase order${r.openPoCount > 1 ? 's' : ''}.`,
       r.openPoNumbers.length ? r.openPoNumbers.join(', ') : '',
       r.openPoReceivedQty > 0
-        ? `${num(r.openPoReceivedQty)} of ${num(r.openPoOrderedQty)} ordered has already been received and is counted in the stock on hand, not here.`
+        ? `${num(r.openPoReceivedQty)} of ${num(r.openPoOrderedQty)} ordered has already been received — counted in the stock on hand, or as Awaiting QC until its QC completes, not here.`
         : '',
       r.openPoEarliestExpectedAt ? `Earliest expected ${dayjs(r.openPoEarliestExpectedAt).format('DD MMM YYYY')}.` : '',
       overdue ? `${num(r.openPoOverdueQty)} of it is past its expected date.` : '',
@@ -465,6 +473,10 @@ const RmImsStockList = () => {
       'SKU Code', 'Item Name', 'Material', 'UOM', 'Total Available Quantity', 'Recorded weight (kg)', 'Material In Transit', 'In Transit source', 'Booked Qty',
       'Daily Avg Consumption', 'ADC source', 'Daily Consumption', 'Safety Factor', 'Lead Time (From Indent to Receipt)', 'Reorder at', 'Max Level',
       'Max Level set', 'Available %', 'Days cover', 'Vendor Name', 'Status',
+      // Appended LAST so every earlier column keeps its position for anyone
+      // reading the file by column number. Received, waiting for Incoming QC:
+      // never part of on hand or in transit.
+      'Awaiting QC',
     ];
     const lines = filtered.map((r) => [
       r.skuCode, r.skuName, r.kind === 'CIRCLE' ? 'Circle' : 'Coil', uomOf(r),
@@ -472,6 +484,7 @@ const RmImsStockList = () => {
       r.adc, r.adcSource, r.dailyConsumption ?? '', r.safetyFactor, r.leadDays, r.reorderPoint, r.maxLevel,
       r.maxLevelMode === 'MANUAL' ? 'Manual' : 'Auto',
       r.availablePct ?? '', r.daysCover ?? '', r.vendorName, stockToken(r.status).label,
+      r.awaitingQc || 0,
     ]);
     const csv = [header, ...lines].map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));

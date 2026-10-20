@@ -88,7 +88,7 @@ const GrnList = () => {
     const a = [{ key: 'view', label: isGrnCompleted(r) ? 'View (read-only)' : 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (isGrnDraft(r)) {
       a.push({ key: 'edit', label: 'Edit Draft', icon: <Pencil size={16} />, fn: () => onEdit(r) });
-      a.push({ key: 'complete', label: 'Complete & Post Stock', icon: <PackageCheck size={16} />, fn: () => onComplete(r) });
+      a.push({ key: 'complete', label: 'Complete GRN', icon: <PackageCheck size={16} />, fn: () => onComplete(r) });
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
       if (canDeleteGrn) a.push({ key: 'delete', label: 'Delete Draft', icon: <Trash2 size={16} />, fn: () => onDelete(r), danger: true });
     }
@@ -136,7 +136,7 @@ const GrnList = () => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
           <GrnStatusChip status={p.value} />
           {isGrnCompleted(p.row) && (
-            <Tooltip title="Completed — stock posted. Read-only: cannot be edited or deleted.">
+            <Tooltip title={p.row.stockPostingStage ? 'Completed — stock posts at QC. Read-only: cannot be edited or deleted.' : 'Completed — stock posted. Read-only: cannot be edited or deleted.'}>
               <Box component="span" sx={{ display: 'inline-flex', color: PFMS.faint }}><Lock size={14} /></Box>
             </Tooltip>
           )}

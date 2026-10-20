@@ -438,6 +438,8 @@ const ImsItemDetail = () => {
             hint="Units physically in the store right now." />
           <Metric label="Material In Transit" value={num(m.inTransit)}
             hint="Ordered from the vendor but not yet received." />
+          <Metric label="Awaiting QC" value={num(m.awaitingQc)}
+            hint="Received on a completed GRN and waiting for Incoming QC — not usable yet. Only the accepted quantity is added to stock when the QC completes; the forecast counts it from the next day. Not part of in transit or on hand." />
           <Metric label="Average Daily Consumption" value={num(m.adc)}
             hint="Average units consumed per day, worked out from actual production issues." />
           {/* A policy figure: an item with no policy has none, so the tile says

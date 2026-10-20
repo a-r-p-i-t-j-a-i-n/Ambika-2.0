@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import { ClipboardCheck, Wrench, Upload, FileText, X } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { useCompleteIncomingQcMutation } from '../../../store/api/procurementApi';
+import { useCompleteIncomingQcMutation, useGetGrnByIdQuery } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { QcResultChip } from './qcMeta';
 
@@ -15,7 +15,12 @@ const REPORT_ACCEPT = '.pdf,image/*,.doc,.docx';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-/** Expected result preview + confirm. Rejected qty moves out of stock on complete. */
+/**
+ * Expected result preview + confirm. What happens to stock depends on the GRN:
+ * on a QC-gated GRN (stockPostingStage set) the ACCEPTED qty is posted now and
+ * rejected qty never enters stock; on an earlier GRN (stock posted at GRN
+ * completion) the rejected qty moves out of stock, as it always did.
+ */
 const expectedResult = (items = []) => {
   const allAccepted = items.every((it) => round2(it.acceptedQty) === round2(it.receivedQty) && round2(it.rejectedQty) === 0 && round2(it.reworkQty) === 0);
   const allRejected = items.every((it) => round2(it.rejectedQty) === round2(it.receivedQty) && round2(it.acceptedQty) === 0);
@@ -41,6 +46,8 @@ const IncomingQCCompleteDialog = ({ open, onClose, qc }) => {
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
 
   const isService = qc?.sourceType === 'SERVICE';
+  const { data: grnRes } = useGetGrnByIdQuery(qc?.grnId, { skip: !open || isService || !qc?.grnId });
+  const qcGated = Boolean(grnRes?.data?.stockPostingStage);
 
   useEffect(() => { if (open) { setRemarks(''); setServiceResult(''); setReport(null); } }, [open]);
 
@@ -171,11 +178,20 @@ const IncomingQCCompleteDialog = ({ open, onClose, qc }) => {
               <Typography variant="body2" fontWeight={700}>Expected Result:</Typography>
               <QcResultChip result={result} />
             </Box>
-            <Alert severity={qc?.totalRejected > 0 ? 'warning' : 'info'} sx={{ mb: 2 }}>
-              {qc?.totalRejected > 0
-                ? `Rejected ${qc.totalRejected} will be moved OUT of stock (QC_REJECT_OUT). Accepted qty stays.`
-                : 'Accepted qty stays in stock; no stock-out needed.'}
-            </Alert>
+            {qcGated ? (
+              <Alert severity="info" sx={{ mb: 2 }} data-testid="qc-complete-stock-note">
+                {`Accepted ${qc?.totalAccepted || 0} will be posted to stock now, to each line's inventory module.`}
+                {qc?.totalRejected > 0 || qc?.totalRework > 0
+                  ? ` Rejected ${qc.totalRejected || 0}${qc.totalRework > 0 ? ` and rework ${qc.totalRework}` : ''} will not enter stock.`
+                  : ''}
+              </Alert>
+            ) : (
+              <Alert severity={qc?.totalRejected > 0 ? 'warning' : 'info'} sx={{ mb: 2 }} data-testid="qc-complete-stock-note">
+                {qc?.totalRejected > 0
+                  ? `Rejected ${qc.totalRejected} will be moved OUT of stock (QC_REJECT_OUT). Accepted qty stays.`
+                  : 'Accepted qty stays in stock; no stock-out needed.'}
+              </Alert>
+            )}
             <TextField label="Remarks" fullWidth multiline minRows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
           </>
         )}

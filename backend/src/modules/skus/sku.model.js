@@ -44,6 +44,47 @@ export const RM_ITEM_TYPES = ['RAW_MATERIAL', 'CIRCLE'];
 // FG / SALE_PRODUCT / READY_STOCK_PRODUCT are defensive aliases for legacy or imported data.
 export const FG_BLOCKED_ITEM_TYPES = ['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT'];
 
+// ── Inventory destination of a received purchase ────────────────────────────
+// Where a GRN line's stock lands is DERIVED from itemType, never stored on the
+// SKU as a second classification: every IMS screen already scopes its listing by
+// itemType, so a separate field could post stock to one module and list it in
+// another. All modules share one ledger (InventoryStock / InventoryMovement);
+// the destination decides the warehouse and which screen lists the item.
+//
+//   RM_IMS      Raw Material IMS — posts at the GRN's "Received At" (PLG01 / JW001)
+//   CP_IMS      Consumable & Packaging IMS — posts at the GRN's own store (MAIN)
+//   MAIN_STORE  posts at the GRN's own store (MAIN) but is listed by no IMS
+//               screen — the existing behaviour for chemicals, ink, spares …
+export const INVENTORY_DESTINATION = {
+  RM_IMS: 'RM_IMS',
+  CP_IMS: 'CP_IMS',
+  MAIN_STORE: 'MAIN_STORE',
+};
+
+/** The item types Consumable & Packaging IMS lists (its single source of truth). */
+export const CP_IMS_ITEM_TYPES = ['CONSUMABLE', 'PACKING', 'PACKAGING'];
+
+/** Purchasable, stocked at the GRN's store, outside every IMS listing. */
+export const MAIN_STORE_ITEM_TYPES = [
+  'CHEMICAL', 'INK', 'BUTTER_PAPER', 'SUBLIMATION_PAPER', 'STATIONERY', 'SPARE_PART', 'WIP_MATERIAL',
+];
+
+/**
+ * Buy-side, but not material: bought through internal-service indents, never
+ * received on a GRN. Blocked from material GRNs only — NOT from the shared
+ * purchase-item-guard, which also guards the indents that legitimately use them.
+ */
+export const NON_MATERIAL_ITEM_TYPES = ['SERVICE', 'JOB_WORK'];
+
+/** Destination for an itemType, or null when a GRN cannot route it. */
+export const inventoryDestinationOf = (itemType) => {
+  const t = String(itemType || '').trim().toUpperCase();
+  if (RM_ITEM_TYPES.includes(t)) return INVENTORY_DESTINATION.RM_IMS;
+  if (CP_IMS_ITEM_TYPES.includes(t)) return INVENTORY_DESTINATION.CP_IMS;
+  if (MAIN_STORE_ITEM_TYPES.includes(t)) return INVENTORY_DESTINATION.MAIN_STORE;
+  return null;
+};
+
 const SkuSchema = new Schema({
   ...baseSchemaFields,
 

@@ -18,6 +18,12 @@
  * → ready for GRN. GRNs, cuts and scrap outs go through their real services
  * (here) or the real UI (the browser half).
  *
+ * GRN completion posts NO stock: each line's destination comes from its SKU
+ * (coils and circles → RM IMS at the GRN's Received At, consumables → the GRN
+ * warehouse), and the accepted qty is posted when the MD has signed and the
+ * GRN's Incoming QC completes (signAndQc below; the browser does it through
+ * the GRN page).
+ *
  * ── SAFETY ─────────────────────────────────────────────────────────────────
  * Pinned to a THROWAWAY single-node replica set on 127.0.0.1:27018 (started
  * for this run, data in the session scratchpad) so transactions are real and
@@ -46,6 +52,7 @@ import { indentService } from '../modules/procurement/indent/indent.service.js';
 import { purchaseOrderService } from '../modules/procurement/purchase-order/purchaseOrder.service.js';
 import { followUpService } from '../modules/procurement/follow-up/followUp.service.js';
 import { grnService } from '../modules/procurement/grn/grn.service.js';
+import { incomingQcService } from '../modules/procurement/incoming-qc/incomingQc.service.js';
 import { rmImsService } from '../modules/inventory/rmIms.service.js';
 import { scrapImsService } from '../modules/inventory/scrapIms.service.js';
 import { scrapBuyerService } from '../modules/inventory/scrapBuyer.service.js';
@@ -245,6 +252,19 @@ const grnItems = (po, skus, qtyOf, batch) => po.items.map((it) => {
   };
 });
 
+/**
+ * After a GRN is completed nothing is stocked yet: the MD signs, then its
+ * Incoming QC (accept all) posts the GRN_IN. The signature is the approval
+ * mirror field, as the other fixtures stand it in.
+ */
+const signAndQc = async (grnId, user) => {
+  await GoodsReceiptNote.updateOne({ _id: grnId }, { $set: { approvalStatus: 'MD_APPROVED' } });
+  const qc = await incomingQcService.create({ grnId: String(grnId) }, user);
+  await incomingQcService.complete(String(qc._id), {}, user);
+  return qc;
+};
+const grnInsOf = (grnId) => InventoryMovement.find({ refId: grnId, txnType: TXN_TYPE.GRN_IN }).lean();
+
 /* ══ --seed ══════════════════════════════════════════════════════════════ */
 
 const seed = async () => {
@@ -342,54 +362,73 @@ const api = async () => {
   const { user, skus, pos } = ctx;
   const po = async (k) => VendorPurchaseOrder.findById(pos[k].poId).lean();
 
-  console.log('\nGRN — batch rules, Add to RM Stock OFF/ON, duplicate + concurrent completion, failure');
+  console.log('\nGRN — batch + Received At rules, routing by SKU, duplicate + concurrent completion, failure; stock only at QC');
 
   // Coil without batch → reject.
   const a4 = await po('A4');
   await refused('[G1] coil GRN line without a batch number',
-    () => grnService.create({ poId: pos.A4.poId, addToRmStock: true, rmReceivedAtLocation: 'PLG01', items: grnItems(a4, skus, null, '') }, user),
+    () => grnService.create({ poId: pos.A4.poId, rmReceivedAtLocation: 'PLG01', items: grnItems(a4, skus, null, '') }, user),
     /batch/i);
-  const g4 = await grnService.create({ poId: pos.A4.poId, addToRmStock: true, rmReceivedAtLocation: 'PLG01', items: grnItems(a4, skus, null, 'E2E-FULL-COIL-004') }, user);
+  const g4 = await grnService.create({ poId: pos.A4.poId, rmReceivedAtLocation: 'PLG01', items: grnItems(a4, skus, null, 'E2E-FULL-COIL-004') }, user);
   const g4id = idOf(g4);
   check('[G2] coil GRN with a batch is created as DRAFT', !!g4id);
   await grnService.complete(g4id, {}, user);
-  let mv = await InventoryMovement.find({ refId: g4id, txnType: TXN_TYPE.GRN_IN }).lean();
-  check('[G2] completion inherits Add to RM Stock + PLG01 and posts exactly one GRN_IN',
+  let mv = await grnInsOf(g4id);
+  const g4doc = await GoodsReceiptNote.findById(g4id).lean();
+  check('[G2] completion posts NO stock — the coil line is RM IMS · PLG01, Awaiting QC',
+    mv.length === 0 && g4doc.stockPostingStage === 'QC_COMPLETION' && g4doc.items[0].inventoryDestination === 'RM_IMS'
+    && g4doc.items[0].stockWarehouse === 'PLG01' && g4doc.items[0].stockStatus === 'AWAITING_QC',
+    JSON.stringify(g4doc.items.map((i) => [i.inventoryDestination, i.stockWarehouse, i.stockStatus])));
+  await refused('[G3] completing the same GRN a second time', () => grnService.complete(g4id, {}, user), /already been completed|only draft/i);
+  await signAndQc(g4id, user);
+  mv = await grnInsOf(g4id);
+  check('[G2] after MD + QC: exactly one GRN_IN at PLG01 (inherited Received At), batch kept, 1,000 kg',
     mv.length === 1 && mv[0].warehouse === 'PLG01' && mv[0].batchNo === 'E2E-FULL-COIL-004' && mv[0].quantity === 1000 && mv[0].refType === 'GRN',
     JSON.stringify(mv.map((m) => [m.warehouse, m.batchNo, m.quantity, m.refType])));
-  await refused('[G3] completing the same GRN a second time', () => grnService.complete(g4id, {}, user), /already posted|only draft/i);
+  await refused('[G3] completing it again after QC', () => grnService.complete(g4id, {}, user), /already been completed|only draft/i);
   eq('[G3] still exactly one GRN_IN for it', await InventoryMovement.countDocuments({ refId: g4id, txnType: TXN_TYPE.GRN_IN }), 1);
 
   // Concurrent completion.
   const a5 = await po('A5');
-  const g5 = await grnService.create({ poId: pos.A5.poId, addToRmStock: true, rmReceivedAtLocation: 'PLG01', items: grnItems(a5, skus, null, 'E2E-FULL-COIL-005') }, user);
+  const g5 = await grnService.create({ poId: pos.A5.poId, rmReceivedAtLocation: 'PLG01', items: grnItems(a5, skus, null, 'E2E-FULL-COIL-005') }, user);
   const g5id = idOf(g5);
   const settled = await Promise.allSettled([grnService.complete(g5id, {}, user), grnService.complete(g5id, {}, user)]);
   const ok = settled.filter((s) => s.status === 'fulfilled').length;
   check('[G4] two simultaneous completions: exactly ONE succeeds', ok === 1,
     settled.map((s) => (s.status === 'fulfilled' ? 'ok' : s.reason?.message?.slice(0, 60))).join(' | '));
-  eq('[G4] exactly one GRN_IN posted', await InventoryMovement.countDocuments({ refId: g5id, txnType: TXN_TYPE.GRN_IN }), 1);
+  eq('[G4] …and nothing is stocked by either', await InventoryMovement.countDocuments({ refId: g5id, txnType: TXN_TYPE.GRN_IN }), 0);
+  eq('[G4] one COMPLETE entry on the GRN', (await GoodsReceiptNote.findById(g5id).lean()).activityTimeline.filter((t) => t.action === 'COMPLETE').length, 1);
+  await signAndQc(g5id, user);
+  eq('[G4] after MD + QC: exactly one GRN_IN posted', await InventoryMovement.countDocuments({ refId: g5id, txnType: TXN_TYPE.GRN_IN }), 1);
 
-  // Circle without batch → reject; consumable without batch fine; Add to RM Stock OFF.
+  // Circle without batch → reject; circle without Received At → reject; consumable
+  // needs neither. The retired "Add to RM Stock" flag decides nothing any more.
   const a6 = await po('A6');
   await refused('[G5] circle GRN line without a batch number',
-    () => grnService.create({ poId: pos.A6.poId, addToRmStock: false, items: grnItems(a6, skus, null, '') }, user), /batch/i);
-  const g6 = await grnService.create({ poId: pos.A6.poId, addToRmStock: false, warehouse: 'MAIN', items: grnItems(a6, skus, null, 'E2E-FULL-CIR-006') }, user);
+    () => grnService.create({ poId: pos.A6.poId, rmReceivedAtLocation: 'PLG01', items: grnItems(a6, skus, null, '') }, user), /batch/i);
+  await refused('[G5] circle GRN line with a batch but NO Received At',
+    () => grnService.create({ poId: pos.A6.poId, items: grnItems(a6, skus, null, 'E2E-FULL-CIR-006') }, user), /Received At is required/);
+  const g6 = await grnService.create({ poId: pos.A6.poId, addToRmStock: false, rmReceivedAtLocation: 'PLG01', warehouse: 'MAIN', items: grnItems(a6, skus, null, 'E2E-FULL-CIR-006') }, user);
   const g6id = idOf(g6);
-  check('[G5] circle WITH batch + consumable WITHOUT batch: GRN created (other products keep their rule)', !!g6id);
+  check('[G5] circle WITH batch + Received At, consumable WITHOUT batch: GRN created', !!g6id);
   const c6 = await grnService.complete(g6id, {}, user);
-  mv = await InventoryMovement.find({ refId: g6id, txnType: TXN_TYPE.GRN_IN }).lean();
-  check('[G6] Add to RM Stock OFF: the GRN completes', (await GoodsReceiptNote.findById(g6id).lean()).stockPosted === true, c6?.grnStatus || '');
-  check('[G6] …the CIRCLE (RM) line posts NO GRN_IN', !mv.some((m) => m.skuCode === 'JSL204-07-700'), JSON.stringify(mv.map((m) => m.skuCode)));
-  check('[G6] …the consumable still posts its GRN_IN to the GRN warehouse (MAIN), unbatched',
-    mv.length === 1 && mv[0].skuCode === 'E2E-FULL-CONS' && mv[0].warehouse === 'MAIN' && mv[0].quantity === 40 && mv[0].batchNo === '',
+  check('[G6] the GRN completes; nothing stocked yet', (await GoodsReceiptNote.findById(g6id).lean()).stockPosted === true
+    && (await grnInsOf(g6id)).length === 0, c6?.grnStatus || '');
+  await signAndQc(g6id, user);
+  mv = await grnInsOf(g6id);
+  const byCode = Object.fromEntries(mv.map((m) => [m.skuCode, m]));
+  check('[G6] after QC: the CIRCLE (RM) line goes to RM IMS at PLG01 with its batch, even with "Add to RM Stock" sent as false',
+    mv.length === 2 && byCode['JSL204-07-700']?.warehouse === 'PLG01' && byCode['JSL204-07-700']?.quantity === 500 && byCode['JSL204-07-700']?.batchNo === 'E2E-FULL-CIR-006',
+    JSON.stringify(mv.map((m) => [m.skuCode, m.warehouse, m.quantity, m.batchNo])));
+  check('[G6] …the consumable goes to the GRN warehouse (MAIN), unbatched',
+    byCode['E2E-FULL-CONS']?.warehouse === 'MAIN' && byCode['E2E-FULL-CONS']?.quantity === 40 && byCode['E2E-FULL-CONS']?.batchNo === '',
     JSON.stringify(mv.map((m) => [m.skuCode, m.warehouse, m.quantity, m.batchNo])));
   const poA6 = await po('A6');
   check('[G6] …and the PO still records both lines as received', poA6.items.every((i) => round2(i.receivedQty) === i.quantity));
 
   // Failure after the completion claim: over-receipt with no remarks.
   const a7 = await po('A7');
-  const g7 = await grnService.create({ poId: pos.A7.poId, addToRmStock: true, rmReceivedAtLocation: 'PLG01', items: grnItems(a7, skus, () => 150, 'E2E-FULL-COIL-007') }, user)
+  const g7 = await grnService.create({ poId: pos.A7.poId, rmReceivedAtLocation: 'PLG01', items: grnItems(a7, skus, () => 150, 'E2E-FULL-COIL-007') }, user)
     .catch((e) => ({ error: e }));
   if (g7.error) {
     check('[G7] over-receipt GRN', false, `create refused: ${g7.error.message}`);
@@ -402,7 +441,9 @@ const api = async () => {
     const g7doc = await GoodsReceiptNote.findById(g7id).lean();
     check('[G7] …the claim is released: stockPosted back to false, still DRAFT', g7doc.stockPosted === false && g7doc.grnStatus === 'DRAFT', `${g7doc.stockPosted}/${g7doc.grnStatus}`);
     await grnService.complete(g7id, { allowOverReceipt: true, remarks: 'E2E: extra 50 kg delivered and accepted' }, user);
-    eq('[G7] …and the corrected completion then posts once (150 kg)',
+    eq('[G7] …the corrected completion posts nothing yet', (await grnInsOf(g7id)).length, 0);
+    await signAndQc(g7id, user);
+    eq('[G7] …and its QC then posts once (150 kg)',
       (await InventoryMovement.find({ refId: g7id, txnType: TXN_TYPE.GRN_IN }).lean()).map((m) => m.quantity), [150]);
   }
 
@@ -508,7 +549,7 @@ const retryproof = async () => {
   console.log('\nGRN COMPLETION UNDER A TRANSACTION RETRY');
   const vendors = { 'E2E Full Supplier 4': await Vendor.findOne({ name: 'E2E Full Supplier 4' }) };
   const { po } = await buyThrough({ vendor: 'E2E Full Supplier 4', lines: [{ sku: 'JSL202-06', qty: 50, rate: 170 }] }, skus, vendors, user);
-  const g = await grnService.create({ poId: String(po._id), addToRmStock: true, rmReceivedAtLocation: 'PLG01', items: grnItems(po, skus, null, 'E2E-FULL-COIL-008') }, user);
+  const g = await grnService.create({ poId: String(po._id), rmReceivedAtLocation: 'PLG01', items: grnItems(po, skus, null, 'E2E-FULL-COIL-008') }, user);
   const gid = idOf(g);
 
   const origSave = VendorPurchaseOrder.prototype.save;
@@ -532,7 +573,9 @@ const retryproof = async () => {
   const fresh = await VendorPurchaseOrder.findById(po._id).lean();
   eq('PO received qty counted ONCE (50, not 100)', fresh.items[0].receivedQty, 50);
   eq('PO timeline has ONE GRN_RECEIVED entry', fresh.activityTimeline.filter((t) => t.action === 'GRN_RECEIVED').length, 1);
-  eq('exactly one GRN_IN (50 kg)', (await InventoryMovement.find({ refId: gid, txnType: TXN_TYPE.GRN_IN }).lean()).map((m) => m.quantity), [50]);
+  eq('no stock at GRN completion', (await grnInsOf(gid)).length, 0);
+  await signAndQc(gid, user);
+  eq('after MD + QC: exactly one GRN_IN (50 kg)', (await InventoryMovement.find({ refId: gid, txnType: TXN_TYPE.GRN_IN }).lean()).map((m) => m.quantity), [50]);
   const gd = await GoodsReceiptNote.findById(gid).lean();
   check('GRN completed once (stockPosted, one COMPLETE entry)', gd.stockPosted === true && gd.activityTimeline.filter((t) => t.action === 'COMPLETE').length === 1);
   return finish();
@@ -571,7 +614,7 @@ const piPath = async () => {
   eq('PO mirror: PI Received', (await VendorPurchaseOrder.findById(poId).lean()).piStatus, 'PI_RECEIVED');
   await refused('[P1] a GRN before the PI is paid', async () => {
     const poX = await VendorPurchaseOrder.findById(poId).lean();
-    return grnService.create({ poId: String(poId), addToRmStock: true, rmReceivedAtLocation: 'PLG01', items: grnItems(poX, skus, null, 'E2E-FULL-COIL-PI') }, user);
+    return grnService.create({ poId: String(poId), rmReceivedAtLocation: 'PLG01', items: grnItems(poX, skus, null, 'E2E-FULL-COIL-PI') }, user);
   });
   await proformaInvoiceService.approve(pi._id, {}, user);
   eq('PI approved → ready for advance payment (PO mirror)', (await VendorPurchaseOrder.findById(poId).lean()).piStatus, 'READY_FOR_ADVANCE_PAYMENT');
@@ -584,7 +627,7 @@ const piPath = async () => {
   await followUpService.markDone(idOf(fu), { finalMaterialDate: new Date() }, user);
   const po = await VendorPurchaseOrder.findById(poId).lean();
   check('PO is GRN-eligible (READY_FOR_GRN + PAYMENT_COMPLETED)', po.followUpStatus === 'READY_FOR_GRN' && po.piStatus === 'PAYMENT_COMPLETED');
-  const g = await grnService.create({ poId: String(poId), addToRmStock: true, rmReceivedAtLocation: 'PLG01', items: grnItems(po, skus, null, 'E2E-FULL-COIL-PI') }, user);
+  const g = await grnService.create({ poId: String(poId), rmReceivedAtLocation: 'PLG01', items: grnItems(po, skus, null, 'E2E-FULL-COIL-PI') }, user);
   const gid = idOf(g);
   check('the GRN carries the PI link', String((await GoodsReceiptNote.findById(gid).lean()).piId) === String(pi._id));
 
@@ -607,7 +650,9 @@ const piPath = async () => {
   const piAfter = await ProformaInvoice.findById(pi._id).lean();
   eq('PI received qty counted ONCE (300, not 600) and balance 0', [piAfter.items[0].receivedQty, piAfter.items[0].balanceQty], [300, 0]);
   eq('PO received qty counted once', (await VendorPurchaseOrder.findById(poId).lean()).items[0].receivedQty, 300);
-  eq('exactly one GRN_IN of 300 kg', (await InventoryMovement.find({ refId: gid, txnType: TXN_TYPE.GRN_IN }).lean()).map((m) => m.quantity), [300]);
+  eq('no stock at GRN completion', (await grnInsOf(gid)).length, 0);
+  await signAndQc(gid, user);
+  eq('after MD + QC: exactly one GRN_IN of 300 kg', (await InventoryMovement.find({ refId: gid, txnType: TXN_TYPE.GRN_IN }).lean()).map((m) => m.quantity), [300]);
   return finish();
 };
 
@@ -645,7 +690,11 @@ const verify = async () => {
     const want = p.key === 'A7' ? 150 : p.lines[0].qty;
     check(`${p.key}: PO received qty booked back = GRN qty`, round2(po.items[0].receivedQty) === want, `${po.items[0].receivedQty}`);
     const mv = await InventoryMovement.find({ refId: g._id, txnType: TXN_TYPE.GRN_IN }).lean();
-    if (p.key === 'A6') continue; // asserted in --api (RM line OFF, consumable ON)
+    check(`${p.key} ${g.grnNumber}: QC-gated, MD signed, QC passed, every line Posted`,
+      g.stockPostingStage === 'QC_COMPLETION' && g.approvalStatus === 'MD_APPROVED' && g.qcStatus === 'PASSED'
+      && g.items.filter((i) => i.receivedQty > 0).every((i) => i.stockStatus === 'POSTED'),
+      `${g.stockPostingStage}/${g.approvalStatus}/${g.qcStatus}`);
+    if (p.key === 'A6') continue; // two lines (circle → PLG01, consumable → MAIN), asserted in --api
     check(`${p.key} ${g.grnNumber}: exactly one GRN_IN = ${want} kg, batch ${p.batch}, at ${p.at}`,
       mv.length === 1 && round2(mv[0].quantity) === want && mv[0].batchNo === p.batch && mv[0].warehouse === p.at && g.rmReceivedAtLocation === p.at,
       JSON.stringify(mv.map((m) => [m.quantity, m.batchNo, m.warehouse])));
@@ -703,8 +752,8 @@ const verify = async () => {
     circleRows.push({ sku: s.code, producedPcs: round2(ins.reduce((t, m) => t + m.quantity, 0)), producedKg: expKg, stockPcs: pcs, stockKg: kg });
     eq(`${s.code}: stock pcs = Σ CONVERT_IN pcs, stock kg = Σ CONVERT_IN kg`, [pcs, kg], [expPcs, expKg]);
   }
-  check('Add to RM Stock OFF: the circle received on A6 never entered stock',
-    (await InventoryMovement.countDocuments({ skuCode: 'JSL204-07-700', txnType: TXN_TYPE.GRN_IN })) === 0);
+  eq('the circle bought on A6 entered RM stock once, at QC (500 pcs @ PLG01)',
+    (await InventoryMovement.find({ skuCode: 'JSL204-07-700', txnType: TXN_TYPE.GRN_IN }).lean()).map((m) => [m.quantity, m.warehouse]), [[500, 'PLG01']]);
 
   /* Scrap */
   console.log('\n— scrap');

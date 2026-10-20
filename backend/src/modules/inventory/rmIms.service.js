@@ -23,6 +23,8 @@ import { inventoryService, combineStockRows, stockBySkuId } from './inventory.se
 // than growing a second implementation that could drift.
 import { imsService, resolveMaxLevel } from './ims.service.js';
 import { rmInTransitService } from './rmInTransit.service.js';
+import { awaitingQcBySku } from './awaitingQc.service.js';
+import { projectStockSeries, AWAITING_QC_DAY } from './stockProjection.js';
 import {
   checkSafetyFactor, checkStockInReason, STOCK_IN_REASONS,
   checkStockOutReason, STOCK_OUT_REASONS,
@@ -39,7 +41,7 @@ import SKU, { RM_ITEM_TYPES } from '../skus/sku.model.js';
 // Read-only, and the model only — never the GRN service. A coil receipt records
 // its indent on the GRN header and does not copy it onto the movement, so the
 // received-coil lookup reads it back from there.
-import GoodsReceiptNote from '../procurement/grn/grn.model.js';
+import GoodsReceiptNote, { GRN_STOCK_POSTING_STAGE, GRN_LINE_STOCK_STATUS } from '../procurement/grn/grn.model.js';
 import { AppError } from '../../utils/apiResponse.js';
 
 /**
@@ -183,6 +185,7 @@ const rmPolicyOrDefaults = (policy, sku = {}) => policy || {
  * @param {object} [ctx]
  *   measuredAdc?  the 90-day measured rate for this SKU (0 when none)
  *   openPo?       this SKU's open-PO row from rmInTransit.service, when any
+ *   awaitingQc?   this SKU's Awaiting QC row from awaitingQc.service, when any
  */
 export const deriveMetrics = (policy = {}, stock = {}, ctx = {}) => {
   const { adc, adcSource, plannedAdc, measuredAdc } = resolveActiveAdc(policy, ctx.measuredAdc);
@@ -209,8 +212,13 @@ export const deriveMetrics = (policy = {}, stock = {}, ctx = {}) => {
   const { maxLevel, formulaMaxLevel, storedMaxLevel, maxLevelMode, maxLevelInferred } = resolveMaxLevel(policy, adc);
   const safetyStock = round2(Math.max(0, maxLevel - leadTimeDemand));
   const reorderPoint = leadTimeDemand;
-  // Available to plan with = on-hand + in-transit − already booked.
-  const projectedAvailable = round2(onHand + inTransit - booked);
+  // Received on a completed GRN, QC not completed yet: not usable (never in
+  // onHand), no longer in transit (the PO counts it received), but still coming
+  // — so it is pipeline stock for the reorder decision, exactly as in-transit is.
+  // Before QC-gated posting this qty sat in onHand, so planning is unchanged.
+  const awaitingQc = round2(ctx.awaitingQc?.qty || 0);
+  // Available to plan with = on-hand + in-transit + awaiting QC − already booked.
+  const projectedAvailable = round2(onHand + inTransit + awaitingQc - booked);
   const daysCover = adc > 0 ? round2(onHand / adc) : null;
   // "Available in %" — the sheet's coloured % column, which is Total Available
   // Quantity ÷ Max Level (Inventory!Q = N/L×100). Deliberately NOT the projected
@@ -231,6 +239,7 @@ export const deriveMetrics = (policy = {}, stock = {}, ctx = {}) => {
   const rate = Number(policy.rate || stock.avgCost || 0);
   return {
     onHand, onHandKg, inTransit, booked, adc, leadDays, safetyFactor,
+    awaitingQc, awaitingQcGrnNumbers: ctx.awaitingQc?.grnNumbers || [],
     // Where each of the two figures that move the levels actually came from, so
     // no screen has to guess whether it is showing a measurement or a plan.
     adcSource, plannedAdc, measuredAdc, consumption90dDays: CONSUMPTION_WINDOW_DAYS,
@@ -483,12 +492,13 @@ export const rmImsService = {
     // Four grouped reads for the whole page — never one per row. The two
     // consumption aggregations are the Consumables pipeline, called with RM's
     // own SKU ids; the PO read is the procurement module, read-only.
-    const [stocks, policies, today, window90d, openPo] = await Promise.all([
+    const [stocks, policies, today, window90d, openPo, awaiting] = await Promise.all([
       InventoryStock.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
       imsService._todayConsumptionBySku(ids),
       imsService._consumptionBySku90d(ids),
       rmInTransitService.getOpenPoBySku(skus),
+      awaitingQcBySku(ids),
     ]);
     // Every warehouse a SKU is stocked in, folded into one figure. Keying the
     // Map by skuId alone kept only the LAST row, so the day anything is received
@@ -505,6 +515,7 @@ export const rmImsService = {
       const m = deriveMetrics(policy, stock, {
         measuredAdc: adcFrom(bucket90d),
         openPo: openPo.bySkuId.get(key) || null,
+        awaitingQc: awaiting.get(key) || null,
       });
       // TODAY'S measured consumption — a different question and a different
       // aggregation from the 90-day average. Absent means nothing was issued
@@ -579,34 +590,24 @@ export const rmImsService = {
     // Same combined stock, the same policy defaults, the same measured rate and
     // the same open-PO figure the stock list uses, so the projection cannot
     // disagree with the row it was opened from.
-    const [measuredAdc, openPo] = await Promise.all([
+    const [measuredAdc, openPo, awaiting] = await Promise.all([
       this._measuredAdcForSku(skuId),
       rmInTransitService.getOpenPoBySku([{ _id: sku._id, code: sku.code }]),
+      awaitingQcBySku([skuId]),
     ]);
     const m = deriveMetrics(rmPolicyOrDefaults(policy, sku), combineStockRows(stocks), {
-      measuredAdc, openPo: openPo.bySkuId.get(String(skuId)) || null,
+      measuredAdc, openPo: openPo.bySkuId.get(String(skuId)) || null, awaitingQc: awaiting.get(String(skuId)) || null,
     });
     const n = Math.min(Math.max(Number(days) || 30, 7), 120);
-
-    const series = [];
-    let projected = m.onHand;
-    let reorderDay = null;
-    let stockoutDay = null;
-    const today = new Date();
-    for (let d = 0; d <= n; d += 1) {
-      const date = new Date(today.getTime() + d * 86400000);
-      if (m.inTransit > 0 && d === Math.round(m.leadDays)) projected = round2(projected + m.inTransit);
-      if (d > 0) projected = round2(projected - m.adc);
-      const clamped = Math.max(0, projected);
-      if (reorderDay === null && clamped <= m.reorderPoint) reorderDay = d;
-      if (stockoutDay === null && clamped <= 0) stockoutDay = d;
-      series.push({ day: d, date, projected: clamped });
-    }
+    // Shared with the Consumables forecast: on hand, + Awaiting QC the next
+    // day, + in transit after the lead time, − ADC each day.
+    const { series, reorderDay, stockoutDay } = projectStockSeries({ ...m, days: n });
     return {
       sku: { skuId: sku._id, skuCode: sku.code, skuName: sku.name, unit: sku.unit, category: sku.category, kind: kindOf(sku.itemType) },
       // Whether the levels above came from a real policy or from the fallback,
       // so the UI can say "not configured" instead of showing a default as data.
       metrics: { ...m, hasPolicy: !!policy },
+      awaitingQcDay: AWAITING_QC_DAY,
       reorderDay, stockoutDay, series,
     };
   },
@@ -625,7 +626,7 @@ export const rmImsService = {
       throw new AppError('That item is not a raw material.', 400);
     }
 
-    const [stocks, policy, measuredAdc, today, openPo, conversions] = await Promise.all([
+    const [stocks, policy, measuredAdc, today, openPo, conversions, awaiting] = await Promise.all([
       InventoryStock.find({ skuId, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
       this._measuredAdcForSku(skuId),
@@ -636,11 +637,14 @@ export const rmImsService = {
         isDeleted: { $ne: true },
         $or: [{ coilSkuId: skuId }, { 'circles.circleSkuId': skuId }],
       }).sort({ conversionDate: -1 }).limit(20).lean(),
+      awaitingQcBySku([skuId]),
     ]);
 
     const combined = combineStockRows(stocks);
     const po = openPo.bySkuId.get(String(skuId)) || null;
-    const m = deriveMetrics(rmPolicyOrDefaults(policy, sku), combined, { measuredAdc, openPo: po });
+    const m = deriveMetrics(rmPolicyOrDefaults(policy, sku), combined, {
+      measuredAdc, openPo: po, awaitingQc: awaiting.get(String(skuId)) || null,
+    });
     const consumedToday = today.get(String(skuId));
     const kind = kindOf(sku.itemType);
 
@@ -955,6 +959,14 @@ export const rmImsService = {
       ? `${STOCK_IN_REASONS.OTHER} — ${customReason}`
       : STOCK_IN_REASONS[reason];
 
+    // A coil received on a QC-gated GRN reaches stock only through its QC.
+    // Stocking the same batch in by hand would make it usable early and, once
+    // the QC posts, count it twice.
+    for (const it of items) {
+      const hit = await this._findQcPendingBatch(it.batchNo);
+      if (hit) throw new AppError(this._qcPendingBatchMessage(String(it.batchNo).trim(), hit), 409);
+    }
+
     // One unit of work: every line lands or none does, and a replayed submission
     // is recognised by its request id rather than adding stock twice. Same
     // helper Consumables and Finished Goods post through.
@@ -1161,6 +1173,43 @@ export const rmImsService = {
    * coil still has a receipt. Exact match first (indexed), then the anchored
    * case-insensitive retry, the same two-step the resolver uses.
    */
+  /**
+   * A batch that sits on a QC-gated GRN line whose stock is NOT usable: still
+   * AWAITING_QC, or NOT_POSTED because its QC accepted nothing. Read-only.
+   *
+   * Such a coil has no GRN_IN yet (or never will), so _findReceiptForBatch does
+   * not see it — and without this check it could be entered as a manual coil
+   * and cut, or stocked in by hand, before (or despite) its Incoming QC; the QC
+   * would then post the same physical coil a second time. Legacy GRNs are not
+   * looked at: they posted at completion and are covered by the receipt check.
+   *
+   * @returns {{ grnNumber, itemName, stockStatus } | null}
+   */
+  async _findQcPendingBatch(rawBatchNo, session) {
+    const batchNo = String(rawBatchNo || '').trim();
+    if (!batchNo) return null;
+    const anchored = new RegExp(`^${batchNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    const q = GoodsReceiptNote.findOne({
+      stockPostingStage: GRN_STOCK_POSTING_STAGE.QC_COMPLETION,
+      isDeleted: { $ne: true },
+      items: { $elemMatch: { batchNo: anchored, stockStatus: { $in: [GRN_LINE_STOCK_STATUS.AWAITING_QC, GRN_LINE_STOCK_STATUS.NOT_POSTED] } } },
+    }).select('grnNumber items.batchNo items.itemName items.stockStatus');
+    if (session) q.session(session);
+    const grn = await q.lean();
+    if (!grn) return null;
+    const line = grn.items.find((l) => anchored.test(l.batchNo || '')
+      && [GRN_LINE_STOCK_STATUS.AWAITING_QC, GRN_LINE_STOCK_STATUS.NOT_POSTED].includes(l.stockStatus));
+    return { grnNumber: grn.grnNumber, itemName: line?.itemName || '', stockStatus: line?.stockStatus || '' };
+  },
+
+  /** The operator-facing refusal for _findQcPendingBatch. */
+  _qcPendingBatchMessage(batchNo, hit) {
+    return hit.stockStatus === GRN_LINE_STOCK_STATUS.AWAITING_QC
+      ? `Batch ${batchNo} was received on ${hit.grnNumber} and is awaiting Incoming QC — it is not usable stock yet. `
+        + 'It becomes available (and can be cut) when its QC is completed.'
+      : `Batch ${batchNo} was received on ${hit.grnNumber} and its Incoming QC accepted none of it — it never entered stock and cannot be used.`;
+  },
+
   async _findReceiptForBatch(rawBatchNo, session) {
     const batchNo = String(rawBatchNo || '').trim();
     if (!batchNo) return null;
@@ -1220,12 +1269,16 @@ export const rmImsService = {
   async lookupManualCoil(query = {}) {
     const batchNo = String(query.batchNo || '').trim();
     if (!batchNo) throw new AppError('Enter a batch number.', 400);
-    const [mc, receipt] = await Promise.all([
+    const [mc, receipt, qcPending] = await Promise.all([
       ManualCoil.findOne({ batchKey: manualBatchKey(batchNo), isDeleted: { $ne: true } }).lean(),
       this._findReceiptForBatch(batchNo),
+      this._findQcPendingBatch(batchNo),
     ]);
     return {
       manualCoil: mc ? await this._manualCoilFacts(mc) : null,
+      // Received on a QC-gated GRN, not usable (QC pending / rejected) — the
+      // save refuses manual entry for it; this lets the screen say why first.
+      qcPending: qcPending ? { ...qcPending, message: this._qcPendingBatchMessage(batchNo, qcPending) } : null,
       grnReceipt: receipt
         ? {
           movementId: receipt._id,
@@ -1484,6 +1537,10 @@ export const rmImsService = {
                 409,
               );
             }
+            // Received on a GRN but not usable yet (QC pending) or never
+            // (rejected at QC): manual entry must not become a way round QC.
+            const qcHit = await rmImsService._findQcPendingBatch(newManualBatch, session);
+            if (qcHit) throw new AppError(rmImsService._qcPendingBatchMessage(newManualBatch, qcHit), 409);
           }
 
           const originalKg = manualCoil ? Number(manualCoil.originalWeightKg) : newManualTotal;

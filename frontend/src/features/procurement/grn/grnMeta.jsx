@@ -11,7 +11,8 @@ export const HOW_ITEM_RECEIVED = [
 
 // Draft = editable / deletable / completable (mirrors the server's open-draft guard).
 export const isGrnDraft = (grn) => grn?.grnStatus === 'DRAFT' && !grn?.stockPosted;
-// Completed ("Complete & Post Stock" done) — stock posted, read-only for good.
+// Completed ("Complete GRN" done) — read-only for good. Stock posts at QC
+// (GRNs completed before QC-gated posting posted it here).
 export const isGrnCompleted = (grn) => ['RECEIVED', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(grn?.grnStatus);
 
 export const GrnStatusChip = ({ status }) => <StatusChip status={status} />;

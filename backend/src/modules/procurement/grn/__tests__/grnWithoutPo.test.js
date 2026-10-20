@@ -23,18 +23,17 @@ const baseWopo = {
   isWithoutPo: true,
   vendorId: VENDOR_ID,
   vendorName: 'Walk-in Supplier',
-  inventoryType: 'CONSUMABLE_PACKAGING',
   items: [{ itemName: 'Bolt M8', skuId: SKU_ID, receivedQty: 10 }],
 };
 
 test('a normal (PO-based) create still requires a PO (poId or poIds) — unchanged default behaviour', () => {
-  const { error } = createGrnSchema.validate({ inventoryType: 'CONSUMABLE_PACKAGING' });
+  const { error } = createGrnSchema.validate({});
   assert.ok(error);
   assert.match(error.message, /Purchase Order/);
 });
 
 test('isWithoutPo defaults to false when omitted', () => {
-  const { value } = createGrnSchema.validate({ poId: PO_ID, inventoryType: 'CONSUMABLE_PACKAGING' });
+  const { value } = createGrnSchema.validate({ poId: PO_ID });
   assert.equal(value.isWithoutPo, false);
 });
 
@@ -58,11 +57,13 @@ test('a W/O PO create requires at least one item — there is no PO to auto-load
   assert.ok(emptyError);
 });
 
-test('a W/O PO create still runs every other GRN rule (Inventory Type required)', () => {
-  const { inventoryType, ...rest } = baseWopo;
-  const { error } = createGrnSchema.validate(rest);
-  assert.ok(error);
-  assert.match(error.message, /Inventory Type/);
+test('a W/O PO create no longer asks for a manual Inventory Type — destinations come from the SKU master', () => {
+  // The retired field is not part of the contract any more; validate.js strips
+  // it (stripUnknown) so an older client that still sends it is not refused.
+  assert.equal(createGrnSchema.validate(baseWopo).error, undefined);
+  const { error, value } = createGrnSchema.validate({ ...baseWopo, inventoryType: 'RM' }, { stripUnknown: true });
+  assert.equal(error, undefined);
+  assert.equal('inventoryType' in value, false);
 });
 
 test('an explicit poId is tolerated (but not required) on a W/O PO create', () => {

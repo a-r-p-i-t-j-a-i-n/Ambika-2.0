@@ -1,5 +1,6 @@
 import * as skuService from './sku.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { userHasPermission } from '../../middleware/permission.middleware.js';
 
 export const createSku = async (req, res) => {
   const sku = await skuService.createSku(req.body, req.user?._id);
@@ -17,7 +18,9 @@ export const getSkuById = async (req, res) => {
 };
 
 export const updateSku = async (req, res) => {
-  const sku = await skuService.updateSku(req.params.id, req.body, req.user?._id);
+  const sku = await skuService.updateSku(req.params.id, req.body, req.user?._id, {
+    canReclassify: userHasPermission(req, 'masters.editSku'),
+  });
   res.json(ApiResponse.ok('SKU updated successfully', sku));
 };
 

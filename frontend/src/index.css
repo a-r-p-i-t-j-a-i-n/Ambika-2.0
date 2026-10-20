@@ -23,9 +23,13 @@ html, body {
   color: #0b2545;
 }
 
+/* 100%, never 100vw: 100vw includes the vertical scrollbar, so on any page
+   tall enough to scroll the shell was a scrollbar's width wider than the
+   window — a browser-level horizontal scrollbar, and a left-right jump when
+   moving between short and tall pages. */
 #root {
-  width: 100vw !important;
-  max-width: 100vw !important;
+  width: 100% !important;
+  max-width: 100% !important;
   margin: 0 !important;
   padding: 0 !important;
   text-align: left !important;

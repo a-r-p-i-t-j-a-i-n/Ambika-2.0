@@ -15,8 +15,12 @@ import { FIELD } from './imsFieldHelp';
 
 const H = FIELD.ims;
 
+// "Vendor receipt" is deliberately NOT here any more: material received from a
+// supplier is recorded as a GRN, signed by the MD and accepted by Incoming QC,
+// which posts it to this store by itself. Typing it here as well created
+// unchecked stock and a second movement for one physical delivery. Movements
+// already posted under the old reason keep their label in History.
 const REASONS = [
-  { value: 'VENDOR_RECEIPT', label: 'Vendor receipt', hint: 'Material physically received from a supplier against a bill or challan.' },
   { value: 'OPENING_STOCK', label: 'Opening stock', hint: 'The stock that already existed when you started using IMS.' },
   { value: 'CORRECTION_ADJUSTMENT', label: 'Correction / adjustment', hint: 'Fixing a counting mistake so the system matches the physical store.' },
   // Anything that is none of the above. Rather than minting a new code per
@@ -51,7 +55,10 @@ const ImsStockIn = () => {
 
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
   // The Reason field's raw text. Everything else about the reason is derived.
-  const [reasonText, setReasonText] = useState(REASONS[0].label);
+  // Empty on purpose: 'Opening stock' and 'Correction / adjustment' mean very
+  // different things in History, so the operator picks one rather than
+  // inheriting whichever happens to be first. Submit stays disabled until then.
+  const [reasonText, setReasonText] = useState('');
   // Selecting "Other" is a mode switch, not a value — see onInputChange below.
   const otherJustPicked = useRef(false);
   const [reference, setReference] = useState('');
@@ -92,7 +99,7 @@ const ImsStockIn = () => {
       enqueueSnackbar(res?.data?.duplicate
         ? 'Already recorded — this receipt was submitted twice, so stock was not added again.'
         : `Stock added for ${res?.data?.count || lines.length} item(s).`, { variant: 'success' });
-      setLines([]); setReference(''); setReasonText(REASONS[0].label);
+      setLines([]); setReference(''); setReasonText('');
       requestId.current = newRequestId();
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not add stock.', { variant: 'error' }); }
   };
@@ -170,7 +177,7 @@ const ImsStockIn = () => {
                 placeholder="Pick one, or type your own reason…"
                 error={reasonError}
                 helperText={
-                  !reasonText.trim() ? 'Reason is required — pick one from the list or type your own.'
+                  !reasonText.trim() ? 'Reason is required — pick one. Material received from a supplier is not entered here: raise a GRN, and its Incoming QC adds the accepted quantity to this store.'
                     : !picked.ok ? 'Type your own reason here, in place of "Other".'
                       : picked.custom ? 'Saved as a custom reason and shown in History.'
                         : picked.hint

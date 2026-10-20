@@ -89,6 +89,19 @@ export const assertE2ESafe = (uri, label = 'e2e') => {
     console.error(`  Blank these for the process: ${E2E_BLANK_VARS.map((k) => `${k}=`).join(' ')}\n`);
     process.exit(1);
   }
+
+  // Posting QC-accepted stock refuses to run without a transaction, and a
+  // standalone mongod has none (MongoDB only offers them on a replica set).
+  // Most scratch databases here are standalone :27017, so the harness opts
+  // into the non-atomic fallback for itself — it has just proven it is pointed
+  // at a throwaway local database whose name contains "e2e". A server holding
+  // real stock never reaches this line, so it keeps refusing instead.
+  // Suites that must prove atomicity (QC-gated posting, fullIms) run against a
+  // local replica set, where the flag is never consulted.
+  if (!process.env.INVENTORY_ALLOW_NON_ATOMIC) process.env.INVENTORY_ALLOW_NON_ATOMIC = 'true';
+  line('ATOMICITY', process.env.INVENTORY_ALLOW_NON_ATOMIC === 'true'
+    ? 'non-atomic fallback ALLOWED (scratch DB) — a real deployment refuses it and needs a replica set'
+    : 'transactions required');
   return r;
 };
 

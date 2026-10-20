@@ -10,8 +10,9 @@
  *
  * HOW THE RECORDS ARE MADE
  * Nothing transactional is written by hand. Each GRN is raised as a DRAFT on a
- * PO and then completed through grnService.complete() — the same call the GRN
- * Complete dialog makes — so the GRN_IN movement, the stock balance, the
+ * PO, completed through grnService.complete() — the same call the GRN Complete
+ * dialog makes — then MD-signed and QC-accepted through incomingQcService (see
+ * e2eGrnLifecycle.js; stock posts at QC since QC-gated posting), so the GRN_IN movement, the stock balance, the
  * stockPosted flag and the Received At location are exactly what the app
  * itself writes. The cutting history on four of the coils is saved through
  * rmImsService.convert(), the Cut Coils save, so conversions, circle stock,
@@ -43,7 +44,7 @@ import User from '../modules/auth/auth.model.js';
 import SKU from '../modules/skus/sku.model.js';
 import VendorPurchaseOrder from '../modules/procurement/purchase-order/purchaseOrder.model.js';
 import GoodsReceiptNote, { GRN_STATUS } from '../modules/procurement/grn/grn.model.js';
-import { grnService } from '../modules/procurement/grn/grn.service.js';
+import { completeGrnThroughQc } from './e2eGrnLifecycle.js';
 import InventoryMovement, { TXN_TYPE } from '../modules/inventory/inventoryMovement.model.js';
 import InventoryStock from '../modules/inventory/inventoryStock.model.js';
 import InventoryRequestKey from '../modules/inventory/inventoryRequestKey.model.js';
@@ -202,8 +203,9 @@ const ensureGrn = async (g, { user, skus }) => {
     await register('GoodsReceiptNote', grn._id);
   }
   // A DRAFT left by an interrupted run is completed now; complete() itself
-  // refuses a second posting, so this cannot double the stock.
-  const done = await grnService.complete(grn._id, { addToRmStock: true, rmReceivedAtLocation: g.at }, user);
+  // refuses a second completion, so this cannot double the stock. Since
+  // QC-gated posting the coil reaches stock when its Incoming QC completes.
+  const done = await completeGrnThroughQc(grn._id, user, { rmReceivedAtLocation: g.at });
   return { grn: done, created: true };
 };
 

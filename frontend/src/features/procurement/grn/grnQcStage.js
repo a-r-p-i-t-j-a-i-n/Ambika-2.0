@@ -5,11 +5,12 @@
  * the absence of a QC record is never read as "QC done".
  *
  * Mirrors the server's gates (incomingQc.service create): QC needs a completed
- * GRN (stock posted) that the MD has digitally signed. Nothing here relaxes them.
+ * GRN that the MD has digitally signed. Nothing here relaxes them. Stock is
+ * posted when the QC completes (GRNs completed earlier posted at completion).
  *
  *   NOT_SAVED      GRN not saved yet (Create GRN form) — no QC possible
  *   CANCELLED      GRN cancelled — no QC
- *   GRN_DRAFT      GRN saved but not completed — complete & post stock first
+ *   GRN_DRAFT      GRN saved but not completed — complete the GRN first
  *   AWAITING_MD    completed, waiting for the MD signature
  *   QC_READY       signed, no QC yet — the form is open
  *   QC_DRAFT       signed, a draft / in-progress QC exists — resume it
@@ -33,7 +34,7 @@ export const resolveGrnQcStage = (grn, qc = null) => {
     return {
       key: 'NOT_SAVED', editable: false, label: 'QC Not Started', tone: 'neutral',
       title: 'Incoming QC has not started',
-      desc: 'Save this GRN first. Incoming QC is recorded on the GRN page once the GRN is completed (stock posted) and signed by the MD.',
+      desc: 'Save this GRN first. Incoming QC is recorded on the GRN page once the GRN is completed and signed by the MD.',
     };
   }
   if (grn.grnStatus === 'CANCELLED') {
@@ -43,7 +44,7 @@ export const resolveGrnQcStage = (grn, qc = null) => {
     return {
       key: 'GRN_DRAFT', editable: false, label: 'QC Pending', tone: 'amber',
       title: 'Complete the GRN first',
-      desc: 'Incoming QC opens once the GRN is completed (Complete & Post Stock) and digitally signed by the MD.',
+      desc: 'Incoming QC opens once the GRN is completed and digitally signed by the MD. Stock is posted when the QC is completed.',
     };
   }
   if (qc && QC_COMPLETED.includes(qc.qcStatus)) return { key: 'QC_DONE', editable: false, ...DONE_LABEL[qc.qcStatus] };

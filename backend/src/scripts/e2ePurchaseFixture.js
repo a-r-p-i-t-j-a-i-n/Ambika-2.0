@@ -27,6 +27,7 @@ import AdvancePayment from '../modules/procurement/advance-payment/advancePaymen
 import PurchaseFollowUp from '../modules/procurement/follow-up/followUp.model.js';
 import InventoryMovement from '../modules/inventory/inventoryMovement.model.js';
 import InventoryStock from '../modules/inventory/inventoryStock.model.js';
+import IncomingQC from '../modules/procurement/incoming-qc/incomingQc.model.js';
 
 export const E2E_URI = 'mongodb://127.0.0.1:27017/ambika_e2e_purchase';
 // Local scratch DB, S3 off, email off — or stop before anything connects.
@@ -98,12 +99,21 @@ const verify = async () => {
   const g = grns[0];
   if (g) {
     const mv = await InventoryMovement.find({ refId: g._id }).lean();
-    check('two simultaneous completions → ONE GRN_IN (500 kg) and nothing else', mv.length === 1 && mv[0].txnType === 'GRN_IN' && mv[0].quantity === 500, JSON.stringify(mv.map((m) => [m.txnType, m.quantity])));
-    check('GRN completed once: stockPosted, one COMPLETE in its timeline', g.stockPosted === true && (g.activityTimeline || []).filter((t) => t.action === 'COMPLETE').length === 1);
+    const qcs = await IncomingQC.find({ grnId: g._id }).lean();
+    check('GRN completed once: one COMPLETE in its timeline, QC-gated', g.stockPosted === true && g.stockPostingStage === 'QC_COMPLETION'
+      && (g.activityTimeline || []).filter((t) => t.action === 'COMPLETE').length === 1);
+    check('MD-signed, one QC, PASSED', g.approvalStatus === 'MD_APPROVED' && qcs.length === 1 && qcs[0].qcStatus === 'PASSED', `${g.approvalStatus} ${qcs.map((q) => q.qcStatus)}`);
+    check('two simultaneous completions + a double-clicked QC → ONE GRN_IN (500 kg at PLG01) and nothing else',
+      mv.length === 1 && mv[0].txnType === 'GRN_IN' && mv[0].quantity === 500 && mv[0].warehouse === 'PLG01', JSON.stringify(mv.map((m) => [m.txnType, m.quantity, m.warehouse])));
+    check('…posted at QC completion, not at GRN completion', !!mv[0] && !!qcs[0] && Math.abs(new Date(mv[0].movementDate) - new Date(qcs[0].completedAt)) < 5
+      && new Date(mv[0].createdAt) >= new Date(g.completedAt));
     const poA = await VendorPurchaseOrder.findById(pos[0]._id).lean();
     check('PO A received 500 once (not 1,000), FULLY_RECEIVED', poA.items[0].receivedQty === 500 && poA.poStatus === 'FULLY_RECEIVED', `${poA.items[0].receivedQty} ${poA.poStatus}`);
     check('PO A timeline: one GRN_RECEIVED', (poA.activityTimeline || []).filter((t) => t.action === 'GRN_RECEIVED').length === 1);
   }
+  const quick = await SKU.findOne({ code: 'E2E-UI-NEWPROD' }).lean();
+  check('indent quick-add created its SKU with the Item Type chosen (CONSUMABLE), once', quick?.itemType === 'CONSUMABLE'
+    && (await SKU.countDocuments({ code: 'E2E-UI-NEWPROD' })) === 1, quick?.itemType);
   const allMv = await InventoryMovement.countDocuments({});
   check('no stock anywhere except that one GRN — purchase alone created none', allMv === 1, `${allMv} movements`);
   const stock = await InventoryStock.find({}).lean();

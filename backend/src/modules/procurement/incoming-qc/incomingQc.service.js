@@ -2,7 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import PDFDocument from 'pdfkit';
 import IncomingQC, { QC_STATUS, QC_RESULT, QC_SOURCE_TYPE } from './incomingQc.model.js';
-import GoodsReceiptNote, { GRN_STATUS, GRN_QC_STATUS } from '../grn/grn.model.js';
+import GoodsReceiptNote, {
+  GRN_STATUS, GRN_QC_STATUS, GRN_STOCK_POSTING_STAGE, GRN_LINE_STOCK_STATUS,
+} from '../grn/grn.model.js';
 import VendorPurchaseOrder from '../purchase-order/purchaseOrder.model.js';
 import ServiceCompletion, { SERVICE_COMPLETION_STATUS, SERVICE_QC_STATUS } from '../service-completion/serviceCompletion.model.js';
 import PurchaseIndent, { INDENT_OVERALL_STATUS, INDENT_REQUEST_TYPE } from '../indent/indent.model.js';
@@ -161,6 +163,109 @@ export const planRejectStockOut = ({ qcItems = [], grnItems = [], receipts = [] 
     steps.push({
       item, post: true, skuId: receipt.skuId, warehouse: receipt.warehouse, batchNo: receipt.batchNo || '', receiptId: receipt._id,
     });
+  }
+  return { steps, errors };
+};
+
+// ── QC-gated stock posting (GRN stockPostingStage QC_COMPLETION) ─────────────
+
+/** True when this GRN posts its stock at QC completion (every GRN completed since the change). */
+export const isQcGatedGrn = (grn) => grn?.stockPostingStage === GRN_STOCK_POSTING_STAGE.QC_COMPLETION;
+
+/** True when a GRN covers more than one PO — and so gets one QC per PO. */
+const isMultiPoGrn = (grn) => (grn?.poIds?.length || 0) > 1;
+
+/**
+ * The received GRN lines one QC inspects: every received line, or on a
+ * multi-PO GRN only the lines of the QC's own PO. Pure.
+ */
+export const qcScopeLines = (grn, poId) => (grn?.items || []).filter((it) => round2(it.receivedQty) > 0
+  && (!isMultiPoGrn(grn) || !poId || String(it.poId) === String(poId)));
+
+/**
+ * Which other QC of the same GRN makes this one a duplicate. A single-PO (or
+ * W/O PO) GRN gets exactly one QC result, so any other completed QC on it is a
+ * duplicate — the safeguard against moving the same stock twice. A multi-PO GRN
+ * gets one QC per PO, so only a completed QC for the SAME PO is a duplicate:
+ * scoping the guard to the whole GRN refused every PO after the first. Pure.
+ */
+export const duplicateQcFilter = (grn, qc) => ({
+  grnId: qc.grnId,
+  _id: { $ne: qc._id },
+  isDeleted: { $ne: true },
+  qcStatus: { $in: [QC_STATUS.PASSED, QC_STATUS.FAILED, QC_STATUS.PARTIAL] },
+  ...(isMultiPoGrn(grn) ? { poId: qc.poId } : {}),
+});
+
+const INSPECTION_FIELDS = ['acceptedQty', 'rejectedQty', 'reworkQty', 'defectType', 'defectSeverity', 'defectRemarks', 'qcRemarks'];
+
+/**
+ * QC lines for a QC-gated GRN, rebuilt from the GRN. Pure.
+ *
+ * Received qty, SKU, batch and unit always come from the GRN line, never from
+ * the request — on these GRNs the accepted qty becomes stock, so a QC line must
+ * never claim more than was received. Only the inspection result (accepted /
+ * rejected / rework / defects) is taken from `items`. Every received line in
+ * scope must be inspected exactly once: an uninspected line can never post.
+ *
+ * @param items       QC lines as sent (each with grnItemId), or null for "default all accepted"
+ * @param scopeLines  qcScopeLines(grn, poId)
+ * @returns {{ items: object[], errors: string[] }}
+ */
+export const qcItemsFromGrn = ({ items = null, scopeLines = [] }) => {
+  const errors = [];
+  const sent = new Map();
+  for (const it of items || []) {
+    const key = String(it.grnItemId || '');
+    const line = scopeLines.find((g) => String(g._id) === key);
+    if (!line) { errors.push(`"${it.itemName || 'item'}" is not a received line of this GRN${key ? '' : ' (no GRN line reference)'}`); continue; }
+    if (sent.has(key)) { errors.push(`"${line.itemName}" is inspected more than once`); continue; }
+    sent.set(key, it);
+  }
+  const out = scopeLines.map((g) => {
+    const base = {
+      grnItemId: g._id, skuId: g.skuId, skuCode: g.skuCode || '', itemName: g.itemName, unit: g.unit || 'Pcs',
+      batchNo: g.batchNo || '', receivedQty: round2(g.receivedQty), shortQty: g.shortQty || 0,
+      acceptedQty: round2(g.receivedQty), rejectedQty: 0, reworkQty: 0,
+    };
+    if (!items) return base;
+    const it = sent.get(String(g._id));
+    if (!it) { errors.push(`"${g.itemName}" has not been inspected — every received line must be accepted or rejected`); return base; }
+    return { ...base, ...Object.fromEntries(INSPECTION_FIELDS.filter((f) => it[f] !== undefined).map((f) => [f, it[f]])) };
+  });
+  return { items: out, errors };
+};
+
+/**
+ * What a QC-gated QC posts on completion. Pure.
+ *
+ * One step per QC line: the line's ACCEPTED qty posts to the warehouse fixed on
+ * its GRN line at GRN completion. Rejected and rework qty post nothing. Refuses
+ * (errors) rather than guesses whenever a line cannot be matched with certainty
+ * or has already been posted.
+ *
+ * @returns {{ steps: { item, grnLine, post, quantity }[], errors: string[] }}
+ */
+export const planAcceptedStockIn = ({ qcItems = [], scopeLines = [] }) => {
+  const steps = [];
+  const errors = [];
+  const rebuilt = qcItemsFromGrn({ items: qcItems, scopeLines });
+  if (rebuilt.errors.length) return { steps, errors: rebuilt.errors };
+  for (const item of qcItems) {
+    const grnLine = scopeLines.find((g) => String(g._id) === String(item.grnItemId));
+    const name = grnLine.itemName;
+    if (round2(item.receivedQty) !== round2(grnLine.receivedQty)) {
+      errors.push(`"${name}": QC received qty ${item.receivedQty} differs from the GRN's ${grnLine.receivedQty}`); continue;
+    }
+    const accepted = round2(item.acceptedQty);
+    if (accepted < 0 || accepted > round2(grnLine.receivedQty)) { errors.push(`"${name}": accepted qty ${accepted} is outside 0–${grnLine.receivedQty}`); continue; }
+    if (grnLine.stockStatus !== GRN_LINE_STOCK_STATUS.AWAITING_QC || grnLine.movementId) {
+      errors.push(`"${name}": already posted to stock (${grnLine.movementNumber || grnLine.stockStatus || 'no QC-pending status'})`); continue;
+    }
+    if (!grnLine.skuId || !grnLine.inventoryDestination || !grnLine.stockWarehouse) {
+      errors.push(`"${name}": the GRN line has no inventory destination recorded`); continue;
+    }
+    steps.push({ item, grnLine, post: accepted > 0, quantity: accepted });
   }
   return { steps, errors };
 };
@@ -408,12 +513,21 @@ export const incomingQcService = {
     // scoped to the target PO's own lines on a multi-PO GRN.
     const grnLines = (grn.items || []).filter((it) => round2(it.receivedQty) > 0
       && (!targetPoId || poIds.length <= 1 || String(it.poId) === String(targetPoId)));
-    const sourceItems = data.items?.length ? data.items : grnLines
-      .map((it) => ({
-        grnItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
-        batchNo: it.batchNo || '', receivedQty: it.receivedQty, shortQty: it.shortQty || 0,
-        acceptedQty: it.receivedQty, rejectedQty: 0, reworkQty: 0,
-      }));
+    let sourceItems;
+    if (isQcGatedGrn(grn)) {
+      // The accepted qty of these lines becomes stock — lines and received qty
+      // always come from the GRN; only the inspection result is taken from the request.
+      const rebuilt = qcItemsFromGrn({ items: data.items?.length ? data.items : null, scopeLines: grnLines });
+      if (rebuilt.errors.length) throw new AppError(rebuilt.errors.join('; '), 400);
+      sourceItems = rebuilt.items;
+    } else {
+      sourceItems = data.items?.length ? data.items : grnLines
+        .map((it) => ({
+          grnItemId: it._id, skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
+          batchNo: it.batchNo || '', receivedQty: it.receivedQty, shortQty: it.shortQty || 0,
+          acceptedQty: it.receivedQty, rejectedQty: 0, reworkQty: 0,
+        }));
+    }
     if (!sourceItems.length) throw new AppError('This GRN has no received items to inspect', 400);
 
     const { lines, totals } = computeTotals(sourceItems);
@@ -499,7 +613,18 @@ export const incomingQcService = {
     Object.assign(qc, rest);
     if (qcReportDocument) qc.qcReportDocument = qcReportDocument.fileUrl ? { ...qcReportDocument, uploadedAt: new Date() } : {};
     if (items) {
-      const { lines, totals } = computeTotals(items);
+      let source = items;
+      // On a QC-gated GRN the accepted qty becomes stock: re-anchor the lines on
+      // the GRN so a QC can never claim more than was received.
+      if (qc.sourceType !== QC_SOURCE_TYPE.SERVICE && qc.grnId) {
+        const grn = await GoodsReceiptNote.findById(qc.grnId).select('items poIds poId stockPostingStage').lean();
+        if (isQcGatedGrn(grn)) {
+          const rebuilt = qcItemsFromGrn({ items, scopeLines: qcScopeLines(grn, qc.poId) });
+          if (rebuilt.errors.length) throw new AppError(rebuilt.errors.join('; '), 400);
+          source = rebuilt.items;
+        }
+      }
+      const { lines, totals } = computeTotals(source);
       qc.items = lines;
       Object.assign(qc, totals);
       if (qc.qcStatus === QC_STATUS.DRAFT) qc.qcStatus = QC_STATUS.IN_PROGRESS;
@@ -604,29 +729,33 @@ export const incomingQcService = {
 
     // PDF (non-fatal).
     try {
-      const { qcPdfUrl, qcPdfFileName } = await this.generatePdf(id);
-      qc.qcPdfUrl = qcPdfUrl;
-      qc.qcPdfFileName = qcPdfFileName;
+      await this.generatePdf(id);
     } catch (err) { logger.error(`[qc] PDF generation failed for ${qc.qcNumber}: ${err.message}`); }
 
-    return qc;
+    // The stored record — the QC-gated path completes a fresh copy of the QC,
+    // so the in-memory one this request loaded is not what was saved.
+    return IncomingQC.findById(qc._id);
   },
 
   /** complete() for a GRN QC — runs holding the GRN's QC lock. */
   async _completeGrnQcLocked(qc, data, user, { qcStatus, overallResult }) {
-    // A GRN gets one QC result. A second (historical duplicate) draft must not
-    // complete on top of it and move the rejected stock out again.
-    const done = await IncomingQC.findOne({
-      grnId: qc.grnId, _id: { $ne: qc._id }, isDeleted: { $ne: true },
-      qcStatus: { $in: [QC_STATUS.PASSED, QC_STATUS.FAILED, QC_STATUS.PARTIAL] },
-    }).select('qcNumber').lean();
+    const grn = await GoodsReceiptNote.findById(qc.grnId)
+      .select('grnNumber grnDate items poId poNumber poIds vendorId vendorName approvalStatus stockPostingStage').lean();
+    if (!grn) throw new AppError('The GRN for this QC was not found', 404);
+
+    // One QC result per GRN — per PO on a multi-PO GRN (see duplicateQcFilter).
+    // A second (historical duplicate) draft must not complete on top of it and
+    // move the same stock again.
+    const done = await IncomingQC.findOne(duplicateQcFilter(grn, qc)).select('qcNumber').lean();
     if (done) {
-      throw new AppError(`This GRN already has a completed QC (${done.qcNumber}). ${qc.qcNumber} is a duplicate — cancel it instead of completing it.`, 409);
+      const scope = isMultiPoGrn(grn) ? `This GRN's PO ${qc.poNumber || ''}`.trim() : 'This GRN';
+      throw new AppError(`${scope} already has a completed QC (${done.qcNumber}). ${qc.qcNumber} is a duplicate — cancel it instead of completing it.`, 409);
     }
 
+    if (isQcGatedGrn(grn)) return this._completeGatedGrnQcLocked(qc, grn, data, user, { qcStatus, overallResult });
+
+    // ── LEGACY GRN: its stock was posted at GRN completion ──
     // Where each rejected line's stock really is: its own GRN_IN receipt.
-    const grn = await GoodsReceiptNote.findById(qc.grnId).select('grnNumber items').lean();
-    if (!grn) throw new AppError('The GRN for this QC was not found', 404);
     const receipts = (await inventoryService.getMovementsByRef('GRN', grn._id))
       .filter((m) => m.txnType === 'GRN_IN' && m.movementType === 'IN');
     const { steps, errors } = planRejectStockOut({ qcItems: qc.items, grnItems: grn.items || [], receipts });
@@ -702,6 +831,145 @@ export const incomingQcService = {
     }
 
     // Rule 8: update the GRN's aggregate qcStatus + linkage.
+    try {
+      await recomputeGrnQcStatus(qc.grnId);
+    } catch (err) { logger.error(`[qc] GRN update failed for ${qc.grnId}: ${err.message}`); }
+  },
+
+  /**
+   * complete() for a QC-gated GRN (stockPostingStage QC_COMPLETION) — runs
+   * holding the GRN's QC lock. This is where the GRN's stock first becomes
+   * usable: each line's ACCEPTED qty posts as GRN_IN (refType GRN, so RM IMS,
+   * Cut Coils and batch history read it exactly like a legacy receipt), dated at
+   * QC completion, to the warehouse fixed on the GRN line. Rejected and rework
+   * qty never enter stock — the QC record keeps them.
+   *
+   * Duplicate protection, three layers deep:
+   *   1. the QC claim (stockPosted false→true) — a double click / retry of the
+   *      same QC is told it is already completed;
+   *   2. per GRN line, a conditional flip AWAITING_QC → POSTED / NOT_POSTED that
+   *      only succeeds while the line has no movementId — no other QC (or a
+   *      replay) can post the same line twice;
+   *   3. all of it, the movements and the QC's own status in ONE transaction, so
+   *      a failure part-way leaves nothing behind.
+   */
+  async _completeGatedGrnQcLocked(qc, grn, data, user, { qcStatus, overallResult }) {
+    // Usable stock needs BOTH the MD signature and the QC. create() already
+    // required the signature; it is checked again here because this is the
+    // moment stock is written.
+    if (grn.approvalStatus !== 'MD_APPROVED') {
+      throw new AppError('The GRN must be digitally signed by the MD before its QC can be completed and stock posted', 400);
+    }
+
+    const { steps, errors } = planAcceptedStockIn({ qcItems: qc.items, scopeLines: qcScopeLines(grn, qc.poId) });
+    if (errors.length) throw new AppError(`Cannot complete QC — ${errors.join('; ')}`, 409);
+
+    const claim = await IncomingQC.updateOne(
+      { _id: qc._id, stockPosted: { $ne: true }, qcStatus: { $in: [QC_STATUS.DRAFT, QC_STATUS.IN_PROGRESS] } },
+      { $set: { stockPosted: true } },
+    );
+    if (!claim.modifiedCount) throw new AppError('QC is already completed', 400);
+
+    const completedAt = new Date();
+    try {
+      await inventoryService.runAtomically(async (session) => {
+        const opts = session ? { session } : undefined;
+        // This callback can run more than once (a transaction replay, or the
+        // standalone fallback re-running it): every attempt works on a FRESH
+        // copy of the QC, never one an earlier attempt already changed.
+        const q = await IncomingQC.findById(qc._id).session(session || null);
+        const notes = [];
+        for (const step of steps) {
+          const { item, grnLine } = step;
+          // Layer 2: claim the GRN line itself. Fails when the line was posted
+          // meanwhile (or already holds a movement) — and aborts everything.
+          const flipped = await GoodsReceiptNote.updateOne(
+            {
+              _id: grn._id,
+              items: { $elemMatch: { _id: grnLine._id, stockStatus: GRN_LINE_STOCK_STATUS.AWAITING_QC, movementId: null } },
+            },
+            {
+              $set: {
+                'items.$.stockStatus': step.post ? GRN_LINE_STOCK_STATUS.POSTED : GRN_LINE_STOCK_STATUS.NOT_POSTED,
+                'items.$.postedQty': step.quantity,
+                'items.$.postedQcId': qc._id,
+                'items.$.stockPostedAt': completedAt,
+              },
+            },
+            opts,
+          );
+          if (flipped.modifiedCount !== 1) {
+            throw new AppError(`"${grnLine.itemName}" has already been posted to stock — nothing was posted for this QC`, 409);
+          }
+
+          const held = [
+            round2(item.rejectedQty) > 0 && `${round2(item.rejectedQty)} rejected`,
+            round2(item.reworkQty) > 0 && `${round2(item.reworkQty)} rework`,
+          ].filter(Boolean).join(', ');
+          if (!step.post) {
+            notes.push(`${grnLine.itemName}: nothing accepted — no stock posted${held ? ` (${held} kept out of stock)` : ''}`);
+            continue;
+          }
+
+          const { movement } = await inventoryService.increaseStock({
+            skuId: grnLine.skuId, skuCode: grnLine.skuCode, skuName: grnLine.itemName, unit: grnLine.unit,
+            warehouse: grnLine.stockWarehouse,
+            quantity: step.quantity,
+            unitCost: round2(grnLine.rate),
+            txnType: 'GRN_IN', sourceModule: 'PURCHASE_FMS',
+            refType: 'GRN', refId: grn._id, refNumber: grn.grnNumber,
+            batchNo: grnLine.batchNo || '',
+            vendorId: grn.vendorId, vendorName: grn.vendorName,
+            poId: grnLine.poId || grn.poId, poNumber: grnLine.poNumber || grn.poNumber,
+            piId: qc.piId, piNumber: qc.piNumber,
+            remarks: `Accepted at Incoming QC ${qc.qcNumber}`,
+            performedBy: user, movementDate: completedAt,
+          }, opts);
+
+          await GoodsReceiptNote.updateOne(
+            { _id: grn._id, 'items._id': grnLine._id },
+            { $set: { 'items.$.movementId': movement._id, 'items.$.movementNumber': movement.movementNumber } },
+            opts,
+          );
+          const qi = q.items.id(item._id);
+          qi.stockInMovementId = movement._id;
+          qi.stockInMovementNumber = movement.movementNumber;
+          notes.push(`${grnLine.itemName}: ${step.quantity} accepted → stock at ${grnLine.stockWarehouse} (${movement.movementNumber})`
+            + (held ? `; ${held} kept out of stock` : ''));
+        }
+
+        q.qcStatus = qcStatus;
+        q.overallResult = overallResult;
+        q.stockPosted = true;
+        q.completedAt = completedAt;
+        if (data.remarks) q.remarks = data.remarks;
+        q.updatedBy = user?._id;
+        q.activityTimeline.push({ action: 'COMPLETE', description: `QC completed — ${overallResult}`, actorId: user?._id });
+        for (const note of notes) q.activityTimeline.push({ action: 'STOCK_NOTE', description: note, actorId: user?._id });
+        await q.save(opts);
+      // This is the moment usable stock comes into existence: the movements,
+      // the balances, each GRN line's POSTED marker and the QC's own completion
+      // have to land together or not at all. A database without transactions
+      // cannot promise that, so the posting is refused there rather than run
+      // half way (see runAtomically — a replica set is required).
+      }, { requireTransaction: true });
+    } catch (err) {
+      // With transactions nothing landed, so the QC is handed back (still a
+      // draft) to be completed again. On a deployment without transactions a
+      // line may already be claimed — then the QC stays claimed so a retry can
+      // never post twice, and the state is logged for reconciliation.
+      const touched = await GoodsReceiptNote.exists({ _id: grn._id, 'items.postedQcId': qc._id }).catch(() => true);
+      if (!touched) {
+        await IncomingQC.updateOne(
+          { _id: qc._id, qcStatus: { $in: [QC_STATUS.DRAFT, QC_STATUS.IN_PROGRESS] } },
+          { $set: { stockPosted: false } },
+        ).catch(() => {});
+      } else {
+        logger.error(`[qc] ${qc.qcNumber}: completion failed part-way on ${grn.grnNumber} (GRN line(s) already claimed) — QC left claimed: ${err.message}`);
+      }
+      throw err;
+    }
+
     try {
       await recomputeGrnQcStatus(qc.grnId);
     } catch (err) { logger.error(`[qc] GRN update failed for ${qc.grnId}: ${err.message}`); }

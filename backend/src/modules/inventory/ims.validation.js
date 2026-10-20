@@ -131,6 +131,29 @@ export const STOCK_IN_REASONS = {
   OTHER:                 'Other',
 };
 
+/**
+ * Reasons that may no longer be used for a NEW Stock In, and why.
+ *
+ * VENDOR_RECEIPT is material arriving from a supplier, which is exactly what
+ * Purchase FMS owns: the GRN records the receipt, the MD signs it and Incoming
+ * QC decides how much is accepted — only then does it become usable stock.
+ * Typing the same delivery into Stock In created usable stock with no GRN, no
+ * signature and no QC, and (when the GRN was completed too) a second movement
+ * for one physical receipt.
+ *
+ * It stays in STOCK_IN_REASONS above because movements already posted under it
+ * must keep rendering their label in History — only new entries are refused.
+ * Opening stock, corrections and OTHER are untouched: they describe material
+ * that never came from a supplier delivery, and each still carries its own
+ * authorization and audit trail.
+ */
+export const RETIRED_STOCK_IN_REASONS = {
+  VENDOR_RECEIPT:
+    'Vendor receipt is not a Stock In reason any more — material received from a supplier must be entered as a GRN, so the MD can sign it and Incoming QC can accept it. '
+    + 'Raise a GRN against the Purchase Order (or a Without-PO GRN when there is no order); the accepted quantity is posted to this store automatically when its QC completes. '
+    + 'Use "Correction / adjustment" only to fix a counting mistake, and "Opening stock" only for material that was already in the store before IMS.',
+};
+
 // The codes the Stock-In form posted before this change. Still accepted and
 // mapped forward, so nothing that already speaks the old vocabulary breaks.
 const LEGACY_REASON_CODES = {
@@ -150,6 +173,13 @@ export const normalizeStockInReason = (value) => {
 export const checkStockInReason = (reason, customReason) => {
   const code = normalizeStockInReason(reason);
   const custom = String(customReason || '').trim();
+  // Refused before anything else: a supplier delivery belongs to Purchase FMS.
+  // normalizeStockInReason maps the older VENDOR code here too, and falls back
+  // to VENDOR_RECEIPT for an unrecognised one, so neither an older client build
+  // nor a stray code can post a vendor receipt around the GRN + QC route.
+  if (RETIRED_STOCK_IN_REASONS[code]) {
+    return { ok: false, message: RETIRED_STOCK_IN_REASONS[code] };
+  }
   if (code === 'OTHER' && !custom) {
     return { ok: false, message: 'Custom Reason is required when Reason is Other.' };
   }

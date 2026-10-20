@@ -607,7 +607,7 @@ const run = async () => {
   await histRow.waitFor({ timeout: 10000 }).catch(() => {});
   const hr = flat(await histRow.innerText().catch(() => ''));
   check('the history lists the manual coil as "Manual entry · No GRN" with 1,500 cut and 0 left',
-    /Manual entry No GRN/.test(hr) && /1,500 1,500 .* 0 Fully cut 3 rounds$/.test(hr), hr.slice(0, 260));
+    /3 rounds Manual entry No GRN/.test(hr) && /1,500 of 1,500 .* 0 Fully cut Physical coil$/.test(hr), hr.slice(0, 260));
   await F.getByTestId('manual-coil-banner').getByRole('button', { name: /view this coil's history/i }).click();
   await page.waitForURL(/\/rm-ims\/coil\//, { timeout: 10000 });
   await ready();

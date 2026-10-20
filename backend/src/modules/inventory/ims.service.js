@@ -3,7 +3,9 @@ import InventoryPolicy from './inventoryPolicy.model.js';
 import InventoryStock, { DEFAULT_WAREHOUSE } from './inventoryStock.model.js';
 import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.model.js';
 import { inventoryService, combineStockRows, stockBySkuId } from './inventory.service.js';
-import SKU from '../skus/sku.model.js';
+import { awaitingQcBySku } from './awaitingQc.service.js';
+import { projectStockSeries, AWAITING_QC_DAY } from './stockProjection.js';
+import SKU, { CP_IMS_ITEM_TYPES } from '../skus/sku.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import {
@@ -19,8 +21,9 @@ import {
  * same ledger so on-hand always reconciles with the movements.
  */
 
-// Item types this IMS covers (consumables & packaging).
-export const IMS_ITEM_TYPES = ['CONSUMABLE', 'PACKING', 'PACKAGING'];
+// Item types this IMS covers (consumables & packaging) — the same list the GRN
+// routes to this module (see inventoryDestinationOf in sku.model.js).
+export const IMS_ITEM_TYPES = CP_IMS_ITEM_TYPES;
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const rx = (s) => new RegExp(String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -147,8 +150,11 @@ const imsPolicyOrDefaults = (policy, sku = {}) => policy || {
   moq: 0, maxLevel: 0, maxLevelMode: 'AUTO', materialInTransit: 0, openingStock: 0, convertedItemName: '',
 };
 
-/** Stock status from on-hand + in-transit vs the policy thresholds. */
-const deriveMetrics = (policy = {}, stock = {}, calculatedAdc = 0) => {
+/**
+ * Stock status from on-hand + in-transit vs the policy thresholds.
+ * `awaitingQc` is the Awaiting QC row from awaitingQc.service (or null).
+ */
+const deriveMetrics = (policy = {}, stock = {}, calculatedAdc = 0, awaitingQcRow = null) => {
   // ADC is the MEASURED 90-day rate supplied by the caller, never
   // policy.averageDailyConsumption. That stored column is kept on the model for
   // backward compatibility but no longer drives anything IMS shows or computes.
@@ -165,7 +171,11 @@ const deriveMetrics = (policy = {}, stock = {}, calculatedAdc = 0) => {
   // Reorder point is lead-time demand only — deliberately free of the Safety
   // Factor, so changing the SF never moves "Reorder at".
   const reorderPoint = leadTimeDemand;                            // reorder when cover ≤ lead time
-  const projectedAvailable = round2(onHand + inTransit);
+  // Received on a completed GRN, QC not completed yet: not usable (never in
+  // onHand) but still coming — pipeline stock for the reorder decision, like
+  // in-transit. Before QC-gated posting this qty sat in onHand, so planning is unchanged.
+  const awaitingQc = round2(awaitingQcRow?.qty || 0);
+  const projectedAvailable = round2(onHand + inTransit + awaitingQc);
   const daysCover = adc > 0 ? round2(onHand / adc) : null;        // null = no consumption set
 
   let status = 'OK';
@@ -181,6 +191,7 @@ const deriveMetrics = (policy = {}, stock = {}, calculatedAdc = 0) => {
 
   return {
     onHand, inTransit, adc, leadDays, safetyFactor,
+    awaitingQc, awaitingQcGrnNumbers: awaitingQcRow?.grnNumbers || [],
     leadTimeDemand, safetyStock, reorderPoint, maxLevel,
     // Max-level provenance, so the UI can say when the Safety Factor is being
     // overruled instead of silently showing a number the formula did not make.
@@ -308,11 +319,12 @@ export const imsService = {
     const ids = skus.map((s) => s._id);
 
     // Two grouped aggregations for the whole page — never one per row.
-    const [stocks, policies, consumption, window90d] = await Promise.all([
+    const [stocks, policies, consumption, window90d, awaiting] = await Promise.all([
       InventoryStock.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
       InventoryPolicy.find({ skuId: { $in: ids }, isDeleted: { $ne: true } }).lean(),
       this._todayConsumptionBySku(ids),
       this._consumptionBySku90d(ids),
+      awaitingQcBySku(ids),
     ]);
     // Every warehouse a SKU is stocked in, folded into one figure — keying the
     // Map by skuId alone used to keep only the last row.
@@ -325,7 +337,7 @@ export const imsService = {
       // ADC, measured: 90-day consumption ÷ 90. Drives lead-time demand, reorder
       // point, max level and safety stock through the unchanged formulas.
       const bucket90d = window90d.get(String(sku._id));
-      const m = deriveMetrics(policy, stock, adcFrom(bucket90d));
+      const m = deriveMetrics(policy, stock, adcFrom(bucket90d), awaiting.get(String(sku._id)) || null);
       // TODAY'S measured consumption — a different question and a different
       // aggregation. Absent = nothing issued today, rendered as "—"; never
       // back-filled from earlier days and never divided by the window.
@@ -392,25 +404,14 @@ export const imsService = {
     // Same measured ADC, same combined stock and the same policy defaults the
     // stock list uses, so the projection cannot disagree with the row it was
     // opened from.
-    const m = deriveMetrics(imsPolicyOrDefaults(policy, sku), combineStockRows(stocks), await this._adcForSku(skuId));
+    const m = deriveMetrics(imsPolicyOrDefaults(policy, sku), combineStockRows(stocks), await this._adcForSku(skuId),
+      (await awaitingQcBySku([skuId])).get(String(skuId)) || null);
     const n = Math.min(Math.max(Number(days) || 30, 7), 120);
-
-    const series = [];
-    let projected = m.onHand;
-    let reorderDay = null;
-    let stockoutDay = null;
-    const today = new Date();
-    for (let d = 0; d <= n; d += 1) {
-      const date = new Date(today.getTime() + d * 86400000);
-      // Material-in-transit assumed to arrive after the lead time.
-      if (m.inTransit > 0 && d === Math.round(m.leadDays)) projected = round2(projected + m.inTransit);
-      if (d > 0) projected = round2(projected - m.adc);
-      const clamped = Math.max(0, projected);
-      if (reorderDay === null && clamped <= m.reorderPoint) reorderDay = d;
-      if (stockoutDay === null && clamped <= 0) stockoutDay = d;
-      series.push({ day: d, date, projected: clamped });
-    }
+    // Shared with the RM forecast: on hand, + Awaiting QC the next day,
+    // + in transit after the lead time, − ADC each day.
+    const { series, reorderDay, stockoutDay } = projectStockSeries({ ...m, days: n });
     return {
+      awaitingQcDay: AWAITING_QC_DAY,
       sku: { skuId: sku._id, skuCode: sku.code, skuName: sku.name, unit: sku.unit, category: sku.category },
       // Whether the levels above came from a policy or from the fallback, so the
       // item page can say "not configured" instead of showing a default as data.
@@ -433,7 +434,8 @@ export const imsService = {
       InventoryPolicy.findOne({ skuId, isDeleted: { $ne: true } }).lean(),
     ]);
     if (!sku) throw new AppError('Item not found', 404);
-    const m = deriveMetrics(imsPolicyOrDefaults(policy, sku), combineStockRows(stocks), await this._adcForSku(skuId));
+    const m = deriveMetrics(imsPolicyOrDefaults(policy, sku), combineStockRows(stocks), await this._adcForSku(skuId),
+      (await awaitingQcBySku([skuId])).get(String(skuId)) || null);
 
     // Resolve the [from, to] window as IST calendar days. Default: last 30 days.
     const todayKey = istDayKey(new Date());

@@ -6,11 +6,16 @@ const { Schema, model } = mongoose;
 /**
  * Incoming QC Check — Purchase FMS Step 1.9.
  *
- * Always linked to a completed GRN (GRN.qcStatus PENDING). On COMPLETE:
- *   • Accepted qty stays in stock (GRN already added it — no movement).
- *   • Rejected qty is moved OUT via inventoryService.decreaseStock()
- *     (txnType QC_REJECT_OUT) — never touching the inventory models directly.
- *   • Rework qty is held separately for a future rework flow.
+ * Always linked to a completed, MD-signed GRN (GRN.qcStatus PENDING). On
+ * COMPLETE, by the GRN's stockPostingStage:
+ *   QC_COMPLETION (every GRN completed since QC-gated posting)
+ *     • Accepted qty is POSTED to stock now (GRN_IN, dated at QC completion),
+ *       to the destination fixed on the GRN line — the first time it is usable.
+ *     • Rejected and rework qty never enter stock; the QC record keeps them.
+ *   LEGACY (GRN completed earlier — it already posted every received unit)
+ *     • Accepted qty stays in stock (no movement).
+ *     • Rejected qty is moved OUT via inventoryService.decreaseStock()
+ *       (txnType QC_REJECT_OUT); rework stays, exactly as before.
  * Then the GRN's qcStatus is updated. Sets the stage for Invoice / Debit Note.
  */
 
@@ -67,9 +72,15 @@ const qcItemSchema = new Schema({
   defectRemarks:  { type: String, trim: true, default: '' },
   qcRemarks:      { type: String, trim: true, default: '' },
 
-  // Set after rejected-qty stock-out (back-reference to the ledger row).
+  // LEGACY GRNs (stock posted at GRN completion): set after the rejected-qty
+  // stock-out (back-reference to the QC_REJECT_OUT ledger row).
   inventoryMovementId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement' },
   inventoryMovementNumber: { type: String, trim: true, default: '' },
+
+  // QC-gated GRNs (stockPostingStage QC_COMPLETION): set when this line's
+  // ACCEPTED qty is posted to stock (back-reference to the GRN_IN ledger row).
+  stockInMovementId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement' },
+  stockInMovementNumber: { type: String, trim: true, default: '' },
 }, { _id: true });
 
 const incomingQcSchema = new Schema({

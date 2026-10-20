@@ -184,7 +184,7 @@ const PurchaseOrderDetail = () => {
     if (!activeGrn) return null;
     if (activeGrn.grnStatus === 'DRAFT') {
       return {
-        tone: 'warning', text: 'A GRN has been created for this PO — complete it to post stock and update inventory.',
+        tone: 'warning', text: 'A GRN has been created for this PO — complete it, then the MD signs it and Incoming QC posts the accepted stock.',
         primary: { label: 'Complete GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnCompleteOpen(true) },
       };
     }

@@ -10,7 +10,9 @@
  *   A  quotation NOT required · PI not required        (500 kg)
  *   B  vendor quotation uploaded (Step 1.2 "Yes") → Step 1.3 approved · PI not required  (400 kg)
  *   C  quotation not required · PI → PI approved → full advance payment  (300 kg)
- * Then: one GRN on A's PO, completed from TWO browser contexts at the same moment.
+ * Then: one GRN on A's PO, completed from TWO browser contexts at the same moment
+ * (no stock yet — the receipt waits for QC), then MD-signed and QC'd: only then
+ * does the accepted coil become stock, exactly once.
  *
  * Expects: backend :5099 (ambika_e2e_purchase, via e2eServer.js), frontend :3100.
  */
@@ -18,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
+import { signAndCompleteQc } from './_grnLifecycle.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -177,6 +180,9 @@ const run = async () => {
     d = dialog();
     const vendorVal = await d.getByLabel(/Vendor \*/).first().inputValue().catch(() => '');
     check(`${key}: PO form preselects the approved item and the only supplier for this SKU`, vendorVal.includes(SUPPLIER), vendorVal);
+    // Expected Delivery Date became mandatory on the PO form (79e4f4f); this
+    // spec never filled it, so it stopped at this step even at HEAD 3310fe7.
+    await typeDate(/Expected Delivery/, d);
     await shot(`${key}-po-form`);
     await d.getByRole('button', { name: /^Save as Draft$/ }).click();
     check(`${key}: PO saved as draft`, await toast(/saved as draft/i));
@@ -236,11 +242,9 @@ const run = async () => {
     check(`${key}: PO PI status = ${pi ? 'Payment Completed' : 'PI Not Required'}`, po?.piStatus === (pi ? 'PAYMENT_COMPLETED' : 'PI_NOT_REQUIRED'), po?.piStatus);
 
     /* follow-up → ready for GRN */
-    await btn(/^Create Follow-up$/).click();
-    await page.waitForTimeout(700);
-    await dialog().getByRole('button', { name: /^Create Follow-up$/ }).click();
-    check(`${key}: follow-up created`, await toast(/Follow-up .* created/));
-    await fresh();
+    // With the PO's (now mandatory) Expected Delivery Date, "Update Follow-up"
+    // creates the follow-up itself and opens its done dialog; the separate
+    // "Create Follow-up" form is only for legacy POs without that date.
     await btn(/^Update Follow-up$/).click();
     await page.waitForTimeout(700);
     await typeDate(/Final Date of Material/);
@@ -257,6 +261,36 @@ const run = async () => {
     return po;
   };
 
+  /* ── Indent quick-add: the new SKU's Item Type must be chosen ── */
+  // It decides where purchased stock is posted (RM IMS / C&P IMS / main store),
+  // so nothing is pre-selected. Done in a throwaway indent drawer (cancelled) so
+  // the indents the branches below raise are untouched.
+  section('Indent quick-add SKU — Item Type is an explicit choice');
+  await go('/procurement/indents');
+  await waitText(/Purchase Indents/);
+  await btn(/^Create Indent$/).click();
+  await page.waitForTimeout(800);
+  await dialog().getByRole('button', { name: /^New Product$/ }).click();
+  const qa = page.getByRole('dialog').filter({ hasText: 'Add New Product' });
+  await qa.waitFor({ timeout: 10000 });
+  const typeBox = qa.getByRole('combobox', { name: /Item Type/ });
+  check('quick-add: no Item Type is pre-selected (was Raw Material)', !/Raw Material|Consumable|Packing/.test(await typeBox.innerText()), await typeBox.innerText());
+  check('quick-add: the field says why it is required', /decides which inventory module/i.test(await qa.innerText()));
+  await qa.getByLabel(/Product Name/).fill('E2E UI Polishing Buff');
+  await qa.getByLabel(/SKU Code/).fill('E2E-UI-NEWPROD');
+  await qa.getByRole('button', { name: /^Add Product$/ }).click();
+  check('quick-add: saving without an Item Type is refused', await toast(/Select the Item Type/, 6000));
+  check('…and no SKU was created', !((await apiGet('/skus/lookup/list?search=E2E-UI-NEWPROD'))?.data || []).length);
+  await typeBox.click();
+  await page.getByRole('option', { name: 'Consumable', exact: true }).click();
+  check('quick-add: the chosen type explains its destination (C&P IMS)', /Consumable & Packaging IMS/.test(await qa.innerText()));
+  await qa.getByRole('button', { name: /^Add Product$/ }).click();
+  check('quick-add: product added to the SKU master', await toast(/Product added to SKU master/));
+  const quickSku = ((await apiGet('/skus/lookup/list?search=E2E-UI-NEWPROD'))?.data || [])[0];
+  check('…with exactly the Item Type chosen (CONSUMABLE)', quickSku?.itemType === 'CONSUMABLE', quickSku?.itemType);
+  await dialog().getByRole('button', { name: /^Cancel$/ }).click().catch(() => {});
+  await page.waitForTimeout(600);
+
   const poA = await buy({ key: 'A', qty: 500, quote: 'NOT REQUIRED', pi: false });
   const poB = await buy({ key: 'B', qty: 400, quote: 'FILE', pi: false });
   const poC = await buy({ key: 'C', qty: 300, quote: 'NOT REQUIRED', pi: true });
@@ -267,7 +301,8 @@ const run = async () => {
   await waitText(/GRN/);
   await btn(/^New GRN$/).click();
   await page.waitForTimeout(1000);
-  await dialog().getByRole('combobox', { name: /Purchase Order \*/ }).click();
+  // "Purchase Order(s) *" since the multi-PO GRN (f48f82c); the old exact label no longer matched.
+  await dialog().getByRole('combobox', { name: /Purchase Order/i }).first().click();
   await page.waitForTimeout(1200);
   const opts = (await page.getByRole('option').allInnerTexts()).map(flat);
   for (const [k, p] of [['A', poA], ['B', poB], ['C', poC]]) {
@@ -280,25 +315,24 @@ const run = async () => {
   await page.waitForTimeout(1200);
   const d = dialog();
   await d.getByLabel(/^Batch No/).first().fill('E2E-UI-RACE-001');
-  // Inventory Type replaced the "Add to RM Stock" checkbox: "Raw Material (RM)"
-  // sends the coil to RM stock, at the "Received At" asked for only then.
-  const invType = d.getByRole('combobox', { name: /Inventory Type/ });
-  check('the GRN form asks for an Inventory Type, and no Received At until Raw Material is chosen',
-    (await invType.count()) === 1 && (await d.getByRole('combobox', { name: /Received At/i }).count()) === 0);
-  await invType.click();
-  await page.getByRole('option', { name: 'Raw Material (RM)', exact: true }).click();
-  await d.getByRole('combobox', { name: /Received At/i }).first().click();
+  // No manual Inventory Type: the coil's SKU routes it to RM IMS, and Received
+  // At — where it physically landed — has to be chosen (never pre-filled).
+  const recvAt = d.getByRole('combobox', { name: /Received At/i }).first();
+  check('the GRN form has no Inventory Type; the coil line asks for Received At, not pre-filled',
+    (await d.getByRole('combobox', { name: /Inventory Type/ }).count()) === 0 && (await recvAt.count()) === 1 && !/PLG01|JW001/.test(await recvAt.innerText()));
+  check('…and shows the coil going to RM IMS', (await d.getByTestId('grn-line-destination').allInnerTexts()).some((t) => /RM IMS/.test(t)));
+  await recvAt.click();
   await page.getByRole('option', { name: /PLG01/ }).click();
-  // The form's submit is "Save GRN" (it then stays open for Incoming QC).
-  await d.getByRole('button', { name: /^save grn$/i }).click();
+  await d.getByRole('button', { name: /^Save as Draft$/ }).click();
   check('GRN draft created', await toast(/created \(draft\)/i));
+  check('saving the draft created no stock', ((await apiGet('/inventory/movements?limit=50'))?.data || []).length === 0);
   const g = ((await apiGet('/procurement/grns?limit=10&sort=-createdAt'))?.data || [])[0];
 
   const { page: pageB } = await login(browser, 'B');
   const openDialog = async (p) => {
     await p.goto(`${APP}/procurement/grns/${g._id}`, { waitUntil: 'domcontentloaded' });
-    await p.getByRole('button', { name: /complete & post stock/i }).first().waitFor({ timeout: 20000 });
-    await p.getByRole('button', { name: /complete & post stock/i }).first().click();
+    await p.getByRole('button', { name: /^Complete GRN$/ }).first().waitFor({ timeout: 20000 });
+    await p.getByRole('button', { name: /^Complete GRN$/ }).first().click();
     await p.waitForTimeout(900);
   };
   await openDialog(page);
@@ -307,17 +341,30 @@ const run = async () => {
   const respOf = (p) => p.waitForResponse((r) => /\/procurement\/grns\/[^/]+\/complete/.test(r.url()) && r.request().method() === 'POST', { timeout: 30000 }).catch(() => null);
   const [ra, rb] = await Promise.all([
     respOf(page), respOf(pageB),
-    page.getByRole('button', { name: /complete & post stock/i }).last().click(),
-    pageB.getByRole('button', { name: /complete & post stock/i }).last().click(),
+    page.getByRole('dialog').getByRole('button', { name: /^Complete GRN$/ }).click(),
+    pageB.getByRole('dialog').getByRole('button', { name: /^Complete GRN$/ }).click(),
   ]);
   const codes = [ra?.status(), rb?.status()].sort();
   check('exactly ONE completion succeeds; the other is refused', codes[0] === 200 && codes[1] >= 400 && codes[1] < 500, JSON.stringify(codes));
   const loser = ra?.status() === 200 ? pageB : page;
   await loser.waitForTimeout(800);
-  check('the refused session gets a readable message, not a stack trace', /already posted|only draft/i.test(flat(await loser.locator('body').innerText())) && !/at Object\.|TypeError|ReferenceError/.test(flat(await loser.locator('body').innerText())));
+  check('the refused session gets a readable message, not a stack trace', /already been completed|only draft|being completed right now/i.test(flat(await loser.locator('body').innerText())) && !/at Object\.|TypeError|ReferenceError/.test(flat(await loser.locator('body').innerText())));
   await page.waitForTimeout(1500);
   const gAfter = (await apiGet(`/procurement/grns/${g._id}`))?.data;
-  check('GRN ends completed once (stockPosted, not draft)', gAfter?.stockPosted === true && gAfter?.grnStatus !== 'DRAFT', `${gAfter?.stockPosted} ${gAfter?.grnStatus}`);
+  check('GRN ends completed once (receipt final, not draft)', gAfter?.stockPosted === true && gAfter?.grnStatus !== 'DRAFT', `${gAfter?.stockPosted} ${gAfter?.grnStatus}`);
+  check('…and completing it posted NO stock — its coil is awaiting QC', ((await apiGet('/inventory/movements?limit=50'))?.data || []).length === 0
+    && gAfter?.items?.[0]?.stockStatus === 'AWAITING_QC', gAfter?.items?.[0]?.stockStatus);
+
+  /* ── MD signs, QC completes — only then is the coil stock ── */
+  section('MD signature + Incoming QC on the raced GRN');
+  await page.goto(`${APP}/procurement/grns/${g._id}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#grn-qc-section', { timeout: 20000 });
+  await page.waitForTimeout(1200);
+  const qcStage = await signAndCompleteQc(page, page, { doubleClick: true });
+  check('signed by the MD and QC completed (accept all, double-clicked)', qcStage === 'QC Completed · Passed', qcStage);
+  const mvAfter = (await apiGet('/inventory/movements?limit=50'))?.data || [];
+  check('now ONE GRN_IN of the accepted 500 kg at PLG01', mvAfter.length === 1 && mvAfter[0].txnType === 'GRN_IN' && mvAfter[0].quantity === 500 && mvAfter[0].warehouse === 'PLG01',
+    JSON.stringify(mvAfter.map((m) => [m.txnType, m.quantity, m.warehouse])));
 
   await browser.close();
   // Expected 4xx: the one refused GRN completion (the race loser).

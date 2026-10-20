@@ -42,8 +42,12 @@ export { RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT } from './receivedAt.js';
 // Same vocabulary and the same wording as Consumables & Packaging, so a planner
 // reads the identical list whichever IMS module they are standing in. The codes
 // are the ones the API validates against.
+// 'Vendor receipt' is deliberately absent: coils and circles received from a
+// supplier are recorded as a GRN, signed by the MD and accepted by Incoming QC,
+// which posts the accepted weight to RM stock by itself. Entering the same
+// delivery here as well made it usable before QC and double-counted it once the
+// QC posted. Movements already posted under that reason keep their History label.
 export const STOCK_IN_REASON_OPTIONS = [
-  { value: 'VENDOR_RECEIPT',        label: 'Vendor receipt',         hint: 'Coils or circles physically received from a supplier against a bill or challan.' },
   { value: 'OPENING_STOCK',         label: 'Opening stock',          hint: 'The material that already existed when you started using IMS.' },
   { value: 'CORRECTION_ADJUSTMENT', label: 'Correction / adjustment', hint: 'Fixing a counting mistake so the system matches the physical store.' },
   { value: 'OTHER',                 label: 'Other',                  hint: 'Anything else — type your own reason so History can explain it later.' },

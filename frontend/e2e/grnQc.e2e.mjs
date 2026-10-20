@@ -7,6 +7,11 @@
  *   backend  :5099  via e2eServer.js against the ambika_e2e_grnqc scratch DB
  *   frontend :3100  with VITE_API_URL pointing at :5099
  *
+ * New GRNs post NO stock when saved or completed: the MD signs, Incoming QC is
+ * completed, and only then is the ACCEPTED qty posted, to the module the SKU's
+ * Item Type decides (no manual Inventory Type any more). LEGACY GRNs (completed
+ * before that change) keep their own behaviour and are exercised separately.
+ *
  * The browser performs every action; `e2eGrnQcFixture.js --verify` then reads
  * the database and is the real oracle. This file checks what the operator sees.
  */
@@ -14,6 +19,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
+import {
+  dialogTitled, signAsMd, confirmCompleteGrn as confirmGrn, confirmCompleteQc,
+} from './_grnLifecycle.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -30,7 +38,8 @@ const findChromium = () => {
 };
 
 const APP = 'http://127.0.0.1:3100';
-await assertE2ESetup(APP, 'http://127.0.0.1:5099/api/v1', 'grnQc.e2e.mjs');
+const API = 'http://127.0.0.1:5099/api/v1';
+await assertE2ESetup(APP, API, 'grnQc.e2e.mjs');
 const USER = { email: 'e2e@test.local', password: 'E2e@12345' };
 const SHOTS = process.env.SHOT_DIR || 'e2e/shots/grnqc';
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -73,6 +82,14 @@ const login = async (page) => {
   await page.waitForURL((u) => !/\/login/.test(u.toString()), { timeout: 20000 });
 };
 
+/** Read-only API call with the logged-in user's token. */
+const api = (page, p) => page.evaluate(async ([base, url]) => {
+  const r = await fetch(`${base}${url}`, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+  return r.json();
+}, [API, p]);
+const stockOf = async (page, code) => ((await api(page, `/inventory/stock?limit=200&skuCode=${code}`)).data || [])
+  .filter((r) => r.skuCode === code).reduce((s, r) => s + (r.qtyOnHand || 0), 0);
+
 const openGrn = async (page, tag) => {
   await go(page, `${APP}/procurement/grns`);
   await page.getByText(`GRN-E2E-${tag}`, { exact: true }).first().click({ timeout: 15000 });
@@ -92,42 +109,15 @@ const qcStatusText = async (scope) => ((await scope.getByTestId('grn-qc-status')
 const nextText = async (scope) => ((await scope.getByTestId('grn-qc-next').first().innerText().catch(() => '')) || '').trim();
 const completeBtn = (scope) => section(scope).getByRole('button', { name: 'Complete GRN + QC' });
 const draftBtn = (scope) => section(scope).getByRole('button', { name: 'Save QC Draft' });
-const dialogTitled = (page, re) => page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: re }) });
+const saveDraftGrn = (form) => form.getByRole('button', { name: /^Save as Draft$/ });
 
 /** The combined action when the GRN is signed → confirm in the existing Complete QC dialog. */
 const completeQc = async (page, scope = page, { doubleClick = false } = {}) => {
   await completeBtn(scope).click();
-  const dlg = dialogTitled(page, /^Complete QC/);
-  await dlg.waitFor({ timeout: 10000 });
-  const confirm = dlg.getByRole('button', { name: 'Complete QC' });
-  if (doubleClick) await confirm.dblclick(); else await confirm.click();
-  await dlg.waitFor({ state: 'detached', timeout: 15000 });
-  await page.waitForTimeout(1500);
+  await confirmCompleteQc(page, { doubleClick });
 };
-
-/** Draw on the signature pad and sign (MD). */
-const signInDialog = async (page) => {
-  const sdlg = dialogTitled(page, /sign/i);
-  await sdlg.waitFor();
-  const box = await sdlg.locator('canvas').first().boundingBox();
-  await page.mouse.move(box.x + 30, box.y + box.height / 2);
-  await page.mouse.down();
-  for (let i = 1; i <= 12; i += 1) await page.mouse.move(box.x + 30 + i * 18, box.y + box.height / 2 + (i % 2 ? -18 : 18));
-  await page.mouse.up();
-  await sdlg.getByRole('button', { name: 'Continue' }).click();
-  await sdlg.getByRole('button', { name: 'Sign Document' }).click();
-  await sdlg.waitFor({ state: 'detached', timeout: 20000 });
-  await page.waitForTimeout(2000);
-};
-
-/** Confirm "Complete & Post Stock" in the existing Complete GRN dialog. */
-const confirmCompleteGrn = async (page) => {
-  const cdlg = dialogTitled(page, /^Complete GRN/);
-  await cdlg.waitFor({ timeout: 10000 });
-  await cdlg.getByRole('button', { name: /complete & post stock/i }).click();
-  await cdlg.waitFor({ state: 'detached', timeout: 20000 });
-  await page.waitForTimeout(2000);
-};
+const signInDialog = signAsMd;
+const confirmCompleteGrn = (page, opts) => confirmGrn(page, opts);
 
 const noHorizontalScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 
@@ -150,12 +140,14 @@ check('QC Records has no standalone "New QC" button', (await page.getByRole('but
 const resumeRow = page.getByRole('row').filter({ hasText: 'QC-E2E-RESUME' });
 await resumeRow.getByRole('button', { name: 'Actions' }).click();
 await page.getByRole('menuitem', { name: 'View' }).click();
-await page.waitForURL(/\/procurement\/incoming-qc\//); await ready(page); await page.waitForTimeout(1000);
+await page.waitForURL(/\/procurement\/incoming-qc\//); await ready(page);
+// The detail page compiles on first visit after a cold dev-server start — wait for it.
+await page.getByRole('button', { name: /Open GRN & QC/ }).first().waitFor({ timeout: 20000 }).catch(() => {});
 check('QC detail of a GRN draft offers "Open GRN & QC", not its own Complete QC',
   (await page.getByRole('button', { name: /Open GRN & QC/ }).count()) >= 1 && (await page.getByRole('button', { name: 'Complete QC' }).count()) === 0);
 
 // ── The required journey, on the Create GRN form itself ──────────────────────
-console.log('\n── Save GRN → QC form on the same page → Complete GRN + QC ──');
+console.log('\n── Save GRN → Complete GRN → MD signs → QC → stock (same form) ──');
 await go(page, `${APP}/purchase-fms/grn`);
 await page.waitForTimeout(1200);
 await page.getByRole('button', { name: /new grn/i }).first().click();
@@ -163,57 +155,48 @@ const form = page.getByRole('dialog').filter({ hasText: 'Create GRN' });
 await form.waitFor();
 check('before saving: "Save GRN first to enter QC details."', await form.getByText('Save GRN first to enter QC details.').isVisible());
 check('…and no QC inputs yet', (await section(form).count()) === 0);
-check('no four-step progress tracker', (await form.getByText('2. Completed & stock posted').count()) === 0);
 await shot(page, '10-create-form-before-save');
 
 await form.getByRole('combobox', { name: /purchase order/i }).first().click();
 await page.waitForTimeout(800);
 await page.getByRole('option', { name: /PO-E2E-NEWGRN/ }).click();
-await page.waitForTimeout(1000);
+await page.waitForTimeout(1500);
+// The legacy GRNs the fixture seeds (DONE, HIST, LEGACY) already hold bolts at
+// MAIN, posted at their completion — every stock check below is against that baseline.
+const boltBase = await stockOf(page, 'E2E-BOLT');
 
-// Inventory Type replaces the "Add to RM Stock" checkbox.
-const invType = form.getByRole('combobox', { name: /Inventory Type/ });
-check('Inventory Type dropdown shown, "Add to RM Stock" checkbox gone', (await invType.count()) === 1 && (await form.getByText('Add to RM Stock').count()) === 0);
-check('…with the helper text', await form.getByText('Select the inventory type for the received material.').isVisible());
-await form.getByRole('button', { name: 'Save GRN' }).click();
-await page.waitForTimeout(1200);
-check('saving without an Inventory Type is refused', (await page.getByText('Select the Inventory Type for the received material').count()) > 0
-  && (await form.getByTestId('grn-form-saved-summary').count()) === 0);
-await invType.click();
-const optionTexts = (await page.getByRole('option').allInnerTexts()).map((t) => t.trim());
-check('options are exactly Raw Material (RM) and Consumable & Packaging (no Finished Goods)',
-  optionTexts.join('|') === 'Raw Material (RM)|Consumable & Packaging', optionTexts.join('|'));
-await page.getByRole('option', { name: 'Raw Material (RM)' }).click();
-await page.waitForTimeout(400);
-await form.getByRole('button', { name: 'Save GRN' }).click();
-await page.waitForTimeout(1200);
-check('Raw Material chosen for a consumable line is refused with a clear message',
-  (await page.getByText(/"E2E Bolt M8" is not Raw Material/).count()) > 0 && (await form.getByTestId('grn-form-saved-summary').count()) === 0);
-await invType.click();
-await page.getByRole('option', { name: 'Consumable & Packaging' }).click();
-await page.waitForTimeout(400);
-check('Received At is only asked for Raw Material', (await form.getByRole('combobox', { name: /Received At/ }).count()) === 0);
-await form.getByRole('button', { name: 'Save GRN' }).click();
+check('no manual Inventory Type dropdown, no "Add to RM Stock" checkbox',
+  (await form.getByRole('combobox', { name: /Inventory Type/ }).count()) === 0 && (await form.getByText('Add to RM Stock').count()) === 0);
+const tagsCp = (await form.getByTestId('grn-line-destination').allInnerTexts()).map((t) => t.trim());
+check('the bolt line shows its destination from the SKU master: C&P IMS · MAIN', tagsCp.includes('→ C&P IMS · MAIN'), tagsCp.join(' | '));
+check('Received At is not asked for (no Raw Material on this GRN)', (await form.getByRole('combobox', { name: /Received At/ }).count()) === 0);
+await saveDraftGrn(form).click();
 await page.waitForTimeout(3000);
 const summary = form.getByTestId('grn-form-saved-summary');
 const summaryText = (await summary.innerText().catch(() => '')).replace(/\s+/g, ' ');
-check('1. Save GRN keeps the user on the same form, with a GRN number', (await form.isVisible()) && /AGL\/GRN-\d+/.test(summaryText), summaryText);
+check('1. Save as Draft keeps the user on the same form, with a GRN number', (await form.isVisible()) && /AGL\/GRN-\d+/.test(summaryText), summaryText);
 check('…showing GRN status and QC status', /Draft/.test(summaryText) && /QC Pending/.test(summaryText));
+check('…saving the draft posted NO stock', (await stockOf(page, 'E2E-BOLT')) === boltBase);
 check('2. the actual QC form appears right after saving (inputs for the line)', await qtyInput(form, 'Rejected', 'E2E Bolt M8').isVisible());
 check('…Save QC Draft waits for the GRN to be completed and signed (existing rule)', await draftBtn(form).isDisabled());
-check('…the next step is spelled out', (await nextText(form)).includes('complete the GRN and post stock'), await nextText(form));
+check('…the next action is spelled out: Complete GRN', /^Next action: Complete GRN/.test(await nextText(form)), await nextText(form));
 await setQty(form, 'E2E Bolt M8', 6, 2);
 await shot(page, '11-create-form-qc-entered');
 
 await completeBtn(form).click();
 const cdlgCp = dialogTitled(page, /^Complete GRN/);
 await cdlgCp.waitFor();
-check('Complete GRN dialog confirms the saved Inventory Type (Consumable & Packaging)',
-  /Consumable & Packaging/.test(await cdlgCp.getByRole('combobox', { name: /Inventory Type/ }).innerText()));
+check('Complete GRN dialog: no Inventory Type; says stock is not usable yet',
+  (await cdlgCp.getByRole('combobox', { name: /Inventory Type/ }).count()) === 0 && /not usable yet/i.test(await cdlgCp.innerText()));
 await confirmCompleteGrn(page);
-check('5a. "Complete GRN + QC" first completes the GRN (stock posts) — form still open',
+check('5a. "Complete GRN + QC" first completes the GRN — form still open, Awaiting MD Signature',
   (await form.isVisible()) && /Fully Received/.test(await summary.innerText()) && (await qcStatusText(form)) === 'Awaiting MD Signature');
-check('…GRN part is now read-only (no Save GRN)', (await form.getByRole('button', { name: 'Save GRN' }).count()) === 0);
+check('…completing the GRN posted NO stock', (await stockOf(page, 'E2E-BOLT')) === boltBase);
+const cpGrnNo = (summaryText.match(/AGL\/GRN-\d+\/\d+-\d+/) || [''])[0];
+const cpGrn = ((await api(page, `/procurement/grns?search=${encodeURIComponent(cpGrnNo)}`)).data || [])[0];
+check('…but the line is recorded as received, awaiting QC', cpGrn?.items?.[0]?.stockStatus === 'AWAITING_QC' && cpGrn?.items?.[0]?.receivedQty === 8,
+  `${cpGrn?.items?.[0]?.stockStatus} ${cpGrn?.items?.[0]?.receivedQty}`);
+check('…GRN part is now read-only (no Save as Draft)', (await saveDraftGrn(form).count()) === 0);
 check('…QC entries kept across the step (rejected 2)', (await qtyInput(form, 'Rejected', 'E2E Bolt M8').inputValue()) === '2');
 check('…next: MD signature', (await nextText(form)).includes('sign the GRN as MD'), await nextText(form));
 await shot(page, '12-create-form-grn-completed');
@@ -222,25 +205,37 @@ await completeBtn(form).click();
 await signInDialog(page);
 check('5b. the MD signs from the same form; QC now open to save / complete', (await qcStatusText(form)) === 'QC Pending' && !(await draftBtn(form).isDisabled()));
 check('…QC entries still kept (rejected 2)', (await qtyInput(form, 'Rejected', 'E2E Bolt M8').inputValue()) === '2');
+check('…still NO stock after the signature alone', (await stockOf(page, 'E2E-BOLT')) === boltBase);
+check('…next action: Complete QC — accepted quantities posted then', /^Next action: Complete QC — accepted quantities/.test(await nextText(form)), await nextText(form));
 
 await draftBtn(form).click();
 await page.waitForTimeout(2000);
 check('3. QC saved as a draft on the server', (await qcStatusText(form)) === 'QC Draft');
 
-await completeQc(page, form, { doubleClick: true });
+await completeBtn(form).click();
+const qdlg = dialogTitled(page, /^Complete QC/);
+await qdlg.waitFor();
+check('Complete QC dialog: accepted 6 posts now, rejected 2 will not enter stock',
+  /Accepted 6 will be posted to stock now/.test(await qdlg.innerText()) && /Rejected 2 will not enter stock/.test(await qdlg.innerText()));
+await qdlg.getByRole('button', { name: 'Complete QC' }).dblclick();
+await qdlg.waitFor({ state: 'detached', timeout: 20000 });
+await page.waitForTimeout(2000);
 const done = await sectionText(form);
 check('5c/7. QC completed on the same form — result shown read-only with the GRN',
   /result\s*partial/i.test(done) && (await section(form).locator('input[type=number]').count()) === 0 && (await qcStatusText(form)) === 'QC Completed · Partial',
   (done.match(/result\s*\S+\s*\S+/i) || [''])[0]);
+check('…only the ACCEPTED 6 became stock (double-click did not duplicate it)', (await stockOf(page, 'E2E-BOLT')) === boltBase + 6, `${await stockOf(page, 'E2E-BOLT')}`);
 await shot(page, '13-create-form-qc-done');
 await form.getByRole('button', { name: 'Close' }).click();
 await page.waitForTimeout(1500);
 check('closing opens the GRN page showing the same completed QC', (await qcStatusText(page)) === 'QC Completed · Partial', page.url().replace(APP, ''));
-const cpGrnNo = (summaryText.match(/AGL\/GRN-\d+\/\d+-\d+/) || [''])[0];
-check('the GRN page shows Inventory Type = Consumable & Packaging', /Inventory Type\s*Consumable & Packaging/i.test(await page.locator('body').innerText()));
+const cpBody = await page.locator('body').innerText();
+check('the GRN page shows "Stock Posting" (no manual Inventory Type)', /Stock Posting/i.test(cpBody) && !/Inventory Type \(earlier GRN\)/i.test(cpBody));
+const cpStock = (await page.getByTestId('grn-line-stock').allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+check('…and the line: C&P IMS · MAIN, Posted 6, with its movement', cpStock.some((t) => /C&P IMS · MAIN Posted 6 MOV-/.test(t)), cpStock.join(' | '));
 
-// ── Inventory Type = Raw Material, through the form → RM IMS ────────────────
-console.log('\n── Inventory Type: Raw Material through the form ──');
+// ── Raw Material through the form: Received At asked for automatically ──────
+console.log('\n── Raw Material through the form → RM IMS (after QC) ──');
 await go(page, `${APP}/purchase-fms/grn`);
 await page.waitForTimeout(1200);
 await page.getByRole('button', { name: /new grn/i }).first().click();
@@ -249,15 +244,17 @@ await rmForm.waitFor();
 await rmForm.getByRole('combobox', { name: /purchase order/i }).first().click();
 await page.waitForTimeout(800);
 await page.getByRole('option', { name: /PO-E2E-NEWRM/ }).click();
-await page.waitForTimeout(1000);
-await rmForm.getByRole('combobox', { name: /Inventory Type/ }).click();
-await page.getByRole('option', { name: 'Raw Material (RM)' }).click();
-await page.waitForTimeout(400);
-await rmForm.getByRole('combobox', { name: /Received At/ }).click();
+await page.waitForTimeout(1500);
+const recvAt = rmForm.getByRole('combobox', { name: /Received At/ });
+check('a coil line makes Received At appear by itself — not pre-filled', (await recvAt.count()) === 1 && !/PLG01|JW001/.test(await recvAt.innerText()));
+await rmForm.getByLabel(/^Batch No/).fill('B-FORM-RM-1');
+await saveDraftGrn(rmForm).click();
+check('saving Raw Material without Received At is refused', await page.getByText(/Select Received At/).first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false));
+await recvAt.click();
 await page.getByRole('option', { name: /JW001/ }).click();
 await page.waitForTimeout(300);
-await rmForm.getByLabel(/^Batch No/).fill('B-FORM-RM-1');
-await rmForm.getByRole('button', { name: 'Save GRN' }).click();
+check('the coil line reads → RM IMS · JW001', (await rmForm.getByTestId('grn-line-destination').allInnerTexts()).map((t) => t.trim()).includes('→ RM IMS · JW001'));
+await saveDraftGrn(rmForm).click();
 await page.waitForTimeout(3000);
 const rmSummary = (await rmForm.getByTestId('grn-form-saved-summary').innerText().catch(() => '')).replace(/\s+/g, ' ');
 const rmGrnNo = (rmSummary.match(/AGL\/GRN-\d+\/\d+-\d+/) || [''])[0];
@@ -265,17 +262,24 @@ check('RM GRN saved from the form', Boolean(rmGrnNo), rmSummary);
 await completeBtn(rmForm).click();
 const cdlgRm = dialogTitled(page, /^Complete GRN/);
 await cdlgRm.waitFor();
-check('Complete GRN dialog confirms Raw Material (RM) at JW001',
-  /Raw Material \(RM\)/.test(await cdlgRm.getByRole('combobox', { name: /Inventory Type/ }).innerText())
-  && /JW001/.test(await cdlgRm.getByRole('combobox', { name: /Received At/ }).innerText()));
-await cdlgRm.getByRole('button', { name: /complete & post stock/i }).dblclick();
+check('Complete GRN dialog carries Received At JW001 and lists RM IMS: 1',
+  /JW001/.test(await cdlgRm.getByRole('combobox', { name: /Received At/ }).innerText()) && /RM IMS: 1/.test(await cdlgRm.getByTestId('grn-complete-destinations').innerText()));
+await cdlgRm.getByRole('button', { name: /^Complete GRN$/ }).dblclick();
 await cdlgRm.waitFor({ state: 'detached', timeout: 20000 });
 await page.waitForTimeout(2000);
-check('RM GRN completed (stock posted), form still open', /Fully Received/.test(await rmForm.getByTestId('grn-form-saved-summary').innerText()));
+// No coil anywhere yet: RMPLG is completed later on, and the legacy RMOFF coil was never stocked.
+check('RM GRN completed — Awaiting MD Signature, no coil stock yet', (await qcStatusText(rmForm)) === 'Awaiting MD Signature' && (await stockOf(page, 'E2E-COIL')) === 0,
+  `coil stock ${await stockOf(page, 'E2E-COIL')}`);
+await completeBtn(rmForm).click();
+await signInDialog(page);
+await setQty(rmForm, 'E2E Coil 1250mm', 45, 5);
+await completeQc(page, rmForm, { doubleClick: true });
+check('RM QC completed — accepted 45 of the coil now in stock', (await qcStatusText(rmForm)) === 'QC Completed · Partial');
 await rmForm.getByRole('button', { name: 'Close' }).click();
 await page.waitForTimeout(1500);
 const rmPage = await page.locator('body').innerText();
-check('GRN page: Inventory Type Raw Material (RM), Received At JW001', /Inventory Type\s*Raw Material \(RM\)/i.test(rmPage) && /Received At\s*JW001/i.test(rmPage));
+check('GRN page: Received At JW001, line RM IMS · JW001 Posted 45', /Received At\s*JW001/i.test(rmPage)
+  && (await page.getByTestId('grn-line-stock').allInnerTexts()).some((t) => /RM IMS · JW001\s*Posted 45/.test(t)));
 
 // The stock is in the module — on its own screens, nobody re-enters it.
 await go(page, `${APP}/rm-ims/movements`);
@@ -294,12 +298,15 @@ check('Consumable & Packaging IMS ledger lists the C&P GRN receipt', cpLedger.in
 check('…and does not list the RM GRN', !cpLedger.includes(rmGrnNo));
 await shot(page, '16-cp-ims-movements');
 
-// The saved choice comes back when an existing GRN is reopened.
+// Reopening a draft: no type to choose, destinations come from the SKU master.
 await openGrn(page, 'DRAFT');
 await page.getByRole('button', { name: 'Edit' }).first().click();
 const editForm = page.getByRole('dialog').filter({ hasText: 'Edit GRN' });
 await editForm.waitFor();
-check('reopening a GRN restores its Inventory Type', /Consumable & Packaging/.test(await editForm.getByRole('combobox', { name: /Inventory Type/ }).innerText()));
+await page.waitForTimeout(1200);
+check('reopening a draft: no Inventory Type, each line shows its destination',
+  (await editForm.getByRole('combobox', { name: /Inventory Type/ }).count()) === 0
+  && (await editForm.getByTestId('grn-line-destination').allInnerTexts()).every((t) => /C&P IMS · MAIN/.test(t)));
 await editForm.getByRole('button', { name: 'Cancel' }).click();
 await page.waitForTimeout(800);
 
@@ -317,6 +324,8 @@ await shot(page, '01-draft-grn-qc-form');
 await openGrn(page, 'UNSIGNED');
 check('completed, unsigned: "Awaiting MD Signature", next = MD signs', (await qcStatusText(page)) === 'Awaiting MD Signature'
   && (await nextText(page)).includes('sign the GRN as MD'));
+const unsignedStock = (await page.getByTestId('grn-line-stock').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+check('…its lines read "Awaiting QC" — nothing usable before MD + QC', unsignedStock.length === 2 && unsignedStock.every((t) => /Awaiting QC/.test(t)), unsignedStock.join(' | '));
 await openGrn(page, 'NOREQ');
 check('no MD approval raised: Complete GRN + QC disabled, reason shown', (await completeBtn(page).isDisabled())
   && (await nextText(page)).includes('no MD approval has been raised'));
@@ -345,7 +354,7 @@ const mismatch = (await section(page).getByTestId('qc-balance').innerText().catc
 check('mismatch message: "Accepted + Rejected must equal Received … (6 + 3 ≠ 10)"', /Accepted \+ Rejected must equal Received for: E2E Bolt M8 \(6 \+ 3 ≠ 10\)/.test(mismatch), mismatch);
 await completeBtn(page).click();
 await page.waitForTimeout(600);
-check('unbalanced: Complete GRN + QC refused (no confirm dialog)', (await page.getByRole('dialog').count()) === 0);
+check('unbalanced (uninspected 1): Complete GRN + QC refused (no confirm dialog)', (await page.getByRole('dialog').count()) === 0);
 await setQty(page, 'E2E Bolt M8', 7, 3);
 check('balanced: mismatch message gone', (await section(page).getByTestId('qc-balance').count()) === 0);
 // Optional per-line remark + the existing QC report / photo attachment.
@@ -373,8 +382,10 @@ await shot(page, '05-flow-qc-done');
 await section(page).getByRole('button', { name: 'View full QC record' }).click();
 await page.waitForURL(/\/procurement\/incoming-qc\//); await ready(page); await page.waitForTimeout(1200);
 const fullFlow = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-check('full QC record: remark, attachment, reject movement and timeline',
-  fullFlow.includes('Seal damaged on 3') && fullFlow.includes('qc-photo.png') && /MOV-\d+/.test(fullFlow) && /Timeline/i.test(fullFlow));
+const lineMov = (await page.getByTestId('qc-line-movement').allInnerTexts()).map((t) => t.trim());
+check('full QC record: remark, attachment, timeline, and the accepted stock-IN movement per line',
+  fullFlow.includes('Seal damaged on 3') && fullFlow.includes('qc-photo.png') && /Timeline/i.test(fullFlow) && lineMov.length === 2 && lineMov.every((t) => /^IN MOV-/.test(t)),
+  lineMov.join(' | '));
 await shot(page, '05c-flow-full-record');
 
 // ── Records written by the earlier form (rework / defect / severity) ────────
@@ -405,25 +416,37 @@ const fullHist = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
 check('…full record lists Rework 3, defect "dent", severity MINOR', /Rework \(earlier form\)\s*3/i.test(fullHist) && fullHist.includes('dent') && fullHist.includes('MINOR'));
 await shot(page, '06b-hist-full-record');
 
-// ── Raw Material: rejection leaves where the coil was received (DB asserted by --verify) ──
+// ── Raw Material on the GRN page (DB asserted by --verify) ───────────────────
 console.log('\n── Raw Material GRNs ──');
 await openGrn(page, 'RMPLG');
 await setQty(page, 'E2E Coil 1250mm', 400, 100);
 await completeBtn(page).click();
-check('RMPLG: Complete GRN dialog pre-filled with Raw Material (RM)',
-  /Raw Material \(RM\)/.test(await dialogTitled(page, /^Complete GRN/).getByRole('combobox', { name: /Inventory Type/ }).innerText()));
+check('RMPLG: Complete GRN dialog carries Received At PLG01 (saved on the draft)',
+  /PLG01/.test(await dialogTitled(page, /^Complete GRN/).getByRole('combobox', { name: /Received At/ }).innerText()));
 await confirmCompleteGrn(page);
 await completeBtn(page).click(); await signInDialog(page);
 await completeQc(page);
 check('RMPLG: coil GRN completed, signed and QC\'d on one page', (await qcStatusText(page)) === 'QC Completed · Partial');
 
-// A GRN completed before Inventory Type existed, "Add to RM Stock" OFF.
+// ── LEGACY GRNs: completed before QC-gated posting ───────────────────────────
+console.log('\n── Legacy GRNs (stock posted at completion) ──');
 await openGrn(page, 'RMOFF');
-check('RMOFF (earlier GRN): shown as recorded, not reinterpreted',
-  /earlier GRN · Add to RM Stock: No/.test(await page.locator('body').innerText()));
+check('RMOFF (earlier GRN): its old "Add to RM Stock: No" is shown as recorded, not reinterpreted',
+  /Inventory Type \(earlier GRN\)[\s\S]*Add to RM Stock: No/i.test(await page.locator('body').innerText()));
 await setQty(page, 'E2E Coil 1250mm', 400, 200);
 await completeQc(page);
 check('RMOFF: QC completes on the earlier GRN', (await qcStatusText(page)) === 'QC Completed · Partial');
+await openGrn(page, 'LEGACY');
+check('LEGACY: next action explains the earlier GRN already holds its stock', /already added its stock, so rejected quantities move out/.test(await nextText(page)), await nextText(page));
+await setQty(page, 'E2E Bolt M8', 8, 2);
+await completeBtn(page).click();
+const ldlg = dialogTitled(page, /^Complete QC/);
+await ldlg.waitFor();
+check('LEGACY: QC dialog says the rejected 2 move OUT of stock (QC_REJECT_OUT)', /Rejected 2 will be moved OUT of stock/.test(await ldlg.innerText()));
+await ldlg.getByRole('button', { name: 'Complete QC' }).click();
+await ldlg.waitFor({ state: 'detached', timeout: 20000 });
+await page.waitForTimeout(1500);
+check('LEGACY: QC completed', (await qcStatusText(page)) === 'QC Completed · Partial');
 
 // ── 8. Existing / historical GRNs ────────────────────────────────────────────
 console.log('\n── Existing & historical GRNs ──');
@@ -433,6 +456,8 @@ await setQty(page, 'E2E Nut M8', 0, 5);
 check('all-rejected → expected result FAIL shown', /expected result\s*fail/i.test(await sectionText(page)));
 await completeQc(page);
 check('READYFAIL completed → QC Completed · Failed', (await qcStatusText(page)) === 'QC Completed · Failed');
+const failStock = (await page.getByTestId('grn-line-stock').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+check('…every line "Not posted" — nothing rejected became stock', failStock.length === 2 && failStock.every((t) => /Not posted/.test(t)), failStock.join(' | '));
 await openGrn(page, 'RESUME');
 check('seeded historical draft resumed (QC Draft, rejected 2)', (await qcStatusText(page)) === 'QC Draft'
   && (await qtyInput(page, 'Rejected', 'E2E Bolt M8').inputValue()) === '2');

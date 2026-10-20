@@ -24,7 +24,7 @@ import GoodsReceiptNote from '../grn.model.js';
 const PO_1 = '6ac09965f1c61c40fa206c41';
 const PO_2 = '6ac09965f1c61c40fa206c42';
 
-const base = { inventoryType: 'CONSUMABLE_PACKAGING' };
+const base = {};
 
 test('createGrnSchema accepts poIds[] with two or more Purchase Orders (multi-PO GRN)', () => {
   const { error, value } = createGrnSchema.validate({ ...base, poIds: [PO_1, PO_2] });

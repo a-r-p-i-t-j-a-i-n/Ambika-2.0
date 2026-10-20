@@ -2,13 +2,15 @@ import fs from 'fs';
 import path from 'path';
 import PDFDocument from 'pdfkit';
 import GoodsReceiptNote, {
-  GRN_STATUS, GRN_QC_STATUS, HOW_ITEM_RECEIVED, GRN_INVENTORY_TYPE, GRN_INVENTORY_TYPE_LABEL,
+  GRN_STATUS, GRN_QC_STATUS, HOW_ITEM_RECEIVED, GRN_INVENTORY_TYPE_LABEL,
+  GRN_STOCK_POSTING_STAGE, GRN_LINE_STOCK_STATUS,
 } from './grn.model.js';
 import VendorPurchaseOrder, { PO_STATUS, PO_FOLLOWUP_STATUS, PO_PI_STATUS } from '../purchase-order/purchaseOrder.model.js';
 import PurchaseFollowUp from '../follow-up/followUp.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
-import SKU, { RM_ITEM_TYPES } from '../../skus/sku.model.js';
-import { DEFAULT_RM_RECEIVED_AT } from '../../inventory/inventoryStock.model.js';
+import SKU, {
+  RM_ITEM_TYPES, INVENTORY_DESTINATION, NON_MATERIAL_ITEM_TYPES, FG_BLOCKED_ITEM_TYPES, inventoryDestinationOf,
+} from '../../skus/sku.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
@@ -24,13 +26,6 @@ const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.P
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 /**
- * The completion line in the activity timeline.
- *
- * Says what happened to the RM lines in plain words, because "GRN completed"
- * alone cannot be told apart from "GRN completed and deliberately added no RM
- * stock" six months later.
- */
-/**
  * Coil and Circle must arrive with a batch number; nothing else changes.
  *
  * A batch number is how a coil is identified for the rest of its life — RM
@@ -41,8 +36,8 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
  * Classified from the SKU master (`SKU.itemType` against RM_ITEM_TYPES), never
  * from the item name: GRN lines carry a free-typed `itemName`, and a coil whose
  * description happens to omit the word would slip straight through a string
- * test. This is the same classification planGrnStockPosting posts by, so the
- * rule and the posting can never disagree about what "RM" means.
+ * test. This is the same classification routeGrnLines routes by, so the rule
+ * and the posting can never disagree about what "RM" means.
  *
  * Scoped to lines with a received quantity: a draft row with nothing received
  * is not a receipt and has nothing to identify yet.
@@ -71,50 +66,121 @@ const resolveLineTypes = async (lines = []) => {
   return (l) => (l.skuId && byId.get(String(l.skuId))) || byCode.get(up(l.skuCode)) || '';
 };
 
+// ── Automatic inventory routing ──────────────────────────────────────────────
+// Replaces the manual, one-per-GRN Inventory Type. Every received line is routed
+// on its own, from its SKU's itemType (inventoryDestinationOf), so one GRN may
+// carry Raw Material and Consumables together. A line that cannot be routed is
+// refused with the reason — it is never skipped and never guessed into a module.
+
+/** Why a received line cannot be routed. */
+export const ROUTING_PROBLEM = {
+  NO_SKU: 'NO_SKU',                   // not linked to any SKU in the master
+  NON_MATERIAL: 'NON_MATERIAL',       // Service / Job Work — never received on a GRN
+  NOT_PURCHASABLE: 'NOT_PURCHASABLE', // Finished Goods / Scrap
+  UNCLASSIFIED: 'UNCLASSIFIED',       // any other itemType no destination exists for
+};
+
+const NOT_PURCHASABLE_TYPES = new Set([...FG_BLOCKED_ITEM_TYPES, 'SCRAP']);
+
 /**
- * One Inventory Type per GRN. Pure — returns the received lines that do NOT
- * belong to the chosen type:
- *   RM                    every received line must be Raw Material / Circle
- *   CONSUMABLE_PACKAGING  no received line may be Raw Material / Circle (any
- *                         other purchasable type posts here, as it always has)
- * Lines whose type is unknown ('') are not judged. A PO mixing both kinds is
- * received on separate GRNs (lines not being received stay at 0 qty).
+ * Where each RECEIVED line's stock lands. Pure and exported so the rule can be
+ * read — and tested — without a database.
+ *
+ *   RM_IMS      warehouse = the GRN's "Received At" (null when none was chosen;
+ *               the caller refuses that — no location is ever assumed)
+ *   CP_IMS      warehouse = the GRN's own store (MAIN), as it always was
+ *   MAIN_STORE  warehouse = the GRN's own store; listed by no IMS screen
+ *
+ * @param {object[]} lines        GRN lines (lines with receivedQty 0 are left out)
+ * @param {Function} typeOf       line -> SKU itemType ('' when no SKU matched)
+ * @param {string|null} rmLocation  the GRN's Received At
+ * @param {string} grnWarehouse   the GRN's own store
+ * @returns {{ line, itemType, destination, isRm, warehouse, problem }[]}
  */
-export const findInventoryTypeConflicts = ({ lines = [], typeOf, inventoryType }) => {
-  if (!inventoryType) return [];
-  return lines.filter((l) => round2(l.receivedQty) > 0).filter((l) => {
-    const t = typeOf(l);
-    if (!t) return false;
-    const isRm = RM_ITEM_TYPES.includes(t);
-    return inventoryType === GRN_INVENTORY_TYPE.RM ? !isRm : isRm;
+export const routeGrnLines = ({ lines = [], typeOf, rmLocation = null, grnWarehouse = 'MAIN' }) => lines
+  .filter((l) => round2(l.receivedQty) > 0)
+  .map((line) => {
+    const itemType = String(typeOf(line) || '').trim().toUpperCase();
+    const destination = inventoryDestinationOf(itemType);
+    let problem = null;
+    if (!itemType) problem = ROUTING_PROBLEM.NO_SKU;
+    else if (NON_MATERIAL_ITEM_TYPES.includes(itemType)) problem = ROUTING_PROBLEM.NON_MATERIAL;
+    else if (NOT_PURCHASABLE_TYPES.has(itemType)) problem = ROUTING_PROBLEM.NOT_PURCHASABLE;
+    else if (!destination) problem = ROUTING_PROBLEM.UNCLASSIFIED;
+    const isRm = destination === INVENTORY_DESTINATION.RM_IMS;
+    const warehouse = !destination ? null : (isRm ? (rmLocation || null) : grnWarehouse);
+    return { line, itemType, destination, isRm, warehouse, problem };
+  });
+
+const names = (routes) => routes.map((r) => `"${r.line.itemName}"`).join(', ');
+const isAre = (list) => (list.length > 1 ? 'are' : 'is');
+
+/** The operator-facing refusal for every line a GRN cannot route. */
+export const routingProblemMessage = (routes = []) => {
+  const of = (p) => routes.filter((r) => r.problem === p);
+  const parts = [];
+  const nonMaterial = of(ROUTING_PROBLEM.NON_MATERIAL);
+  if (nonMaterial.length) {
+    parts.push(`${names(nonMaterial)} ${isAre(nonMaterial)} Service / Job Work, not material, and cannot be received on a GRN. `
+      + 'Set the received qty to 0 — services are raised as internal-service indents and checked by Service QC.');
+  }
+  const blocked = of(ROUTING_PROBLEM.NOT_PURCHASABLE);
+  if (blocked.length) parts.push(`${names(blocked)}: Finished Goods and Scrap cannot be received from a vendor.`);
+  const unclassified = of(ROUTING_PROBLEM.UNCLASSIFIED);
+  if (unclassified.length) {
+    const types = [...new Set(unclassified.map((r) => r.itemType))].join(', ');
+    parts.push(`${names(unclassified)} ${isAre(unclassified)} classified as "${types}" in the SKU master, which has no inventory destination. `
+      + 'Correct the Item Type in SKU Master before receiving.');
+  }
+  const noSku = of(ROUTING_PROBLEM.NO_SKU);
+  if (noSku.length) parts.push(`${names(noSku)} ${isAre(noSku)} not linked to a SKU — add it to the SKU master before receiving.`);
+  return parts.join(' ');
+};
+
+/**
+ * Refuse (400) when a received line cannot be routed, or a Raw Material line
+ * has no "Received At". On a draft a line may still lack its SKU (the W/O PO
+ * form allows a free-typed row until completion); completion passes
+ * `requireSku` and refuses that too.
+ */
+export const assertRoutable = (routes = [], { requireSku = false } = {}) => {
+  const blocking = routes.filter((r) => r.problem && (requireSku || r.problem !== ROUTING_PROBLEM.NO_SKU));
+  if (blocking.length) throw new AppError(routingProblemMessage(blocking), 400);
+  const rmWithoutLocation = routes.filter((r) => r.isRm && !r.warehouse);
+  if (rmWithoutLocation.length) {
+    throw new AppError(
+      `Received At is required — ${names(rmWithoutLocation)} ${isAre(rmWithoutLocation)} Raw Material. `
+      + 'Select where it was received (PLG01 — Plant or JW001 — Job work).',
+      400,
+    );
+  }
+};
+
+/** Copy each line's routing onto it (display on a draft, fixed at completion). */
+const stampRouting = (lines, routes) => {
+  const byLine = new Map(routes.map((r) => [r.line, r]));
+  return lines.map((l) => {
+    const r = byLine.get(l);
+    return {
+      ...l,
+      itemTypeAtReceipt: r?.itemType || '',
+      inventoryDestination: r?.destination || null,
+      stockWarehouse: r?.warehouse || '',
+    };
   });
 };
 
-/** The operator-facing refusal for findInventoryTypeConflicts. */
-export const inventoryTypeConflictMessage = (conflicts, inventoryType) => {
-  const names = conflicts.map((l) => `"${l.itemName}"`).join(', ');
-  const chosen = GRN_INVENTORY_TYPE_LABEL[inventoryType] || inventoryType;
-  const other = inventoryType === GRN_INVENTORY_TYPE.RM
-    ? GRN_INVENTORY_TYPE_LABEL.CONSUMABLE_PACKAGING : GRN_INVENTORY_TYPE_LABEL.RM;
-  return `Inventory Type is "${chosen}", but ${names} ${conflicts.length > 1 ? 'are' : 'is'} not ${inventoryType === GRN_INVENTORY_TYPE.RM ? 'Raw Material' : 'Consumable & Packaging'}. `
-    + `Set ${conflicts.length > 1 ? 'their' : 'its'} received qty to 0 here and receive ${conflicts.length > 1 ? 'them' : 'it'} on a separate GRN with Inventory Type "${other}".`;
-};
+/** '' / undefined Received At → null, so "not chosen" has exactly one spelling. */
+const locationOrNull = (v) => (String(v || '').trim() ? String(v).trim().toUpperCase() : null);
 
-const assertInventoryType = async (lines = [], inventoryType) => {
-  if (!inventoryType) return;
+/** Route a draft's lines, refuse what cannot be routed, return them stamped. */
+const routeDraftLines = async (lines, rmLocation, grnWarehouse) => {
   const received = (lines || []).filter((l) => round2(l.receivedQty) > 0);
-  if (!received.length) return;
-  const conflicts = findInventoryTypeConflicts({ lines: received, typeOf: await resolveLineTypes(received), inventoryType });
-  if (conflicts.length) throw new AppError(inventoryTypeConflictMessage(conflicts, inventoryType), 400);
+  const typeOf = await resolveLineTypes(received);
+  const routes = routeGrnLines({ lines, typeOf, rmLocation: locationOrNull(rmLocation), grnWarehouse });
+  assertRoutable(routes);
+  return stampRouting(lines, routes);
 };
-
-/**
- * The RM fields implied by an Inventory Type: RM ⇒ RM lines post (addToRmStock)
- * at "Received At"; Consumable & Packaging ⇒ no RM posting and no RM location.
- */
-const rmFieldsFor = (inventoryType, location) => (inventoryType === GRN_INVENTORY_TYPE.RM
-  ? { addToRmStock: true, rmReceivedAtLocation: location || DEFAULT_RM_RECEIVED_AT }
-  : { addToRmStock: false, rmReceivedAtLocation: null });
 
 const assertRmBatchNumbers = async (lines = []) => {
   const received = (lines || []).filter((l) => round2(l.receivedQty) > 0);
@@ -129,40 +195,24 @@ const assertRmBatchNumbers = async (lines = []) => {
   throw new AppError(`Batch Number is required for ${kinds.join(' and ')}. Add it to ${names}.`, 400);
 };
 
-/**
- * Which received lines post stock, and where each one lands.
- *
- * Pure and exported so the rule can be read - and tested - on its own, without
- * a database behind it. The decision is deliberately only two things:
- *
- *   post       a Raw Material line posts ONLY when the operator opted in;
- *              every other item type posts exactly as it always has.
- *   warehouse  RM goes to the chosen "Received At"; everything else keeps the
- *              GRN's own store. Neither is ever mapped onto the other.
- *
- * @param {object[]} lines          received GRN lines (skuId set)
- * @param {Map} itemTypeBySku       String(skuId) -> SKU itemType
- * @param {boolean} addToRmStock    the operator's opt-in
- * @param {string|null} rmLocation  Received At for the RM lines
- * @param {string} grnWarehouse     the GRN's own store (e.g. MAIN)
- */
-export const planGrnStockPosting = ({ lines = [], itemTypeBySku, addToRmStock, rmLocation, grnWarehouse }) =>
-  lines.map((line) => {
-    const isRm = RM_ITEM_TYPES.includes(itemTypeBySku.get(String(line.skuId)));
-    return {
-      line,
-      isRm,
-      post: !isRm || !!addToRmStock,
-      warehouse: isRm ? rmLocation : grnWarehouse,
-    };
-  });
+const DESTINATION_NOTE = {
+  [INVENTORY_DESTINATION.RM_IMS]: 'RM IMS',
+  [INVENTORY_DESTINATION.CP_IMS]: 'Consumable & Packaging IMS',
+  [INVENTORY_DESTINATION.MAIN_STORE]: 'Main store',
+};
 
-const buildCompletionNote = (grnStatus, rmLineCount, addToRmStock, rmLocation) => {
-  const base = `GRN completed - stock posted (${grnStatus})`;
-  if (!rmLineCount) return base;
-  return addToRmStock
-    ? `${base}; ${rmLineCount} RM line(s) added to RM stock at ${rmLocation}`
-    : `${base}; ${rmLineCount} RM line(s) NOT added to RM stock (not opted in)`;
+/**
+ * The completion line in the activity timeline. Says plainly that nothing was
+ * stocked yet and where each line will go, because "GRN completed" alone cannot
+ * be told apart from "stock posted" six months later.
+ */
+const buildCompletionNote = (grnStatus, routes, rmLocation) => {
+  const byDest = Object.keys(DESTINATION_NOTE)
+    .map((d) => [d, routes.filter((r) => r.destination === d).length])
+    .filter(([, n]) => n)
+    .map(([d, n]) => `${DESTINATION_NOTE[d]}${d === INVENTORY_DESTINATION.RM_IMS ? ` at ${rmLocation}` : ''}: ${n}`);
+  return `GRN completed (${grnStatus}) — ${routes.length} line(s) awaiting QC; usable stock posts after the MD signs and Incoming QC completes`
+    + (byDest.length ? ` · ${byDest.join(' · ')}` : '');
 };
 
 const findOrThrow = async (id) => {
@@ -629,8 +679,11 @@ export const grnService = {
 
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
-    await assertInventoryType(sourceItems, data.inventoryType);
-    const { lines, totals } = computeLines(sourceItems);
+    const computed = computeLines(sourceItems);
+    // Destination per line from the SKU master; refuses Service / Job Work,
+    // unclassified SKUs and Raw Material without an explicit Received At.
+    const lines = await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN');
+    const { totals } = computed;
 
     const grnNumber = await generateGrnNumber(data.grnDate || new Date());
     const uniqueId = await generateGrnUniqueId();
@@ -652,15 +705,10 @@ export const grnService = {
       receivedBy: data.receivedBy || user?.name || '',
       preparedBy: data.preparedBy || user?.name || '',
       warehouse: data.warehouse || 'MAIN',
-      // The RM choice, captured when the GRN is raised rather than only at
-      // completion. `warehouse` above is the GRN's own store and stays MAIN —
-      // the two are never mapped onto each other.
-      // The Inventory Type decides the RM handling; a caller that predates it
-      // (no inventoryType) keeps the old opt-in semantics unchanged.
-      inventoryType: data.inventoryType || null,
-      ...(data.inventoryType
-        ? rmFieldsFor(data.inventoryType, data.rmReceivedAtLocation)
-        : { addToRmStock: !!data.addToRmStock, rmReceivedAtLocation: data.rmReceivedAtLocation || null }),
+      // Where the Raw Material lines physically landed. `warehouse` above is the
+      // GRN's own store and stays MAIN — the two are never mapped onto each other.
+      // The retired Inventory Type / Add to RM Stock stay at their defaults.
+      rmReceivedAtLocation: locationOrNull(data.rmReceivedAtLocation),
       howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
       challanDocument: data.challanDocument?.fileUrl ? { ...data.challanDocument, uploadedAt: new Date() } : undefined,
       invoiceDocument: data.invoiceDocument?.fileUrl ? { ...data.invoiceDocument, uploadedAt: new Date() } : undefined,
@@ -696,8 +744,9 @@ export const grnService = {
 
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
-    await assertInventoryType(sourceItems, data.inventoryType);
-    const { lines, totals } = computeLines(sourceItems);
+    const computed = computeLines(sourceItems);
+    const lines = await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN');
+    const { totals } = computed;
     // No PO to compare against — these columns are not applicable, never derived.
     lines.forEach((l) => { l.orderedQty = 0; l.previouslyReceivedQty = 0; l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
 
@@ -718,10 +767,7 @@ export const grnService = {
       receivedBy: data.receivedBy || user?.name || '',
       preparedBy: data.preparedBy || user?.name || '',
       warehouse: data.warehouse || 'MAIN',
-      inventoryType: data.inventoryType || null,
-      ...(data.inventoryType
-        ? rmFieldsFor(data.inventoryType, data.rmReceivedAtLocation)
-        : { addToRmStock: !!data.addToRmStock, rmReceivedAtLocation: data.rmReceivedAtLocation || null }),
+      rmReceivedAtLocation: locationOrNull(data.rmReceivedAtLocation),
       howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
       challanDocument: data.challanDocument?.fileUrl ? { ...data.challanDocument, uploadedAt: new Date() } : undefined,
       invoiceDocument: data.invoiceDocument?.fileUrl ? { ...data.invoiceDocument, uploadedAt: new Date() } : undefined,
@@ -814,7 +860,7 @@ export const grnService = {
     }
     if (!isOpenDraft(grn)) throw new AppError('Only draft GRNs can be edited', 400);
     const {
-      items, challanDocument, invoiceDocument, inventoryType,
+      items, challanDocument, invoiceDocument,
       vendorId, vendorName, vendorGST, vendorAddress, vendorPhone,
       ...rest
     } = data;
@@ -828,12 +874,7 @@ export const grnService = {
       if (vendorAddress !== undefined) grn.vendorAddress = vendorAddress || '';
       if (vendorPhone !== undefined) grn.vendorPhone = vendorPhone || '';
     }
-    if (inventoryType) {
-      grn.inventoryType = inventoryType;
-      Object.assign(grn, rmFieldsFor(inventoryType, data.rmReceivedAtLocation || grn.rmReceivedAtLocation));
-    }
-    // Every save is checked against the GRN's Inventory Type (lines as sent, or as stored).
-    await assertInventoryType(items || grn.items, grn.inventoryType);
+    if (data.rmReceivedAtLocation !== undefined) grn.rmReceivedAtLocation = locationOrNull(data.rmReceivedAtLocation);
     if (challanDocument) grn.challanDocument = challanDocument.fileUrl ? { ...challanDocument, uploadedAt: new Date() } : {};
     if (invoiceDocument) grn.invoiceDocument = invoiceDocument.fileUrl ? { ...invoiceDocument, uploadedAt: new Date() } : {};
     if (items) {
@@ -854,6 +895,9 @@ export const grnService = {
         Object.assign(grn, totals);
       }
     }
+    // Every save re-derives each line's destination from the SKU master (lines
+    // as sent, or as stored) and refuses what cannot be routed.
+    grn.items = await routeDraftLines(grn.items.map(plain), grn.rmReceivedAtLocation, grn.warehouse || 'MAIN');
     grn.updatedBy = user?._id;
     grn.activityTimeline.push({ action: 'UPDATE', description: 'Draft GRN updated', actorId: user?._id });
     return saveOpenDraft(grn);
@@ -872,15 +916,16 @@ export const grnService = {
   },
 
   /**
-   * Complete a GRN: post stock via inventoryService, update PO + PI quantities,
-   * roll receipt status, generate the GRN PDF, and leave qcStatus PENDING for
-   * Step 1.9 Incoming QC. Idempotent: the draft is claimed atomically (DRAFT +
-   * stockPosted:false → stockPosted:true) before anything is posted, so of two
-   * concurrent/double-submitted completes only one can ever post stock.
+   * Complete a GRN: update PO + PI quantities, roll receipt status, fix each
+   * received line's inventory destination, generate the GRN PDF, request the MD
+   * signature and leave qcStatus PENDING for Step 1.9 Incoming QC.
    *
-   * Raw Material lines are posted ONLY when the operator ticked "Add to RM
-   * Stock" (data.addToRmStock). Every other item type posts exactly as it
-   * always has — the opt-in gates RM and nothing else.
+   * NO usable stock is posted here (stockPostingStage QC_COMPLETION): each
+   * line is marked AWAITING_QC and its accepted qty posts when its Incoming QC
+   * completes, after the MD has signed (incomingQc.service). Idempotent: the
+   * draft is claimed atomically (DRAFT + stockPosted:false → stockPosted:true)
+   * before anything is written, so of two concurrent/double-submitted completes
+   * only one can ever roll the PO quantities.
    */
   async complete(id, data, user) {
     // ── 0) Claim the completion, atomically ──────────────────────────────────
@@ -897,7 +942,7 @@ export const grnService = {
     if (!grn) {
       const current = await findOrThrow(id); // 404 when it genuinely is not there
       if (current.grnStatus !== GRN_STATUS.DRAFT) throw new AppError('Only draft GRNs can be completed', 400);
-      throw new AppError('Stock already posted for this GRN', 400);
+      throw new AppError('This GRN has already been completed', 400);
     }
     // Hand the draft back (still DRAFT, editable) when completion fails before
     // any stock landed, so the user can correct it and complete again.
@@ -934,8 +979,7 @@ export const grnService = {
 
   /** complete() body — runs with the GRN claimed and the PO posting lock(s) held. */
   async _completeLocked(grn, data, user, releaseClaim) {
-    let pos = []; let piById; let piForLine; let receivedLines; let planFor; let rmLines;
-    let addToRmStock; let receivedAtLocation; let rmLocation; let inventoryType;
+    let pos = []; let piIdForLine = () => null; let receivedLines; let routes; let rmLocation;
     try {
       if (grn.isWithoutPo) {
         // No PO to re-derive figures against — the lines are final as saved,
@@ -961,9 +1005,9 @@ export const grnService = {
       receivedLines = grn.items.filter((it) => round2(it.receivedQty) > 0);
       if (!receivedLines.length) throw new AppError('Enter a received quantity on at least one item', 400);
 
-      // Last gate before anything posts. create()/update() already enforce this,
-      // but a GRN saved before the rule existed can still reach completion, and a
-      // coil must not enter stock with no way to identify it afterwards.
+      // Last gates before anything is written. create()/update() already enforce
+      // these, but a draft saved before a rule existed can still reach completion.
+      await assertPurchasable(receivedLines);
       await assertRmBatchNumbers(receivedLines);
 
       // Rule 6: extra receipt (beyond the CURRENT pending qty) must be explicitly
@@ -991,59 +1035,32 @@ export const grnService = {
         if (!line.skuId) throw new AppError(`"${line.itemName}" is not linked to a SKU — add it to the SKU master before receiving`, 400);
       }
 
-      // ── Which lines are Raw Material? ──────────────────────────────────────
-      // Read from the SKU master, never inferred from the item name: it is the
-      // same source RM IMS classifies by (RM_ITEM_TYPES), so "is this line RM?"
-      // cannot drift between the two modules. A line whose SKU carries any other
-      // item type is not RM and is completely unaffected by the opt-in.
+      // ── Where each line's stock will land ──────────────────────────────────
+      // Read from the SKU master, never from the item name or the request: the
+      // same source every IMS screen lists by, so the destination cannot drift
+      // from where the item is shown. Fixed on the line now and used unchanged
+      // when the line's QC posts the accepted qty.
       const skuDocs = await SKU.find({ _id: { $in: receivedLines.map((l) => l.skuId) } })
         .select('_id itemType').lean();
       const itemTypeBySku = new Map(skuDocs.map((s) => [String(s._id), s.itemType]));
-
-      // Both can be chosen when the GRN is raised and confirmed again here, so
-      // the request wins only when it actually says something. An omitted field
-      // inherits what the GRN already carries.
-      inventoryType = data.inventoryType || grn.inventoryType || null;
-      if (inventoryType) {
-        // One Inventory Type per GRN — refuse before anything posts (the claim is
-        // handed back below), never route a line into the wrong module.
-        const conflicts = findInventoryTypeConflicts({
-          lines: receivedLines, typeOf: (l) => itemTypeBySku.get(String(l.skuId)) || '', inventoryType,
-        });
-        if (conflicts.length) throw new AppError(inventoryTypeConflictMessage(conflicts, inventoryType), 400);
-        ({ addToRmStock, rmReceivedAtLocation: receivedAtLocation } = rmFieldsFor(
-          inventoryType, data.rmReceivedAtLocation || grn.rmReceivedAtLocation,
-        ));
-      } else {
-        // GRN raised before Inventory Type existed: its recorded opt-in, unchanged.
-        addToRmStock = data.addToRmStock !== undefined ? !!data.addToRmStock : !!grn.addToRmStock;
-        // receivedAtLocation = where the goods landed (recorded either way, never
-        // invented); rmLocation = where the RM movement posts (only when opted in,
-        // and only then does the default stand in).
-        receivedAtLocation = data.rmReceivedAtLocation || grn.rmReceivedAtLocation || null;
-      }
-      rmLocation = addToRmStock ? (receivedAtLocation || DEFAULT_RM_RECEIVED_AT) : null;
-
-      // An RM line with the box unticked is still RECEIVED — it updates the PO,
-      // the PI and the GRN — it just posts no inventory movement.
-      const plan = planGrnStockPosting({
-        lines: receivedLines, itemTypeBySku, addToRmStock, rmLocation, grnWarehouse: grn.warehouse,
+      // The request wins only when it actually names a location; otherwise the
+      // GRN's saved choice stands. No default: Raw Material needs an explicit one.
+      rmLocation = locationOrNull(data.rmReceivedAtLocation) || locationOrNull(grn.rmReceivedAtLocation);
+      routes = routeGrnLines({
+        lines: receivedLines,
+        typeOf: (l) => itemTypeBySku.get(String(l.skuId)) || '',
+        rmLocation,
+        grnWarehouse: grn.warehouse || 'MAIN',
       });
-      planFor = new Map(plan.map((p) => [p.line, p]));
-      rmLines = plan.filter((p) => p.isRm).map((p) => p.line);
+      assertRoutable(routes, { requireSku: true });
 
-      // Resolve each touched PO's own PI (different POs on one GRN may carry
-      // different PIs) — one lookup per distinct piId, not per line.
-      const piIds = uniq(pos.map((p) => p.piId));
-      const piDocs = piIds.length
-        ? await ProformaInvoice.find({ _id: { $in: piIds }, isDeleted: { $ne: true } })
-        : [];
-      piById = new Map(piDocs.map((d) => [String(d._id), d]));
+      // Each touched PO's own PI (different POs on one GRN may carry different
+      // PIs). Only the id is resolved here: the PI DOCUMENT is read fresh inside
+      // every attempt of the unit of work below.
       const poByPoId = new Map(pos.map((p) => [String(p._id), p]));
-      /** The PI (if any) for the PO a given received line belongs to. */
-      piForLine = (line) => {
+      piIdForLine = (line) => {
         const po = poByPoId.get(String(line.poId));
-        return po?.piId ? piById.get(String(po.piId)) : null;
+        return po?.piId ? String(po.piId) : null;
       };
     } catch (err) {
       await releaseClaim();
@@ -1052,10 +1069,10 @@ export const grnService = {
 
     // PO lines: receivedQty / pendingQty = completed GRNs + this GRN. Absolute
     // values (not increments), so re-applying on a fresh copy after a concurrent
-    // write elsewhere on the PO is safe. Runs for EVERY received line, posted or
-    // not: the goods arrived against the order either way. Keyed by
-    // `${poId}|${poItemId}` so two POs' identical line ids never collide
-    // (poItemId is already globally unique, but the key stays explicit).
+    // write elsewhere on the PO is safe. The goods arrived against the order, so
+    // the PO is rolled now — the material is no longer in transit; until its QC
+    // completes it is reported as Awaiting QC (inventory/awaitingQc.service).
+    // Keyed by `${poId}|${poItemId}` so two POs' identical line ids never collide.
     const priorReceived = new Map(receivedLines.map((l) => [`${l.poId}|${l.poItemId}`, round2(l.previouslyReceivedQty)]));
     // One flag per PO — the GRN is only FULLY_RECEIVED once every PO it
     // touches is itself fully received (resolves the multi-PO status gap).
@@ -1069,7 +1086,7 @@ export const grnService = {
         poItem.receivedQty = round2((priorReceived.get(`${line.poId}|${line.poItemId}`) || 0) + line.receivedQty);
         poItem.pendingQty = Math.max(0, round2((poItem.quantity || 0) - poItem.receivedQty));
       }
-      // ── 4) Roll PO status (Rules 4 & 5) ──
+      // ── Roll PO status (Rules 4 & 5) ──
       const fully = doc.items.every((p) => round2((p.quantity || 0) - (p.receivedQty || 0)) <= 0);
       poFullyReceivedById.set(String(doc._id), fully);
       doc.poStatus = fully ? PO_STATUS.FULLY_RECEIVED : PO_STATUS.PARTIAL_RECEIVED;
@@ -1077,60 +1094,64 @@ export const grnService = {
       doc.activityTimeline.push({ action: 'GRN_RECEIVED', description: `${grn.grnNumber} received (${grn.totalReceivedQty})`, actorId: user?._id });
     };
 
-    const touchedPiIds = new Set();
+    // ── 1) Fix each line's destination; its stock waits for QC ──
+    // Pure and repeatable, so done once, before the unit of work.
+    const routeFor = new Map(routes.map((r) => [r.line, r]));
+    const rmLineCount = routes.filter((r) => r.isRm).length;
+    for (const line of receivedLines) {
+      const route = routeFor.get(line);
+      line.itemTypeAtReceipt = route.itemType;
+      line.inventoryDestination = route.destination;
+      line.stockWarehouse = route.warehouse;
+      line.stockStatus = GRN_LINE_STOCK_STATUS.AWAITING_QC;
+      line.postedQty = 0;
+    }
+    const finalItems = grn.items.map(plain);
+    const finalTotals = {
+      totalOrderedQty: grn.totalOrderedQty, totalInvoiceQty: grn.totalInvoiceQty, totalReceivedQty: grn.totalReceivedQty,
+      totalShortQty: grn.totalShortQty, totalValue: grn.totalValue,
+    };
+    const retiredType = grn.inventoryType;
+    let saved = null;
 
     // ── One unit of work ─────────────────────────────────────────────────────
-    // Every movement, both documents' quantities and the GRN's own status land
-    // together or not at all. On a standalone mongod runAtomically degrades to
-    // non-atomic and logs that once.
+    // Both documents' quantities and the GRN's own status land together or not
+    // at all. No inventory movement is written here.
+    //
+    // The callback can run MORE THAN ONCE: withTransaction replays it after a
+    // transient abort, and on a standalone mongod runAtomically re-runs it
+    // without a session after the first write is refused. So every attempt
+    // starts from FRESH copies of the PO, PI and GRN — never from a document an
+    // earlier attempt already changed in memory, which would add a second
+    // timeline entry or a second PI receipt.
     try {
       await inventoryService.runAtomically(async (session) => {
         const opts = session ? { session } : undefined;
+        const read = (q) => q.session(session || null);
 
+        // ── 2) PI lines: receivedQty / balanceQty ──
+        const pis = new Map();
+        const touchedPiIds = new Set();
         for (const line of receivedLines) {
-          // ── 1) Post stock — strictly through inventoryService ──
-          const step = planFor.get(line);
-          const linePo = pos.find((p) => String(p._id) === String(line.poId));
-          const linePi = piForLine ? piForLine(line) : null;
-          if (step.post) {
-            const { movement } = await inventoryService.increaseStock({
-              skuId: line.skuId, skuCode: line.skuCode, skuName: line.itemName, unit: line.unit,
-              // RM goes to the "Received At" the operator chose; everything else
-              // keeps the GRN's own store.
-              warehouse: step.warehouse,
-              quantity: round2(line.receivedQty),
-              unitCost: round2(line.rate),
-              txnType: 'GRN_IN', sourceModule: 'PURCHASE_FMS',
-              refType: 'GRN', refId: grn._id, refNumber: grn.grnNumber,
-              batchNo: line.batchNo || '',
-              vendorId: grn.vendorId, vendorName: grn.vendorName,
-              // Stamp the movement with THIS line's own PO/PI, not the GRN
-              // header's primary — distinct POs on one GRN can differ.
-              poId: line.poId || grn.poId, poNumber: line.poNumber || grn.poNumber,
-              piId: linePo?.piId, piNumber: linePo?.piNumber,
-              remarks: 'Stock added from Purchase GRN',
-              performedBy: user, movementDate: grn.grnDate,
-            }, opts);
-            line.movementId = movement._id;
-            line.movementNumber = movement.movementNumber;
-          }
-
-          // ── 3) PI line: receivedQty / balanceQty ──
-          if (linePi) {
-            const piItem = linePi.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode)
-              || linePi.items.find((p) => p.itemName === line.itemName);
-            if (piItem) {
-              piItem.receivedQty = round2((piItem.receivedQty || 0) + line.receivedQty);
-              piItem.balanceQty = Math.max(0, round2((piItem.quantity || 0) - piItem.receivedQty));
-              touchedPiIds.add(String(linePi._id));
-            }
+          const piId = piIdForLine(line);
+          if (!piId) continue;
+          if (!pis.has(piId)) pis.set(piId, await read(ProformaInvoice.findOne({ _id: piId, isDeleted: { $ne: true } })));
+          const pi = pis.get(piId);
+          if (!pi) continue;
+          const piItem = pi.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode)
+            || pi.items.find((p) => p.itemName === line.itemName);
+          if (piItem) {
+            piItem.receivedQty = round2((piItem.receivedQty || 0) + line.receivedQty);
+            piItem.balanceQty = Math.max(0, round2((piItem.quantity || 0) - piItem.receivedQty));
+            touchedPiIds.add(piId);
           }
         }
 
-        // ── 2) + 4) PO quantities and status — nothing to roll for a W/O PO GRN,
+        // ── 3) PO quantities and status — nothing to roll for a W/O PO GRN,
         // one save (with its own version-conflict retry) per distinct PO ──
-        for (let po of pos) {
-          const poId = po._id;
+        for (const { _id: poId } of pos) {
+          let po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
+          if (!po) throw new AppError('Linked Purchase Order not found', 404);
           applyToPo(po);
           for (let attempt = 1; ; attempt += 1) {
             try {
@@ -1138,71 +1159,84 @@ export const grnService = {
               break;
             } catch (err) {
               if (!isVersionConflict(err) || attempt >= 4) throw err;
-              po = await VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }).session(session || null);
+              po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
               applyToPo(po);
             }
           }
         }
         for (const piId of touchedPiIds) {
-          const piDoc = piById.get(piId);
+          const piDoc = pis.get(piId);
           piDoc.updatedBy = user?._id;
           await piDoc.save(opts);
         }
 
-        // ── 5) Finalize GRN + QC handoff ──
+        // ── 4) Finalize GRN + QC handoff ──
         // A W/O PO GRN has no PO to be "partial" or "full" against — RECEIVED is
         // the terminal status for it (already QC-eligible, see GRN_QC_ELIGIBLE).
         // FULLY_RECEIVED only once EVERY PO this GRN touches is itself fully
         // received — a multi-PO GRN with one PO still partial stays PARTIAL.
+        const g = await read(GoodsReceiptNote.findById(grn._id));
         const allPosFullyReceived = pos.length > 0 && pos.every((po) => poFullyReceivedById.get(String(po._id)));
-        grn.grnStatus = grn.isWithoutPo ? GRN_STATUS.RECEIVED : (allPosFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED);
-        grn.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
-        grn.stockPosted = true;               // already claimed above; kept explicit
-        grn.addToRmStock = addToRmStock;      // the operator's choice, on the record
-        if (inventoryType) grn.inventoryType = inventoryType;
-        // Record where the goods landed, not merely where stock went.
-        grn.rmReceivedAtLocation = addToRmStock ? rmLocation : receivedAtLocation;
-        grn.receivedAt = new Date();
-        grn.completedAt = new Date();
-        grn.completedBy = user?.name || '';
-        if (data.remarks) grn.remarks = data.remarks;
-        grn.updatedBy = user?._id;
-        grn.activityTimeline.push({
+        g.items = finalItems;
+        Object.assign(g, finalTotals);
+        g.grnStatus = g.isWithoutPo ? GRN_STATUS.RECEIVED : (allPosFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED);
+        g.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
+        g.stockPosted = true;               // the completion claim (see the model)
+        g.stockPostingStage = GRN_STOCK_POSTING_STAGE.QC_COMPLETION;
+        // Kept truthful for older readers: RM lines here always go to RM IMS.
+        g.addToRmStock = rmLineCount > 0;
+        // A draft raised before Inventory Type was retired may still carry one;
+        // it is no longer what decides anything, so the record says so.
+        g.inventoryType = null;
+        g.rmReceivedAtLocation = rmLocation;
+        g.receivedAt = new Date();
+        g.completedAt = new Date();
+        g.completedBy = user?.name || '';
+        if (data.remarks) g.remarks = data.remarks;
+        g.updatedBy = user?._id;
+        g.activityTimeline.push({
           action: 'COMPLETE',
-          description: buildCompletionNote(grn.grnStatus, rmLines.length, addToRmStock, rmLocation)
-            + (inventoryType ? ` · Inventory Type: ${GRN_INVENTORY_TYPE_LABEL[inventoryType]}` : ''),
+          description: buildCompletionNote(g.grnStatus, routes, rmLocation)
+            + (retiredType ? ` · draft's manual Inventory Type "${GRN_INVENTORY_TYPE_LABEL[retiredType] || retiredType}" ignored — destination derived per line from the SKU master` : ''),
           actorId: user?._id,
         });
-        await grn.save(opts);
+        await g.save(opts);
+        saved = g;
       });
     } catch (err) {
-      // Rolled back (or nothing written) → release the claim. If movements did
-      // land (deployment without transactions), keep the GRN locked so a retry
-      // can never post the same stock twice.
+      // Nothing posts stock here, so a failed completion is simply handed back
+      // as an editable draft. (The movement check stays as a tripwire: nothing
+      // in this path writes one, so finding any means something else did.)
       const posted = await inventoryService.getMovementsByRef('GRN', grn._id).catch(() => [{}]);
       if (!posted.length) await releaseClaim();
-      else logger.error(`[grn] ${grn.grnNumber}: completion failed part-way (${posted.length} movement(s) written) — GRN left locked: ${err.message}`);
+      else logger.error(`[grn] ${grn.grnNumber}: completion failed and ${posted.length} movement(s) exist for it — GRN left locked: ${err.message}`);
       throw err;
     }
+    grn = saved;
 
-    // What the caller tells the operator. Counted from what was actually
-    // decided, so the UI can never claim RM stock moved when no RM line did.
+    // What the caller tells the operator — counted from what was decided.
+    const count = (d) => routes.filter((r) => r.destination === d).length;
     grn.$locals.rmSummary = {
-      inventoryType,
-      addToRmStock,
-      rmReceivedAtLocation: rmLocation,
-      rmLineCount: rmLines.length,
-      rmPostedCount: addToRmStock ? rmLines.length : 0,
+      stockPostingStage: GRN_STOCK_POSTING_STAGE.QC_COMPLETION,
+      awaitingQcLineCount: routes.length,
+      rmLineCount,
+      rmReceivedAtLocation: rmLineCount ? rmLocation : null,
+      rmPostedCount: 0, // nothing posts at GRN completion any more
+      destinations: {
+        [INVENTORY_DESTINATION.RM_IMS]: count(INVENTORY_DESTINATION.RM_IMS),
+        [INVENTORY_DESTINATION.CP_IMS]: count(INVENTORY_DESTINATION.CP_IMS),
+        [INVENTORY_DESTINATION.MAIN_STORE]: count(INVENTORY_DESTINATION.MAIN_STORE),
+      },
     };
 
-    // ── 6) PDF (non-fatal) ──
+    // ── 5) PDF (non-fatal) ──
     try {
       const { grnPdfUrl, grnPdfFileName } = await this.generatePdf(grn._id);
       grn.grnPdfUrl = grnPdfUrl;
       grn.grnPdfFileName = grnPdfFileName;
     } catch (err) { logger.error(`[grn] PDF generation failed for ${grn.grnNumber}: ${err.message}`); }
 
-    // ── 7) Ready for MD Approval (non-fatal) ──
+    // ── 6) Ready for MD Approval (non-fatal) ──
     try {
       await approvalService.ensureReady({ documentType: 'GRN', documentId: grn._id, documentNumber: grn.grnNumber }, user);
     } catch (err) { logger.error(`[grn] approval ensureReady failed for ${grn.grnNumber}: ${err.message}`); }

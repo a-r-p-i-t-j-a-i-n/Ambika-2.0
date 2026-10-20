@@ -48,9 +48,10 @@ const pick = (it) => Object.fromEntries(ENTERED.map((f) => [f, it[f]]));
  * "Complete GRN + QC". Each click performs the NEXT step the existing rules
  * allow, each through its existing confirmation:
  *
- *   GRN draft     → Complete & Post Stock (GrnCompleteDialog — stock posts once)
+ *   GRN draft     → Complete GRN (GrnCompleteDialog — receipt finalised, no stock yet)
  *   awaiting MD   → MD signs the GRN (SignDocumentDialog — MD users only)
- *   signed        → save the QC and complete it (IncomingQCCompleteDialog)
+ *   signed        → save the QC and complete it (IncomingQCCompleteDialog) —
+ *                   on a QC-gated GRN this is when accepted qty is posted to stock
  *
  * Nothing is skipped: the server still refuses a QC for an unsigned GRN. A QC
  * draft can be saved to the server once the GRN is signed; before that the
@@ -125,8 +126,8 @@ const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, on
     if (stage.key === 'GRN_DRAFT') {
       setBusy(true);
       try {
-        // Unsaved GRN edits (Create / Edit GRN form) are saved first, so the stock
-        // posted is exactly what is on screen.
+        // Unsaved GRN edits (Create / Edit GRN form) are saved first, so what is
+        // received is exactly what is on screen.
         if (prepareGrn && !(await prepareGrn())) return;
         onCompleteGrn();
       } finally { setBusy(false); }
@@ -139,12 +140,17 @@ const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, on
     }
   };
 
+  // GRNs completed before QC-gated posting already hold their stock; on every
+  // other GRN nothing is usable until this QC completes.
+  const legacyStock = Boolean(grn.stockPosted) && !grn.stockPostingStage && stage.key !== 'GRN_DRAFT';
   const nextText = (() => {
-    if (stage.key === 'GRN_DRAFT') return 'Next: complete the GRN and post stock, then the MD signs the GRN, then the QC is completed.';
-    if (canSign) return 'GRN completed. Next: sign the GRN as MD, then complete the QC.';
-    if (waitingForMd && grn.approvalStatus === 'READY_FOR_MD_APPROVAL') return 'GRN completed — waiting for the MD to sign it. Your QC entries are kept on this device until then.';
+    if (stage.key === 'GRN_DRAFT') return 'Next action: Complete GRN. Then the MD signs the GRN and the QC is completed — stock is posted only when the QC is completed.';
+    if (canSign) return 'GRN completed — awaiting MD signature. Next action: sign the GRN as MD, then complete the QC.';
+    if (waitingForMd && grn.approvalStatus === 'READY_FOR_MD_APPROVAL') return 'Awaiting MD Signature — the GRN is completed and waits for the MD to sign it. Your QC entries are kept on this device until then.';
     if (waitingForMd) return stage.desc;
-    return 'Next: confirm and complete the QC — rejected quantities move out of stock.';
+    return legacyStock
+      ? 'Next action: Complete QC — this earlier GRN already added its stock, so rejected quantities move out of stock.'
+      : 'Next action: Complete QC — accepted quantities are then posted to stock; rejected quantities never enter it.';
   })();
 
   return (

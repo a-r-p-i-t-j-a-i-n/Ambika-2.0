@@ -45,6 +45,34 @@ const isTxnUnsupported = (e) => e?.code === 20
 let txnUnsupportedWarned = false;
 
 /**
+ * A unit of work that must be atomic has nowhere to run on a mongod that has
+ * no transactions: replaying it without a session is exactly the behaviour
+ * that leaves a half-posted ledger. Refusing is the only safe answer, so the
+ * caller passes `{ requireTransaction: true }` and gets this 503 instead.
+ *
+ * MongoDB only offers transactions on a replica set (or a sharded cluster), so
+ * every environment that posts stock — production, staging, and any local one
+ * used for QC testing — must run as one. A single-node replica set is enough:
+ *
+ *   mongod --replSet rs0 --dbpath <data>        then, once:
+ *   mongosh --eval 'rs.initiate()'              and connect with ?replicaSet=rs0
+ *
+ * INVENTORY_ALLOW_NON_ATOMIC=true opts a throwaway local setup out of this (the
+ * guarded e2e harness sets it, which is why those suites still run against a
+ * standalone mongod). It must never be set where real stock is kept: it buys
+ * back exactly the partial-write behaviour this guard exists to prevent.
+ */
+const ALLOW_NON_ATOMIC = () => String(process.env.INVENTORY_ALLOW_NON_ATOMIC || '').toLowerCase() === 'true';
+const NON_ATOMIC_REFUSAL = 'This posting has to be written as one unit, and this database cannot: MongoDB only runs transactions on a replica set. '
+  + 'Nothing was posted. Point the server at a replica set (a single-node one is enough) and try again.';
+
+const refuseWithoutTransaction = (requireTransaction, detail) => {
+  if (!requireTransaction || ALLOW_NON_ATOMIC()) return;
+  logger.error(`[inventory] refusing a non-atomic posting — ${detail}`);
+  throw new AppError(NON_ATOMIC_REFUSAL, 503);
+};
+
+/**
  * Run `work` as one all-or-nothing unit: either every movement it writes lands,
  * or none of them does.
  *
@@ -54,13 +82,21 @@ let txnUnsupportedWarned = false;
  * session and must pass it down to every write.
  *
  * On a deployment without transactions (a standalone mongod) the work still
- * runs, just without the rollback guarantee, and says so once in the log.
+ * runs, just without the rollback guarantee, and says so once in the log —
+ * unless the caller passed `{ requireTransaction: true }`, which refuses
+ * instead of degrading (see above). `work` may be replayed, so it must read
+ * every document it changes afresh on each attempt.
+ *
+ * @param {(session: import('mongoose').ClientSession|null) => Promise<any>} work
+ * @param {{ requireTransaction?: boolean }} [opts]
  */
-export const runAtomically = async (work) => {
+export const runAtomically = async (work, opts = {}) => {
+  const { requireTransaction = false } = opts;
   let session;
   try {
     session = await mongoose.startSession();
   } catch (e) {
+    refuseWithoutTransaction(requireTransaction, `sessions unavailable: ${e.message}`);
     if (!txnUnsupportedWarned) { logger.warn(`[inventory] transactions unavailable — writes are not atomic: ${e.message}`); txnUnsupportedWarned = true; }
     return work(null);
   }
@@ -72,6 +108,9 @@ export const runAtomically = async (work) => {
         return out;
       } catch (e) {
         if (isTxnUnsupported(e)) {
+          // Nothing was committed (the server refused to start the transaction
+          // at all), so refusing here leaves no partial state behind.
+          refuseWithoutTransaction(requireTransaction, 'this mongod is not a replica set member');
           if (!txnUnsupportedWarned) { logger.warn('[inventory] transactions unavailable — writes are not atomic'); txnUnsupportedWarned = true; }
           return work(null);
         }

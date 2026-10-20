@@ -3,8 +3,11 @@
  *
  *   node e2e/fullFlow.e2e.mjs
  *
- *   PO -> GRN -> Add to RM Stock -> RM Stock -> batch lookup -> Cut Coils
- *      -> Circle stock -> Scrap -> Scrap by physical coil -> Movement history
+ *   PO -> GRN (no stock) -> MD signature -> Incoming QC -> RM Stock -> batch lookup
+ *      -> Cut Coils -> Circle stock -> Scrap -> Scrap by physical coil -> Movement history
+ *
+ * The coil's destination comes from its SKU (RM IMS) at the chosen Received At;
+ * completing the GRN posts nothing — the accepted coil is stocked at QC.
  *
  * Follows grnRm.e2e.mjs and cutCoils.e2e.mjs: the playwright LIBRARY, not
  * @playwright/test, because that is what is installed. Every action below is
@@ -19,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
+import { combinedBtn, confirmCompleteGrn, signAndCompleteQc, stageText } from './_grnLifecycle.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -172,17 +176,16 @@ const main = async () => {
     check('the Coil row demands a Batch No', (await dlg.getByLabel(/Batch No \*/).count()) > 0);
     await batchField.fill(p.batch);
 
-    // Inventory Type (it replaced "Add to RM Stock") + Received At, on the form
-    // where the GRN is raised. Received At is asked for only for Raw Material.
-    check('Received At is not asked for before an Inventory Type is chosen', (await dlg.getByRole('combobox', { name: /Received At/i }).count()) === 0);
-    await pickSelect('Inventory Type', /^Raw Material \(RM\)$/);
-    check('Inventory Type is "Raw Material (RM)" on the form — the coil goes to RM stock', /Raw Material \(RM\)/.test(await comboText('Inventory Type')), await comboText('Inventory Type'));
+    // No manual Inventory Type: the coil's SKU sends it to RM IMS, and Received
+    // At (where it physically landed) is asked for automatically — never pre-filled.
+    check('no Inventory Type; the coil line shows → RM IMS', (await dlg.getByRole('combobox', { name: /Inventory Type/ }).count()) === 0
+      && (await dlg.getByTestId('grn-line-destination').allInnerTexts()).some((t) => /RM IMS/.test(t)));
+    check('Received At is asked for and not pre-filled', (await dlg.getByRole('combobox', { name: /Received At/i }).count()) > 0 && !/PLG01|JW001/.test(await comboText('Received At')));
     await pickSelect('Received At', new RegExp(p.at));
     check(`Received At is set to ${p.at}`, new RegExp(p.at).test(await comboText('Received At')));
     await shot(`02-grn-form-${p.batch}`);
 
-    // The form's submit is "Save GRN" (it then stays open for Incoming QC).
-    await dlg.getByRole('button', { name: /^save grn$/i }).click();
+    await dlg.getByRole('button', { name: /^Save as Draft$/ }).click();
     await page.waitForTimeout(3500);
     check('the GRN is created as a draft', (await page.getByText(/created \(draft\)/i).count()) > 0);
 
@@ -198,25 +201,24 @@ const main = async () => {
     if (!id) continue;
     grnIds[p.batch] = id;
 
-    // ── Complete & post stock ──
+    // ── Complete the GRN: receipt final, NO stock yet ──
     await go(`${APP}/procurement/grns/${id}`);
-    await page.waitForTimeout(2200);
-    await page.getByRole('button', { name: /complete & post stock/i }).first().click();
+    await page.waitForSelector('#grn-qc-section', { timeout: 15000 });
+    await page.waitForTimeout(1200);
+    await combinedBtn(page).click();
     await page.waitForTimeout(900);
-
-    // The choices made on the form must be inherited by the dialog.
-    check('the dialog inherits Inventory Type = Raw Material (RM) from the form',
-      /Raw Material \(RM\)/.test(await comboText('Inventory Type')), await comboText('Inventory Type'));
-    check(`the dialog inherits Received At = ${p.at}`,
+    check(`the dialog inherits Received At = ${p.at} from the form`,
       new RegExp(p.at).test(await comboText('Received At')), await comboText('Received At'));
     await shot(`03-grn-complete-${p.batch}`);
+    await confirmCompleteGrn(page);
+    const stockAfterGrn = (await page.getByTestId('grn-line-stock').allInnerTexts()).join(' ');
+    check('completed — Awaiting MD Signature; the coil is Awaiting QC, not stock', (await stageText(page)) === 'Awaiting MD Signature'
+      && /Awaiting QC/.test(stockAfterGrn), stockAfterGrn.replace(/\s+/g, ' '));
 
-    await page.getByRole('button', { name: /complete & post stock/i }).last().click();
-    const posted = await page.getByText(/RM stock updated successfully/i).first()
-      .waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
-    check('completion reports RM stock was updated', posted);
-    check(`…at ${p.at}`, (await page.getByText(new RegExp(`at ${p.at}`, 'i')).count()) > 0);
-    await page.waitForTimeout(1500);
+    // ── MD signs, Incoming QC accepts the coil → stock ──
+    check('MD signs, QC completes (accept all)', (await signAndCompleteQc(page)) === 'QC Completed · Passed');
+    const stockAfterQc = (await page.getByTestId('grn-line-stock').allInnerTexts()).join(' ').replace(/\s+/g, ' ');
+    check(`…the coil is now RM stock at ${p.at}`, new RegExp(`RM IMS · ${p.at} Posted `).test(stockAfterQc), stockAfterQc);
     await shot(`04-grn-completed-${p.batch}`);
   }
 
@@ -431,8 +433,8 @@ const main = async () => {
   if (firstGrn) {
     await go(`${APP}/procurement/grns/${firstGrn}`);
     await page.waitForTimeout(2200);
-    const canComplete = await page.getByRole('button', { name: /complete & post stock/i }).count();
-    check('D. a completed GRN offers no second "Complete & post stock"', canComplete === 0,
+    const canComplete = (await page.getByRole('button', { name: /^Complete GRN$/ }).count()) + (await page.getByRole('button', { name: 'Complete GRN + QC' }).count());
+    check('D. a completed (and QC-ed) GRN offers no second "Complete GRN"', canComplete === 0,
       `${canComplete} button(s)`);
     await shot('13-negative-duplicate-grn');
   }

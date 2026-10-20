@@ -22,7 +22,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { useGetVendorsQuery } from '../../../store/api/vendorApi';
-import { useGetSkusQuery } from '../../../store/api/skuApi';
+import { useGetSkusQuery, useGetSkuLookupQuery } from '../../../store/api/skuApi';
 // The RM module's own classification of its SKUs (kind COIL / CIRCLE, derived
 // from SKU.itemType). Reused rather than re-deriving "is this a coil?" here, so
 // the form and the server can never disagree about what counts as RM.
@@ -34,15 +34,13 @@ import GrnQcStatusChip from './GrnQcStatusChip';
 import { GrnQcSections } from './GrnQcSection';
 import StatusChip from '../components/StatusChip';
 import { pickGrnQc } from '../incoming-qc/qcForm';
-import {
-  INVENTORY_TYPE_OPTIONS, INVENTORY_TYPE_HELP, inventoryTypeConflicts, inventoryTypeConflictText,
-} from './inventoryType';
+import { destinationOf, routingProblemOf, destinationText, DESTINATION_META } from './inventoryDestination';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
 // The SAME two values and default the RM Stock In screen uses, so "Received At"
 // has one definition across both modules.
-import { RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT } from '../../rm-ims/receivedAt';
+import { RECEIVED_AT_OPTIONS } from '../../rm-ims/receivedAt';
 
 const ACCEPT = '.pdf,image/*';
 
@@ -93,7 +91,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const liveGrn = grnProp ? grn : (savedFreshRes?.data || savedGrn);
   const { data: qcRes } = useGetIncomingQcsByGrnQuery(liveGrn?._id, { skip: !open || !isGrnCompleted(liveGrn) });
   const qcStage = resolveGrnQcStage(liveGrn, pickGrnQc(qcRes?.data || []));
-  // Once completed (stock posted) or MD-signed, the GRN is read-only for good —
+  // Once completed or MD-signed, the GRN is read-only for good —
   // the server refuses edits; here the fields stop accepting them and Save goes.
   const grnLocked = Boolean(liveGrn?._id) && (isGrnCompleted(liveGrn) || liveGrn.approvalStatus === 'MD_APPROVED' || liveGrn.grnStatus === 'CANCELLED');
 
@@ -106,9 +104,10 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const [header, setHeader] = useState({
     grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '',
     vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '',
-    // Inventory Type (required — decides the IMS module) and, for Raw Material,
-    // where it landed. Both ride along in buildPayload()'s `...header` spread.
-    inventoryType: '', rmReceivedAtLocation: DEFAULT_RECEIVED_AT,
+    // Where the Raw Material landed — asked for (and required) only when a Raw
+    // Material line is received, and never pre-filled: it must be chosen.
+    // Every line's inventory destination comes from its SKU master Item Type.
+    rmReceivedAtLocation: '',
     // Vendor snapshot — only used (and only editable) for a W/O PO GRN; on a
     // PO-backed GRN this always mirrors the PO and is never sent by the form.
     vendorId: '', vendorName: '', vendorGST: '', vendorAddress: '', vendorPhone: '',
@@ -224,10 +223,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         invoiceDate: grn.invoiceDate ? grn.invoiceDate.slice(0, 10) : '',
         vehicleNumber: grn.vehicleNumber || '', receivedBy: grn.receivedBy || '', preparedBy: grn.preparedBy || '',
         howItemReceived: grn.howItemReceived || 'FULL_MATERIAL_RECEIVED', remarks: grn.remarks || '',
-        // A draft raised before Inventory Type existed opens with none chosen —
-        // its old checkbox is not reinterpreted; the operator picks the type.
-        inventoryType: grn.inventoryType || '',
-        rmReceivedAtLocation: grn.rmReceivedAtLocation || DEFAULT_RECEIVED_AT,
+        rmReceivedAtLocation: grn.rmReceivedAtLocation || '',
         vendorId: grn.vendorId || '', vendorName: grn.vendorName || '', vendorGST: grn.vendorGST || '',
         vendorAddress: grn.vendorAddress || '', vendorPhone: grn.vendorPhone || '',
       });
@@ -243,7 +239,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       setMode('PO');
       setHeader({
         grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '', vehicleNumber: '', receivedBy: '', preparedBy: '',
-        howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '', inventoryType: '', rmReceivedAtLocation: DEFAULT_RECEIVED_AT,
+        howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '', rmReceivedAtLocation: '',
         vendorId: '', vendorName: '', vendorGST: '', vendorAddress: '', vendorPhone: '',
       });
       setDoc(null);
@@ -292,6 +288,37 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   }, [rmRes]);
   /** 'Coil' | 'Circle' | '' — '' means "not RM", so leave the row alone. */
   const rmKindOf = (it) => rmKindBySku.get(String(it.skuId || '')) || '';
+
+  // ── Inventory destination per line (display; the server decides) ───────────
+  // Item Types of the lines' SKUs, so each row can show where its stock will
+  // land before the GRN is saved. W/O PO picks already carry their Item Type.
+  const lineSkuIds = useMemo(() => [...new Set(items.map((it) => String(it.skuId || '')).filter(Boolean))].sort(), [items]);
+  const { data: lineSkusRes } = useGetSkuLookupQuery(
+    { ids: lineSkuIds.join(','), limit: 2000 }, { skip: !open || !lineSkuIds.length },
+  );
+  const itemTypeBySku = useMemo(() => {
+    const m = new Map();
+    [...(lineSkusRes?.data || []), ...(skusRes?.data || [])].forEach((s) => s?._id && m.set(String(s._id), s.itemType));
+    return m;
+  }, [lineSkusRes, skusRes]);
+  const itemTypeOf = (it) => itemTypeBySku.get(String(it.skuId || '')) || '';
+  const isRmLine = (it) => !!rmKindOf(it) || destinationOf(itemTypeOf(it)) === 'RM_IMS';
+  const hasRmLine = validItems.some(isRmLine);
+  /** Destination chip for one row: where it goes, or why it cannot be received. */
+  const destinationTag = (it) => {
+    const t = itemTypeOf(it);
+    const problem = routingProblemOf(t);
+    const dest = destinationOf(t) || (rmKindOf(it) ? 'RM_IMS' : null);
+    if (!problem && !dest) return null;
+    const where = dest === 'RM_IMS' ? (header.rmReceivedAtLocation || 'Received At?') : 'MAIN';
+    return (
+      <Chip size="small" variant="outlined" data-testid="grn-line-destination"
+        label={problem || `→ ${destinationText(dest, where)}`}
+        color={problem ? 'error' : 'default'}
+        sx={{ mt: 0.5, height: 20, fontSize: '0.68rem', fontWeight: 700, maxWidth: '100%',
+          ...(problem ? {} : { color: DESTINATION_META[dest].color, borderColor: DESTINATION_META[dest].color }) }} />
+    );
+  };
   const batchMissing = (it) => !!rmKindOf(it) && !it.batchNo?.trim();
 
   // Highlight the header Remarks field — and escalate it to a required/warning
@@ -309,8 +336,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       const noName = validItems.find((it) => !it.itemName?.trim());
       if (noName) { enqueueSnackbar('Every item needs a description', { variant: 'warning' }); return false; }
       // A free-typed (not picked from the SKU list) item is allowed on a draft,
-      // but complete() requires every line to resolve to a real SKU before it
-      // can post stock — so finalizing one here would save the draft fine and
+      // but complete() requires every line to resolve to a real SKU (its Item
+      // Type decides where it is stocked) — so finalizing one here would save the draft fine and
       // then fail on the very next call. Catch it before either call fires.
       if (forFinalize) {
         const noSku = validItems.find((it) => !it.skuId);
@@ -335,17 +362,14 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       enqueueSnackbar(`Batch Number is required for ${rmKindOf(noBatch)}.`, { variant: 'warning' });
       return false;
     }
-    // Inventory Type: required, and one per GRN (the server enforces both too).
-    if (!header.inventoryType) {
-      enqueueSnackbar('Select the Inventory Type for the received material', { variant: 'warning' }); return false;
+    // Lines the SKU master says cannot be received (the server refuses them too).
+    const blocked = validItems.find((it) => routingProblemOf(itemTypeOf(it)));
+    if (blocked) {
+      enqueueSnackbar(`"${blocked.itemName}": ${routingProblemOf(itemTypeOf(blocked))}. Set its received qty to 0.`, { variant: 'warning' }); return false;
     }
-    const conflicts = inventoryTypeConflicts(validItems, header.inventoryType, (it) => Boolean(rmKindOf(it)));
-    if (conflicts.length) {
-      enqueueSnackbar(inventoryTypeConflictText(conflicts, header.inventoryType), { variant: 'warning' }); return false;
-    }
-    // An RM receipt must say where the material landed (its stock posts there).
-    if (header.inventoryType === 'RM' && !header.rmReceivedAtLocation) {
-      enqueueSnackbar('Choose a Received At location for the Raw Material', { variant: 'warning' }); return false;
+    // Raw Material must say where it landed (its stock posts there) — chosen, never assumed.
+    if (hasRmLine && !header.rmReceivedAtLocation) {
+      enqueueSnackbar('Select Received At — this GRN has Raw Material lines', { variant: 'warning' }); return false;
     }
     return true;
   };
@@ -353,8 +377,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const buildPayload = () => ({
     ...header,
     isWithoutPo,
-    // Received At belongs to Raw Material only; Consumable & Packaging posts at the GRN's store.
-    rmReceivedAtLocation: header.inventoryType === 'RM' ? header.rmReceivedAtLocation : null,
+    // Received At belongs to Raw Material only; every other line posts at the GRN's store.
+    rmReceivedAtLocation: hasRmLine ? header.rmReceivedAtLocation : null,
     invoiceDate: header.invoiceDate || undefined,
     challanDocument: doc ? { fileName: doc.fileName, fileUrl: doc.fileUrl, fileType: doc.fileType } : undefined,
     items: validItems.map((it) => (isWithoutPo ? {
@@ -404,12 +428,12 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   };
 
   // ── Save & Finalize GRN — chains the SAME create/update + complete() calls
-  // the two-step flow already uses (this form, then the separate "Complete &
-  // Post Stock" dialog on the GRN detail page); it does not duplicate or
-  // shortcut any of that logic. complete() still independently re-validates
-  // everything server-side (over-receipt, batch numbers, inventory-type
-  // conflicts, atomic posting lock) against the PO's live state — nothing
-  // here lets the client's numbers decide what actually posts to inventory.
+  // the two-step flow already uses (this form, then the separate "Complete
+  // GRN" dialog on the GRN detail page); it does not duplicate or shortcut any
+  // of that logic. complete() still independently re-validates everything
+  // server-side (over-receipt, batch numbers, SKU routing, Received At, the
+  // completion lock) against the PO's live state. Nothing is stocked here —
+  // accepted quantities are posted when the MD has signed and QC completes.
   const runSaveAndFinalize = async (allowOverReceipt) => {
     if (!validateForm({ forFinalize: true })) return;
     const payload = buildPayload();
@@ -429,7 +453,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     }
     try {
       await completeGrn({ id: savedId, allowOverReceipt, remarks: header.remarks?.trim() || undefined }).unwrap();
-      enqueueSnackbar('GRN saved and finalized — stock posted', { variant: 'success' });
+      enqueueSnackbar('GRN saved and completed — stock posts after MD signature and QC', { variant: 'success' });
       onClose?.(true);
     } catch (err) {
       // The GRN is already saved as a draft at this point — only finalization
@@ -437,7 +461,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       // this form and completing it, because another GRN against the same PO
       // completed in between). Never silently drop the user's entry: leave
       // the saved draft in place so they can retry here or finish it from the
-      // GRN detail page's own Complete & Post Stock dialog.
+      // GRN detail page's own Complete GRN dialog.
       enqueueSnackbar(err?.data?.message || 'Saved as a draft, but finalizing failed — complete it from the GRN detail page', { variant: 'error' });
     }
   };
@@ -616,29 +640,18 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             <Grid item xs={6} sm={3}><TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
 
-            {/* ── Inventory Type (replaces the "Add to RM Stock" checkbox) ──
-                Required, one per GRN. It decides where the stock lands when the
-                GRN is completed: Raw Material → RM IMS at "Received At";
-                Consumable & Packaging → the GRN's store, as before. */}
-            <Grid item xs={12} sm={6}>
-              <TextField
-                label="Inventory Type *" select fullWidth required
-                value={header.inventoryType}
-                onChange={(e) => setHeader((h) => ({ ...h, inventoryType: e.target.value }))}
-                helperText={INVENTORY_TYPE_HELP}
-                error={!header.inventoryType && validItems.length > 0 && pos.length > 0}
-                inputProps={{ 'data-testid': 'grn-inventory-type' }}
-              >
-                {INVENTORY_TYPE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
-              </TextField>
-            </Grid>
-            {header.inventoryType === 'RM' && (
-              <Grid item xs={6} sm={3}>
+            {/* Inventory destination is automatic: each line goes where its SKU
+                master Item Type says (shown on the line). Only Raw Material
+                needs one more answer — where it physically landed. */}
+            {hasRmLine && (
+              <Grid item xs={12} sm={6}>
                 <TextField
-                  label="Received At *" select fullWidth
+                  label="Received At *" select fullWidth required
                   value={header.rmReceivedAtLocation}
                   onChange={(e) => setHeader((h) => ({ ...h, rmReceivedAtLocation: e.target.value }))}
-                  helperText="Where the Raw Material physically landed — its RM stock posts here."
+                  error={!header.rmReceivedAtLocation}
+                  helperText="Where the Raw Material physically landed — its RM stock posts here after QC."
+                  inputProps={{ 'data-testid': 'grn-received-at' }}
                 >
                   {RECEIVED_AT_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
                 </TextField>
@@ -668,7 +681,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
 
         {/* Items */}
         <Paper elevation={0} sx={SECTION}>
-          <Typography sx={{ fontWeight: 700, color: '#b45309', mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'space-between' }}>
+          <Typography component="div" sx={{ fontWeight: 700, color: '#b45309', mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'space-between' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><PackageCheck size={18} /> Material Receipt</Box>
             {isWithoutPo && !grnLocked && (
               <Button size="small" startIcon={<Plus size={14} />} onClick={addWopoItem} sx={{ textTransform: 'none' }}>
@@ -698,6 +711,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                       borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
                       '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
                     }}>
+                      <Box sx={{ minWidth: 0 }}>
                       <Autocomplete
                         freeSolo
                         options={skuOptions}
@@ -712,6 +726,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                           <TextField {...params} size="small" label="Description *" placeholder="Pick a SKU or type a name" />
                         )}
                       />
+                      {destinationTag(it)}
+                      </Box>
                       <TextField size="small" label="Unit" value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })} />
                       <TextField size="small" type="number" label="Received Qty" value={it.receivedQty}
                         onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
@@ -787,6 +803,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                             <Box sx={{ minWidth: 0 }}>
                               <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
                               <Typography variant="caption" color="text.disabled">{it.unit}</Typography>
+                              <Box>{destinationTag(it)}</Box>
                             </Box>
                             <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
                             <QtyCell label="Ordered Qty" value={it.orderedQty} />
@@ -941,7 +958,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       </Box>
 
       {/* Over-receipt consent — mirrors the same checkbox/confirmation the
-          separate "Complete & Post Stock" dialog already asks for; the server
+          separate "Complete GRN" dialog already asks for; the server
           re-validates this against the PO's live pending quantity regardless. */}
       <Dialog open={overReceiptConfirmOpen} onClose={() => setOverReceiptConfirmOpen(false)} maxWidth="xs" fullWidth>
         <Box sx={{ p: 3 }}>

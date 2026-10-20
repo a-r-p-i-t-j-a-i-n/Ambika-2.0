@@ -246,6 +246,9 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
   // A goods receipt carries this batch, but it is not a coil that can be cut
   // here (nothing left on its ledger, or an unmapped grade): never a new coil.
   const receiptOnRecord = lookupSettled ? (manualRes.meta?.grnReceipt || null) : null;
+  // Received on a GRN whose Incoming QC is pending (or rejected it): not stock,
+  // so it can neither be cut nor entered manually until its QC posts it.
+  const qcPendingBatch = lookupSettled ? (manualRes.meta?.qcPending || null) : null;
   // The batch WAS received, but on a coil with no approved circle sizes — say
   // that, rather than the misleading "not found".
   const unmappedBatch = lookupSettled && !exactReceipts.length ? (exactLookup.currentData?.meta?.unmappedBatch || null) : null;
@@ -409,7 +412,7 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
           : (!lookupSettled || toBind) ? 'pending'
             : candidates.length > 1 ? 'ambiguous'
               : unmappedBatch ? 'unmapped'
-                : receiptOnRecord ? 'blocked'
+                : (receiptOnRecord || qcPendingBatch) ? 'blocked'
                   : 'new';
   const lookingUp = batchState === 'pending';
   // No coil on record carries this batch: the form describes a NEW manual coil.
@@ -825,7 +828,7 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
       color: STOCK_TOKENS.OUT_OF_STOCK.color,
     },
     blocked: {
-      text: receiptOnRecord ? `Batch ${receiptOnRecord.batchNo} is on goods receipt${receiptOnRecord.grnNumber ? ` ${receiptOnRecord.grnNumber}` : ''} (${receiptOnRecord.skuCode}), with nothing on it that can be cut here — and a coil with a GRN cannot be entered manually.` : '',
+      text: qcPendingBatch ? qcPendingBatch.message : receiptOnRecord ? `Batch ${receiptOnRecord.batchNo} is on goods receipt${receiptOnRecord.grnNumber ? ` ${receiptOnRecord.grnNumber}` : ''} (${receiptOnRecord.skuCode}), with nothing on it that can be cut here — and a coil with a GRN cannot be entered manually.` : '',
       color: STOCK_TOKENS.OUT_OF_STOCK.color,
     },
     new: {

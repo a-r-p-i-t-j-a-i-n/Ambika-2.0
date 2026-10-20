@@ -21,6 +21,7 @@ import { useGetImsOverviewQuery, useGetImsForecastQuery } from '../../store/api/
 import PolicyDrawer from './PolicyDrawer';
 import { TYPE_META } from '../masters/itemTypeMeta';
 import { FIELD } from './imsFieldHelp';
+import AwaitingQcNote from './AwaitingQcNote';
 
 const H = FIELD.ims;
 
@@ -275,11 +276,13 @@ const ImsStockList = () => {
     // policy, matching the "—" the table shows.
     const header = ['S.No.', 'SKU Code', 'Item Name', 'Category', 'Available Qty', 'Material In Transit',
       'Average Daily Consumption', 'Safety Factor', 'Daily Consumption', 'Lead Time (From Indent to Receipt)',
-      'Reorder at', 'Max Level', 'Converted Item Name (For Resale)', 'Status'];
+      'Reorder at', 'Max Level', 'Converted Item Name (For Resale)', 'Status',
+      // Appended LAST so existing columns keep their positions (see RM export).
+      'Awaiting QC'];
     const lines = filtered.map((r, i) => [i + 1, r.skuCode, r.skuName, typeMeta(r.itemType).label, r.onHand,
       r.inTransit, r.adc, r.hasPolicy ? r.safetyFactor : '', r.dailyConsumption ?? '',
       r.hasPolicy ? r.leadDays : '', r.reorderPoint, r.maxLevel, r.convertedItemNameForResale || '',
-      stockToken(r.status).label]);
+      stockToken(r.status).label, r.awaitingQc || 0]);
     const csv = [header, ...lines].map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
@@ -434,7 +437,10 @@ const ImsStockList = () => {
                     </TableCell>
                     <TableCell><CategoryChip itemType={r.itemType} /></TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inTransit ? O2D.body : O2D.faint }}>{r.inTransit ? num(r.inTransit) : '—'}</TableCell>
+                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inTransit ? O2D.body : O2D.faint }}>
+                      {r.inTransit ? num(r.inTransit) : '—'}
+                      <AwaitingQcNote qty={r.awaitingQc} grnNumbers={r.awaitingQcGrnNumbers} fmt={num} />
+                    </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                       {r.adc ? (
                         <Tooltip arrow slotProps={O2D_TIP}

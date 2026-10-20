@@ -272,7 +272,10 @@ const RmImsItemDetail = () => {
             hint="How much is physically in the store right now." />
           <Metric label="Material In Transit" value={dash(m.inTransit)}
             sub={m.inTransitSource === 'PO' ? `from ${m.openPoCount} open PO${m.openPoCount > 1 ? 's' : ''}` : (m.inTransitSource === 'MANUAL' ? 'typed by hand' : null)}
-            hint="Ordered and not yet received. Read from the open purchase orders; quantities already received sit in the stock on hand instead." />
+            hint="Ordered and not yet received. Read from the open purchase orders; quantities already received sit in the stock on hand — or under Awaiting QC until their QC completes." />
+          <Metric label="Awaiting QC" value={dash(m.awaitingQc)}
+            sub={m.awaitingQcGrnNumbers?.length ? m.awaitingQcGrnNumbers.join(', ') : null}
+            hint="Received on a completed GRN and waiting for Incoming QC — not usable yet. Only the accepted quantity is added to stock when the QC completes; the forecast counts it from the next day. Not part of in transit or on hand." />
           <Metric label="Booked Qty" value={dash(m.booked)} hint={H.booked} />
           <Metric label="Available %" value={m.availablePct == null ? '—' : `${m.availablePct}%`}
             hint="Total Available Quantity ÷ Max Level × 100 — the client's own formula." />
