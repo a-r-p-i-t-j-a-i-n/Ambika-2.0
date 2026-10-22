@@ -13,8 +13,11 @@
   Cache-Control: no-cache, no-store, must-revalidate
 
 # Baseline security headers.
+# Framing: only this site and the Delegation Suite (which shows the ERP screens
+# inside its own sidebar) may frame this app. Microphone is allowed for this
+# origin so the voice recorder works.
 /*
   X-Content-Type-Options: nosniff
-  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: frame-ancestors 'self' https://msambika.netlify.app
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: geolocation=(), microphone=(), camera=()
+  Permissions-Policy: geolocation=(), microphone=(self), camera=()

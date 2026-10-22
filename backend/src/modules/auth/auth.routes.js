@@ -6,6 +6,8 @@ const router = Router();
 
 router.post('/register', authController.register);
 router.post('/login', authController.login);
+// Single sign-on from the Delegation Suite (the ERP shown inside its sidebar).
+router.post('/sso', authController.sso);
 router.get('/me', protect, authController.getMe);
 
 // Employee Management Routes

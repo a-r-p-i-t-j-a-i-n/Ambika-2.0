@@ -11,13 +11,13 @@
 # These MUST come before the SPA fallback below (Netlify uses first-match).
 [[redirects]]
   from = "/api/*"
-  to = "http://32.236.114.49:3006/api/:splat"
+  to = "http://3.105.199.228:3005/api/:splat"
   status = 200
   force = true
 
 [[redirects]]
   from = "/uploads/*"
-  to = "http://32.236.114.49:3006/uploads/:splat"
+  to = "http://3.105.199.228:3005/uploads/:splat"
   status = 200
   force = true
 
@@ -46,10 +46,13 @@
     Cache-Control = "no-cache, no-store, must-revalidate"
 
 # Baseline security headers.
+# Framing: only this site itself and the Delegation Suite (which shows the ERP
+# screens inside its own sidebar) may put this app in a frame; every other site
+# is refused. Microphone stays available to this origin for the voice recorder.
 [[headers]]
   for = "/*"
   [headers.values]
     X-Content-Type-Options = "nosniff"
-    X-Frame-Options = "SAMEORIGIN"
+    Content-Security-Policy = "frame-ancestors 'self' https://msambika.netlify.app"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "geolocation=(), microphone=(), camera=()"
+    Permissions-Policy = "geolocation=(), microphone=(self), camera=()"

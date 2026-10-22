@@ -9,6 +9,11 @@ const env = {
   JWT_SECRET:     process.env.JWT_SECRET     || 'fallback-secret',
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '7d',
 
+  // Shared with the Delegation Suite backend, which signs the short-lived
+  // sign-in tickets that POST /auth/sso accepts. Optional: when it is empty,
+  // single sign-on answers 503 and normal email/password login is unaffected.
+  ERP_SSO_SECRET: process.env.ERP_SSO_SECRET || '',
+
   COMPANY_NAME:    process.env.COMPANY_NAME    || 'M/s AMBIKA GLOBAL',
   COMPANY_CODE:    process.env.COMPANY_CODE    || 'AGL',
   COMPANY_ADDRESS: process.env.COMPANY_ADDRESS || '',
