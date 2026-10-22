@@ -18,6 +18,8 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
+import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import { GrnStatusChip, GRN_STATUSES, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
 import GrnQcStatusChip from './GrnQcStatusChip';
 import { resolveGrnQcStage } from './grnQcStage';
@@ -26,20 +28,30 @@ import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 const GrnList = () => {
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [poNumber, setPoNumber] = useState('');
   const [poTypeFilter, setPoTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+
+  const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
+  const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
+
+  // "Filters" covers Vendor, PO Number, PO Type and the date range — Status
+  // stays always visible (the field most GRN lookups start from).
+  const secondaryCount = [vendorFilter, poNumber, poTypeFilter, from, to].filter(Boolean).length;
+  const clearSecondary = () => { setVendorFilter(null); setPoNumber(''); setPoTypeFilter(''); setFrom(''); setTo(''); resetPage(); };
+  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [editGrn, setEditGrn] = useState(null);
@@ -174,32 +186,93 @@ const GrnList = () => {
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}    label="Pending Qty"      value={stats.pendingQty}      color="#be123c" /></Grid>
       </Grid>
 
-      {/* Filters */}
-      <Paper sx={{ ...pfmsCardSx, p: 1, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
-        <TextField size="small" placeholder="Search GRN / vendor / invoice…" value={search} onChange={(e) => setSearch(e.target.value)}
-          sx={{ width: { xs: '100%', sm: 230 } }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
-        <Autocomplete
-          size="small" sx={{ minWidth: 180 }}
-          options={partiesRes?.data || []}
-          value={vendorFilter}
-          getOptionLabel={(o) => o?.name || ''}
-          isOptionEqualToValue={(o, v) => o._id === v._id}
-          onChange={(_e, v) => setVendorFilter(v)}
-          renderInput={(params) => <TextField {...params} label="Vendor" />}
+      {/* Filters — Search + Status stay visible; Vendor, PO Number, PO Type
+          and the date range move into Filters, which only counts those as
+          active. PO Number stays a separate EXACT filter (not a duplicate of
+          Search) — Search fuzzy-matches poNumber by substring, this isolates
+          one PO's GRNs precisely even when PO numbers share a prefix. */}
+      <Paper sx={{ ...pfmsCardSx, p: 1.25 }}>
+        <AdaptiveFilterBar
+          pinned={[
+            { key: 'search', minWidth: 220, node: (
+              <Box sx={{ flex: { xs: '1 1 100%', sm: '1 1 220px' }, minWidth: 0 }}>
+                <Typography component="label" htmlFor="grn-search" sx={pfmsFieldLabelSx}>Search</Typography>
+                <TextField id="grn-search" size="small" fullWidth placeholder="Search GRN / vendor / invoice…"
+                  value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
+              </Box>
+            ) },
+            { key: 'status', minWidth: 160, node: (
+              <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
+                <Typography component="label" htmlFor="grn-status" sx={pfmsFieldLabelSx}>Status</Typography>
+                <TextField id="grn-status" size="small" select fullWidth value={statusFilter}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                  <MenuItem value="">All</MenuItem>
+                  {GRN_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                </TextField>
+              </Box>
+            ) },
+          ]}
+          items={[
+            {
+              key: 'vendor', width: 200, active: Boolean(vendorFilter),
+              node: (
+                <Box sx={{ flex: '0 1 200px', minWidth: 180 }}>
+                  <Autocomplete
+                    size="small" fullWidth
+                    options={partiesRes?.data || []}
+                    value={vendorFilter}
+                    getOptionLabel={(o) => o?.name || ''}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    onChange={(_e, v) => onFilterChange(setVendorFilter)(v)}
+                    renderInput={(params) => <TextField {...params} label="Vendor" />}
+                  />
+                </Box>
+              ),
+            },
+            {
+              key: 'poNumber', width: 150, active: Boolean(poNumber),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 130 }}>
+                  <TextField size="small" fullWidth label="PO Number" value={poNumber} onChange={(e) => onFilterChange(setPoNumber)(e.target.value)} />
+                </Box>
+              ),
+            },
+            {
+              key: 'poType', width: 150, active: Boolean(poTypeFilter),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 130 }}>
+                  <TextField size="small" select fullWidth label="PO Type" value={poTypeFilter}
+                    InputLabelProps={{ shrink: true }}
+                    SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setPoTypeFilter)(e.target.value)}>
+                    <MenuItem value="">All</MenuItem>
+                    <MenuItem value="false">Against PO</MenuItem>
+                    <MenuItem value="true">Without PO</MenuItem>
+                  </TextField>
+                </Box>
+              ),
+            },
+            {
+              key: 'from', width: 150, active: Boolean(from),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="From" fullWidth value={from} onChange={onFilterChange(setFrom)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'to', width: 150, active: Boolean(to),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="To" fullWidth value={to} onChange={onFilterChange(setTo)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+          ]}
+          onClearSecondary={clearSecondary}
+          onClearAll={clearAll}
+          anyActive={anyFilterActive}
         />
-        <TextField size="small" label="PO Number" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} sx={{ minWidth: 150 }} />
-        <TextField size="small" select label="PO Type" value={poTypeFilter} onChange={(e) => setPoTypeFilter(e.target.value)} sx={{ minWidth: 150 }}>
-          <MenuItem value="">All</MenuItem>
-          <MenuItem value="false">Against PO</MenuItem>
-          <MenuItem value="true">Without PO</MenuItem>
-        </TextField>
-        <TextField size="small" select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 160 }}>
-          <MenuItem value="">All</MenuItem>
-          {GRN_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
-        </TextField>
-        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
-        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
       </Paper>
 
       {/* Grid */}

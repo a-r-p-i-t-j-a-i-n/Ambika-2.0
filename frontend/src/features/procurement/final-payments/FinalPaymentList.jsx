@@ -18,21 +18,31 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
+import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import { fileHref } from '../indents/indentMeta';
-import { PaymentStatusChip, PAYMENT_STATUSES, paymentModeLabel, fmtINR, fmtDate } from './paymentMeta';
+import { PaymentStatusChip, PAYMENT_STATUSES, PAYMENT_MODES, paymentModeLabel, fmtINR, fmtDate } from './paymentMeta';
 import FinalPaymentFormDialog from './FinalPaymentFormDialog';
 import PdfViewerModal from '../common/PdfViewerModal';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 const FinalPaymentList = () => {
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
+  const [modeFilter, setModeFilter] = useState('');
   const [from, setFrom] = useState(''); const [to, setTo] = useState('');
+
+  const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
+  const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
+  const secondaryCount = [vendorFilter, modeFilter, from, to].filter(Boolean).length;
+  const clearSecondary = () => { setVendorFilter(null); setModeFilter(''); setFrom(''); setTo(''); resetPage(); };
+  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -45,6 +55,10 @@ const FinalPaymentList = () => {
   const queryArgs = {
     page: paginationModel.page + 1, limit: paginationModel.pageSize, sort: '-createdAt',
     search: search || undefined, vendorId: vendorFilter?._id || undefined, paymentStatus: statusFilter || undefined,
+    // No dedicated Joi rule for paymentMode in the list schema, but it's
+    // `.unknown(true)` and paymentMode is a real, indexed enum field on the
+    // model — ApiFeatures.filter() exact-matches it with no backend change.
+    paymentMode: modeFilter || undefined,
     ...(from ? { 'paymentDate[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'paymentDate[lte]': `${to}T23:59:59` } : {}),
   };
   const { data, isLoading, isFetching } = useGetFinalPaymentsQuery(queryArgs);
@@ -118,17 +132,81 @@ const FinalPaymentList = () => {
         <Grid item xs={12} sm={6} md={2}><PfmsKpiCard icon={<Scissors size={20} />}               label="Short Closed"   value={stats.shortClosed}           color="#7e22ce" /></Grid>
       </Grid>
 
-      <Paper sx={{ ...pfmsCardSx, p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
-        <TextField size="small" placeholder="Search payment / voucher / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
-          sx={{ width: { xs: '100%', sm: 240 } }} InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
-        <Autocomplete size="small" sx={{ minWidth: 190 }} options={partiesRes?.data || []} value={vendorFilter}
-          getOptionLabel={(o) => o?.name || ''} isOptionEqualToValue={(o, v) => o._id === v._id} onChange={(_e, v) => setVendorFilter(v)} renderInput={(params) => <TextField {...params} label="Vendor" />} />
-        <TextField size="small" select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 180 }}>
-          <MenuItem value="">All</MenuItem>
-          {PAYMENT_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
-        </TextField>
-        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
-        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
+      {/* Filters — Search + Status stay visible; Vendor, Payment Mode and the
+          date range move into Filters, which only counts those as active. */}
+      <Paper sx={{ ...pfmsCardSx, p: 1.25 }}>
+        <AdaptiveFilterBar
+          pinned={[
+            { key: 'search', minWidth: 220, node: (
+              <Box sx={{ flex: { xs: '1 1 100%', sm: '1 1 220px' }, minWidth: 0 }}>
+                <Typography component="label" htmlFor="fp-search" sx={pfmsFieldLabelSx}>Search</Typography>
+                <TextField id="fp-search" size="small" fullWidth placeholder="Search payment / voucher / vendor…"
+                  value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
+              </Box>
+            ) },
+            { key: 'status', minWidth: 180, node: (
+              <Box sx={{ flex: '0 1 180px', minWidth: 150 }}>
+                <Typography component="label" htmlFor="fp-status" sx={pfmsFieldLabelSx}>Status</Typography>
+                <TextField id="fp-status" size="small" select fullWidth value={statusFilter}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                  <MenuItem value="">All</MenuItem>
+                  {PAYMENT_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                </TextField>
+              </Box>
+            ) },
+          ]}
+          items={[
+            {
+              key: 'vendor', width: 200, active: Boolean(vendorFilter),
+              node: (
+                <Box sx={{ flex: '0 1 200px', minWidth: 180 }}>
+                  <Autocomplete
+                    size="small" fullWidth
+                    options={partiesRes?.data || []}
+                    value={vendorFilter}
+                    getOptionLabel={(o) => o?.name || ''}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    onChange={(_e, v) => onFilterChange(setVendorFilter)(v)}
+                    renderInput={(params) => <TextField {...params} label="Vendor" />}
+                  />
+                </Box>
+              ),
+            },
+            {
+              key: 'mode', width: 160, active: Boolean(modeFilter),
+              node: (
+                <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
+                  <TextField size="small" select fullWidth label="Payment Mode" value={modeFilter}
+                    InputLabelProps={{ shrink: true }}
+                    SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setModeFilter)(e.target.value)}>
+                    <MenuItem value="">All</MenuItem>
+                    {PAYMENT_MODES.map((m) => <MenuItem key={m} value={m}>{paymentModeLabel(m)}</MenuItem>)}
+                  </TextField>
+                </Box>
+              ),
+            },
+            {
+              key: 'from', width: 150, active: Boolean(from),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="From" fullWidth value={from} onChange={onFilterChange(setFrom)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'to', width: 150, active: Boolean(to),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="To" fullWidth value={to} onChange={onFilterChange(setTo)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+          ]}
+          onClearSecondary={clearSecondary}
+          onClearAll={clearAll}
+          anyActive={anyFilterActive}
+        />
       </Paper>
 
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>

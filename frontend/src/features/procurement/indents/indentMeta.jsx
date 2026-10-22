@@ -38,6 +38,17 @@ export const DEPARTMENTS = ['Stores', 'Production', 'QC', 'Admin', 'Maintenance'
 
 export const APPROVAL_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'];
 
+/**
+ * Indent request types, mirroring the backend enum INDENT_REQUEST_TYPE
+ * (indent.model.js). These are the ONLY two values an indent can carry — the
+ * Type column and the Type filter both read from here so neither can drift
+ * from the data.
+ */
+export const REQUEST_TYPES = [
+  { value: 'MATERIAL_PURCHASE', label: 'Material' },
+  { value: 'INTERNAL_SERVICE',  label: 'Service' },
+];
+
 // Per-item approval decision (Step 1.1) — lets one indent mix approved and
 // rejected SKUs in the same approval action.
 export const ITEM_APPROVAL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'];

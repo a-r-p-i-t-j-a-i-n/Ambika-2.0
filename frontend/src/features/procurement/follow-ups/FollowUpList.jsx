@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, MenuItem,
+  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip,
   Autocomplete, FormControlLabel, Switch, Chip,
 } from '@mui/material';
@@ -16,24 +16,37 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
+import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import { FuStatusChip, FuTypeChip, FOLLOWUP_STATUSES, fmtDate, fmtDelay, isDelayed } from './fuMeta';
 import FollowUpFormDrawer from './FollowUpFormDrawer';
 import FollowUpDoneDialog from './FollowUpDoneDialog';
 import FollowUpRescheduleDialog from './FollowUpRescheduleDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 const FollowUpList = () => {
   const navigate = useNavigate();
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [delayedOnly, setDelayedOnly] = useState(false);
+
+  const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
+  const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
+
+  // "Filters" covers Vendor, the date range and the Delayed-only toggle —
+  // Status stays always visible (disabled while Delayed-only is on, same as
+  // before: that toggle already implies its own status set).
+  const secondaryCount = [vendorFilter, from, to, delayedOnly].filter(Boolean).length;
+  const clearSecondary = () => { setVendorFilter(null); setFrom(''); setTo(''); setDelayedOnly(false); resetPage(); };
+  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [editFu, setEditFu] = useState(null);
@@ -149,30 +162,81 @@ const FollowUpList = () => {
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Ready For GRN"   value={stats.readyForGrn} color="#16a34a" /></Grid>
       </Grid>
 
-      {/* Filters */}
-      <Paper sx={{ ...pfmsCardSx, p: 1, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
-        <TextField size="small" placeholder="Search FU / PO / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
-          sx={{ width: { xs: '100%', sm: 230 } }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
-        <Autocomplete
-          size="small" sx={{ minWidth: 190 }}
-          options={partiesRes?.data || []}
-          value={vendorFilter}
-          getOptionLabel={(o) => o?.name || ''}
-          isOptionEqualToValue={(o, v) => o._id === v._id}
-          onChange={(_e, v) => setVendorFilter(v)}
-          renderInput={(params) => <TextField {...params} label="Vendor" />}
-        />
-        <TextField size="small" select label="Status" value={statusFilter} disabled={delayedOnly}
-          onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 160 }}>
-          <MenuItem value="">All</MenuItem>
-          {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
-        </TextField>
-        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
-        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} disabled={delayedOnly} />
-        <FormControlLabel
-          control={<Switch size="small" checked={delayedOnly} onChange={(e) => setDelayedOnly(e.target.checked)} />}
-          label={<Typography variant="caption" fontWeight={700}>Delayed only</Typography>}
+      {/* Filters — Search + Status stay visible (Status disables while
+          Delayed-only is on, same as before — that toggle implies its own
+          status set); Vendor, the date range and the toggle move into
+          Filters, which only counts those as active. */}
+      <Paper sx={{ ...pfmsCardSx, p: 1.25 }}>
+        <AdaptiveFilterBar
+          pinned={[
+            { key: 'search', minWidth: 220, node: (
+              <Box sx={{ flex: { xs: '1 1 100%', sm: '1 1 220px' }, minWidth: 0 }}>
+                <Typography component="label" htmlFor="fu-search" sx={pfmsFieldLabelSx}>Search</Typography>
+                <TextField id="fu-search" size="small" fullWidth placeholder="Search FU / PO / vendor…"
+                  value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
+              </Box>
+            ) },
+            { key: 'status', minWidth: 160, node: (
+              <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
+                <Typography component="label" htmlFor="fu-status" sx={pfmsFieldLabelSx}>Status</Typography>
+                <TextField id="fu-status" size="small" select fullWidth value={statusFilter} disabled={delayedOnly}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                  <MenuItem value="">All</MenuItem>
+                  {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                </TextField>
+              </Box>
+            ) },
+          ]}
+          items={[
+            {
+              key: 'vendor', width: 200, active: Boolean(vendorFilter),
+              node: (
+                <Box sx={{ flex: '0 1 200px', minWidth: 180 }}>
+                  <Autocomplete
+                    size="small" fullWidth
+                    options={partiesRes?.data || []}
+                    value={vendorFilter}
+                    getOptionLabel={(o) => o?.name || ''}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    onChange={(_e, v) => onFilterChange(setVendorFilter)(v)}
+                    renderInput={(params) => <TextField {...params} label="Vendor" />}
+                  />
+                </Box>
+              ),
+            },
+            {
+              key: 'from', width: 150, active: Boolean(from),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="From" fullWidth value={from} onChange={onFilterChange(setFrom)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'to', width: 150, active: Boolean(to),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="To" fullWidth value={to} onChange={onFilterChange(setTo)} disabled={delayedOnly} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'delayedOnly', width: 150, active: delayedOnly,
+              node: (
+                <Box sx={{ flex: '0 0 150px', minWidth: 140, pb: 0.5 }}>
+                  <FormControlLabel
+                    control={<Switch size="small" checked={delayedOnly} onChange={(e) => onFilterChange(setDelayedOnly)(e.target.checked)} />}
+                    label={<Typography variant="caption" fontWeight={700}>Delayed only</Typography>}
+                    sx={{ ml: 0 }}
+                  />
+                </Box>
+              ),
+            },
+          ]}
+          onClearSecondary={clearSecondary}
+          onClearAll={clearAll}
+          anyActive={anyFilterActive}
         />
       </Paper>
 

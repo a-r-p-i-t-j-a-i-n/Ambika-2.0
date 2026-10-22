@@ -249,6 +249,9 @@ const applyStockDelta = async (p) => {
     }
     if (p.skuCode && !current?.skuCode) set.skuCode = p.skuCode;
     if (p.skuName && !current?.skuName) set.skuName = p.skuName;
+    // The unit follows the SKU master (createStockMovement resolves it), so a
+    // row that was opened under an older spelling catches up on its next move.
+    if (current && p.unit && current.unit !== p.unit) set.unit = p.unit;
 
     if (!current) {
       try {
@@ -366,12 +369,13 @@ const createStockMovement = async (input = {}, opts = {}) => {
   const quantityKg = hasKg ? round2(input.quantityKg) : null;
   const qtyKgDelta = hasKg ? round2(sign * quantityKg) : null;
 
-  // Fill item identity from the SKU master when not supplied.
+  // Fill item identity from the SKU master when not supplied. The unit is the
+  // master's whenever it has one: stock is held against the SKU, and callers
+  // pass their own document's spelling (a GRN line says "Kg" where the master
+  // says KGS), which would otherwise land in the ledger as a second unit.
   let { skuCode, skuName, unit } = input;
-  if (!skuCode || !skuName) {
-    const sku = await SKU.findById(input.skuId).select('code name unit').lean();
-    if (sku) { skuCode = skuCode || sku.code; skuName = skuName || sku.name; unit = unit || sku.unit; }
-  }
+  const sku = await SKU.findById(input.skuId).select('code name unit').lean();
+  if (sku) { skuCode = skuCode || sku.code; skuName = skuName || sku.name; unit = sku.unit || unit; }
 
   // Get-or-create the stock row for this SKU+warehouse and apply the delta under
   // a version guard, so two simultaneous movements cannot overwrite each other.

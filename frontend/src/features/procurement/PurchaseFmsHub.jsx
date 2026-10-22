@@ -1,11 +1,11 @@
-import React, { Suspense, useState } from 'react';
-import { Box, Typography, Paper, Button } from '@mui/material';
+import React, { Suspense, useState, useRef, useLayoutEffect } from 'react';
+import { Box, Typography, Button, Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
 import { useNavigate, useParams, Navigate } from 'react-router-dom';
-import { ClipboardList, ShoppingBag, PackageCheck, Banknote } from 'lucide-react';
+import { ClipboardList, ShoppingBag, PackageCheck, Banknote, Plus, ChevronDown } from 'lucide-react';
 import { lazyWithRetry } from '../../utils/lazyWithRetry';
 import AppLoader from '../../components/AppLoader';
 import PurchaseFmsStepper from './components/PurchaseFmsStepper';
-import { PFMS, pfmsCardSx } from './pfmsTheme';
+import { PFMS } from './pfmsTheme';
 import {
   useGetIndentStatsQuery, useGetPurchaseOrderStatsQuery,
   useGetProformaInvoiceStatsQuery, useGetAdvancePaymentStatsQuery, useGetGrnStatsQuery,
@@ -100,16 +100,25 @@ const useStepCounts = () => {
 };
 
 // ── Quick Actions — create a record from anywhere in Purchase FMS without
-// first navigating to its step. Each button opens the EXACT SAME dialog the
+// first navigating to its step. Each item opens the EXACT SAME dialog the
 // module's own list page uses, with no preset source record — every one of
 // these dialogs already supports picking its own eligible source (approved
 // indent, eligible PO, payment-pending invoice) or an empty state explaining
 // why none exist, so no new selection UI or validation is introduced here.
 // None of the four creation endpoints carry a dedicated permission today
-// (confirmed earlier this session — only each module's DELETE route does),
-// so these buttons are shown to any authenticated Purchase FMS user, exactly
-// matching each list page's own "New X" button today. The backend remains
-// authoritative regardless of what's shown here.
+// (only each module's DELETE route does), so these items are shown to any
+// authenticated Purchase FMS user, exactly matching each list page's own
+// "New X" button today. The backend remains authoritative regardless of what
+// is shown here.
+//
+// Presentation note: this used to be a full-width panel of four outlined
+// buttons sitting above the step rail on every one of the 8 steps. It is now
+// a single "Quick Actions" dropdown in the page header — same four actions,
+// same dialogs, same destinations, a fraction of the vertical space. The
+// trigger keeps the feature's own name rather than borrowing "Create": each
+// list page has its own exact-named primary button (e.g. "Create Indent"), and
+// two buttons sharing an accessible name would be ambiguous for users and
+// tests alike.
 const QUICK_ACTIONS = [
   { key: 'indent',  label: 'Create Indent',          icon: ClipboardList },
   { key: 'po',      label: 'Create Purchase Order',  icon: ShoppingBag },
@@ -117,22 +126,59 @@ const QUICK_ACTIONS = [
   { key: 'voucher', label: 'Create Passing Voucher', icon: Banknote },
 ];
 
-const QuickActions = ({ open, onOpen }) => (
-  <Paper sx={{ ...pfmsCardSx, p: { xs: 1.5, md: 2 }, mb: 2 }}>
-    <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: 'text.secondary', mb: 1 }}>
-      Quick Actions
-    </Typography>
-    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.25 }}>
-      {QUICK_ACTIONS.map((action) => (
-        <Button key={action.key} variant="outlined" startIcon={<action.icon size={16} />}
-          onClick={() => onOpen(action.key)} disabled={open === action.key}
-          sx={{ flex: { xs: '1 1 calc(50% - 10px)', sm: '0 1 auto' }, fontWeight: 700 }}>
-          + {action.label}
-        </Button>
-      ))}
-    </Box>
-  </Paper>
-);
+const QuickActionsMenu = ({ onOpen }) => {
+  const [anchor, setAnchor] = useState(null);
+  const open = Boolean(anchor);
+  return (
+    <>
+      <Button
+        id="pfms-create-button"
+        data-testid="pfms-quick-actions"
+        variant="contained"
+        disableElevation
+        onClick={(e) => setAnchor(e.currentTarget)}
+        startIcon={<Plus size={17} />}
+        endIcon={(
+          <ChevronDown
+            size={16}
+            style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms ease' }}
+          />
+        )}
+        aria-haspopup="menu"
+        aria-expanded={open || undefined}
+        aria-controls={open ? 'pfms-create-menu' : undefined}
+        sx={{ fontWeight: 700, px: 2, py: 1, borderRadius: '8px', whiteSpace: 'nowrap' }}
+      >
+        Quick Actions
+      </Button>
+      <Menu
+        id="pfms-create-menu"
+        anchorEl={anchor}
+        open={open}
+        onClose={() => setAnchor(null)}
+        MenuListProps={{ 'aria-labelledby': 'pfms-create-button', dense: true }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{ paper: { sx: { mt: 0.75, minWidth: 234, borderRadius: '10px' } } }}
+      >
+        {QUICK_ACTIONS.map((action) => (
+          <MenuItem
+            key={action.key}
+            onClick={() => { setAnchor(null); onOpen(action.key); }}
+            sx={{ py: 1, px: 1.5 }}
+          >
+            <ListItemIcon sx={{ minWidth: 30, color: 'primary.main' }}>
+              <action.icon size={17} />
+            </ListItemIcon>
+            <ListItemText primaryTypographyProps={{ fontSize: '0.84rem', fontWeight: 600 }}>
+              {action.label}
+            </ListItemText>
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
+  );
+};
 
 const PurchaseFmsHub = () => {
   const { step } = useParams();
@@ -141,6 +187,26 @@ const PurchaseFmsHub = () => {
   const counts = useStepCounts();
   // Which Quick Action dialog is open, if any — null | 'indent' | 'po' | 'grn' | 'voucher'.
   const [openQuick, setOpenQuick] = useState(null);
+
+  // The hub's own chrome (header + step rail) is published to the active step
+  // page as --pfms-chrome, so that page's pfmsPageSx minHeight can subtract it
+  // instead of claiming a full 100vh underneath us — see pfmsTheme.js. Without
+  // this the page is always taller than the window by the height of the hub
+  // chrome, which is what produced the permanent vertical scrollbar and the
+  // large empty canvas band below every table. Measured rather than hardcoded
+  // because the header wraps at narrow widths.
+  const chromeRef = useRef(null);
+  const [chromeHeight, setChromeHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = chromeRef.current;
+    if (!el) return undefined;
+    const measure = () => setChromeHeight(el.offsetHeight || 0);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [activeIndex]);
 
   // Closing a Quick Action dialog: if it created a new record, open that
   // record's own detail page — the same "go straight to what you just made"
@@ -180,18 +246,35 @@ const PurchaseFmsHub = () => {
   const ActiveComponent = PURCHASE_FMS_STEPS[activeIndex].Component;
 
   return (
-    <Box>
-      <Box sx={{ px: { xs: 2, md: 3 }, pt: { xs: 2, md: 3 }, pb: 1.5 }}>
-        <Typography sx={{ fontSize: { xs: '1.2rem', md: '1.4rem' }, fontWeight: 800, color: PFMS.ink }}>
-          Purchase FMS
-        </Typography>
-        <Typography sx={{ fontSize: '0.85rem', color: 'text.secondary', mt: 0.25 }}>
-          Manage the complete purchase workflow
-        </Typography>
-      </Box>
+    <Box sx={{ bgcolor: PFMS.canvas }}>
+      <Box ref={chromeRef} sx={{ px: { xs: 1.5, md: 2 }, pt: { xs: 1.5, md: 2 } }}>
+        {/* Page header — title/subtitle left, primary page actions right. */}
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', sm: 'row' },
+            alignItems: { xs: 'stretch', sm: 'center' },
+            justifyContent: 'space-between',
+            gap: 1.5,
+            mb: 1.5,
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              component="h1"
+              sx={{ fontSize: { xs: '1.15rem', md: '1.35rem' }, fontWeight: 800, color: PFMS.ink, lineHeight: 1.2 }}
+            >
+              Purchase FMS
+            </Typography>
+            <Typography sx={{ fontSize: '0.8rem', color: PFMS.sub, mt: 0.25 }}>
+              Manage the complete purchase workflow
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', justifyContent: { xs: 'flex-start', sm: 'flex-end' }, flexShrink: 0 }}>
+            <QuickActionsMenu onOpen={setOpenQuick} />
+          </Box>
+        </Box>
 
-      <Box sx={{ px: { xs: 1.5, md: 3 } }}>
-        <QuickActions open={openQuick} onOpen={setOpenQuick} />
         <PurchaseFmsStepper
           steps={PURCHASE_FMS_STEPS}
           activeIndex={activeIndex}
@@ -200,7 +283,7 @@ const PurchaseFmsHub = () => {
         />
       </Box>
 
-      <Box sx={{ mt: 2 }}>
+      <Box style={{ '--pfms-chrome': `${chromeHeight}px` }}>
         <Suspense fallback={<AppLoader />}>
           <ActiveComponent />
         </Suspense>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
   Box, Typography, CircularProgress, Chip, Checkbox, IconButton, MenuItem,
@@ -65,8 +65,15 @@ const toRow = (ind) => {
  * Bulk approve / reject pending Purchase Indents from one modal. Lists only
  * PENDING_APPROVAL indents; each row expands to edit item-wise revised/approved
  * quantities. Approve and Reject act on the selected rows.
+ *
+ * `preselectedIds` seeds the selection from rows ticked in the Indent list.
+ * It is intersected with the indents this dialog actually loaded, because the
+ * list can select any indent while this dialog only ever handles DRAFT and
+ * PENDING_APPROVAL ones — an already-APPROVED row ticked in the grid must not
+ * arrive here looking selected. The seed is a starting point only; everything
+ * after it is the existing selection behaviour, untouched.
  */
-const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
+const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote, preselectedIds = [] }) => {
   const { enqueueSnackbar } = useSnackbar();
 
   // Indents "awaiting approval" = PENDING_APPROVAL + DRAFT (the single-approve
@@ -127,6 +134,22 @@ const BulkIndentApprovalDialog = ({ open, onClose, onReceiveQuote }) => {
       return (data?.data || []).map((ind) => kept.get(String(ind._id)) || toRow(ind));
     });
   }, [data]);
+
+  // Seed the selection from the rows ticked in the Indent list, once per
+  // opening and only once the candidate indents have actually loaded. Ids the
+  // list selected that are not candidates here (e.g. an already-APPROVED
+  // indent) are dropped rather than silently widening what Approve would act
+  // on. After this seed the user drives the selection exactly as before.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!open) { seededRef.current = false; return; }
+    if (seededRef.current) return;
+    const available = new Set((data?.data || []).map((d) => String(d._id)));
+    if (!available.size) return;
+    seededRef.current = true;
+    const seed = (preselectedIds || []).map(String).filter((id) => available.has(id));
+    if (seed.length) setSelected(new Set(seed));
+  }, [open, data, preselectedIds]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

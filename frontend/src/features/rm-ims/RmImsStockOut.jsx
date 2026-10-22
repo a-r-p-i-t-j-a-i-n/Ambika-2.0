@@ -28,7 +28,7 @@ const RmImsStockOut = () => {
     reason: 'PRODUCTION_ISSUE',
     customReason: '',
     warehouse: DEFAULT_RECEIVED_AT,
-    purpose: '', issuedTo: '', department: '', reference: '', allowNegative: false,
+    issuedTo: '', department: '', reference: '', allowNegative: false,
   });
   const [lines, setLines] = useState([blankLine()]);
   // Replay protection for this submission — see the note on Stock In.
@@ -63,7 +63,7 @@ const RmImsStockOut = () => {
         clientRequestId: requestId,
         customReason: header.reason === 'OTHER' ? header.customReason.trim() : undefined,
         warehouse: header.warehouse,
-        purpose: header.purpose || undefined, issuedTo: header.issuedTo || undefined,
+        issuedTo: header.issuedTo || undefined,
         department: header.department || undefined, reference: header.reference || undefined,
         allowNegative: header.allowNegative,
         items: valid.map((l) => ({ skuId: l.sku.skuId, skuCode: l.sku.skuCode, quantity: Number(l.quantity), remarks: l.remarks || undefined })),
@@ -130,11 +130,6 @@ const RmImsStockOut = () => {
                 : 'Saved as a custom reason and shown in History.'}
               FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
           )}
-          <TextField size="small" label="Purpose" value={header.purpose}
-            onChange={(e) => setHeader((h) => ({ ...h, purpose: e.target.value }))}
-            placeholder="e.g. Press shop"
-            helperText="What the material is being used for."
-            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
           <TextField size="small" label="Department" value={header.department}
             onChange={(e) => setHeader((h) => ({ ...h, department: e.target.value }))} placeholder="e.g. Pressing" />
           <TextField size="small" label="Issued to (person)" value={header.issuedTo}
