@@ -21,6 +21,7 @@ import { resolveActionLink, resolveEntityLink, actionLinkMeta } from './actionLi
 import BoardRowEditDialog from './BoardRowEditDialog';
 import BulkEmailDialog from './BulkEmailDialog';
 import { O2D } from './o2dTheme';
+import { useHiddenSteps, stepKey } from '../../utils/embed';
 
 // ── Ambika 2.0 step-first O2D board ─────────────────────────────────────────
 // The client's doers don't browse orders — they own ONE step of the flow and
@@ -432,6 +433,9 @@ const O2dStepBoard = () => {
   const [sortBy, setSortBy] = useState('recentFirst');
   const { data, isLoading, refetch } = useGetProcessesQuery({ limit: 300, sort: '-createdAt' }, { pollingInterval: 60_000 });
   const rows = useMemo(() => data?.data || [], [data]);
+  // Steps the MD switched off for this employee in the Delegation Suite
+  // (empty when Ambika 2.0 is used on its own).
+  const hiddenSteps = useHiddenSteps('o2d');
 
   // The flow is the same for every order, so the step rail is simply the union
   // of embedded steps across the loaded processes, in sequence order. Carries
@@ -463,8 +467,9 @@ const O2dStepBoard = () => {
     // only covers some steps, so the fork position is the source of truth.
     const forkSeq = list.find((x) => x.isDispatch)?.seq;
     if (forkSeq != null) list.forEach((x) => { if (x.seq >= forkSeq) x.perDc = true; });
-    return list;
-  }, [rows]);
+    // Leave out hidden steps only now, so the fork above still sees them all.
+    return hiddenSteps.size ? list.filter((x) => !hiddenSteps.has(stepKey(x.code))) : list;
+  }, [rows, hiddenSteps]);
 
   const activeCode = stepCode && steps.some((s) => s.code === stepCode) ? stepCode : steps[0]?.code;
   const activeStep = steps.find((s) => s.code === activeCode);

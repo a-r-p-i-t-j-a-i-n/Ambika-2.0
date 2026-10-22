@@ -19,6 +19,7 @@ import IndentFormDrawer from './indents/IndentFormDrawer';
 import PurchaseOrderFormDrawer from './purchase-orders/PurchaseOrderFormDrawer';
 import GrnFormDialog from './grn/GrnFormDialog';
 import VoucherFormDialog from './vouchers/VoucherFormDialog';
+import { useHiddenSteps, stepKey } from '../../utils/embed';
 
 // Each step reuses the existing, fully-functional screen for that module —
 // same components, APIs, tables, forms, filters and actions as before. This
@@ -117,13 +118,17 @@ const QUICK_ACTIONS = [
   { key: 'voucher', label: 'Create Passing Voucher', icon: Banknote },
 ];
 
-const QuickActions = ({ open, onOpen }) => (
+// The step each Quick Action belongs to — hidden along with that step when
+// the Delegation Suite hides it for this employee.
+const QUICK_ACTION_STEP = { indent: 'purchase-indents', po: 'purchase-orders', grn: 'grn', voucher: 'invoices-payments' };
+
+const QuickActions = ({ open, onOpen, actions = QUICK_ACTIONS }) => (
   <Paper sx={{ ...pfmsCardSx, p: { xs: 1.5, md: 2 }, mb: 2 }}>
     <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: 'text.secondary', mb: 1 }}>
       Quick Actions
     </Typography>
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.25 }}>
-      {QUICK_ACTIONS.map((action) => (
+      {actions.map((action) => (
         <Button key={action.key} variant="outlined" startIcon={<action.icon size={16} />}
           onClick={() => onOpen(action.key)} disabled={open === action.key}
           sx={{ flex: { xs: '1 1 calc(50% - 10px)', sm: '0 1 auto' }, fontWeight: 700 }}>
@@ -137,7 +142,16 @@ const QuickActions = ({ open, onOpen }) => (
 const PurchaseFmsHub = () => {
   const { step } = useParams();
   const navigate = useNavigate();
-  const activeIndex = PURCHASE_FMS_STEPS.findIndex((s) => s.slug === step);
+  // Steps the MD switched off for this employee in the Delegation Suite
+  // (empty when Ambika 2.0 is used on its own).
+  const hiddenSteps = useHiddenSteps('purchase');
+  const visibleSteps = hiddenSteps.size
+    ? PURCHASE_FMS_STEPS.filter((s) => !hiddenSteps.has(stepKey(s.slug)))
+    : PURCHASE_FMS_STEPS;
+  const visibleActions = hiddenSteps.size
+    ? QUICK_ACTIONS.filter((a) => !hiddenSteps.has(stepKey(QUICK_ACTION_STEP[a.key])))
+    : QUICK_ACTIONS;
+  const activeIndex = visibleSteps.findIndex((s) => s.slug === step);
   const counts = useStepCounts();
   // Which Quick Action dialog is open, if any — null | 'indent' | 'po' | 'grn' | 'voucher'.
   const [openQuick, setOpenQuick] = useState(null);
@@ -171,13 +185,23 @@ const PurchaseFmsHub = () => {
     return <Navigate to="/purchase-fms/purchase-orders" replace />;
   }
 
-  // Unknown/missing step (e.g. a stale bookmark) — land on the first step
-  // rather than rendering nothing.
-  if (activeIndex === -1) {
-    return <Navigate to={`/purchase-fms/${PURCHASE_FMS_STEPS[0].slug}`} replace />;
+  // Every step is switched off for this employee in the Delegation Suite.
+  if (visibleSteps.length === 0) {
+    return (
+      <Box sx={{ px: 3, py: 6, textAlign: 'center' }}>
+        <Typography sx={{ fontWeight: 800, color: PFMS.ink }}>No Purchase FMS steps are switched on for you.</Typography>
+        <Typography sx={{ fontSize: '0.85rem', color: 'text.secondary', mt: 0.5 }}>Ask your MD to switch them on in Employees → lock icon.</Typography>
+      </Box>
+    );
   }
 
-  const ActiveComponent = PURCHASE_FMS_STEPS[activeIndex].Component;
+  // Unknown/missing step (e.g. a stale bookmark) or a hidden one — land on the
+  // first visible step rather than rendering nothing.
+  if (activeIndex === -1) {
+    return <Navigate to={`/purchase-fms/${visibleSteps[0].slug}`} replace />;
+  }
+
+  const ActiveComponent = visibleSteps[activeIndex].Component;
 
   return (
     <Box>
@@ -191,9 +215,9 @@ const PurchaseFmsHub = () => {
       </Box>
 
       <Box sx={{ px: { xs: 1.5, md: 3 } }}>
-        <QuickActions open={openQuick} onOpen={setOpenQuick} />
+        {visibleActions.length > 0 && <QuickActions open={openQuick} onOpen={setOpenQuick} actions={visibleActions} />}
         <PurchaseFmsStepper
-          steps={PURCHASE_FMS_STEPS}
+          steps={visibleSteps}
           activeIndex={activeIndex}
           counts={counts}
           onStepClick={(slug) => navigate(`/purchase-fms/${slug}`)}

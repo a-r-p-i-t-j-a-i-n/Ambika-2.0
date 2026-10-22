@@ -25,15 +25,15 @@ import { exportRowsToExcel, printTablePdf } from '../../utils/exportMasterData';
 import { resolveFileUrl } from '../../utils/fileUrl';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
-const dt = (d) => (d ? dayjs(d).format('DD MMM YYYY Â· hh:mm A') : 'â€”');
-const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : 'â€”');
+const dt = (d) => (d ? dayjs(d).format('DD MMM YYYY · hh:mm A') : '—');
+const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
 const col = (field, headerName, extra = {}) => ({ field, headerName, flex: 1, minWidth: 120, sortable: true, ...extra });
 
-// â”€â”€ Step catalog (ACTIVE fmsKey = CURRENT_SHEET) â€” every O2D step, in order.
+// ── Step catalog (ACTIVE fmsKey = CURRENT_SHEET) — every O2D step, in order.
 // `code` ties a tab to its FMS step so each row can show that step's audit + links.
 const STEP_META = {
   // Client flow: 1.01 IS the sales-order punch-in ("Order Received"); 2.02 is
-  // the PO-vs-Tally check that follows it â€” a pure process step, no entity.
+  // the PO-vs-Tally check that follows it — a pure process step, no entity.
   so:               { code: '1.01', name: 'Order Received (SO Punch-in)' },
   poTally:          { code: '2.02', name: 'PO Recd Entry in Tally & Dispatch Vs PO' },
   inventory:        { code: '2.03', name: 'Check Inventory' },
@@ -49,7 +49,7 @@ const STEP_META = {
   transportPayment: { code: '2.13', name: 'Transportation Bill Payment' },
 };
 
-// Tabs that have NO dedicated entity collection â€” their data & audit live purely
+// Tabs that have NO dedicated entity collection — their data & audit live purely
 // on the FMS process step (email / inventory / delivery-tracking steps).
 const PROC_TABS = ['poTally', 'inventory', 'emailSchedule', 'emailInvoice', 'trackDelivery'];
 
@@ -66,28 +66,28 @@ const dateOf = (tab, r) => {
 // Party for each step (undefined = this step has no party, so the party filter is skipped).
 const partyOf = (tab, r) => (tab === 'transportReceipt' || tab === 'transportPayment' ? undefined : r.partyName);
 
-// â”€â”€ Human helpers for the FMS step audit â”€â”€
+// ── Human helpers for the FMS step audit ──
 const humanDelay = (step) => {
-  if (!step) return 'â€”';
+  if (!step) return '—';
   const mins = step.delayMins || 0;
-  if (mins <= 0) return step.status === 'DONE' ? 'On time' : 'â€”';
+  if (mins <= 0) return step.status === 'DONE' ? 'On time' : '—';
   const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
   const parts = [d && `${d}d`, h && `${h}h`, !d && !h && `${m}m`].filter(Boolean);
   return `${parts.join(' ')} late`;
 };
 // Best available "who did this step" from the denormalised sub-item names.
 const stepDoer = (step) => {
-  if (!step) return 'â€”';
+  if (!step) return '—';
   const ap = (step.actionProgress || []).filter((a) => a.doneByName);
   if (ap.length) return ap[ap.length - 1].doneByName;
   const ff = (step.formFields || []).find((f) => f.filledByName);
   if (ff) return ff.filledByName;
   const ck = (step.checklist || []).find((c) => c.doneByName);
   if (ck) return ck.doneByName;
-  return step.status === 'DONE' ? 'Completed' : 'â€”';
+  return step.status === 'DONE' ? 'Completed' : '—';
 };
 
-// Resolve a step's connected records â†’ clickable links with their own "who/when" log.
+// Resolve a step's connected records → clickable links with their own "who/when" log.
 // This is the "two links on 2.06 = Actual Dispatch + Delivery Challan" the sheet expects.
 const stepLinks = (step, proc) => {
   if (!step || !proc) return [];
@@ -119,15 +119,15 @@ const stepLinks = (step, proc) => {
 
 // Standard audit columns for the pure process-step tabs (no entity collection).
 const procCols = [
-  col('order', 'Order', { minWidth: 150, valueGetter: (v, r) => r.soNumber || r.uniqueO2DId || 'â€”' }),
-  col('partyName', 'Party', { minWidth: 170, valueGetter: (v, r) => r.partyName || 'â€”' }),
-  col('poNumber', 'PO Number', { minWidth: 130, valueGetter: (v, r) => r.poNumber || 'â€”' }),
+  col('order', 'Order', { minWidth: 150, valueGetter: (v, r) => r.soNumber || r.uniqueO2DId || '—' }),
+  col('partyName', 'Party', { minWidth: 170, valueGetter: (v, r) => r.partyName || '—' }),
+  col('poNumber', 'PO Number', { minWidth: 130, valueGetter: (v, r) => r.poNumber || '—' }),
   col('status', 'Status', { minWidth: 120, valueGetter: (v, r) => r.__step?.status || 'PENDING' }),
   col('planned', 'Planned', { minWidth: 120, valueGetter: (v, r) => dd(r.__step?.planned) }),
   col('doneOn', 'Done On', { minWidth: 180, valueGetter: (v, r) => dt(r.__step?.actual) }),
   col('delay', 'Delay', { minWidth: 110, valueGetter: (v, r) => humanDelay(r.__step) }),
   col('doneBy', 'Done By', { minWidth: 140, valueGetter: (v, r) => stepDoer(r.__step) }),
-  col('remarks', 'Remarks', { minWidth: 180, sortable: false, valueGetter: (v, r) => r.__step?.remarks || 'â€”' }),
+  col('remarks', 'Remarks', { minWidth: 180, sortable: false, valueGetter: (v, r) => r.__step?.remarks || '—' }),
 ];
 
 // One column set per O2D step (mirrors the client's sheet tabs).
@@ -136,8 +136,8 @@ const COLUMNS = {
     col('createdAt', 'Timestamp', { minWidth: 180, valueGetter: (v, r) => dt(r.createdAt) }),
     col('partyName', "Party's Name", { minWidth: 180 }),
     col('channel', 'Channel', { minWidth: 110 }),
-    col('contactName', 'Contact', { minWidth: 120, valueGetter: (v, r) => r.contactName || 'â€”' }),
-    col('items', 'Items', { minWidth: 220, sortable: false, valueGetter: (v, r) => (r.items || []).map((i) => `${i.skuName} (${num(i.qty)})`).join(', ') || 'â€”' }),
+    col('contactName', 'Contact', { minWidth: 120, valueGetter: (v, r) => r.contactName || '—' }),
+    col('items', 'Items', { minWidth: 220, sortable: false, valueGetter: (v, r) => (r.items || []).map((i) => `${i.skuName} (${num(i.qty)})`).join(', ') || '—' }),
     col('intakeStatus', 'Status', { minWidth: 110 }),
     col('createdByName', 'Logged By', { minWidth: 130, valueGetter: (v, r) => r.createdByName || r.createdBy?.name || 'System' }),
   ],
@@ -169,84 +169,84 @@ const COLUMNS = {
     col('dcNumber', 'DC Number', { minWidth: 150 }),
     col('dcDate', 'Date', { minWidth: 120, valueGetter: (v, r) => dd(r.dcDate) }),
     col('partyName', 'Party', { minWidth: 160 }),
-    col('soNumber', 'SO / PO', { minWidth: 150, valueGetter: (v, r) => `${r.soNumber || 'â€”'}${r.poNumber ? ` / ${r.poNumber}` : ''}` }),
+    col('soNumber', 'SO / PO', { minWidth: 150, valueGetter: (v, r) => `${r.soNumber || '—'}${r.poNumber ? ` / ${r.poNumber}` : ''}` }),
     col('phase', 'Phase', { minWidth: 100, valueGetter: (v, r) => (
       r.isUnplanned
         ? 'Unplanned'
-        : ([...new Set((r.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || r.phaseRef?.phaseNo || 'â€”')
+        : ([...new Set((r.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || r.phaseRef?.phaseNo || '—')
     ) }),
     col('totalQuantityPcs', 'Qty (pcs)', { minWidth: 100, type: 'number', valueGetter: (v, r) => Number(r.totalQuantityPcs || 0) }),
     col('totalBoxes', 'Boxes', { minWidth: 80, type: 'number', valueGetter: (v, r) => Number(r.totalBoxes || 0) }),
-    col('transporterName', 'Transporter', { minWidth: 140, valueGetter: (v, r) => r.transporterName || 'â€”' }),
-    col('invoiceNo', 'Invoice No', { minWidth: 130, valueGetter: (v, r) => r.invoiceNo || 'â€”' }),
+    col('transporterName', 'Transporter', { minWidth: 140, valueGetter: (v, r) => r.transporterName || '—' }),
+    col('invoiceNo', 'Invoice No', { minWidth: 130, valueGetter: (v, r) => r.invoiceNo || '—' }),
     col('status', 'Status', { minWidth: 110 }),
   ],
   invoice: [
     col('invoiceNo', 'Invoice No', { minWidth: 150 }),
     col('invoiceDate', 'Date', { minWidth: 120, valueGetter: (v, r) => dd(r.invoiceDate) }),
     col('partyName', 'Party', { minWidth: 160 }),
-    col('invoiceAmount', 'Amount â‚¹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.invoiceAmount || 0) }),
-    col('amountReceived', 'Received â‚¹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.amountReceived || 0) }),
-    col('balance', 'Balance â‚¹', { minWidth: 110, type: 'number', valueGetter: (v, r) => Number(r.balance || 0) }),
-    col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || 'â€”' }),
-    col('transporterName', 'Transporter', { minWidth: 140, valueGetter: (v, r) => r.transporterName || 'â€”' }),
+    col('invoiceAmount', 'Amount ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.invoiceAmount || 0) }),
+    col('amountReceived', 'Received ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.amountReceived || 0) }),
+    col('balance', 'Balance ₹', { minWidth: 110, type: 'number', valueGetter: (v, r) => Number(r.balance || 0) }),
+    col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || '—' }),
+    col('transporterName', 'Transporter', { minWidth: 140, valueGetter: (v, r) => r.transporterName || '—' }),
     col('status', 'Status', { minWidth: 110 }),
   ],
   emailInvoice: procCols,
   trackDelivery: procCols,
-  // 2.10 â€” Payment Follow-up (Payment.followUp)
+  // 2.10 — Payment Follow-up (Payment.followUp)
   paymentFollowup: [
     col('partyName', 'Party', { minWidth: 170 }),
-    col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || 'â€”' }),
-    col('type', 'Type', { minWidth: 140, valueGetter: (v, r) => r.type || 'â€”' }),
+    col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || '—' }),
+    col('type', 'Type', { minWidth: 140, valueGetter: (v, r) => r.type || '—' }),
     col('followUpStatus', 'Follow-up', { minWidth: 120, valueGetter: (v, r) => r.followUp?.status || 'PENDING' }),
     col('followedOn', 'Followed On', { minWidth: 130, valueGetter: (v, r) => dd(r.followUp?.actual) }),
-    col('followDelay', 'Delay', { minWidth: 100, valueGetter: (v, r) => r.followUp?.timeDelay || 'â€”' }),
+    col('followDelay', 'Delay', { minWidth: 100, valueGetter: (v, r) => r.followUp?.timeDelay || '—' }),
   ],
-  // 2.11 â€” Receive Payment & Tally (Payment.confirmation)
+  // 2.11 — Receive Payment & Tally (Payment.confirmation)
   paymentReceipt: [
     col('partyName', 'Party', { minWidth: 170 }),
-    col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || 'â€”' }),
-    col('receivedAmount', 'Received â‚¹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.confirmation?.receivedAmount || 0) }),
+    col('dcNumber', 'DC No', { minWidth: 130, valueGetter: (v, r) => r.dcNumber || '—' }),
+    col('receivedAmount', 'Received ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.confirmation?.receivedAmount || 0) }),
     col('receivedDate', 'Received On', { minWidth: 130, valueGetter: (v, r) => dd(r.confirmation?.receivedDate) }),
     col('confirmation', 'Confirmed', { minWidth: 120, valueGetter: (v, r) => r.confirmation?.status || 'PENDING' }),
   ],
-  // 2.12 â€” Receive Transport Bill (TransportBill.receipt)
+  // 2.12 — Receive Transport Bill (TransportBill.receipt)
   transportReceipt: [
-    col('dcNumber', 'DC No', { minWidth: 150, valueGetter: (v, r) => r.dcNumber || 'â€”' }),
+    col('dcNumber', 'DC No', { minWidth: 150, valueGetter: (v, r) => r.dcNumber || '—' }),
     col('receiptStatus', 'Bill Received', { minWidth: 140, valueGetter: (v, r) => r.receipt?.status || 'PENDING' }),
     col('receiptOn', 'Received On', { minWidth: 170, valueGetter: (v, r) => dt(r.receipt?.actual) }),
   ],
-  // 2.13 â€” Transport Bill Payment (TransportBill.payment)
+  // 2.13 — Transport Bill Payment (TransportBill.payment)
   transportPayment: [
-    col('dcNumber', 'DC No', { minWidth: 150, valueGetter: (v, r) => r.dcNumber || 'â€”' }),
+    col('dcNumber', 'DC No', { minWidth: 150, valueGetter: (v, r) => r.dcNumber || '—' }),
     col('paymentStatus', 'Bill Paid', { minWidth: 130, valueGetter: (v, r) => r.payment?.status || 'PENDING' }),
     col('paymentOn', 'Paid On', { minWidth: 170, valueGetter: (v, r) => dt(r.payment?.actual) }),
   ],
 };
 
 const TABS = [
-  { key: 'so', label: 'Order Received Â· 1.01' },
-  { key: 'poTally', label: 'PO Entry in Tally Â· 2.02' },
-  { key: 'inventory', label: 'Check Inventory Â· 2.03' },
-  { key: 'plan', label: 'Dispatch Scheduler & Planning Â· 2.04' },
-  { key: 'emailSchedule', label: 'Email Schedule Â· 2.05' },
-  { key: 'dispatch', label: 'Actual Dispatch Â· 2.06' },
-  { key: 'invoice', label: 'Invoices Â· 2.07' },
-  { key: 'emailInvoice', label: 'Email Invoice Â· 2.08' },
-  { key: 'trackDelivery', label: 'Track Delivery Â· 2.09' },
-  { key: 'paymentFollowup', label: 'Payment Follow-up Â· 2.10' },
-  { key: 'paymentReceipt', label: 'Receive Payment Â· 2.11' },
-  { key: 'transportReceipt', label: 'Transport Bill Â· 2.12' },
-  { key: 'transportPayment', label: 'Transport Payment Â· 2.13' },
+  { key: 'so', label: 'Order Received · 1.01' },
+  { key: 'poTally', label: 'PO Entry in Tally · 2.02' },
+  { key: 'inventory', label: 'Check Inventory · 2.03' },
+  { key: 'plan', label: 'Dispatch Scheduler & Planning · 2.04' },
+  { key: 'emailSchedule', label: 'Email Schedule · 2.05' },
+  { key: 'dispatch', label: 'Actual Dispatch · 2.06' },
+  { key: 'invoice', label: 'Invoices · 2.07' },
+  { key: 'emailInvoice', label: 'Email Invoice · 2.08' },
+  { key: 'trackDelivery', label: 'Track Delivery · 2.09' },
+  { key: 'paymentFollowup', label: 'Payment Follow-up · 2.10' },
+  { key: 'paymentReceipt', label: 'Receive Payment · 2.11' },
+  { key: 'transportReceipt', label: 'Transport Bill · 2.12' },
+  { key: 'transportPayment', label: 'Transport Payment · 2.13' },
 ];
 
 // Compute a column's display value for the non-grid views (sheet / cards / board).
 const displayVal = (c, row) => {
   const raw = c.valueGetter ? c.valueGetter(undefined, row) : row[c.field];
-  return typeof raw === 'number' ? num(raw) : (raw ?? 'â€”');
+  return typeof raw === 'number' ? num(raw) : (raw ?? '—');
 };
-// Status accessor per step â€” used to group records in the Board view.
+// Status accessor per step — used to group records in the Board view.
 const statusOf = (tab, row) => {
   if (row.__step) return row.__step.status || 'PENDING';
   return ({
@@ -266,23 +266,23 @@ const VIEWS = [
   { key: 'board', label: 'Board', icon: Columns3 },
 ];
 
-// â”€â”€ Small building blocks for the audit log â”€â”€
+// ── Small building blocks for the audit log ──
 const LogLine = ({ icon: Icon, children }) => (
   <Stack direction="row" spacing={0.75} alignItems="center" sx={{ color: 'text.secondary', fontSize: '0.72rem' }}>
     {Icon && <Icon size={12} />}<span>{children}</span>
   </Stack>
 );
 
-/** Connected records â†’ ONE compact clickable link on a single line (extras collapse
+/** Connected records → ONE compact clickable link on a single line (extras collapse
  *  to "+N"), so a row with many connected records can't grow tall or overlap. The
  *  full list is always available in the row's "Log" detail. */
 const LinkChips = ({ links }) => {
-  if (!links?.length) return <Typography variant="caption" color="text.disabled">â€”</Typography>;
+  if (!links?.length) return <Typography variant="caption" color="text.disabled">—</Typography>;
   const first = links[0];
   const extra = links.length - 1;
   return (
     <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'nowrap', minWidth: 0 }}>
-      <Tooltip title={`${first.label}${first.doneByName ? ` Â· ${first.doneByName}${first.doneAt ? ` Â· ${dd(first.doneAt)}` : ''}` : (first.to ? ' Â· open record' : ' Â· not done yet')}`}>
+      <Tooltip title={`${first.label}${first.doneByName ? ` · ${first.doneByName}${first.doneAt ? ` · ${dd(first.doneAt)}` : ''}` : (first.to ? ' · open record' : ' · not done yet')}`}>
         {first.to ? (
           <Link component={RouterLink} to={first.to}
             sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, minWidth: 0, maxWidth: 170,
@@ -310,7 +310,7 @@ const ConnectedCell = ({ step, proc }) => {
   const links = stepLinks(step, proc);
   const atts = step?.attachments?.length || 0;
   const emails = step?.emailLog?.length || 0;
-  if (!links.length && !atts && !emails) return <Typography variant="caption" color="text.disabled">â€”</Typography>;
+  if (!links.length && !atts && !emails) return <Typography variant="caption" color="text.disabled">—</Typography>;
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexWrap: 'nowrap', overflow: 'hidden', maxWidth: '100%' }}>
       <LinkChips links={links} />
@@ -335,7 +335,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
   const meta = STEP_META[tab] || {};
   const links = stepLinks(step, proc);
   const orderLink = proc?.salesOrderId
-    ? { label: `Sales Order Â· ${proc.soNumber || ''}`, to: `/orders/${encodeURIComponent(String(proc.salesOrderId?._id || proc.salesOrderId))}` }
+    ? { label: `Sales Order · ${proc.soNumber || ''}`, to: `/orders/${encodeURIComponent(String(proc.salesOrderId?._id || proc.salesOrderId))}` }
     : (proc?.intakeId ? { label: 'Order Intake', to: `/order-intake?convert=${encodeURIComponent(String(proc.intakeId?._id || proc.intakeId))}` } : null);
 
   const Section = ({ title, children }) => (
@@ -348,7 +348,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
   const headTk = tokenOf(step?.status);
   return (
     <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { width: { xs: '100%', sm: 440 }, p: 0, bgcolor: O2D.canvas } }}>
-      {/* Header â€” flush editorial: status spine + chip + faded step code (no navy) */}
+      {/* Header — flush editorial: status spine + chip + faded step code (no navy) */}
       <Box sx={{ position: 'relative', overflow: 'hidden', bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}` }}>
         <Box sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, bgcolor: headTk.ring }} />
         <Box sx={{ pt: 1.5, pb: 1.25, pl: 2, pr: 6 }}>
@@ -361,7 +361,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
             sx={{ fontWeight: 800, fontSize: '0.6rem', letterSpacing: '0.04em', textTransform: 'uppercase', color: headTk.color, bgcolor: headTk.bg, height: 20, '& .MuiChip-icon': { color: headTk.ring } }} />
           <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', lineHeight: 1.2, color: O2D.ink, mt: 0.5 }}>{meta.name}</Typography>
           <Typography sx={{ fontSize: '0.74rem', color: O2D.sub, mt: 0.25 }}>
-            {proc?.soNumber || proc?.uniqueO2DId || 'â€”'}{proc?.partyName ? ` Â· ${proc.partyName}` : ''}
+            {proc?.soNumber || proc?.uniqueO2DId || '—'}{proc?.partyName ? ` · ${proc.partyName}` : ''}
           </Typography>
         </Box>
         <IconButton size="small" onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8, color: O2D.sub }}><X size={17} /></IconButton>
@@ -381,7 +381,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={0.5} sx={{ mb: 1 }}>
                 <Chip size="small" label={headTk.label}
                   sx={{ fontWeight: 800, fontSize: '0.66rem', color: headTk.color, bgcolor: headTk.bg }} />
-                {humanDelay(step) !== 'â€”' && (
+                {humanDelay(step) !== '—' && (
                   <Chip size="small" label={humanDelay(step)}
                     color={humanDelay(step) === 'On time' ? 'success' : 'error'} variant="outlined" sx={{ fontWeight: 700 }} />
                 )}
@@ -416,7 +416,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                       </Typography>
                     )}
                     <LogLine icon={l.doneByName ? CheckCircle2 : Circle}>
-                      {l.doneByName ? <>Done by <b>{l.doneByName}</b>{l.doneAt ? ` Â· ${dt(l.doneAt)}` : ''}</> : 'Not completed yet'}
+                      {l.doneByName ? <>Done by <b>{l.doneByName}</b>{l.doneAt ? ` · ${dt(l.doneAt)}` : ''}</> : 'Not completed yet'}
                     </LogLine>
                   </Box>
                 ))}
@@ -437,8 +437,8 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                           <Typography variant="caption" color="text.secondary">{dt(em.sentAt)}</Typography>
                         </Stack>
                         <Typography sx={{ fontSize: '0.8rem', fontWeight: 700 }}>{em.subject || '(no subject)'}</Typography>
-                        <LogLine icon={UserIcon}>Sent by <b>{em.sentByName || 'â€”'}</b></LogLine>
-                        <LogLine>To: {em.to || 'â€”'}</LogLine>
+                        <LogLine icon={UserIcon}>Sent by <b>{em.sentByName || '—'}</b></LogLine>
+                        <LogLine>To: {em.to || '—'}</LogLine>
                         {em.cc?.length > 0 && <LogLine>CC: {em.cc.join(', ')}</LogLine>}
                         {em.body && (
                           <Box sx={{ mt: 0.5, p: 0.75, borderRadius: 1, bgcolor: (t) => alpha(t.palette.primary.main, 0.04),
@@ -469,10 +469,10 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                       <Stack direction="row" justifyContent="space-between" spacing={1}>
                         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>{f.label}</Typography>
                         <Typography variant="caption" sx={{ fontWeight: 700, textAlign: 'right' }}>
-                          {f.value == null || f.value === '' ? 'â€”' : (f.fieldType === 'DATE' ? dd(f.value) : String(f.value))}
+                          {f.value == null || f.value === '' ? '—' : (f.fieldType === 'DATE' ? dd(f.value) : String(f.value))}
                         </Typography>
                       </Stack>
-                      {f.filledByName && <LogLine icon={UserIcon}>{f.filledByName}{f.filledAt ? ` Â· ${dd(f.filledAt)}` : ''}</LogLine>}
+                      {f.filledByName && <LogLine icon={UserIcon}>{f.filledByName}{f.filledAt ? ` · ${dd(f.filledAt)}` : ''}</LogLine>}
                     </Box>
                   ))}
                 </Stack>
@@ -488,7 +488,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                       {c.done ? <CheckCircle2 size={14} color={theme.palette.success.main} style={{ marginTop: 2 }} /> : <Circle size={14} color={theme.palette.text.disabled} style={{ marginTop: 2 }} />}
                       <Box>
                         <Typography variant="caption" sx={{ fontWeight: 600 }}>{c.text}</Typography>
-                        {c.done && c.doneByName && <LogLine icon={UserIcon}>{c.doneByName}{c.doneAt ? ` Â· ${dd(c.doneAt)}` : ''}</LogLine>}
+                        {c.done && c.doneByName && <LogLine icon={UserIcon}>{c.doneByName}{c.doneAt ? ` · ${dd(c.doneAt)}` : ''}</LogLine>}
                       </Box>
                     </Stack>
                   ))}
@@ -504,10 +504,10 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                     <Box key={vv._id}>
                       <Typography variant="caption" sx={{ fontWeight: 600 }}>{vv.question}</Typography>
                       <Stack direction="row" spacing={0.75} alignItems="center">
-                        <Chip size="small" label={vv.answer || 'â€”'} color={vv.answer === 'YES' ? 'success' : vv.answer === 'NO' ? 'error' : 'default'} sx={{ height: 18, fontSize: '0.62rem' }} />
+                        <Chip size="small" label={vv.answer || '—'} color={vv.answer === 'YES' ? 'success' : vv.answer === 'NO' ? 'error' : 'default'} sx={{ height: 18, fontSize: '0.62rem' }} />
                         {vv.remark && <Typography variant="caption" color="text.secondary">{vv.remark}</Typography>}
                       </Stack>
-                      {vv.answeredByName && <LogLine icon={UserIcon}>{vv.answeredByName}{vv.answeredAt ? ` Â· ${dd(vv.answeredAt)}` : ''}</LogLine>}
+                      {vv.answeredByName && <LogLine icon={UserIcon}>{vv.answeredByName}{vv.answeredAt ? ` · ${dd(vv.answeredAt)}` : ''}</LogLine>}
                     </Box>
                   ))}
                 </Stack>
@@ -528,7 +528,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                   {step.comments.map((cm) => (
                     <Box key={cm._id} sx={{ p: 1, borderRadius: 1.5, bgcolor: (t) => alpha(t.palette.primary.main, 0.04) }}>
                       <Typography variant="body2">{cm.text}</Typography>
-                      <LogLine icon={UserIcon}>{cm.userName || 'User'}{cm.at ? ` Â· ${dt(cm.at)}` : ''}</LogLine>
+                      <LogLine icon={UserIcon}>{cm.userName || 'User'}{cm.at ? ` · ${dt(cm.at)}` : ''}</LogLine>
                     </Box>
                   ))}
                 </Stack>
@@ -542,7 +542,7 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
                   {step.attachments.map((a) => (
                     <LogLine key={a._id} icon={FileText}>
                       <Link href={resolveFileUrl(a.fileUrl)} target="_blank" rel="noreferrer" sx={{ fontWeight: 700 }}>{a.fileName}</Link>
-                      {a.uploadedByName ? ` Â· ${a.uploadedByName}` : ''}
+                      {a.uploadedByName ? ` · ${a.uploadedByName}` : ''}
                     </LogLine>
                   ))}
                 </Stack>
@@ -556,19 +556,19 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
 };
 
 /**
- * O2D Master Data â€” a per-step data view (one tab per O2D step) mirroring the
+ * O2D Master Data — a per-step data view (one tab per O2D step) mirroring the
  * client's sheet tabs: every entry shown with its full columns (who/what/when),
  * its connected records (links), and a full audit log per step (Links & Log).
  * Switch between Table / Sheet / Cards / Board views. Read-only.
  */
 const O2dMasterData = () => {
   const theme = useTheme();
-  const [tab, setTab] = useState('so'); // 1.01 Order Received â€” first step first
+  const [tab, setTab] = useState('so'); // 1.01 Order Received — first step first
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [logRow, setLogRow] = useState(null); // row whose Links & Log drawer is open
-  // â”€â”€ GLOBAL filters â€” set once, apply to every step tab (do NOT reset on switch).
+  // ── GLOBAL filters — set once, apply to every step tab (do NOT reset on switch).
   const [partyFilter, setPartyFilter] = useState('');
   const [dateMode, setDateMode] = useState('all'); // all | month | day | custom
   const [monthVal, setMonthVal] = useState(dayjs().format('YYYY-MM'));
@@ -576,11 +576,11 @@ const O2dMasterData = () => {
   const [fromVal, setFromVal] = useState('');
   const [toVal, setToVal] = useState('');
 
-  // Party dropdown source â€” the full parties master (stable across tabs).
+  // Party dropdown source — the full parties master (stable across tabs).
   const { data: partiesRes } = useGetPartiesQuery({ limit: 1000, sort: 'name' });
   const partyOptions = useMemo(() => (partiesRes?.data || []).map((p) => p.name).filter(Boolean), [partiesRes]);
 
-  // Switching tabs keeps the global party/date filters â€” only the per-tab search/status reset.
+  // Switching tabs keeps the global party/date filters — only the per-tab search/status reset.
   const switchTab = (t) => { setTab(t); setSearch(''); setStatusFilter(''); };
   const clearGlobal = () => { setPartyFilter(''); setDateMode('all'); setFromVal(''); setToVal(''); };
 
@@ -601,7 +601,7 @@ const O2dMasterData = () => {
 
   const isProcTab = PROC_TABS.includes(tab);
 
-  // The FMS process register â€” the audit ledger. Loaded always: it drives the
+  // The FMS process register — the audit ledger. Loaded always: it drives the
   // pure process tabs AND supplies the "Links & Log" for every entity tab.
   const procQ = useGetProcessesQuery({ limit: 1000, sort: '-createdAt' });
   const processes = useMemo(() => procQ?.data?.data || [], [procQ]);
@@ -616,7 +616,7 @@ const O2dMasterData = () => {
     return m;
   }, [processes]);
 
-  // Payment/transport rows carry only dcNumber â†’ resolve to soNumber via challans.
+  // Payment/transport rows carry only dcNumber → resolve to soNumber via challans.
   const needDcMap = ['paymentFollowup', 'paymentReceipt', 'transportReceipt', 'transportPayment'].includes(tab);
   const dcMapQ = useGetChallansQuery({ limit: 1000, sort: '-dcDate' }, { skip: !needDcMap });
   const dcToSo = useMemo(() => {
@@ -625,7 +625,7 @@ const O2dMasterData = () => {
     return m;
   }, [dcMapQ]);
 
-  // Only the active entity tab fetches (skip the rest) â€” fast and cache-friendly.
+  // Only the active entity tab fetches (skip the rest) — fast and cache-friendly.
   const intakeQ = useGetOrderIntakesQuery({ limit: 500, sort: '-createdAt' }, { skip: tab !== 'intake' });
   const soQ = useGetOrdersQuery({ limit: 1000, sort: '-orderDate' }, { skip: tab !== 'so' });
   const planQ = useGetSchedulesQuery({ limit: 1000, sort: '-updatedAt' }, { skip: tab !== 'plan' });
@@ -658,7 +658,7 @@ const O2dMasterData = () => {
 
   const rawRows = useMemo(() => (isProcTab ? procRows : (current?.data?.data || [])), [isProcTab, procRows, current]);
 
-  // Resolve any row â†’ its FMS process step (for the Links & Log layer).
+  // Resolve any row → its FMS process step (for the Links & Log layer).
   const stepForRow = useMemo(() => (row) => {
     if (row.__step) return { step: row.__step, proc: row.__proc };
     let proc = null;
@@ -709,12 +709,12 @@ const O2dMasterData = () => {
     partyFilter && `Party: ${partyFilter}`,
     dateMode === 'month' && monthVal && `Month: ${dayjs(`${monthVal}-01`).format('MMM YYYY')}`,
     dateMode === 'day' && dayVal && `Day: ${dayjs(dayVal).format('DD MMM YYYY')}`,
-    dateMode === 'custom' && (fromVal || toVal) && `Range: ${fromVal ? dayjs(fromVal).format('DD MMM YYYY') : 'â€¦'} â†’ ${toVal ? dayjs(toVal).format('DD MMM YYYY') : 'â€¦'}`,
+    dateMode === 'custom' && (fromVal || toVal) && `Range: ${fromVal ? dayjs(fromVal).format('DD MMM YYYY') : '…'} → ${toVal ? dayjs(toVal).format('DD MMM YYYY') : '…'}`,
     statusFilter && `Status: ${statusFilter}`,
-  ].filter(Boolean).join('  Â·  ') || 'All records';
+  ].filter(Boolean).join('  ·  ') || 'All records';
   const exportBase = `O2D ${activeTab?.label || tab}${partyFilter ? ` - ${partyFilter}` : ''}`.replace(/[\\/:*?"<>|]/g, '-');
   const doExcel = () => exportRowsToExcel({ columns, rows, displayVal, sheetName: activeTab?.label || tab, fileName: `${exportBase}.xlsx` });
-  const doPdf = () => printTablePdf({ title: activeTab?.label ? `O2D â€” ${activeTab.label}` : 'O2D Master Data', subtitle: filterSummary, columns, rows, displayVal });
+  const doPdf = () => printTablePdf({ title: activeTab?.label ? `O2D — ${activeTab.label}` : 'O2D Master Data', subtitle: filterSummary, columns, rows, displayVal });
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas, overflowX: 'hidden', maxWidth: '100%' }}>
@@ -727,14 +727,14 @@ const O2dMasterData = () => {
           <Box sx={{ minWidth: 0 }}>
             <Typography sx={{ color: O2D.ink, fontSize: { xs: '1rem', md: '1.1rem' }, fontWeight: 800, lineHeight: 1.2 }}>O2D Master Data</Typography>
             <Typography noWrap sx={{ color: O2D.sub, fontSize: '0.72rem' }}>
-              Every step Â· who did what, when Â· connected records &amp; full audit log. One tab per O2D step.
+              Every step · who did what, when · connected records &amp; full audit log. One tab per O2D step.
             </Typography>
           </Box>
         </Stack>
       </Box>
 
       <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, pb: 6, minWidth: 0, overflowX: 'hidden' }}>
-        {/* â”€â”€ GLOBAL filters (apply to every step tab) + export â”€â”€ */}
+        {/* ── GLOBAL filters (apply to every step tab) + export ── */}
         <Paper elevation={0} sx={{ borderRadius: '8px', p: 1, mb: 1.25, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
             <Chip label="FILTERS" size="small" sx={{ fontWeight: 800, letterSpacing: '0.06em', bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.dark' }} />
@@ -771,12 +771,12 @@ const O2dMasterData = () => {
             <Button size="small" variant="contained" startIcon={<FileText size={15} />} onClick={doPdf}>PDF</Button>
           </Stack>
           <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, mt: 0.75, display: 'block' }}>
-            {filterSummary} â€” applies to <strong>every step tab</strong>. Export reflects the current tab &amp; filters.
+            {filterSummary} — applies to <strong>every step tab</strong>. Export reflects the current tab &amp; filters.
           </Typography>
         </Paper>
 
         <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-          {/* Step rail â€” the same card language as the O2D Step Board, so the
+          {/* Step rail — the same card language as the O2D Step Board, so the
               steps read as STEPS, not thin text tabs: bold code, name beneath,
               blue card when active, light-blue lift on hover. */}
           <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', px: 1.25, py: 1, borderBottom: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
@@ -784,7 +784,7 @@ const O2dMasterData = () => {
               const meta = STEP_META[t.key] || {};
               const active = tab === t.key;
               return (
-                <Tooltip key={t.key} arrow title={`${meta.code || ''} Â· ${meta.name || t.label}`}>
+                <Tooltip key={t.key} arrow title={`${meta.code || ''} · ${meta.name || t.label}`}>
                   <Paper
                     elevation={0} role="tab" tabIndex={0} aria-selected={active}
                     onClick={() => switchTab(t.key)}
@@ -815,11 +815,11 @@ const O2dMasterData = () => {
             })}
           </Box>
 
-          {/* Compact toolbar: search Â· status Â· count Â· view */}
+          {/* Compact toolbar: search · status · count · view */}
           <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', borderBottom: `1px solid ${O2D.line}` }}>
             <TextField
               size="small" value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="Searchâ€¦"
+              placeholder="Search…"
               sx={{ width: { xs: '100%', sm: 240 }, '& .MuiInputBase-root': { height: 34 } }}
               InputProps={{ startAdornment: <InputAdornment position="start"><Search size={14} /></InputAdornment> }}
             />
@@ -835,7 +835,7 @@ const O2dMasterData = () => {
               {rows.length}{statusFilter || search ? ` / ${rawRows.length}` : ''} record{rows.length === 1 ? '' : 's'}
             </Typography>
             <Box sx={{ flex: 1 }} />
-            {/* Icon-only view switcher â€” compact */}
+            {/* Icon-only view switcher — compact */}
             <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, v) => v && setView(v)}>
               {VIEWS.map((vw) => (
                 <ToggleButton key={vw.key} value={vw.key} title={vw.label} sx={{ px: 1, py: 0.4 }}>
@@ -845,7 +845,7 @@ const O2dMasterData = () => {
             </ToggleButtonGroup>
           </Stack>
 
-          {/* â”€â”€ Table view (DataGrid) â”€â”€ */}
+          {/* ── Table view (DataGrid) ── */}
           {view === 'table' && (
             <Box sx={{ px: 1.5, pb: 1.5, width: '100%', minWidth: 0, overflowX: 'hidden' }}>
               <DataGrid
@@ -860,7 +860,7 @@ const O2dMasterData = () => {
             </Box>
           )}
 
-          {/* â”€â”€ Sheet view (dense spreadsheet) â”€â”€ */}
+          {/* ── Sheet view (dense spreadsheet) ── */}
           {view === 'sheet' && (
             <Box sx={{ px: 1.5, pb: 1.5, overflowX: 'auto' }}>
               <Table size="small" sx={{ minWidth: 720, '& td, & th': { border: `1px solid ${O2D.lineSoft}`, fontSize: '0.78rem', px: 1, py: 0.6, whiteSpace: 'nowrap' }, '& tbody tr:hover': { bgcolor: O2D.surfaceAlt } }}>
@@ -889,7 +889,7 @@ const O2dMasterData = () => {
             </Box>
           )}
 
-          {/* â”€â”€ Cards view â”€â”€ */}
+          {/* ── Cards view ── */}
           {view === 'cards' && (
             <Box sx={{ p: 1.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 1.5 }}>
               {rows.map((row) => (
@@ -916,7 +916,7 @@ const O2dMasterData = () => {
             </Box>
           )}
 
-          {/* â”€â”€ Board view (grouped by status) â”€â”€ */}
+          {/* ── Board view (grouped by status) ── */}
           {view === 'board' && (
             <Box sx={{ p: 1.5, display: 'flex', gap: 1.5, overflowX: 'auto' }}>
               {(() => {
@@ -950,7 +950,7 @@ const O2dMasterData = () => {
         </Paper>
       </Box>
 
-      {/* Links & Log drawer â€” the full "who did what, when, why" audit for a step. */}
+      {/* Links & Log drawer — the full "who did what, when, why" audit for a step. */}
       <StepLogDrawer open={!!logRow} onClose={() => setLogRow(null)} tab={tab} row={logRow} resolve={stepForRow} />
     </Box>
   );

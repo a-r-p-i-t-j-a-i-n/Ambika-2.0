@@ -1,7 +1,29 @@
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import User from './auth.model.js';
 import env from '../../config/env.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { logger } from '../../utils/logger.js';
+
+// Delegation Suite role key → this app's `role` value (both systems use the
+// same company roles). Only 'MD' carries extra rights here — restrictTo('MD')
+// and the root access-control role — so every other value is equivalent.
+const SUITE_ROLE_TO_ERP_ROLE = {
+  md: 'MD',
+  admin: 'MD',
+  chief_of_staff: 'Chief of Staff',
+  ea: 'EA',
+  factory_manager: 'Factory Incharge (Palghar)',
+  production_head: 'Production Head',
+  quality_check: 'QC Head',
+  store_manager: 'Store Manager',
+  deo: 'Data Entry Operator (Store & Prodn)',
+  process_coordinator: 'Process Coordinator',
+  process_coordinator_accounts: 'Process Coordinator & Accounts',
+  accountant: 'Accountant',
+};
+// Suite roles with no matching job title here (e.g. manager, member).
+const FALLBACK_ERP_ROLE = 'Process Coordinator';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -69,6 +91,39 @@ export const authService = {
       throw new AppError('Incorrect email or password', 401);
     }
     return user;
+  },
+
+  // Lookup for Delegation Suite single sign-on (authController.sso).
+  async findByEmail(email) {
+    return withDbRetry(() => User.findOne({ email }));
+  },
+
+  // Delegation is the one place employees are added. When a Delegation employee
+  // opens the ERP for the first time and has no account here yet, create it
+  // from the Delegation details carried by the signed ticket. Only ever INSERTS
+  // one new user — never changes or removes an existing one.
+  //   • role: same job title as in Delegation (MD/Admin → MD).
+  //   • access: MD → root; everyone else → VIEWER (read-only), the same default
+  //     this app gives every new user; the MD grants more in Access Control.
+  //   • password: random and never used — these people come in via the Suite.
+  async createFromSuite({ email, name, mobile, suiteRole }) {
+    const role = SUITE_ROLE_TO_ERP_ROLE[String(suiteRole || '').toLowerCase()] || FALLBACK_ERP_ROLE;
+    try {
+      const user = await User.create({
+        name,
+        email,
+        mobile: String(mobile || ''),
+        role,
+        roles: [role === 'MD' ? 'MD' : 'VIEWER'],
+        password: crypto.randomBytes(24).toString('hex'),
+      });
+      logger.info(`[sso] Created ERP account for Delegation employee ${email} (${role})`);
+      return user;
+    } catch (err) {
+      // Two first-time sign-ins at the same moment: the other one created it.
+      if (err?.code === 11000) return User.findOne({ email });
+      throw err;
+    }
   },
 
   async getAllEmployees() {

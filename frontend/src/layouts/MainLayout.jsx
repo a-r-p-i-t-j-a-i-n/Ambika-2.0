@@ -23,6 +23,7 @@ import { usePermissions } from '../hooks/usePermission';
 
 import AmbikaLogo from '../assets/ambikalogo.jpeg';
 import NotificationBell from '../features/notifications/NotificationBell';
+import { isEmbedded } from '../utils/embed';
 
 const EXPANDED_WIDTH = 268;
 const COLLAPSED_WIDTH = 76;
@@ -1013,6 +1014,20 @@ const MainLayout = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mini, isMobile, sections, location.pathname, location.search, openMenus, user, initials, go, handleLogout],
   );
+
+  // Embedded in the Delegation Suite: the Suite's sidebar drives navigation,
+  // owns sign-out and shows ERP notifications in its own bell, so render no
+  // drawer, no app bar, no profile/logout and no bell — just the page itself at
+  // full width, starting right under the Suite's navbar.
+  if (isEmbedded) {
+    return (
+      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+        <Box component="main" sx={{ width: '100%', minWidth: 0 }}>
+          <Outlet />
+        </Box>
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
