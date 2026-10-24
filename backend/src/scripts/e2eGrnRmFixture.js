@@ -12,7 +12,7 @@
  * Raw Material lines route to RM IMS automatically (from the SKU's Item Type)
  * at the GRN's "Received At", which has to be chosen — there is no default and
  * no manual Inventory Type. Nothing is stocked when the GRN is completed: the
- * ACCEPTED qty posts when the MD-signed GRN's Incoming QC completes.
+ * ACCEPTED qty posts when the GRN's Incoming QC completes (no MD signature needed first).
  *
  * SAFETY: pinned to a localhost scratch database and drops it on --seed. It
  * never reads the configured MONGO_URI, so it cannot touch the Atlas data.

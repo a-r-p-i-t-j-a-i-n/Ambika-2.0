@@ -19,6 +19,8 @@ const invoiceItem = Joi.object({
   grnId:       objectId.allow('', null),
   qcId:        objectId.allow('', null),
   sourceQcId:  objectId.allow('', null), // alias accepted from older clients
+  qcItemId:    objectId.allow('', null), // exact QC line (repeated SKUs within one GRN)
+  grnItemId:   objectId.allow('', null),
   skuId:       objectId.allow('', null),
   skuCode:     Joi.string().trim().max(60).allow('', null),
   itemName:    Joi.string().trim().max(300).allow('', null),

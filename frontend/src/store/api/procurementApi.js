@@ -9,11 +9,12 @@ import { baseApi } from './baseApi';
 // uses, so signing/replacing/removing a signature also refreshes the GRN/
 // Voucher detail query that mirrors approvalStatus — same invalidation
 // convention used everywhere else in this file.
-const APPROVAL_PARENT_TAG = { GRN: 'Grn', VOUCHER: 'Voucher' };
+const APPROVAL_PARENT_TAG = { GRN: 'Grn', VOUCHER: 'Voucher', PROFORMA_INVOICE: 'ProformaInvoice' };
 const approvalInvalidates = (documentType, documentId) => {
   const parentTag = APPROVAL_PARENT_TAG[documentType];
   return [
     { type: 'Approval', id: `${documentType}-${documentId}` },
+    { type: 'Approval', id: 'LIST' },
     ...(parentTag ? [parentTag, { type: parentTag, id: documentId }] : []),
   ];
 };
@@ -553,8 +554,14 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
 
     // ── Digital Approval & Signature (generic engine) ────────
-    // documentType is one of GRN | VOUCHER (today) — the same 4 endpoints
+    // documentType is one of GRN | VOUCHER | PROFORMA_INVOICE — the same endpoints
     // work for any future document type the backend registers.
+    // MD Approval screen (MD only) — every tracked approval with its
+    // document's summary, plus the summary cards and vendor options.
+    getMdApprovals: builder.query({
+      query: (params = {}) => ({ url: '/approvals', params }),
+      providesTags: [{ type: 'Approval', id: 'LIST' }],
+    }),
     getApproval: builder.query({
       query: ({ documentType, documentId }) => `/approvals/${documentType}/${documentId}`,
       providesTags: (_r, _e, { documentType, documentId }) => [{ type: 'Approval', id: `${documentType}-${documentId}` }],
@@ -582,6 +589,7 @@ export const procurementApi = baseApi.injectEndpoints({
 
 export const {
   useGetIndentsQuery,
+  useGetMdApprovalsQuery,
   useGetIndentStatsQuery,
   useGetIndentQuery,
   useCreateIndentMutation,

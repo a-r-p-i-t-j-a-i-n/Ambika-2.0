@@ -27,6 +27,8 @@ export const APPROVAL_DOCUMENT_TYPE = {
   INCOMING_QC:    'INCOMING_QC',
   TALLY_ENTRY:    'TALLY_ENTRY',
   FINAL_PAYMENT:  'FINAL_PAYMENT',
+  // Advance payment gate — the PI's MD approval (see proformaInvoice.service.js).
+  PROFORMA_INVOICE: 'PROFORMA_INVOICE',
 };
 
 export const APPROVAL_STATUS = {

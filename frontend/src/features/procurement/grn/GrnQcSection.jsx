@@ -17,7 +17,6 @@ import {
 import { pfmsCardSx } from '../pfmsTheme';
 import GrnQcStatusChip from './GrnQcStatusChip';
 import GrnCompleteDialog from './GrnCompleteDialog';
-import SignDocumentDialog from '../approvals/SignDocumentDialog';
 import { resolveGrnQcStage } from './grnQcStage';
 import { isGrnCompleted } from './grnMeta';
 
@@ -30,7 +29,7 @@ const Field = ({ label, value }) => (
   </Box>
 );
 
-// QC typed in before the QC record may exist (GRN not yet completed / MD-signed)
+// QC typed in before the QC record may exist (GRN not yet completed)
 // is kept on this device so it is not lost between the steps. Cleared as soon as
 // the QC is saved to the server, which from then on is the only copy.
 const localKey = (grnId) => `grnQcDraft:${grnId}`;
@@ -49,16 +48,15 @@ const pick = (it) => Object.fromEntries(ENTERED.map((f) => [f, it[f]]));
  * allow, each through its existing confirmation:
  *
  *   GRN draft     → Complete GRN (GrnCompleteDialog — receipt finalised, no stock yet)
- *   awaiting MD   → MD signs the GRN (SignDocumentDialog — MD users only)
- *   signed        → save the QC and complete it (IncomingQCCompleteDialog) —
+ *   completed     → save the QC and complete it (IncomingQCCompleteDialog) —
  *                   on a QC-gated GRN this is when accepted qty is posted to stock
  *
- * Nothing is skipped: the server still refuses a QC for an unsigned GRN. A QC
- * draft can be saved to the server once the GRN is signed; before that the
- * entries are kept on this device. Keyed by the QC id, so it re-seeds only when
+ * The GRN's MD signature is recorded separately (MD Approval card / screen) and
+ * never holds the QC back. A QC draft can be saved to the server once the GRN
+ * is completed; before that the entries are kept on this device. Keyed by the QC id, so it re-seeds only when
  * the QC record itself appears — never on a refetch.
  */
-const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, onSign, onRequestComplete, onConflict }) => {
+const GrnQcEditor = ({ grn, qc, poId, stage, prepareGrn, onCompleteGrn, onRequestComplete, onConflict }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [local] = useState(() => (qc ? {} : readLocal(grn._id)));
   const [header, setHeader] = useState(() => (qc ? headerFromQc(qc) : { ...emptyHeader(), ...(local.header || {}) }));
@@ -92,8 +90,6 @@ const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, on
   }, [grn._id, qcId, header, doc, entered]);
 
   const canSaveDraft = stage.editable;
-  const canSign = stage.key === 'AWAITING_MD' && grn.approvalStatus === 'READY_FOR_MD_APPROVAL' && isMd;
-  const waitingForMd = stage.key === 'AWAITING_MD' && !canSign;
 
   /** Create (first time) or update the QC; returns the saved record or null. */
   const save = async () => {
@@ -133,7 +129,6 @@ const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, on
       } finally { setBusy(false); }
       return;
     }
-    if (canSign) { onSign(); return; }
     if (stage.editable) {
       const saved = await save();
       if (saved) onRequestComplete(saved);
@@ -144,10 +139,7 @@ const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, on
   // other GRN nothing is usable until this QC completes.
   const legacyStock = Boolean(grn.stockPosted) && !grn.stockPostingStage && stage.key !== 'GRN_DRAFT';
   const nextText = (() => {
-    if (stage.key === 'GRN_DRAFT') return 'Next action: Complete GRN. Then the MD signs the GRN and the QC is completed — stock is posted only when the QC is completed.';
-    if (canSign) return 'GRN completed — awaiting MD signature. Next action: sign the GRN as MD, then complete the QC.';
-    if (waitingForMd && grn.approvalStatus === 'READY_FOR_MD_APPROVAL') return 'Awaiting MD Signature — the GRN is completed and waits for the MD to sign it. Your QC entries are kept on this device until then.';
-    if (waitingForMd) return stage.desc;
+    if (stage.key === 'GRN_DRAFT') return 'Next action: Complete GRN, then complete the QC — stock is posted only when the QC is completed.';
     return legacyStock
       ? 'Next action: Complete QC — this earlier GRN already added its stock, so rejected quantities move out of stock.'
       : 'Next action: Complete QC — accepted quantities are then posted to stock; rejected quantities never enter it.';
@@ -179,15 +171,15 @@ const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, on
               · {items.length} line(s) · {balanced ? 'balanced' : 'not balanced'}
             </Typography>
           </Box>
-          <Typography variant="body2" data-testid="grn-qc-next" sx={{ mt: 0.5, color: waitingForMd ? 'warning.dark' : 'text.secondary' }}>{nextText}</Typography>
+          <Typography variant="body2" data-testid="grn-qc-next" sx={{ mt: 0.5, color: 'text.secondary' }}>{nextText}</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button variant="outlined" onClick={onSaveDraft} disabled={working || !canSaveDraft}
-            title={canSaveDraft ? '' : 'A QC draft can be saved once the GRN is completed and MD-signed'}
+            title={canSaveDraft ? '' : 'A QC draft can be saved once the GRN is completed'}
             startIcon={creating || updating ? <CircularProgress size={14} color="inherit" /> : <Save size={16} />}>
             Save QC Draft
           </Button>
-          <Button variant="contained" color="success" onClick={onCompleteAll} disabled={working || !items.length || waitingForMd}
+          <Button variant="contained" color="success" onClick={onCompleteAll} disabled={working || !items.length}
             startIcon={busy ? <CircularProgress size={14} color="inherit" /> : <ClipboardCheck size={16} />}>
             Complete GRN + QC
           </Button>
@@ -208,12 +200,11 @@ const GrnQcEditor = ({ grn, qc, poId, stage, isMd, prepareGrn, onCompleteGrn, on
  * unscoped, identical to before.
  *
  *   grn         the saved GRN (live from the API)
- *   isMd        may sign the GRN (the server still enforces the MD role)
  *   prepareGrn  optional async () => boolean — save unsaved GRN edits first
  *   poId        scope to one PO's QC on a multi-PO GRN (omit for single-PO/W-O-PO)
  *   poNumber    that PO's number, for the section title
  */
-const GrnQcSection = ({ grn, isMd = false, prepareGrn, poId, poNumber }) => {
+const GrnQcSection = ({ grn, prepareGrn, poId, poNumber }) => {
   const navigate = useNavigate();
   const completedGrn = isGrnCompleted(grn);
   const { data: qcRes, isLoading: qcLoading, refetch } = useGetIncomingQcsByGrnQuery(grn._id, { skip: !completedGrn });
@@ -221,11 +212,10 @@ const GrnQcSection = ({ grn, isMd = false, prepareGrn, poId, poNumber }) => {
   const stage = resolveGrnQcStage(grn, qc);
 
   const [grnCompleteOpen, setGrnCompleteOpen] = useState(false);
-  const [signOpen, setSignOpen] = useState(false);
   const [completeTarget, setCompleteTarget] = useState(null);
   const [pdfOpen, setPdfOpen] = useState(false);
 
-  const editing = ['GRN_DRAFT', 'AWAITING_MD', 'QC_READY', 'QC_DRAFT'].includes(stage.key);
+  const editing = ['GRN_DRAFT', 'QC_READY', 'QC_DRAFT'].includes(stage.key);
 
   return (
     <Paper id={poId ? `grn-qc-section-${poId}` : 'grn-qc-section'} sx={{ ...pfmsCardSx, p: { xs: 2, md: 3 }, scrollMarginTop: 80 }}>
@@ -253,19 +243,16 @@ const GrnQcSection = ({ grn, isMd = false, prepareGrn, poId, poNumber }) => {
         </Box>
       </Box>
 
-      {/* No spinner while awaiting the MD: no QC can exist yet, and keeping the
-          form mounted keeps what was typed across the GRN-completion step. */}
-      {completedGrn && qcLoading && !qc && stage.key !== 'AWAITING_MD' ? (
+      {completedGrn && qcLoading && !qc ? (
         <Box sx={{ display: 'grid', placeItems: 'center', py: 4 }}><CircularProgress size={22} /></Box>
       ) : (
         <>
           {stage.key === 'CANCELLED' && <Alert severity="info">{stage.desc}</Alert>}
 
           {editing && (
-            <GrnQcEditor key={qc?._id || 'new'} grn={grn} qc={stage.key === 'QC_DRAFT' ? qc : null} poId={poId} stage={stage} isMd={isMd}
+            <GrnQcEditor key={qc?._id || 'new'} grn={grn} qc={stage.key === 'QC_DRAFT' ? qc : null} poId={poId} stage={stage}
               prepareGrn={prepareGrn}
               onCompleteGrn={() => setGrnCompleteOpen(true)}
-              onSign={() => setSignOpen(true)}
               onRequestComplete={setCompleteTarget}
               onConflict={refetch} />
           )}
@@ -296,8 +283,6 @@ const GrnQcSection = ({ grn, isMd = false, prepareGrn, poId, poNumber }) => {
       )}
 
       <GrnCompleteDialog open={grnCompleteOpen} grn={grn} onClose={() => setGrnCompleteOpen(false)} />
-      <SignDocumentDialog open={signOpen} documentType="GRN" documentId={grn._id} documentTitle={grn.grnNumber}
-        onClose={() => setSignOpen(false)} />
       <IncomingQCCompleteDialog open={Boolean(completeTarget)} qc={completeTarget} onClose={() => setCompleteTarget(null)} />
       {qc && <IncomingQCPdfPreview open={pdfOpen} qc={qc} onClose={() => setPdfOpen(false)} />}
     </Paper>

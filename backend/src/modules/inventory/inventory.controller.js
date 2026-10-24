@@ -1,5 +1,6 @@
 import asyncHandler from '../../middleware/asyncHandler.js';
 import { inventoryService } from './inventory.service.js';
+import { stockCorrectionService } from './stockCorrection.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 
 export const inventoryController = {
@@ -31,5 +32,15 @@ export const inventoryController = {
   adjust: asyncHandler(async (req, res) => {
     const { movement, stock } = await inventoryService.adjust(req.body, req.user);
     res.status(201).json(ApiResponse.created('Stock adjusted', { movement, stock }));
+  }),
+
+  // ── Stock correction (physical count → system), any IMS item ──
+  getCorrectionSkus: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Items to correct', await stockCorrectionService.listSkus(req.query)));
+  }),
+
+  correctStock: asyncHandler(async (req, res) => {
+    const out = await stockCorrectionService.correct(req.body, req.user);
+    res.status(out.duplicate ? 200 : 201).json(ApiResponse.created('Stock corrected', out));
   }),
 };

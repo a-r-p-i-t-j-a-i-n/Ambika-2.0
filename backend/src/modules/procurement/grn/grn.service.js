@@ -604,16 +604,38 @@ registerApprovalDocument('GRN', {
     const company = await resolveCompanyForApproval();
     return buildGrnPdfBuffer(grn, company, opts?.signature || null);
   },
+  // The GRN's MD approval is recorded only — Incoming QC never waits for it.
+  gatesPayment: false,
+  summaryFields: 'grnNumber grnDate vendorName totalValue grnStatus qcStatus',
+  summarize: (grn) => {
+    const cancelled = grn.grnStatus === GRN_STATUS.CANCELLED;
+    const qcDone = grn.qcStatus && grn.qcStatus !== GRN_QC_STATUS.PENDING;
+    return {
+      module: 'GRN & QC',
+      documentLabel: 'GRN',
+      vendorName: grn.vendorName || '',
+      amount: Number(grn.totalValue) || 0,
+      documentDate: grn.grnDate || null,
+      workflowLabel: cancelled ? 'GRN Cancelled' : qcDone ? `QC ${grn.qcStatus.charAt(0)}${grn.qcStatus.slice(1).toLowerCase()}` : 'QC Pending',
+      workflowCompleted: cancelled || Boolean(qcDone),
+      detailPath: `/procurement/grns/${grn._id}`,
+    };
+  },
 });
 
-// GRN can proceed once the PI step is settled: either no PI was ever created
+// GRN can proceed once the PI step is settled: no PI was ever created
 // (NOT_RECEIVED — a PI is optional and can still be added later), it was
-// explicitly marked Not Required, or its advance payment is complete. A PI
-// that was actually created and is still in progress (PI_RECEIVED / PI_APPROVED
-// / READY_FOR_ADVANCE_PAYMENT) still blocks until it's resolved.
+// explicitly marked Not Required, or it has been APPROVED. An approved PI
+// (PI_APPROVED / READY_FOR_ADVANCE_PAYMENT / PAYMENT_COMPLETED) never holds the
+// GRN back: its advance payment — and the MD approval that payment needs — is
+// a payment-only gate (advancePayment.service.js) and runs in parallel. Only a
+// created PI still awaiting its ordinary approval (PI_RECEIVED) blocks.
 // Kept in sync with fmsCatalog.js's GRN task filter — see its comment.
-export const isPiSettledForGrn = (piStatus) =>
-  [PO_PI_STATUS.NOT_RECEIVED, PO_PI_STATUS.PAYMENT_COMPLETED, PO_PI_STATUS.PI_NOT_REQUIRED].includes(piStatus);
+export const PI_SETTLED_FOR_GRN = [
+  PO_PI_STATUS.NOT_RECEIVED, PO_PI_STATUS.PI_NOT_REQUIRED,
+  PO_PI_STATUS.PI_APPROVED, PO_PI_STATUS.READY_FOR_ADVANCE_PAYMENT, PO_PI_STATUS.PAYMENT_COMPLETED,
+];
+export const isPiSettledForGrn = (piStatus) => PI_SETTLED_FOR_GRN.includes(piStatus);
 
 const uniq = (arr) => [...new Set(arr.filter(Boolean).map(String))];
 
@@ -638,7 +660,7 @@ export const grnService = {
     // received. A multi-PO GRN only proceeds once every selected PO qualifies.
     for (const po of pos) {
       if (po.followUpStatus !== PO_FOLLOWUP_STATUS.READY_FOR_GRN || !isPiSettledForGrn(po.piStatus)) {
-        throw new AppError(`PO ${po.poNumber}: GRN can only be created when the PO is READY_FOR_GRN and its PI is completed or marked Not Required`, 400);
+        throw new AppError(`PO ${po.poNumber}: GRN can only be created when the PO is READY_FOR_GRN and its PI is approved or marked Not Required`, 400);
       }
       if (po.poStatus !== PO_STATUS.PARTIAL_RECEIVED) {
         let hasFinalMaterialDate = !!(po.readyForGrnAt && po.finalMaterialDate);

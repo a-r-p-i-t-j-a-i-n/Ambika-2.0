@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
-  Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Divider, Chip, Tooltip,
+  Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Tooltip,
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, Send, CheckCircle2, FileText, FileCheck2,
-  ClipboardList, User, Building2, Hash, ExternalLink, ShoppingBag,
+  ClipboardList, User, Building2, Hash, ShoppingBag,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -28,21 +28,61 @@ import NextStepBanner from '../components/NextStepBanner';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
+// ── Page-wide design tokens ──────────────────────────────────────────────────
+// One spacing/typography scale, reused by every section on this page, instead
+// of each section card picking its own padding/gap/icon-size. SECTION_GAP is
+// the single vertical rhythm between Hero → cards → cards (8/12/16/24px scale,
+// i.e. MUI units 1 / 1.5 / 2 / 3).
+const SECTION_GAP = 2;
+const CARD_PAD = 2;
+const TABLE_HEAD_SX = {
+  fontWeight: 700, color: PFMS.sub, textTransform: 'uppercase',
+  fontSize: '0.64rem', letterSpacing: '0.04em', whiteSpace: 'nowrap',
+};
+
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
-    <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
+    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: PFMS.sub, mb: 0.4 }}>{label}</Typography>
     {/* div, not p: some values are chips (block elements), which may not sit inside a <p> */}
-    <Typography component="div" sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
+    <Typography component="div" sx={{ fontSize: '0.86rem', fontWeight: 600, color: PFMS.ink, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
   </Box>
 );
 
+// A row of Fields that aligns to common columns and reflows at any width
+// without hand-picked breakpoints. Each field is capped at a comfortable
+// reading width (not stretched to fill the card) so a short row of fields on
+// a full-width card reads as a tidy info strip, not as content straining to
+// occupy space it doesn't need.
+const FieldGrid = ({ children, sx }) => (
+  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 210px))', gap: 2, ...sx }}>
+    {children}
+  </Box>
+);
+
+// Every section on the page is a full-width card. Earlier this page paired
+// Approval/Quote Step/Approved Quotation two-up (md=6 each); on real data that
+// produced two concrete defects, visible in a before/after comparison: (1)
+// whichever of the three landed alone in a row left roughly half the row as
+// blank page background, and (2) the Quote Step / Approved Quotation
+// item-wise file tables — six columns each — were squeezed into ~half the
+// content width, which is what was wrapping SKUs and cramping the file
+// buttons. Full-width cards fix both at the root: nothing is ever short a
+// partner to pair with, and a table gets the page's full width to lay out its
+// columns before falling back to its own horizontal scroll.
 const SectionCard = ({ icon, title, action, children }) => (
-  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-      <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
+  <Paper sx={{ ...pfmsCardSx, p: CARD_PAD }}>
+    <Box sx={{
+      display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' },
+      justifyContent: 'space-between', gap: 1.25, mb: 1.5,
+    }}>
+      <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, fontSize: '0.92rem', color: 'primary.main' }}>
         {icon} {title}
       </Typography>
-      {action}
+      {action && (
+        <Box sx={{ width: { xs: '100%', sm: 'auto' }, '& .MuiButtonBase-root': { width: { xs: '100%', sm: 'auto' } } }}>
+          {action}
+        </Box>
+      )}
     </Box>
     {children}
   </Paper>
@@ -60,104 +100,145 @@ const itemsOf = (indent) => {
   return [];
 };
 
-const ITEM_COLS = '1.8fr 1fr 0.8fr 0.7fr 0.9fr 0.9fr 0.9fr 1.2fr';
+// One compact file button — icon + CSS-ellipsised name, consistent height
+// regardless of filename length. The full name is always available via the
+// tooltip, and the button still opens/downloads the file exactly as before
+// (same href/target/rel); only the truncation moved from a hand-rolled
+// character slice (inconsistent across the page — 16 chars in one place, 18
+// in another) to one CSS rule everyone shares.
+const FileChip = ({ doc, index }) => {
+  const label = doc.fileName || `File ${index + 1}`;
+  return (
+    <Tooltip title={label}>
+      <Button
+        size="small" variant="outlined" startIcon={<FileText size={13} />}
+        href={fileHref(doc.fileUrl)} target="_blank" rel="noopener"
+        sx={{
+          textTransform: 'none', height: 30, px: 1.1, maxWidth: 190, minWidth: 0,
+          justifyContent: 'flex-start', fontWeight: 600, fontSize: '0.76rem',
+          '& .MuiButton-startIcon': { mr: 0.6, flexShrink: 0 },
+        }}
+      >
+        <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</Box>
+      </Button>
+    </Tooltip>
+  );
+};
+
+const FileChipRow = ({ docs }) => {
+  if (!docs?.length) return <Typography variant="body2" color="text.disabled">—</Typography>;
+  return (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+      {docs.map((d, i) => <FileChip key={d.fileUrl || i} doc={d} index={i} />)}
+    </Box>
+  );
+};
+
+// Fixed pixel/minmax column tracks (not fr-only) so the table never collapses
+// into an unlabeled stack on a narrow screen — on tablet/mobile the HEADER
+// stays visible and aligned with its data; the whole table scrolls sideways
+// inside its own container instead, which keeps every field reachable without
+// hiding any of them. This is also what fixes "wrapped SKU" — SKU keeps a
+// fixed 110px column regardless of viewport, it no longer gets squeezed.
+const ITEM_COLS = 'minmax(200px,1.6fr) 110px 80px 70px 90px 90px 140px minmax(150px,1fr)';
+const ITEM_HEADERS = ['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Status', 'Remarks'];
+const NUMERIC_ITEM_COLS = new Set(['Qty', 'Revised', 'Approved']);
+
 const ItemsTable = ({ items, indentNumber }) => (
-  <Box>
-    <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: ITEM_COLS, gap: 1, px: 1, mb: 0.5 }}>
-      {['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Status', 'Remarks'].map((h, i) => (
-        <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem', textAlign: ['Qty', 'Revised', 'Approved'].includes(h) ? 'right' : 'left' }}>{h}</Typography>
+  <Box sx={{ overflowX: 'auto' }}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: ITEM_COLS, gap: 1.5, px: 1, pb: 1, borderBottom: `1px solid ${PFMS.line}` }}>
+      {ITEM_HEADERS.map((h) => (
+        <Typography key={h} sx={{ ...TABLE_HEAD_SX, textAlign: NUMERIC_ITEM_COLS.has(h) ? 'right' : 'left' }}>{h}</Typography>
       ))}
     </Box>
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-      {items.map((it, idx) => (
-        <Box key={it._id || idx} sx={{
-          display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: ITEM_COLS }, gap: 1, alignItems: 'center',
-          p: 1, borderRadius: '10px', border: '1px solid', borderColor: 'divider',
-        }}>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
-            <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700 }}>{itemRef(indentNumber, it, idx)}</Typography>
-          </Box>
-          <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
-          <Typography variant="body2" sx={{ textAlign: { md: 'right' } }}>{it.quantity ?? '—'}</Typography>
-          <Typography variant="body2" color="text.secondary">{it.unit || '—'}</Typography>
-          <Typography variant="body2" sx={{ textAlign: { md: 'right' } }}>{it.revisedQuantity || '—'}</Typography>
-          <Typography variant="body2" sx={{ textAlign: { md: 'right' }, fontWeight: 700, color: '#0f766e' }}>{it.approvedQuantity || '—'}</Typography>
-          <Box sx={{ minWidth: 0 }}>
-            <StatusChip status={it.approvalStatus || 'PENDING'} />
-            {it.approvalStatus === 'REJECTED' && it.rejectionReason ? (
-              <Tooltip title={it.rejectionReason}>
-                <Typography variant="caption" color="error.main" noWrap sx={{ display: 'block', mt: 0.25 }}>{it.rejectionReason}</Typography>
-              </Tooltip>
-            ) : null}
-          </Box>
-          <Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography>
+    {items.map((it, idx) => (
+      <Box key={it._id || idx} sx={{
+        display: 'grid', gridTemplateColumns: ITEM_COLS, gap: 1.5, alignItems: 'center',
+        px: 1, py: 1.25, borderBottom: idx === items.length - 1 ? 'none' : `1px solid ${PFMS.lineSoft}`,
+      }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
+          <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700 }}>{itemRef(indentNumber, it, idx)}</Typography>
         </Box>
-      ))}
-    </Box>
+        <Typography variant="body2" color="primary.main" fontWeight={700} noWrap>{it.skuCode || '—'}</Typography>
+        <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{it.quantity ?? '—'}</Typography>
+        <Typography variant="body2" color="text.secondary" noWrap>{it.unit || '—'}</Typography>
+        <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{it.revisedQuantity || '—'}</Typography>
+        <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: '#0f766e' }}>{it.approvedQuantity || '—'}</Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <StatusChip status={it.approvalStatus || 'PENDING'} />
+          {it.approvalStatus === 'REJECTED' && it.rejectionReason ? (
+            <Tooltip title={it.rejectionReason}>
+              <Typography variant="caption" color="error.main" noWrap sx={{ display: 'block', mt: 0.25 }}>{it.rejectionReason}</Typography>
+            </Tooltip>
+          ) : null}
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{it.remarks || '—'}</Typography>
+      </Box>
+    ))}
   </Box>
 );
 
-// Human-readable per-item status label for the detail display.
-const STATUS_LABEL = {
-  YES: 'Yes',
-  QUOTE_NOT_REQUIRED: 'Quote Not Required',
-  QUOTATION_NOT_APPROVED: 'Quotation Not Approved',
+// Per-item status for the Quote Step vs. Approved Quotation file tables —
+// the SAME raw value (statusDone: 'YES') means two different things
+// depending which step it's read from ("the quote was received" vs. "the
+// quotation was approved"), so each context gets its own label — still
+// through the one shared StatusChip component and its existing semantic
+// tones (blue = received/in-hand, green = approved, red = not approved,
+// neutral = not required), not a new badge or a new color.
+const itemFileStatusChip = (statusDone, context) => {
+  if (context === 'approval') {
+    if (statusDone === 'YES') return <StatusChip status="APPROVED" />;
+    if (statusDone === 'QUOTATION_NOT_APPROVED') return <StatusChip status={statusDone} />;
+    return <StatusChip status={statusDone || 'PENDING'} />;
+  }
+  if (statusDone === 'YES') return <StatusChip status="RECEIVED" label="Received" tone="blue" />;
+  if (statusDone === 'QUOTE_NOT_REQUIRED') return <StatusChip status={statusDone} />;
+  return <StatusChip status={statusDone || 'PENDING'} />;
 };
 
 // Item-wise uploaded-files table for Step 1.2 / 1.3 detail display.
-const FILE_COLS = '1.6fr 0.9fr 1.2fr 2.4fr 1.1fr 1.4fr';
-const ItemFilesTable = ({ rows, fileKey }) => {
+const FILE_COLS = 'minmax(190px,1.4fr) 100px 150px minmax(220px,1.6fr) 100px minmax(140px,1fr)';
+const FILE_HEADERS = ['Item', 'SKU', 'Status', 'Files', 'Actual Date', 'Remarks'];
+
+const ItemFilesTable = ({ rows, fileKey, context }) => {
   if (!rows?.length) return null;
   return (
-    <Box sx={{ mt: 2 }}>
-      <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: FILE_COLS, gap: 1, px: 1, mb: 0.5 }}>
-        {['Item', 'SKU', 'Status', 'Files', 'Actual Date', 'Remarks'].map((h, i) => (
-          <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.6rem' }}>{h}</Typography>
-        ))}
+    <Box sx={{ mt: 1.5, overflowX: 'auto' }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: FILE_COLS, gap: 1.5, px: 1, pb: 1, borderBottom: `1px solid ${PFMS.line}` }}>
+        {FILE_HEADERS.map((h) => <Typography key={h} sx={TABLE_HEAD_SX}>{h}</Typography>)}
       </Box>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-        {rows.map((row, idx) => {
-          const files = (row[fileKey] || []).filter((d) => d?.fileUrl);
-          return (
-            <Box key={row.itemId || idx} sx={{
-              display: 'grid', gridTemplateColumns: { xs: '1fr', md: FILE_COLS }, gap: 1, alignItems: 'center',
-              p: 1, borderRadius: '10px', border: '1px solid', borderColor: 'divider',
-            }}>
-              <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>{row.itemName || '—'}</Typography>
-                {row.itemDisplayNumber ? <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700 }}>{row.itemDisplayNumber}</Typography> : null}
-              </Box>
-              <Typography variant="body2" color="primary.main" fontWeight={700}>{row.skuCode || '—'}</Typography>
-              <Typography variant="body2" color="text.secondary">{STATUS_LABEL[row.statusDone] || row.statusDone || '—'}</Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                {files.length ? files.map((d, i) => (
-                  <Tooltip key={i} title={d.fileName || 'View file'}>
-                    <Button size="small" variant="outlined" startIcon={<FileText size={13} />}
-                      href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
-                      {d.fileName ? (d.fileName.length > 16 ? `${d.fileName.slice(0, 14)}…` : d.fileName) : `File ${i + 1}`}
-                    </Button>
-                  </Tooltip>
-                )) : <Typography variant="body2" color="text.secondary">—</Typography>}
-              </Box>
-              <Typography variant="body2" color="text.secondary">{fmtDate(row.actualAt)}</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{row.remarks || '—'}</Typography>
+      {rows.map((row, idx) => {
+        const files = (row[fileKey] || []).filter((d) => d?.fileUrl);
+        return (
+          <Box key={row.itemId || idx} sx={{
+            display: 'grid', gridTemplateColumns: FILE_COLS, gap: 1.5, alignItems: 'center',
+            px: 1, py: 1.25, borderBottom: idx === rows.length - 1 ? 'none' : `1px solid ${PFMS.lineSoft}`,
+          }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>{row.itemName || '—'}</Typography>
+              {row.itemDisplayNumber ? <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700 }}>{row.itemDisplayNumber}</Typography> : null}
             </Box>
-          );
-        })}
-      </Box>
+            <Typography variant="body2" color="primary.main" fontWeight={700} noWrap>{row.skuCode || '—'}</Typography>
+            <Box>{itemFileStatusChip(row.statusDone, context)}</Box>
+            <FileChipRow docs={files} />
+            <Typography variant="body2" color="text.secondary">{fmtDate(row.actualAt)}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{row.remarks || '—'}</Typography>
+          </Box>
+        );
+      })}
     </Box>
   );
 };
 
 const StepBlock = ({ step }) => (
-  <Grid container spacing={2}>
-    <Grid item xs={6} sm={3}><Field label="Status" value={<QuoteChip status={step?.status || 'PENDING'} />} /></Grid>
-    <Grid item xs={6} sm={3}><Field label="Planned" value={fmtDate(step?.plannedAt)} /></Grid>
-    <Grid item xs={6} sm={3}><Field label="Actual" value={fmtDate(step?.actualAt)} /></Grid>
-    <Grid item xs={6} sm={3}><Field label="Time Delay" value={step?.timeDelay || '—'} /></Grid>
-    {step?.remarks ? <Grid item xs={12}><Field label="Remarks" value={step.remarks} /></Grid> : null}
-  </Grid>
+  <FieldGrid>
+    <Field label="Status" value={<QuoteChip status={step?.status || 'PENDING'} />} />
+    <Field label="Planned" value={fmtDate(step?.plannedAt)} />
+    <Field label="Actual" value={fmtDate(step?.actualAt)} />
+    <Field label="Time Delay" value={step?.timeDelay || '—'} />
+    {step?.remarks ? <Field label="Remarks" value={step.remarks} /> : null}
+  </FieldGrid>
 );
 
 const IndentDetail = () => {
@@ -265,19 +346,28 @@ const IndentDetail = () => {
     return null;
   })();
 
+  const approvedQuotationDocs = (() => {
+    const step = indent.quotationApprovalStep;
+    return step?.approvedQuotationDocuments?.length
+      ? step.approvedQuotationDocuments
+      : (step?.approvedQuotation?.fileUrl ? [step.approvedQuotation] : []);
+  })();
+
   return (
-    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
+    <Box sx={{ ...pfmsPageSx }}>
       {/* Hero */}
-      <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
-          <ArrowLeft size={20} />
-        </IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
-          <ClipboardList size={24} />
+      <Box sx={{ mb: SECTION_GAP, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+        <Tooltip title="Back">
+          <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}`, width: 38, height: 38 }}>
+            <ArrowLeft size={18} />
+          </IconButton>
+        </Tooltip>
+        <Box sx={{ width: 38, height: 38, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main', flexShrink: 0 }}>
+          <ClipboardList size={20} />
         </Box>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{indent.indentNumber}</Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: PFMS.ink }}>{indent.indentNumber}</Typography>
             <ApprovalChip status={indent.approvalStatus} />
             {quoteSkipped ? (
               <>
@@ -288,7 +378,7 @@ const IndentDetail = () => {
               <OverallChip status={indent.overallStatus} />
             )}
           </Box>
-          <Typography variant="body2" color="text.secondary">{indent.productNameRevised}</Typography>
+          <Typography variant="body2" sx={{ color: PFMS.sub }}>{indent.productNameRevised}</Typography>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         {/* Contextual actions */}
@@ -307,173 +397,118 @@ const IndentDetail = () => {
       <NextStepBanner step={nextStep} />
 
       <FmsDoerCard entityType="INDENT" entityId={id} />
-      <Grid container spacing={2}>
-        {/* Header + items */}
-        <Grid item xs={12}>
-          <SectionCard icon={<Hash size={18} />} title="Indent Details">
-            <Grid container spacing={2} sx={{ mb: 2 }}>
-              <Grid item xs={6} sm={3}><Field label="Raised On" value={fmtDate(indent.timestamp)} /></Grid>
-              <Grid item xs={6} sm={3}><Field label={<><User size={12} /> Raised By</>} value={indent.raisedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={3}><Field label={<><Building2 size={12} /> Department</>} value={indent.department || '—'} /></Grid>
-              <Grid item xs={6} sm={3}><Field label="Remarks" value={indent.remarks || '—'} /></Grid>
-            </Grid>
-            <ItemsTable items={detailItems} indentNumber={indent.indentNumber} />
-          </SectionCard>
-        </Grid>
 
-        {/* Approval */}
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<CheckCircle2 size={18} />} title="Approval">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Status" value={<ApprovalChip status={indent.approvalStatus} />} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Approved By" value={indent.approval?.approvedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Approved On" value={fmtDate(indent.approval?.approvedAt)} /></Grid>
-              {indent.approval?.remarks ? <Grid item xs={12}><Field label="Remarks" value={indent.approval.remarks} /></Grid> : null}
-            </Grid>
-          </SectionCard>
-        </Grid>
+      {/* Every remaining section is a full-width card in one vertical stack —
+          see the comment on SectionCard for why this replaced the earlier
+          two-column (md=6) pairing. */}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: SECTION_GAP }}>
+        <SectionCard icon={<Hash size={18} />} title="Indent Details">
+          <FieldGrid sx={{ mb: 2 }}>
+            <Field label="Raised On" value={fmtDate(indent.timestamp)} />
+            <Field label={<><User size={12} /> Raised By</>} value={indent.raisedBy || '—'} />
+            <Field label={<><Building2 size={12} /> Department</>} value={indent.department || '—'} />
+            <Field label="Remarks" value={indent.remarks || '—'} />
+          </FieldGrid>
+          <ItemsTable items={detailItems} indentNumber={indent.indentNumber} />
+        </SectionCard>
 
-        {/* Quote step */}
-        <Grid item xs={12} md={6}>
-          <SectionCard
-            icon={<FileText size={18} />}
-            title="Quote Step"
-            action={isApproved && quoteDone && !hasPo ? (
-              <Tooltip title={quoteSkipped ? 'Change Step 1.2 back to "Quote Received" to require quotation approval again' : 'Edit the received quote / comparative'}>
-                <Button size="small" variant="outlined" startIcon={<Pencil size={14} />} onClick={() => setComparativeOpen(true)}>
-                  Edit
-                </Button>
-              </Tooltip>
-            ) : null}
-          >
-            <StepBlock step={indent.quoteStep} />
-            {(() => {
-              const step = indent.quoteComparativeStep;
-              // Prefer item-wise quotation files; fall back to legacy flat docs.
-              if (step?.itemQuotations?.length) {
-                return (
-                  <Box sx={{ mt: 1 }}>
-                    <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>Item-wise Quotation Files</Typography>
-                    <ItemFilesTable rows={step.itemQuotations} fileKey="quotationDocuments" />
-                    {step.legacyQuotationDocuments?.length > 0 && (
-                      <Box sx={{ mt: 1.5 }}>
-                        <Field label={`Earlier quotation files — not linked to an item (${step.legacyQuotationDocuments.length})`} value={
-                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                            {step.legacyQuotationDocuments.map((d, i) => (
-                              <Tooltip key={d.fileUrl || i} title={d.fileName || 'View file'}>
-                                <Button size="small" variant="outlined" startIcon={<FileText size={14} />}
-                                  href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
-                                  {d.fileName ? (d.fileName.length > 18 ? `${d.fileName.slice(0, 16)}…` : d.fileName) : `File ${i + 1}`}
-                                </Button>
-                              </Tooltip>
-                            ))}
-                          </Box>
-                        } />
-                      </Box>
-                    )}
-                  </Box>
-                );
-              }
-              const docs = step?.quotationDocuments?.length
-                ? step.quotationDocuments
-                : (step?.quotationUploaded?.fileUrl ? [step.quotationUploaded] : []);
-              if (!docs.length) return null;
+        <SectionCard icon={<CheckCircle2 size={18} />} title="Approval">
+          <FieldGrid>
+            <Field label="Status" value={<ApprovalChip status={indent.approvalStatus} />} />
+            <Field label="Approved By" value={indent.approval?.approvedBy || '—'} />
+            <Field label="Approved On" value={fmtDate(indent.approval?.approvedAt)} />
+            {indent.approval?.remarks ? <Field label="Remarks" value={indent.approval.remarks} /> : null}
+          </FieldGrid>
+        </SectionCard>
+
+        <SectionCard
+          icon={<FileText size={18} />}
+          title="Quote Step"
+          action={isApproved && quoteDone && !hasPo ? (
+            <Tooltip title={quoteSkipped ? 'Change Step 1.2 back to "Quote Received" to require quotation approval again' : 'Edit the received quote / comparative'}>
+              <Button size="small" variant="outlined" startIcon={<Pencil size={14} />} onClick={() => setComparativeOpen(true)}>
+                Edit
+              </Button>
+            </Tooltip>
+          ) : null}
+        >
+          <StepBlock step={indent.quoteStep} />
+          {(() => {
+            const step = indent.quoteComparativeStep;
+            // Prefer item-wise quotation files; fall back to legacy flat docs.
+            if (step?.itemQuotations?.length) {
               return (
                 <Box sx={{ mt: 2 }}>
-                  <Field label={`Quotation Uploaded (${docs.length})`} value={
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                      {docs.map((d, i) => (
-                        <Tooltip key={i} title={d.fileName || 'View file'}>
-                          <Button size="small" variant="outlined" startIcon={<FileText size={14} />}
-                            href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
-                            {d.fileName ? (d.fileName.length > 18 ? `${d.fileName.slice(0, 16)}…` : d.fileName) : `File ${i + 1}`}
-                          </Button>
-                        </Tooltip>
-                      ))}
+                  <Typography sx={TABLE_HEAD_SX}>Item-wise Quotation Files</Typography>
+                  <ItemFilesTable rows={step.itemQuotations} fileKey="quotationDocuments" context="quote" />
+                  {step.legacyQuotationDocuments?.length > 0 && (
+                    <Box sx={{ mt: 2 }}>
+                      <Field label={`Earlier quotation files — not linked to an item (${step.legacyQuotationDocuments.length})`} value={
+                        <FileChipRow docs={step.legacyQuotationDocuments} />
+                      } />
                     </Box>
-                  } />
+                  )}
                 </Box>
               );
-            })()}
-          </SectionCard>
-        </Grid>
-
-        {/* Quotation approval step — Step 1.3 */}
-        <Grid item xs={12} md={6}>
-          <SectionCard
-            icon={<FileCheck2 size={18} />}
-            title="Approved Quotation"
-            action={
-              <Tooltip title={isQuotationApproved ? 'Create a Purchase Order from this indent' : 'Available after quotation is approved'}>
-                <span>
-                  <Button size="small" variant={isQuotationApproved ? 'contained' : 'outlined'} startIcon={<ShoppingBag size={14} />}
-                    disabled={!isQuotationApproved} onClick={() => setPoDrawerOpen(true)}>
-                    Create Vendor PO
-                  </Button>
-                </span>
-              </Tooltip>
             }
-          >
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}>
-                <Field label="Status" value={<QuotationChip status={indent.quotationApprovalStep?.statusDone || (quoteSkipped ? 'NOT_REQUIRED' : 'PENDING')} />} />
-              </Grid>
-              <Grid item xs={6} sm={4}><Field label="Actual Date" value={fmtDate(indent.quotationApprovalStep?.actualAt)} /></Grid>
-              <Grid item xs={12} sm={4}>
-                {(() => {
-                  const step = indent.quotationApprovalStep;
-                  const docs = step?.approvedQuotationDocuments?.length
-                    ? step.approvedQuotationDocuments
-                    : (step?.approvedQuotation?.fileUrl ? [step.approvedQuotation] : []);
-                  return (
-                    <Field label={`Approved Quotation File${docs.length ? ` (${docs.length})` : ''}`} value={
-                      docs.length ? (
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                          {docs.map((d, i) => (
-                            <Tooltip key={i} title={d.fileName || 'View file'}>
-                              <Button size="small" variant="outlined" startIcon={<FileText size={14} />}
-                                href={fileHref(d.fileUrl)} target="_blank" rel="noopener" sx={{ textTransform: 'none' }}>
-                                {d.fileName ? (d.fileName.length > 18 ? `${d.fileName.slice(0, 16)}…` : d.fileName) : `File ${i + 1}`}
-                              </Button>
-                            </Tooltip>
-                          ))}
-                        </Box>
-                      ) : '—'
-                    } />
-                  );
-                })()}
-              </Grid>
-              {indent.quotationApprovalStep?.remarks ? (
-                <Grid item xs={12}><Field label="Remarks" value={indent.quotationApprovalStep.remarks} /></Grid>
-              ) : null}
-              {indent.quotationApprovalStep?.itemApprovedQuotations?.length ? (
-                <Grid item xs={12}>
-                  <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>Item-wise Approved Quotation Files</Typography>
-                  <ItemFilesTable rows={indent.quotationApprovalStep.itemApprovedQuotations} fileKey="approvedQuotationDocuments" />
-                </Grid>
-              ) : null}
-            </Grid>
-          </SectionCard>
-        </Grid>
+            const docs = step?.quotationDocuments?.length
+              ? step.quotationDocuments
+              : (step?.quotationUploaded?.fileUrl ? [step.quotationUploaded] : []);
+            if (!docs.length) return null;
+            return (
+              <Box sx={{ mt: 2 }}>
+                <Field label={`Quotation Uploaded (${docs.length})`} value={<FileChipRow docs={docs} />} />
+              </Box>
+            );
+          })()}
+        </SectionCard>
+
+        <SectionCard
+          icon={<FileCheck2 size={18} />}
+          title="Approved Quotation"
+          action={
+            <Tooltip title={isQuotationApproved ? 'Create a Purchase Order from this indent' : 'Available after quotation is approved'}>
+              <span>
+                <Button size="small" variant={isQuotationApproved ? 'contained' : 'outlined'} startIcon={<ShoppingBag size={14} />}
+                  disabled={!isQuotationApproved} onClick={() => setPoDrawerOpen(true)}>
+                  Create Vendor PO
+                </Button>
+              </span>
+            </Tooltip>
+          }
+        >
+          <FieldGrid>
+            <Field label="Status" value={<QuotationChip status={indent.quotationApprovalStep?.statusDone || (quoteSkipped ? 'NOT_REQUIRED' : 'PENDING')} />} />
+            <Field label="Actual Date" value={fmtDate(indent.quotationApprovalStep?.actualAt)} />
+            <Field label={`Approved Quotation File${approvedQuotationDocs.length ? ` (${approvedQuotationDocs.length})` : ''}`} value={<FileChipRow docs={approvedQuotationDocs} />} />
+            {indent.quotationApprovalStep?.remarks ? <Field label="Remarks" value={indent.quotationApprovalStep.remarks} /> : null}
+          </FieldGrid>
+          {indent.quotationApprovalStep?.itemApprovedQuotations?.length ? (
+            <Box sx={{ mt: 2 }}>
+              <Typography sx={TABLE_HEAD_SX}>Item-wise Approved Quotation Files</Typography>
+              <ItemFilesTable rows={indent.quotationApprovalStep.itemApprovedQuotations} fileKey="approvedQuotationDocuments" context="approval" />
+            </Box>
+          ) : null}
+        </SectionCard>
 
         {/* Activity timeline */}
         {indent.activityTimeline?.length ? (
-          <Grid item xs={12}>
-            <SectionCard icon={<ClipboardList size={18} />} title="Activity">
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {[...indent.activityTimeline].reverse().map((ev, i) => (
-                  <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 110 }} />
-                    <Typography variant="body2" color="text.secondary">{ev.description}</Typography>
-                    <Box sx={{ flexGrow: 1 }} />
-                    <Typography variant="caption" color="text.disabled">{fmtDate(ev.timestamp)}</Typography>
-                  </Box>
-                ))}
-              </Box>
-            </SectionCard>
-          </Grid>
+          <SectionCard icon={<ClipboardList size={18} />} title="Activity">
+            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+              {[...indent.activityTimeline].reverse().map((ev, i, arr) => (
+                <Box key={i} sx={{
+                  display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' },
+                  gap: { xs: 0.5, sm: 1.5 }, py: 1, borderBottom: i === arr.length - 1 ? 'none' : `1px solid ${PFMS.lineSoft}`,
+                }}>
+                  <Chip size="small" label={ev.action.replace(/_/g, ' ')} sx={{ fontWeight: 700, fontSize: '0.68rem', height: 22, flexShrink: 0 }} />
+                  <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>{ev.description}</Typography>
+                  <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>{fmtDate(ev.timestamp)}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </SectionCard>
         ) : null}
-      </Grid>
+      </Box>
 
       {/* Drawer + dialogs */}
       <IndentFormDrawer open={formOpen} indent={indent} onClose={() => setFormOpen(false)} />

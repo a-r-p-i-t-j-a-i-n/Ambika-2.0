@@ -16,6 +16,7 @@ const FollowUpRescheduleDialog = ({ open, onClose, followUp }) => {
   const [followUpType, setFollowUpType] = useState('CALL');
   const [remarks, setRemarks] = useState('');
   const [message, setMessage] = useState('');
+  const [contactPerson, setContactPerson] = useState('');
   const [reschedule, { isLoading }] = useRescheduleFollowUpMutation();
 
   useEffect(() => {
@@ -24,6 +25,7 @@ const FollowUpRescheduleDialog = ({ open, onClose, followUp }) => {
     setFollowUpType(followUp?.followUpType || 'CALL');
     setRemarks('');
     setMessage('');
+    setContactPerson(followUp?.contactPerson || '');
   }, [open, followUp]);
 
   const handleSubmit = async () => {
@@ -31,7 +33,7 @@ const FollowUpRescheduleDialog = ({ open, onClose, followUp }) => {
     try {
       await reschedule({
         id: followUp._id, nextFollowUpDate, followUpType,
-        remarks: remarks.trim(), message: message.trim(),
+        remarks: remarks.trim(), message: message.trim(), contactPerson: contactPerson.trim(),
       }).unwrap();
       enqueueSnackbar('Follow-up rescheduled', { variant: 'info' });
       onClose?.(true);
@@ -61,6 +63,10 @@ const FollowUpRescheduleDialog = ({ open, onClose, followUp }) => {
           <Grid item xs={12}>
             <TextField label="Reason / Remarks" fullWidth value={remarks}
               onChange={(e) => setRemarks(e.target.value)} placeholder="Why is it moving?" />
+          </Grid>
+          <Grid item xs={12}>
+            <TextField label="Contact Person" fullWidth value={contactPerson}
+              onChange={(e) => setContactPerson(e.target.value)} />
           </Grid>
           <Grid item xs={12}>
             <TextField label="Communication Message" fullWidth multiline minRows={2} value={message}

@@ -43,8 +43,31 @@ const coilConversionSchema = new Schema({
 
   // Derived & stored for the summary view.
   circlesWeightKg: { type: Number, default: 0, min: 0 },        // Σ circle weight
-  scrapKg:         { type: Number, default: 0 },                // coil − circles (can be ~0)
-  yieldRatioPct:   { type: Number, default: 0 },                // circles / coil × 100
+  scrapKg:         { type: Number, default: 0 },                // settled − circles (can be ~0)
+  yieldRatioPct:   { type: Number, default: 0 },                // circles / settled × 100; null on a partial round
+
+  /**
+   * The coil weight whose OUTPUT this round records: circles + scrap = settled.
+   *
+   * A PARTIAL round records only the coil weight it cut — its circles are
+   * counted and entered with the coil's full cut — so it settles 0 kg. The
+   * round that records circles (the FULL cut) settles its own weight plus
+   * every earlier round of the coil still at 0, and its scrap and yield are
+   * worked out over all of it: the yield of the whole coil, not of one round.
+   *
+   * Absent on every conversion made before partial rounds stopped recording
+   * circles: each of those settled its own weight, so readers take
+   * `settledKg ?? coilWeightKg` and nothing is back-filled.
+   */
+  settledKg: { type: Number, default: undefined, min: 0 },
+
+  /**
+   * Where the round was cut (PLG01 / JW001). The cut's ScrapRecord carries the
+   * same location; a partial round has no scrap yet and so no ScrapRecord,
+   * and this is where its location is kept. Read after the ScrapRecord (see
+   * cutLocationStages in rmIms.service.js), so older rounds are unchanged.
+   */
+  cutLocation: { type: String, trim: true, uppercase: true, default: undefined },
 
   // REJECTED is additive: the client's Summary Scrap sheet carries that state on
   // two historical batches, and mapping it to PENDING would lose what they

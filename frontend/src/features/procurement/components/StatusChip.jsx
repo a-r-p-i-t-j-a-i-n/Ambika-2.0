@@ -1,5 +1,8 @@
 import React from 'react';
 import { Box } from '@mui/material';
+import {
+  Check, Clock, X, Loader, Circle, Send, PauseCircle, AlertTriangle,
+} from 'lucide-react';
 
 /**
  * Shared, enterprise status badge for the entire Purchase FMS.
@@ -7,6 +10,11 @@ import { Box } from '@mui/material';
  * ONE component, ONE color system — no module-specific colors. Every status
  * resolves to a semantic tone (light background + dark text, WCAG-friendly,
  * no neon / no pink). Same height, radius, weight, padding everywhere.
+ *
+ * Each tone also carries a GLYPH, so the state is never communicated by colour
+ * alone — the badge still reads correctly in greyscale and for colour-blind
+ * users. Pass `showIcon={false}` for the rare dense cell where the glyph does
+ * not fit.
  *
  * Usage:  <StatusChip status="APPROVED" />
  *         <StatusChip status={po.poStatus} label="Released to Vendor" />
@@ -25,6 +33,22 @@ const TONES = {
   cyan:    { bg: '#cffafe', fg: '#0e7490' }, // cyan (ready for GRN)
   red:     { bg: '#fee2e2', fg: '#b91c1c' }, // red (failed / rejected / cancelled)
   purple:  { bg: '#f3e8ff', fg: '#7e22ce' }, // purple (short closed)
+};
+
+// tone → glyph. Deliberately a small, closed set: the glyph reinforces the
+// tone's MEANING (done / waiting / failed / in-flight), it does not encode a
+// per-status icon vocabulary nobody would learn.
+const TONE_ICONS = {
+  neutral: Circle,
+  amber:   Clock,
+  blue:    Check,
+  indigo:  Loader,
+  green:   Check,
+  teal:    Send,
+  orange:  PauseCircle,
+  cyan:    Circle,
+  red:     X,
+  purple:  AlertTriangle,
 };
 
 // Canonical status token → [label, tone]. Covers every Purchase FMS status.
@@ -111,20 +135,24 @@ const prettify = (s) => String(s || '—')
   .replace(/_/g, ' ')
   .replace(/\w\S*/g, (t) => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
 
-const StatusChip = ({ status, label, tone }) => {
+const StatusChip = ({ status, label, tone, showIcon = true }) => {
   const key = String(status || '').toUpperCase();
   const [mappedLabel, mappedTone] = STATUS[key] || [null, 'neutral'];
-  const t = TONES[tone || mappedTone] || TONES.neutral;
+  const resolvedTone = tone || mappedTone;
+  const t = TONES[resolvedTone] || TONES.neutral;
   const text = label || mappedLabel || prettify(status);
+  const Icon = TONE_ICONS[resolvedTone] || Circle;
   return (
     <Box
       component="span"
+      aria-label={text}
       sx={{
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
+        gap: 0.5,
         height: 22,
-        px: 1,
+        px: 0.85,
         borderRadius: '6px',
         bgcolor: t.bg,
         color: t.fg,
@@ -136,6 +164,7 @@ const StatusChip = ({ status, label, tone }) => {
         verticalAlign: 'middle',
       }}
     >
+      {showIcon && <Icon size={12} strokeWidth={3} aria-hidden="true" style={{ flexShrink: 0 }} />}
       {text}
     </Box>
   );

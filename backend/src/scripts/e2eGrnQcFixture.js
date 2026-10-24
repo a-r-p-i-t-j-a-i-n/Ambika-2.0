@@ -277,7 +277,7 @@ const verify = async () => {
   console.log('\n── New workflow: stock posts at QC, accepted qty only ──');
 
   const flow = await grnState('FLOW');
-  check('FLOW: completed, MD-signed and QC-gated in the browser', flow.grn.stockPostingStage === 'QC_COMPLETION' && flow.grn.approvalStatus === 'MD_APPROVED',
+  check('FLOW: completed, QC-gated, then MD-signed after its QC in the browser', flow.grn.stockPostingStage === 'QC_COMPLETION' && flow.grn.approvalStatus === 'MD_APPROVED',
     `${flow.grn.stockPostingStage} · ${flow.grn.approvalStatus}`);
   check('FLOW: exactly one QC, PARTIAL, mirrored on the GRN', flow.qcs.length === 1 && flow.qcs[0].qcStatus === 'PARTIAL' && flow.grn.qcStatus === 'PARTIAL');
   check('FLOW: only the ACCEPTED qty became stock — bolt 7 (3 rejected), nut 5, at MAIN', ins(flow) === 'E2E-BOLT:7@MAIN,E2E-NUT:5@MAIN', ins(flow));
@@ -312,12 +312,12 @@ const verify = async () => {
   check('RMPLG: accepted coil (400 of 500) posted at PLG01 with its batch — the 100 rejected never in stock',
     ins(plg) === 'E2E-COIL:400@PLG01/B-RMPLG' && plg.rejectMovs.length === 0 && datedAtQc(plg), ins(plg));
 
-  // Raised, completed, signed and QC'd entirely on the Create GRN form.
+  // Raised, completed and QC'd on the Create GRN form (no signature first), then MD-signed on its page.
   const newGrn = await GoodsReceiptNote.findOne({ poNumber: 'PO-E2E-NEWGRN' }).lean();
   const newQcs = newGrn ? await IncomingQC.find({ grnId: newGrn._id }).lean() : [];
   const newIn = newGrn ? await InventoryMovement.find({ refType: 'GRN', refId: newGrn._id }).lean() : [];
   const newOut = newQcs.length ? await InventoryMovement.find({ refType: 'INCOMING_QC', refId: newQcs[0]._id }).lean() : [];
-  check('NEWGRN: completed and MD-signed from the form, no manual Inventory Type', !!newGrn && newGrn.grnStatus === 'FULLY_RECEIVED' && newGrn.approvalStatus === 'MD_APPROVED'
+  check('NEWGRN: completed, QC\'d unsigned, then MD-signed; no manual Inventory Type', !!newGrn && newGrn.grnStatus === 'FULLY_RECEIVED' && newGrn.approvalStatus === 'MD_APPROVED'
     && newGrn.inventoryType === null && newGrn.stockPostingStage === 'QC_COMPLETION',
   newGrn ? `${newGrn.grnNumber} · ${newGrn.grnStatus} · ${newGrn.approvalStatus} · ${newGrn.inventoryType}` : 'not found');
   check('NEWGRN: PO received 8 at GRN completion', (await VendorPurchaseOrder.findOne({ poNumber: 'PO-E2E-NEWGRN' }).lean()).items[0].receivedQty === 8);
@@ -449,13 +449,13 @@ const race = async () => {
     && sig(await grnIns(g5._id)) === 'E2E-BOLT:6,E2E-NUT:5',
   outs.filter((o) => o.status === 'rejected').map((o) => o.reason.message.slice(0, 60)).join(' | '));
 
-  console.log('\n── MD signature is required at the moment stock is posted ──');
+  console.log('\n── MD signature never holds QC / stock posting back ──');
   const g6 = await signed('RACE-UNSIGN');
   const d6 = await qcs.create({ grnId: String(g6._id) }, user);
   await GoodsReceiptNote.updateOne({ _id: g6._id }, { $set: { approvalStatus: 'READY_FOR_MD_APPROVAL' } }); // signature withdrawn
   const unsigned = await errMsg(qcs.complete(String(d6._id), {}, user));
-  check('a QC whose GRN is no longer MD-signed cannot complete', /^400 .*signed by the MD/.test(unsigned), unsigned);
-  check('…nothing posted and the QC is still open', (await grnIns(g6._id)).length === 0 && ['DRAFT', 'IN_PROGRESS'].includes((await IncomingQC.findById(d6._id).lean()).qcStatus));
+  check('a QC whose GRN is not MD-signed still completes', unsigned === 'OK', unsigned);
+  check('…accepted qty posted and the QC is closed', (await grnIns(g6._id)).length > 0 && !['DRAFT', 'IN_PROGRESS'].includes((await IncomingQC.findById(d6._id).lean()).qcStatus));
 
   console.log('\n── Vendor Invoice eligibility (unchanged) ──');
   const gp = await signed('INV-PASS');

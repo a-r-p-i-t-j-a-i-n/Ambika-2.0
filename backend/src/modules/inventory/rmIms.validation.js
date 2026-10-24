@@ -262,7 +262,15 @@ export const rmConvertSchema = Joi.object({
     }),
     // Still required: yield and scrap are weight-based.
     weightKg:    Joi.number().greater(0).required(),
-  })).min(1).required(),
+  })).when('cuttingType', {
+    // A PARTIAL round records only the coil weight it cut; the circles of the
+    // whole coil are entered with its FULL cut. Every other cut records them.
+    is: Joi.string().regex(/^\s*partial\s*$/i).required(),
+    then: Joi.array().max(0).default([]).messages({
+      'array.max': 'A partial cut records only the coil weight. Enter the circles with the full cut of this coil.',
+    }),
+    otherwise: Joi.array().min(1).required(),
+  }),
 })
   // A cut names its coil ONE way. Sending a receipt and a manual coil (or a
   // manual coil and "No receipt available") is a confused client, not a choice.
@@ -274,10 +282,18 @@ export const rmConvertSchema = Joi.object({
   .messages({ 'any.invalid': 'Name the coil one way only: a received coil (GRN), a manual-entry coil, or "No receipt available".' });
 
 export const rmMovementQuerySchema = Joi.object({
-  search:  Joi.string().max(120).allow('', null),
-  txnType: Joi.string().max(40).allow('', null),
-  page:    Joi.number().integer().min(1),
-  limit:   Joi.number().integer().min(1).max(200),
+  search:    Joi.string().max(120).allow('', null),
+  // One type, or several comma-separated (e.g. "OPENING,ADJUST_IN").
+  txnType:   Joi.string().max(200).allow('', null),
+  skuId:     objectId.allow('', null).messages({ 'string.pattern.base': 'Item is not a valid id' }),
+  kind:      Joi.string().trim().uppercase().valid('COIL', 'CIRCLE').allow('', null),
+  direction: Joi.string().trim().uppercase().valid('IN', 'OUT').allow('', null),
+  // The movement's day (IST). isoDay is declared further down this file.
+  from:      Joi.string().trim().pattern(/^\d{4}-\d{2}-\d{2}$/).allow('', null).label('From date'),
+  to:        Joi.string().trim().pattern(/^\d{4}-\d{2}-\d{2}$/).allow('', null).label('To date'),
+  sort:      Joi.string().trim().lowercase().valid('latest', 'oldest').allow('', null),
+  page:      Joi.number().integer().min(1),
+  limit:     Joi.number().integer().min(1).max(200),
 }).unknown(true);
 
 /**
@@ -374,8 +390,14 @@ export const rmConversionLedgerQuerySchema = Joi.object({
   status:   Joi.string().trim().uppercase().valid('NOT_CUT', 'PARTIALLY_CUT', 'FULLY_CUT').allow('', null),
   circleSkuId: objectId.allow('', null)
     .messages({ 'string.pattern.base': 'Circle SKU is not a valid id' }),
+  // The coil SKU the cut was made from.
+  coilSkuId: objectId.allow('', null)
+    .messages({ 'string.pattern.base': 'Coil SKU is not a valid id' }),
   from:     isoDay.allow('', null).label('From date'),
   to:       isoDay.allow('', null).label('To date'),
+  // Row order: newest cut first (default), oldest first, or coil SKU A → Z.
+  sort:     Joi.string().trim().lowercase().valid('latest', 'oldest', 'az').allow('', null)
+    .messages({ 'any.only': 'Sort must be latest, oldest or az' }),
   page:     Joi.number().integer().min(1),
   limit:    Joi.number().integer().min(1).max(200),
 }).unknown(true).custom((v, helpers) => (

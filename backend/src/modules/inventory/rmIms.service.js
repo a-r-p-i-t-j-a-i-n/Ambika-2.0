@@ -403,9 +403,16 @@ const cutLocationStages = () => {
       },
     },
     scrapLocation('srImport', 'importScrapRef', 'sourceRef'),
+    // Last, the round's own `cutLocation`: a partial round has no scrap record
+    // yet (its scrap comes with the full cut), so that is where it is kept.
     {
       $addFields: {
-        location: { $ifNull: [{ $arrayElemAt: ['$srOwn.location', 0] }, { $ifNull: [{ $arrayElemAt: ['$srImport.location', 0] }, null] }] },
+        location: {
+          $ifNull: [
+            { $arrayElemAt: ['$srOwn.location', 0] },
+            { $ifNull: [{ $arrayElemAt: ['$srImport.location', 0] }, { $ifNull: ['$cutLocation', null] }] },
+          ],
+        },
       },
     },
     { $project: { srOwn: 0, srImport: 0, importScrapRef: 0 } },
@@ -422,10 +429,20 @@ const cutLocationStages = () => {
  * Shared by the Coil to Circle History (listCuttingHistory) and the conversion
  * ledger (listConversionLedger), so a coil reads the same in both.
  */
+/** Circle SKUs as { code, name }, once each, by code. */
+const circleSkusOf = (items = []) => {
+  const byCode = new Map();
+  for (const it of items) {
+    if (it?.code && !byCode.has(it.code)) byCode.set(it.code, { code: it.code, name: it.name || '' });
+  }
+  return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code));
+};
+
 const coilHistoryRow = (g) => {
   const rc = g.receipt || null;
   const row = summariseCoilRow({
     receivedKg: g.receivedKg, cutKg: g.cutKg, circlesKg: g.circlesKg, scrapKg: g.scrapKg, rounds: g.rounds,
+    settledKg: g.settledKg ?? g.cutKg,
   });
   const ledger = ledgerCoilState({
     receivedKg: g.receivedKg, roundsCutKg: g.cutKg, ledgerAvailableKg: g.ledgerAvailableKg,
@@ -466,6 +483,8 @@ const coilHistoryRow = (g) => {
     // Pieces across every circle size the coil produced, and which sizes.
     circlesPcs: round2(g.circlesPcs),
     circleSkuCodes: [...new Set((g.circleCodes || []).flat().filter(Boolean))].sort(),
+    // The same sizes with their names (where the caller grouped them).
+    circleSkus: circleSkusOf((g.circleItems || []).flat()),
     // How many of the coil's rounds satisfied the round-level filters —
     // equal to `rounds` when none is applied.
     matchedRounds: g.matchedRounds || 0,
@@ -1012,7 +1031,7 @@ export const rmImsService = {
 
     const context = [
       payload.purpose && `Purpose: ${payload.purpose}`,
-      payload.issuedTo && `Issued to: ${payload.issuedTo}`,
+      payload.issuedTo && `Received by: ${payload.issuedTo}`,
       payload.department && `Dept: ${payload.department}`,
     ].filter(Boolean).join(' · ');
 
@@ -1229,8 +1248,13 @@ export const rmImsService = {
    */
   async _manualCoilFacts(mc) {
     const conversions = await CoilConversion.find({ manualCoilId: mc._id, isDeleted: { $ne: true } })
-      .select('coilWeightKg conversionDate').lean();
+      .select('coilWeightKg settledKg conversionDate').lean();
     const cutKg = round2(conversions.reduce((s, c) => s + Number(c.coilWeightKg || 0), 0));
+    // Cut whose circles are not entered yet — Σ cut − Σ settled, the figure
+    // the next full cut settles (see convert()). A settled partial round is
+    // inside a later round's settledKg, so it is not counted here.
+    const settledKg = conversions.reduce((s, c) => s + Number(c.settledKg ?? c.coilWeightKg ?? 0), 0);
+    const pendingKg = round2(Math.max(0, cutKg - settledKg));
     const state = ledgerCoilState({
       receivedKg: mc.originalWeightKg, roundsCutKg: cutKg, ledgerAvailableKg: Number(mc.originalWeightKg) - cutKg,
     });
@@ -1246,6 +1270,7 @@ export const rmImsService = {
       unit: mc.unit || 'KGS',
       originalWeightKg: round2(mc.originalWeightKg),
       cutKg,
+      pendingKg,
       availableKg: state.availableKg,
       rounds: conversions.length,
       status: state.status,
@@ -1309,8 +1334,19 @@ export const rmImsService = {
     const cuttingType = ['FULL', 'PARTIAL'].includes(cuttingTypeRaw) ? cuttingTypeRaw : null;
     if (cuttingTypeRaw && !cuttingType) throw new AppError('Cutting type must be FULL or PARTIAL.', 400);
 
+    /**
+     * A PARTIAL round records only the coil weight it cut. The circles are
+     * counted when the coil is finished and entered with its FULL cut, which
+     * then settles the scrap and yield of the whole coil (see `settledKg`
+     * below). Every other cut records its circles.
+     */
+    const isPartial = cuttingType === 'PARTIAL';
     const circles = (payload.circles || []).filter((c) => c.circleSkuId && Number(c.weightKg) > 0);
-    if (!circles.length) throw new AppError('Add at least one produced circle (with weight).', 400);
+    if (isPartial && (payload.circles || []).length) {
+      throw new AppError('A partial cut records only the coil weight. Enter the circles with the full cut of this coil.', 400);
+    }
+    if (!isPartial && !circles.length) throw new AppError('Add at least one produced circle (with weight).', 400);
+    const circlesWeightIn = round2(circles.reduce((s, c) => s + Number(c.weightKg || 0), 0));
 
     const conversionDate = payload.conversionDate ? new Date(payload.conversionDate) : new Date();
     const allowNegative = !!payload.allowNegative;
@@ -1327,7 +1363,12 @@ export const rmImsService = {
     // "Full" means "everything this physical coil has left" — a cut that names
     // no coil has no such figure, so there is nothing for FULL to resolve to.
     if (cuttingType === 'FULL' && manualFallback) {
-      throw new AppError('Full cutting needs the physical coil (its batch number): a full cut takes exactly what that coil has left. Use Partial cutting for a cut with no receipt.', 400);
+      throw new AppError('Full cutting needs the physical coil (its batch number): a full cut takes exactly what that coil has left. A cut with no receipt is recorded in one entry, with its circles.', 400);
+    }
+    // Nor is there a coil to finish later, so a partial round — which waits
+    // for the full cut to record its circles — would never get them.
+    if (isPartial && manualFallback) {
+      throw new AppError('A cut with no receipt has no coil to finish later, so it is recorded in one entry with its circles. Leave the cutting type out.', 400);
     }
 
     /**
@@ -1375,14 +1416,18 @@ export const rmImsService = {
      * stock it posts.
      */
     const circleIdsForCheck = [...new Set(circles.map((c) => String(c.circleSkuId)))];
-    const circleSkusForCheck = await SKU.find({ _id: { $in: circleIdsForCheck } })
-      .select('code').lean();
+    const circleSkusForCheck = circleIdsForCheck.length
+      ? await SKU.find({ _id: { $in: circleIdsForCheck } }).select('code').lean()
+      : [];
     // A circle id that matches no SKU is NOT judged here. It is left to the
     // in-session lookup, which already answers it with "Circle SKU <id> not
     // found" - a clearer message than calling an item that does not exist
-    // unapproved, and the existing behaviour for that case.
-    const mapVerdict = checkCirclesAgainstCoil(coil.code, circleSkusForCheck.map((s) => s.code));
-    if (!mapVerdict.ok) throw new AppError(describeCircleMapRefusal(mapVerdict), 400);
+    // unapproved, and the existing behaviour for that case. A partial round
+    // has no circles, so there is nothing to judge.
+    if (circleSkusForCheck.length) {
+      const mapVerdict = checkCirclesAgainstCoil(coil.code, circleSkusForCheck.map((s) => s.code));
+      if (!mapVerdict.ok) throw new AppError(describeCircleMapRefusal(mapVerdict), 400);
+    }
 
     /* ── Does every circle carry a piece count? ──
      *
@@ -1491,6 +1536,28 @@ export const rmImsService = {
         if (cuttingType === 'FULL' && !receipt && !manualMode) {
           throw new AppError('Full cutting needs the physical coil (its batch number).', 400);
         }
+        // A partial round waits for its coil's full cut to record its circles,
+        // so it must name the coil that full cut will finish.
+        if (isPartial && !receipt && !manualMode) {
+          throw new AppError('Partial cutting needs the physical coil (its batch number): its circles are entered with that coil\'s full cut.', 400);
+        }
+
+        /**
+         * A PARTIAL round must leave something on the coil. Taking the last
+         * kilogram is the full cut — the round that records the circles — and
+         * a coil finished by a partial round would have no round left to
+         * record them in. Refused whatever "allow negative" says: over-cutting
+         * a coil partially would strand its circles the same way.
+         */
+        const refusePartialTakingAll = (available, label) => {
+          if (!isPartial || round2(available - coilWeight) > EPS) return;
+          throw new AppError(
+            available > EPS
+              ? `This round takes everything left on coil ${label} (${kgText(available)} KG). Choose Full cutting: it finishes the coil and records its circles and scrap.`
+              : `Physical coil ${label} is already fully cut — 0 KG remaining, so there is nothing left to cut.`,
+            400,
+          );
+        };
 
         /**
          * ── A MANUAL-ENTRY COIL (no goods receipt) ─────────────────────────
@@ -1554,6 +1621,7 @@ export const rmImsService = {
           }
           const available = round2(originalKg - cutSoFar);
           const label = manualCoil ? manualCoil.batchNo : newManualBatch;
+          refusePartialTakingAll(available, label);
 
           if (cuttingType === 'FULL') {
             if (available <= EPS) {
@@ -1590,9 +1658,10 @@ export const rmImsService = {
             throw new AppError('That receipt carries no batch number, so the coil cannot be identified. Use manual selection instead.', 400);
           }
 
-          // A FULL round always needs the coil's balance, override or not —
-          // it is the number a full cut resolves to.
-          if (!allowNegative || cuttingType === 'FULL') {
+          // A FULL or PARTIAL round always needs the coil's balance, override
+          // or not: a full cut resolves to it, a partial one must stay under it.
+          if (!allowNegative || cuttingType) {
+            // One after the other: a transaction's session runs one operation at a time.
             const bal = await InventoryMovement.aggregate([
               { $match: { batchNo: receipt.batchNo, skuId: receipt.skuId, isDeleted: { $ne: true } } },
               {
@@ -1603,7 +1672,26 @@ export const rmImsService = {
                 },
               },
             ]).session(session);
-            const available = round2(Number(bal[0]?.inQty || 0) - Number(bal[0]?.outQty || 0));
+            const own = cuttingType
+              ? await CoilConversion.aggregate([
+                { $match: { coilReceiptId: receipt._id, isDeleted: { $ne: true } } },
+                { $group: { _id: null, kg: { $sum: '$coilWeightKg' } } },
+              ]).session(session)
+              : [];
+            const ledgerKg = round2(Number(bal[0]?.inQty || 0) - Number(bal[0]?.outQty || 0));
+            /**
+             * What THIS coil has left: its batch ledger — or, where one batch is
+             * on two receipts of the same coil grade and so shares a ledger,
+             * no more than this receipt's own weight less its own rounds. The
+             * same figure the form shows (`coilFacts.availableKg`). For a coil
+             * with a ledger of its own the ledger is never the larger, so
+             * nothing changes for it; a shared coil can now be finished with a
+             * full cut, which a partial round's circles depend on.
+             */
+            const available = cuttingType
+              ? Math.min(ledgerKg, round2(Number(receipt.quantity || 0) - Number(own[0]?.kg || 0)))
+              : ledgerKg;
+            refusePartialTakingAll(available, receipt.batchNo);
 
             /**
              * ── FULL CUTTING: the server decides the weight ────────────────
@@ -1651,6 +1739,52 @@ export const rmImsService = {
           if (coilWeight > onHand) {
             throw new AppError(`Not enough coil stock for ${coil.code} (on hand ${onHand}). Tick "allow negative" to override.`, 400);
           }
+        }
+
+        /**
+         * ── WHAT THIS ROUND'S CIRCLES ACCOUNT FOR ───────────────────────────
+         *
+         * A partial round settles nothing: its circles come with the full cut.
+         * A round that records circles settles its own weight AND whatever of
+         * this coil is still unsettled, because those circles came off all of
+         * it. So the full cut's scrap is the whole coil's — Σ cut − Σ circles —
+         * and its yield is the coil's. A cut with no coil settles just its own
+         * weight, as every cut did. Read inside the session, beside the
+         * balances checked above.
+         *
+         * "Unsettled" is the coil's Σ cut − Σ settled (an older round settled
+         * its own weight), NOT "the rounds with settledKg 0": a partial round
+         * keeps settledKg 0 after a later round has settled it, and counting it
+         * again would put the same kilograms into two rounds' scrap.
+         */
+        let pendingKg = 0;
+        if (circles.length && (receipt || manualCoil)) {
+          const [p] = await CoilConversion.aggregate([
+            {
+              $match: {
+                ...(receipt ? { coilReceiptId: receipt._id } : { manualCoilId: manualCoil._id }),
+                isDeleted: { $ne: true },
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                cut: { $sum: '$coilWeightKg' },
+                settled: { $sum: { $ifNull: ['$settledKg', '$coilWeightKg'] } },
+              },
+            },
+          ]).session(session);
+          pendingKg = round2(Math.max(0, Number(p?.cut || 0) - Number(p?.settled || 0)));
+        }
+        const settledKg = circles.length ? round2(coilWeight + pendingKg) : 0;
+        // Metal cannot be created: checked before any stock moves, so a refused
+        // cut leaves nothing behind even where there is no transaction.
+        if (circles.length && circlesWeightIn > settledKg + EPS) {
+          throw new AppError(
+            `The circles weigh ${kgText(circlesWeightIn)} KG — more than the ${kgText(settledKg)} KG of coil they came from`
+            + `${pendingKg > 0 ? ` (this round's ${kgText(coilWeight)} KG + ${kgText(pendingKg)} KG cut in earlier partial rounds)` : ''}. Check the weights.`,
+            400,
+          );
         }
 
         /*
@@ -1740,8 +1874,13 @@ export const rmImsService = {
         }
 
         /* ── 3) Record the cut ── */
-        const scrapKg = round2(coilWeight - circlesWeight);
-        const yieldRatioPct = coilWeight > 0 ? round2((circlesWeight / coilWeight) * 100) : 0;
+        // Worked out over what the round SETTLED — for a full cut, the whole
+        // coil (`settledKg` above). A partial round has no scrap or yield yet.
+        const scrapKg = circles.length ? round2(settledKg - circlesWeight) : 0;
+        const yieldRatioPct = settledKg > 0 ? round2((circlesWeight / settledKg) * 100) : null;
+        // A manual coil stands in for the receipt as the location fallback —
+        // it carries the location the operator gave on its first round.
+        const scrapLocation = resolveScrapLocation(receipt || manualCoil, payload.warehouse);
 
         const [doc] = await CoilConversion.create([{
           conversionNumber, conversionDate,
@@ -1750,6 +1889,8 @@ export const rmImsService = {
           coilWeightKg: coilWeight, rate,
           circles: producedRows,
           circlesWeightKg: circlesWeight, scrapKg, yieldRatioPct,
+          settledKg,
+          cutLocation: scrapLocation || undefined,
           scrapVerified: payload.scrapVerified || 'PENDING',
           coilMovementId: coilMov._id, coilMovementNumber: coilMov.movementNumber,
           // Null unless a physical coil was named — see the model.
@@ -1793,44 +1934,50 @@ export const rmImsService = {
          * and were never stock Ambika held — 229,774 of the 246,679 kg on
          * record are exactly that, which is why this is a rule and not a
          * convenience.
+         *
+         * ── A PARTIAL ROUND RECORDS NO SCRAP ───────────────────────────────
+         * It has none yet: its offcut is part of what the coil's full cut
+         * settles, and that cut's ScrapRecord carries it — with `coilWeightKg`
+         * the SETTLED weight, so the Scrap module's cut, circles and scrap
+         * still add up per record (cut = circles + scrap).
          */
-        // A manual coil stands in for the receipt as the location fallback —
-        // it carries the location the operator gave on its first round.
-        const scrapLocation = resolveScrapLocation(receipt || manualCoil, payload.warehouse);
-        const [scrapDoc] = await ScrapRecord.create([{
-          // No sourceRef — that identity belongs to the workbook import and
-          // this record did not come from there.
-          batchNo,
-          scrapDate: conversionDate,
-          // The coil's own receipt location, or the one the operator chose.
-          // PLG01 stands in only when a caller sent no cutting location at all,
-          // and the remark below says so rather than implying certainty.
-          location: scrapLocation || 'PLG01',
-          coilSkuId: coil._id, coilSkuCode: coil.code, coilSkuName: coil.name,
-          coilWeightKg: coilWeight,
-          circlesWeightKg: circlesWeight,
-          scrapKg,
-          yieldRatioPct: coilWeight > 0 ? yieldRatioPct : null,
-          // The same vocabulary the conversion uses, carried across unchanged.
-          // Verification is not decided here: S1 records the cut, it does not
-          // introduce a workflow.
-          disposition: payload.scrapVerified || 'PENDING',
-          // The conversion carries no verification date, so there is none.
-          verifiedAt: null,
-          coilRate: rate,
-          batchStatus: circlesWeight > 0 ? 'CUT' : 'UNCUT',
-          conversionId: doc._id,
-          conversionNumber: doc.conversionNumber,
-          coilReceiptId: receipt ? receipt._id : null,
-          manualCoilId: manualCoil ? manualCoil._id : null,
-          clientRequestId: key || undefined,
-          remarks: scrapLocation ? '' : 'Cutting location was not recorded on this conversion; defaulted to PLG01.',
-          createdBy: user?._id,
-        }], session ? { session } : undefined);
+        let scrapDoc = null;
+        if (circles.length) {
+          [scrapDoc] = await ScrapRecord.create([{
+            // No sourceRef — that identity belongs to the workbook import and
+            // this record did not come from there.
+            batchNo,
+            scrapDate: conversionDate,
+            // The coil's own receipt location, or the one the operator chose.
+            // PLG01 stands in only when a caller sent no cutting location at all,
+            // and the remark below says so rather than implying certainty.
+            location: scrapLocation || 'PLG01',
+            coilSkuId: coil._id, coilSkuCode: coil.code, coilSkuName: coil.name,
+            coilWeightKg: settledKg,
+            circlesWeightKg: circlesWeight,
+            scrapKg,
+            yieldRatioPct,
+            // The same vocabulary the conversion uses, carried across unchanged.
+            // Verification is not decided here: S1 records the cut, it does not
+            // introduce a workflow.
+            disposition: payload.scrapVerified || 'PENDING',
+            // The conversion carries no verification date, so there is none.
+            verifiedAt: null,
+            coilRate: rate,
+            batchStatus: circlesWeight > 0 ? 'CUT' : 'UNCUT',
+            conversionId: doc._id,
+            conversionNumber: doc.conversionNumber,
+            coilReceiptId: receipt ? receipt._id : null,
+            manualCoilId: manualCoil ? manualCoil._id : null,
+            clientRequestId: key || undefined,
+            remarks: scrapLocation ? '' : 'Cutting location was not recorded on this conversion; defaulted to PLG01.',
+            createdBy: user?._id,
+          }], session ? { session } : undefined);
+        }
 
         /* ── 5) Put in-house scrap into scrap stock ── */
         const cutLocation = scrapLocation || 'PLG01';
-        const cutProducedScrap = circlesWeight > 0 && scrapKg > 0;
+        const cutProducedScrap = !!scrapDoc && circlesWeight > 0 && scrapKg > 0;
         if (cutLocation === 'PLG01' && cutProducedScrap) {
           // Resolved inside the transaction but never created here: a missing
           // scrap item is a configuration problem and must fail the cut loudly
@@ -2147,22 +2294,73 @@ export const rmImsService = {
   },
 
   /** Movement history scoped to RM (coil + circle) SKUs. */
+  /**
+   * MOVEMENT HISTORY — every raw-material movement, newest first.
+   *
+   * "Newest" is by the DAY it happened (IST), then by when it was saved within
+   * the day: a movement's date is sometimes a bare day and sometimes a full
+   * time, so sorting on it alone put a 12:28 entry above a 12:55 one of the
+   * same day. `sort: 'oldest'` turns the whole order round.
+   *
+   * Filters, all on the server so they narrow the whole ledger, not a page:
+   * search (movement no, item, reference, batch), skuId (one item), kind
+   * (COIL / CIRCLE), txnType (one, or several comma-separated), direction
+   * (IN / OUT), from / to (the movement's day, IST). `totals` adds up what the
+   * filters match — every page, not just the one shown.
+   */
   async getMovements(query = {}) {
-    const skus = await SKU.find({ itemType: { $in: RM_ITEM_TYPES }, isDeleted: { $ne: true } }).select('_id').lean();
-    const ids = skus.map((s) => s._id);
+    const kind = String(query.kind || '').toUpperCase();
+    const skuMatch = { itemType: { $in: RM_ITEM_TYPES }, isDeleted: { $ne: true } };
+    const skus = await SKU.find(skuMatch).select('_id itemType').lean();
+    const ids = skus
+      .filter((s) => !kind || kindOf(s.itemType) === kind)
+      .filter((s) => !query.skuId || String(s._id) === String(query.skuId))
+      .map((s) => s._id);
     const filter = { skuId: { $in: ids }, isDeleted: { $ne: true } };
     if (query.search) {
       const r = rx(query.search);
       filter.$or = [{ movementNumber: r }, { skuCode: r }, { skuName: r }, { refNumber: r }, { batchNo: r }];
     }
-    if (query.txnType) filter.txnType = query.txnType;
+    const types = String(query.txnType || '').split(',').map((t) => t.trim().toUpperCase()).filter(Boolean);
+    if (types.length) filter.txnType = types.length === 1 ? types[0] : { $in: types };
+    const direction = String(query.direction || '').toUpperCase();
+    if (direction === 'IN') filter.movementType = MOVEMENT_TYPE.IN;
+    if (direction === 'OUT') filter.movementType = MOVEMENT_TYPE.OUT;
+    if (query.from || query.to) {
+      filter.movementDate = {};
+      if (query.from) filter.movementDate.$gte = new Date(`${query.from}T00:00:00.000+05:30`);
+      if (query.to) filter.movementDate.$lte = new Date(`${query.to}T23:59:59.999+05:30`);
+    }
     const page = Math.max(Number(query.page) || 1, 1);
     const limit = Math.min(Number(query.limit) || 50, 200);
-    const [docs, total] = await Promise.all([
-      InventoryMovement.find(filter).sort({ movementDate: -1, createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-      InventoryMovement.countDocuments(filter),
-    ]);
-    return { docs, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    const order = String(query.sort || '').toLowerCase() === 'oldest' ? 1 : -1;
+
+    const [agg] = await InventoryMovement.aggregate([
+      { $match: filter },
+      { $addFields: { _day: { $dateToString: { format: '%Y-%m-%d', date: '$movementDate', timezone: '+05:30' } } } },
+      { $sort: { _day: order, createdAt: order, _id: order } },
+      {
+        $facet: {
+          rows: [{ $skip: (page - 1) * limit }, { $limit: limit }, { $project: { _day: 0 } }],
+          totals: [{ $group: { _id: '$movementType', qty: { $sum: '$quantity' }, n: { $sum: 1 } } }],
+        },
+      },
+    ]).option({ allowDiskUse: true });
+
+    const byDir = new Map((agg?.totals || []).map((t) => [t._id, t]));
+    const total = (byDir.get(MOVEMENT_TYPE.IN)?.n || 0) + (byDir.get(MOVEMENT_TYPE.OUT)?.n || 0);
+    return {
+      docs: agg?.rows || [],
+      pagination: {
+        page, limit, total, pages: Math.ceil(total / limit),
+        totals: {
+          inQty: round2(byDir.get(MOVEMENT_TYPE.IN)?.qty || 0),
+          outQty: round2(byDir.get(MOVEMENT_TYPE.OUT)?.qty || 0),
+          inCount: byDir.get(MOVEMENT_TYPE.IN)?.n || 0,
+          outCount: byDir.get(MOVEMENT_TYPE.OUT)?.n || 0,
+        },
+      },
+    };
   },
 
   // ── Received coils — the physical coils available to cut ────────────────────
@@ -2234,7 +2432,7 @@ export const rmImsService = {
     if (!coilSkus.length) {
       return { docs: [], summary: { matched: 0, available: 0, fullyCut: 0, unbatchedReceipts: 0, anomalies: 0, unmappedBatch } };
     }
-    const unitBySku = new Map(coilSkus.map((s) => [String(s._id), s.unit || 'KG']));
+    const unitBySku = new Map(coilSkus.map((s) => [String(s._id), s.unit || 'KGS']));
 
     const filter = {
       skuId: { $in: coilSkus.map((s) => s._id) },
@@ -2408,7 +2606,7 @@ export const rmImsService = {
         skuId: m.skuId,
         skuCode: m.skuCode,
         skuName: m.skuName,
-        unit: m.unit || unitBySku.get(String(m.skuId)) || 'KG',
+        unit: m.unit || unitBySku.get(String(m.skuId)) || 'KGS',
         receivedWeight: round2(m.quantity),
         availableWeight: available,
         consumedWeight: consumed,
@@ -2613,7 +2811,7 @@ export const rmImsService = {
         skuId: receipt.skuId,
         skuCode: receipt.skuCode || '',
         itemName: receipt.skuName || '',
-        unit: receipt.unit || 'KG',
+        unit: receipt.unit || 'KGS',
         receivedWeightKg: round2(receipt.quantity),
         unitCost: round2(receipt.unitCost),
         grnNo: receipt.refType === 'GRN' ? (receipt.refNumber || grn?.grnNumber || '') : '',
@@ -2815,7 +3013,8 @@ export const rmImsService = {
           as: 'sr',
         },
       },
-      { $addFields: { location: { $arrayElemAt: ['$sr.location', 0] } } },
+      // A partial round has no ScrapRecord yet; it keeps its own location.
+      { $addFields: { location: { $ifNull: [{ $arrayElemAt: ['$sr.location', 0] }, '$cutLocation'] } } },
       // 1 when this round satisfies every round-level filter (always 1 with none).
       { $addFields: { roundMatch: roundFiltered ? { $cond: [{ $and: roundConds }, 1, 0] } : 1 } },
       {
@@ -2823,6 +3022,8 @@ export const rmImsService = {
           _id: '$coilKey',
           isManual: { $max: { $cond: [{ $eq: [{ $type: '$coilReceiptId' }, 'objectId'] }, 0, 1] } },
           cutKg: { $sum: '$coilWeightKg' },
+          // What the rounds' circles account for — 0 for a partial round.
+          settledKg: { $sum: { $ifNull: ['$settledKg', '$coilWeightKg'] } },
           circlesKg: { $sum: '$circlesWeightKg' },
           circlesPcs: { $sum: { $sum: '$circles.pcs' } },
           scrapKg: { $sum: '$scrapKg' },
@@ -2837,6 +3038,7 @@ export const rmImsService = {
           // The rounds that satisfied the round-level filters, and what they add up to.
           matchedRounds: { $sum: '$roundMatch' },
           matchedCutKg: m('$coilWeightKg'),
+          matchedSettledKg: m({ $ifNull: ['$settledKg', '$coilWeightKg'] }),
           matchedCirclesKg: m('$circlesWeightKg'),
           matchedCirclesPcs: m({ $sum: '$circles.pcs' }),
           matchedScrapKg: m('$scrapKg'),
@@ -2859,6 +3061,7 @@ export const rmImsService = {
               partiallyCut: { $sum: { $cond: [{ $eq: ['$status', CUT_STATUS.PARTIALLY_CUT] }, 1, 0] } },
               fullyCut: { $sum: { $cond: [{ $eq: ['$status', CUT_STATUS.FULLY_CUT] }, 1, 0] } },
               cutKg: { $sum: '$cutKg' },
+              settledKg: { $sum: '$settledKg' },
               circlesKg: { $sum: '$circlesKg' },
               circlesPcs: { $sum: '$circlesPcs' },
               scrapKg: { $sum: '$scrapKg' },
@@ -2866,6 +3069,7 @@ export const rmImsService = {
               jobWorkScrapKg: { $sum: '$jobWorkScrapKg' },
               matchedRounds: { $sum: '$matchedRounds' },
               matchedCutKg: { $sum: '$matchedCutKg' },
+              matchedSettledKg: { $sum: '$matchedSettledKg' },
               matchedCirclesKg: { $sum: '$matchedCirclesKg' },
               matchedCirclesPcs: { $sum: '$matchedCirclesPcs' },
               matchedScrapKg: { $sum: '$matchedScrapKg' },
@@ -2900,8 +3104,10 @@ export const rmImsService = {
         scrapKg: round2(stats.scrapKg),
         plantScrapKg: round2(stats.plantScrapKg),
         jobWorkScrapKg: round2(stats.jobWorkScrapKg),
-        // Weighted over everything listed, like every coil-level yield here.
-        yieldPct: stats.cutKg > 0 ? round2((stats.circlesKg / stats.cutKg) * 100) : null,
+        // Weighted over everything listed, like every coil-level yield here —
+        // of the settled cut: a partial round has no yield until its full cut.
+        pendingKg: round2((stats.cutKg || 0) - (stats.settledKg || 0)),
+        yieldPct: stats.settledKg > 0 ? round2((stats.circlesKg / stats.settledKg) * 100) : null,
         /**
          * Only the ROUNDS that satisfied the round-level filters, across the
          * listed coils — "how much was cut in this period / at this location".
@@ -2918,7 +3124,7 @@ export const rmImsService = {
           scrapKg: round2(stats.matchedScrapKg),
           plantScrapKg: round2(stats.matchedPlantScrapKg),
           jobWorkScrapKg: round2(stats.matchedJobWorkScrapKg),
-          yieldPct: stats.matchedCutKg > 0 ? round2((stats.matchedCirclesKg / stats.matchedCutKg) * 100) : null,
+          yieldPct: stats.matchedSettledKg > 0 ? round2((stats.matchedCirclesKg / stats.matchedSettledKg) * 100) : null,
         },
         untraceable: {
           records: untraced?.records || 0,
@@ -2982,7 +3188,19 @@ export const rmImsService = {
     const location = String(query.location || '').toUpperCase();
     const batch = String(query.batchNo || '').trim();
     const search = String(query.search || '').trim();
-    const filtered = !!(query.from || query.to || query.circleSkuId || location || batch || search || entryType || status);
+    const filtered = !!(query.from || query.to || query.circleSkuId || query.coilSkuId || location || batch || search || entryType || status);
+    /**
+     * Row order. Newest cut first unless asked otherwise; every order ends on
+     * the id, so a page never repeats or skips a row however many tie.
+     *   oldest  the cut date ascending (a coil by its latest round, the date
+     *           its row shows);
+     *   az      the coil SKU A → Z, then batch, then newest first.
+     */
+    const sortKey = String(query.sort || '').toLowerCase();
+    const sortStage = {
+      oldest: { lastCutAt: 1, lastSavedAt: 1, _id: 1 },
+      az: { sortSku: 1, sortBatch: 1, lastCutAt: -1, _id: -1 },
+    }[sortKey] || { lastCutAt: -1, lastSavedAt: -1, _id: -1 };
 
     // A cut with no coil has no status, so it can match only without one. The
     // record type is a filter on the finished rows (`ofType`, below).
@@ -3006,9 +3224,13 @@ export const rmImsService = {
       date: '$conversionDate',
       savedAt: '$createdAt',
       batchNo: '$batchNo',
+      coilSkuId: '$coilSkuId',
       coilSkuCode: '$coilSkuCode',
       coilSkuName: '$coilSkuName',
       cutKg: '$coilWeightKg',
+      // What the cut's circles account for: 0 on a partial round (its coil's
+      // full cut settles it); its own weight on every older cut.
+      settledKg: { $ifNull: ['$settledKg', '$coilWeightKg'] },
       circlesKg: '$circlesWeightKg',
       pcs: { $sum: '$circles.pcs' },
       scrapKg: '$scrapKg',
@@ -3026,6 +3248,7 @@ export const rmImsService = {
           _id: '$coilKey',
           isManual: { $max: { $cond: [{ $eq: [{ $type: '$coilReceiptId' }, 'objectId'] }, 0, 1] } },
           cutKg: { $sum: '$coilWeightKg' },
+          settledKg: { $sum: { $ifNull: ['$settledKg', '$coilWeightKg'] } },
           circlesKg: { $sum: '$circlesWeightKg' },
           circlesPcs: { $sum: { $sum: '$circles.pcs' } },
           scrapKg: { $sum: '$scrapKg' },
@@ -3034,6 +3257,8 @@ export const rmImsService = {
           rounds: { $sum: 1 },
           locations: { $addToSet: '$location' },
           circleCodes: { $push: '$circles.circleSkuCode' },
+          // Each circle SKU with its name, for the history's "Circle SKU" column.
+          circleItems: { $push: { $map: { input: { $ifNull: ['$circles', []] }, as: 'c', in: { code: '$$c.circleSkuCode', name: '$$c.circleSkuName' } } } },
           firstCutAt: { $min: '$conversionDate' },
           lastCutAt: { $max: '$conversionDate' },
           lastSavedAt: { $max: '$createdAt' },
@@ -3089,6 +3314,7 @@ export const rmImsService = {
     if (query.circleSkuId) {
       conds.push({ $in: [new mongoose.Types.ObjectId(String(query.circleSkuId)), { $ifNull: ['$$c.circleIds', []] }] });
     }
+    if (query.coilSkuId) conds.push({ $eq: ['$$c.coilSkuId', new mongoose.Types.ObjectId(String(query.coilSkuId))] });
     if (location) conds.push({ $eq: ['$$c.location', location] });
     if (batch) conds.push({ $or: [like('$receipt.batchNo', batch), like('$$c.batchNo', batch)] });
     if (search) {
@@ -3114,17 +3340,30 @@ export const rmImsService = {
           matchedRounds: { $size: '$matched' },
           matchedIds: '$matched.id',
           mCutKg: { $sum: '$matched.cutKg' },
+          mSettledKg: { $sum: '$matched.settledKg' },
           mCirclesKg: { $sum: '$matched.circlesKg' },
           mCirclesPcs: { $sum: '$matched.pcs' },
           mScrapKg: { $sum: '$matched.scrapKg' },
           mPlantScrapKg: sumWhere('PLG01'),
           mJobWorkScrapKg: sumWhere('JW001'),
           mYieldSum: { $sum: '$matched.yieldPct' },
+          // Cuts that HAVE a yield — a partial round has none until its coil's
+          // full cut, and must not be averaged in as 0%.
+          mYieldCuts: { $size: { $filter: { input: '$matched', as: 'c', cond: { $ne: [{ $ifNull: ['$$c.yieldPct', null] }, null] } } } },
         },
       },
-      // Newest cut first; then the last save; then the id — a fixed order, so
-      // a page never repeats or skips a row, however many share a date.
-      { $sort: { lastCutAt: -1, lastSavedAt: -1, _id: -1 } },
+      // The coil SKU and batch a row is sorted by for "A → Z": the coil's
+      // receipt (or manual entry), or the cut's own for a cut with no coil.
+      ...(sortKey === 'az' ? [{
+        $addFields: {
+          sortSku: { $toUpper: { $ifNull: ['$receipt.skuCode', { $ifNull: ['$cut.coilSkuCode', ''] }] } },
+          sortBatch: { $ifNull: ['$receipt.batchNo', { $ifNull: ['$cut.batchNo', ''] }] },
+        },
+      }] : []),
+      // The chosen order (newest cut first by default); then the last save;
+      // then the id — a fixed order, so a page never repeats or skips a row,
+      // however many share a date.
+      { $sort: sortStage },
       {
         $facet: {
           rows: [...(ofType ? [{ $match: ofType }] : []), { $skip: (page - 1) * limit }, { $limit: limit }, { $project: { cuts: 0, matched: 0 } }],
@@ -3150,12 +3389,14 @@ export const rmImsService = {
               unlinkedCutKg: { $sum: { $cond: [isKind('UNLINKED'), '$mCutKg', 0] } },
               cuts: { $sum: '$matchedRounds' },
               cutKg: { $sum: '$mCutKg' },
+              settledKg: { $sum: '$mSettledKg' },
               circlesKg: { $sum: '$mCirclesKg' },
               circlesPcs: { $sum: '$mCirclesPcs' },
               scrapKg: { $sum: '$mScrapKg' },
               plantScrapKg: { $sum: '$mPlantScrapKg' },
               jobWorkScrapKg: { $sum: '$mJobWorkScrapKg' },
               yieldSum: { $sum: '$mYieldSum' },
+              yieldCuts: { $sum: '$mYieldCuts' },
             },
           }],
         },
@@ -3201,6 +3442,7 @@ export const rmImsService = {
           yieldPct: c.yieldRatioPct != null ? round2(c.yieldRatioPct) : null,
           circles,
           circleSkuCodes: [...new Set(circles.map((x) => x.skuCode).filter(Boolean))].sort(),
+          circleSkus: circleSkusOf(circles.map((x) => ({ code: x.skuCode, name: x.itemName }))),
           scrapVerified: c.scrapVerified || null,
           cuttingType: c.cuttingType || null,
           rate: Number(c.rate) > 0 ? round2(c.rate) : null,
@@ -3253,10 +3495,13 @@ export const rmImsService = {
         jobWorkScrapKg: round2(s.jobWorkScrapKg),
         // Scrap of matching cuts with no recorded location (some imports).
         unplacedScrapKg: round2((s.scrapKg || 0) - (s.plantScrapKg || 0) - (s.jobWorkScrapKg || 0)),
-        // Weighted (circles ÷ cut), like the coil rows; and the plain average
-        // per cut, as All conversions reported it.
-        yieldPct: s.cutKg > 0 ? round2((s.circlesKg / s.cutKg) * 100) : null,
-        avgYieldPct: s.cuts > 0 ? round2(s.yieldSum / s.cuts) : null,
+        // Cut in partial rounds whose circles come with their coil's full cut:
+        // in "coil used", not yet in circles, scrap or yield.
+        pendingKg: round2((s.cutKg || 0) - (s.settledKg || 0)),
+        // Weighted (circles ÷ settled cut), like the coil rows; and the plain
+        // average per cut that has a yield, as All conversions reported it.
+        yieldPct: s.settledKg > 0 ? round2((s.circlesKg / s.settledKg) * 100) : null,
+        avgYieldPct: s.yieldCuts > 0 ? round2(s.yieldSum / s.yieldCuts) : null,
         allCuts,
         pagination: { page, limit, total, pages: Math.ceil(total / limit) },
       },
@@ -3306,6 +3551,39 @@ export const rmImsService = {
           skuCode: s?.code || r.code || '',
           skuName: s?.name || r.name || '',
           rounds: r.rounds.length,
+        };
+      })
+      .sort((a, b) => a.skuCode.localeCompare(b.skuCode));
+  },
+
+  /**
+   * The coil SKUs any recorded cut was made from — what the history's "Coil
+   * SKU" filter offers, so every option returns at least one row. Codes and
+   * names from the SKU master where it still has the item (the conversion's
+   * own copy is the fallback); bounded by the number of coil SKUs.
+   */
+  async listCuttingHistoryCoils() {
+    const rows = await CoilConversion.aggregate([
+      { $match: { isDeleted: { $ne: true }, coilSkuId: { $type: 'objectId' } } },
+      {
+        $group: {
+          _id: '$coilSkuId',
+          code: { $last: '$coilSkuCode' },
+          name: { $last: '$coilSkuName' },
+          cuts: { $sum: 1 },
+        },
+      },
+    ]);
+    const skus = await SKU.find({ _id: { $in: rows.map((r) => r._id) } }).select('code name').lean();
+    const byId = new Map(skus.map((s) => [String(s._id), s]));
+    return rows
+      .map((r) => {
+        const s = byId.get(String(r._id));
+        return {
+          skuId: String(r._id),
+          skuCode: s?.code || r.code || '',
+          skuName: s?.name || r.name || '',
+          cuts: r.cuts,
         };
       })
       .sort((a, b) => a.skuCode.localeCompare(b.skuCode));
@@ -3394,9 +3672,11 @@ export const rmImsService = {
     ]);
 
     const { docs: recentMovements } = await this.getMovements({ limit: 12 });
-    const recentConversions = await CoilConversion.find({ isDeleted: { $ne: true } })
+    // Cuts with a yield to show: a partial round has none until its coil's
+    // full cut, which carries the whole coil's (`settledKg`).
+    const recentConversions = await CoilConversion.find({ isDeleted: { $ne: true }, settledKg: { $ne: 0 } })
       .sort({ conversionDate: -1 }).limit(6)
-      .select('conversionNumber conversionDate batchNo coilSkuCode coilSkuName coilWeightKg circlesWeightKg scrapKg yieldRatioPct').lean();
+      .select('conversionNumber conversionDate batchNo coilSkuCode coilSkuName coilWeightKg settledKg circlesWeightKg scrapKg yieldRatioPct').lean();
 
     const reorderList = docs
       .filter((r) => ['OUT_OF_STOCK', 'REORDER', 'LOW'].includes(r.status))

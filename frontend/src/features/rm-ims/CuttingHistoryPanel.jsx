@@ -8,17 +8,19 @@ import { useTheme } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import {
   History, ChevronRight, ChevronDown, AlertTriangle, ArrowUpRight, Scissors, HelpCircle, MoreVertical,
-  RotateCcw, Disc3, Layers, Scale, Trash2, Receipt, Pencil, RefreshCw, Unlink, CheckCircle2, Clock3, ListTree, FileText,
+  RotateCcw, Disc3, Layers, Scale, Trash2, Receipt, Pencil, RefreshCw, Unlink, ListTree, FileText,
+  CircleDashed, CheckCheck,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import {
-  TableScroll, EmptyNote, YieldChip, CutStatusChip, ScrapChip,
+  TableScroll, EmptyNote, YieldChip, CutStatusChip,
   O2D, O2D_TIP, num, imsTableSx, panelSx,
 } from './rmImsMeta';
 import { CuttingFilterBar, WhereCut } from './cuttingShared';
 import { useCuttingFilters } from './cuttingFilters';
 import {
-  useGetRmConversionLedgerQuery, useGetRmCoilLineageQuery, useGetRmCuttingHistoryCirclesQuery,
+  useGetRmConversionLedgerQuery, useGetRmCoilLineageQuery, useGetRmCuttingHistoryCirclesQuery, useGetRmCuttingHistoryCoilsQuery,
+  useGetRmOverviewQuery,
 } from '../../store/api/rmImsApi';
 
 const day = (d) => (d ? dayjs(d).format('DD-MM-YYYY') : '—');
@@ -47,23 +49,64 @@ const useWidth = () => {
 };
 const plural = (n, word) => `${num(n)} ${word}${n === 1 ? '' : 's'}`;
 
-// The coil table: a little more air per row than the shared IMS table, headers
-// that may wrap onto two lines, and cells tight enough that the table fits a
-// desktop page; below that it scrolls inside its own card.
-const historyTableSx = (() => {
-  const base = imsTableSx(980);
+/**
+ * THE COIL TABLE — laid out like a sheet. Every column keeps its own width
+ * (COLS) and its header stays on one line, so nothing is squeezed or wraps;
+ * the table scrolls left–right inside its card instead. The header row stays
+ * at the top and the Action column at the right edge while it scrolls, and
+ * the scroll box is never taller than the screen, so its horizontal
+ * scrollbar is always in view just under the rows.
+ */
+// In column order. The first group — which SKU, which coil, what it gave and
+// where it stands (to Status) — plus the pinned Action column is ~1,070px: in
+// view on a normal desktop without scrolling. The details after it are
+// scrolled to.
+const COLS = {
+  expand: 30, sno: 44, sku: 135, batch: 130, cut: 100, circleSku: 135, circles: 95, scrap: 88, yield: 76, status: 112,
+  left: 110, date: 112, source: 160, location: 132, type: 132, action: 128,
+};
+const colSx = (key, extra) => ({ width: COLS[key], minWidth: COLS[key], ...extra });
+const historyTableSx = (showType) => {
+  const base = imsTableSx(Object.entries(COLS).reduce((s, [k, w]) => (k === 'type' && !showType ? s : s + w), 0));
   return {
     ...base,
-    '& td, & th': { ...base['& td, & th'], px: 0.6 },
+    tableLayout: 'fixed',
+    // "separate", not "collapse": a sticky header cell keeps its own borders
+    // and background while the rows scroll under it.
+    borderCollapse: 'separate',
+    borderSpacing: 0,
+    '& td, & th': { ...base['& td, & th'], px: 0.75 },
     '& tbody > tr[data-id] > td': { py: 1.1 },
-    // The theme's own head rule (.MuiTableHead-root .MuiTableCell-root) is
-    // more specific than "thead th", so this names it to win.
-    '& .MuiTableHead-root .MuiTableCell-root': {
-      ...base['& thead th'], whiteSpace: 'normal', lineHeight: 1.25, verticalAlign: 'bottom',
-      textTransform: 'none', letterSpacing: 0, fontSize: '0.72rem', color: O2D.body,
+    // THIS table's header only (child combinators): an opened coil's rounds
+    // table sits inside it and keeps its own, unpinned header. Named by MUI
+    // class so it outranks the theme's own head rule.
+    '& > .MuiTableHead-root > .MuiTableRow-root > .MuiTableCell-root': {
+      ...base['& thead th'], whiteSpace: 'nowrap', lineHeight: 1.25, verticalAlign: 'bottom',
+      textTransform: 'none', letterSpacing: 0, fontSize: '0.74rem', fontWeight: 800, color: O2D.ink,
+      // The header row is fixed: the rows and their data scroll under it.
+      position: 'sticky', top: 0, zIndex: 2,
+      borderBottom: `1px solid ${O2D.line}`, boxShadow: `0 1px 0 ${O2D.line}`,
     },
   };
-})();
+};
+/**
+ * The Action column, pinned to the right edge while the table scrolls. Its
+ * background is solid (the row's own, or the hover tint) so the columns
+ * scrolling under it never show through, and a soft edge marks the pin.
+ */
+const actionCellSx = (bg = O2D.surface) => ({
+  ...colSx('action'), position: 'sticky', right: 0, zIndex: 1, bgcolor: bg, whiteSpace: 'nowrap',
+  boxShadow: `inset 1px 0 0 ${O2D.line}, -8px 0 10px -8px rgba(28,30,33,0.22)`,
+  'tr:hover > &': { bgcolor: O2D.surfaceAlt },
+});
+// The scroll box: sideways always; downwards only once the rows are taller
+// than the screen allows (then the header and the scrollbar stay in view).
+const historyScrollSx = {
+  containerType: 'inline-size',
+  overflowY: 'auto',
+  maxHeight: { md: 'max(420px, calc(100vh - 230px))' },
+  '&::-webkit-scrollbar': { height: 11, width: 11 },
+};
 
 /**
  * What a row is: a physical coil known by its goods receipt or by a manual
@@ -128,26 +171,17 @@ const CuttingTypeChip = ({ type }) => {
     : { color: '#b45309', bg: '#fef3c7', border: '#fde68a' };
   return <Chip size="small" label={text} sx={{ ...chipSx(t), borderRadius: '999px' }} />;
 };
-const SCRAP_STATE_TEXT = { DONE: 'Verified', PENDING: 'Not yet checked', JOB_WORK: 'Sent for job work', REJECTED: 'Rejected' };
+// "Scrap checked?" is no longer asked when a cut is entered, so the history no
+// longer shows it; Scrap IMS keeps each scrap record's own state.
 
 /**
- * "Scrap checked?" of one round, as a mark beside its scrap weight: a tick
- * once verified, a clock while not yet checked. Named in its tooltip and its
- * accessible label, so it adds no text to the row.
+ * A PARTIAL round records only the coil weight it cut: the circles are entered
+ * with the coil's Full cut, which works out the scrap and yield of the whole
+ * coil. Until then a coil's circles, scrap and yield read "—" — and so do the
+ * partial rounds themselves.
  */
-const ScrapCheckedMark = ({ state }) => {
-  if (!state) return null;
-  const done = state === 'DONE';
-  const Icon = done ? CheckCircle2 : Clock3;
-  return (
-    <Tooltip arrow slotProps={O2D_TIP} title={`Scrap checked? ${SCRAP_STATE_TEXT[state] || state}`}>
-      <Box component="span" role="img" aria-label={`Scrap checked: ${SCRAP_STATE_TEXT[state] || state}`} data-testid="round-scrap-checked" data-state={state}
-        sx={{ display: 'inline-flex', ml: 0.5, verticalAlign: '-2px', color: done ? '#15803d' : O2D.faint, cursor: 'help' }}>
-        <Icon size={12} />
-      </Box>
-    </Tooltip>
-  );
-};
+const OUTPUT_PENDING_TIP = 'Entered with the full cut — once the whole coil is cut, its circles are entered and the scrap and yield are worked out for the whole coil.';
+const outputPending = (r) => r.kind === 'COIL' && r.status !== 'FULLY_CUT';
 
 /** A label over its value, for a details line. */
 const Fact = ({ label, children, testId }) => (
@@ -254,10 +288,31 @@ const SourceCell = ({ r }) => (r.kind === 'UNLINKED' ? (
 
 const SkuCell = ({ r }) => (
   <>
-    <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }}>{r.skuCode || '—'}</Typography>
+    <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }} title={r.skuCode}>{r.skuCode || '—'}</Typography>
     <Typography noWrap sx={{ fontSize: '0.66rem', color: O2D.sub }} title={r.itemName}>{r.itemName || '—'}</Typography>
   </>
 );
+
+/**
+ * The circle SKU(s) the cut produced — code over name, like the coil's SKU.
+ * Several sizes: the first, and "+N more" with every one in the tooltip.
+ */
+const CircleSkuCell = ({ r }) => {
+  const list = r.circleSkus?.length ? r.circleSkus : (r.circleSkuCodes || []).map((code) => ({ code, name: '' }));
+  if (!list.length) return <CenteredDash tip="No circle sizes recorded" />;
+  const [first, ...rest] = list;
+  return (
+    <Tooltip arrow slotProps={O2D_TIP}
+      title={<Box component="span" sx={{ whiteSpace: 'pre-line' }}>{list.map((c) => `${c.code}${c.name ? ` — ${c.name}` : ''}`).join('\n')}</Box>}>
+      <Box sx={{ minWidth: 0, cursor: 'help' }} data-testid="cut-history-circle-sku">
+        <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#4338ca' }}>
+          {first.code}{rest.length > 0 && <Box component="span" sx={{ fontWeight: 600, color: O2D.sub, fontSize: '0.66rem' }}> +{rest.length} more</Box>}
+        </Typography>
+        <Typography noWrap sx={{ fontSize: '0.66rem', color: O2D.sub }}>{first.name || '—'}</Typography>
+      </Box>
+    </Tooltip>
+  );
+};
 
 // ── Opened details ───────────────────────────────────────────────────────────
 
@@ -314,12 +369,12 @@ const RoundCard = ({ r, hit, matchedIds, showLocation }) => (
     </Stack>
     <Typography sx={{ fontSize: '0.64rem', color: O2D.faint, ...mono }}>{r.conversionNumber} · saved {dayTime(r.savedAt)}</Typography>
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 0.75, mt: 0.75 }}>
-      <Fact label="Cut (kg)">{num(r.cutKg)}</Fact>
-      <Fact label="Circles (pcs)">{num((r.circles || []).reduce((s, x) => s + x.pcs, 0))}</Fact>
-      <Fact label="Circles (kg)">{num(r.circlesKg)}</Fact>
-      <Fact label="Scrap (kg)">{num(r.scrapKg)}<ScrapCheckedMark state={r.scrapVerified} /></Fact>
-      <Fact label="Yield">{r.yieldPct != null ? `${num(r.yieldPct)}%` : '—'}</Fact>
-      <Fact label="Remaining after (kg)">{num(r.remainingAfterKg)}</Fact>
+      <Fact label="Coil Used (kg)">{num(r.cutKg)}</Fact>
+      <Fact label="Circles (pcs)">{r.outputPending ? <Dash tip={OUTPUT_PENDING_TIP} /> : num((r.circles || []).reduce((s, x) => s + x.pcs, 0))}</Fact>
+      <Fact label="Circles (kg)">{r.outputPending ? <Dash tip={OUTPUT_PENDING_TIP} /> : num(r.circlesKg)}</Fact>
+      <Fact label="Scrap (kg)">{r.outputPending ? <Dash tip={OUTPUT_PENDING_TIP} /> : num(r.scrapKg)}</Fact>
+      <Fact label="Yield">{r.yieldPct != null ? `${num(r.yieldPct)}%` : <Dash tip={OUTPUT_PENDING_TIP} />}</Fact>
+      <Fact label="Coil Left After (kg)">{num(r.remainingAfterKg)}</Fact>
       {showLocation && <Fact label="Location"><WhereCut location={r.location} /></Fact>}
     </Box>
   </Box>
@@ -334,12 +389,13 @@ const RoundCard = ({ r, hit, matchedIds, showLocation }) => (
  *   one round   the row above already IS that round — its date, weights,
  *               yield, remaining and status — so nothing is repeated: just the
  *               round's own record: its conversion number, the cutting type
- *               chosen, the circle sizes it produced, whether its scrap was
- *               checked and when it was saved;
+ *               chosen, the circle sizes it produced and when it was saved;
  *   2+ rounds   one line per round, oldest first. Cut, circles, scrap and
- *               yield are THAT round's; remaining and status are the coil's
- *               after it. Location gets a column only when the rounds were not
- *               all cut in one place — the coil row already names a single one.
+ *               yield are THAT round's ("—" on a partial round: they come with
+ *               the full cut, whose own figures are the whole coil's);
+ *               remaining and status are the coil's after it. Location gets a
+ *               column only when the rounds were not all cut in one place —
+ *               the coil row already names a single one.
  *
  *   matchedIds  with a per-cut filter on, the cuts the server matched (null
  *               without one) — the others are dimmed, never hidden.
@@ -383,7 +439,7 @@ const CoilRounds = ({ coilId, batchNo, roundCount, matchedIds, compact }) => {
     const r = rounds[0];
     const circles = r.circles || [];
     body = (
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(5, minmax(0, auto))' }, justifyContent: 'start', columnGap: 3, rowGap: 1, px: 1.5, py: 1.25 }}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, auto))' }, justifyContent: 'start', columnGap: 3, rowGap: 1, px: 1.5, py: 1.25 }}
         data-testid="round-details" data-rounds="1">
         <Fact label="Conversion" testId="round-details-conversion">
           <Box component="span" sx={mono}>{r.conversionNumber || '—'}</Box>
@@ -392,11 +448,10 @@ const CoilRounds = ({ coilId, batchNo, roundCount, matchedIds, compact }) => {
         {/* One size: which one (the row already counts its pieces). Several:
             how the pieces and weight split between them. */}
         <Fact label={circles.length > 1 ? 'Circle sizes' : 'Circle size'} testId="round-details-sizes">
-          {circles.length === 0 && '—'}
+          {circles.length === 0 && (r.outputPending ? 'Entered with the full cut' : '—')}
           {circles.length === 1 && `${circles[0].skuCode}${circles[0].itemName ? ` · ${circles[0].itemName}` : ''}`}
           {circles.length > 1 && sizesText(circles, '  |  ')}
         </Fact>
-        <Fact label="Scrap checked?" testId="round-details-scrap-checked">{r.scrapVerified ? <ScrapChip state={r.scrapVerified} /> : '—'}</Fact>
         <Fact label="Saved" testId="round-details-saved">{dayTime(r.savedAt)}</Fact>
       </Box>
     );
@@ -423,12 +478,12 @@ const CoilRounds = ({ coilId, batchNo, roundCount, matchedIds, compact }) => {
               {showLocation && <TableCell rowSpan={2} sx={groupStart}>Location</TableCell>}
             </TableRow>
             <TableRow>
-              <TableCell align="right" sx={groupStart}>Cut (kg)</TableCell>
+              <TableCell align="right" sx={groupStart}>Coil Used (kg)</TableCell>
               <TableCell align="right">Circles (pcs)</TableCell>
               <TableCell align="right">Circles (kg)</TableCell>
               <TableCell align="right">Scrap (kg)</TableCell>
               <TableCell>Yield</TableCell>
-              <TableCell align="right" sx={groupStart}>Remaining (kg)</TableCell>
+              <TableCell align="right" sx={groupStart}>Coil Left (kg)</TableCell>
               <TableCell>Status</TableCell>
             </TableRow>
           </TableHead>
@@ -451,14 +506,35 @@ const CoilRounds = ({ coilId, batchNo, roundCount, matchedIds, compact }) => {
                   <TableCell sx={{ whiteSpace: 'nowrap', fontSize: '0.72rem', color: O2D.sub, ...mono }}>{r.conversionNumber}</TableCell>
                   <TableCell><CuttingTypeChip type={r.cuttingType} /></TableCell>
                   <TableCell align="right" sx={{ ...numSx, ...groupStart, fontWeight: 800, color: O2D.ink }}>{num(r.cutKg)}</TableCell>
-                  <TableCell align="right" sx={numSx}>
-                    <Tooltip arrow slotProps={O2D_TIP} title={sizes ? <Box component="span" sx={{ whiteSpace: 'pre-line' }}>{sizes}</Box> : 'No circle sizes recorded'}>
-                      <Box component="span" sx={{ cursor: 'help' }}>{num(pcs)}</Box>
-                    </Tooltip>
-                  </TableCell>
-                  <TableCell align="right" sx={{ ...numSx, color: '#4338ca' }}>{num(r.circlesKg)}</TableCell>
-                  <TableCell align="right" sx={{ ...numSx, color: '#b45309' }}>{num(r.scrapKg)}<ScrapCheckedMark state={r.scrapVerified} /></TableCell>
-                  <TableCell>{r.yieldPct != null ? <YieldChip pct={r.yieldPct} /> : '—'}</TableCell>
+                  {r.outputPending ? (
+                    // A partial round: its circles, scrap and yield come with the full cut.
+                    <>
+                      <TableCell align="right"><Dash tip={OUTPUT_PENDING_TIP} /></TableCell>
+                      <TableCell align="right"><Dash tip={OUTPUT_PENDING_TIP} /></TableCell>
+                      <TableCell align="right"><Dash tip={OUTPUT_PENDING_TIP} /></TableCell>
+                      <TableCell><Dash tip={OUTPUT_PENDING_TIP} /></TableCell>
+                    </>
+                  ) : (
+                    <>
+                      <TableCell align="right" sx={numSx}>
+                        <Tooltip arrow slotProps={O2D_TIP} title={sizes ? <Box component="span" sx={{ whiteSpace: 'pre-line' }}>{sizes}</Box> : 'No circle sizes recorded'}>
+                          <Box component="span" sx={{ cursor: 'help' }}>{num(pcs)}</Box>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell align="right" sx={{ ...numSx, color: '#4338ca' }}>{num(r.circlesKg)}</TableCell>
+                      <TableCell align="right" sx={{ ...numSx, color: '#b45309' }}>
+                        {num(r.scrapKg)}
+                        {/* The full cut that finished the coil: its circles and scrap
+                            are the whole coil's, not this round's alone. */}
+                        {r.settledKg > r.cutKg + 0.001 && (
+                          <Tooltip arrow slotProps={O2D_TIP} title={`This full cut entered the circles of ${num(r.settledKg)} kg of the coil — its own ${num(r.cutKg)} kg and ${num(r.settledKg - r.cutKg)} kg cut in the partial rounds before it. Scrap and yield are over all of it.`}>
+                            <Typography component="div" sx={{ fontSize: '0.6rem', color: O2D.sub, cursor: 'help' }} data-testid="round-settled-kg">of {num(r.settledKg)}</Typography>
+                          </Tooltip>
+                        )}
+                      </TableCell>
+                      <TableCell>{r.yieldPct != null ? <YieldChip pct={r.yieldPct} /> : '—'}</TableCell>
+                    </>
+                  )}
                   <TableCell align="right" sx={{ ...numSx, ...groupStart, fontWeight: 800, color: r.remainingAfterKg < 0 ? '#b91c1c' : O2D.ink }}>
                     {num(r.remainingAfterKg)}
                   </TableCell>
@@ -506,7 +582,7 @@ const CutDetails = ({ cut, compact }) => {
     <Box role="region" id={`cut-details-${cut.id}`} aria-label={`Details of conversion ${cut.conversionNumber}`} sx={detailsWrapSx(compact)}>
       <DetailsCard icon={FileText} title="Conversion details"
         caption="This cut names no physical coil, so it has no rounds, remaining weight or coil status — and none is guessed from its batch number.">
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, auto))', lg: 'repeat(8, minmax(0, auto))' }, justifyContent: 'start', columnGap: 3, rowGap: 1, px: 1.5, pt: 1.25, pb: 0.75 }}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, auto))', lg: 'repeat(7, minmax(0, auto))' }, justifyContent: 'start', columnGap: 3, rowGap: 1, px: 1.5, pt: 1.25, pb: 0.75 }}
           data-testid="cut-details">
           <Fact label="Conversion" testId="cut-details-conversion"><Box component="span" sx={mono}>{cut.conversionNumber || '—'}</Box></Fact>
           <Fact label="Cut on" testId="cut-details-date">{day(cut.date)}</Fact>
@@ -515,7 +591,6 @@ const CutDetails = ({ cut, compact }) => {
           <Fact label={circles.length > 1 ? 'Circle sizes' : 'Circle size'} testId="cut-details-sizes">
             {circles.length ? sizesText(circles, '  |  ') : '—'}
           </Fact>
-          <Fact label="Scrap checked?" testId="cut-details-scrap-checked">{cut.scrapVerified ? <ScrapChip state={cut.scrapVerified} /> : '—'}</Fact>
           <Fact label="Rate" testId="cut-details-rate">{cut.rate ? `₹${num(cut.rate)}/kg` : '—'}</Fact>
           <Fact label="Source" testId="cut-details-source">
             {cut.origin === 'IMPORT'
@@ -542,21 +617,22 @@ const SummaryCard = ({
   label, value, sub, icon, color, tint, onClick, actionLabel, active, testId,
 }) => {
   const Icon = icon;
+  // Compact, so all five cards sit on one line on a normal screen.
   const content = (
-    <Stack direction="row" spacing={1.5} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
-      <Box sx={{ width: 44, height: 44, borderRadius: '10px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(color, 0.12), color }}>
-        <Icon size={21} />
+    <Stack direction="row" spacing={1.1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
+      <Box sx={{ width: 34, height: 34, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(color, 0.12), color }}>
+        <Icon size={17} />
       </Box>
       <Box sx={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
-        <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: O2D.body }}>{label}</Typography>
-        <Typography sx={{ fontSize: { xs: '1.3rem', md: '1.45rem' }, fontWeight: 800, color, lineHeight: 1.2, ...numSx }}>{value}</Typography>
-        <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mt: 0.2 }}>{sub}</Typography>
+        <Typography noWrap sx={{ fontSize: '0.72rem', fontWeight: 700, color: O2D.body }}>{label}</Typography>
+        <Typography sx={{ fontSize: { xs: '1.1rem', md: '1.15rem' }, fontWeight: 800, color, lineHeight: 1.25, ...numSx }}>{value}</Typography>
+        <Typography sx={{ fontSize: '0.66rem', color: O2D.sub, mt: 0.15, lineHeight: 1.35 }}>{sub}</Typography>
       </Box>
-      {onClick && <Box sx={{ color: O2D.sub, display: 'flex', flexShrink: 0 }}><ChevronRight size={18} /></Box>}
+      {onClick && <Box sx={{ color: O2D.sub, display: 'flex', flexShrink: 0 }}><ChevronRight size={16} /></Box>}
     </Stack>
   );
   const sx = {
-    ...panelSx, p: { xs: 1.5, md: 1.75 }, bgcolor: tint || O2D.surface, display: 'flex', width: '100%', minWidth: 0,
+    ...panelSx, p: { xs: 1.25, md: 1.25 }, bgcolor: tint || O2D.surface, display: 'flex', width: '100%', minWidth: 0,
     ...(active ? { borderColor: color, boxShadow: `inset 0 0 0 1px ${color}` } : null),
   };
   return onClick ? (
@@ -566,6 +642,36 @@ const SummaryCard = ({
     </ButtonBase>
   ) : (
     <Paper elevation={0} sx={sx} data-testid={testId}>{content}</Paper>
+  );
+};
+
+/**
+ * Circles in stock RIGHT NOW — the stock ledger's balance (the same figure as
+ * Stock & Master Data), not the sum of circles ever cut: every cut adds its
+ * circles, Stock In adds, Stock Out / issue to production removes, so circles
+ * already used are not counted as available. All locations together.
+ * Follows the Circle SKU filter; not the dates, since it is "now". Fetched
+ * fresh each time the page opens, so the count is never an old one.
+ */
+const AvailableCirclesCard = ({ circleSkuId, onOpen }) => {
+  const { data, isLoading, isError } = useGetRmOverviewQuery({ kind: 'CIRCLE' }, { refetchOnMountOrArgChange: true });
+  const rows = (Array.isArray(data?.data) ? data.data : [])
+    .filter((r) => r.kind === 'CIRCLE' && (!circleSkuId || String(r.skuId) === String(circleSkuId)));
+  // A balance below zero is a records problem, never stock you can use.
+  const pcs = rows.reduce((s, r) => s + Math.max(0, Number(r.onHand) || 0), 0);
+  const kg = Math.round(rows.reduce((s, r) => s + Math.max(0, Number(r.onHandKg) || 0), 0) * 100) / 100;
+  const sizes = rows.filter((r) => Number(r.onHand) > 0).length;
+  const belowZero = rows.filter((r) => Number(r.onHand) < 0).length;
+
+  let value = `${num(pcs)} pcs`;
+  let sub = `${num(kg)} kg · ${plural(sizes, 'size')} in stock${circleSkuId ? ' (selected size)' : ''}`
+    + (belowZero ? ` · ${plural(belowZero, 'size')} below zero` : '');
+  if (isLoading) { value = '…'; sub = 'Loading circle stock'; }
+  else if (isError) { value = '—'; sub = 'Could not load circle stock'; }
+
+  return (
+    <SummaryCard label="Available Circles" value={value} sub={sub} icon={CircleDashed} color="#047857" tint="#f2fbf6"
+      onClick={onOpen} actionLabel="Open circle stock" testId="card-available-circles" />
   );
 };
 
@@ -619,7 +725,7 @@ const detailsIdOf = (r) => (r.kind === 'UNLINKED' ? `cut-details-${r.id}` : `coi
 const RoundsChip = ({ r, isOpen, onToggle }) => (
   <Tooltip arrow placement="top" disableInteractive slotProps={O2D_TIP} title={isOpen
     ? (r.rounds === 1 ? 'Hide the round details' : 'Hide the cutting rounds')
-    : (r.rounds === 1 ? "Show this round's record: conversion number, cutting type, circle sizes and scrap check" : 'Show each cutting round of this coil')}>
+    : (r.rounds === 1 ? "Show this round's record: conversion number, cutting type and circle sizes" : 'Show each cutting round of this coil')}>
     <Button size="small" startIcon={<Layers size={12} />} aria-expanded={isOpen} aria-controls={isOpen ? detailsIdOf(r) : undefined}
       onClick={(e) => { e.stopPropagation(); onToggle(); }} data-testid="cut-history-rounds"
       sx={{
@@ -671,6 +777,37 @@ const ExpandButton = ({ r, isOpen }) => (
   </IconButton>
 );
 
+/**
+ * A row's circles, scrap or yield — "—" while its coil is not fully cut. The
+ * dash sits in the middle of its column, as every placeholder in this table
+ * does, so a row of them lines up; `block` centres it in a column whose text
+ * is otherwise left-aligned (the names).
+ */
+const CenteredDash = ({ tip }) => <Box sx={{ textAlign: 'center' }}><Dash tip={tip} /></Box>;
+const UntilFullCut = ({ r, children, block }) => {
+  if (!outputPending(r)) return children;
+  return block ? <CenteredDash tip={OUTPUT_PENDING_TIP} /> : <Dash tip={OUTPUT_PENDING_TIP} />;
+};
+
+/**
+ * A partially cut coil's next step, one click away: "Full Cut" opens the
+ * entry form for THIS coil with Full cutting chosen — the round that enters
+ * its circles. The row's other actions stay in its menu.
+ */
+const FullCutButton = ({ r, onCutCoil }) => (r.kind === 'COIL' && r.status === 'PARTIALLY_CUT' && onCutCoil ? (
+  <Tooltip arrow slotProps={O2D_TIP} title={`Finish coil ${r.batchNo}: cut the ${num(r.remainingKg)} kg left and enter its circles.`}>
+    <Button size="small" variant="outlined" startIcon={<Scissors size={12} />} data-testid="row-full-cut"
+      aria-label={`Full cut of batch ${r.batchNo}`}
+      onClick={(e) => { e.stopPropagation(); onCutCoil(r, 'FULL'); }}
+      sx={{
+        textTransform: 'none', fontWeight: 700, fontSize: '0.68rem', borderRadius: '999px', px: 1, py: 0, minHeight: 24, minWidth: 0,
+        whiteSpace: 'nowrap', borderColor: alpha(O2D.brand, 0.4), color: O2D.brand, '& .MuiButton-startIcon': { mr: 0.4 },
+      }}>
+      Full Cut
+    </Button>
+  </Tooltip>
+) : null);
+
 const ActionsButton = ({ r, onMenu }) => (
   <IconButton size="small" aria-label={`Actions for ${r.kind === 'COIL' ? `batch ${r.batchNo}` : `conversion ${r.conversionNumber}`}`}
     aria-haspopup="menu" data-testid="row-actions"
@@ -681,26 +818,37 @@ const ActionsButton = ({ r, onMenu }) => (
 
 /** One row of the table (from `md` up). */
 const LedgerRow = ({
-  r, sno, isOpen, onToggle, onMenu, cutFiltered, matchedIds, showType, cols,
+  r, sno, isOpen, onToggle, onMenu, onCutCoil, cutFiltered, matchedIds, showType, cols,
 }) => (
   <>
     <TableRow hover onClick={onToggle} {...rowAttrs(r, isOpen)}
       sx={{ cursor: 'pointer', ...(r.kind === 'UNLINKED' ? { bgcolor: '#fbfcfd' } : null), '& > td': isOpen ? { borderBottom: 0 } : undefined }}>
-      <TableCell sx={{ width: 36, pr: 0 }}><ExpandButton r={r} isOpen={isOpen} /></TableCell>
-      <TableCell align="center" sx={{ ...numSx, color: O2D.sub, width: 40 }} data-testid="cut-history-sno">{sno}</TableCell>
-      <TableCell><DateCell r={r} /></TableCell>
+      <TableCell sx={{ pr: 0 }}><ExpandButton r={r} isOpen={isOpen} /></TableCell>
+      <TableCell align="center" sx={{ ...numSx, color: O2D.sub }} data-testid="cut-history-sno">{sno}</TableCell>
+      {/* What is looked at first — which SKU, which coil, what it gave and
+          where it stands — then the details, which the table scrolls to. Same
+          order as the head. */}
+      {/* Names read left-aligned; every figure, chip, date and "—" is centred
+          in its column (and its header), so each column lines up. */}
+      <TableCell><SkuCell r={r} /></TableCell>
       <TableCell><BatchCell r={r} isOpen={isOpen} onToggle={onToggle} cutFiltered={cutFiltered} /></TableCell>
+      <TableCell align="center"><CutFigure r={r} /></TableCell>
+      <TableCell><UntilFullCut r={r} block><CircleSkuCell r={r} /></UntilFullCut></TableCell>
+      <TableCell align="center"><UntilFullCut r={r}><CirclesFigure r={r} /></UntilFullCut></TableCell>
+      <TableCell align="center"><UntilFullCut r={r}><ScrapFigure r={r} /></UntilFullCut></TableCell>
+      <TableCell align="center"><UntilFullCut r={r}>{r.yieldPct != null ? <YieldChip pct={r.yieldPct} /> : <Dash tip="No yield recorded" />}</UntilFullCut></TableCell>
+      <TableCell align="center">{r.kind === 'COIL' ? <CutStatusChip status={r.status} /> : <Dash tip={NO_COIL_TIP.status} />}</TableCell>
+      <TableCell align="center">{r.kind === 'COIL' ? <RemainingFigure r={r} align="center" /> : <Dash tip={NO_COIL_TIP.remaining} />}</TableCell>
+      <TableCell align="center"><DateCell r={r} /></TableCell>
       <TableCell sx={{ maxWidth: 160 }}><SourceCell r={r} /></TableCell>
-      <TableCell sx={{ maxWidth: 170 }}><SkuCell r={r} /></TableCell>
-      <TableCell><WhereCut location={r.location} /></TableCell>
-      <TableCell align="right"><CutFigure r={r} /></TableCell>
-      <TableCell align="right"><CirclesFigure r={r} /></TableCell>
-      <TableCell align="right"><ScrapFigure r={r} /></TableCell>
-      <TableCell>{r.yieldPct != null ? <YieldChip pct={r.yieldPct} /> : '—'}</TableCell>
-      <TableCell align="right">{r.kind === 'COIL' ? <RemainingFigure r={r} /> : <Dash tip={NO_COIL_TIP.remaining} />}</TableCell>
-      <TableCell>{r.kind === 'COIL' ? <CutStatusChip status={r.status} /> : <Dash tip={NO_COIL_TIP.status} />}</TableCell>
-      {showType && <TableCell><TypeChip row={r} /></TableCell>}
-      <TableCell align="right" sx={{ width: 40, pl: 0 }}><ActionsButton r={r} onMenu={onMenu} /></TableCell>
+      <TableCell align="center"><WhereCut location={r.location} /></TableCell>
+      {showType && <TableCell align="center"><TypeChip row={r} /></TableCell>}
+      <TableCell align="right" sx={actionCellSx(r.kind === 'UNLINKED' ? '#fbfcfd' : O2D.surface)}>
+        <Stack direction="row" spacing={0.25} alignItems="center" justifyContent="flex-end">
+          <FullCutButton r={r} onCutCoil={onCutCoil} />
+          <ActionsButton r={r} onMenu={onMenu} />
+        </Stack>
+      </TableCell>
     </TableRow>
     <TableRow>
       {/* `&&` outranks the table's own cell padding, so the pinned details
@@ -725,7 +873,9 @@ const CardFigure = ({ label, children }) => (
 );
 
 /** One record as a card (below `md`) — the same record, the same details. */
-const LedgerCard = ({ r, sno, isOpen, onToggle, onMenu, cutFiltered, matchedIds }) => (
+const LedgerCard = ({
+  r, sno, isOpen, onToggle, onMenu, onCutCoil, cutFiltered, matchedIds,
+}) => (
   <Paper elevation={0} {...rowAttrs(r, isOpen)}
     sx={{ ...panelSx, p: 1.25, bgcolor: r.kind === 'UNLINKED' ? '#fbfcfd' : O2D.surface, ...(isOpen ? { borderColor: alpha(O2D.brand, 0.45), gridColumn: '1 / -1' } : null) }}>
     <Stack direction="row" spacing={0.75} alignItems="flex-start" onClick={onToggle} sx={{ cursor: 'pointer' }}>
@@ -739,18 +889,22 @@ const LedgerCard = ({ r, sno, isOpen, onToggle, onMenu, cutFiltered, matchedIds 
       <Box sx={{ flexShrink: 0 }}>{r.kind === 'COIL' ? <CutStatusChip status={r.status} /> : <TypeChip row={r} />}</Box>
       <Box sx={{ mt: -0.5, mr: -0.75 }}><ActionsButton r={r} onMenu={onMenu} /></Box>
     </Stack>
-    <Box sx={{ mt: 0.75 }}><BatchCell r={r} isOpen={isOpen} onToggle={onToggle} cutFiltered={cutFiltered} /></Box>
+    <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between" sx={{ mt: 0.75 }}>
+      <BatchCell r={r} isOpen={isOpen} onToggle={onToggle} cutFiltered={cutFiltered} />
+      <FullCutButton r={r} onCutCoil={onCutCoil} />
+    </Stack>
     <Stack direction="row" spacing={1.25} alignItems="flex-start" flexWrap="wrap" useFlexGap sx={{ mt: 0.9 }}>
       <Box sx={{ minWidth: 0 }}><SourceCell r={r} /></Box>
       <Box sx={{ minWidth: 0, flex: '1 1 120px' }}><SkuCell r={r} /></Box>
       <Box><WhereCut location={r.location} /></Box>
     </Stack>
     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 1, mt: 1, pt: 1, borderTop: `1px solid ${O2D.lineSoft}` }}>
-      <CardFigure label="Cut (kg)"><CutFigure r={r} /></CardFigure>
-      <CardFigure label="Circles (pcs | kg)"><CirclesFigure r={r} /></CardFigure>
-      <CardFigure label="Scrap (kg)"><ScrapFigure r={r} /></CardFigure>
-      <CardFigure label="Yield">{r.yieldPct != null ? <YieldChip pct={r.yieldPct} /> : '—'}</CardFigure>
-      <CardFigure label="Remaining (kg)">{r.kind === 'COIL' ? <RemainingFigure r={r} align="flex-start" /> : <Dash tip={NO_COIL_TIP.remaining} />}</CardFigure>
+      <CardFigure label="Coil Used (kg)"><CutFigure r={r} /></CardFigure>
+      <CardFigure label="Circle SKU"><UntilFullCut r={r}><CircleSkuCell r={r} /></UntilFullCut></CardFigure>
+      <CardFigure label="Circles (pcs | kg)"><UntilFullCut r={r}><CirclesFigure r={r} /></UntilFullCut></CardFigure>
+      <CardFigure label="Scrap (kg)"><UntilFullCut r={r}><ScrapFigure r={r} /></UntilFullCut></CardFigure>
+      <CardFigure label="Yield"><UntilFullCut r={r}>{r.yieldPct != null ? <YieldChip pct={r.yieldPct} /> : '—'}</UntilFullCut></CardFigure>
+      <CardFigure label="Coil Left (kg)">{r.kind === 'COIL' ? <RemainingFigure r={r} align="flex-start" /> : <Dash tip={NO_COIL_TIP.remaining} />}</CardFigure>
       {/* The header carries a coil's status and a coil-less cut's type; here, the other. */}
       {r.kind === 'COIL'
         ? <CardFigure label="Type"><TypeChip row={r} /></CardFigure>
@@ -788,8 +942,11 @@ const LedgerCard = ({ r, sno, isOpen, onToggle, onMenu, cutFiltered, matchedIds 
  *   refreshKey  changes after every save, so the list jumps back to page 1,
  *               where the coil just cut now sits (newest cut first). Filters
  *               are kept as they are.
+ *   onCutCoil(row, 'FULL' | 'PARTIAL')
+ *               a partially cut coil's row action: the page opens the entry
+ *               form for that coil, with that cutting type chosen.
  */
-const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
+const CuttingHistoryPanel = ({ refreshKey = 0, onCutCoil }) => {
   const navigate = useNavigate();
   const theme = useTheme();
   const narrowWindow = useMediaQuery(theme.breakpoints.down('md'));
@@ -797,11 +954,12 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
   // Until the records area has been measured, the window decides.
   const cards = recordsWidth ? recordsWidth < CARDS_BELOW : narrowWindow;
   const showType = recordsWidth >= TYPE_COLUMN;
-  // Four summary cards a row only where each has room for its figures.
+  // All five summary cards on one line where they have room; fewer per row on
+  // narrower screens.
   const summaryColumns = recordsWidth
-    ? `repeat(${recordsWidth >= 1000 ? 4 : recordsWidth >= 520 ? 2 : 1}, minmax(0, 1fr))`
-    : { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(4, minmax(0, 1fr))' };
-  const cols = showType ? 15 : 14;
+    ? `repeat(${recordsWidth >= 980 ? 5 : recordsWidth >= 720 ? 3 : recordsWidth >= 440 ? 2 : 1}, minmax(0, 1fr))`
+    : { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(5, minmax(0, 1fr))' };
+  const cols = showType ? 16 : 15;
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const filters = useCuttingFilters();
   const {
@@ -835,6 +993,8 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
   // Every circle any cut produced — the older cuts' too, so a size only an
   // imported cut made can still be filtered by.
   const circleList = useGetRmCuttingHistoryCirclesQuery({ scope: 'all' });
+  // Every coil SKU any cut was made from — what the "Coil SKU" filter offers.
+  const coilList = useGetRmCuttingHistoryCoilsQuery();
 
   const toggle = (id) => setOpenId((cur) => (cur === id ? null : id));
   // Per row, the cuts the server matched — for dimming the rest of a coil's rounds.
@@ -868,7 +1028,7 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
       <Stack alignItems="center" spacing={0.5} sx={{ py: 1 }} data-testid="history-empty">
         <EmptyNote icon={Scissors} dense
           title={anyFilter ? 'Nothing matches these filters' : 'No physical coil has been cut yet'}
-          hint={anyFilter ? 'Change or reset the filters to see more.' : 'Each coil appears here after its first round is saved with "Record Cutting Round", and updates with every round after that.'} />
+          hint={anyFilter ? 'Change or reset the filters to see more.' : 'Each coil appears here after its first round is saved with "New Cutting Entry", and updates with every round after that.'} />
         {anyFilter && (
           <Button size="small" onClick={reset} startIcon={<RotateCcw size={13} />}
             sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem' }}>
@@ -879,6 +1039,30 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
     );
   }
   const showRows = !dateError && stateBlock === null;
+
+  /**
+   * Rows per page — 10, 25, 50 or 100 — and the page. Shown over the records
+   * and again under them, so it is in reach without scrolling back up; both
+   * drive the same state.
+   */
+  const pager = (testId) => (
+    <TablePagination
+      component="div" count={total} page={total ? page : 0} rowsPerPage={rowsPerPage}
+      onPageChange={(_, p) => setPage(p)}
+      onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+      rowsPerPageOptions={ROWS_PER_PAGE}
+      labelRowsPerPage="Rows per page:"
+      data-testid={testId}
+      sx={{
+        ml: 'auto', border: 0,
+        '& .MuiTablePagination-toolbar': { minHeight: 40, px: 0 },
+        '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '0.76rem', color: O2D.body },
+        '& .MuiTablePagination-selectLabel': { display: { xs: 'none', sm: 'block' } },
+        '& .MuiTablePagination-input': { mr: { xs: 1, sm: 2 } },
+        '& .MuiTablePagination-actions': { ml: { xs: 0.5, sm: 1.5 } },
+      }}
+    />
+  );
 
   return (
     <>
@@ -895,12 +1079,13 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
                 ? `${num(meta.coilCuts || 0)} on physical coils · ${num(meta.unlinked)} without physical coil`
                 : (cutFiltered ? 'Cuts matching the filters' : 'Cutting rounds of these coils')}
               onClick={() => setNow('entryType', '')} actionLabel="Show all records" testId="card-conversions" />
-            <SummaryCard label="Total Coil Weight Cut" value={`${num(meta.cutKg || 0)} kg`} icon={Scale} color="#4338ca"
+            <SummaryCard label="Total Coil Used" value={`${num(meta.cutKg || 0)} kg`} icon={Scale} color="#4338ca"
               sub={`${num(meta.circlesKg || 0)} kg circles${meta.yieldPct != null ? ` · Yield ${num(meta.yieldPct)}%` : ''}`}
               testId="card-weight" />
             <SummaryCard label="Total Scrap Generated" value={`${num(meta.scrapKg || 0)} kg`} icon={Trash2} color="#b45309" tint="#fffaf2"
               sub={`PLG01 ${num(meta.plantScrapKg || 0)} kg · Job worker ${num(meta.jobWorkScrapKg || 0)} kg`}
               onClick={() => navigate('/scrap-ims/by-coil')} actionLabel="Open Scrap by Physical Coil" testId="card-scrap" />
+            <AvailableCirclesCard circleSkuId={applied.circleSkuId} onOpen={() => navigate('/rm-ims/stock?kind=CIRCLE')} />
           </Box>
           {/* What the cards cover — and the two figures too long for a card. */}
           {!dateError && (
@@ -909,17 +1094,19 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
                 ? `The weights add up the ${plural(meta.cuts || 0, 'matching cut')} (of ${num(meta.allCuts || 0)} recorded) — every page, each cut once. Coils are counted, never added.`
                 : `The weights add up all ${plural(meta.cuts || 0, 'recorded cut')} — every page, each cut once. Coils are counted, never added.`}
               {meta.avgYieldPct != null && ` Yield averaged per cut: ${num(meta.avgYieldPct)}%.`}
+              {meta.pendingKg > 0.005 && ` ${num(meta.pendingKg)} kg was cut in partial rounds whose circles come with the coil's full cut — it is in Coil Used, not yet in circles, scrap or yield.`}
               {meta.unplacedScrapKg > 0.005 && ` ${num(meta.unplacedScrapKg)} kg of the scrap has no recorded cutting location.`}
+              {' Available Circles is the circle stock right now, all locations — the dates do not change it.'}
             </Typography>
           )}
         </Box>
       )}
 
       {/* ── Search and filters ── */}
-      <CuttingFilterBar filters={filters} circleList={circleList} testId="history-filters">
+      <CuttingFilterBar filters={filters} circleList={circleList} coilList={coilList} testId="history-filters">
         {!dateError && (cutFiltered || applied.status || applied.location) && (
           <Typography sx={{ mt: 1, fontSize: '0.66rem', color: O2D.sub }} data-testid="history-filter-note">
-            {cutFiltered && 'Dates, circle, location, batch and search are matched against each cut. A coil is listed when one of its cuts matches them all; its row still shows the whole coil, and the cards add up only the matching cuts. '}
+            {cutFiltered && 'Dates, coil, circle, location, batch and search are matched against each cut. A coil is listed when one of its cuts matches them all; its row still shows the whole coil, and the cards add up only the matching cuts. '}
             {applied.status && 'Cutting status belongs to a physical coil, so a cut that names no physical coil is not listed under a status. '}
             {applied.location && 'Location is where each cut was made (its scrap record — for an imported cut, its own Summary Scrap row); a cut with no recorded location is listed only under All locations.'}
           </Typography>
@@ -942,21 +1129,7 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
         <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" useFlexGap columnGap={1.5} rowGap={0.5}
           sx={{ px: { xs: 1.25, md: 1.75 }, py: 1, borderBottom: `1px solid ${O2D.lineSoft}`, opacity: stale ? 0.6 : 1 }}>
           <RecordTabs segments={!dateError && view ? meta.segments : null} entryType={applied.entryType} onPick={(v) => setNow('entryType', v)} />
-          <TablePagination
-            component="div" count={total} page={total ? page : 0} rowsPerPage={rowsPerPage}
-            onPageChange={(_, p) => setPage(p)}
-            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-            rowsPerPageOptions={ROWS_PER_PAGE}
-            data-testid="history-pagination"
-            sx={{
-              ml: 'auto', border: 0,
-              '& .MuiTablePagination-toolbar': { minHeight: 40, px: 0 },
-              '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '0.76rem', color: O2D.body },
-              '& .MuiTablePagination-selectLabel': { display: { xs: 'none', sm: 'block' } },
-              '& .MuiTablePagination-input': { mr: { xs: 1, sm: 2 } },
-              '& .MuiTablePagination-actions': { ml: { xs: 0.5, sm: 1.5 } },
-            }}
-          />
+          {pager('history-pagination')}
         </Stack>
 
         {cards ? (
@@ -968,7 +1141,7 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
               <Box data-testid="history-records" sx={{ display: 'grid', gap: 1, alignItems: 'start', gridTemplateColumns: recordsWidth >= CARDS_TWO_UP ? 'repeat(2, minmax(0, 1fr))' : 'minmax(0, 1fr)' }}>
                 {rows.map((r, i) => (
                   <LedgerCard key={r.id} r={r} sno={rowBase + i + 1} isOpen={openId === r.id} onToggle={() => toggle(r.id)}
-                    onMenu={onMenu} cutFiltered={cutFiltered} matchedIds={matchedSets.get(r.id)} />
+                    onMenu={onMenu} onCutCoil={onCutCoil} cutFiltered={cutFiltered} matchedIds={matchedSets.get(r.id)} />
                 ))}
               </Box>
             )}
@@ -976,25 +1149,28 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
         ) : (
           // ── From md: the table. A size container, so opened details can take
           //    exactly the visible width of this scroller (100cqw). ──
-          <TableScroll sx={{ containerType: 'inline-size' }}>
-            <Table size="small" sx={{ ...historyTableSx, opacity: stale ? 0.55 : 1, transition: 'opacity .15s' }} aria-label="Coil to Circle history" aria-busy={isFetching}>
+          <TableScroll sx={historyScrollSx}>
+            <Table size="small" sx={{ ...historyTableSx(showType), opacity: stale ? 0.55 : 1, transition: 'opacity .15s' }} aria-label="Coil to Circle history" aria-busy={isFetching}>
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ width: 36 }} />
-                  <TableCell align="center" sx={{ width: 40 }}>#</TableCell>
-                  <TableCell>Date</TableCell>
-                  <TableCell>Batch / Coil</TableCell>
-                  <TableCell>GRN / Source</TableCell>
-                  <TableCell>Coil SKU / Item</TableCell>
-                  <TableCell>Location</TableCell>
-                  <TableCell align="right">Cut (kg)</TableCell>
-                  <TableCell align="right">Circles<Box component="span" sx={{ display: 'block', fontWeight: 600, color: O2D.sub, fontSize: '0.64rem' }}>Pcs | kg</Box></TableCell>
-                  <TableCell align="right">Scrap (kg)</TableCell>
-                  <TableCell>Yield</TableCell>
-                  <TableCell align="right">Remaining (kg)</TableCell>
-                  <TableCell>Status</TableCell>
-                  {showType && <TableCell>Type</TableCell>}
-                  <TableCell sx={{ width: 40 }} aria-label="Actions" />
+                  <TableCell sx={colSx('expand')} />
+                  <TableCell align="center" sx={colSx('sno')}>S.No.</TableCell>
+                  {/* The columns read first, in view without scrolling … */}
+                  <TableCell sx={colSx('sku')}>Coil SKU / Item</TableCell>
+                  <TableCell sx={colSx('batch')}>Batch / Coil</TableCell>
+                  <TableCell align="center" sx={colSx('cut')}>Coil Used (kg)</TableCell>
+                  <TableCell sx={colSx('circleSku')}>Circle SKU</TableCell>
+                  <TableCell align="center" sx={colSx('circles')}>Circles<Box component="span" sx={{ display: 'block', fontWeight: 600, color: O2D.sub, fontSize: '0.64rem' }}>Pcs | kg</Box></TableCell>
+                  <TableCell align="center" sx={colSx('scrap')}>Scrap (kg)</TableCell>
+                  <TableCell align="center" sx={colSx('yield')}>Yield</TableCell>
+                  <TableCell align="center" sx={colSx('status')}>Status</TableCell>
+                  {/* … then the details, scrolled to. */}
+                  <TableCell align="center" sx={colSx('left')}>Coil Left (kg)</TableCell>
+                  <TableCell align="center" sx={colSx('date')}>Date</TableCell>
+                  <TableCell sx={colSx('source')}>GRN / Source</TableCell>
+                  <TableCell align="center" sx={colSx('location')}>Location</TableCell>
+                  {showType && <TableCell align="center" sx={colSx('type')}>Type</TableCell>}
+                  <TableCell align="right" sx={{ ...actionCellSx(O2D.surfaceAlt), pr: 1.5 }}>Action</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody data-testid="history-records">
@@ -1006,11 +1182,18 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
                 )}
                 {showRows && rows.map((r, i) => (
                   <LedgerRow key={r.id} r={r} sno={rowBase + i + 1} isOpen={openId === r.id} onToggle={() => toggle(r.id)}
-                    onMenu={onMenu} cutFiltered={cutFiltered} matchedIds={matchedSets.get(r.id)} showType={showType} cols={cols} />
+                    onMenu={onMenu} onCutCoil={onCutCoil} cutFiltered={cutFiltered} matchedIds={matchedSets.get(r.id)} showType={showType} cols={cols} />
                 ))}
               </TableBody>
             </Table>
           </TableScroll>
+        )}
+
+        {/* The same rows-per-page and paging, under the records. */}
+        {view && !dateError && total > 0 && (
+          <Stack direction="row" sx={{ px: { xs: 1.25, md: 1.75 }, borderTop: `1px solid ${O2D.lineSoft}`, opacity: stale ? 0.6 : 1 }}>
+            {pager('history-pagination-bottom')}
+          </Stack>
         )}
 
         {/* How many of the listed rows are cuts that name no physical coil —
@@ -1031,6 +1214,18 @@ const CuttingHistoryPanel = ({ refreshKey = 0 }) => {
       {/* ── A row's actions ── */}
       <Menu anchorEl={menu?.anchor} open={!!menu} onClose={closeMenu} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }} slotProps={{ paper: { sx: { borderRadius: '8px', border: `1px solid ${O2D.line}`, minWidth: 210 } } }}>
+        {/* A partially cut coil's two next steps — the same form either way,
+            opened for this coil with the cutting type chosen. */}
+        {menu && onCutCoil && menu.row.kind === 'COIL' && menu.row.status === 'PARTIALLY_CUT' && [
+          <MenuItem key="full" data-testid="row-action-full-cut" onClick={() => { closeMenu(); onCutCoil(menu.row, 'FULL'); }} sx={{ fontSize: '0.8rem' }}>
+            <ListItemIcon><CheckCheck size={15} /></ListItemIcon>
+            Full cut — finish this coil
+          </MenuItem>,
+          <MenuItem key="partial" data-testid="row-action-partial-cut" onClick={() => { closeMenu(); onCutCoil(menu.row, 'PARTIAL'); }} sx={{ fontSize: '0.8rem' }}>
+            <ListItemIcon><Scissors size={15} /></ListItemIcon>
+            Partial cut — cut some more
+          </MenuItem>,
+        ]}
         {menu && (
           <MenuItem data-testid="row-action-toggle" onClick={() => { toggle(menu.row.id); closeMenu(); }} sx={{ fontSize: '0.8rem' }}>
             <ListItemIcon><ListTree size={15} /></ListItemIcon>

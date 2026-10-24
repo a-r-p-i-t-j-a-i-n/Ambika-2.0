@@ -3,10 +3,10 @@ import {
   Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, MenuItem, InputAdornment, IconButton, Tooltip, Button,
-  Dialog, DialogTitle, DialogContent, DialogActions,
+  Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, Popover, Badge,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, Pencil, Trash2 } from 'lucide-react';
+import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, Pencil, Trash2, SlidersHorizontal, X } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useSnackbar } from 'notistack';
 import { usePermissions } from '../../hooks/usePermission';
@@ -258,6 +258,42 @@ const statusOf = (tab, row) => ({
   final: row.paymentStatus,
 }[tab]) || 'PENDING';
 
+// Date each step is filtered on by the From/To range — the same date its
+// table's Date column shows (Tally has none, so it uses createdAt).
+const DATE_OF = {
+  indent: (r) => r.timestamp || r.createdAt,
+  po: (r) => r.poDate,
+  followup: (r) => r.nextFollowUpDate,
+  pi: (r) => r.piDate,
+  advance: (r) => r.paymentDate,
+  grn: (r) => r.grnDate,
+  qc: (r) => r.qcDate,
+  vendorInvoice: (r) => r.invoiceDate,
+  voucher: (r) => r.voucherDate,
+  tally: (r) => r.createdAt,
+  final: (r) => r.paymentDate,
+};
+
+// Step-specific filters, keyed on real row fields. Options are the distinct
+// values present in the fetched rows; a filter with no values is not shown.
+// `main` ones sit in the toolbar row, the rest go under "More".
+const EXTRA_FILTERS = {
+  indent:        [{ key: 'approvalStatus', label: 'Approval', main: true }, { key: 'department', label: 'Department' }],
+  po:            [{ key: 'approvalStatus', label: 'Approval', main: true }, { key: 'releaseStatus', label: 'Release' }, { key: 'followUpStatus', label: 'Follow-up' }],
+  followup:      [{ key: 'poNumber', label: 'PO Number', main: true }, { key: 'followUpType', label: 'Type' }, { key: 'performedByName', label: 'Performed by' }],
+  pi:            [{ key: 'poNumber', label: 'PO Number', main: true }, { key: 'approvalStatus', label: 'Approval' }],
+  advance:       [{ key: 'paymentMode', label: 'Payment Mode', main: true }, { key: 'piNumber', label: 'PI Number' }, { key: 'poNumber', label: 'PO Number' }],
+  grn:           [{ key: 'poNumber', label: 'PO Number', main: true }, { key: 'qcStatus', label: 'QC Status' }],
+  qc:            [{ key: 'grnNumber', label: 'GRN Number', main: true }, { key: 'overallResult', label: 'Result' }],
+  vendorInvoice: [{ key: 'poNumber', label: 'PO Number', main: true }],
+  voucher:       [{ key: 'invoiceNumber', label: 'Invoice No', main: true }],
+  tally:         [{ key: 'voucherNumber', label: 'Voucher No', main: true }, { key: 'invoiceNumber', label: 'Invoice No' }, { key: 'tallyLedgerName', label: 'Ledger' }],
+  final:         [{ key: 'paymentMode', label: 'Payment Mode', main: true }, { key: 'voucherNumber', label: 'Voucher No' }],
+};
+
+const distinct = (rows, get) => [...new Set(rows.map(get).filter((v) => v != null && v !== '').map(String))].sort();
+const ymd = (d) => (d ? dayjs(d).format('YYYY-MM-DD') : '');
+
 const VIEWS = [
   { key: 'table', label: 'Table', icon: TableIcon },
   { key: 'sheet', label: 'Sheet', icon: Rows3 },
@@ -269,8 +305,8 @@ const VIEWS = [
  * Purchase Master Data — a per-step data view (one tab per Purchase FMS step),
  * mirroring the O2D Master Data page: every entry shown with its full columns
  * (vendor / amounts / dates / status). Switch Table / Sheet / Cards / Board.
- * Each tab only shows records still active at that step — one that has
- * advanced to the next step (see HIDE_WHEN_ADVANCED) drops out here. The
+ * Each tab shows every record by default; the Pending / Completed toggle
+ * narrows it by whether the record has advanced (see HIDE_WHEN_ADVANCED). The
  * Table view's Action column offers Edit/Delete where the record's own
  * status and the user's permissions allow it.
  */
@@ -282,11 +318,22 @@ const PurchaseMasterData = () => {
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  // 'all' = every record (Master Data default); 'pending' = only records still
+  // at this step, 'done' = only ones advanced past it (HIDE_WHEN_ADVANCED).
+  // Default must be 'all' — once a record
+  // advances, the pending-only view hides it from every earlier tab.
+  const [scope, setScope] = useState('all');
+  const [vendorFilter, setVendorFilter] = useState(null);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [extra, setExtra] = useState({}); // { [field]: value } for EXTRA_FILTERS
+  const [moreAnchor, setMoreAnchor] = useState(null);
   const [editRow, setEditRow] = useState(null);   // { tab, row } | null
   const [deleteRow, setDeleteRow] = useState(null); // { tab, row } | null
   const [deleting, setDeleting] = useState(false);
 
-  const switchTab = (t) => { setTab(t); setSearch(''); setStatusFilter(''); };
+  const clearFilters = () => { setSearch(''); setStatusFilter(''); setVendorFilter(null); setDateFrom(''); setDateTo(''); setExtra({}); };
+  const switchTab = (t) => { setTab(t); clearFilters(); };
 
   // Only the active tab fetches (skip the rest) — fast and cache-friendly.
   const P = { limit: 1000, sort: '-createdAt' };
@@ -327,7 +374,10 @@ const PurchaseMasterData = () => {
   // Real DB rows for this tab, minus whatever has already advanced past this
   // Purchase FMS step (see HIDE_WHEN_ADVANCED) — a pure function of fetched
   // data, so it's correct after refresh and identical for every user.
-  const rawRows = useMemo(() => (current?.data?.data || []).filter((r) => isStageActive(tab, r)), [current, tab]);
+  const rawRows = useMemo(
+    () => (current?.data?.data || []).filter((r) => scope === 'all' || isStageActive(tab, r) === (scope === 'pending')),
+    [current, tab, scope],
+  );
 
   // AdvancePayment can only delete its most-recently-created payment per PI
   // (keeps the balance-reversal chain reversible in order) — computed from
@@ -345,14 +395,44 @@ const PurchaseMasterData = () => {
   // Distinct statuses present (for the status filter dropdown).
   const statuses = useMemo(() => [...new Set(rawRows.map((r) => statusOf(tab, r)).filter(Boolean))], [rawRows, tab]);
 
-  // Apply status filter + free-text search (matches any visible column).
+  const vendors = useMemo(() => distinct(rawRows, (r) => r.vendorName), [rawRows]);
+  const extraDefs = useMemo(
+    () => (EXTRA_FILTERS[tab] || [])
+      .map((f) => ({ ...f, options: distinct(rawRows, (r) => r[f.key]) }))
+      .filter((f) => f.options.length > 0),
+    [rawRows, tab],
+  );
+  const mainExtras = extraDefs.filter((f) => f.main);
+  const moreExtras = extraDefs.filter((f) => !f.main);
+  const moreActive = moreExtras.filter((f) => extra[f.key]).length + (dateFrom ? 1 : 0) + (dateTo ? 1 : 0);
+  const anyFilter = !!(search || statusFilter || vendorFilter || dateFrom || dateTo || Object.values(extra).some(Boolean));
+
+  // Apply status / vendor / date / step filters + free-text search (matches any visible column).
   const rows = useMemo(() => {
     let list = rawRows;
     if (statusFilter) list = list.filter((r) => statusOf(tab, r) === statusFilter);
+    if (vendorFilter) list = list.filter((r) => r.vendorName === vendorFilter);
+    if (dateFrom || dateTo) {
+      list = list.filter((r) => {
+        const d = ymd(DATE_OF[tab]?.(r) || r.createdAt);
+        return d && (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo);
+      });
+    }
+    Object.entries(extra).forEach(([k, v]) => { if (v) list = list.filter((r) => String(r[k] ?? '') === v); });
     const q = search.trim().toLowerCase();
     if (q) list = list.filter((r) => columns.some((c) => String(displayVal(c, r)).toLowerCase().includes(q)));
     return list;
-  }, [rawRows, statusFilter, search, tab, columns]);
+  }, [rawRows, statusFilter, vendorFilter, dateFrom, dateTo, extra, search, tab, columns]);
+
+  const fieldSx = { '& .MuiInputBase-root': { height: 34, fontSize: '0.82rem' } };
+  const renderExtra = (f, width) => (
+    <Autocomplete
+      key={f.key} size="small" options={f.options} value={extra[f.key] || null}
+      onChange={(_, v) => setExtra((p) => ({ ...p, [f.key]: v || '' }))}
+      sx={{ width, ...fieldSx, '& .MuiAutocomplete-input': { py: '0 !important' } }}
+      renderInput={(params) => <TextField {...params} placeholder={f.label} />}
+    />
+  );
 
   // Table-view-only column set: base columns + an Action column (Edit/Delete),
   // gated per-row by each module's own eligibility rule.
@@ -423,24 +503,51 @@ const PurchaseMasterData = () => {
             {TABS.map((t) => <Tab key={t.key} value={t.key} label={t.label} />)}
           </Tabs>
 
-          {/* Compact toolbar: search · status · count · view */}
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', borderBottom: `1px solid ${theme.palette.divider}` }}>
+          {/* Compact toolbar: search · vendor · status · step filter · scope · More · count · view */}
+          <Stack direction="row" alignItems="center" useFlexGap spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', borderBottom: `1px solid ${theme.palette.divider}` }}>
             <TextField
               size="small" value={search} onChange={(e) => setSearch(e.target.value)}
               placeholder="Search…"
-              sx={{ width: { xs: '100%', sm: 240 }, '& .MuiInputBase-root': { height: 34 } }}
+              sx={{ width: { xs: '100%', sm: 200 }, ...fieldSx }}
               InputProps={{ startAdornment: <InputAdornment position="start"><Search size={14} /></InputAdornment> }}
             />
+            {vendors.length > 0 && (
+              <Autocomplete
+                size="small" options={vendors} value={vendorFilter} onChange={(_, v) => setVendorFilter(v)}
+                sx={{ width: { xs: '100%', sm: 190 }, ...fieldSx, '& .MuiAutocomplete-input': { py: '0 !important' } }}
+                renderInput={(params) => <TextField {...params} placeholder="Vendor" />}
+              />
+            )}
             <TextField
               select size="small" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-              sx={{ width: 160, '& .MuiInputBase-root': { height: 34 } }}
+              sx={{ width: { xs: 'calc(50% - 4px)', sm: 160 }, ...fieldSx }}
               SelectProps={{ displayEmpty: true, renderValue: (v) => (v || 'All statuses') }}
             >
               <MenuItem value="">All statuses</MenuItem>
               {statuses.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
             </TextField>
+            {mainExtras.map((f) => renderExtra(f, { xs: 'calc(50% - 4px)', sm: 160 }))}
+            <ToggleButtonGroup size="small" exclusive value={scope} onChange={(_, v) => v && setScope(v)} sx={{ height: 34 }}>
+              <ToggleButton value="all" sx={{ px: 1.25, textTransform: 'none', fontSize: '0.75rem', fontWeight: 700 }}>All</ToggleButton>
+              <ToggleButton value="pending" sx={{ px: 1.25, textTransform: 'none', fontSize: '0.75rem', fontWeight: 700 }}>Pending</ToggleButton>
+              <ToggleButton value="done" sx={{ px: 1.25, textTransform: 'none', fontSize: '0.75rem', fontWeight: 700 }}>Completed</ToggleButton>
+            </ToggleButtonGroup>
+            <Badge color="primary" badgeContent={moreActive} invisible={!moreActive}>
+              <Button
+                size="small" variant="outlined" color="inherit" onClick={(e) => setMoreAnchor(e.currentTarget)}
+                startIcon={<SlidersHorizontal size={14} />}
+                sx={{ height: 34, textTransform: 'none', fontWeight: 700, fontSize: '0.78rem', borderColor: theme.palette.divider, color: 'text.secondary' }}
+              >
+                More
+              </Button>
+            </Badge>
+            {anyFilter && (
+              <Button size="small" onClick={clearFilters} startIcon={<X size={14} />} sx={{ height: 34, textTransform: 'none', fontWeight: 700, fontSize: '0.78rem' }}>
+                Clear
+              </Button>
+            )}
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700 }}>
-              {rows.length}{statusFilter || search ? ` / ${rawRows.length}` : ''} record{rows.length === 1 ? '' : 's'}
+              {rows.length}{anyFilter ? ` / ${rawRows.length}` : ''} record{rows.length === 1 ? '' : 's'}
             </Typography>
             <Box sx={{ flex: 1 }} />
             {/* Icon-only view switcher — compact */}
@@ -452,6 +559,41 @@ const PurchaseMasterData = () => {
               ))}
             </ToggleButtonGroup>
           </Stack>
+
+          {/* "More" — date range + this step's overflow filters */}
+          <Popover
+            open={!!moreAnchor} anchorEl={moreAnchor} onClose={() => setMoreAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+            slotProps={{ paper: { sx: { p: 1.75, mt: 0.5, width: 300, maxWidth: 'calc(100vw - 32px)' } } }}
+          >
+            <Stack spacing={1.25}>
+              <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Date range
+              </Typography>
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  type="date" size="small" label="From" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+                  InputLabelProps={{ shrink: true }} inputProps={{ max: dateTo || undefined }} sx={{ flex: 1, ...fieldSx }}
+                />
+                <TextField
+                  type="date" size="small" label="To" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+                  InputLabelProps={{ shrink: true }} inputProps={{ min: dateFrom || undefined }} sx={{ flex: 1, ...fieldSx }}
+                />
+              </Stack>
+              {moreExtras.length > 0 && (
+                <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em', pt: 0.5 }}>
+                  More filters
+                </Typography>
+              )}
+              {moreExtras.map((f) => renderExtra(f, '100%'))}
+              <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ pt: 0.5 }}>
+                <Button size="small" onClick={() => { setDateFrom(''); setDateTo(''); setExtra((p) => ({ ...p, ...Object.fromEntries(moreExtras.map((f) => [f.key, ''])) })); }} sx={{ textTransform: 'none' }}>
+                  Reset
+                </Button>
+                <Button size="small" variant="contained" onClick={() => setMoreAnchor(null)} sx={{ textTransform: 'none' }}>Done</Button>
+              </Stack>
+            </Stack>
+          </Popover>
 
           {/* ── Table view (DataGrid) ── */}
           {view === 'table' && (

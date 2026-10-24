@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -15,13 +16,16 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
-import { VoucherStatusChip, VoucherTypeChip, VOUCHER_STATUSES, VOUCHER_TYPES, EXPENSE_CATEGORIES, fmtINR, fmtDate } from './voucherMeta';
+import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
+import { useDebouncedSearch } from '../components/useDebouncedSearch';
+import { VoucherStatusChip, VoucherTypeChip, VOUCHER_STATUSES, VOUCHER_TYPES, EXPENSE_CATEGORIES, PAYMENT_MODES, fmtINR, fmtDate } from './voucherMeta';
 import VoucherFormDialog from './VoucherFormDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import PurchaseFmsStepper from '../components/PurchaseFmsStepper';
 import { PURCHASE_FMS_STEPS } from '../PurchaseFmsHub';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 // This standalone page (also reachable outside the Purchase FMS hub, e.g. for
 // Expense vouchers, which have no invoice) still belongs under the hub's
 // unified "Vendor Invoices & Payments" step — show the same step rail here
@@ -30,13 +34,27 @@ const PFMS_STEP_INDEX = PURCHASE_FMS_STEPS.findIndex((s) => s.slug === 'invoices
 
 const VoucherList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/vouchers/${r._id}` });
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [modeFilter, setModeFilter] = useState('');
   const [from, setFrom] = useState(''); const [to, setTo] = useState('');
+
+  const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
+  const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
+
+  // "Filters" covers Vendor, Type, Category, Payment Mode and the date range —
+  // Status stays always visible.
+  const secondaryCount = [vendorFilter, typeFilter, categoryFilter, modeFilter, from, to].filter(Boolean).length;
+  const clearSecondary = () => {
+    setVendorFilter(null); setTypeFilter(''); setCategoryFilter(''); setModeFilter(''); setFrom(''); setTo(''); resetPage();
+  };
+  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [editVoucher, setEditVoucher] = useState(null);
@@ -47,6 +65,10 @@ const VoucherList = () => {
     page: paginationModel.page + 1, limit: paginationModel.pageSize, sort: '-createdAt',
     search: search || undefined, vendorId: vendorFilter?._id || undefined, voucherStatus: statusFilter || undefined,
     voucherType: typeFilter || undefined, expenseCategory: categoryFilter || undefined,
+    // No dedicated Joi rule for paymentMode in the list schema, but it's
+    // `.unknown(true)` and paymentMode is a real, indexed enum field on the
+    // model — ApiFeatures.filter() exact-matches it with no backend change.
+    paymentMode: modeFilter || undefined,
     ...(from ? { 'voucherDate[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'voucherDate[lte]': `${to}T23:59:59` } : {}),
   };
   const { data, isLoading, isFetching } = useGetVouchersQuery(queryArgs);
@@ -70,6 +92,7 @@ const VoucherList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'voucherNumber', headerName: 'VOUCHER NO', width: 145, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'voucherType', headerName: 'TYPE', width: 80, sortable: false, renderCell: (p) => <VoucherTypeChip type={p.value} /> },
     { field: 'voucherDate', headerName: 'DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
@@ -108,34 +131,121 @@ const VoucherList = () => {
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Wallet size={20} />}    label="Outstanding"    value={fmtINR(stats.outstanding)} color="#dc2626" /></Grid>
       </Grid>
 
-      <Paper sx={{ ...pfmsCardSx, p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
-        <TextField size="small" placeholder="Search voucher / invoice / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
-          sx={{ width: { xs: '100%', sm: 240 } }} InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
-        <Autocomplete size="small" sx={{ minWidth: 190 }} options={partiesRes?.data || []} value={vendorFilter}
-          getOptionLabel={(o) => o?.name || ''} isOptionEqualToValue={(o, v) => o._id === v._id} onChange={(_e, v) => setVendorFilter(v)} renderInput={(params) => <TextField {...params} label="Vendor" />} />
-        <TextField size="small" select label="Type" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); if (e.target.value !== 'EXPENSE') setCategoryFilter(''); }} sx={{ minWidth: 150 }}>
-          <MenuItem value="">All</MenuItem>
-          {VOUCHER_TYPES.map((t) => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}
-        </TextField>
-        {typeFilter === 'EXPENSE' && (
-          <TextField size="small" select label="Category" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} sx={{ minWidth: 170 }}>
-            <MenuItem value="">All</MenuItem>
-            {EXPENSE_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
-          </TextField>
-        )}
-        <TextField size="small" select label="Status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 160 }}>
-          <MenuItem value="">All</MenuItem>
-          {VOUCHER_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
-        </TextField>
-        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
-        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
+      {/* Filters — Search + Status stay visible; Vendor, Type (+ its
+          type-gated Category), Payment Mode and the date range move into
+          Filters, which only counts those as active. */}
+      <Paper sx={{ ...pfmsCardSx, p: 1.25 }}>
+        <AdaptiveFilterBar
+          pinned={[
+            { key: 'search', minWidth: 220, node: (
+              <Box sx={{ flex: { xs: '1 1 100%', sm: '1 1 220px' }, minWidth: 0 }}>
+                <Typography component="label" htmlFor="vo-search" sx={pfmsFieldLabelSx}>Search</Typography>
+                <TextField id="vo-search" size="small" fullWidth placeholder="Search voucher / invoice / vendor…"
+                  value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
+              </Box>
+            ) },
+            { key: 'status', minWidth: 160, node: (
+              <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
+                <Typography component="label" htmlFor="vo-status" sx={pfmsFieldLabelSx}>Status</Typography>
+                <TextField id="vo-status" size="small" select fullWidth value={statusFilter}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                  <MenuItem value="">All</MenuItem>
+                  {VOUCHER_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                </TextField>
+              </Box>
+            ) },
+          ]}
+          items={[
+            {
+              key: 'vendor', width: 200, active: Boolean(vendorFilter),
+              node: (
+                <Box sx={{ flex: '0 1 200px', minWidth: 180 }}>
+                  <Autocomplete
+                    size="small" fullWidth
+                    options={partiesRes?.data || []}
+                    value={vendorFilter}
+                    getOptionLabel={(o) => o?.name || ''}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    onChange={(_e, v) => onFilterChange(setVendorFilter)(v)}
+                    renderInput={(params) => <TextField {...params} label="Vendor" />}
+                  />
+                </Box>
+              ),
+            },
+            {
+              key: 'type', width: 150, active: Boolean(typeFilter),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 130 }}>
+                  <TextField size="small" select fullWidth label="Type" value={typeFilter}
+                    InputLabelProps={{ shrink: true }}
+                    SelectProps={ALL_WHEN_UNSET}
+                    onChange={(e) => { onFilterChange(setTypeFilter)(e.target.value); if (e.target.value !== 'EXPENSE') setCategoryFilter(''); }}>
+                    <MenuItem value="">All</MenuItem>
+                    {VOUCHER_TYPES.map((t) => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}
+                  </TextField>
+                </Box>
+              ),
+            },
+            // Category is gated on Type === EXPENSE — when not applicable it is
+            // simply absent from `items`, not just visually hidden, so the
+            // adaptive fit calculation never reserves space for a field that
+            // can't be set right now (matches the old FilterPopover behaviour,
+            // which also only rendered it conditionally).
+            typeFilter === 'EXPENSE' && {
+              key: 'category', width: 160, active: Boolean(categoryFilter),
+              node: (
+                <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
+                  <TextField size="small" select fullWidth label="Category" value={categoryFilter}
+                    InputLabelProps={{ shrink: true }}
+                    SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setCategoryFilter)(e.target.value)}>
+                    <MenuItem value="">All</MenuItem>
+                    {EXPENSE_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+                  </TextField>
+                </Box>
+              ),
+            },
+            {
+              key: 'mode', width: 160, active: Boolean(modeFilter),
+              node: (
+                <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
+                  <TextField size="small" select fullWidth label="Payment Mode" value={modeFilter}
+                    InputLabelProps={{ shrink: true }}
+                    SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setModeFilter)(e.target.value)}>
+                    <MenuItem value="">All</MenuItem>
+                    {PAYMENT_MODES.map((m) => <MenuItem key={m} value={m}>{m.replace(/_/g, ' ')}</MenuItem>)}
+                  </TextField>
+                </Box>
+              ),
+            },
+            {
+              key: 'from', width: 150, active: Boolean(from),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="From" fullWidth value={from} onChange={onFilterChange(setFrom)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'to', width: 150, active: Boolean(to),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="To" fullWidth value={to} onChange={onFilterChange(setTo)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+          ].filter(Boolean)}
+          onClearSecondary={clearSecondary}
+          onClearAll={clearAll}
+          anyActive={anyFilterActive}
+        />
       </Paper>
 
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/vouchers/${p.id}`)} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={50} columnHeaderHeight={44} sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }} />
+          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>

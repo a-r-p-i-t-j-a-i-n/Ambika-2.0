@@ -27,11 +27,8 @@ export const tallyEntryService = {
     if (!POSTED_STATES.includes(v.voucherStatus)) {
       throw new AppError('Tally Entry can only be created from a posted voucher', 400);
     }
-    // MD Digital Approval gate: the voucher must be MD Approved before a Tally
-    // Entry (and, transitively, Final Payment) can proceed.
-    if (v.approvalStatus !== 'MD_APPROVED') {
-      throw new AppError('Voucher must be MD Approved before a Tally Entry can be created', 400);
-    }
+    // The voucher's MD approval does not hold the Tally Entry back — it gates
+    // the Final Payment only (finalPayment.service.js create()).
     const existing = await PurchaseTallyEntry.findOne({
       voucherId: v._id, isDeleted: { $ne: true }, tallyEntryStatus: { $ne: TALLY_ENTRY_STATUS.CANCELLED },
     }).lean();
@@ -40,7 +37,7 @@ export const tallyEntryService = {
     const entryNumber = await generateTallyEntryNumber(new Date());
 
     // Planned Date, Tally Voucher No. and Tally Ledger Name are all derived
-    // from the source (posted, MD-approved) voucher rather than typed by the
+    // from the source (posted) voucher rather than typed by the
     // user: Tally Voucher No. is the same as the Bill Passing Voucher No.,
     // Tally Ledger Name mirrors the voucher's Vendor Name, and Planned Date
     // defaults to the date the voucher was posted (falling back to the

@@ -36,6 +36,16 @@ export const scrapImsApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/scrap-ims/by-coil', params }),
       providesTags: ['ScrapOverview'],
     }),
+    // Scrap master data: one row per coil SKU, and the cuts behind one row.
+    // The register's tag, so a coil cut refreshes both.
+    getScrapMasterBySku: builder.query({
+      query: (params = {}) => ({ url: '/scrap-ims/by-sku', params }),
+      providesTags: ['ScrapOverview'],
+    }),
+    getScrapSkuHistory: builder.query({
+      query: (params) => ({ url: '/scrap-ims/by-sku/history', params }),
+      providesTags: ['ScrapOverview'],
+    }),
     getScrapRecord: builder.query({
       query: (id) => `/scrap-ims/record/${id}`,
       providesTags: (_r, _e, id) => [{ type: 'ScrapRecord', id }],
@@ -86,6 +96,8 @@ export const {
   useGetScrapOverviewQuery,
   useGetScrapDashboardQuery,
   useGetScrapByCoilQuery,
+  useGetScrapMasterBySkuQuery,
+  useGetScrapSkuHistoryQuery,
   useGetScrapRecordQuery,
   useGetScrapStockQuery,
   useGetScrapMovementsQuery,

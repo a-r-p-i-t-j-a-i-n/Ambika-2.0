@@ -1,7 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import DocumentApproval, { APPROVAL_STATUS, APPROVAL_HISTORY_ACTION } from './approval.model.js';
-import { getApprovalDocument } from './approval.registry.js';
+import { getApprovalDocument, getRegisteredApprovalDocuments } from './approval.registry.js';
+import {
+  approvalViewStatus, scopeApprovalRows, summarizeApprovalRows, sortApprovalRows,
+} from './approval.policy.js';
 import Role from '../access-control/role.model.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../common/uploads/s3.service.js';
@@ -107,6 +110,63 @@ export const approvalService = {
 
   async getByDocument(documentType, documentId) {
     return DocumentApproval.findOne({ documentType, documentId }).lean();
+  },
+
+  /**
+   * MD Approval screen — every approval the engine tracks, joined with its
+   * parent document through that document's own adapter `summarize`. Volumes
+   * are one row per GRN / voucher, so the rows are assembled in memory and
+   * filtered, counted and paged here. `summary` counts the rows in the current
+   * module / vendor / date / search scope, before the status filter.
+   */
+  async list({ status, documentType, vendor, from, to, search, page = 1, limit = 25 } = {}) {
+    const adapters = getRegisteredApprovalDocuments().filter(([type]) => !documentType || type === documentType);
+    const rows = [];
+    for (const [type, adapter] of adapters) {
+      if (typeof adapter.summarize !== 'function') continue;
+      const approvals = await DocumentApproval.find({ documentType: type, isDeleted: { $ne: true } })
+        .select('-history').populate('createdBy', 'name').lean();
+      if (!approvals.length) continue;
+      const docs = await adapter.model.find({ _id: { $in: approvals.map((a) => a.documentId) }, isDeleted: { $ne: true } })
+        .select(adapter.summaryFields || '').lean();
+      const byId = new Map(docs.map((d) => [String(d._id), d]));
+      for (const a of approvals) {
+        const doc = byId.get(String(a.documentId));
+        if (!doc) continue; // parent deleted — nothing left to approve
+        const s = adapter.summarize(doc);
+        // e.g. a PI cancelled before the MD signed: nothing left to approve.
+        if (s.withdrawn && a.status !== 'APPROVED') continue;
+        rows.push({
+          _id: a._id,
+          documentType: type,
+          documentId: a.documentId,
+          documentNumber: a.documentNumber || doc[adapter.numberField] || '',
+          ...s,
+          gatesPayment: Boolean(adapter.gatesPayment),
+          engineStatus: a.status,
+          approvalStatus: approvalViewStatus(a.status, s.workflowCompleted),
+          requestedAt: a.createdAt,
+          requestedByName: a.createdBy?.name || '',
+          signedByName: a.signedByName || '',
+          signedAt: a.signedAt || null,
+          unsignedPdfUrl: a.unsignedPdfUrl || '',
+          signedPdfUrl: a.signedPdfUrl || '',
+        });
+      }
+    }
+
+    const scoped = scopeApprovalRows(rows, { vendor, from, to, search });
+    const filtered = sortApprovalRows(status ? scoped.filter((r) => r.approvalStatus === status) : scoped);
+    const vendors = [...new Set(rows.map((r) => r.vendorName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+
+    const pageNo = Math.max(1, Number(page) || 1);
+    const size = Math.max(1, Number(limit) || 25);
+    return {
+      docs: filtered.slice((pageNo - 1) * size, pageNo * size),
+      pagination: { total: filtered.length, page: pageNo, limit: size, totalPages: Math.ceil(filtered.length / size) },
+      summary: summarizeApprovalRows(scoped),
+      vendors,
+    };
   },
 
   /** MD signs the document for the first time. */

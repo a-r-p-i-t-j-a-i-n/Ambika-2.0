@@ -5,6 +5,9 @@ import { AppError } from '../../../utils/apiResponse.js';
 import { generatePiNumber, generatePiUniqueCode } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import { logger } from '../../../utils/logger.js';
+import { registerApprovalDocument } from '../../approvals/approval.registry.js';
+import { approvalService } from '../../approvals/approval.service.js';
+import { buildPiApprovalPdfBuffer } from './proformaInvoice.pdf.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -44,6 +47,70 @@ const findOrThrow = async (id) => {
 const setPoPiStatus = async (poId, patch) => {
   try { await VendorPurchaseOrder.updateOne({ _id: poId }, { $set: patch }); }
   catch (err) { logger.error(`[pi] PO sync failed for ${poId}: ${err.message}`); }
+};
+
+/** Resolve the company profile once, for the approval engine's PDF adapter. */
+const resolveCompanyForApproval = async () => {
+  try {
+    const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
+    const s = await CompanySettings.findOne().lean();
+    if (s) return { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, phone: s.companyPhone, email: s.companyEmail };
+  } catch { /* env fallback */ }
+  return {};
+};
+
+// Wire the PI's advance-payment approval into the generic Digital Approval &
+// Signature engine (see modules/approvals). The MD signs an "Advance Payment
+// Approval" sheet; the vendor's own PI document (piDocument) is never touched.
+registerApprovalDocument('PROFORMA_INVOICE', {
+  model: ProformaInvoice,
+  numberField: 'piNumber',
+  mirrorStatusField: 'mdApprovalStatus',
+  pdfUrlField: 'mdApprovalPdfUrl',
+  pdfFileNameField: 'mdApprovalPdfFileName',
+  uploadFolder: 'proforma-invoices',
+  buildPdfBuffer: async (pi, opts) => buildPiApprovalPdfBuffer(pi, await resolveCompanyForApproval(), opts?.signature || null),
+  // Advance payment waits for this approval (advancePayment.service.js create()).
+  gatesPayment: true,
+  summaryFields: 'piNumber piDate vendorName totalValue paidAmount balanceAmount piStatus',
+  summarize: (pi) => {
+    const label = {
+      [PI_STATUS.READY_FOR_ADVANCE_PAYMENT]: Number(pi.paidAmount) > 0 ? 'Advance Partly Paid' : 'Advance Payment Pending',
+      [PI_STATUS.PAYMENT_COMPLETED]:         'Advance Paid',
+      [PI_STATUS.CANCELLED]:                 'PI Cancelled',
+    }[pi.piStatus] || String(pi.piStatus || '—').replace(/_/g, ' ');
+    return {
+      module: 'Advance Payments',
+      documentLabel: 'Proforma Invoice',
+      vendorName: pi.vendorName || '',
+      amount: Number(pi.totalValue) || 0,
+      documentDate: pi.piDate || null,
+      workflowLabel: label,
+      workflowCompleted: [PI_STATUS.PAYMENT_COMPLETED, PI_STATUS.CANCELLED].includes(pi.piStatus),
+      // A cancelled PI leaves nothing to pay, so an unsigned one drops off the MD's queue.
+      withdrawn: pi.piStatus === PI_STATUS.CANCELLED,
+      detailPath: `/procurement/proforma-invoices/${pi._id}`,
+    };
+  },
+});
+
+/** Raise the PI's advance-payment MD approval (idempotent, non-fatal). */
+export const raisePiMdApproval = async (pi, user) => {
+  try {
+    const row = await approvalService.ensureReady({ documentType: 'PROFORMA_INVOICE', documentId: pi._id, documentNumber: pi.piNumber }, user);
+    // Until it is signed, the PI's approval PDF is the unsigned sheet (the
+    // engine repoints this field at the signed PDF on sign / replace / remove).
+    if (row?.status !== 'APPROVED' && row?.unsignedPdfUrl) {
+      await ProformaInvoice.updateOne(
+        { _id: pi._id, mdApprovalPdfUrl: { $in: ['', null] } },
+        { $set: { mdApprovalPdfUrl: row.unsignedPdfUrl, mdApprovalPdfFileName: row.unsignedPdfFileName } },
+      );
+    }
+    return true;
+  } catch (err) {
+    logger.error(`[pi] MD approval ensureReady failed for ${pi.piNumber}: ${err.message}`);
+    return false;
+  }
 };
 
 export const proformaInvoiceService = {
@@ -220,6 +287,10 @@ export const proformaInvoiceService = {
     await pi.save();
 
     await setPoPiStatus(pi.poId, { piStatus: PO_PI_STATUS.READY_FOR_ADVANCE_PAYMENT });
+
+    // Ready for MD approval of the advance (non-fatal — the payment gate will
+    // raise it again if this fails).
+    if (await raisePiMdApproval(pi, user)) pi.mdApprovalStatus = 'READY_FOR_MD_APPROVAL';
     return pi;
   },
 

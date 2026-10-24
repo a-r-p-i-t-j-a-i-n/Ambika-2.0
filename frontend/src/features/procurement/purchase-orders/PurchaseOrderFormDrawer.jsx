@@ -23,7 +23,7 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import AddVendorForItemModal from './AddVendorForItemModal';
 import { norm, matchVendorProduct, fillOtherRates } from './vendorRateMatch';
-import { itemRef } from '../indents/indentMeta';
+import { itemRef, UNITS, toKgsUnit } from '../indents/indentMeta';
 
 /**
  * Create / edit a Vendor Purchase Order (Step 1.4).
@@ -35,7 +35,6 @@ import { itemRef } from '../indents/indentMeta';
  * Legacy POs created from the Party master still display & resolve correctly —
  * the backend (resolveVendor) accepts either a Vendor or a Party id.
  */
-const UNITS = ['Pcs', 'Kg', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
 const JSL_UNITS = ['Kgs', 'MT', 'Pcs', 'Nos', 'Meter'];
 
 // Hide the native number-input spinner arrows so the digits use the full cell width.
@@ -310,7 +309,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       quantity: o.approvedQuantity || '',
       // Prefer the Jindal vendor-catalog unit (the actual master data for JSL
       // items) over the indent's unit — the indent's generic Unit dropdown
-      // (Pcs/Kg/Meter/...) doesn't cover JSL-specific units (Kgs/MT/Nos), so it
+      // (Pcs/KGS/Meter/...) doesn't cover JSL-specific units (Kgs/MT/Nos), so it
       // silently normalizes those to "Pcs" at indent-creation time.
       unit: match?.unit || o.unit || 'Kgs',
       baseRate: match ? (match.rate ?? 0) : 0,
@@ -619,7 +618,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       indentId: it.indentId || undefined, indentNumber: it.indentNumber || '',
       indentItemId: it.indentItemId || undefined,
       indentItemDisplayNumber: it.indentItemDisplayNumber || '',
-      quantity: Number(it.quantity), unit: it.unit || 'Pcs',
+      quantity: Number(it.quantity), unit: toKgsUnit(it.unit) || 'Pcs',
       rate: Number(it.rate) || 0, gstRate: Number(it.gstRate) || 0,
       rateSource: rateSourceOf(it),
     })),
@@ -1110,7 +1109,9 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                       )}
                       <TextField size="small" type="number" placeholder="0" value={it.quantity}
                         onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
-                      <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
+                      {/* A line filled from an indent, vendor product or saved PO may say "Kg" —
+                          shown and saved as KGS, the dropdown's spelling. */}
+                      <TextField size="small" select value={toKgsUnit(it.unit)} onChange={(e) => setItem(idx, { unit: e.target.value })}>
                         {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                       </TextField>
                       <TextField size="small" type="number" placeholder="0.00" value={it.rate}

@@ -169,13 +169,11 @@ const VoucherPanel = ({
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
   const mdRequired = posted && v.approvalStatus === 'READY_FOR_MD_APPROVAL';
-  // Tally Entry creation requires EXACTLY approvalStatus === 'MD_APPROVED' —
-  // this must match the backend's own hard gate (tallyEntry.service.js
-  // create()) and the "Purchase Entry in Tally" card's own disabled check
-  // further down this component. NOT_REQUIRED is NOT a stand-in for
-  // MD_APPROVED here (it previously was, incorrectly — see approvalSetupStuck
-  // below for why that showed a "Create Tally Entry" button the backend
-  // would then reject).
+  // MD approval never holds the Tally Entry back — it gates the Final Payment
+  // only, and requires EXACTLY approvalStatus === 'MD_APPROVED' there. This
+  // must match the backend's own hard gate (finalPayment.service.js create())
+  // and the Final Payment card's disabled check further down. NOT_REQUIRED is
+  // NOT a stand-in for MD_APPROVED (see approvalSetupStuck below).
   const mdCleared = v.approvalStatus === 'MD_APPROVED';
   // post() always calls the approval engine's ensureReady() to move a voucher
   // from its NOT_REQUIRED default to READY_FOR_MD_APPROVAL. That call builds
@@ -194,24 +192,27 @@ const VoucherPanel = ({
         primary: { label: 'Post Voucher', icon: <Send size={16} />, onClick: doApprove, loading: posting },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
-    if (mdRequired) {
-      return { tone: 'info', title: 'Awaiting MD Approval',
-        desc: 'The Tally Entry (1.12) unlocks once the Managing Director has digitally signed this voucher.',
-        primary: { label: 'Go to MD Approval', icon: <ArrowRight size={16} />, onClick: () => scrollToId('voucher-md-approval') } };
-    }
-    if (approvalSetupStuck && !tallyEntry) {
-      return { tone: 'error', title: 'MD approval could not be prepared for this voucher',
-        desc: 'The voucher posted successfully, but setting it up for MD approval failed (likely while generating its approval PDF). It cannot proceed to Tally Entry until this is resolved — contact an administrator.' };
-    }
-    if (posted && mdCleared && !tallyEntry) {
-      return { tone: 'success', title: 'MD approved — next: record the Tally Entry (Step 1.12)',
-        desc: 'Record the purchase entry in Tally to enable Final Payment.',
-        primary: { label: 'Create Tally Entry', icon: <FileSpreadsheet size={16} />, onClick: () => setTallyFormOpen(true) } };
+    // MD approval is tracked on its own and does not hold the Tally Entry back.
+    if (posted && !tallyEntry) {
+      return { tone: 'success', title: 'Next: record the Tally Entry (Step 1.12)',
+        desc: mdCleared ? 'MD approved. Record the purchase entry in Tally to enable Final Payment.'
+          : 'MD approval is tracked separately and does not hold the Tally Entry back — only the Final Payment waits for it.',
+        primary: { label: 'Create Tally Entry', icon: <FileSpreadsheet size={16} />, onClick: () => setTallyFormOpen(true) },
+        ...(mdRequired ? { secondary: { label: 'Go to MD Approval', onClick: () => scrollToId('voucher-md-approval') } } : {}) };
     }
     if (tallyEntry && tallyEntry.tallyEntryStatus === 'PENDING') {
       return { tone: 'info', title: 'Tally Entry raised — complete it to enable Final Payment',
         desc: 'Finish the Tally Entry checklist on its own page.',
         primary: { label: 'View Tally Entry', icon: <FileSpreadsheet size={16} />, onClick: () => navigate(`/procurement/tally-entries/${tallyEntry._id}`) } };
+    }
+    if (tallyCompleted && Number(v.balanceAmount) > 0 && approvalSetupStuck) {
+      return { tone: 'error', title: 'MD approval could not be prepared for this voucher',
+        desc: 'The voucher posted successfully, but setting it up for MD approval failed (likely while generating its approval PDF). Final Payment needs MD approval, so it cannot be made until this is resolved — contact an administrator.' };
+    }
+    if (tallyCompleted && Number(v.balanceAmount) > 0 && !mdCleared) {
+      return { tone: 'warn', title: 'Tally complete — payment waits for MD approval',
+        desc: `Final Payment (1.13) is the one step that needs the Managing Director's approval. Balance of ${fmtINR(v.balanceAmount)} is pending.`,
+        primary: { label: 'Go to MD Approval', icon: <ArrowRight size={16} />, onClick: () => scrollToId('voucher-md-approval') } };
     }
     if (tallyCompleted && Number(v.balanceAmount) > 0) {
       return { tone: 'success', title: 'Tally complete — next: record the Final Payment (Step 1.13)',
@@ -376,11 +377,10 @@ const VoucherPanel = ({
               <Box>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
                   {!posted ? 'Post the voucher first to enable a Tally Entry.'
-                    : v.approvalStatus !== 'MD_APPROVED' ? 'Awaiting MD Approval before a Tally Entry can be raised.'
                     : 'No Tally Entry yet. Record the purchase entry to enable final payment.'}
                 </Typography>
                 <Button size="small" variant="contained" startIcon={<FileSpreadsheet size={15} />}
-                  disabled={!posted || v.approvalStatus !== 'MD_APPROVED'} onClick={() => setTallyFormOpen(true)}>Create Tally Entry</Button>
+                  disabled={!posted} onClick={() => setTallyFormOpen(true)}>Create Tally Entry</Button>
               </Box>
             )}
           </SectionCard>
@@ -397,10 +397,11 @@ const VoucherPanel = ({
               <Grid item xs={12}>
                 <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                   <Button size="small" variant="contained" color="success" startIcon={<Wallet size={15} />}
-                    disabled={!tallyCompleted || Number(v.balanceAmount) <= 0} onClick={() => setPaymentFormOpen(true)}>Make Payment</Button>
+                    disabled={!tallyCompleted || !mdCleared || Number(v.balanceAmount) <= 0} onClick={() => setPaymentFormOpen(true)}>Make Payment</Button>
                   {payments.length > 0 && <Button size="small" variant="outlined" onClick={() => navigate(`/procurement/final-payments/${lastPayment._id}`)}>View Payments</Button>}
                 </Box>
                 {!tallyCompleted && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>Complete the Tally Entry before making payment.</Typography>}
+                {tallyCompleted && !mdCleared && Number(v.balanceAmount) > 0 && <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'warning.dark' }}>Payment unlocks once the MD approves this voucher.</Typography>}
               </Grid>
             </Grid>
           </SectionCard>

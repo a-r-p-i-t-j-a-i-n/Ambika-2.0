@@ -170,20 +170,22 @@ const PURCHASE_STEPS = [
   },
   {
     key: 'ADVANCE_PAYMENT', code: '1.7', label: 'Advance Payment',
-    description: 'Approved PI awaiting advance payment.',
+    description: 'Approved, MD-approved PI awaiting advance payment.',
     permissions: [],
-    sources: [byFilter('PI', { piStatus: 'READY_FOR_ADVANCE_PAYMENT' })],
+    // Payment is the one step that waits for the MD (advancePayment.service.js).
+    sources: [byFilter('PI', { piStatus: 'READY_FOR_ADVANCE_PAYMENT', mdApprovalStatus: 'MD_APPROVED' })],
   },
   {
     key: 'GRN', code: '1.8', label: 'GRN',
     description: 'PO ready for goods receipt.',
     permissions: [],
     // piStatus values here must match grn.service.js's isPiSettledForGrn —
-    // NOT_RECEIVED (no PI, optional) is settled just like a completed or
-    // explicitly-skipped PI; only an in-progress PI still blocks.
+    // NOT_RECEIVED (no PI, optional), an explicitly-skipped PI and any APPROVED
+    // PI are settled; the advance payment / its MD approval never hold GRN back.
+    // Only a PI still awaiting its ordinary approval (PI_RECEIVED) blocks.
     sources: [byFilter('PO', {
       followUpStatus: 'READY_FOR_GRN',
-      piStatus: { $in: ['NOT_RECEIVED', 'PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'] },
+      piStatus: { $in: ['NOT_RECEIVED', 'PI_NOT_REQUIRED', 'PI_APPROVED', 'READY_FOR_ADVANCE_PAYMENT', 'PAYMENT_COMPLETED'] },
       poStatus: { $in: ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED'] },
     })],
   },
@@ -191,13 +193,13 @@ const PURCHASE_STEPS = [
   // internal-service indent now waits directly at Incoming QC.
   {
     key: 'INCOMING_QC', code: '1.9', label: 'Incoming QC',
-    description: 'Received (MD-signed) GRN or approved internal-service indent awaiting QC.',
+    description: 'Received GRN or approved internal-service indent awaiting QC.',
     permissions: [],
     sources: [
-      // QC can only start once the GRN is MD-signed (existing gate), so an
-      // unsigned GRN is not yet waiting on the QC doer.
+      // The GRN's MD signature never holds QC back (only payment waits for an
+      // MD approval), so every completed, QC-pending GRN waits on the QC doer.
       // RECEIVED = a W/O PO GRN's terminal status (no PO to be "partial"/"full" against).
-      byFilter('GRN', { grnStatus: { $in: ['RECEIVED', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'] }, qcStatus: 'PENDING', approvalStatus: 'MD_APPROVED' }),
+      byFilter('GRN', { grnStatus: { $in: ['RECEIVED', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'] }, qcStatus: 'PENDING' }),
       // SERVICE_COMPLETED = legacy indents completed under the retired step, QC not done yet.
       byFilter('INDENT', { requestType: 'INTERNAL_SERVICE', overallStatus: { $in: ['SERVICE_PENDING', 'SERVICE_COMPLETED'] } }),
     ],
@@ -234,20 +236,21 @@ const PURCHASE_STEPS = [
   },
   {
     key: 'TALLY_ENTRY', code: '1.12', label: 'Tally Purchase Entry',
-    description: 'Posted, MD-signed voucher awaiting Tally entry.',
+    description: 'Posted voucher awaiting Tally entry.',
     permissions: [],
     sources: [byFilter('VOUCHER', {
       voucherStatus: { $in: ['POSTED', 'PARTIALLY_PAID', 'FULLY_PAID'] },
-      approvalStatus: 'MD_APPROVED',
       tallyEntryStatus: 'PENDING',
     })],
   },
   {
     key: 'FINAL_PAYMENT', code: '1.13', label: 'Final Payment',
-    description: 'Tally-completed voucher with a balance to pay.',
+    description: 'Tally-completed, MD-approved voucher with a balance to pay.',
     permissions: [],
     sources: [byFilter('VOUCHER', {
       tallyEntryStatus: 'COMPLETED',
+      // Payment is the one step that waits for the MD (finalPayment.service.js).
+      approvalStatus: 'MD_APPROVED',
       voucherStatus: { $nin: ['FULLY_PAID', 'SHORT_CLOSED', 'CANCELLED'] },
       balanceAmount: { $gt: 0 },
     })],

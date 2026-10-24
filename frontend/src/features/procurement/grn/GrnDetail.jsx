@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, PackageCheck, Ban, Boxes, Building2, FileText, ShoppingBag,
-  Warehouse, ReceiptText, FileDown, ArrowRight, Trash2, Lock,
+  Warehouse, ReceiptText, FileDown, Trash2, Lock,
 } from 'lucide-react';
 import { usePermissions } from '../../../hooks/usePermission';
 import { alpha } from '@mui/material/styles';
@@ -141,25 +141,21 @@ const GrnDetail = () => {
   const nextStep = (() => {
     if (isDraft) {
       return { tone: 'info', title: 'Next action: Complete GRN',
-        desc: 'Confirm the received quantities. Incoming QC (below) opens after the MD signs the GRN; accepted quantities are posted to stock when the QC is completed.',
+        desc: 'Confirm the received quantities. Incoming QC (below) opens once the GRN is completed; accepted quantities are posted to stock when the QC is completed.',
         primary: { label: 'Complete GRN', icon: <PackageCheck size={16} />, onClick: () => setCompleteOpen(true) },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
     if (qcStage.key === 'CANCELLED') return null;
-    if (qcStage.key === 'AWAITING_MD') {
-      // MD Digital Approval gate — QC cannot start until this GRN is signed.
-      return { tone: 'info', title: 'Awaiting MD Approval',
-        desc: 'Incoming QC (section B) unlocks once the Managing Director has digitally signed this GRN.',
-        primary: { label: 'Go to MD Approval', icon: <ArrowRight size={16} />, onClick: () => scrollToId('grn-md-approval') } };
-    }
     if (qcStage.key === 'QC_DRAFT') {
       return { tone: 'info', title: `QC draft ${qc.qcNumber} saved — finish the inspection below`,
         desc: 'Record accepted / rejected / rework quantities and complete the QC.',
         primary: { label: 'Resume QC', icon: <ClipboardCheck size={16} />, onClick: toQcSection } };
     }
     if (qcStage.key === 'QC_READY') {
-      return { tone: 'success', title: 'Goods received & signed — next: Incoming QC (below)',
-        desc: 'Inspect the received material and record the QC result in section B.',
+      return { tone: 'success', title: 'Goods received — next: Incoming QC (below)',
+        desc: grn.approvalStatus === 'MD_APPROVED'
+          ? 'Inspect the received material and record the QC result in section B.'
+          : 'Inspect the received material and record the QC result in section B. MD approval of this GRN is tracked separately and does not hold the QC back.',
         primary: { label: 'Start QC', icon: <ClipboardCheck size={16} />, onClick: toQcSection },
         secondary: grn.poId ? { label: 'View PO', onClick: () => navigate(`/procurement/purchase-orders/${grn.poId}`) } : null };
     }
@@ -276,7 +272,7 @@ const GrnDetail = () => {
                     ? inventoryTypeLabel(grn.inventoryType)
                     : `— (Add to RM Stock: ${grn.addToRmStock ? 'Yes' : 'No'})`} />
                 ) : (
-                  <Field label="Stock Posting" value="After MD signature + QC · destination per line from SKU master" />
+                  <Field label="Stock Posting" value="After QC · destination per line from SKU master" />
                 )}
               </Grid>
               <Grid item xs={6} sm={4}><Field label="Received At" value={grn.rmReceivedAtLocation || '—'} /></Grid>
@@ -454,7 +450,7 @@ const GrnDetail = () => {
           <PageSection letter="B" title="Incoming QC" subtitle="Step 1.9 · Accepted / rejected / rework against the received quantity" />
         </Grid>
         <Grid item xs={12}>
-          <GrnQcSections grn={grn} isMd={isMd} />
+          <GrnQcSections grn={grn} />
         </Grid>
 
         {/* Timeline */}

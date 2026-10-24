@@ -54,7 +54,7 @@ export const STOCK_IN_REASON_OPTIONS = [
 ];
 
 export const STOCK_OUT_REASON_OPTIONS = [
-  { value: 'PRODUCTION_ISSUE', label: 'Production issue',    hint: 'Material issued to the line to be used in production.' },
+  { value: 'PRODUCTION_ISSUE', label: 'Used in production',  hint: 'Material sent to the line to be used in production.' },
   { value: 'MAINTENANCE',      label: 'Maintenance / upkeep', hint: 'Used servicing or maintaining the machines.' },
   { value: 'SAMPLE_TESTING',   label: 'Sample / testing',     hint: 'Taken for a sample, a trial or quality testing.' },
   { value: 'OTHER',            label: 'Other',                hint: 'Anything else — type your own reason so History can explain it later.' },
@@ -113,8 +113,8 @@ export const AvailMeter = ({ pct }) => {
   return (
     <Tooltip arrow slotProps={O2D_TIP}
       title={`${band.label} — on-hand is ${num(pct)}% of the level this item is planned to hold.`}>
-      <Stack spacing={0.3} sx={{ minWidth: 74, cursor: 'help' }}>
-        <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: band.color, textAlign: 'right', lineHeight: 1 }}>
+      <Stack spacing={0.3} sx={{ width: 74, mx: 'auto', cursor: 'help' }}>
+        <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: band.color, textAlign: 'center', lineHeight: 1 }}>
           {num(pct)}%
         </Typography>
         <Box sx={{ height: 4, borderRadius: 2, bgcolor: O2D.lineSoft, overflow: 'hidden' }}>

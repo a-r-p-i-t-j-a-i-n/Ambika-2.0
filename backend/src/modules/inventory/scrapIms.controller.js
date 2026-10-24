@@ -25,6 +25,16 @@ export const scrapImsController = {
     res.json(ApiResponse.ok('Scrap by physical coil', docs, summary));
   }),
 
+  getMasterBySku: asyncHandler(async (req, res) => {
+    const { docs, summary } = await scrapImsService.getMasterBySku(req.query);
+    res.json(ApiResponse.ok('Scrap master data by coil SKU', docs, summary));
+  }),
+
+  getSkuHistory: asyncHandler(async (req, res) => {
+    const { docs, summary } = await scrapImsService.getSkuHistory(req.query);
+    res.json(ApiResponse.ok('Cuts of one coil SKU', docs, summary));
+  }),
+
   getStock: asyncHandler(async (_req, res) => {
     res.json(ApiResponse.ok('Scrap stock', await scrapImsService.getScrapStock()));
   }),

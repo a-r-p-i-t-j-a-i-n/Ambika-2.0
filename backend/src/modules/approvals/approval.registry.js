@@ -23,6 +23,14 @@
  *                        {imageBuffer, signedByName, designation, signedAt}
  *                        once signed. Adapters resolve their own company/
  *                        template context — the engine never touches it.
+ *   gatesPayment       — true when a vendor payment depends on this approval
+ *                        (Voucher). Every other approval is recorded only and
+ *                        never blocks its workflow (see approval.policy.js).
+ *   summaryFields      — projection of the parent doc that `summarize` reads
+ *   summarize(doc)     — the MD Approval screen's row for this document:
+ *                        { module, documentLabel, vendorName, amount,
+ *                          documentDate, workflowLabel, workflowCompleted,
+ *                          detailPath }
  */
 
 const registry = new Map();
@@ -38,3 +46,5 @@ export const getApprovalDocument = (documentType) => {
 };
 
 export const isApprovalDocumentRegistered = (documentType) => registry.has(documentType);
+
+export const getRegisteredApprovalDocuments = () => [...registry.entries()];

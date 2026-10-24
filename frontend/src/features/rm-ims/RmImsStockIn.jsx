@@ -7,7 +7,7 @@ import { PackagePlus, Plus, Trash2, Save, ArrowRight, Info } from 'lucide-react'
 import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import {
-  RmShell, Panel, TableScroll, EmptyNote, Th, StepHead, KindChip, uomOf, newRequestId,
+  RmShell, Panel, TableScroll, EmptyNote, Th, KindChip, uomOf, newRequestId,
   STOCK_IN_REASON_OPTIONS, RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
   O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx, IMS_FORM_MAX,
 } from './rmImsMeta';
@@ -17,6 +17,31 @@ import { FIELD } from '../ims/imsFieldHelp';
 const H = FIELD.rm;
 
 const blankLine = () => ({ sku: null, quantity: '', quantityKg: '', unitCost: '', batchNo: '' });
+// Counted in kilograms (a coil): its quantity is already a weight.
+const countsInKg = (sku) => !!sku && /^KGS?$/i.test(String(uomOf(sku)).trim());
+
+/**
+ * The line's weight in kg — optional, typed on its own. For an item counted in
+ * kg the quantity is a weight too, so when the two differ it says what the
+ * quantity is: a typo shows up, a deliberate difference is still allowed.
+ */
+const WeightField = ({ line, onChange }) => {
+  const kg = line.quantityKg;
+  const differs = countsInKg(line.sku) && kg !== '' && line.quantity !== ''
+    && Math.abs(Number(kg) - Number(line.quantity)) > 0.001;
+  return (
+    <Stack spacing={0.25} alignItems="flex-end">
+      <TextField size="small" type="number" value={kg} onChange={(e) => onChange(e.target.value)}
+        inputProps={{ min: 0, style: { textAlign: 'right', width: 72 }, 'aria-label': `Weight in kg — ${line.sku?.skuName || 'item'}` }}
+        placeholder="Optional" />
+      {differs && (
+        <Typography sx={{ fontSize: '0.6rem', color: STOCK_TOKENS.LOW.color, whiteSpace: 'nowrap' }}>
+          Quantity says {num(line.quantity)} kg
+        </Typography>
+      )}
+    </Stack>
+  );
+};
 
 /**
  * Batch number, with the receipt behind it looked up as you type.
@@ -94,7 +119,6 @@ const RmImsStockIn = () => {
     reason: '',
     customReason: '',
     warehouse: DEFAULT_RECEIVED_AT,
-    reference: '',
   });
   const [lines, setLines] = useState([blankLine()]);
   // Minted once per filled-in form. The server recognises a replay of the same
@@ -150,11 +174,15 @@ const RmImsStockIn = () => {
   const valid = lines.filter((l) => l.sku && Number(l.quantity) > 0);
   const totalQty = valid.reduce((t, l) => t + Number(l.quantity || 0), 0);
   const totalValue = valid.reduce((t, l) => t + Number(l.quantity || 0) * Number(l.unitCost || l.sku?.rate || 0), 0);
-  const activeReason = STOCK_IN_REASON_OPTIONS.find((r) => r.value === header.reason);
-  const activeLocation = RECEIVED_AT_OPTIONS.find((w) => w.value === header.warehouse);
   // "Other" has to say what it was, or History can never explain this movement.
   const needsCustomReason = header.reason === 'OTHER' && !header.customReason.trim();
   const needsReason = !header.reason;
+  const ready = valid.length > 0 && !needsReason && !needsCustomReason;
+  // What is still missing, said on the Save line.
+  const status = !valid.length ? 'Pick an item and enter a quantity above zero.'
+    : needsReason ? 'Pick a reason — a supplier delivery comes in through its GRN, not here.'
+      : needsCustomReason ? 'Say what the reason is.'
+        : 'Everything looks right.';
 
   const submit = async () => {
     if (!valid.length) return enqueueSnackbar('Add at least one item with a quantity.', { variant: 'warning' });
@@ -166,10 +194,9 @@ const RmImsStockIn = () => {
         clientRequestId: requestId,
         customReason: header.reason === 'OTHER' ? header.customReason.trim() : undefined,
         warehouse: header.warehouse,
-        reference: header.reference || undefined,
         items: valid.map((l) => ({
           skuId: l.sku.skuId, skuCode: l.sku.skuCode, quantity: Number(l.quantity),
-          // Only sent when the slip stated a weight. Undefined — not 0 — so the
+          // Only sent when a weight was entered. Undefined — not 0 — so the
           // ledger records "not stated" rather than "weighed nothing".
           quantityKg: l.quantityKg === '' ? undefined : Number(l.quantityKg),
           unitCost: Number(l.unitCost || 0), batchNo: l.batchNo || undefined,
@@ -181,9 +208,10 @@ const RmImsStockIn = () => {
         enqueueSnackbar(`Stock added for ${res?.data?.count || valid.length} item(s).`, { variant: 'success' });
       }
       setLines([blankLine()]);
-      setHeader((h) => ({ ...h, reference: '', customReason: '' }));
+      setHeader((h) => ({ ...h, customReason: '' }));
       setRequestId(newRequestId());
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not add stock.', { variant: 'error' }); }
+    return undefined;
   };
 
   return (
@@ -204,53 +232,9 @@ const RmImsStockIn = () => {
         </Stack>
       </Paper>
 
-      {/* ── Step 1 ── */}
-      <Panel>
-        <StepHead n={1} title="Receipt details" hint="When it arrived and why it is being added." done={!!header.date} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25, mt: 1.25 }}>
-          <TextField size="small" type="date" label="Date received" value={header.date}
-            onChange={(e) => setHeader((h) => ({ ...h, date: e.target.value }))}
-            InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
-          <TextField select size="small" label="Reason" value={header.reason}
-            onChange={(e) => setHeader((h) => ({ ...h, reason: e.target.value }))}
-            error={needsReason}
-            helperText={needsReason
-              ? 'Pick a reason — a supplier delivery is not entered here; its GRN + Incoming QC adds it.'
-              : activeReason?.hint}
-            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
-            {STOCK_IN_REASON_OPTIONS.map((r) => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
-          </TextField>
-          {/* Where the material physically landed. Maps to the stock engine's
-              existing warehouse field — the sheet's own PLG01 / JW001 codes. */}
-          <TextField select size="small" label="Received At" value={header.warehouse}
-            onChange={(e) => { setWarehouseTouched(true); setHeader((h) => ({ ...h, warehouse: e.target.value })); }}
-            helperText={activeLocation?.hint}
-            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
-            {RECEIVED_AT_OPTIONS.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
-          </TextField>
-          {header.reason === 'OTHER' && (
-            <TextField size="small" label="Custom Reason" value={header.customReason}
-              onChange={(e) => setHeader((h) => ({ ...h, customReason: e.target.value }))}
-              placeholder="Say what this receipt was"
-              error={needsCustomReason}
-              inputProps={{ maxLength: 200 }}
-              helperText={needsCustomReason
-                ? 'Custom Reason is required when Reason is Other.'
-                : 'Saved as a custom reason and shown in History.'}
-              FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
-          )}
-          <TextField size="small" label="Reference (optional)" value={header.reference}
-            onChange={(e) => setHeader((h) => ({ ...h, reference: e.target.value }))}
-            placeholder="Challan / bill / note no."
-            helperText="Helps you trace this entry later in History."
-            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
-        </Box>
-      </Panel>
-
-      {/* ── Step 2 ── */}
-      <Panel>
-        <StepHead n={2} title="What is coming in?" hint="Pick each coil or circle, then type the quantity received." done={valid.length > 0} />
-        <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
+      {/* ── One form: the items, then when / why / where, then Save ── */}
+      <Panel dense>
+        <TableScroll>
           <Table size="small" sx={imsTableSx(1140)}>
             <TableHead>
               <TableRow>
@@ -258,7 +242,7 @@ const RmImsStockIn = () => {
                 <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
                 <TableCell align="right"><Th label="UOM" hint={H.unit} /></TableCell>
                 <TableCell align="right">In store now</TableCell>
-                <TableCell align="right">Quantity received</TableCell>
+                <TableCell align="right">Quantity in</TableCell>
                 {/* Circles are counted in pieces but also weighed. Recording the
                     weight beside the count keeps both, and keeps them apart. */}
                 <TableCell align="right"><Th label="Weight (kg)" hint={H.weightKg} /></TableCell>
@@ -305,19 +289,18 @@ const RmImsStockIn = () => {
                     <TableCell align="right" sx={{ width: 130 }}>
                       <TextField size="small" type="number" value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)}
                         inputProps={{ min: 0, style: { textAlign: 'right', width: 82, fontWeight: 700 },
-                          'aria-label': `Quantity received — ${l.sku?.skuName || 'item'}` }} placeholder="0" />
+                          'aria-label': `Quantity in — ${l.sku?.skuName || 'item'}` }} placeholder="0" />
                     </TableCell>
                     <TableCell align="right" sx={{ width: 120 }}>
-                      {l.sku?.kind === 'CIRCLE' ? (
-                        <TextField size="small" type="number" value={l.quantityKg}
-                          onChange={(e) => setLine(i, 'quantityKg', e.target.value)}
-                          inputProps={{ min: 0, style: { textAlign: 'right', width: 72 },
-                            'aria-label': `Weight in kg — ${l.sku?.skuName || 'item'}` }} placeholder="—" />
-                      ) : (
-                        <Tooltip arrow slotProps={O2D_TIP}
-                          title={l.sku ? 'A coil is received by weight, so the quantity already is its kilograms.' : 'Pick an item first.'}>
+                      {/* Weight, optional and entered on its own for every item — never
+                          copied from the quantity. For an item counted in kg the two
+                          should agree, so a different figure is pointed out (not blocked). */}
+                      {!l.sku ? (
+                        <Tooltip arrow slotProps={O2D_TIP} title="Pick an item first.">
                           <Box component="span" sx={{ color: O2D.faint, cursor: 'help' }}>—</Box>
                         </Tooltip>
+                      ) : (
+                        <WeightField line={l} onChange={(v) => setLine(i, 'quantityKg', v)} />
                       )}
                     </TableCell>
                     <TableCell align="right" sx={{ width: 130 }}>
@@ -355,30 +338,48 @@ const RmImsStockIn = () => {
               })}
               {lines.length === 0 && (
                 <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
-                  <EmptyNote icon={PackagePlus} title="No items added yet" hint="Add a line to start this receipt." />
+                  <EmptyNote icon={PackagePlus} title="No items added yet" hint="Add a line to start." />
                 </TableCell></TableRow>
               )}
             </TableBody>
           </Table>
         </TableScroll>
-        <Button size="small" startIcon={<Plus size={14} />} onClick={addLine}
-          sx={{ mt: 1.25, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', color: O2D.brand }}>
-          Add another item
-        </Button>
-      </Panel>
 
-      {/* ── Step 3 ── */}
-      <Paper elevation={0} sx={{
-        position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '8px', px: 1.5, py: 1.15,
-        border: `1px solid ${valid.length ? STOCK_TOKENS.OK.border : O2D.line}`,
-        bgcolor: valid.length ? STOCK_TOKENS.OK.tint : O2D.surface,
-        boxShadow: '0 6px 20px rgba(28,30,33,0.08)',
-      }}>
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-          <StepHead n={3} title="Confirm and save"
-            hint={valid.length ? 'Everything looks right.' : 'Pick an item and enter a quantity above zero.'}
-            done={valid.length > 0} />
-          <Stack direction="row" spacing={0.75} sx={{ ml: 'auto' }} flexWrap="wrap" useFlexGap alignItems="center">
+        <Box sx={{ px: 1.5, pb: 1.5 }}>
+          <Button size="small" startIcon={<Plus size={14} />} onClick={addLine}
+            sx={{ mt: 1, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', color: O2D.brand }}>
+            Add another item
+          </Button>
+
+          {/* When it arrived, why it is added, and where it landed. */}
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25, mt: 1.75 }}>
+            <TextField size="small" type="date" label="Date received" value={header.date}
+              onChange={(e) => setHeader((h) => ({ ...h, date: e.target.value }))}
+              InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
+            <TextField select size="small" label="Reason" required value={header.reason}
+              onChange={(e) => setHeader((h) => ({ ...h, reason: e.target.value }))}
+              SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}>
+              <MenuItem value="" disabled><Box component="span" sx={{ color: O2D.faint }}>Pick a reason</Box></MenuItem>
+              {STOCK_IN_REASON_OPTIONS.map((r) => <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>)}
+            </TextField>
+            {/* Where the material physically landed. Maps to the stock engine's
+                existing warehouse field — the sheet's own PLG01 / JW001 codes. */}
+            <TextField select size="small" label="Received At" value={header.warehouse}
+              onChange={(e) => { setWarehouseTouched(true); setHeader((h) => ({ ...h, warehouse: e.target.value })); }}>
+              {RECEIVED_AT_OPTIONS.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
+            </TextField>
+            {header.reason === 'OTHER' && (
+              <TextField size="small" label="Custom reason" required value={header.customReason}
+                onChange={(e) => setHeader((h) => ({ ...h, customReason: e.target.value }))}
+                placeholder="Say what this receipt was" error={needsCustomReason}
+                inputProps={{ maxLength: 200 }} />
+            )}
+          </Box>
+
+          {/* Save — the last line of the same form. */}
+          <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap
+            sx={{ mt: 1.75, pt: 1.25, borderTop: `1px solid ${O2D.lineSoft}` }}>
+            <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: ready ? STOCK_TOKENS.OK.color : O2D.sub, mr: 'auto' }}>{status}</Typography>
             <Chip size="small" label={`${valid.length} item${valid.length === 1 ? '' : 's'}`}
               sx={{ height: 24, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
             <Chip size="small" label={`${num(totalQty)} units in`}
@@ -387,14 +388,14 @@ const RmImsStockIn = () => {
               <Chip size="small" label={`Worth ${inr(totalValue)}`}
                 sx={{ height: 24, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
             )}
-            <Button variant="contained" disableElevation onClick={submit} disabled={isLoading || !valid.length || needsReason}
+            <Button variant="contained" disableElevation onClick={submit} disabled={isLoading || !ready}
               startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
               sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
               Add to store
             </Button>
           </Stack>
-        </Stack>
-      </Paper>
+        </Box>
+      </Panel>
     </RmShell>
   );
 };

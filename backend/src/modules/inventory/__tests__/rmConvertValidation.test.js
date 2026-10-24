@@ -118,7 +118,25 @@ test('cutting-history query: batch, entry type, circle SKU and date range', () =
 test('cuttingType: FULL / PARTIAL accepted (any case), absent still accepted, anything else refused', () => {
   assert.equal(validate({}).error, undefined);
   assert.equal(validate({ cuttingType: 'FULL' }).error, undefined);
-  assert.equal(validate({ cuttingType: 'partial' }).value.cuttingType, 'PARTIAL');
+  // A partial round sends no circles — they come with the coil's full cut.
+  assert.equal(validate({ cuttingType: 'partial', circles: undefined }).value.cuttingType, 'PARTIAL');
+  assert.equal(validate({ cuttingType: 'partial', circles: undefined }).error, undefined);
   assert.equal(validate({ cuttingType: null }).error, undefined);
   assert.ok(validate({ cuttingType: 'HALF' }).error);
+});
+
+// ── Partial rounds record only the coil weight ───────────────────────────────
+test('a PARTIAL round carries no circles; every other cut must', () => {
+  // Partial: no circles is right, and they default to an empty list.
+  assert.deepEqual(validate({ cuttingType: 'PARTIAL', circles: undefined }).value.circles, []);
+  assert.equal(validate({ cuttingType: 'PARTIAL', circles: [] }).error, undefined);
+  // Partial with circles is refused, in words the operator can act on.
+  const withCircles = validate({ cuttingType: 'PARTIAL' }).error;
+  assert.ok(withCircles);
+  assert.match(withCircles.message, /full cut/i);
+  // Full, and a cut that names no type, still need at least one circle.
+  assert.ok(validate({ cuttingType: 'FULL', circles: undefined }).error);
+  assert.ok(validate({ cuttingType: 'FULL', circles: [] }).error);
+  assert.ok(validate({ circles: undefined }).error);
+  assert.ok(validate({ circles: [] }).error);
 });

@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { protect } from '../../middleware/auth.middleware.js';
 import validate from '../../middleware/validate.js';
 import { imsController as c } from './ims.controller.js';
-import { movementQuerySchema } from './inventory.validation.js';
+import { movementQuerySchema, itemLedgerQuerySchema } from './inventory.validation.js';
 import {
   overviewQuerySchema, forecastQuerySchema, historyQuerySchema, skuParamSchema,
   policySchema, receiveSchema, issueSchema,
@@ -21,6 +21,8 @@ router.get('/reorder', validate(overviewQuerySchema, 'query'), c.getReorderList)
 router.get('/forecast/:skuId', validate(skuParamSchema, 'params'), validate(forecastQuerySchema, 'query'), c.getForecast);
 router.get('/history/:skuId', validate(skuParamSchema, 'params'), validate(historyQuerySchema, 'query'), c.getStockHistory);
 router.get('/movements', validate(movementQuerySchema, 'query'), c.getMovements);
+// One item's history, newest first, with its in/out totals.
+router.get('/ledger/:skuId', validate(skuParamSchema, 'params'), validate(itemLedgerQuerySchema, 'query'), c.getItemLedger);
 
 router.get('/policy/:skuId', validate(skuParamSchema, 'params'), c.getPolicy);
 router.put('/policy/:skuId', validate(skuParamSchema, 'params'), validate(policySchema), c.upsertPolicy);

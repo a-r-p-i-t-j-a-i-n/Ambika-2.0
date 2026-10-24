@@ -74,7 +74,7 @@ const RmImsDashboard = () => {
   const reorderList = d?.reorderList || [];
 
   // Average yield across the recent conversions — the single number that says
-  // whether the cutting floor is wasting metal.
+  // whether the cutting floor is wasting metal. hi 
   const avgYield = conversions.length
     ? Math.round((conversions.reduce((t, c) => t + Number(c.yieldRatioPct || 0), 0) / conversions.length) * 10) / 10
     : null;
@@ -265,7 +265,9 @@ const RmImsDashboard = () => {
                         <TableCell sx={{ py: 0.85 }}>
                           <Typography noWrap sx={{ fontSize: '0.78rem', fontWeight: 700, color: O2D.ink, maxWidth: 230 }}>{c.coilSkuName}</Typography>
                           <Typography sx={{ fontSize: '0.67rem', color: O2D.sub }}>
-                            {c.batchNo || c.conversionNumber} · coil <b>{num(c.coilWeightKg)}kg</b> → circles <b>{num(c.circlesWeightKg)}kg</b> · scrap {num(c.scrapKg)}kg
+                            {/* A full cut accounts for the whole coil — its own round and
+                                the partial rounds before it (settledKg). */}
+                            {c.batchNo || c.conversionNumber} · coil <b>{num(c.settledKg ?? c.coilWeightKg)}kg</b> → circles <b>{num(c.circlesWeightKg)}kg</b> · scrap {num(c.scrapKg)}kg
                           </Typography>
                         </TableCell>
                         <TableCell align="right" sx={{ py: 0.85, width: 88 }}><YieldChip pct={c.yieldRatioPct} /></TableCell>

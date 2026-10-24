@@ -36,7 +36,7 @@ const SectionCard = ({ icon, title, children }) => (
 const FollowUpDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const goBack = useSmartBack('/purchase-fms/material-follow-ups');
+  const goBack = useSmartBack('/purchase-fms/follow-ups');
 
   const { data, isLoading } = useGetFollowUpByIdQuery(id);
   const fu = data?.data;
@@ -50,7 +50,7 @@ const FollowUpDetail = () => {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography variant="h6">Follow-up not found</Typography>
-        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/material-follow-ups')}>Back to list</Button>
+        <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate('/purchase-fms/follow-ups')}>Back to list</Button>
       </Box>
     );
   }
@@ -165,6 +165,7 @@ const FollowUpDetail = () => {
               <Grid item xs={6} sm={4}><Field label="Vendor" value={fu.vendorName || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Phone" value={fu.vendorPhone || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Email" value={fu.vendorEmail || '—'} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Contact Person" value={fu.contactPerson || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="PO Number" value={fu.poNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Indent Number" value={fu.indentNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Performed By" value={fu.performedByName || fu.performedBy?.name || '—'} /></Grid>
@@ -182,7 +183,7 @@ const FollowUpDetail = () => {
                     <FuTypeChip type={c.type} />
                     <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                       <Typography variant="body2">{c.message || '—'}</Typography>
-                      <Typography variant="caption" color="text.disabled">{c.byName || '—'} · {fmtDate(c.timestamp)}</Typography>
+                      <Typography variant="caption" color="text.disabled">{c.byName || '—'} · {fmtDate(c.timestamp)}{c.contactPerson ? ` · spoke to ${c.contactPerson}` : ''}</Typography>
                     </Box>
                   </Box>
                 ))}

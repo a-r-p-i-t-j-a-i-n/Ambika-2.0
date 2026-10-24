@@ -175,7 +175,11 @@ const run = async () => {
   await page.waitForTimeout(1200);
   await page.getByPlaceholder('Search indents…').fill('NO-SUCH-INDENT-XYZ');
   await page.waitForTimeout(1500);
-  check('Indents: a search with no match shows the grid’s empty state ("No rows", 0–0 of 0)', /No rows/.test(await body()) && /0–0 of 0/.test(await body()));
+  // The Indents grid now renders the Purchase FMS pager ("Showing 0 to 0 of 0
+  // indents") in place of MUI's default "0–0 of 0" strip. Same assertion, same
+  // strength — an empty result must still be stated as empty AND counted as
+  // zero; only the wording the grid uses to say it has changed.
+  check('Indents: a search with no match shows the grid’s empty state ("No rows", zero count)', /No rows/.test(await body()) && /Showing 0 to 0 of 0 indents/.test(await body()));
   await page.screenshot({ path: `${SHOTS}/uisweep-empty-indents.png` }).catch(() => {});
 
   /* ── Disabled states (Cut Coils, Scrap Out) ── */

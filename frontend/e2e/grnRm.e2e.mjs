@@ -9,8 +9,9 @@
  * smallest thing that can actually click the buttons.
  *
  * Raw Material routes to RM IMS automatically (SKU Item Type), at a "Received
- * At" that has to be chosen. Completing the GRN stocks nothing: the MD signs,
- * QC completes, and only the ACCEPTED qty is posted. A coil still awaiting QC
+ * At" that has to be chosen. Completing the GRN stocks nothing: QC completes
+ * and only the ACCEPTED qty is posted — the GRN's MD signature is recorded on
+ * its own and is not waited for. A coil still awaiting QC
  * cannot be stocked in by hand or cut as a manual coil.
  *
  * Every action here happens in the browser. Nothing is asserted from a toast:
@@ -26,7 +27,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
 import {
-  dialogTitled, combinedBtn, stageText, confirmCompleteGrn, signAndCompleteQc,
+  dialogTitled, combinedBtn, stageText, confirmCompleteGrn, completeQc,
 } from './_grnLifecycle.mjs';
 
 /**
@@ -150,9 +151,9 @@ const main = async () => {
   check('completing without Received At is refused (no location is assumed)', await seen(/Select Received At/));
   check('…and the dialog stays open', (await dlg.count()) > 0);
   await confirmCompleteGrn(page, { receivedAt: 'PLG01' });
-  check('mixed GRN completed — Awaiting MD Signature', (await stageText(page)) === 'Awaiting MD Signature', await stageText(page));
+  check('mixed GRN completed — QC open at once (no MD signature awaited)', (await stageText(page)) === 'QC Pending', await stageText(page));
   check('…nothing is stock yet: both lines read "Awaiting QC"', (await lineStock()).every((t) => /Awaiting QC/.test(t)), (await lineStock()).join(' | '));
-  check('mixed GRN: MD signs, QC completes', (await signAndCompleteQc(page)) === 'QC Completed · Passed');
+  check('mixed GRN: QC completes without an MD signature', (await completeQc(page)) === 'QC Completed · Passed');
   const mixStock = await lineStock();
   check('coil → RM IMS · PLG01 Posted 500, bolt → C&P IMS · MAIN Posted 200',
     mixStock.some((t) => /RM IMS · PLG01 Posted 500/.test(t)) && mixStock.some((t) => /C&P IMS · MAIN Posted 200/.test(t)), mixStock.join(' | '));
@@ -164,9 +165,9 @@ const main = async () => {
   dlg = await openCompleteDialog();
   check('the dialog carries the draft\'s Received At (PLG01)', /PLG01/.test(await comboText(dlg, 'Received At')), await comboText(dlg, 'Received At'));
   await confirmCompleteGrn(page);
-  check('completed — the message says stock waits for QC', await seen(/awaiting QC/i, 3000) || (await stageText(page)) === 'Awaiting MD Signature');
-  const plgStage = await signAndCompleteQc(page, page, { split: [['E2E Circle A 180mm', 280, 20]] });
-  check('signed and QC\'d — Partial (20 circles rejected)', plgStage === 'QC Completed · Partial', plgStage);
+  check('completed — the message says stock waits for QC', await seen(/awaiting QC/i, 3000) || (await stageText(page)) === 'QC Pending');
+  const plgStage = await completeQc(page, page, { split: [['E2E Circle A 180mm', 280, 20]] });
+  check('QC\'d — Partial (20 circles rejected)', plgStage === 'QC Completed · Partial', plgStage);
   const plgStock = await lineStock();
   check('coil 500 and circle 280 posted at PLG01 — the 20 rejected are not stock',
     plgStock.some((t) => /RM IMS · PLG01 Posted 500/.test(t)) && plgStock.some((t) => /RM IMS · PLG01 Posted 280/.test(t)), plgStock.join(' | '));
@@ -180,7 +181,7 @@ const main = async () => {
   dlg = await openCompleteDialog();
   check('JW001 carried from the draft', /JW001/.test(await comboText(dlg, 'Received At')));
   await confirmCompleteGrn(page);
-  check('JW: signed and QC\'d', (await signAndCompleteQc(page)) === 'QC Completed · Passed');
+  check('JW: QC\'d', (await completeQc(page)) === 'QC Completed · Passed');
   check('JW: coil posted at JW001 only after QC', (await lineStock()).some((t) => /RM IMS · JW001 Posted 400/.test(t)), (await lineStock()).join(' | '));
 
   // ── The GRN FORM itself ────────────────────────────────────────────────────
@@ -230,7 +231,7 @@ const main = async () => {
     await page.waitForTimeout(2200);
     const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
     check('GRN detail shows Received At = JW001 and Warehouse MAIN', /Received At\s*JW001/i.test(body) && /Warehouse\s*MAIN/i.test(body));
-    check('…and "Stock Posting" after MD signature + QC, no Inventory Type field', /Stock Posting/i.test(body) && !/Inventory Type/i.test(body));
+    check('…and "Stock Posting" after QC, no Inventory Type field', /Stock Posting\s*After QC/i.test(body) && !/Inventory Type/i.test(body));
     await shot('23-grn-detail-persisted');
   }
 
@@ -261,7 +262,7 @@ const main = async () => {
   check('…and shows no trace of the retired Inventory Type', (await comboCount(dlg, 'Inventory Type')) === 0);
   await shot('24-complete-prefilled');
   await confirmCompleteGrn(page);
-  check('INHERIT completed — Awaiting MD Signature, line Awaiting QC', (await stageText(page)) === 'Awaiting MD Signature'
+  check('INHERIT completed — QC open (no MD signature awaited), line Awaiting QC', (await stageText(page)) === 'QC Pending'
     && (await lineStock()).some((t) => /RM IMS · JW001 Awaiting QC/.test(t)), (await lineStock()).join(' | '));
 
   // ── Duplicate submits ──────────────────────────────────────────────────────
@@ -269,8 +270,8 @@ const main = async () => {
   await openGrn('DUP');
   await openCompleteDialog();
   await confirmCompleteGrn(page, { doubleClick: true });
-  check('a double-clicked Complete GRN leaves the GRN completed once', (await stageText(page)) === 'Awaiting MD Signature');
-  check('…double-clicked Complete QC', (await signAndCompleteQc(page, page, { doubleClick: true })) === 'QC Completed · Passed');
+  check('a double-clicked Complete GRN leaves the GRN completed once', (await stageText(page)) === 'QC Pending');
+  check('…double-clicked Complete QC', (await completeQc(page, page, { doubleClick: true })) === 'QC Completed · Passed');
   await openGrn('DUP');
   check('a completed GRN cannot be completed again from the UI', (await page.getByRole('button', { name: /^Complete GRN$/ }).count()) === 0
     && (await combinedBtn(page).count()) === 0);

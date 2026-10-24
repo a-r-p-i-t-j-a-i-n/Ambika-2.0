@@ -3,6 +3,11 @@ import { approvalService } from './approval.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 
 export const approvalController = {
+  list: asyncHandler(async (req, res) => {
+    const { docs, pagination, summary, vendors } = await approvalService.list(req.query);
+    res.json(ApiResponse.ok('Approvals retrieved', { rows: docs, summary, vendors }, pagination));
+  }),
+
   getByDocument: asyncHandler(async (req, res) => {
     const { documentType, documentId } = req.params;
     const row = await approvalService.getByDocument(documentType, documentId);

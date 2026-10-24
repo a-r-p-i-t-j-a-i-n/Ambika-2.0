@@ -253,9 +253,10 @@ const grnItems = (po, skus, qtyOf, batch) => po.items.map((it) => {
 });
 
 /**
- * After a GRN is completed nothing is stocked yet: the MD signs, then its
- * Incoming QC (accept all) posts the GRN_IN. The signature is the approval
- * mirror field, as the other fixtures stand it in.
+ * After a GRN is completed nothing is stocked yet: its Incoming QC (accept all)
+ * posts the GRN_IN. The MD signature never holds that back; it is set here too
+ * (the approval mirror field, as the other fixtures stand it in) so the seeded
+ * GRNs match what the browser run leaves behind.
  */
 const signAndQc = async (grnId, user) => {
   await GoodsReceiptNote.updateOne({ _id: grnId }, { $set: { approvalStatus: 'MD_APPROVED' } });

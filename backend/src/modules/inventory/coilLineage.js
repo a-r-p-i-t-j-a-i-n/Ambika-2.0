@@ -141,10 +141,19 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
   const rounds = ordered.map((c, i) => {
     const cutKg = round2(c.coilWeightKg);
     const circlesKg = round2(c.circlesWeightKg);
-    // Taken from the conversion rather than recomputed as cut − circles: the
-    // conversion is what the ledger and the Scrap register were both written
-    // from, so recomputing it here would be a second opinion nobody asked for.
-    const scrapKg = round2(c.scrapKg);
+    /**
+     * The coil weight this round's circles and scrap account for. A PARTIAL
+     * round settles 0 — its circles are entered with the coil's full cut,
+     * which settles its own weight and those rounds' together. Absent on every
+     * older round, each of which settled its own cut.
+     */
+    const outputPending = c.settledKg === 0;
+    const settledKg = round2(c.settledKg ?? c.coilWeightKg);
+    // Taken from the conversion rather than recomputed as settled − circles:
+    // the conversion is what the ledger and the Scrap register were both
+    // written from, so recomputing it here would be a second opinion nobody
+    // asked for. A partial round has no scrap yet, which is not 0 kg of it.
+    const scrapKg = outputPending ? null : round2(c.scrapKg);
     cumulativeCut = round2(cumulativeCut + cutKg);
     const remainingAfterKg = round2(received - cumulativeCut);
 
@@ -170,7 +179,9 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
       })),
       circlesKg,
       scrapKg,
-      yieldPct: cutKg > 0 ? round2((circlesKg / cutKg) * 100) : null,
+      settledKg,
+      outputPending,
+      yieldPct: settledKg > 0 ? round2((circlesKg / settledKg) * 100) : null,
       // Derived, never stored. Can go NEGATIVE where more was cut from a batch
       // than ever arrived — that is a real data fault and the screen says so
       // rather than clamping it to zero and hiding it.
@@ -193,7 +204,8 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
       disposition: scrap?.disposition || null,
       // The cutting location, off the scrap record — it decides whether the
       // offcut became stock Ambika holds (PLG01) or stayed with the job worker.
-      location: scrap?.location || null,
+      // A partial round has no scrap record yet; it keeps its own.
+      location: scrap?.location || c.cutLocation || null,
       scrapStockMovementId: scrap?.stockMovementId || null,
       batchStatus: scrap?.batchStatus || null,
 
@@ -203,7 +215,8 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
 
   const cutKg = cumulativeCut;
   const circlesKg = round2(rounds.reduce((s, r) => s + r.circlesKg, 0));
-  const scrapKg = round2(rounds.reduce((s, r) => s + r.scrapKg, 0));
+  const scrapKg = round2(rounds.reduce((s, r) => s + (r.scrapKg || 0), 0));
+  const settledKg = round2(rounds.reduce((s, r) => s + r.settledKg, 0));
   const remainingKg = round2(received - cutKg);
 
   return {
@@ -213,6 +226,10 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
       cutKg,
       circlesKg,
       scrapKg,
+      // Cut whose circles and scrap are recorded, and cut still waiting for
+      // the coil's full cut (partial rounds). settled + pending = cut.
+      settledKg,
+      pendingKg: round2(cutKg - settledKg),
       remainingKg,
       /**
        * Yield for the COIL, weighted by how much each round actually cut —
@@ -224,8 +241,10 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
        * which averages per CUT across many coils and must stay comparable with
        * the client's Summary Scrap sheet. Different question, different number.
        */
-      avgYieldPct: cutKg > 0 ? round2((circlesKg / cutKg) * 100) : null,
-      scrapPct: cutKg > 0 ? round2((scrapKg / cutKg) * 100) : null,
+      // Over the SETTLED cut: weight still waiting for its circles has no
+      // yield yet, and counting it would read as metal lost.
+      avgYieldPct: settledKg > 0 ? round2((circlesKg / settledKg) * 100) : null,
+      scrapPct: settledKg > 0 ? round2((scrapKg / settledKg) * 100) : null,
       rounds: rounds.length,
       // What the ROUNDS say. The lineage service adds the ledger's view
       // (`ledgerCoilState`) beside it.
@@ -244,22 +263,30 @@ export const deriveRounds = ({ receivedKg = 0, conversions = [], scrapByConversi
  * summed, so the aggregation and the drill-down can never disagree about a
  * coil's scrap.
  */
-export const summariseCoilRow = ({ receivedKg = 0, cutKg = 0, circlesKg = 0, scrapKg = 0, rounds = 0 } = {}) => {
+export const summariseCoilRow = ({
+  receivedKg = 0, cutKg = 0, circlesKg = 0, scrapKg = 0, rounds = 0, settledKg = cutKg,
+} = {}) => {
   const received = round2(receivedKg);
   const cut = round2(cutKg);
   const scrap = round2(scrapKg);
   const circles = round2(circlesKg);
+  // The cut whose circles are recorded (deriveRounds) — all of it, unless
+  // partial rounds are still waiting for the coil's full cut.
+  const settled = round2(settledKg);
   return {
     receivedKg: received,
     cutKg: cut,
     circlesKg: circles,
     scrapKg: scrap,
+    settledKg: settled,
+    pendingKg: round2(cut - settled),
     // Scrap as a share of what was CUT, not of what arrived: a coil half of
     // which is still on the floor has not yet had a chance to scrap the rest,
-    // and dividing by the arrival weight would flatter it.
-    scrapPct: cut > 0 ? round2((scrap / cut) * 100) : null,
+    // and dividing by the arrival weight would flatter it. Of the settled cut
+    // only — a partial round has no scrap yet.
+    scrapPct: settled > 0 ? round2((scrap / settled) * 100) : null,
     remainingKg: round2(received - cut),
-    avgYieldPct: cut > 0 ? round2((circles / cut) * 100) : null,
+    avgYieldPct: settled > 0 ? round2((circles / settled) * 100) : null,
     rounds,
     status: cuttingStatus({ cutKg: cut, remainingKg: received - cut }),
   };
