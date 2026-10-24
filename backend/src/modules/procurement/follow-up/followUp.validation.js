@@ -12,6 +12,7 @@ export const createFollowUpSchema = Joi.object({
   followUpType: followUpType.default(FOLLOWUP_TYPE.CALL),
   remarks:      Joi.string().trim().max(1000).allow('', null),
   formLink:     Joi.string().trim().max(1000).allow('', null),
+  contactPerson: Joi.string().trim().max(120).allow('', null),
 });
 
 // ── Update (PENDING only — service guards) ──
@@ -20,6 +21,7 @@ export const updateFollowUpSchema = Joi.object({
   followUpType: followUpType,
   remarks:      Joi.string().trim().max(1000).allow('', null),
   formLink:     Joi.string().trim().max(1000).allow('', null),
+  contactPerson: Joi.string().trim().max(120).allow('', null),
 }).min(1);
 
 // ── Mark done ──
@@ -30,6 +32,7 @@ export const markDoneSchema = Joi.object({
   nextFollowUpDate:  Joi.date().allow('', null),
   finalMaterialDate: Joi.date().allow('', null),
   message:           Joi.string().trim().max(2000).allow('', null), // communication log entry
+  contactPerson: Joi.string().trim().max(120).allow('', null),
 });
 
 // ── Reschedule ──
@@ -38,6 +41,7 @@ export const rescheduleSchema = Joi.object({
   followUpType:     followUpType,
   remarks:          Joi.string().trim().max(1000).allow('', null),
   message:          Joi.string().trim().max(2000).allow('', null),
+  contactPerson: Joi.string().trim().max(120).allow('', null),
 });
 
 // ── Ready for GRN ──

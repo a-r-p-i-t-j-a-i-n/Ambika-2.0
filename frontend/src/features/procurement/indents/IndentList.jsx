@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Tooltip, Chip, Pagination,
@@ -34,6 +35,7 @@ import BulkIndentApprovalDialog from './BulkIndentApprovalDialog';
 import { useStartServiceQc, canStartServiceQc } from './useStartServiceQc';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 // Map the Step-1.2 statusDone (or legacy quoteStep) to a chip state.
 const quoteStateOf = (row) => {
   const sd = row.quoteComparativeStep?.statusDone;
@@ -145,6 +147,7 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const IndentList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/indents/${r._id}` });
   const { enqueueSnackbar } = useSnackbar();
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
@@ -229,16 +232,6 @@ const IndentList = () => {
   const filteredTotal = data?.meta?.total;
   const headerCount = filteredTotal ?? stats.total ?? 0;
 
-  // Serial numbers are positional within the CURRENT server page, offset by the
-  // pages before it — so they stay continuous across pagination and restart
-  // correctly whenever a filter changes the result set.
-  const serialById = useMemo(() => {
-    const offset = paginationModel.page * paginationModel.pageSize;
-    const map = new Map();
-    rows.forEach((r, i) => map.set(String(r._id), offset + i + 1));
-    return map;
-  }, [rows, paginationModel.page, paginationModel.pageSize]);
-
   const [submitIndent] = useSubmitIndentMutation();
 
   const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
@@ -297,13 +290,8 @@ const IndentList = () => {
   const numCellSx = { fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: PFMS.ink };
 
   const columns = [
-    { field: 'serial', headerName: 'S.No', width: 70, sortable: false, filterable: false,
-      disableColumnMenu: true, hideable: false, align: 'center', headerAlign: 'center',
-      renderCell: (p) => (
-        <Typography variant="body2" sx={{ color: PFMS.sub, fontVariantNumeric: 'tabular-nums' }}>
-          {serialById.get(String(p.row._id)) ?? '—'}
-        </Typography>
-      ) },
+    // Shared S.No. — continuous across pages, restarts when a filter resets the page.
+    serialColumn({ field: 'serial', width: 70 }),
     { field: 'indentNumber', headerName: 'Indent No', width: 132, hideable: false,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'timestamp', headerName: 'Date', width: 104,
@@ -622,7 +610,7 @@ const IndentList = () => {
           rowCount={filteredTotal || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/indents/${p.id}`)}
+          {...rowNav.gridProps}
           pageSizeOptions={PAGE_SIZE_OPTIONS}
           checkboxSelection
           keepNonExistentRowsSelected
@@ -644,17 +632,16 @@ const IndentList = () => {
               onPageSizeChange: (pageSize) => setPaginationModel({ page: 0, pageSize }),
             },
           }}
-          sx={{
+          sx={[{
             border: 0,
             flexGrow: 1,
-            '& .MuiDataGrid-row': { cursor: 'pointer' },
             // Auto row height: keep cells vertically centred with a little padding
             // so multi-item Product lists aren't cramped.
             '& .MuiDataGrid-cell': { display: 'flex', alignItems: 'center', py: 0.5 },
             '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': { outline: 'none' },
             '& .MuiDataGrid-row:nth-of-type(even)': { bgcolor: ALT_ROW_BG },
             '& .MuiDataGrid-row:nth-of-type(even):hover': { bgcolor: PFMS.surfaceAlt },
-          }}
+          }, rowNavigationGridSx]}
         />
       </Paper>
 

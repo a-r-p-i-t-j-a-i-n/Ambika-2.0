@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -28,6 +29,7 @@ import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 // One invoice's live (non-cancelled) voucher, for the list's Voucher column —
 // a small self-contained cell so each row fetches only its own voucher via
 // the existing by-invoice endpoint (same one the Invoice Detail page already
@@ -80,6 +82,7 @@ const WORKFLOW_CHIPS = [
 
 const VendorInvoiceList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/vendor-invoices/${r._id}` });
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
@@ -155,6 +158,7 @@ const VendorInvoiceList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'invoiceNumber', headerName: 'INVOICE NO', width: 140, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'invoiceDate', headerName: 'DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'grnNumber', headerName: 'GRN', width: 150, sortable: false,
@@ -294,8 +298,8 @@ const VendorInvoiceList = () => {
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={rows} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/vendor-invoices/${p.id}`)} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={50} columnHeaderHeight={44} sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }} />
+          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>

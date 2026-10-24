@@ -14,6 +14,7 @@ import { requireApprovalRole } from './approval.middleware.js';
 import { approvalController as c } from './approval.controller.js';
 import {
   approvalParamSchema,
+  approvalListQuerySchema,
   signDocumentSchema,
   replaceSignatureSchema,
   removeSignatureSchema,
@@ -21,6 +22,11 @@ import {
 
 const router = Router();
 router.use(protect);
+
+// MD Approval screen — every tracked approval with its document's summary.
+// MD-only, like signing: it is the MD's own work queue.
+router.get('/',
+  requireApprovalRole('MD'), validate(approvalListQuerySchema, 'query'), c.list);
 
 router.get('/:documentType/:documentId',
   validate(approvalParamSchema, 'params'), c.getByDocument);

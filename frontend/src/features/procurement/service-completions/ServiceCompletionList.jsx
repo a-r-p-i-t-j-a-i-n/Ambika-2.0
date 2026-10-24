@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   Grid, Chip,
@@ -67,6 +68,7 @@ const ServiceCompletionList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'scNumber', headerName: 'SC NO', width: 150,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'indentNumber', headerName: 'INDENT', width: 130 },

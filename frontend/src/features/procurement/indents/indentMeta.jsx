@@ -2,7 +2,9 @@ import React from 'react';
 import StatusChip from '../components/StatusChip';
 
 /** Dropdown option sets shared across the Indent screens. */
-export const UNITS = ['Pcs', 'Kg', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
+// Kilograms are KGS, spelled as SKU Master spells them (sku.model.js
+// normalizeSkuUnit), so a unit inherited from the master reads the same here.
+export const UNITS = ['Pcs', 'KGS', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
 
 // The SKU master stores units as entered during import (e.g. "KGS", "LTR",
 // "MTR", "NOS" — see sku.model.js's `unit` field comment), which don't match
@@ -11,7 +13,8 @@ export const UNITS = ['Pcs', 'Kg', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Doze
 // real unit (e.g. "KGS" collapsing to "Pcs").
 const UNIT_ALIASES = {
   PCS: 'Pcs', PC: 'Pcs', NOS: 'Pcs', NO: 'Pcs',
-  KG: 'Kg', KGS: 'Kg', KILOGRAM: 'Kg', KILOGRAMS: 'Kg',
+  // Saved purchase documents hold "Kg" — they open as KGS.
+  KG: 'KGS', KGS: 'KGS', KILO: 'KGS', KILOS: 'KGS', KILOGRAM: 'KGS', KILOGRAMS: 'KGS',
   METER: 'Meter', METERS: 'Meter', METRE: 'Meter', METRES: 'Meter', MTR: 'Meter', MTRS: 'Meter',
   ROLL: 'Roll', ROLLS: 'Roll',
   BOX: 'Box', BOXES: 'Box',
@@ -34,6 +37,14 @@ export const normalizeUnit = (u) => {
   if (exact) return exact;
   return UNIT_ALIASES[raw.toUpperCase()] || '';
 };
+
+/**
+ * Kilogram spellings ("Kg", "KG", "Kgs", "kilogram") → KGS; every other unit
+ * is returned exactly as given. For forms that keep units normalizeUnit would
+ * remap (a PO line's "Nos" must stay "Nos"), and for saved documents opened
+ * for editing, which still say "Kg".
+ */
+export const toKgsUnit = (u) => (UNIT_ALIASES[String(u ?? '').trim().toUpperCase()] === 'KGS' ? 'KGS' : u);
 export const DEPARTMENTS = ['Stores', 'Production', 'QC', 'Admin', 'Maintenance', 'Packing'];
 
 export const APPROVAL_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'];

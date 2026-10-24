@@ -27,18 +27,19 @@ const emptyForm = {
 
 /**
  * Record a Vendor Final Payment (Step 1.13). Source vouchers must have a
- * completed Tally Entry and a remaining balance. Full payment auto-fills the
- * balance; short payment requires remarks.
+ * completed Tally Entry, MD approval and a remaining balance. Full payment
+ * auto-fills the balance; short payment requires remarks. MD approval is the
+ * one mandatory MD gate in Purchase FMS — the server refuses the payment too.
  */
 const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [form, setForm] = useState(emptyForm);
   const [proof, setProof] = useState(null);
 
-  // Eligibility is enforced server-side: Tally completed + remaining balance,
-  // excluding cancelled vouchers. (See voucher.service getAll.)
+  // Eligibility is enforced server-side: Tally completed + MD approved +
+  // remaining balance, excluding cancelled vouchers. (See voucher.service getAll.)
   const { data: vouRes } = useGetVouchersQuery(
-    { limit: 300, sort: '-createdAt', tallyEntryStatus: 'COMPLETED', minBalance: 1, excludeStatus: 'CANCELLED' },
+    { limit: 300, sort: '-createdAt', tallyEntryStatus: 'COMPLETED', approvalStatus: 'MD_APPROVED', minBalance: 1, excludeStatus: 'CANCELLED' },
     { skip: !open || Boolean(presetVoucher) },
   );
   const voucherOptions = useMemo(() => {
@@ -55,7 +56,12 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
     { limit: 1, minBalance: 1, excludeStatus: 'CANCELLED' },
     { skip: !open || Boolean(presetVoucher) },
   );
+  const { data: mdPendingRes } = useGetVouchersQuery(
+    { limit: 1, tallyEntryStatus: 'COMPLETED', approvalStatus: 'READY_FOR_MD_APPROVAL', minBalance: 1, excludeStatus: 'CANCELLED' },
+    { skip: !open || Boolean(presetVoucher) },
+  );
   const eligibleCount = vouRes?.meta?.total ?? voucherOptions.length;
+  const awaitingMdCount = mdPendingRes?.meta?.total ?? 0;
   const tallyCompletedCount = tallyRes?.meta?.total ?? 0;
   const balanceCount = balRes?.meta?.total ?? 0;
 
@@ -67,6 +73,7 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
     [voucherOptions, form.voucherId, presetVoucher],
   );
   const balance = Number(selectedVoucher?.balanceAmount || 0);
+  const mdBlocked = Boolean(selectedVoucher) && selectedVoucher.approvalStatus !== 'MD_APPROVED';
 
   useEffect(() => {
     if (!open) return;
@@ -104,6 +111,7 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
 
   const submit = async () => {
     if (!form.voucherId) return enqueueSnackbar('Select a voucher', { variant: 'warning' });
+    if (mdBlocked) return enqueueSnackbar('Payment cannot be processed until the MD approves this voucher', { variant: 'warning' });
     if (!(paid > 0)) return enqueueSnackbar('Enter a valid paid amount', { variant: 'warning' });
     if (paid > balance + 0.01) return enqueueSnackbar('Paid amount exceeds the voucher balance', { variant: 'warning' });
     if (form.paymentStatus === 'FULL_PAYMENT' && balanceAfter > 0.01) return enqueueSnackbar('Full payment must clear the balance', { variant: 'warning' });
@@ -149,13 +157,22 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
               <Alert severity="info" icon={false} sx={{ borderRadius: '10px' }}>
                 <Typography variant="body2" fontWeight={700}>No voucher ready for payment.</Typography>
                 <Typography variant="caption" color="text.secondary">
-                  A voucher must have <b>Tally Completed</b> and <b>Balance Amount &gt; 0</b>. A voucher already fully paid at the Voucher stage has a zero balance and won't appear here.
+                  A voucher must have <b>Tally Completed</b>, <b>MD Approval</b> and <b>Balance Amount &gt; 0</b>. A voucher already fully paid at the Voucher stage has a zero balance and won't appear here.
                 </Typography>
                 <Box sx={{ mt: 1, display: 'flex', gap: 2.5, flexWrap: 'wrap' }}>
                   <Typography variant="caption" color="text.secondary">Tally completed: <b>{tallyCompletedCount}</b></Typography>
                   <Typography variant="caption" color="text.secondary">With balance &gt; 0: <b>{balanceCount}</b></Typography>
-                  <Typography variant="caption" color="text.secondary">Ready (both): <b>{eligibleCount}</b></Typography>
+                  <Typography variant="caption" color="text.secondary">Awaiting MD approval: <b>{awaitingMdCount}</b></Typography>
+                  <Typography variant="caption" color="text.secondary">Ready: <b>{eligibleCount}</b></Typography>
                 </Box>
+              </Alert>
+            </Grid>
+          )}
+
+          {mdBlocked && (
+            <Grid item xs={12}>
+              <Alert severity="warning" sx={{ borderRadius: '10px' }}>
+                Payment cannot be processed until the MD approves voucher <b>{selectedVoucher.voucherNumber}</b>.
               </Alert>
             </Grid>
           )}
@@ -216,7 +233,7 @@ const FinalPaymentFormDialog = ({ open, onClose, presetVoucher }) => {
       </DialogContent>
       <DialogActions sx={{ p: 2, gap: 1 }}>
         <Button onClick={() => onClose?.(false)} disabled={creating}>Cancel</Button>
-        <Button variant="contained" onClick={submit} disabled={creating} startIcon={creating ? <CircularProgress size={16} color="inherit" /> : <Wallet size={16} />}>Record Payment</Button>
+        <Button variant="contained" onClick={submit} disabled={creating || mdBlocked} startIcon={creating ? <CircularProgress size={16} color="inherit" /> : <Wallet size={16} />}>Record Payment</Button>
       </DialogActions>
     </Dialog>
   );

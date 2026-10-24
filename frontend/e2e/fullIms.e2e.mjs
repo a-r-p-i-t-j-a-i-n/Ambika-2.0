@@ -20,7 +20,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
-import { combinedBtn, confirmCompleteGrn, signAndCompleteQc, stageText } from './_grnLifecycle.mjs';
+import { combinedBtn, confirmCompleteGrn, completeQc, signGrnFromCard, stageText } from './_grnLifecycle.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -160,13 +160,16 @@ const run = async () => {
     await page.waitForTimeout(900);
     check(`completion inherits Received At = ${p.at} (not the completion date)`, new RegExp(p.at).test(flat(await combo('Received At').textContent())));
     await confirmCompleteGrn(page);
-    check('completion reports the lines awaiting QC — nothing stocked yet', (await stageText(page)) === 'Awaiting MD Signature');
+    check('completion opens the QC at once (no MD signature awaited) — nothing stocked yet', (await stageText(page)) === 'QC Pending', await stageText(page));
     check('…still no stock for the batch after GRN completion', !(await apiGet(`/rm-ims/received-coils?q=${p.batch}&includeConsumed=true`))?.data?.length);
-    check('MD signs, QC accepts the coil', (await signAndCompleteQc(page)) === 'QC Completed · Passed');
+    check('QC accepts the coil before any MD signature', (await completeQc(page)) === 'QC Completed · Passed');
     await page.waitForTimeout(1200);
     const detail = await body();
     check('GRN detail shows the batch and the location', detail.includes(p.batch) && detail.includes(p.at));
     check('…the line is RM IMS stock, posted at QC', (await page.getByTestId('grn-line-stock').allInnerTexts()).some((t) => new RegExp(`RM IMS · ${p.at}\\s*Posted`).test(t)));
+    check('…while the GRN\'s MD approval is still pending', /Pending Approval/.test(flat(await page.locator('#grn-md-approval').innerText())));
+    await signGrnFromCard(page);
+    check('the MD signs afterwards from the GRN page', /MD Approved/.test(flat(await page.locator('#grn-md-approval').innerText())));
     check('…and no second "Complete GRN" is possible', (await page.getByRole('button', { name: /^Complete GRN$/ }).count()) === 0 && (await combinedBtn(page).count()) === 0);
     await shot(`04-grn-done-${p.key}`);
   }

@@ -92,6 +92,31 @@ registerApprovalDocument('VOUCHER', {
     const doc = await withGrnRefs(typeof v?.toObject === 'function' ? v.toObject() : { ...v });
     return buildVoucherPdfBuffer(doc, company, opts?.signature || null);
   },
+  // The one mandatory MD gate: no Final Payment until the voucher is MD Approved
+  // (finalPayment.service.js). The Tally Entry proceeds without it.
+  gatesPayment: true,
+  summaryFields: 'voucherNumber voucherType voucherDate vendorName partyName netPayableAmount voucherStatus tallyEntryStatus',
+  summarize: (v) => {
+    const closed = [VOUCHER_STATUS.FULLY_PAID, VOUCHER_STATUS.SHORT_CLOSED, VOUCHER_STATUS.CANCELLED].includes(v.voucherStatus);
+    const label = {
+      [VOUCHER_STATUS.DRAFT]:          'Draft',
+      [VOUCHER_STATUS.POSTED]:         v.tallyEntryStatus === 'COMPLETED' ? 'Tally Done · Payment Pending' : 'Posted · Tally Pending',
+      [VOUCHER_STATUS.PARTIALLY_PAID]: 'Partially Paid',
+      [VOUCHER_STATUS.FULLY_PAID]:     'Fully Paid',
+      [VOUCHER_STATUS.SHORT_CLOSED]:   'Short Closed',
+      [VOUCHER_STATUS.CANCELLED]:      'Cancelled',
+    }[v.voucherStatus] || v.voucherStatus || '—';
+    return {
+      module: 'Vendor Invoices & Payments',
+      documentLabel: v.voucherType === VOUCHER_TYPE.EXPENSE ? 'Expense Voucher' : 'Purchase Voucher',
+      vendorName: v.vendorName || v.partyName || '',
+      amount: Number(v.netPayableAmount) || 0,
+      documentDate: v.voucherDate || null,
+      workflowLabel: label,
+      workflowCompleted: closed,
+      detailPath: `/procurement/vouchers/${v._id}`,
+    };
+  },
 });
 
 /** All GRN / QC references of a (multi-GRN) vendor invoice, legacy single refs as fallback. */

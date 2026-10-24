@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
+import { signGrnFromCard } from './_grnLifecycle.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -141,7 +142,7 @@ await cdlg.getByRole('button', { name: 'Complete GRN' }).dblclick();
 await cdlg.waitFor({ state: 'detached', timeout: 20000 });
 await page.waitForTimeout(2000);
 const qcStatus = async () => ((await form.getByTestId('grn-qc-status').first().innerText().catch(() => '')) || '').trim();
-check('GRN completed → Awaiting MD Signature', (await qcStatus()) === 'Awaiting MD Signature', await qcStatus());
+check('GRN completed → QC open at once (no MD signature awaited)', (await qcStatus()) === 'QC Pending', await qcStatus());
 check('completing the GRN posts no stock (coil 0, brush 0)', (await stockOf('E2E-COIL')) === 0 && (await stockOf('E2E-BRUSH')) === 0);
 
 // ── 3b. Awaiting QC on the IMS screens and in their CSV exports ──────────────
@@ -202,34 +203,15 @@ console.log('\n── 3b. Awaiting QC: screen, export and API agree ──');
   await t.close();
 }
 
-// ── 4. MD approval is required ───────────────────────────────────────────────
-console.log('\n── 4. MD approval ──');
-check('QC cannot be saved before the MD signs', await section.getByRole('button', { name: 'Save QC Draft' }).isDisabled());
+// ── 4. MD approval is recorded, never awaited ────────────────────────────────
+console.log('\n── 4. MD approval: recorded, not blocking ──');
 const grnRes = (await api(`/procurement/grns?search=${encodeURIComponent(grnNo)}`)).data?.[0];
-const qcTry = await page.evaluate(async ([base, id]) => {
-  const r = await fetch(`${base}/procurement/incoming-qc`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
-    body: JSON.stringify({ grnId: id }),
-  });
-  return { status: r.status, body: await r.json() };
-}, [API, grnRes?._id]);
-check('the API refuses a QC for an unsigned GRN', qcTry.status === 400 && /MD Approved/.test(qcTry.body?.message || ''), `${qcTry.status} ${qcTry.body?.message}`);
-await shot('03-awaiting-md');
+check('the GRN\'s MD approval is raised and pending', grnRes?.approvalStatus === 'READY_FOR_MD_APPROVAL', grnRes?.approvalStatus);
+check('QC can be saved before the MD signs', !(await section.getByRole('button', { name: 'Save QC Draft' }).isDisabled()));
+await shot('03-qc-open-unsigned');
 
-// ── 5. Sign as MD ────────────────────────────────────────────────────────────
-await section.getByRole('button', { name: 'Complete GRN + QC' }).click();
-const sdlg = dialogTitled(/sign/i);
-await sdlg.waitFor();
-const box = await sdlg.locator('canvas').first().boundingBox();
-await page.mouse.move(box.x + 30, box.y + box.height / 2);
-await page.mouse.down();
-for (let i = 1; i <= 12; i += 1) await page.mouse.move(box.x + 30 + i * 18, box.y + box.height / 2 + (i % 2 ? -18 : 18));
-await page.mouse.up();
-await sdlg.getByRole('button', { name: 'Continue' }).click();
-await sdlg.getByRole('button', { name: 'Sign Document' }).click();
-await sdlg.waitFor({ state: 'detached', timeout: 20000 });
-await page.waitForTimeout(2000);
-check('5. signed by the MD → QC open', (await qcStatus()) === 'QC Pending', await qcStatus());
+// ── 5. QC open without any MD signature ──────────────────────────────────────
+check('5. QC open without an MD signature', (await qcStatus()) === 'QC Pending', await qcStatus());
 check('…next action: Complete QC, accepted qty posts then', /^Next action: Complete QC — accepted quantities are then posted/.test(await nextText()), await nextText());
 check('…still no stock before the QC', (await stockOf('E2E-COIL')) === 0);
 
@@ -264,12 +246,16 @@ const stockCells = (await page.getByTestId('grn-line-stock').allInnerTexts()).ma
 check('line Stock column: coil RM IMS · JW001 Posted 480, brush C&P IMS · MAIN Posted 36, service not received',
   stockCells.some((t) => /RM IMS · JW001 Posted 480 MOV-/.test(t)) && stockCells.some((t) => /C&P IMS · MAIN Posted 36 MOV-/.test(t)), stockCells.join(' | '));
 const body = await page.locator('body').innerText();
-check('GRN page: Stock Posting after MD signature + QC (no manual Inventory Type)', /After MD signature \+ QC/i.test(body) && !/Inventory Type \(earlier GRN\)/i.test(body));
+check('GRN page: Stock Posting after QC — no MD signature in it (no manual Inventory Type)', /Stock Posting\s*After QC/i.test(body) && !/After MD signature/i.test(body) && !/Inventory Type \(earlier GRN\)/i.test(body));
 const mov = (await api(`/inventory/movements/by-ref/GRN/${grnRes._id}`)).data || [];
 check('9. two GRN_IN movements, dated today (QC completion), referencing the GRN',
   mov.length === 2 && mov.every((m) => m.txnType === 'GRN_IN' && m.refNumber === grnNo && new Date(m.movementDate).toDateString() === new Date().toDateString()),
   mov.map((m) => `${m.skuCode}:${m.quantity}@${m.warehouse}`).join(', '));
 check('10. double clicks did not duplicate anything', mov.length === 2);
+check('…all of it posted while the GRN was still awaiting the MD', (await api(`/procurement/grns/${grnRes._id}`)).data?.approvalStatus === 'READY_FOR_MD_APPROVAL');
+await signGrnFromCard(page);
+check('the MD signs afterwards from the GRN page — QC result and stock unchanged',
+  (await api(`/procurement/grns/${grnRes._id}`)).data?.approvalStatus === 'MD_APPROVED' && ((await api(`/inventory/movements/by-ref/GRN/${grnRes._id}`)).data || []).length === 2);
 await shot('05-grn-page-after-qc');
 
 // ── 13. RM IMS and C&P IMS ───────────────────────────────────────────────────

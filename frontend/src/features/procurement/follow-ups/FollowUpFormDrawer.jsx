@@ -31,6 +31,7 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
   const [plannedAt, setPlannedAt] = useState(todayStr());
   const [followUpType, setFollowUpType] = useState('CALL');
   const [remarks, setRemarks] = useState('');
+  const [contactPerson, setContactPerson] = useState('');
 
   const [createFu, { isLoading: creating }] = useCreateFollowUpMutation();
   const [updateFu, { isLoading: updating }] = useUpdateFollowUpMutation();
@@ -50,11 +51,13 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
       setPlannedAt(toDateInput(followUp.plannedAt) || todayStr());
       setFollowUpType(followUp.followUpType || 'CALL');
       setRemarks(followUp.remarks || '');
+      setContactPerson(followUp.contactPerson || '');
     } else {
       setPo(presetPo || null);
       setPlannedAt(presetPo?.expectedDeliveryDate ? toDateInput(presetPo.expectedDeliveryDate) : todayStr());
       setFollowUpType('CALL');
       setRemarks('');
+      setContactPerson('');
     }
   }, [open, followUp, presetPo]);
 
@@ -67,10 +70,10 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
     if (!isEdit && !po?._id) { enqueueSnackbar('Select a released PO first', { variant: 'warning' }); return; }
     try {
       if (isEdit) {
-        await updateFu({ id: followUp._id, plannedAt, followUpType, remarks: remarks.trim() }).unwrap();
+        await updateFu({ id: followUp._id, plannedAt, followUpType, remarks: remarks.trim(), contactPerson: contactPerson.trim() }).unwrap();
         enqueueSnackbar('Follow-up updated', { variant: 'success' });
       } else {
-        const res = await createFu({ poId: po._id, plannedAt, followUpType, remarks: remarks.trim() }).unwrap();
+        const res = await createFu({ poId: po._id, plannedAt, followUpType, remarks: remarks.trim(), contactPerson: contactPerson.trim() }).unwrap();
         enqueueSnackbar(`Follow-up ${res?.data?.followUpNumber || ''} created`, { variant: 'success' });
       }
       onClose?.(true);
@@ -146,6 +149,10 @@ const FollowUpFormDrawer = ({ open, onClose, followUp = null, presetPo = null })
               onChange={(e) => setFollowUpType(e.target.value)}>
               {FOLLOWUP_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
             </TextField>
+          </Grid>
+          <Grid item xs={12}>
+            <TextField label="Contact Person" fullWidth value={contactPerson} placeholder="Vendor-side person to follow up with"
+              onChange={(e) => setContactPerson(e.target.value)} />
           </Grid>
           <Grid item xs={12}>
             <TextField label="Remarks" fullWidth multiline minRows={2} value={remarks}

@@ -195,7 +195,7 @@ const VendorInvoiceDetail = () => {
                       <Box key={it._id || i} sx={{ display: 'grid', gridTemplateColumns: CMP_COLS, gap: 1, alignItems: 'center', px: 1.25, py: 0.85, borderTop: '1px solid', borderColor: 'divider', bgcolor: varianceRowBg(status) }}>
                         <Box sx={{ minWidth: 0 }}>
                           <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
-                          {it.grnNumber ? <Typography variant="caption" color="text.secondary">GRN {it.grnNumber}</Typography> : null}
+                          {it.grnNumber || it.batchNo ? <Typography variant="caption" color="text.secondary">{[it.grnNumber && `GRN ${it.grnNumber}`, it.batchNo && `Batch ${it.batchNo}`].filter(Boolean).join(' · ')}</Typography> : null}
                         </Box>
                         <Typography variant="body2" color="primary.main" fontWeight={700} noWrap>{it.skuCode || '—'}</Typography>
                         <Typography variant="body2" color="text.secondary">{it.unit}</Typography>

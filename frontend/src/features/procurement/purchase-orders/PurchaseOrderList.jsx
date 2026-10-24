@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -30,8 +31,10 @@ import BulkReleasePoDialog from './BulkReleasePoDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 const PurchaseOrderList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/purchase-orders/${r._id}` });
   const { enqueueSnackbar } = useSnackbar();
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
@@ -124,6 +127,7 @@ const PurchaseOrderList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'poNumber', headerName: 'PO NUMBER', width: 145,
       renderCell: (p) => (
         <Typography variant="body2" fontWeight={700} color={p.value ? 'primary.main' : 'text.secondary'}>
@@ -274,12 +278,12 @@ const PurchaseOrderList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/purchase-orders/${p.id}`)}
+          {...rowNav.gridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
+          sx={[{ border: 0 }, rowNavigationGridSx]}
         />
       </Paper>
 

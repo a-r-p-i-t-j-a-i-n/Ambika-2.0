@@ -372,9 +372,10 @@ const PAGE_TITLES = {
   // Purchase FMS — unified workflow page (step navigation lives inside it)
   '/purchase-fms/purchase-indents':    'Purchase FMS — Purchase Indents',
   '/purchase-fms/purchase-orders':     'Purchase FMS — Purchase Orders',
+  '/purchase-fms/follow-ups':          'Purchase FMS — Follow-ups',
   // Old step slug — kept so a title still resolves for the instant before
-  // PurchaseFmsHub's redirect to purchase-orders takes effect.
-  '/purchase-fms/material-follow-ups': 'Purchase FMS — Purchase Orders',
+  // PurchaseFmsHub's redirect to follow-ups takes effect.
+  '/purchase-fms/material-follow-ups': 'Purchase FMS — Follow-ups',
   '/purchase-fms/pi-forms':            'Purchase FMS — PI Forms',
   '/purchase-fms/advance-payments':    'Purchase FMS — Advance Payments',
   '/purchase-fms/grn':                 'Purchase FMS — GRN & QC',

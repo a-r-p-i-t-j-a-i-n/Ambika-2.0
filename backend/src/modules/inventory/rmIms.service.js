@@ -2408,7 +2408,7 @@ export const rmImsService = {
         skuId: m.skuId,
         skuCode: m.skuCode,
         skuName: m.skuName,
-        unit: unitBySku.get(String(m.skuId)) || m.unit || 'KGS',
+        unit: m.unit || unitBySku.get(String(m.skuId)) || 'KGS',
         receivedWeight: round2(m.quantity),
         availableWeight: available,
         consumedWeight: consumed,

@@ -14,7 +14,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fileHref } from '../indents/indentMeta';
-import { fmtINR } from './invoiceMeta';
+import { fmtINR, fmtDate } from './invoiceMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
 
@@ -46,8 +46,11 @@ const calcRow = (it) => {
 };
 
 // Build combined rows from selected QC summaries (default invoiceQty = pending).
+// One row per QC line: the same SKU on two lines (batches) or two GRNs stays two
+// rows, each tied to its line by qcItemId.
 const rowsFromQcs = (qcs = []) => qcs.flatMap((qc) => (qc.items || []).map((it) => ({
   qcId: qc._id, qcNumber: qc.qcNumber, grnId: qc.grnId, grnNumber: qc.grnNumber,
+  qcItemId: it.qcItemId || '', grnItemId: it.grnItemId || '', batchNo: it.batchNo || '',
   skuId: it.skuId || '', skuCode: it.skuCode || '', itemName: it.itemName || '', unit: it.unit || 'Pcs',
   orderedQty: round2(it.orderedQty), grnReceivedQty: round2(it.grnReceivedQty ?? it.receivedQty),
   receivedQty: round2(it.receivedQty), acceptedQty: round2(it.acceptedQty), rejectedQty: round2(it.rejectedQty),
@@ -80,8 +83,14 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
   const saving = creating || updating;
 
   const { data: qcRes, isLoading: qcLoading } = useGetInvoiceableGrnsQuery({}, { skip: !open || isEdit });
-  const qcOptions = qcRes?.data || []; // invoiceable GRNs (each carries its linked QC)
-  const anchor = selectedQcs[0] || null; // first pick fixes the vendor + PO
+  const qcOptions = useMemo(() => qcRes?.data || [], [qcRes]); // invoiceable GRNs (each carries its linked QC)
+  // A preset (opened from a GRN / QC page) carries only display fields — resolve
+  // each pick to its full eligible entry (vendor, PO, items) once the list loads.
+  const selectedFull = useMemo(
+    () => selectedQcs.map((s) => qcOptions.find((o) => o._id === s._id) || s),
+    [selectedQcs, qcOptions],
+  );
+  const anchor = selectedFull[0] || null; // first pick fixes the vendor + PO
 
   const piId = anchor?.piId || invoice?.piId;
   // Server-computed PI advance position: what is still unallocated after the
@@ -105,6 +114,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
       setItems((invoice.items || []).map((it) => ({
         qcId: it.qcId || invoice.qcId || '', qcNumber: it.qcNumber || invoice.qcNumber || '',
         grnId: it.grnId || invoice.grnId || '', grnNumber: it.grnNumber || invoice.grnNumber || '',
+        qcItemId: it.qcItemId || '', grnItemId: it.grnItemId || '', batchNo: it.batchNo || '',
         skuId: it.skuId || '', skuCode: it.skuCode || '', itemName: it.itemName || '', unit: it.unit || 'Pcs',
         orderedQty: round2(it.orderedQty), grnReceivedQty: round2(it.grnReceivedQty ?? it.receivedQty),
         receivedQty: round2(it.receivedQty), acceptedQty: round2(it.acceptedQty), rejectedQty: round2(it.rejectedQty),
@@ -125,10 +135,8 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
   // the eligible list arrives, resolve any preset to the full (items) entry.
   useEffect(() => {
     if (isEdit || !open) return;
-    const resolved = selectedQcs.map((s) => qcOptions.find((o) => o._id === s._id) || s);
-    setItems(rowsFromQcs(resolved));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedQcs, qcOptions, isEdit, open]);
+    setItems(rowsFromQcs(selectedFull));
+  }, [selectedFull, isEdit, open]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -185,6 +193,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
       invoiceReceivedDate: form.invoiceReceivedDate || undefined,
       items: items.map((it) => ({
         qcId: it.qcId || undefined, grnId: it.grnId || undefined,
+        qcItemId: it.qcItemId || undefined, grnItemId: it.grnItemId || undefined,
         skuId: it.skuId || undefined, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
         invoiceQty: round2(it.invoiceQty), rate: round2(it.rate), gstRate: round2(it.gstRate), remarks: it.remarks?.trim() || '',
       })),
@@ -265,10 +274,28 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
               ) : (
                 <Autocomplete
                   multiple options={qcOptions} loading={qcLoading} value={selectedQcs}
-                  getOptionLabel={(o) => `${o.grnNumber || '—'} — PO ${o.poNumber || '—'} — ${o.vendorName || '—'} — QC ${qcStatusLabel(o.qcStatus)} — Pend ${o.pendingInvoiceQty ?? o.totalPendingInvoiceQty ?? '—'}`}
+                  getOptionLabel={(o) => `${o.grnNumber || '—'} — PO ${o.poNumber || '—'} — ${o.vendorName || '—'} — QC ${qcStatusLabel(o.qcStatus)} — Pend ${o.pendingInvoiceQty ?? o.totalPendingInvoiceQty ?? '—'} ${(o.items || []).map((it) => it.skuCode).join(' ')}`}
                   isOptionEqualToValue={(o, v) => o._id === v._id}
-                  getOptionDisabled={(o) => !!anchor && (String(o.vendorId) !== String(anchor.vendorId) || String(o.poId) !== String(anchor.poId))}
+                  getOptionDisabled={(o) => !!anchor?.vendorId && (String(o.vendorId) !== String(anchor.vendorId) || String(o.poId) !== String(anchor.poId))}
                   onChange={(_e, v) => setSelectedQcs(v)}
+                  renderOption={(props, o) => {
+                    const skus = [...new Set((o.items || []).map((it) => it.skuCode || it.itemName).filter(Boolean))];
+                    return (
+                      <li {...props} key={o._id}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" fontWeight={700}>
+                            {o.grnNumber || '—'} <Typography component="span" variant="caption" color="text.secondary">· {fmtDate(o.grnDate)} · PO {o.poNumber || '—'} · QC {o.qcNumber || '—'} ({qcStatusLabel(o.qcStatus)})</Typography>
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" component="div" noWrap>
+                            {o.vendorName || '—'} · Pending {o.pendingInvoiceQty ?? o.totalPendingInvoiceQty ?? '—'} of {o.totalAccepted ?? '—'} accepted · {skus.slice(0, 4).join(', ')}{skus.length > 4 ? ` +${skus.length - 4}` : ''}
+                          </Typography>
+                        </Box>
+                      </li>
+                    );
+                  }}
+                  renderTags={(value, getTagProps) => value.map((o, i) => (
+                    <Chip {...getTagProps({ index: i })} key={o._id} size="small" label={o.grnNumber || o.qcNumber || '—'} sx={{ fontWeight: 700 }} />
+                  ))}
                   noOptionsText="No GRN pending invoice"
                   renderInput={(params) => <TextField {...params} label="GRN No *" placeholder="GRN No — PO No — Vendor — QC Status — Pending Qty"
                     helperText={anchor ? `Same vendor (${anchor.vendorName}) & PO (${anchor.poNumber || '—'}) only · QC auto-linked` : 'Pick one or more GRNs of the same vendor & PO — QC is linked automatically'}
@@ -317,6 +344,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
                           <Box sx={{ minWidth: 0 }}>
                             <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
                             {it.skuCode ? <Typography variant="caption" color="primary.main" fontWeight={700}>{it.skuCode}</Typography> : null}
+                            {it.batchNo ? <Typography variant="caption" color="text.secondary"> · Batch {it.batchNo}</Typography> : null}
                           </Box>
                           <Typography variant="body2" sx={{ textAlign: 'right', color: 'text.secondary' }}>{it.unit}</Typography>
                           <Typography variant="body2" sx={{ textAlign: 'right' }}>{it.orderedQty}</Typography>

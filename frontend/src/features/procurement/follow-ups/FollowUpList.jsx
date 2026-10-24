@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip,
@@ -7,7 +8,7 @@ import {
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, MoreVertical, Eye, Pencil, CheckCircle2, CalendarClock,
-  PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock,
+  PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock, Plus,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -24,6 +25,7 @@ import FollowUpDoneDialog from './FollowUpDoneDialog';
 import FollowUpRescheduleDialog from './FollowUpRescheduleDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 const FollowUpList = () => {
@@ -54,6 +56,7 @@ const FollowUpList = () => {
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [readyOpen, setReadyOpen] = useState(false);
   const [activeFu, setActiveFu] = useState(null);
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/follow-ups/${r._id}` });
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
 
@@ -102,10 +105,21 @@ const FollowUpList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'followUpNumber', headerName: 'FOLLOW-UP NO', width: 125,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'poNumber', headerName: 'PO NUMBER', width: 140,
       renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
+    { field: 'expectedDeliveryDate', headerName: 'EXPECTED DELIVERY', width: 140,
+      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
+    { field: 'pendingQty', headerName: 'PENDING QTY', width: 115, type: 'number', sortable: false,
+      renderCell: (p) => (p.value == null
+        ? <Typography variant="caption" color="text.disabled">—</Typography>
+        : <Typography variant="body2" fontWeight={700} color={p.value > 0 ? 'warning.main' : 'success.main'}>
+            {p.value}{p.row.pendingQtyUnit ? ` ${p.row.pendingQtyUnit}` : ''}
+          </Typography>) },
+    { field: 'lastFollowUpAt', headerName: 'LAST FOLLOW-UP', width: 125, sortable: false,
+      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'indentNumber', headerName: 'INDENT NO', width: 110,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 160,
@@ -120,8 +134,30 @@ const FollowUpList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'followUpStatus', headerName: 'STATUS', width: 135,
       renderCell: (p) => <FuStatusChip status={p.value} /> },
+    // Next contact: the saved next date, else (while active) the planned date.
     { field: 'nextFollowUpDate', headerName: 'NEXT FOLLOW-UP', width: 130,
-      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
+      renderCell: (p) => {
+        const active = ['PENDING', 'RESCHEDULED'].includes(p.row.followUpStatus);
+        const next = p.value || (active ? p.row.plannedAt : null);
+        return (
+          <Typography variant="body2" sx={{ color: isDelayed(p.row) ? 'error.main' : 'text.secondary', fontWeight: isDelayed(p.row) ? 700 : 400 }}>
+            {fmtDate(next)}
+          </Typography>
+        );
+      } },
+    { field: 'contactPerson', headerName: 'CONTACT', width: 140, sortable: false,
+      renderCell: (p) => (
+        <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>
+          <Typography variant="body2" noWrap>{p.value || '—'}</Typography>
+          {p.row.vendorPhone ? <Typography variant="caption" color="text.secondary" noWrap>{p.row.vendorPhone}</Typography> : null}
+        </Box>
+      ) },
+    { field: 'remarks', headerName: 'REMARKS', flex: 1, minWidth: 160, sortable: false,
+      renderCell: (p) => (
+        <Tooltip title={p.value || ''} disableHoverListener={!p.value}>
+          <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography>
+        </Tooltip>
+      ) },
     { field: 'finalMaterialDate', headerName: 'FINAL MATERIAL', width: 125,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'timeDelayMinutes', headerName: 'TIME DELAY', width: 110, sortable: false,
@@ -142,15 +178,20 @@ const FollowUpList = () => {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
-      {/* Header — tracking/management only; follow-ups are created and driven
-          from a Purchase Order's detail page (single "Continue Follow-up" action). */}
+      {/* Header — follow-ups can be started here for any released PO, or from
+          a Purchase Order's detail page; both use the same create rules. */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Material Follow-ups ({stats.total || 0})</Typography>
+          <Typography sx={pfmsTitleSx}>Follow-ups ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
-            Step 1.5 · Track every vendor delivery follow-up — open a Purchase Order to create or continue one
+            Step 1.5 · Track vendor delivery follow-ups for released POs — expected delivery, pending qty and contact history
           </Typography>
         </Box>
+        <Button variant="contained" disableElevation startIcon={<Plus size={17} />}
+          onClick={() => { setEditFu(null); setFormOpen(true); }}
+          sx={{ fontWeight: 700, borderRadius: '8px', whiteSpace: 'nowrap' }}>
+          Add Follow-up
+        </Button>
       </Box>
 
       {/* KPIs */}
@@ -251,12 +292,17 @@ const FollowUpList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/follow-ups/${p.id}`)}
+          // Row click opens Follow-up Details; Mark Done / Edit stay in the actions menu.
+          {...rowNav.gridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
+          // Secondary fields stay available from the column menu.
+          initialState={{ columns: { columnVisibilityModel: {
+            indentNumber: false, actualAt: false, finalMaterialDate: false, performedByName: false, plannedAt: false,
+          } } }}
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
+          sx={[{ border: 0 }, rowNavigationGridSx]}
         />
       </Paper>
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -26,10 +27,12 @@ import ProformaInvoicePdfPreview from './ProformaInvoicePdfPreview';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 const sumQty = (items, key) => (items || []).reduce((s, it) => s + (Number(it[key]) || 0), 0);
 
 const ProformaInvoiceList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/proforma-invoices/${r._id}` });
   const { enqueueSnackbar } = useSnackbar();
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
@@ -105,6 +108,7 @@ const ProformaInvoiceList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'piDate', headerName: 'PI DATE', width: 95,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'piNumber', headerName: 'PI NUMBER', width: 120,
@@ -242,12 +246,12 @@ const ProformaInvoiceList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/proforma-invoices/${p.id}`)}
+          {...rowNav.gridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
+          sx={[{ border: 0 }, rowNavigationGridSx]}
         />
       </Paper>
 

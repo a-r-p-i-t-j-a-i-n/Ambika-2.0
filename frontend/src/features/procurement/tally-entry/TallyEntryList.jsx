@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, LinearProgress,
@@ -23,8 +24,10 @@ import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 const TallyEntryList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/tally-entries/${r._id}` });
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
@@ -82,6 +85,7 @@ const TallyEntryList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'entryNumber', headerName: 'ENTRY NO', width: 135, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'voucherNumber', headerName: 'VOUCHER', width: 130, renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
     { field: 'invoiceNumber', headerName: 'INVOICE', width: 130, renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
@@ -178,8 +182,8 @@ const TallyEntryList = () => {
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/tally-entries/${p.id}`)} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={52} columnHeaderHeight={44} sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }} />
+          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={52} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>

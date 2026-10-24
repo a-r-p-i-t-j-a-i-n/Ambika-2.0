@@ -6,9 +6,13 @@
  * write (sku.model.js normalizeSkuUnit); this fixes what was written before.
  *
  *   1. skus                 unit KG / Kg / Kgs / kilogram… → KGS
- *   2. inventorystocks      unit in that family, for a SKU whose master is KGS → KGS
- *   3. inventorymovements   same rule (GRN/QC postings copied the purchase
- *                           document's "Kg" instead of the master's unit)
+ *   2. inventorystocks,     the same spellings → KGS. GRN/QC postings copied the
+ *      inventorymovements,  purchase document's "Kg"; the ledger now normalises
+ *      inventorypolicies,   it on write (inventory.service.js).
+ *      manualcoils
+ *
+ * A label only. No quantity, weight, balance or cost is read or written, and a
+ * row keeps its unit's meaning — a "Kg" row was a kilogram figure and stays one.
  *
  * Procurement documents (indents, POs, PIs, GRNs, QC, vendor invoices, pricing
  * history) are NOT touched: they speak procurement's own unit list ("Kg"), which
@@ -40,23 +44,15 @@ const run = async () => {
 
   const skus = await db.collection('skus').find({ unit: NOT_KGS }, { projection: { code: 1, unit: 1 } }).toArray();
   console.log(`\nskus to fix: ${skus.length}`);
-  skus.forEach((s) => console.log(`  ${s.code}  ${JSON.stringify(s.unit)} → "KGS"`));
-
-  // After step 1 every KG-family master is KGS, so "master is KGS" covers both.
-  const kgsSkuIds = new Set([
-    ...skus.map((s) => String(s._id)),
-    ...(await db.collection('skus').distinct('_id', { unit: 'KGS' })).map(String),
-  ]);
+  skus.forEach((s) => console.log(`  ${s._id}  ${s.code}  ${JSON.stringify(s.unit)} → "KGS"`));
 
   const plan = {};
-  for (const coll of ['inventorystocks', 'inventorymovements']) {
-    const rows = await db.collection(coll)
-      .find({ unit: NOT_KGS }, { projection: { skuId: 1, skuCode: 1, unit: 1, movementNumber: 1, warehouse: 1 } })
+  for (const coll of ['inventorystocks', 'inventorymovements', 'inventorypolicies', 'manualcoils']) {
+    plan[coll] = await db.collection(coll)
+      .find({ unit: NOT_KGS }, { projection: { skuCode: 1, unit: 1, movementNumber: 1, warehouse: 1 } })
       .toArray();
-    plan[coll] = rows.filter((r) => kgsSkuIds.has(String(r.skuId)));
-    const skipped = rows.length - plan[coll].length;
-    console.log(`\n${coll} to fix: ${plan[coll].length}${skipped ? `  (left alone, master not KGS: ${skipped})` : ''}`);
-    plan[coll].forEach((r) => console.log(`  ${r.movementNumber || r.warehouse || ''}  ${r.skuCode}  ${JSON.stringify(r.unit)} → "KGS"`));
+    console.log(`\n${coll} to fix: ${plan[coll].length}`);
+    plan[coll].forEach((r) => console.log(`  ${r._id}  ${r.movementNumber || r.warehouse || ''}  ${r.skuCode || ''}  ${JSON.stringify(r.unit)} → "KGS"`));
   }
 
   if (DRY_RUN) {

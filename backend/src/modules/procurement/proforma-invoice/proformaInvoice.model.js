@@ -96,6 +96,19 @@ const proformaInvoiceSchema = new Schema({
   // ── Timeline ──
   receivedAt: { type: Date, default: null },
 
+  // ── MD Digital Approval for the advance payment (mirror of DocumentApproval —
+  // see modules/approvals). Separate from `approvalStatus` above, which is the
+  // PI's own approval. Raised when the PI becomes ready for advance payment;
+  // no advance is paid until it is MD_APPROVED.
+  mdApprovalStatus: {
+    type: String,
+    enum: ['NOT_REQUIRED', 'READY_FOR_MD_APPROVAL', 'MD_APPROVED'],
+    default: 'NOT_REQUIRED',
+    index: true,
+  },
+  mdApprovalPdfUrl:      { type: String, trim: true, default: '' },
+  mdApprovalPdfFileName: { type: String, trim: true, default: '' },
+
 }, baseSchemaOptions);
 
 // ── Indexes ──────────────────────────────────────────────────

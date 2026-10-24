@@ -480,10 +480,8 @@ export const incomingQcService = {
     if (!GRN_QC_ELIGIBLE.includes(grn.grnStatus) || grn.qcStatus !== GRN_QC_STATUS.PENDING) {
       throw new AppError('Incoming QC can only be created for a completed GRN with QC pending', 400);
     }
-    // MD Digital Approval gate: the GRN must be MD Approved before QC can start.
-    if (grn.approvalStatus !== 'MD_APPROVED') {
-      throw new AppError('GRN must be MD Approved before Incoming QC can be created', 400);
-    }
+    // The GRN's MD approval is tracked on its own (MD Approval screen) and never
+    // holds QC back — only payment execution waits for an MD approval.
 
     // One QC per (GRN, PO): the duplicate check and the insert run under the
     // GRN's QC lock, so a concurrent request waits and then finds this QC
@@ -854,13 +852,8 @@ export const incomingQcService = {
    *      a failure part-way leaves nothing behind.
    */
   async _completeGatedGrnQcLocked(qc, grn, data, user, { qcStatus, overallResult }) {
-    // Usable stock needs BOTH the MD signature and the QC. create() already
-    // required the signature; it is checked again here because this is the
-    // moment stock is written.
-    if (grn.approvalStatus !== 'MD_APPROVED') {
-      throw new AppError('The GRN must be digitally signed by the MD before its QC can be completed and stock posted', 400);
-    }
-
+    // Usable stock follows the QC alone. The GRN's MD signature is recorded
+    // independently and does not hold stock posting back.
     const { steps, errors } = planAcceptedStockIn({ qcItems: qc.items, scopeLines: qcScopeLines(grn, qc.poId) });
     if (errors.length) throw new AppError(`Cannot complete QC — ${errors.join('; ')}`, 409);
 

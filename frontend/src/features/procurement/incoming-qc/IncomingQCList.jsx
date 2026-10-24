@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -26,10 +27,12 @@ import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 const sumQty = (items, key) => (items || []).reduce((s, it) => s + (Number(it[key]) || 0), 0);
 
 const IncomingQCList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/incoming-qc/${r._id}` });
   const { enqueueSnackbar } = useSnackbar();
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
@@ -107,6 +110,7 @@ const IncomingQCList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'qcNumber', headerName: 'QC NUMBER', width: 140, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'qcDate', headerName: 'QC DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'grnNumber', headerName: 'GRN NUMBER', width: 140, renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
@@ -229,12 +233,12 @@ const IncomingQCList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/incoming-qc/${p.id}`)}
+          {...rowNav.gridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
+          sx={[{ border: 0 }, rowNavigationGridSx]}
         />
       </Paper>
 

@@ -7,9 +7,11 @@
  *   backend  :5099  via e2eServer.js against the ambika_e2e_grnqc scratch DB
  *   frontend :3100  with VITE_API_URL pointing at :5099
  *
- * New GRNs post NO stock when saved or completed: the MD signs, Incoming QC is
- * completed, and only then is the ACCEPTED qty posted, to the module the SKU's
- * Item Type decides (no manual Inventory Type any more). LEGACY GRNs (completed
+ * New GRNs post NO stock when saved or completed: Incoming QC is completed and
+ * only then is the ACCEPTED qty posted, to the module the SKU's Item Type
+ * decides (no manual Inventory Type any more). The GRN's MD signature is
+ * recorded on its own and never holds QC or stock posting back — the MD signs
+ * afterwards here, from the GRN page's MD Approval card. LEGACY GRNs (completed
  * before that change) keep their own behaviour and are exercised separately.
  *
  * The browser performs every action; `e2eGrnQcFixture.js --verify` then reads
@@ -20,7 +22,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
 import {
-  dialogTitled, signAsMd, confirmCompleteGrn as confirmGrn, confirmCompleteQc,
+  dialogTitled, signGrnFromCard, confirmCompleteGrn as confirmGrn, confirmCompleteQc,
 } from './_grnLifecycle.mjs';
 
 const findChromium = () => {
@@ -111,12 +113,11 @@ const completeBtn = (scope) => section(scope).getByRole('button', { name: 'Compl
 const draftBtn = (scope) => section(scope).getByRole('button', { name: 'Save QC Draft' });
 const saveDraftGrn = (form) => form.getByRole('button', { name: /^Save as Draft$/ });
 
-/** The combined action when the GRN is signed → confirm in the existing Complete QC dialog. */
+/** The combined action on a completed GRN → confirm in the existing Complete QC dialog. */
 const completeQc = async (page, scope = page, { doubleClick = false } = {}) => {
   await completeBtn(scope).click();
   await confirmCompleteQc(page, { doubleClick });
 };
-const signInDialog = signAsMd;
 const confirmCompleteGrn = (page, opts) => confirmGrn(page, opts);
 
 const noHorizontalScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
@@ -147,7 +148,7 @@ check('QC detail of a GRN draft offers "Open GRN & QC", not its own Complete QC'
   (await page.getByRole('button', { name: /Open GRN & QC/ }).count()) >= 1 && (await page.getByRole('button', { name: 'Complete QC' }).count()) === 0);
 
 // ── The required journey, on the Create GRN form itself ──────────────────────
-console.log('\n── Save GRN → Complete GRN → MD signs → QC → stock (same form) ──');
+console.log('\n── Save GRN → Complete GRN → QC → stock (same form, no MD signature needed) ──');
 await go(page, `${APP}/purchase-fms/grn`);
 await page.waitForTimeout(1200);
 await page.getByRole('button', { name: /new grn/i }).first().click();
@@ -178,7 +179,7 @@ check('1. Save as Draft keeps the user on the same form, with a GRN number', (aw
 check('…showing GRN status and QC status', /Draft/.test(summaryText) && /QC Pending/.test(summaryText));
 check('…saving the draft posted NO stock', (await stockOf(page, 'E2E-BOLT')) === boltBase);
 check('2. the actual QC form appears right after saving (inputs for the line)', await qtyInput(form, 'Rejected', 'E2E Bolt M8').isVisible());
-check('…Save QC Draft waits for the GRN to be completed and signed (existing rule)', await draftBtn(form).isDisabled());
+check('…Save QC Draft waits for the GRN to be completed (existing rule)', await draftBtn(form).isDisabled());
 check('…the next action is spelled out: Complete GRN', /^Next action: Complete GRN/.test(await nextText(form)), await nextText(form));
 await setQty(form, 'E2E Bolt M8', 6, 2);
 await shot(page, '11-create-form-qc-entered');
@@ -189,8 +190,9 @@ await cdlgCp.waitFor();
 check('Complete GRN dialog: no Inventory Type; says stock is not usable yet',
   (await cdlgCp.getByRole('combobox', { name: /Inventory Type/ }).count()) === 0 && /not usable yet/i.test(await cdlgCp.innerText()));
 await confirmCompleteGrn(page);
-check('5a. "Complete GRN + QC" first completes the GRN — form still open, Awaiting MD Signature',
-  (await form.isVisible()) && /Fully Received/.test(await summary.innerText()) && (await qcStatusText(form)) === 'Awaiting MD Signature');
+check('5a. "Complete GRN + QC" first completes the GRN — form still open, QC open at once (no MD signature needed)',
+  (await form.isVisible()) && /Fully Received/.test(await summary.innerText()) && (await qcStatusText(form)) === 'QC Pending' && !(await draftBtn(form).isDisabled()),
+  await qcStatusText(form));
 check('…completing the GRN posted NO stock', (await stockOf(page, 'E2E-BOLT')) === boltBase);
 const cpGrnNo = (summaryText.match(/AGL\/GRN-\d+\/\d+-\d+/) || [''])[0];
 const cpGrn = ((await api(page, `/procurement/grns?search=${encodeURIComponent(cpGrnNo)}`)).data || [])[0];
@@ -198,15 +200,9 @@ check('…but the line is recorded as received, awaiting QC', cpGrn?.items?.[0]?
   `${cpGrn?.items?.[0]?.stockStatus} ${cpGrn?.items?.[0]?.receivedQty}`);
 check('…GRN part is now read-only (no Save as Draft)', (await saveDraftGrn(form).count()) === 0);
 check('…QC entries kept across the step (rejected 2)', (await qtyInput(form, 'Rejected', 'E2E Bolt M8').inputValue()) === '2');
-check('…next: MD signature', (await nextText(form)).includes('sign the GRN as MD'), await nextText(form));
+check('5b. …next action: Complete QC — accepted quantities posted then', /^Next action: Complete QC — accepted quantities/.test(await nextText(form)), await nextText(form));
+check('…the GRN\'s MD approval is raised and pending — recorded, not blocking', cpGrn?.approvalStatus === 'READY_FOR_MD_APPROVAL', cpGrn?.approvalStatus);
 await shot(page, '12-create-form-grn-completed');
-
-await completeBtn(form).click();
-await signInDialog(page);
-check('5b. the MD signs from the same form; QC now open to save / complete', (await qcStatusText(form)) === 'QC Pending' && !(await draftBtn(form).isDisabled()));
-check('…QC entries still kept (rejected 2)', (await qtyInput(form, 'Rejected', 'E2E Bolt M8').inputValue()) === '2');
-check('…still NO stock after the signature alone', (await stockOf(page, 'E2E-BOLT')) === boltBase);
-check('…next action: Complete QC — accepted quantities posted then', /^Next action: Complete QC — accepted quantities/.test(await nextText(form)), await nextText(form));
 
 await draftBtn(form).click();
 await page.waitForTimeout(2000);
@@ -233,6 +229,12 @@ const cpBody = await page.locator('body').innerText();
 check('the GRN page shows "Stock Posting" (no manual Inventory Type)', /Stock Posting/i.test(cpBody) && !/Inventory Type \(earlier GRN\)/i.test(cpBody));
 const cpStock = (await page.getByTestId('grn-line-stock').allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
 check('…and the line: C&P IMS · MAIN, Posted 6, with its movement', cpStock.some((t) => /C&P IMS · MAIN Posted 6 MOV-/.test(t)), cpStock.join(' | '));
+const cpAfterQc = ((await api(page, `/procurement/grns?search=${encodeURIComponent(cpGrnNo)}`)).data || [])[0];
+check('…stock was posted while the GRN was still awaiting the MD', cpAfterQc?.approvalStatus === 'READY_FOR_MD_APPROVAL', cpAfterQc?.approvalStatus);
+await signGrnFromCard(page);
+const cpSigned = ((await api(page, `/procurement/grns?search=${encodeURIComponent(cpGrnNo)}`)).data || [])[0];
+check('5d. the MD signs afterwards from the GRN page — QC result and stock unchanged', cpSigned?.approvalStatus === 'MD_APPROVED'
+  && (await qcStatusText(page)) === 'QC Completed · Partial' && (await stockOf(page, 'E2E-BOLT')) === boltBase + 6, cpSigned?.approvalStatus);
 
 // ── Raw Material through the form: Received At asked for automatically ──────
 console.log('\n── Raw Material through the form → RM IMS (after QC) ──');
@@ -268,10 +270,8 @@ await cdlgRm.getByRole('button', { name: /^Complete GRN$/ }).dblclick();
 await cdlgRm.waitFor({ state: 'detached', timeout: 20000 });
 await page.waitForTimeout(2000);
 // No coil anywhere yet: RMPLG is completed later on, and the legacy RMOFF coil was never stocked.
-check('RM GRN completed — Awaiting MD Signature, no coil stock yet', (await qcStatusText(rmForm)) === 'Awaiting MD Signature' && (await stockOf(page, 'E2E-COIL')) === 0,
-  `coil stock ${await stockOf(page, 'E2E-COIL')}`);
-await completeBtn(rmForm).click();
-await signInDialog(page);
+check('RM GRN completed — QC open at once (no MD signature), no coil stock yet', (await qcStatusText(rmForm)) === 'QC Pending' && (await stockOf(page, 'E2E-COIL')) === 0,
+  `${await qcStatusText(rmForm)} · coil stock ${await stockOf(page, 'E2E-COIL')}`);
 await setQty(rmForm, 'E2E Coil 1250mm', 45, 5);
 await completeQc(page, rmForm, { doubleClick: true });
 check('RM QC completed — accepted 45 of the coil now in stock', (await qcStatusText(rmForm)) === 'QC Completed · Partial');
@@ -314,7 +314,7 @@ await page.waitForTimeout(800);
 console.log('\n── Prerequisites on the GRN page ──');
 await openGrn(page, 'DRAFT');
 check('draft GRN: QC form is shown and editable', (await section(page).locator('input[type=number]').count()) > 0);
-check('…Save QC Draft disabled until signed, Complete GRN + QC offered', (await draftBtn(page).isDisabled()) && !(await completeBtn(page).isDisabled()));
+check('…Save QC Draft disabled until the GRN is completed, Complete GRN + QC offered', (await draftBtn(page).isDisabled()) && !(await completeBtn(page).isDisabled()));
 await setQty(page, 'E2E Nut M8', 1, 4);
 await page.reload({ waitUntil: 'domcontentloaded' }); await ready(page);
 await page.waitForSelector('#grn-qc-section'); await page.waitForTimeout(1000);
@@ -322,23 +322,20 @@ check('…entries typed before the QC can be saved are kept on this device (relo
 await shot(page, '01-draft-grn-qc-form');
 
 await openGrn(page, 'UNSIGNED');
-check('completed, unsigned: "Awaiting MD Signature", next = MD signs', (await qcStatusText(page)) === 'Awaiting MD Signature'
-  && (await nextText(page)).includes('sign the GRN as MD'));
+check('completed, unsigned: QC open ("QC Pending"), next = Complete QC — the MD signature is not awaited', (await qcStatusText(page)) === 'QC Pending'
+  && /^Next action: Complete QC/.test(await nextText(page)) && !(await draftBtn(page).isDisabled()), await nextText(page));
 const unsignedStock = (await page.getByTestId('grn-line-stock').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-check('…its lines read "Awaiting QC" — nothing usable before MD + QC', unsignedStock.length === 2 && unsignedStock.every((t) => /Awaiting QC/.test(t)), unsignedStock.join(' | '));
+check('…its lines read "Awaiting QC" — nothing usable before the QC', unsignedStock.length === 2 && unsignedStock.every((t) => /Awaiting QC/.test(t)), unsignedStock.join(' | '));
 await openGrn(page, 'NOREQ');
-check('no MD approval raised: Complete GRN + QC disabled, reason shown', (await completeBtn(page).isDisabled())
-  && (await nextText(page)).includes('no MD approval has been raised'));
+check('no MD approval raised at all: QC is still open — Complete GRN + QC enabled', (await qcStatusText(page)) === 'QC Pending' && !(await completeBtn(page).isDisabled()),
+  await qcStatusText(page));
 
 // ── Full journey on the GRN page (existing GRN) ──────────────────────────────
 console.log('\n── Existing GRN page (GRN-E2E-FLOW) ──');
 await openGrn(page, 'FLOW');
 await completeBtn(page).click();
 await confirmCompleteGrn(page);
-check('stage after completion: Awaiting MD Signature', (await qcStatusText(page)) === 'Awaiting MD Signature');
-await completeBtn(page).click();
-await signInDialog(page);
-check('signed: QC Pending, form open', (await qcStatusText(page)) === 'QC Pending');
+check('stage after completion: QC Pending, form open — no MD signature step', (await qcStatusText(page)) === 'QC Pending', await qcStatusText(page));
 // The simplified table: Item · SKU · Received · Accepted · Rejected · Remark.
 const headers = [];
 for (const h of ['Item', 'SKU', 'Received', 'Accepted', 'Rejected', 'Remark', 'Rework', 'Remaining', 'Defect', 'Severity']) {
@@ -379,6 +376,11 @@ check('next step points to the Vendor Invoice', await page.getByText('QC complet
 check('completed view shows the remark and attachment read-only', (await sectionText(page)).includes('Seal damaged on 3')
   && (await section(page).getByTestId('qc-attachment').innerText()).includes('qc-photo.png'));
 await shot(page, '05-flow-qc-done');
+const flowGrnId = page.url().split('/procurement/grns/')[1]?.split(/[?#]/)[0];
+check('FLOW: QC completed and stock posted while the GRN awaits the MD', (await api(page, `/procurement/grns/${flowGrnId}`)).data?.approvalStatus === 'READY_FOR_MD_APPROVAL');
+await signGrnFromCard(page);
+check('FLOW: the MD signs afterwards — QC result unchanged', (await api(page, `/procurement/grns/${flowGrnId}`)).data?.approvalStatus === 'MD_APPROVED'
+  && (await qcStatusText(page)) === 'QC Completed · Partial');
 await section(page).getByRole('button', { name: 'View full QC record' }).click();
 await page.waitForURL(/\/procurement\/incoming-qc\//); await ready(page); await page.waitForTimeout(1200);
 const fullFlow = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
@@ -424,9 +426,8 @@ await completeBtn(page).click();
 check('RMPLG: Complete GRN dialog carries Received At PLG01 (saved on the draft)',
   /PLG01/.test(await dialogTitled(page, /^Complete GRN/).getByRole('combobox', { name: /Received At/ }).innerText()));
 await confirmCompleteGrn(page);
-await completeBtn(page).click(); await signInDialog(page);
 await completeQc(page);
-check('RMPLG: coil GRN completed, signed and QC\'d on one page', (await qcStatusText(page)) === 'QC Completed · Partial');
+check('RMPLG: coil GRN completed and QC\'d on one page — no signature step', (await qcStatusText(page)) === 'QC Completed · Partial');
 
 // ── LEGACY GRNs: completed before QC-gated posting ───────────────────────────
 console.log('\n── Legacy GRNs (stock posted at completion) ──');

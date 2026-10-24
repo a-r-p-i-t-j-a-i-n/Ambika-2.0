@@ -1,7 +1,7 @@
 import PDFDocument from 'pdfkit';
 import env from '../../../config/env.js';
 
-const PAGE = { w: 595.28, h: 841.89, m: 40 };
+export const PAGE = { w: 595.28, h: 841.89, m: 40 };
 const navy = '#0b2545';
 const blue = '#1d4ed8';
 const line = '#dbe4f3';
@@ -9,7 +9,7 @@ const INR = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFracti
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
 // Shared header band + return the starting Y for body content.
-const drawHeader = (doc, company, title) => {
+export const drawHeader = (doc, company, title) => {
   const W = PAGE.w - PAGE.m * 2;
   doc.rect(0, 0, PAGE.w, 86).fill(navy);
   doc.fill('#ffffff').font('Helvetica-Bold').fontSize(18).text(company.name || env.COMPANY_NAME, PAGE.m, 18);
@@ -22,7 +22,7 @@ const drawHeader = (doc, company, title) => {
 };
 
 // Two-column key/value info box.
-const infoRows = (doc, x, yStart, w, rows) => {
+export const infoRows = (doc, x, yStart, w, rows) => {
   let y = yStart + 10;
   rows.forEach(([label, value]) => {
     doc.font('Helvetica').fontSize(8.5).fill('#475a8a').text(`${label}:`, x + 10, y, { width: 90, lineBreak: false });
@@ -33,7 +33,7 @@ const infoRows = (doc, x, yStart, w, rows) => {
   return y;
 };
 
-const totalsBlock = (doc, yStart, rows) => {
+export const totalsBlock = (doc, yStart, rows) => {
   const W = PAGE.w - PAGE.m * 2;
   let y = yStart;
   const totX = PAGE.m + W - 240;
@@ -47,7 +47,7 @@ const totalsBlock = (doc, yStart, rows) => {
   return y;
 };
 
-const signature = (doc, company, mdSig) => {
+export const signature = (doc, company, mdSig, footer = 'This is a computer generated voucher.') => {
   // This block is bottom-anchored via absolute PAGE.h-relative coordinates —
   // it's deliberately positioned to fit within the physical page. PDFKit's
   // auto-page-break checks against the MARGIN-constrained maxY (page height
@@ -63,7 +63,7 @@ const signature = (doc, company, mdSig) => {
     .text(`For ${company.name || env.COMPANY_NAME}`, PAGE.m + W - 180, PAGE.h - 110, { width: 180, align: 'center' });
   doc.font('Helvetica').fontSize(8).text('Authorized Signatory', PAGE.m + W - 180, PAGE.h - 60, { width: 180, align: 'center' });
   doc.font('Helvetica').fontSize(7.5).fill('#475a8a')
-    .text('This is a computer generated voucher.', PAGE.m, PAGE.h - 48, { width: W, align: 'center' });
+    .text(footer, PAGE.m, PAGE.h - 48, { width: W, align: 'center' });
 
   // ── MD Approval block (Digital Approval & Signature engine) — always
   // rendered (left column) so the unsigned PDF shows exactly where the

@@ -13,6 +13,8 @@ import AmbikaLogo from '../../assets/ambikalogo.jpeg';
 import { AppBootLoader } from '../../components/AppLoader';
 import { isEmbedded } from '../../utils/embed';
 
+const RETRY_WINDOW_MS = 30000;
+
 // A connection/server hiccup is NOT a bad password — auto-retry those, and only
 // show "check your credentials" for a real 400/401.
 const isTransientError = (err) => {
@@ -60,9 +62,11 @@ const Login = () => {
   const navigate = useNavigate();
 
   // Attempt the login, transparently retrying a transient connection/server blip
-  // a couple of times before showing an error — so the user no longer has to
-  // "click 2–3 times" while the database reconnects.
-  const attemptLogin = async (attempt = 1) => {
+  // before showing an error — so the user no longer has to "click 2–3 times"
+  // while the database reconnects. The window must outlast a full backend
+  // restart: the server only opens its port after connecting to MongoDB and
+  // running its startup seeds, which takes several seconds.
+  const attemptLogin = async (attempt = 1, waited = 0) => {
     try {
       const response = await login({ email, password }).unwrap();
       // Clear any cached data from a previous session before this user's queries run,
@@ -71,10 +75,11 @@ const Login = () => {
       dispatch(setCredentials({ user: response.data.user, token: response.data.token }));
       navigate('/dashboard');
     } catch (err) {
-      if (isTransientError(err) && attempt < 3) {
+      const delay = Math.min(700 * attempt, 3000);
+      if (isTransientError(err) && waited + delay <= RETRY_WINDOW_MS) {
         setRetrying(true);
-        await new Promise((r) => setTimeout(r, 700 * attempt));
-        return attemptLogin(attempt + 1);
+        await new Promise((r) => setTimeout(r, delay));
+        return attemptLogin(attempt + 1, waited + delay);
       }
       setRetrying(false);
       console.error('Failed to log in:', err);

@@ -64,7 +64,7 @@ const ROUTES = [
   '/pricing', '/pricing/approvals', '/pricing/calculator', '/pricing/documents', '/pricing/analytics', '/quotes', '/quotes/drafts',
   '/o2d-fms', '/o2d-fms/all-tasks', '/o2d-fms/processes', '/o2d-fms/steps', '/o2d-fms/master', '/o2d-fms/master-data', '/o2d-fms/transporters',
   '/order-intake', '/o2d-fms/dashboard', '/o2d-fms/config', '/o2d-fms/templates', '/o2d-fms/scores',
-  '/purchase-fms', '/fms/doer-assignment', '/fms/my-tasks',
+  '/purchase-fms', '/purchase-fms/md-approvals', '/fms/doer-assignment', '/fms/my-tasks',
   '/procurement/indents', '/procurement/purchase-orders', '/procurement/follow-ups', '/procurement/proforma-invoices',
   '/procurement/advance-payments', '/procurement/grns', '/procurement/service-completions', '/procurement/incoming-qc',
   '/procurement/vendor-invoices', '/procurement/vouchers', '/procurement/tally-entries', '/procurement/final-payments',

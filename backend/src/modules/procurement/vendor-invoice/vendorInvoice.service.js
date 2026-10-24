@@ -1,12 +1,16 @@
-import VendorInvoice, { INVOICE_STATUS, INVOICE_VARIANCE_STATUS } from './vendorInvoice.model.js';
+import VendorInvoice, { INVOICE_STATUS, INVOICE_VARIANCE_STATUS, normalizeInvoiceNumber, invoiceNumberChanged } from './vendorInvoice.model.js';
 import { getAdvancePosition, withPiAdvanceLock } from './piAdvance.js';
+import { assertInvoiceNumberProtection } from './invoiceNumberIndexGuard.js';
 import IncomingQC, { QC_STATUS } from '../incoming-qc/incomingQc.model.js';
+import GoodsReceiptNote from '../grn/grn.model.js';
 import VendorPurchaseOrder from '../purchase-order/purchaseOrder.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
 export { getAdvancePosition }; // re-exported for the controller / existing imports
+// Pure line builders — exported for the unit tests (no DB needed).
+export { buildInvoiceItems, resolveInvoicedByLine };
 
 const QC_LOCK_TTL_MS = 2 * 60 * 1000;
 
@@ -41,10 +45,14 @@ const withQcInvoiceLock = async (qcIds, work) => {
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const sameSku = (a, b) => a && b && String(a).toUpperCase() === String(b).toUpperCase();
+const sameItem = (a, b) => sameSku(a.skuCode, b.skuCode) || (a.itemName && b.itemName && a.itemName === b.itemName);
 const itemKey = (qcId, skuCode, itemName) => `${String(qcId)}|${String(skuCode || itemName || '').toUpperCase()}`;
+const lineKey = (qcId, qcItemId) => `${String(qcId)}#${String(qcItemId)}`;
 
 /**
- * Sum already-invoiced qty per (qcId, sku) across existing non-rejected invoices.
+ * Already-invoiced qty across existing non-rejected invoices touching these QCs.
+ *   byLine — per exact QC line (qcId + qcItemId), for invoice lines that record it
+ *   bySku  — per qcId + SKU, for invoice lines created before line-level refs
  * Considers both the per-item source qcId (multi-GRN) and the legacy header qcId.
  * Optionally excludes one invoice (when recomputing during an edit).
  */
@@ -56,37 +64,103 @@ const invoicedQtyMap = async (qcIds, excludeInvoiceId) => {
   };
   if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
   const invoices = await VendorInvoice.find(filter).select('qcId items').lean();
-  const map = {};
+  const byLine = {};
+  const bySku = {};
   for (const inv of invoices) {
     for (const it of inv.items || []) {
       const qid = it.qcId || inv.qcId; // per-item source, else legacy header
       if (!qid) continue;
-      const k = itemKey(qid, it.skuCode, it.itemName);
-      map[k] = round2((map[k] || 0) + (Number(it.invoiceQty) || 0));
+      const qty = Number(it.invoiceQty) || 0;
+      if (it.qcItemId) {
+        const k = lineKey(qid, it.qcItemId);
+        byLine[k] = round2((byLine[k] || 0) + qty);
+      } else {
+        const k = itemKey(qid, it.skuCode, it.itemName);
+        bySku[k] = round2((bySku[k] || 0) + qty);
+      }
     }
   }
-  return map;
+  return { byLine, bySku };
+};
+
+/**
+ * Already-invoiced qty for each line of one QC (array aligned with qc.items).
+ * Line-tagged qty lands on its own line. SKU-only qty (older invoices) is spread
+ * over the QC's lines of that SKU in QC order, filling each line's remaining
+ * accepted qty first — any excess stays on the last such line, so it still
+ * shows as fully invoiced instead of being silently lost.
+ */
+const resolveInvoicedByLine = (qc, { byLine = {}, bySku = {} } = {}) => {
+  const lines = qc.items || [];
+  const out = lines.map((qi) => round2(byLine[lineKey(qc._id, qi._id)] || 0));
+  const left = {};
+  lines.forEach((qi, idx) => {
+    const k = itemKey(qc._id, qi.skuCode, qi.itemName);
+    if (!(k in left)) left[k] = round2(bySku[k] || 0);
+    if (left[k] <= 0) return;
+    const isLast = !lines.slice(idx + 1).some((n) => itemKey(qc._id, n.skuCode, n.itemName) === k);
+    const room = Math.max(0, round2(round2(qi.acceptedQty) - out[idx]));
+    const take = isLast ? left[k] : Math.min(room, left[k]);
+    out[idx] = round2(out[idx] + take);
+    left[k] = round2(left[k] - take);
+  });
+  return out;
+};
+
+/**
+ * PO line a QC line is priced from: the GRN line's own poItemId when known (a PO
+ * can list one SKU twice at different rates), else the first PO line of that SKU.
+ */
+const matchPoLine = (poItems, qi, poItemIdByGrnItem = {}) => {
+  const poItemId = qi.grnItemId && poItemIdByGrnItem[String(qi.grnItemId)];
+  return (poItemId && poItems.find((p) => String(p._id) === String(poItemId)))
+    || poItems.find((p) => sameItem(p, qi)) || {};
+};
+
+/** grnItemId → poItemId (and grnId → grnDate) for the GRNs behind these QCs. */
+const loadGrnLineRefs = async (qcs) => {
+  const grnIds = uniq(qcs.map((q) => q.grnId));
+  const grns = grnIds.length
+    ? await GoodsReceiptNote.find({ _id: { $in: grnIds } }).select('grnDate items._id items.poItemId').lean()
+    : [];
+  const poItemIdByGrnItem = {};
+  const grnDateById = {};
+  for (const g of grns) {
+    grnDateById[String(g._id)] = g.grnDate || null;
+    for (const it of g.items || []) if (it.poItemId) poItemIdByGrnItem[String(it._id)] = it.poItemId;
+  }
+  return { poItemIdByGrnItem, grnDateById };
 };
 
 /**
  * Build authoritative invoice items across one or more QCs (received/accepted from
- * the QC, rate/GST from the PO), merging user-editable fields from submitted rows
- * (matched by source qcId + sku). Tracks already-invoiced and pending per line.
+ * the QC, rate/GST from the PO), merging user-editable fields from submitted rows.
+ * One invoice line per QC line — never merged by SKU, so the same SKU on several
+ * lines of one GRN (or across GRNs) keeps its own qty. A submitted row is matched
+ * to its QC line by qcItemId; rows without one (older clients / invoices) match
+ * by source qcId + SKU in order, each row used once.
  */
-const buildInvoiceItems = (qcs = [], poItems = [], submitted = [], invoicedMap = {}) => {
-  const matchPo = (qi) => poItems.find((p) =>
-    sameSku(p.skuCode, qi.skuCode) || (p.itemName && qi.itemName && p.itemName === qi.itemName)) || {};
-  const matchSub = (qcId, qi) => submitted.find((s) =>
-    String(s.qcId || s.sourceQcId || '') === String(qcId)
-    && (sameSku(s.skuCode, qi.skuCode) || (s.itemName && qi.itemName && s.itemName === qi.itemName))) || {};
+const buildInvoiceItems = (qcs = [], poItems = [], submitted = [], invoiced = {}, poItemIdByGrnItem = {}) => {
+  const used = new Set();
+  const takeSub = (qcId, qi) => {
+    let i = submitted.findIndex((s, j) => !used.has(j) && s.qcItemId && String(s.qcItemId) === String(qi._id));
+    if (i < 0) {
+      i = submitted.findIndex((s, j) => !used.has(j) && !s.qcItemId
+        && String(s.qcId || s.sourceQcId || '') === String(qcId) && sameItem(s, qi));
+    }
+    if (i < 0) return {};
+    used.add(i);
+    return submitted[i];
+  };
 
   const items = [];
   for (const qc of qcs) {
-    for (const qi of qc.items || []) {
-      const s = matchSub(qc._id, qi);
-      const po = matchPo(qi);
+    const invoicedByLine = resolveInvoicedByLine(qc, invoiced);
+    (qc.items || []).forEach((qi, idx) => {
+      const s = takeSub(qc._id, qi);
+      const po = matchPoLine(poItems, qi, poItemIdByGrnItem);
       const acceptedQty = round2(qi.acceptedQty);
-      const alreadyInvoicedQty = round2(invoicedMap[itemKey(qc._id, qi.skuCode, qi.itemName)] || 0);
+      const alreadyInvoicedQty = invoicedByLine[idx];
       const pendingInvoiceQty = Math.max(0, round2(acceptedQty - alreadyInvoicedQty));
       let invoiceQty = s.invoiceQty != null ? round2(s.invoiceQty) : pendingInvoiceQty;
       invoiceQty = Math.max(0, invoiceQty);
@@ -101,6 +175,7 @@ const buildInvoiceItems = (qcs = [], poItems = [], submitted = [], invoicedMap =
       items.push({
         grnId: qc.grnId || undefined, grnNumber: qc.grnNumber || '',
         qcId: qc._id, qcNumber: qc.qcNumber || '',
+        qcItemId: qi._id, grnItemId: qi.grnItemId || null, batchNo: qi.batchNo || '',
         skuId: qi.skuId || undefined, skuCode: qi.skuCode || '', itemName: qi.itemName || '', unit: qi.unit || 'Pcs',
         orderedQty: round2(po.quantity), grnReceivedQty: round2(qi.receivedQty),
         receivedQty: round2(qi.receivedQty), acceptedQty, rejectedQty: round2(qi.rejectedQty),
@@ -110,7 +185,7 @@ const buildInvoiceItems = (qcs = [], poItems = [], submitted = [], invoicedMap =
         totalAmount: round2(taxableAmount + gstAmount),
         remarks: (s.remarks || '').trim(),
       });
-    }
+    });
   }
   return {
     items,
@@ -171,8 +246,70 @@ const loadAndValidateQcs = async (qcIdList) => {
   if (vendorIds.length > 1) throw new AppError('All selected GRNs/QCs must belong to the same vendor', 400);
   const poIds = uniq(qcs.map((q) => q.poId));
   if (poIds.length > 1) throw new AppError('All selected GRNs/QCs must belong to the same PO', 400);
-  return qcs;
+  return inSelectionOrder(qcs, qcIdList);
 };
+
+// $in returns documents in storage order; keep the user's pick order so the
+// legacy single refs (= first selected GRN/QC) and the line order are stable.
+const inSelectionOrder = (qcs, qcIdList) => qcIdList
+  .map((id) => qcs.find((q) => String(q._id) === String(id)))
+  .filter(Boolean);
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const duplicateNumberError = (existing) => {
+  const grns = (existing?.grnNumbers?.length ? existing.grnNumbers : [existing?.grnNumber]).filter(Boolean).join(', ');
+  return new AppError(
+    `Vendor invoice ${existing?.invoiceNumber || ''} is already recorded for this vendor${grns ? ` (GRN ${grns})` : ''}. One invoice covering several GRNs must be entered once with all its GRNs selected.`,
+    400,
+  );
+};
+
+/**
+ * One vendor invoice number is recorded once per vendor (case-insensitive) —
+ * an invoice covering several GRNs is ONE invoice with all of them selected, not
+ * the same number entered per GRN. Rejected / deleted invoices don't count.
+ * Same rule the expense voucher applies to its bill number (assertNoDuplicateBill).
+ *
+ * This read is the friendly pre-check (and the only check against invoices
+ * recorded before invoiceNumberKey existed). It cannot stop two concurrent
+ * requests that both pass it — the partial unique index on
+ * { vendorId, invoiceNumberKey } does that; see saveUniqueNumber.
+ */
+const assertUniqueInvoiceNumber = async (vendorId, invoiceNumber, excludeInvoiceId = null) => {
+  const no = String(invoiceNumber || '').trim();
+  if (!vendorId || !no) return;
+  const filter = {
+    vendorId,
+    invoiceNumber: new RegExp(`^${escapeRegex(no)}$`, 'i'),
+    isDeleted: { $ne: true },
+    invoiceStatus: { $ne: INVOICE_STATUS.REJECTED },
+  };
+  if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
+  const existing = await VendorInvoice.findOne(filter).select('invoiceNumber grnNumber grnNumbers').lean();
+  if (existing) throw duplicateNumberError(existing);
+};
+
+/**
+ * Run an invoice write (create / save). If MongoDB rejects it on the live
+ * invoice-number index — another request recorded the same vendor + number
+ * between our pre-check and this write — answer with the same validation
+ * message as the pre-check instead of a raw duplicate-key error. Nothing else
+ * was written by then: the invoice (and its PI advance share) is this one write.
+ */
+const saveUniqueNumber = async (write, vendorId, invoiceNumber) => {
+  try {
+    return await write();
+  } catch (err) {
+    if (err?.code !== 11000 || !err?.keyPattern?.invoiceNumberKey) throw err;
+    const winner = await VendorInvoice.findOne({ vendorId, invoiceNumberKey: normalizeInvoiceNumber(invoiceNumber) })
+      .select('invoiceNumber grnNumber grnNumbers').lean();
+    throw duplicateNumberError(winner || { invoiceNumber });
+  }
+};
+
+/** Every QC an invoice was raised from (multi-GRN list, else the legacy single ref). */
+const invoiceQcIds = (inv) => uniq(inv.qcIds?.length ? inv.qcIds : (inv.qcId ? [inv.qcId] : []));
 
 const findOrThrow = async (id) => {
   const inv = await VendorInvoice.findOne({ _id: id, isDeleted: { $ne: true } });
@@ -182,6 +319,8 @@ const findOrThrow = async (id) => {
 
 export const vendorInvoiceService = {
   async create(data, user, opts = {}) {
+    // No new invoice number is taken until the unique index is confirmed in the DB.
+    await assertInvoiceNumberProtection();
     // Accept one QC (legacy) or many (multi-GRN). All must share vendor + PO.
     const rawIds = data.qcIds?.length ? data.qcIds : (data.qcId ? [data.qcId] : []);
     if (!rawIds.length) throw new AppError('Select at least one QC / GRN', 400);
@@ -200,12 +339,14 @@ export const vendorInvoiceService = {
 
   async _createLocked(data, user, opts, qcs) {
     const first = qcs[0];
+    await assertUniqueInvoiceNumber(first.vendorId, data.invoiceNumber);
 
     // Recompute items + totals authoritatively from QC quantities + PO rates,
     // accounting for what's already been invoiced on prior invoices.
     const po = first.poId ? await VendorPurchaseOrder.findById(first.poId).select('items').lean() : null;
     const invoicedMap = await invoicedQtyMap(qcs.map((q) => q._id));
-    const { items, totals: itemTotals } = buildInvoiceItems(qcs, po?.items || [], data.items || [], invoicedMap);
+    const { poItemIdByGrnItem } = await loadGrnLineRefs(qcs);
+    const { items, totals: itemTotals } = buildInvoiceItems(qcs, po?.items || [], data.items || [], invoicedMap, poItemIdByGrnItem);
     if (!items.length) throw new AppError('Selected QCs have no items to invoice', 400);
     if (!items.some((it) => it.invoiceQty > 0)) throw new AppError('Enter an invoice quantity on at least one item', 400);
     assertWithinPending(items, opts.allowExcess);
@@ -223,7 +364,7 @@ export const vendorInvoiceService = {
     const base = { invoiceAmount, debitNoteAmount, advancePaid };
     const netPayableAmount = computeNetPayable(base);
 
-    const inv = await VendorInvoice.create({
+    const inv = await saveUniqueNumber(() => VendorInvoice.create({
       invoiceNumber: data.invoiceNumber,
       invoiceDate: data.invoiceDate || null,
       invoiceReceivedDate: data.invoiceReceivedDate || new Date(),
@@ -254,7 +395,7 @@ export const vendorInvoiceService = {
       remarks: data.remarks || '',
       createdBy: user?._id,
       activityTimeline: [{ action: 'CREATE', description: `Invoice created from ${uniq(qcs.map((q) => q.qcNumber)).join(', ')}`, actorId: user?._id }],
-    });
+    }), first.vendorId, data.invoiceNumber);
     return inv;
   },
 
@@ -298,19 +439,20 @@ export const vendorInvoiceService = {
     const poIds = uniq(qcs.map((q) => q.poId));
     const pos = poIds.length ? await VendorPurchaseOrder.find({ _id: { $in: poIds } }).select('items').lean() : [];
     const poItemsById = Object.fromEntries(pos.map((p) => [String(p._id), p.items || []]));
-    const matchPo = (poItems, qi) => poItems.find((p) =>
-      sameSku(p.skuCode, qi.skuCode) || (p.itemName && qi.itemName && p.itemName === qi.itemName)) || {};
+    const { poItemIdByGrnItem, grnDateById } = await loadGrnLineRefs(qcs);
 
     return qcs.map((qc) => {
       const poItems = poItemsById[String(qc.poId)] || [];
+      const invoicedByLine = resolveInvoicedByLine(qc, invoicedMap);
       let totalAccepted = 0; let totalPending = 0;
-      const items = (qc.items || []).map((it) => {
-        const po = matchPo(poItems, it);
+      const items = (qc.items || []).map((it, idx) => {
+        const po = matchPoLine(poItems, it, poItemIdByGrnItem);
         const accepted = round2(it.acceptedQty);
-        const already = round2(invoicedMap[itemKey(qc._id, it.skuCode, it.itemName)] || 0);
+        const already = invoicedByLine[idx];
         const pending = Math.max(0, round2(accepted - already));
         totalAccepted += accepted; totalPending += pending;
         return {
+          qcItemId: it._id, grnItemId: it.grnItemId || null, batchNo: it.batchNo || '',
           skuId: it.skuId, skuCode: it.skuCode || '', itemName: it.itemName || '', unit: it.unit || 'Pcs',
           orderedQty: round2(po.quantity), grnReceivedQty: round2(it.receivedQty), receivedQty: round2(it.receivedQty),
           acceptedQty: accepted, rejectedQty: round2(it.rejectedQty),
@@ -320,6 +462,7 @@ export const vendorInvoiceService = {
       });
       return {
         _id: qc._id, qcNumber: qc.qcNumber, grnId: qc.grnId, grnNumber: qc.grnNumber,
+        grnDate: grnDateById[String(qc.grnId)] || null, qcDate: qc.qcDate || null,
         poId: qc.poId, poNumber: qc.poNumber, piId: qc.piId, piNumber: qc.piNumber,
         vendorId: qc.vendorId, vendorName: qc.vendorName, qcStatus: qc.qcStatus, overallResult: qc.overallResult,
         totalAccepted: round2(totalAccepted), totalPendingInvoiceQty: round2(totalPending),
@@ -342,8 +485,8 @@ export const vendorInvoiceService = {
       .filter((q) => q.grnId) // GRN-backed material QCs only
       .map((q) => ({
         _id: q._id, // = qcId — keeps the qcIds[] create payload working unchanged
-        grnId: q.grnId, grnNumber: q.grnNumber,
-        qcId: q._id, qcNumber: q.qcNumber,
+        grnId: q.grnId, grnNumber: q.grnNumber, grnDate: q.grnDate,
+        qcId: q._id, qcNumber: q.qcNumber, qcDate: q.qcDate,
         poId: q.poId, poNumber: q.poNumber,
         piId: q.piId, piNumber: q.piNumber,
         vendorId: q.vendorId, vendorName: q.vendorName,
@@ -375,7 +518,14 @@ export const vendorInvoiceService = {
 
   async update(id, data, user, opts = {}) {
     const existing = await findOrThrow(id);
-    return withPiAdvanceLock(existing.piId, () => this._updateLocked(id, data, user, opts));
+    // A number change takes a (new) number — only once the unique index is
+    // confirmed. Edits that keep the number can't create a duplicate and go on.
+    if (invoiceNumberChanged(existing.invoiceNumber, data.invoiceNumber)) await assertInvoiceNumberProtection();
+    // Re-deriving quantities competes with a concurrent create on the same QCs,
+    // so take the same QC lock create does (QC lock first, then the PI's).
+    const qcIdList = Array.isArray(data.items) ? invoiceQcIds(existing) : [];
+    return withQcInvoiceLock(qcIdList, () =>
+      withPiAdvanceLock(existing.piId, () => this._updateLocked(id, data, user, opts)));
   },
 
   async _updateLocked(id, data, user, opts) {
@@ -384,18 +534,27 @@ export const vendorInvoiceService = {
     if (!EDITABLE_STATUSES.includes(inv.invoiceStatus)) {
       throw new AppError('Invoice cannot be edited after payment is completed or when rejected', 400);
     }
+    // Only a CHANGED number is checked, so an invoice already sharing its number
+    // with another (recorded before this rule) can still be edited. A case-only
+    // change counts too: it re-keys the invoice, and the index alone can't see an
+    // older unkeyed twin — this lookup (case-insensitive, self excluded) can.
+    if (invoiceNumberChanged(inv.invoiceNumber, data.invoiceNumber)) {
+      await assertUniqueInvoiceNumber(inv.vendorId, data.invoiceNumber, inv._id);
+    }
     const { invoiceDocument, debitNoteDocument, items: submittedItems, ...rest } = data;
     Object.assign(inv, rest);
 
     // When items are supplied, re-derive items + amounts from the invoice's QCs +
     // PO (authoritative), excluding THIS invoice from the already-invoiced tally.
     if (Array.isArray(submittedItems)) {
-      const qcIdList = uniq(inv.qcIds?.length ? inv.qcIds : (inv.qcId ? [inv.qcId] : []));
-      const qcs = await IncomingQC.find({ _id: { $in: qcIdList }, isDeleted: { $ne: true } }).lean();
+      const qcIdList = invoiceQcIds(inv);
+      const found = await IncomingQC.find({ _id: { $in: qcIdList }, isDeleted: { $ne: true } }).lean();
+      const qcs = inSelectionOrder(found, qcIdList);
       if (qcs.some((q) => q.items?.length)) {
         const po = inv.poId ? await VendorPurchaseOrder.findById(inv.poId).select('items').lean() : null;
         const invoicedMap = await invoicedQtyMap(qcIdList, inv._id);
-        const r = buildInvoiceItems(qcs, po?.items || [], submittedItems, invoicedMap);
+        const { poItemIdByGrnItem } = await loadGrnLineRefs(qcs);
+        const r = buildInvoiceItems(qcs, po?.items || [], submittedItems, invoicedMap, poItemIdByGrnItem);
         assertWithinPending(r.items, opts.allowExcess);
         inv.items = r.items;
         inv.invoiceAmount = r.totals.invoiceAmount;
@@ -422,7 +581,9 @@ export const vendorInvoiceService = {
     if (inv.invoiceDocument?.fileUrl && inv.invoiceStatus === INVOICE_STATUS.DRAFT) inv.invoiceStatus = INVOICE_STATUS.RECEIVED;
     inv.updatedBy = user?._id;
     inv.activityTimeline.push({ action: 'UPDATE', description: 'Invoice updated', actorId: user?._id });
-    return inv.save();
+    // A renamed invoice gets a new number key on save (vendorInvoice.model.js),
+    // so a concurrent create / rename to the same number loses here, cleanly.
+    return saveUniqueNumber(() => inv.save(), inv.vendorId, inv.invoiceNumber);
   },
 
   async remove(id, user) {

@@ -235,9 +235,11 @@ const runApi = async () => {
   const cpRow = (await svc.imsService.getOverview({})).docs.find((r) => r.skuCode === 'E2E-BRUSH');
   check('C&P IMS: brush on hand 0, awaiting QC 50', cpRow.onHand === 0 && cpRow.awaitingQc === 50 && cpRow.projectedAvailable === 50);
 
-  await expectReject('QC cannot start before the MD signs', Q.create({ grnId: String(g1._id) }, user), /MD Approved/);
-  await sign(g1._id);
+  // MD approval is recorded on its own and never holds QC back (only payment waits for it).
+  check('the GRN is not MD-signed yet', (await GoodsReceiptNote.findById(g1._id).lean()).approvalStatus !== 'MD_APPROVED');
   const qc1 = await Q.create({ grnId: String(g1._id) }, user);
+  check('QC starts while the MD signature is still pending', Boolean(qc1?._id));
+  await sign(g1._id);
   check('QC lines come from the GRN (4 received lines, default all accepted)', qc1.items.length === 4 && qc1.items.every((i) => i.acceptedQty === i.receivedQty));
   const forged = qcLinesFor(qc1, { 'E2E-COIL': [999] }).map((l) => (l.itemName.includes('Coil') ? { ...l, receivedQty: 999 } : l));
   const qc1f = await Q.update(String(qc1._id), { items: forged }, user);

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -24,6 +25,7 @@ import PurchaseFmsStepper from '../components/PurchaseFmsStepper';
 import { PURCHASE_FMS_STEPS } from '../PurchaseFmsHub';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 // This standalone page (also reachable outside the Purchase FMS hub, e.g. for
 // Expense vouchers, which have no invoice) still belongs under the hub's
 // unified "Vendor Invoices & Payments" step — show the same step rail here
@@ -32,6 +34,7 @@ const PFMS_STEP_INDEX = PURCHASE_FMS_STEPS.findIndex((s) => s.slug === 'invoices
 
 const VoucherList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/vouchers/${r._id}` });
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
@@ -89,6 +92,7 @@ const VoucherList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'voucherNumber', headerName: 'VOUCHER NO', width: 145, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'voucherType', headerName: 'TYPE', width: 80, sortable: false, renderCell: (p) => <VoucherTypeChip type={p.value} /> },
     { field: 'voucherDate', headerName: 'DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
@@ -240,8 +244,8 @@ const VoucherList = () => {
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/vouchers/${p.id}`)} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={50} columnHeaderHeight={44} sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }} />
+          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>

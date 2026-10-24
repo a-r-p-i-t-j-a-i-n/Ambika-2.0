@@ -25,6 +25,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtINR, fmtDate, poDisplayNumber } from './poMeta';
 import { PFMS, pfmsPageSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
+import useRowNavigation, { rowNavigationTableSx } from '../common/useRowNavigation';
 import StatusChip from '../components/StatusChip';
 import NextStepBanner from '../components/NextStepBanner';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
@@ -138,6 +139,7 @@ const activityTone = (action) => {
 const PurchaseOrderDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const followUpRowNav = useRowNavigation({ to: (fu) => `/procurement/follow-ups/${fu._id}` });
   const goBack = useSmartBack('/purchase-fms/purchase-orders');
   const { enqueueSnackbar } = useSnackbar();
 
@@ -197,11 +199,11 @@ const PurchaseOrderDetail = () => {
   // "Create GRN" is offered again.
   const activeGrn = grns.find((g) => g.grnStatus !== 'CANCELLED') || null;
   // GRN gate: material confirmed (READY_FOR_GRN + Final Material Date) and PI
-  // settled. NOT_RECEIVED (no PI — optional) is settled too, same as the
-  // backend's isPiSettledForGrn (grn.service.js) — only an in-progress PI blocks.
+  // settled — same list as the backend's isPiSettledForGrn (grn.service.js).
+  // An approved PI is settled: its advance payment / MD approval never blocks GRN.
   const grnGateMet = data?.data?.followUpStatus === 'READY_FOR_GRN'
     && Boolean(data?.data?.finalMaterialDate)
-    && ['NOT_RECEIVED', 'PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'].includes(data?.data?.piStatus);
+    && ['NOT_RECEIVED', 'PI_NOT_REQUIRED', 'PI_APPROVED', 'READY_FOR_ADVANCE_PAYMENT', 'PAYMENT_COMPLETED'].includes(data?.data?.piStatus);
   // A new PO needs the full gate; one already partially received keeps receiving (back-compat).
   // Blocked while the active GRN is still a draft — it must be completed first.
   const canCreateGrn = activeGrn?.grnStatus !== 'DRAFT' && (
@@ -217,7 +219,7 @@ const PurchaseOrderDetail = () => {
     if (!activeGrn) return null;
     if (activeGrn.grnStatus === 'DRAFT') {
       return {
-        tone: 'warning', text: 'A GRN has been created for this PO — complete it, then the MD signs it and Incoming QC posts the accepted stock.',
+        tone: 'warning', text: 'A GRN has been created for this PO — complete it, then Incoming QC posts the accepted stock.',
         primary: { label: 'Complete GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnCompleteOpen(true) },
       };
     }
@@ -228,15 +230,8 @@ const PurchaseOrderDetail = () => {
         primary: { label: 'Create Next GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnFormOpen(true) },
       };
     }
-    // MD Digital Approval gate: Incoming QC cannot start until this GRN is
-    // signed — the sign action itself lives on GRN Detail's MD Approval card.
-    if (activeGrn.approvalStatus !== 'MD_APPROVED') {
-      return {
-        tone: 'warning', text: 'Goods received — awaiting MD Approval before Incoming QC can start.',
-        primary: { label: 'View GRN', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/grns/${activeGrn._id}`) },
-      };
-    }
     // QC is entered on the GRN page, directly under the GRN (one combined step).
+    // The GRN's MD approval is tracked separately and never holds QC back.
     return {
       tone: 'success', text: 'Goods received — run Incoming QC on the GRN page.',
       primary: { label: 'Open GRN & QC', icon: <ClipboardCheck size={16} />, onClick: () => navigate(`/procurement/grns/${activeGrn._id}#qc`) },
@@ -355,22 +350,17 @@ const PurchaseOrderDetail = () => {
           primary: { label: followUpPrimary.label, icon: followUpPrimary.icon, onClick: followUpPrimary.onClick, disabled: followUpPrimary.disabled },
         };
       }
-      // A PI that was actually created and hasn't finished still needs
-      // resolving — these are the only cases that legitimately block GRN now
-      // that PI itself is optional (see grnGateMet / isPiSettledForGrn).
+      // A created PI still awaiting its ordinary approval is the only PI state
+      // that blocks GRN (see grnGateMet / isPiSettledForGrn). An approved PI's
+      // advance payment waits for the MD on its own and never holds GRN back.
       if (livePi && canApprovePi) {
         return {
           tone: 'warning', text: 'The Proforma Invoice is waiting for approval.',
           primary: { label: 'Approve PI', icon: <CheckCircle2 size={16} />, onClick: () => setPiApprovalOpen(true) },
         };
       }
-      if (livePi && livePi.piStatus === 'READY_FOR_ADVANCE_PAYMENT') {
-        return {
-          tone: 'warning', text: 'The PI is approved — record the advance payment to complete it.',
-          primary: { label: 'Open PI', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) },
-        };
-      }
-      if (livePi && livePi.piStatus !== 'PAYMENT_COMPLETED') {
+      const advancePending = livePi?.piStatus === 'READY_FOR_ADVANCE_PAYMENT';
+      if (livePi && !advancePending && livePi.piStatus !== 'PAYMENT_COMPLETED') {
         return {
           tone: 'warning', text: 'The Proforma Invoice is still in progress.',
           primary: { label: 'Open PI', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) },
@@ -384,11 +374,20 @@ const PurchaseOrderDetail = () => {
           tone: 'success',
           text: livePi?.piStatus === 'PAYMENT_COMPLETED'
             ? 'Payment is complete — create the GRN to receive stock.'
+            : advancePending
+              ? 'Material delivery is confirmed — create the GRN to receive stock. The PI advance payment is recorded separately and does not hold the GRN.'
             : isPiNotRequired
               ? 'PI was marked Not Required — create the GRN to receive stock.'
               : 'Material delivery is confirmed — create the GRN to receive stock. A Proforma Invoice is optional and can still be added later.',
           primary: { label: 'Create GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnFormOpen(true) },
-          secondary: canCreatePi ? { label: 'Create PI', onClick: () => setPiFormOpen(true) } : null,
+          secondary: canCreatePi ? { label: 'Create PI', onClick: () => setPiFormOpen(true) }
+            : advancePending ? { label: 'Open PI', onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) } : null,
+        };
+      }
+      if (advancePending) {
+        return {
+          tone: 'warning', text: 'The PI is approved — record the advance payment to complete it.',
+          primary: { label: 'Open PI', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) },
         };
       }
       if (canCreatePi) {
@@ -441,7 +440,7 @@ const PurchaseOrderDetail = () => {
       };
     }
     return {
-      text: 'GRN is blocked because PI is not completed.',
+      text: 'GRN is blocked because the Proforma Invoice is not approved yet.',
       button: canCreatePi
         ? { label: 'Create PI', onClick: () => setPiFormOpen(true) }
         : livePi ? { label: 'Open PI', onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) } : null,
@@ -637,7 +636,7 @@ const PurchaseOrderDetail = () => {
                 against this PO, newest first (already sorted -createdAt by the API). */}
             {followUps.length > 0 && (
               <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '10px' }}>
-                <Table size="small">
+                <Table size="small" sx={rowNavigationTableSx}>
                   <TableHead>
                     <TableRow>
                       {['Follow-up No', 'Type', 'Status', 'Planned', 'Actual', 'Next / Final Date', 'Remarks', 'By'].map((h) => (
@@ -647,7 +646,7 @@ const PurchaseOrderDetail = () => {
                   </TableHead>
                   <TableBody>
                     {followUps.map((fu) => (
-                      <TableRow key={fu._id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(`/procurement/follow-ups/${fu._id}`)}>
+                      <TableRow key={fu._id} hover {...followUpRowNav.getTableRowProps(fu)}>
                         <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{fu.followUpNumber}</Typography></TableCell>
                         <TableCell><FuTypeChip type={fu.followUpType} /></TableCell>
                         <TableCell><FuStatusChip status={fu.followUpStatus} /></TableCell>

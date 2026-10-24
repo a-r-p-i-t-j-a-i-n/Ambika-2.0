@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   Grid, Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Search, Wallet, IndianRupee, Hourglass, AlertTriangle, CircleSlash } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import {
   useGetAdvancePaymentsQuery,
   useGetAdvancePaymentStatsQuery,
@@ -19,7 +20,9 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 const AdvancePaymentList = () => {
-  const navigate = useNavigate();
+  // No standalone advance-payment detail page — a row opens its PI, and rows
+  // without one are not clickable.
+  const rowNav = useRowNavigation({ to: (r) => (r.piId ? `/procurement/proforma-invoices/${r.piId}` : null) });
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
@@ -59,6 +62,7 @@ const AdvancePaymentList = () => {
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
 
   const columns = [
+    serialColumn(),
     { field: 'paymentDate', headerName: 'DATE', width: 95,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'paymentNumber', headerName: 'PAYMENT NO', width: 130,
@@ -190,12 +194,12 @@ const AdvancePaymentList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => p.row.piId && navigate(`/procurement/proforma-invoices/${p.row.piId}`)}
+          {...rowNav.gridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
+          sx={[{ border: 0 }, rowNavigationGridSx]}
         />
       </Paper>
     </Box>
