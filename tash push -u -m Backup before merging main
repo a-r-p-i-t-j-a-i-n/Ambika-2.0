@@ -1,0 +1,70 @@
+[1mdiff --git a/backend/src/app.js b/backend/src/app.js[m
+[1mindex 4d08b72..625b55e 100644[m
+[1m--- a/backend/src/app.js[m
+[1m+++ b/backend/src/app.js[m
+[36m@@ -62,6 +62,7 @@[m [mimport transporterRoutes from './modules/transporters/transporter.routes.js';[m
+ import approvalRoutes from './modules/approvals/approval.routes.js';[m
+ import fmsDoerRoutes from './modules/fms-doers/fmsDoer.routes.js';[m
+ import { fmsWorkflowSync } from './modules/fms-doers/fmsDoerSync.middleware.js';[m
+[32m+[m[32mimport { getInvoiceNumberIndexStatus } from './modules/procurement/vendor-invoice/invoiceNumberIndexGuard.js';[m
+ [m
+ [m
+ [m
+[36m@@ -113,12 +114,22 @@[m [mconst healthPayload = (_req, res) => {[m
+     message: 'DPES API is running',[m
+     env: env.NODE_ENV,[m
+     timestamp: new Date().toISOString(),[m
+[32m+[m[32m    // In-memory (no DB hit). Liveness stays 200 either way — see below.[m
+[32m+[m[32m    checks: { vendorInvoiceNumberIndex: getInvoiceNumberIndexStatus().status },[m
+   });[m
+ };[m
+ app.get('/', healthPayload);[m
+ app.head('/', (_req, res) => res.sendStatus(200));[m
+ app.get('/health', healthPayload);[m
+ app.get('/api/health', healthPayload);[m
+[32m+[m[32m// Readiness of the vendor invoice numbering safeguard (invoiceNumberIndexGuard):[m
+[32m+[m[32m// 200 only once its unique index is confirmed in the database, 503 otherwise.[m
+[32m+[m[32m// Separate from /api/health so one module's index can't fail the whole ERP's[m
+[32m+[m[32m// liveness (the deploy job and keep-warm pingers poll /api/health).[m
+[32m+[m[32mapp.get('/api/health/invoice-numbering', (_req, res) => {[m
+[32m+[m[32m  const s = getInvoiceNumberIndexStatus();[m
+[32m+[m[32m  res.status(s.status === 'OK' ? 200 : 503).json({ success: s.status === 'OK', ...s });[m
+[32m+[m[32m});[m
+ [m
+ // ── API Routes ──────────────────────────────────────────────[m
+ app.use('/api/v1/auth',            authRoutes);[m
+[1mdiff --git a/backend/src/modules/approvals/approval.controller.js b/backend/src/modules/approvals/approval.controller.js[m
+[1mindex e14efda..8296a86 100644[m
+[1m--- a/backend/src/modules/approvals/approval.controller.js[m
+[1m+++ b/backend/src/modules/approvals/approval.controller.js[m
+[36m@@ -3,6 +3,11 @@[m [mimport { approvalService } from './approval.service.js';[m
+ import { ApiResponse } from '../../utils/apiResponse.js';[m
+ [m
+ export const approvalController = {[m
+[32m+[m[32m  list: asyncHandler(async (req, res) => {[m
+[32m+[m[32m    const { docs, pagination, summary, vendors } = await approvalService.list(req.query);[m
+[32m+[m[32m    res.json(ApiResponse.ok('Approvals retrieved', { rows: docs, summary, vendors }, pagination));[m
+[32m+[m[32m  }),[m
+[32m+[m
+   getByDocument: asyncHandler(async (req, res) => {[m
+     const { documentType, documentId } = req.params;[m
+     const row = await approvalService.getByDocument(documentType, documentId);[m
+[1mdiff --git a/backend/src/modules/approvals/approval.model.js b/backend/src/modules/approvals/approval.model.js[m
+[1mindex 48c6950..0be0b8e 100644[m
+[1m--- a/backend/src/modules/approvals/approval.model.js[m
+[1m+++ b/backend/src/modules/approvals/approval.model.js[m
+[36m@@ -27,6 +27,8 @@[m [mexport const APPROVAL_DOCUMENT_TYPE = {[m
+   INCOMING_QC:    'INCOMING_QC',[m
+   TALLY_ENTRY:    'TALLY_ENTRY',[m
+   FINAL_PAYMENT:  'FINAL_PAYMENT',[m
+[32m+[m[32m  // Advance payment gate — the PI's MD approval (see proformaInvoice.service.js).[m
+[32m+[m[32m  PROFORMA_INVOICE: 'PROFORMA_INVOICE',[m
+ };[m
+ [m
+ export const APPROVAL_STATUS = {[m
+[1mdiff --git a/backend/src/modules/approvals/approval.registry.js b/backend/src/modules/approvals/approval.registry.js[m
+[1mindex 9fea1c7..300f5f3 100644[m
+[1m--- a/backend/src/modules/approvals/approval.registry.js[m
+[1m+++ b/backend/src/modules/approvals/approval.registry.js[m
+[36m@@ -23,6 +23,14 @@[m
+  *                        {imageBuffer, s

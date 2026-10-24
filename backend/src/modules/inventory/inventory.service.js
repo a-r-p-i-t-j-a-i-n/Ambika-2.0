@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import InventoryStock, { DEFAULT_WAREHOUSE } from './inventoryStock.model.js';
 import InventoryMovement, { MOVEMENT_TYPE, TXN_TYPE } from './inventoryMovement.model.js';
 import InventoryRequestKey from './inventoryRequestKey.model.js';
-import SKU from '../skus/sku.model.js';
+import SKU, { normalizeSkuUnit } from '../skus/sku.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { generateMovementNumber } from '../../utils/docNumberGenerator.js';
@@ -249,6 +249,9 @@ const applyStockDelta = async (p) => {
     }
     if (p.skuCode && !current?.skuCode) set.skuCode = p.skuCode;
     if (p.skuName && !current?.skuName) set.skuName = p.skuName;
+    // A row opened under an older kilogram spelling ("Kg", "KG") is relabelled
+    // KGS on its next move. A label only — every other unit is left as it was.
+    if (current && p.unit === 'KGS' && current.unit !== 'KGS' && normalizeSkuUnit(current.unit) === 'KGS') set.unit = 'KGS';
 
     if (!current) {
       try {
@@ -430,6 +433,10 @@ const createStockMovement = async (input = {}, opts = {}) => {
     const sku = await SKU.findById(input.skuId).select('code name unit').lean();
     if (sku) { skuCode = skuCode || sku.code; skuName = skuName || sku.name; unit = unit || sku.unit; }
   }
+  // Kilograms are spelled KGS in the ledger, as in SKU Master. Callers pass
+  // their own document's spelling (a GRN line says "Kg"), which would otherwise
+  // land beside KGS as a second unit. Label only; the quantity is untouched.
+  unit = normalizeSkuUnit(unit);
 
   // Get-or-create the stock row for this SKU+warehouse and apply the delta under
   // a version guard, so two simultaneous movements cannot overwrite each other.

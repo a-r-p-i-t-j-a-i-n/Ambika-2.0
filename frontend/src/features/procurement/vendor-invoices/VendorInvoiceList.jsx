@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -18,14 +19,17 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
+import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import { InvoiceStatusChip, INVOICE_STATUSES, fmtINR, fmtDate } from './invoiceMeta';
 import { VoucherStatusChip } from '../vouchers/voucherMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 // One invoice's live (non-cancelled) voucher, for the list's Voucher column —
 // a small self-contained cell so each row fetches only its own voucher via
 // the existing by-invoice endpoint (same one the Invoice Detail page already
@@ -78,13 +82,29 @@ const WORKFLOW_CHIPS = [
 
 const VendorInvoiceList = () => {
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/vendor-invoices/${r._id}` });
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [from, setFrom] = useState(''); const [to, setTo] = useState('');
   const [workflowChip, setWorkflowChip] = useState('ALL');
   const [voucherMap, setVoucherMap] = useState({}); // invoiceId -> voucher | null (resolved, no live voucher) | undefined (loading)
+
+  const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
+  const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
+
+  // The Workflow Chips row below is already the primary, always-visible status
+  // control for this screen (richer than a plain status list — it also
+  // distinguishes voucher sub-states a single invoiceStatus can't). The raw
+  // Status dropdown is kept — it can isolate e.g. just DRAFT or just APPROVED,
+  // which no chip does alone — but as a SECONDARY/precision filter, alongside
+  // Vendor and the date range, so it isn't a second always-visible status
+  // selector duplicating the chips.
+  const secondaryCount = [vendorFilter, statusFilter, from, to].filter(Boolean).length;
+  const clearSecondary = () => { setVendorFilter(null); setStatusFilter(''); setWorkflowChip('ALL'); setFrom(''); setTo(''); resetPage(); };
+  const anyFilterActive = Boolean(search || secondaryCount || workflowChip !== 'ALL');
+  const clearAll = () => { resetSearch(); clearSecondary(); };
 
   const handleVoucherResolved = useCallback((invoiceId, live) => {
     setVoucherMap((m) => {
@@ -138,6 +158,7 @@ const VendorInvoiceList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'invoiceNumber', headerName: 'INVOICE NO', width: 140, renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'invoiceDate', headerName: 'DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'grnNumber', headerName: 'GRN', width: 150, sortable: false,
@@ -186,18 +207,73 @@ const VendorInvoiceList = () => {
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<CheckCheck size={20} />}  label="Payment Done"     value={stats.paymentCompleted} color="#16a34a" /></Grid>
       </Grid>
 
-      <Paper sx={{ ...pfmsCardSx, p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
-        <TextField size="small" placeholder="Search invoice / GRN / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
-          sx={{ width: { xs: '100%', sm: 240 } }} InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
-        <Autocomplete size="small" sx={{ minWidth: 190 }} options={partiesRes?.data || []} value={vendorFilter}
-          getOptionLabel={(o) => o?.name || ''} isOptionEqualToValue={(o, v) => o._id === v._id} onChange={(_e, v) => setVendorFilter(v)} renderInput={(params) => <TextField {...params} label="Vendor" />} />
-        <TextField size="small" select label="Status" value={statusFilter}
-          onChange={(e) => { setStatusFilter(e.target.value); setWorkflowChip('ALL'); }} sx={{ minWidth: 170 }}>
-          <MenuItem value="">All</MenuItem>
-          {INVOICE_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
-        </TextField>
-        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
-        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} />
+      {/* Search + the Workflow Chips below are the primary filtering surface
+          for this screen. Vendor, the precise Status list and the date range
+          are secondary — Filters only counts those. */}
+      <Paper sx={{ ...pfmsCardSx, p: 1.25 }}>
+        <AdaptiveFilterBar
+          pinned={[
+            { key: 'search', minWidth: 260, node: (
+              <Box sx={{ flex: { xs: '1 1 100%', sm: '1 1 260px' }, minWidth: 0 }}>
+                <Typography component="label" htmlFor="vi-search" sx={pfmsFieldLabelSx}>Search</Typography>
+                <TextField id="vi-search" size="small" fullWidth placeholder="Search invoice / GRN / vendor…"
+                  value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
+              </Box>
+            ) },
+          ]}
+          items={[
+            {
+              key: 'vendor', width: 200, active: Boolean(vendorFilter),
+              node: (
+                <Box sx={{ flex: '0 1 200px', minWidth: 180 }}>
+                  <Autocomplete
+                    size="small" fullWidth
+                    options={partiesRes?.data || []}
+                    value={vendorFilter}
+                    getOptionLabel={(o) => o?.name || ''}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    onChange={(_e, v) => onFilterChange(setVendorFilter)(v)}
+                    renderInput={(params) => <TextField {...params} label="Vendor" />}
+                  />
+                </Box>
+              ),
+            },
+            {
+              key: 'status', width: 170, active: Boolean(statusFilter),
+              node: (
+                <Box sx={{ flex: '0 1 170px', minWidth: 150 }}>
+                  <TextField size="small" select fullWidth label="Status (precise)" value={statusFilter}
+                    InputLabelProps={{ shrink: true }}
+                    SelectProps={ALL_WHEN_UNSET}
+                    onChange={(e) => { onFilterChange(setStatusFilter)(e.target.value); setWorkflowChip('ALL'); }}>
+                    <MenuItem value="">All</MenuItem>
+                    {INVOICE_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                  </TextField>
+                </Box>
+              ),
+            },
+            {
+              key: 'from', width: 150, active: Boolean(from),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="From" fullWidth value={from} onChange={onFilterChange(setFrom)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'to', width: 150, active: Boolean(to),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="To" fullWidth value={to} onChange={onFilterChange(setTo)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+          ]}
+          onClearSecondary={clearSecondary}
+          onClearAll={clearAll}
+          anyActive={anyFilterActive}
+        />
       </Paper>
 
       <Paper sx={{ ...pfmsCardSx, p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
@@ -222,8 +298,8 @@ const VendorInvoiceList = () => {
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={rows} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/vendor-invoices/${p.id}`)} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={50} columnHeaderHeight={44} sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }} />
+          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>

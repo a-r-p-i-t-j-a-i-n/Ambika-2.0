@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Paper, Stack, Typography, alpha, useTheme, ToggleButtonGroup, ToggleButton,
@@ -11,6 +12,7 @@ import { useSnackbar } from 'notistack';
 import { useGetVendorsQuery, useCreateVendorMutation } from '../../../store/api/vendorApi';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 const emptyRow = () => ({ productName: '', skuCode: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' });
 const emptyVendor = () => ({
   name: '', contactPerson: '', phone: '', email: '', address: '', gstNo: '', panNo: '',
@@ -31,6 +33,7 @@ const EXCEL_COLS = [
 const VendorMaster = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/vendors/${r._id}` });
   const { enqueueSnackbar } = useSnackbar();
   const [view, setView] = useState('vendors');
   const [search, setSearch] = useState('');
@@ -99,6 +102,7 @@ const VendorMaster = () => {
   }, [filtered]);
 
   const columns = [
+    serialColumn(),
     { field: 'name', headerName: 'Vendor', flex: 1.4, minWidth: 200,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color={BRAND_DK}>{p.value}</Typography> },
     { field: 'contactPerson', headerName: 'Contact Person', flex: 1, minWidth: 150,
@@ -166,10 +170,10 @@ const VendorMaster = () => {
           <Box sx={{ px: 1.5, pb: 1.5 }}>
             <DataGrid
               rows={filtered} columns={columns} getRowId={(r) => r._id} loading={isLoading}
-              autoHeight density="compact" onRowClick={(p) => navigate(`/procurement/vendors/${p.id}`)}
+              autoHeight density="compact" {...rowNav.gridProps}
               initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
               pageSizeOptions={[25, 50, 100]} disableRowSelectionOnClick
-              sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' }, '& .MuiDataGrid-columnHeaders': { bgcolor: alpha(BRAND, 0.04) } }}
+              sx={[{ border: 0, '& .MuiDataGrid-columnHeaders': { bgcolor: alpha(BRAND, 0.04) } }, rowNavigationGridSx]}
             />
           </Box>
         )}

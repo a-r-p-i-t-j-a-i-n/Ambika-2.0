@@ -85,6 +85,17 @@ export const inventoryDestinationOf = (itemType) => {
   return null;
 };
 
+// The master spells kilograms one way: KGS — the way RM coils, scrap and the
+// policy sheets already do. "KG", "Kgs", "kilogram" typed in the form or a
+// sheet would otherwise sit beside KGS as a second unit for the same thing.
+// Every other unit is kept exactly as given.
+const KG_SPELLINGS = /^(kg|kgs|kilo|kilos|kilogram|kilograms)$/i;
+export const normalizeSkuUnit = (v) => {
+  if (v == null) return v;
+  const s = String(v).trim();
+  return KG_SPELLINGS.test(s) ? 'KGS' : s;
+};
+
 const SkuSchema = new Schema({
   ...baseSchemaFields,
 
@@ -112,7 +123,7 @@ const SkuSchema = new Schema({
   // reader gets a string and never has to guard for it.
   convertedItemNameForResale: { type: String, trim: true, default: '', set: (v) => (v == null ? '' : v) },
 
-  unit: { type: String, default: 'PCS' }, // e.g., PCS, KGS, MTR, LTR
+  unit: { type: String, default: 'PCS', set: normalizeSkuUnit }, // e.g., PCS, KGS, MTR, LTR
   pcsPerBox: { type: Number, default: 1, min: 1 },
   weightPerBox: { type: Number, default: 0, min: 0 }, // Weight in KGs
   weightPerPc: { type: Number, default: 0, min: 0 },

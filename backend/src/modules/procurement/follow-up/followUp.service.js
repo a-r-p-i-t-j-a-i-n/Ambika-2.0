@@ -19,9 +19,11 @@ const findOrThrow = async (id) => {
   return fu;
 };
 
-const logEntry = (type, message, user) => ({
+const logEntry = (type, message, user, extra = {}) => ({
+  ...extra,
   type: type || FOLLOWUP_TYPE.CALL,
   message: message || '',
+  contactPerson: extra.contactPerson || '',
   timestamp: new Date(),
   by: user?._id,
   byName: user?.name || '',
@@ -85,11 +87,15 @@ export const followUpService = {
         followUpType: data.followUpType || FOLLOWUP_TYPE.CALL,
         remarks: data.remarks || '',
         formLink: data.formLink || '',
+        contactPerson: data.contactPerson || '',
         isActiveFollowUp: true,
         performedBy: user?._id,
         performedByName: user?.name || '',
         createdBy: user?._id,
         activityTimeline: [{ action: 'CREATE', description: `Follow-up created for ${po.poNumber}`, actorId: user?._id }],
+        communicationLog: [logEntry(data.followUpType || FOLLOWUP_TYPE.CALL, `Follow-up started — planned ${plannedAt.toDateString()}`, user, {
+          outcome: 'CREATED', contactPerson: data.contactPerson, nextFollowUpDate: plannedAt, remarks: data.remarks || '',
+        })],
       });
     } catch (err) {
       // The findOne check above is a fast, friendly pre-check — it cannot by
@@ -125,7 +131,34 @@ export const followUpService = {
       .sort()
       .select()
       .paginate();
-    return features.exec();
+    const result = await features.exec();
+
+    // Delivery context for the tracker view, read live from each row's PO:
+    // expected delivery date and outstanding qty (Σ quantity − receivedQty,
+    // same formula as GRN stats). lastFollowUpAt = the latest logged contact,
+    // falling back to the last recorded actual.
+    const poIds = [...new Set(result.docs.map((d) => String(d.poId)).filter(Boolean))];
+    const pos = poIds.length
+      ? await VendorPurchaseOrder.find({ _id: { $in: poIds } })
+        .select('expectedDeliveryDate items.quantity items.receivedQty items.unit poStatus').lean()
+      : [];
+    const poMap = new Map(pos.map((p) => [String(p._id), p]));
+    result.docs = result.docs.map((d) => {
+      const po = poMap.get(String(d.poId));
+      const items = po?.items || [];
+      const pendingQty = items.reduce((s, it) => s + Math.max(0, (it.quantity || 0) - (it.receivedQty || 0)), 0);
+      const units = [...new Set(items.map((it) => it.unit).filter(Boolean))];
+      const lastLog = (d.communicationLog || []).reduce((m, c) => (c.timestamp && (!m || c.timestamp > m) ? c.timestamp : m), null);
+      return {
+        ...d,
+        expectedDeliveryDate: po?.expectedDeliveryDate || null,
+        poStatus: po?.poStatus,
+        pendingQty: Math.round(pendingQty * 100) / 100,
+        pendingQtyUnit: units.length === 1 ? units[0] : '',
+        lastFollowUpAt: lastLog || d.actualAt || null,
+      };
+    });
+    return result;
   },
 
   async getById(id) {
@@ -211,7 +244,16 @@ export const followUpService = {
     if (data.remarks) fu.remarks = data.remarks;
     fu.performedBy = user?._id;
     fu.performedByName = user?.name || fu.performedByName;
-    if (data.message) fu.communicationLog.push(logEntry(data.followUpType || fu.followUpType, data.message, user));
+    if (data.contactPerson) fu.contactPerson = data.contactPerson;
+    // Every cycle is logged (message optional) so the history is complete.
+    fu.communicationLog.push(logEntry(data.followUpType || fu.followUpType, data.message, user, {
+      outcome: hasFinal ? 'READY_FOR_GRN' : (hasNext ? 'FOLLOWED_UP' : 'DONE'),
+      contactPerson: data.contactPerson,
+      actualAt,
+      nextFollowUpDate: hasNext ? new Date(data.nextFollowUpDate) : null,
+      finalMaterialDate: hasFinal ? new Date(data.finalMaterialDate) : null,
+      remarks: data.remarks || '',
+    }));
     fu.updatedBy = user?._id;
 
     if (hasFinal) {
@@ -262,7 +304,11 @@ export const followUpService = {
     fu.isActiveFollowUp = true; // still the active cycle for this PO
     if (data.followUpType) fu.followUpType = data.followUpType;
     if (data.remarks) fu.remarks = data.remarks;
-    fu.communicationLog.push(logEntry(data.followUpType || fu.followUpType, data.message || `Rescheduled to ${new Date(data.nextFollowUpDate).toDateString()}`, user));
+    if (data.contactPerson) fu.contactPerson = data.contactPerson;
+    fu.communicationLog.push(logEntry(data.followUpType || fu.followUpType, data.message || `Rescheduled to ${new Date(data.nextFollowUpDate).toDateString()}`, user, {
+      outcome: 'RESCHEDULED', contactPerson: data.contactPerson,
+      nextFollowUpDate: new Date(data.nextFollowUpDate), remarks: data.remarks || '',
+    }));
     fu.updatedBy = user?._id;
     fu.activityTimeline.push({ action: 'RESCHEDULE', description: 'Follow-up rescheduled', actorId: user?._id });
     return fu.save();

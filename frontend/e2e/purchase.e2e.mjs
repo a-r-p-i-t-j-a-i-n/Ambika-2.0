@@ -9,9 +9,9 @@
  * Branches, each from a fresh indent to a GRN-eligible PO:
  *   A  quotation NOT required · PI not required        (500 kg)
  *   B  vendor quotation uploaded (Step 1.2 "Yes") → Step 1.3 approved · PI not required  (400 kg)
- *   C  quotation not required · PI → PI approved → full advance payment  (300 kg)
+ *   C  quotation not required · PI → PI approved → MD approves the advance → full advance payment  (300 kg)
  * Then: one GRN on A's PO, completed from TWO browser contexts at the same moment
- * (no stock yet — the receipt waits for QC), then MD-signed and QC'd: only then
+ * (no stock yet — the receipt waits for QC), then QC'd (the MD signs it afterwards): only then
  * does the accepted coil become stock, exactly once.
  *
  * Expects: backend :5099 (ambika_e2e_purchase, via e2eServer.js), frontend :3100.
@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
-import { signAndCompleteQc } from './_grnLifecycle.mjs';
+import { completeQc, signAsMd, signGrnFromCard } from './_grnLifecycle.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -226,6 +226,20 @@ const run = async () => {
       const piDoc = ((await apiGet('/procurement/proforma-invoices?limit=10&sort=-createdAt'))?.data || [])[0];
       await go(`/procurement/proforma-invoices/${piDoc._id}`);
       await waitText(/Record Advance Payment/);
+      // Advance payment is the one step that waits for the MD.
+      check(`${key}: PI approval raised its MD approval — the advance waits for it`, piDoc.mdApprovalStatus === 'READY_FOR_MD_APPROVAL'
+        && await waitText(/advance payment waits for MD approval/), piDoc.mdApprovalStatus);
+      await btn(/^Record Advance Payment$/).click();
+      await page.waitForTimeout(700);
+      check(`${key}: …the payment dialog refuses it until the MD approves (Record Payment disabled)`,
+        /until the MD approves this Proforma Invoice/.test(await dialog().innerText()) && await dialog().getByRole('button', { name: /^Record Payment$/ }).isDisabled());
+      await dialog().getByRole('button', { name: /^Cancel$/ }).click();
+      await page.waitForTimeout(500);
+      await page.locator('#pi-md-approval').getByRole('button', { name: 'Sign Document' }).click();
+      await signAsMd(page);
+      const piSigned = (await apiGet(`/procurement/proforma-invoices/${piDoc._id}`))?.data;
+      check(`${key}: the MD approves the PI from its MD Approval card`, piSigned?.mdApprovalStatus === 'MD_APPROVED', piSigned?.mdApprovalStatus);
+      await fresh();
       await btn(/^Record Advance Payment$/).click();
       await page.waitForTimeout(700);
       await dialog().getByLabel(/Payment Status/).first().click();
@@ -355,16 +369,20 @@ const run = async () => {
   check('…and completing it posted NO stock — its coil is awaiting QC', ((await apiGet('/inventory/movements?limit=50'))?.data || []).length === 0
     && gAfter?.items?.[0]?.stockStatus === 'AWAITING_QC', gAfter?.items?.[0]?.stockStatus);
 
-  /* ── MD signs, QC completes — only then is the coil stock ── */
-  section('MD signature + Incoming QC on the raced GRN');
+  /* ── QC completes (no MD signature needed) — only then is the coil stock ── */
+  section('Incoming QC on the raced GRN, then the MD signature');
   await page.goto(`${APP}/procurement/grns/${g._id}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#grn-qc-section', { timeout: 20000 });
   await page.waitForTimeout(1200);
-  const qcStage = await signAndCompleteQc(page, page, { doubleClick: true });
-  check('signed by the MD and QC completed (accept all, double-clicked)', qcStage === 'QC Completed · Passed', qcStage);
+  const qcStage = await completeQc(page, page, { doubleClick: true });
+  check('QC completed before any MD signature (accept all, double-clicked)', qcStage === 'QC Completed · Passed', qcStage);
   const mvAfter = (await apiGet('/inventory/movements?limit=50'))?.data || [];
   check('now ONE GRN_IN of the accepted 500 kg at PLG01', mvAfter.length === 1 && mvAfter[0].txnType === 'GRN_IN' && mvAfter[0].quantity === 500 && mvAfter[0].warehouse === 'PLG01',
     JSON.stringify(mvAfter.map((m) => [m.txnType, m.quantity, m.warehouse])));
+  check('…posted while the GRN was still awaiting the MD', (await apiGet(`/procurement/grns/${g._id}`))?.data?.approvalStatus === 'READY_FOR_MD_APPROVAL');
+  await signGrnFromCard(page);
+  check('the MD signs afterwards from the GRN page — still ONE GRN_IN', (await apiGet(`/procurement/grns/${g._id}`))?.data?.approvalStatus === 'MD_APPROVED'
+    && ((await apiGet('/inventory/movements?limit=50'))?.data || []).length === 1);
 
   await browser.close();
   // Expected 4xx: the one refused GRN completion (the race loser).

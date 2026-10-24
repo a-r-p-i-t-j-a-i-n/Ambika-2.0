@@ -2432,7 +2432,7 @@ export const rmImsService = {
     if (!coilSkus.length) {
       return { docs: [], summary: { matched: 0, available: 0, fullyCut: 0, unbatchedReceipts: 0, anomalies: 0, unmappedBatch } };
     }
-    const unitBySku = new Map(coilSkus.map((s) => [String(s._id), s.unit || 'KG']));
+    const unitBySku = new Map(coilSkus.map((s) => [String(s._id), s.unit || 'KGS']));
 
     const filter = {
       skuId: { $in: coilSkus.map((s) => s._id) },
@@ -2606,7 +2606,7 @@ export const rmImsService = {
         skuId: m.skuId,
         skuCode: m.skuCode,
         skuName: m.skuName,
-        unit: m.unit || unitBySku.get(String(m.skuId)) || 'KG',
+        unit: m.unit || unitBySku.get(String(m.skuId)) || 'KGS',
         receivedWeight: round2(m.quantity),
         availableWeight: available,
         consumedWeight: consumed,
@@ -2811,7 +2811,7 @@ export const rmImsService = {
         skuId: receipt.skuId,
         skuCode: receipt.skuCode || '',
         itemName: receipt.skuName || '',
-        unit: receipt.unit || 'KG',
+        unit: receipt.unit || 'KGS',
         receivedWeightKg: round2(receipt.quantity),
         unitCost: round2(receipt.unitCost),
         grnNo: receipt.refType === 'GRN' ? (receipt.refNumber || grn?.grnNumber || '') : '',

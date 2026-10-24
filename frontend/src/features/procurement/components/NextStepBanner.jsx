@@ -21,24 +21,29 @@ const TONE = {
  * (`{ tone, title, desc?, primary?: {label, icon, onClick, disabled, loading},
  * secondary?: {label, onClick, disabled} }`) — this component only renders
  * it, so no business/workflow rule lives here, only presentation.
+ *
+ * `mb` is kept on the component itself (not left to a parent's flex `gap`)
+ * because every consumer still composes its page the same way — this banner
+ * as a plain sibling before the rest of the content — so changing how it
+ * spaces itself from what follows is safe to do once, here, for all of them.
  */
 const NextStepBanner = ({ step }) => {
   if (!step) return null;
   const t = TONE[step.tone] || TONE.info;
   return (
     <Paper elevation={0} sx={{
-      mb: 2.5, p: 2.5, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
+      mb: 2.5, p: 2, borderRadius: '8px', border: '1px solid', borderColor: t.border, bgcolor: t.bg,
       display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
     }}>
-      <Box sx={{ width: 42, height: 42, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
-        <ArrowRight size={22} />
+      <Box sx={{ width: 40, height: 40, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
+        <ArrowRight size={20} />
       </Box>
       <Box sx={{ minWidth: 220, flexGrow: 1 }}>
         <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
         <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{step.title}</Typography>
         {step.desc && <Typography variant="body2" color="text.secondary">{step.desc}</Typography>}
       </Box>
-      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' }, '& .MuiButtonBase-root': { width: { xs: '100%', sm: 'auto' } } }}>
         {step.secondary && (
           <Button variant="outlined" disabled={step.secondary.disabled} onClick={step.secondary.onClick}>{step.secondary.label}</Button>
         )}

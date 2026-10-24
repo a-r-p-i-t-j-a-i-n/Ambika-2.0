@@ -3,7 +3,7 @@
  *
  *   node e2e/fullFlow.e2e.mjs
  *
- *   PO -> GRN (no stock) -> MD signature -> Incoming QC -> RM Stock -> batch lookup
+ *   PO -> GRN (no stock) -> Incoming QC -> RM Stock (MD signs afterwards) -> batch lookup
  *      -> Cut Coils -> Circle stock -> Scrap -> Scrap by physical coil -> Movement history
  *
  * The coil's destination comes from its SKU (RM IMS) at the chosen Received At;
@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { assertE2ESetup } from './_e2eSafety.mjs';
-import { combinedBtn, confirmCompleteGrn, signAndCompleteQc, stageText } from './_grnLifecycle.mjs';
+import { combinedBtn, confirmCompleteGrn, completeQc, signGrnFromCard, stageText } from './_grnLifecycle.mjs';
 
 const findChromium = () => {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -212,13 +212,18 @@ const main = async () => {
     await shot(`03-grn-complete-${p.batch}`);
     await confirmCompleteGrn(page);
     const stockAfterGrn = (await page.getByTestId('grn-line-stock').allInnerTexts()).join(' ');
-    check('completed — Awaiting MD Signature; the coil is Awaiting QC, not stock', (await stageText(page)) === 'Awaiting MD Signature'
+    check('completed — QC open at once (no MD signature awaited); the coil is Awaiting QC, not stock', (await stageText(page)) === 'QC Pending'
       && /Awaiting QC/.test(stockAfterGrn), stockAfterGrn.replace(/\s+/g, ' '));
 
-    // ── MD signs, Incoming QC accepts the coil → stock ──
-    check('MD signs, QC completes (accept all)', (await signAndCompleteQc(page)) === 'QC Completed · Passed');
+    // ── Incoming QC accepts the coil → stock, before any MD signature ──
+    check('QC completes before any MD signature (accept all)', (await completeQc(page)) === 'QC Completed · Passed');
     const stockAfterQc = (await page.getByTestId('grn-line-stock').allInnerTexts()).join(' ').replace(/\s+/g, ' ');
     check(`…the coil is now RM stock at ${p.at}`, new RegExp(`RM IMS · ${p.at} Posted `).test(stockAfterQc), stockAfterQc);
+    check('…while the GRN\'s MD approval is still pending', /Pending Approval/.test(await page.locator('#grn-md-approval').innerText()));
+    // ── The MD signs afterwards — recorded independently, the stock stays ──
+    await signGrnFromCard(page);
+    check('the MD signs afterwards from the GRN page; the stock is unchanged', /MD Approved/.test(await page.locator('#grn-md-approval').innerText())
+      && (await page.getByTestId('grn-line-stock').allInnerTexts()).join(' ').replace(/\s+/g, ' ') === stockAfterQc);
     await shot(`04-grn-completed-${p.batch}`);
   }
 

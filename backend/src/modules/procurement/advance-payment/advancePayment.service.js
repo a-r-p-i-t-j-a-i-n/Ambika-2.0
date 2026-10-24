@@ -6,6 +6,8 @@ import { AppError } from '../../../utils/apiResponse.js';
 import { generateAdvancePaymentNumber } from '../../../utils/docNumberGenerator.js';
 import { logger } from '../../../utils/logger.js';
 import { invoicesHoldingAdvance, withPiAdvanceLock } from '../vendor-invoice/piAdvance.js';
+import { paymentApprovalBlock } from '../../approvals/approval.policy.js';
+import { raisePiMdApproval } from '../proforma-invoice/proformaInvoice.service.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -30,6 +32,20 @@ export const advancePaymentService = {
     const isCancelledEntry = data.paymentStatus === PAYMENT_STATUS.CANCELLED;
     if (!isCancelledEntry && pi.piStatus !== PI_STATUS.READY_FOR_ADVANCE_PAYMENT) {
       throw new AppError('Payments can only be recorded for a PI that is ready for advance payment', 400);
+    }
+
+    // MD approval is the one mandatory gate in Purchase FMS: no advance is paid
+    // until the MD has approved the PI. A CANCELLED entry posts nothing, so it
+    // is not held back. A PI approved before this rule existed has no MD
+    // approval yet — raise it now, so it reaches the MD's queue.
+    if (!isCancelledEntry) {
+      const blocked = paymentApprovalBlock(pi.mdApprovalStatus, 'Proforma Invoice');
+      if (blocked) {
+        if (pi.mdApprovalStatus !== 'READY_FOR_MD_APPROVAL' && await raisePiMdApproval(pi, user)) {
+          throw new AppError('Payment cannot be processed until the MD approves this Proforma Invoice — it has now been sent to the MD for approval', 400);
+        }
+        throw new AppError(blocked, 400);
+      }
     }
 
     const previousBalance = round2(pi.balanceAmount);

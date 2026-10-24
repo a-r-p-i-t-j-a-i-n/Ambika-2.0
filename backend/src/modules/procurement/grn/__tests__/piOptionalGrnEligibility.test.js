@@ -4,9 +4,10 @@
  * Required", before it can reach GRN. `isPiSettledForGrn` (grn.service.js) is
  * the single gate this depends on: it now also treats the default
  * PO_PI_STATUS.NOT_RECEIVED (no PI ever created, undecided) as settled, same
- * as PAYMENT_COMPLETED and PI_NOT_REQUIRED — while a PI that was actually
- * created and is still in progress keeps blocking until it's resolved, so an
- * existing PI's payment gate is never bypassed.
+ * as PAYMENT_COMPLETED and PI_NOT_REQUIRED. An APPROVED PI is settled too: its
+ * advance payment (and the MD approval that payment needs) is a payment-only
+ * gate and never holds the GRN back. Only a created PI still awaiting its
+ * ordinary approval (PI_RECEIVED) blocks.
  *
  * Pure / DB-less test: grnService.create() itself loads real PO/GRN documents
  * from Mongo and isn't exercised here — see the module header comment for
@@ -35,10 +36,15 @@ test('PI_RECEIVED is NOT settled — a PI that exists must still be resolved', (
   assert.equal(isPiSettledForGrn('PI_RECEIVED'), false);
 });
 
-test('READY_FOR_ADVANCE_PAYMENT is NOT settled — an approved PI still needs its advance payment', () => {
-  assert.equal(isPiSettledForGrn('READY_FOR_ADVANCE_PAYMENT'), false);
+test('READY_FOR_ADVANCE_PAYMENT is settled — GRN never waits for the advance payment or its MD approval', () => {
+  assert.equal(isPiSettledForGrn('READY_FOR_ADVANCE_PAYMENT'), true);
 });
 
-test('PI_APPROVED is NOT settled — defensive: an in-progress PI state must still block even if later wired up', () => {
-  assert.equal(isPiSettledForGrn('PI_APPROVED'), false);
+test('PI_APPROVED is settled — an approved PI never holds the GRN back', () => {
+  assert.equal(isPiSettledForGrn('PI_APPROVED'), true);
+});
+
+test('unknown / missing PI status is NOT settled (defensive)', () => {
+  assert.equal(isPiSettledForGrn(undefined), false);
+  assert.equal(isPiSettledForGrn('SOMETHING_ELSE'), false);
 });

@@ -25,6 +25,10 @@ import AdvancePaymentFormDialog from '../advance-payments/AdvancePaymentFormDial
 import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
+import { useSelector } from 'react-redux';
+import MdApprovalCard from '../approvals/MdApprovalCard';
+import PdfViewerModal from '../common/PdfViewerModal';
+import { isMdUser } from '../approvals/mdApprovalMeta';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -56,6 +60,8 @@ const ProformaInvoiceDetail = () => {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [mdPdfOpen, setMdPdfOpen] = useState(false);
+  const isMd = useSelector((s) => isMdUser(s.auth.user));
 
   // Step 1.7 — payments recorded against this PI.
   const piPayable = ['READY_FOR_ADVANCE_PAYMENT', 'PAYMENT_COMPLETED'].includes(data?.data?.piStatus);
@@ -81,6 +87,9 @@ const ProformaInvoiceDetail = () => {
   };
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
+  // Advance payment is the one step that waits for the MD (server-enforced in
+  // advancePayment.service.js); everything else carries on regardless.
+  const mdCleared = pi.mdApprovalStatus === 'MD_APPROVED';
   const nextStep = (() => {
     if (pi.piStatus === 'CANCELLED') return null;
     if (editable) {
@@ -89,9 +98,18 @@ const ProformaInvoiceDetail = () => {
         primary: { label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, onClick: () => setApprovalOpen(true) },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
+    if (pi.piStatus === 'READY_FOR_ADVANCE_PAYMENT' && !mdCleared) {
+      return { tone: 'warn', title: 'PI approved — the advance payment waits for MD approval',
+        desc: pi.mdApprovalStatus === 'READY_FOR_MD_APPROVAL'
+          ? 'The Managing Director must approve this PI before any advance is paid.'
+          : 'This PI has not been sent to the MD yet — it is sent automatically the first time a payment is attempted.',
+        primary: pi.mdApprovalStatus === 'READY_FOR_MD_APPROVAL'
+          ? { label: 'Go to MD Approval', icon: <CheckCircle2 size={16} />, onClick: () => document.getElementById('pi-md-approval')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+          : { label: 'Record Advance Payment', icon: <Wallet size={16} />, onClick: () => setPaymentOpen(true) } };
+    }
     if (pi.piStatus === 'READY_FOR_ADVANCE_PAYMENT') {
       return { tone: 'success', title: 'PI approved — next: record the advance payment (Step 1.7)',
-        desc: 'Record the advance payment against this PI to proceed toward GRN.',
+        desc: 'Record the advance payment against this PI. GRN does not wait for it.',
         primary: { label: 'Record Advance Payment', icon: <Wallet size={16} />, onClick: () => setPaymentOpen(true) } };
     }
     if (pi.piStatus === 'PAYMENT_COMPLETED') {
@@ -317,6 +335,19 @@ const ProformaInvoiceDetail = () => {
           </Grid>
         )}
 
+        {/* MD approval of the advance payment (Digital Approval & Signature) */}
+        {pi.mdApprovalStatus && pi.mdApprovalStatus !== 'NOT_REQUIRED' && (
+          <Grid item xs={12} id="pi-md-approval" sx={{ scrollMarginTop: 80 }}>
+            <MdApprovalCard
+              documentType="PROFORMA_INVOICE"
+              documentId={pi._id}
+              documentTitle={pi.piNumber}
+              isMd={isMd}
+              onPreviewPdf={pi.mdApprovalPdfUrl ? () => setMdPdfOpen(true) : undefined}
+            />
+          </Grid>
+        )}
+
         {/* Timeline */}
         {pi.activityTimeline?.length ? (
           <Grid item xs={12}>
@@ -341,6 +372,7 @@ const ProformaInvoiceDetail = () => {
       <ProformaInvoiceApprovalDialog open={approvalOpen} pi={pi} onClose={() => setApprovalOpen(false)} />
       <ProformaInvoicePdfPreview open={pdfOpen} pi={pi} onClose={() => setPdfOpen(false)} />
       <AdvancePaymentFormDialog open={paymentOpen} pi={pi} onClose={() => setPaymentOpen(false)} />
+      <PdfViewerModal open={mdPdfOpen} url={pi.mdApprovalPdfUrl} title={`${pi.piNumber} — advance payment approval`} onClose={() => setMdPdfOpen(false)} />
     </Box>
   );
 };

@@ -4,6 +4,7 @@ import PDFDocument from 'pdfkit';
 import VendorFinalPayment, { FINAL_PAYMENT_STATUS } from './finalPayment.model.js';
 import VendorVoucher, { VOUCHER_STATUS } from '../voucher/voucher.model.js';
 import VendorInvoice, { INVOICE_STATUS } from '../vendor-invoice/vendorInvoice.model.js';
+import { paymentApprovalBlock } from '../../approvals/approval.policy.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateFinalPaymentNumber } from '../../../utils/docNumberGenerator.js';
@@ -131,6 +132,15 @@ export const finalPaymentService = {
     }
 
     const status = data.paymentStatus;
+
+    // MD approval is the one mandatory gate in Purchase FMS: no money moves
+    // until the MD has approved the voucher. A CANCELLED entry posts nothing,
+    // so it is not held back.
+    if (status !== FINAL_PAYMENT_STATUS.CANCELLED) {
+      const blocked = paymentApprovalBlock(v.approvalStatus, 'voucher');
+      if (blocked) throw new AppError(blocked, 400);
+    }
+
     const previousBalance = round2(v.balanceAmount);
     const paidAmount = round2(data.paidAmount);
 

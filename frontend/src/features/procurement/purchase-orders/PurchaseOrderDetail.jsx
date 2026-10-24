@@ -2,14 +2,13 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
-  Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
+  Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Tooltip,
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer, Divider,
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, CheckCircle2, Send, FileDown, Ban, ShoppingBag,
-  Building2, FileText, Truck, Mail, PhoneCall, PackageCheck, Eye, CircleSlash,
-  MapPin, Wallet, Clock, CalendarClock, User, RotateCcw, GitBranch,
-  Compass, AlertTriangle, ClipboardCheck,
+  Building2, FileText, Truck, PhoneCall, PackageCheck, Eye, CircleSlash,
+  RotateCcw, GitBranch, AlertTriangle, ClipboardCheck,
 } from 'lucide-react';
 import { alpha } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
@@ -25,7 +24,10 @@ import {
 
 } from '../../../store/api/procurementApi';
 import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtINR, fmtDate, poDisplayNumber } from './poMeta';
-import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
+import useRowNavigation, { rowNavigationTableSx } from '../common/useRowNavigation';
+import StatusChip from '../components/StatusChip';
+import NextStepBanner from '../components/NextStepBanner';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
@@ -44,24 +46,55 @@ import GrnFormDialog from '../grn/GrnFormDialog';
 import GrnCompleteDialog from '../grn/GrnCompleteDialog';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
-
-const TONE_COLOR = { info: '#2563eb', warning: '#b45309', success: '#16a34a', error: '#dc2626' };
+// ── Page-wide design tokens — same spacing/typography scale as Indent Detail
+// (SECTION_GAP/CARD_PAD/Field/FieldGrid/SectionCard), so the two most-used
+// Purchase FMS detail pages read as one system. ──
+const SECTION_GAP = 2;
+const CARD_PAD = 2;
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
-    <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
-    {/* overflowWrap:anywhere lets long unbroken tokens (GST/PAN/emails) wrap inside their column */}
+    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: PFMS.sub, mb: 0.4 }}>{label}</Typography>
     {/* div, not p: some values are chips (block elements), which may not sit inside a <p> */}
-    <Typography component="div" sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
+    <Typography component="div" sx={{ fontSize: '0.86rem', fontWeight: 600, color: PFMS.ink, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
   </Box>
 );
 
-const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ ...pfmsCardSx, p: 3, height: '100%' }}>
-    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, fontWeight: 700, color: 'primary.main' }}>
-      <Box component="span" sx={{ display: 'grid', placeItems: 'center', width: 30, height: 30, borderRadius: '9px', bgcolor: (t) => alpha(t.palette.primary.main, 0.08) }}>{icon}</Box>
-      {title}
-    </Typography>
+// A row of Fields that aligns to common columns and reflows at any width
+// without hand-picked breakpoints — one grid rule instead of a different
+// xs/sm split per section.
+const FieldGrid = ({ children, sx }) => (
+  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 210px))', gap: 2, ...sx }}>
+    {children}
+  </Box>
+);
+
+// Every section is a full-width card, stacked in one column. A paired md=6
+// layout (the previous Vendor/Terms and Approval/Remarks arrangement) leaves
+// half a row blank the moment its partner is short or absent — on real data
+// that happened constantly (no Remarks, a short Approval card) — and a wide
+// table forced into half the content width wraps cells it doesn't need to.
+// Full width removes both failure modes at the root.
+// Action rows on this page carry several chips/buttons at once (unlike a
+// single lone button), so the title needs more room than Indent Detail's
+// sm breakpoint gives before pairing side-by-side — at sm a longer title
+// ("Vendor Delivery Follow-ups") wraps and squeezes the action row instead
+// of sitting cleanly above it.
+const SectionCard = ({ icon, title, action, children }) => (
+  <Paper sx={{ ...pfmsCardSx, p: CARD_PAD }}>
+    <Box sx={{
+      display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: { xs: 'stretch', md: 'center' },
+      justifyContent: 'space-between', gap: 1.25, mb: 1.5,
+    }}>
+      <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, fontSize: '0.92rem', color: 'primary.main' }}>
+        {icon} {title}
+      </Typography>
+      {action && (
+        <Box sx={{ width: { xs: '100%', md: 'auto' }, display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', '& .MuiButtonBase-root': { width: { xs: '100%', sm: 'auto' } } }}>
+          {action}
+        </Box>
+      )}
+    </Box>
     {children}
   </Paper>
 );
@@ -79,32 +112,34 @@ const TaxBadge = ({ label, value }) => (
   </Box>
 );
 
-// Icon-led contact row; becomes a tel:/mailto: link when href is provided.
-const ContactRow = ({ icon, text, href }) => (
-  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25 }}>
-    <Box sx={{ flexShrink: 0, mt: 0.25, display: 'grid', placeItems: 'center', width: 30, height: 30, borderRadius: '9px', bgcolor: (t) => alpha(t.palette.primary.main, 0.06), color: 'primary.main' }}>{icon}</Box>
-    {href && text ? (
-      <Typography component="a" href={href} sx={{ fontWeight: 600, color: 'text.primary', textDecoration: 'none', overflowWrap: 'anywhere', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}>{text}</Typography>
-    ) : (
-      <Typography sx={{ fontWeight: 600, color: text ? 'text.primary' : 'text.disabled', overflowWrap: 'anywhere' }}>{text || '—'}</Typography>
-    )}
-  </Box>
-);
+// tel:/mailto: link styled as a plain Field value (no icon avatar).
+const LinkValue = ({ text, href }) => {
+  if (!text) return '—';
+  if (!href) return text;
+  return (
+    <Typography component="a" href={href} sx={{ fontSize: 'inherit', fontWeight: 'inherit', color: 'inherit', textDecoration: 'none', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}>
+      {text}
+    </Typography>
+  );
+};
 
-// Icon-led label/value pair for terms & release fields.
-const TermItem = ({ icon, label, value, accent }) => (
-  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-    <Box sx={{ flexShrink: 0, display: 'grid', placeItems: 'center', width: 34, height: 34, borderRadius: '10px', bgcolor: (t) => alpha(t.palette.primary.main, 0.06), color: 'primary.main' }}>{icon}</Box>
-    <Box sx={{ minWidth: 0 }}>
-      <Typography sx={{ fontSize: '0.64rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'text.secondary' }}>{label}</Typography>
-      <Typography sx={{ fontWeight: 700, color: value ? (accent ? 'primary.main' : 'text.primary') : 'text.disabled', overflowWrap: 'anywhere' }}>{value || '—'}</Typography>
-    </Box>
-  </Box>
-);
+// Activity event type → semantic tone, reusing StatusChip's own tone set
+// (not a new color vocabulary) so failures stand out without the whole
+// timeline looking alarming.
+const activityTone = (action) => {
+  const a = String(action || '').toUpperCase();
+  if (a.includes('FAIL')) return 'red';
+  if (a.includes('CANCEL') || a.includes('REJECT')) return 'red';
+  if (a.includes('APPROVE')) return 'green';
+  if (a.includes('RELEASE')) return 'teal';
+  if (a.includes('CREATE')) return 'blue';
+  return 'neutral';
+};
 
 const PurchaseOrderDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const followUpRowNav = useRowNavigation({ to: (fu) => `/procurement/follow-ups/${fu._id}` });
   const goBack = useSmartBack('/purchase-fms/purchase-orders');
   const { enqueueSnackbar } = useSnackbar();
 
@@ -164,11 +199,11 @@ const PurchaseOrderDetail = () => {
   // "Create GRN" is offered again.
   const activeGrn = grns.find((g) => g.grnStatus !== 'CANCELLED') || null;
   // GRN gate: material confirmed (READY_FOR_GRN + Final Material Date) and PI
-  // settled. NOT_RECEIVED (no PI — optional) is settled too, same as the
-  // backend's isPiSettledForGrn (grn.service.js) — only an in-progress PI blocks.
+  // settled — same list as the backend's isPiSettledForGrn (grn.service.js).
+  // An approved PI is settled: its advance payment / MD approval never blocks GRN.
   const grnGateMet = data?.data?.followUpStatus === 'READY_FOR_GRN'
     && Boolean(data?.data?.finalMaterialDate)
-    && ['NOT_RECEIVED', 'PAYMENT_COMPLETED', 'PI_NOT_REQUIRED'].includes(data?.data?.piStatus);
+    && ['NOT_RECEIVED', 'PI_NOT_REQUIRED', 'PI_APPROVED', 'READY_FOR_ADVANCE_PAYMENT', 'PAYMENT_COMPLETED'].includes(data?.data?.piStatus);
   // A new PO needs the full gate; one already partially received keeps receiving (back-compat).
   // Blocked while the active GRN is still a draft — it must be completed first.
   const canCreateGrn = activeGrn?.grnStatus !== 'DRAFT' && (
@@ -184,7 +219,7 @@ const PurchaseOrderDetail = () => {
     if (!activeGrn) return null;
     if (activeGrn.grnStatus === 'DRAFT') {
       return {
-        tone: 'warning', text: 'A GRN has been created for this PO — complete it, then the MD signs it and Incoming QC posts the accepted stock.',
+        tone: 'warning', text: 'A GRN has been created for this PO — complete it, then Incoming QC posts the accepted stock.',
         primary: { label: 'Complete GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnCompleteOpen(true) },
       };
     }
@@ -195,15 +230,8 @@ const PurchaseOrderDetail = () => {
         primary: { label: 'Create Next GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnFormOpen(true) },
       };
     }
-    // MD Digital Approval gate: Incoming QC cannot start until this GRN is
-    // signed — the sign action itself lives on GRN Detail's MD Approval card.
-    if (activeGrn.approvalStatus !== 'MD_APPROVED') {
-      return {
-        tone: 'warning', text: 'Goods received — awaiting MD Approval before Incoming QC can start.',
-        primary: { label: 'View GRN', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/grns/${activeGrn._id}`) },
-      };
-    }
     // QC is entered on the GRN page, directly under the GRN (one combined step).
+    // The GRN's MD approval is tracked separately and never holds QC back.
     return {
       tone: 'success', text: 'Goods received — run Incoming QC on the GRN page.',
       primary: { label: 'Open GRN & QC', icon: <ClipboardCheck size={16} />, onClick: () => navigate(`/procurement/grns/${activeGrn._id}#qc`) },
@@ -235,14 +263,14 @@ const PurchaseOrderDetail = () => {
   // never from follow-up notes or a new status enum. ──
   const effectiveExpectedDate = po.finalMaterialDate || nextFollowUpDate || po.expectedDeliveryDate || null;
   const deliveryStatus = (() => {
-    if (po.poStatus === 'FULLY_RECEIVED') return { label: 'Fully Received', color: 'success' };
-    if (po.poStatus === 'PARTIAL_RECEIVED') return { label: 'Partially Received', color: 'warning' };
+    if (po.poStatus === 'FULLY_RECEIVED') return { label: 'Fully Received', tone: 'green' };
+    if (po.poStatus === 'PARTIAL_RECEIVED') return { label: 'Partially Received', tone: 'orange' };
     if (po.poStatus !== 'RELEASED_TO_VENDOR' || !effectiveExpectedDate) return null;
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const exp = new Date(effectiveExpectedDate); exp.setHours(0, 0, 0, 0);
-    if (exp.getTime() === today.getTime()) return { label: 'Due Today', color: 'warning' };
-    if (exp.getTime() < today.getTime()) return { label: 'Overdue', color: 'error' };
-    return { label: 'Upcoming', color: 'info' };
+    if (exp.getTime() === today.getTime()) return { label: 'Due Today', tone: 'amber' };
+    if (exp.getTime() < today.getTime()) return { label: 'Overdue', tone: 'red' };
+    return { label: 'Upcoming', tone: 'blue' };
   })();
   // Routine delivery follow-ups close once the PO is fully received — matches
   // the backend's own eligibility gate (followUpService.create), not a new rule.
@@ -322,22 +350,17 @@ const PurchaseOrderDetail = () => {
           primary: { label: followUpPrimary.label, icon: followUpPrimary.icon, onClick: followUpPrimary.onClick, disabled: followUpPrimary.disabled },
         };
       }
-      // A PI that was actually created and hasn't finished still needs
-      // resolving — these are the only cases that legitimately block GRN now
-      // that PI itself is optional (see grnGateMet / isPiSettledForGrn).
+      // A created PI still awaiting its ordinary approval is the only PI state
+      // that blocks GRN (see grnGateMet / isPiSettledForGrn). An approved PI's
+      // advance payment waits for the MD on its own and never holds GRN back.
       if (livePi && canApprovePi) {
         return {
           tone: 'warning', text: 'The Proforma Invoice is waiting for approval.',
           primary: { label: 'Approve PI', icon: <CheckCircle2 size={16} />, onClick: () => setPiApprovalOpen(true) },
         };
       }
-      if (livePi && livePi.piStatus === 'READY_FOR_ADVANCE_PAYMENT') {
-        return {
-          tone: 'warning', text: 'The PI is approved — record the advance payment to complete it.',
-          primary: { label: 'Open PI', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) },
-        };
-      }
-      if (livePi && livePi.piStatus !== 'PAYMENT_COMPLETED') {
+      const advancePending = livePi?.piStatus === 'READY_FOR_ADVANCE_PAYMENT';
+      if (livePi && !advancePending && livePi.piStatus !== 'PAYMENT_COMPLETED') {
         return {
           tone: 'warning', text: 'The Proforma Invoice is still in progress.',
           primary: { label: 'Open PI', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) },
@@ -351,11 +374,20 @@ const PurchaseOrderDetail = () => {
           tone: 'success',
           text: livePi?.piStatus === 'PAYMENT_COMPLETED'
             ? 'Payment is complete — create the GRN to receive stock.'
+            : advancePending
+              ? 'Material delivery is confirmed — create the GRN to receive stock. The PI advance payment is recorded separately and does not hold the GRN.'
             : isPiNotRequired
               ? 'PI was marked Not Required — create the GRN to receive stock.'
               : 'Material delivery is confirmed — create the GRN to receive stock. A Proforma Invoice is optional and can still be added later.',
           primary: { label: 'Create GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnFormOpen(true) },
-          secondary: canCreatePi ? { label: 'Create PI', onClick: () => setPiFormOpen(true) } : null,
+          secondary: canCreatePi ? { label: 'Create PI', onClick: () => setPiFormOpen(true) }
+            : advancePending ? { label: 'Open PI', onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) } : null,
+        };
+      }
+      if (advancePending) {
+        return {
+          tone: 'warning', text: 'The PI is approved — record the advance payment to complete it.',
+          primary: { label: 'Open PI', icon: <Eye size={16} />, onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) },
         };
       }
       if (canCreatePi) {
@@ -408,14 +440,26 @@ const PurchaseOrderDetail = () => {
       };
     }
     return {
-      text: 'GRN is blocked because PI is not completed.',
+      text: 'GRN is blocked because the Proforma Invoice is not approved yet.',
       button: canCreatePi
         ? { label: 'Create PI', onClick: () => setPiFormOpen(true) }
         : livePi ? { label: 'Open PI', onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) } : null,
     };
   })() : null;
 
-  const hasQuickActions = (fuRelevant && !followUpPrimary.done) || canCreatePi || livePi || canMarkPiNotRequired || canCreateGrn || Boolean(grnGate);
+  // Quick actions jump straight to any OTHER available step without
+  // scrolling — "other" meaning not already the Next Action's own primary/
+  // secondary button, so the same action is never offered twice in the same
+  // screen region.
+  const nextActionLabels = new Set([nextAction?.primary?.label, nextAction?.secondary?.label].filter(Boolean));
+  const quickActions = [
+    fuRelevant && !followUpPrimary.done && { key: 'followup', label: followUpPrimary.label, icon: <PhoneCall size={13} />, onClick: followUpPrimary.onClick, disabled: followUpPrimary.disabled },
+    canCreatePi && { key: 'createPi', label: 'Create PI', icon: <FileText size={13} />, onClick: () => setPiFormOpen(true) },
+    livePi && { key: 'openPi', label: 'Open PI', icon: <Eye size={13} />, onClick: () => navigate(`/procurement/proforma-invoices/${livePi._id}`) },
+    canMarkPiNotRequired && { key: 'markPiNotReq', label: 'Mark PI Not Required', icon: <CircleSlash size={13} />, color: 'warning', onClick: () => setPiNotReqOpen(true) },
+    canCreateGrn && { key: 'createGrn', label: 'Create GRN', icon: <PackageCheck size={13} />, color: 'success', onClick: () => setGrnFormOpen(true) },
+    grnGate && { key: 'grnGate', label: grnGate.primary.label, icon: grnGate.primary.icon, color: grnGate.tone === 'success' ? 'success' : 'warning', onClick: grnGate.primary.onClick },
+  ].filter((a) => a && !nextActionLabels.has(a.label));
 
   const handleCancel = async () => {
     try { await cancelPo({ id: po._id }).unwrap(); enqueueSnackbar('PO cancelled', { variant: 'info' }); }
@@ -435,116 +479,67 @@ const PurchaseOrderDetail = () => {
   };
 
   return (
-    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
-      {/* Hero */}
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
-          <ArrowLeft size={20} />
-        </IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
-          <ShoppingBag size={24} />
+    <Box sx={{ ...pfmsPageSx }}>
+      {/* Hero — status + identity only; the workflow action lives in the Next
+          Action banner below, not duplicated up here. */}
+      <Box sx={{ mb: SECTION_GAP, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+        <Tooltip title="Back">
+          <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}`, width: 38, height: 38 }}>
+            <ArrowLeft size={18} />
+          </IconButton>
+        </Tooltip>
+        <Box sx={{ width: 38, height: 38, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main', flexShrink: 0 }}>
+          <ShoppingBag size={20} />
         </Box>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{poDisplayNumber(po)}</Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: PFMS.ink }}>{poDisplayNumber(po)}</Typography>
             <PoStatusChip status={po.poStatus} />
             <PoApprovalChip status={po.approvalStatus} />
             <PoReleaseChip status={po.releaseStatus} />
           </Box>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: PFMS.sub }}>
             {po.vendorName} · Indent {po.indentNumber || '—'} · {fmtDate(po.poDate)}
           </Typography>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {isDraft && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
-          {canRelease && <Button variant="contained" startIcon={<Send size={16} />} onClick={() => setReleaseOpen(true)}>Release to Supplier</Button>}
-          <Button variant="outlined" startIcon={pdfGenerating ? <CircularProgress size={16} /> : <FileDown size={16} />} onClick={doPreviewPdf} disabled={pdfGenerating}>{po.poPdfUrl ? 'PO PDF' : 'Preview PDF'}</Button>
-          {canCancel && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
+          {isDraft && <Button variant="outlined" size="small" startIcon={<Pencil size={15} />} onClick={() => setFormOpen(true)}>Edit</Button>}
+          <Button variant="outlined" size="small" startIcon={pdfGenerating ? <CircularProgress size={15} /> : <FileDown size={15} />} onClick={doPreviewPdf} disabled={pdfGenerating}>
+            {po.poPdfUrl ? 'PO PDF' : 'Preview PDF'}
+          </Button>
+          {canCancel && <Button variant="outlined" size="small" color="error" startIcon={<Ban size={15} />} onClick={handleCancel}>Cancel</Button>}
           {po.poStatus === 'CANCELLED' && (
-            <Button variant="contained" startIcon={<RotateCcw size={16} />} onClick={() => setReviseOpen(true)}>Revise PO</Button>
+            <Button variant="contained" size="small" startIcon={<RotateCcw size={15} />} onClick={() => setReviseOpen(true)}>Revise PO</Button>
           )}
         </Box>
       </Box>
 
-      {/* Next Action — guides the user through Follow-up → PI → GRN without
-          back-and-forth navigation (backend gating rules are unchanged). */}
-      {nextAction && (
-        <Paper sx={{
-          mb: 3, p: 2.5, borderRadius: '8px', border: '1px solid',
-          borderColor: alpha(TONE_COLOR[nextAction.tone], 0.3),
-          bgcolor: alpha(TONE_COLOR[nextAction.tone], 0.05),
-        }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0, flexGrow: 1 }}>
-              <Box sx={{
-                flexShrink: 0, width: 36, height: 36, borderRadius: '10px', display: 'grid', placeItems: 'center',
-                bgcolor: alpha(TONE_COLOR[nextAction.tone], 0.15), color: TONE_COLOR[nextAction.tone],
-              }}>
-                <Compass size={18} />
-              </Box>
-              <Box sx={{ minWidth: 0 }}>
-                <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: TONE_COLOR[nextAction.tone] }}>
-                  Next Action
-                </Typography>
-                <Typography sx={{ fontWeight: 600 }}>{nextAction.text}</Typography>
-              </Box>
-            </Box>
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              {nextAction.secondary && (
-                <Button size="small" variant="outlined" color="warning" onClick={nextAction.secondary.onClick}>{nextAction.secondary.label}</Button>
-              )}
-              {nextAction.primary && (
-                <Button variant="contained" size="small" startIcon={nextAction.primary.icon} onClick={nextAction.primary.onClick}
-                  disabled={nextAction.primary.disabled}
-                  sx={{ bgcolor: TONE_COLOR[nextAction.tone], '&:hover': { bgcolor: TONE_COLOR[nextAction.tone] } }}>
-                  {nextAction.primary.label}
-                </Button>
-              )}
-            </Box>
-          </Box>
+      {/* Next Action — the one guided call-to-action (Follow-up → PI → GRN),
+          shared presentation with every other Purchase FMS detail page. */}
+      <NextStepBanner step={nextAction ? {
+        tone: nextAction.tone === 'warning' ? 'warn' : nextAction.tone,
+        title: nextAction.text,
+        primary: nextAction.primary,
+        secondary: nextAction.secondary,
+      } : null} />
 
-          {/* Quick actions — jump straight to any available step without scrolling */}
-          {hasQuickActions && (
-            <Box sx={{ mt: 2, pt: 2, borderTop: '1px dashed', borderColor: 'divider', display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-              <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', mr: 0.5 }}>Quick actions:</Typography>
-              {fuRelevant && !followUpPrimary.done && (
-                <Button size="small" variant="text" startIcon={<PhoneCall size={13} />} onClick={followUpPrimary.onClick} disabled={followUpPrimary.disabled}>
-                  {followUpPrimary.label}
-                </Button>
-              )}
-              {canCreatePi && (
-                <Button size="small" variant="text" startIcon={<FileText size={13} />} onClick={() => setPiFormOpen(true)}>Create PI</Button>
-              )}
-              {livePi && (
-                <Button size="small" variant="text" startIcon={<Eye size={13} />}
-                  onClick={() => navigate(`/procurement/proforma-invoices/${livePi._id}`)}>Open PI</Button>
-              )}
-              {canMarkPiNotRequired && (
-                <Button size="small" variant="text" color="warning" startIcon={<CircleSlash size={13} />} onClick={() => setPiNotReqOpen(true)}>
-                  Mark PI Not Required
-                </Button>
-              )}
-              {canCreateGrn && (
-                <Button size="small" variant="text" color="success" startIcon={<PackageCheck size={13} />} onClick={() => setGrnFormOpen(true)}>
-                  Create GRN
-                </Button>
-              )}
-              {grnGate && (
-                <Button size="small" variant="text" color={grnGate.tone === 'success' ? 'success' : 'warning'}
-                  startIcon={grnGate.primary.icon} onClick={grnGate.primary.onClick}>
-                  {grnGate.primary.label}
-                </Button>
-              )}
-            </Box>
-          )}
-        </Paper>
+      {/* Quick actions — a single compact row, never repeating whatever the
+          Next Action banner already offers. */}
+      {quickActions.length > 0 && (
+        <Box sx={{ mb: SECTION_GAP, mt: -1, display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, color: PFMS.sub, mr: 0.5 }}>Quick actions:</Typography>
+          {quickActions.map((a) => (
+            <Button key={a.key} size="small" variant="text" color={a.color} startIcon={a.icon} onClick={a.onClick} disabled={a.disabled}>
+              {a.label}
+            </Button>
+          ))}
+        </Box>
       )}
 
       {/* Revision linkage badges */}
       {(po.revisedFromPoId || po.revisedToPoNumber) && (
-        <Box sx={{ mb: 3, display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+        <Box sx={{ mb: SECTION_GAP, display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           {po.revisedFromPoId && (
             <Chip icon={<GitBranch size={14} />} variant="outlined" color="primary"
               label={`Revised from ${po.revisedFromPoNumber || 'previous PO'}${po.revisionNo ? ` · revision ${po.revisionNo}` : ''}`}
@@ -561,355 +556,308 @@ const PurchaseOrderDetail = () => {
       )}
 
       <FmsDoerCard entityType="PO" entityId={id} />
-      <Grid container spacing={3}>
-        {/* Vendor */}
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<Building2 size={17} />} title="Vendor / Supplier">
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {/* Name + tax identifiers */}
-              <Box>
-                <Typography sx={{ fontSize: '1.2rem', fontWeight: 800, lineHeight: 1.25, color: 'text.primary' }}>
-                  {po.vendorName || '—'}
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1.25 }}>
-                  <TaxBadge label="GST" value={po.vendorGST} />
-                  <TaxBadge label="PAN" value={po.vendorPAN} />
-                </Box>
-              </Box>
-              <Divider sx={{ borderStyle: 'dashed' }} />
-              {/* Contact details */}
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                <ContactRow icon={<MapPin size={15} />} text={po.vendorAddress} />
-                <ContactRow icon={<PhoneCall size={15} />} text={po.vendorPhone} href={po.vendorPhone ? `tel:${po.vendorPhone}` : undefined} />
-                <ContactRow icon={<Mail size={15} />} text={po.vendorEmail} href={po.vendorEmail ? `mailto:${po.vendorEmail}` : undefined} />
+
+      {/* Every remaining section is a full-width card in one vertical stack
+          — see the comment on SectionCard for why. */}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: SECTION_GAP }}>
+        <SectionCard icon={<Building2 size={18} />} title="Vendor / Supplier">
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Box>
+              <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, lineHeight: 1.25, color: PFMS.ink }}>
+                {po.vendorName || '—'}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
+                <TaxBadge label="GST" value={po.vendorGST} />
+                <TaxBadge label="PAN" value={po.vendorPAN} />
               </Box>
             </Box>
-          </SectionCard>
-        </Grid>
+            <FieldGrid>
+              <Field label="Address" value={po.vendorAddress} />
+              <Field label="Phone" value={<LinkValue text={po.vendorPhone} href={po.vendorPhone ? `tel:${po.vendorPhone}` : undefined} />} />
+              <Field label="Email" value={<LinkValue text={po.vendorEmail} href={po.vendorEmail ? `mailto:${po.vendorEmail}` : undefined} />} />
+            </FieldGrid>
+          </Box>
+        </SectionCard>
 
-        {/* Terms + release */}
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<Truck size={17} />} title="Terms & Release">
-            <Grid container spacing={2.5}>
-              <Grid item xs={12} sm={6}><TermItem icon={<Truck size={15} />} label="Delivery Terms" value={po.deliveryTerms} /></Grid>
-              <Grid item xs={12} sm={6}><TermItem icon={<Wallet size={15} />} label="Payment Terms" value={po.paymentTerms} accent /></Grid>
-              <Grid item xs={12} sm={6}><TermItem icon={<Clock size={15} />} label="Lead Time" value={po.leadTime} /></Grid>
-              <Grid item xs={12} sm={6}><TermItem icon={<CalendarClock size={15} />} label="Credit Period" value={po.creditPeriod ? `${po.creditPeriod} days` : ''} accent /></Grid>
-              <Grid item xs={12} sm={6}><TermItem icon={<User size={15} />} label="Released By" value={po.releasedBy} /></Grid>
-              <Grid item xs={12} sm={6}><TermItem icon={<CheckCircle2 size={15} />} label="Released At" value={po.releasedAt ? fmtDate(po.releasedAt) : ''} /></Grid>
-              {po.supplierEmailSent ? (
-                <Grid item xs={12}>
-                  <Chip size="small" icon={<Mail size={13} />} color="info"
-                    label={`Supplier email sent · ${fmtDate(po.supplierEmailSentAt)}`} sx={{ fontWeight: 700 }} />
-                </Grid>
-              ) : null}
-            </Grid>
-          </SectionCard>
-        </Grid>
+        <SectionCard icon={<Truck size={18} />} title="Terms & Release">
+          <FieldGrid>
+            <Field label="Delivery Terms" value={po.deliveryTerms} />
+            <Field label="Payment Terms" value={po.paymentTerms} />
+            <Field label="Lead Time" value={po.leadTime} />
+            <Field label="Credit Period" value={po.creditPeriod ? `${po.creditPeriod} days` : null} />
+            <Field label="Released By" value={po.releasedBy} />
+            <Field label="Released At" value={po.releasedAt ? fmtDate(po.releasedAt) : null} />
+          </FieldGrid>
+          {po.supplierEmailSent ? (
+            <Box sx={{ mt: 2 }}>
+              <StatusChip tone="blue" label={`Supplier email sent · ${fmtDate(po.supplierEmailSentAt)}`} />
+            </Box>
+          ) : null}
+        </SectionCard>
 
         {/* Step 1.5 — Vendor Delivery Follow-ups (only meaningful for released POs).
             This replaces the former standalone "Material Follow-ups" hub step —
             PO detail is now the primary place to record and review them. */}
         {(po.poStatus === 'RELEASED_TO_VENDOR' || po.followUpStatus !== 'NOT_STARTED') && (
-          <Grid item xs={12}>
-            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-                <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
-                  <PhoneCall size={18} /> Vendor Delivery Follow-ups
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-                  {deliveryStatus && <Chip size="small" color={deliveryStatus.color} label={deliveryStatus.label} sx={{ fontWeight: 700 }} />}
-                  {/* One primary follow-up action — label/target adapts to the current cycle. */}
-                  {deliveryFollowUpsClosed ? (
-                    <Chip size="small" variant="outlined" label="Follow-ups closed — fully received" sx={{ fontWeight: 700 }} />
-                  ) : followUpPrimary.done ? (
-                    <Chip size="small" color="success" icon={<CheckCircle2 size={14} />} label="Ready for GRN" sx={{ fontWeight: 700 }} />
-                  ) : (
-                    <Button size="small" variant="contained" startIcon={followUpPrimary.icon} onClick={followUpPrimary.onClick} disabled={followUpPrimary.disabled}>
-                      {followUpPrimary.label}
-                    </Button>
-                  )}
-                  <Button size="small" variant="outlined" startIcon={<Eye size={14} />}
-                    onClick={() => navigate('/procurement/follow-ups')}>
-                    All Follow-ups
+          <SectionCard
+            icon={<PhoneCall size={18} />}
+            title="Vendor Delivery Follow-ups"
+            action={(
+              <>
+                {deliveryStatus && <StatusChip tone={deliveryStatus.tone} label={deliveryStatus.label} />}
+                {/* One primary follow-up action — label/target adapts to the current cycle. */}
+                {deliveryFollowUpsClosed ? (
+                  <StatusChip tone="neutral" label="Follow-ups closed — fully received" />
+                ) : followUpPrimary.done ? (
+                  <StatusChip tone="green" label="Ready for GRN" />
+                ) : (
+                  <Button size="small" variant="contained" startIcon={followUpPrimary.icon} onClick={followUpPrimary.onClick} disabled={followUpPrimary.disabled}>
+                    {followUpPrimary.label}
                   </Button>
-                </Box>
-              </Box>
-              <Grid container spacing={2} sx={{ mb: followUps.length ? 2.5 : 0 }}>
-                <Grid item xs={6} sm={2}><Field label="Follow-up Status" value={<PoFollowUpChip status={po.followUpStatus} />} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Original Expected" value={fmtFuDate(po.expectedDeliveryDate)} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Revised / Next Expected" value={nextFollowUpDate ? fmtFuDate(nextFollowUpDate) : 'Not revised'} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Final Committed" value={po.finalMaterialDate ? fmtFuDate(po.finalMaterialDate) : 'Not committed yet'} /></Grid>
-                <Grid item xs={6} sm={2}>
-                  <Field label="Last Follow-up" value={lastFollowUp
-                    ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><FuStatusChip status={lastFollowUp.followUpStatus} /><Typography variant="caption" color="text.secondary">{fmtFuDate(lastFollowUp.actualAt || lastFollowUp.plannedAt)}</Typography></Box>
-                    : '—'} />
-                </Grid>
-                <Grid item xs={6} sm={2}><Field label="Next Scheduled" value={activeFollowUp?.plannedAt ? fmtFuDate(activeFollowUp.plannedAt) : '—'} /></Grid>
-              </Grid>
+                )}
+                <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => navigate('/procurement/follow-ups')}>
+                  All Follow-ups
+                </Button>
+              </>
+            )}
+          >
+            <FieldGrid sx={{ mb: followUps.length ? 2 : 0 }}>
+              <Field label="Follow-up Status" value={<PoFollowUpChip status={po.followUpStatus} />} />
+              <Field label="Original Expected" value={fmtFuDate(po.expectedDeliveryDate)} />
+              <Field label="Revised / Next Expected" value={nextFollowUpDate ? fmtFuDate(nextFollowUpDate) : 'Not revised'} />
+              <Field label="Final Committed" value={po.finalMaterialDate ? fmtFuDate(po.finalMaterialDate) : 'Not committed yet'} />
+              <Field label="Last Follow-up" value={lastFollowUp
+                ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}><FuStatusChip status={lastFollowUp.followUpStatus} /><Typography variant="caption" color="text.secondary">{fmtFuDate(lastFollowUp.actualAt || lastFollowUp.plannedAt)}</Typography></Box>
+                : null} />
+              <Field label="Next Scheduled" value={activeFollowUp?.plannedAt ? fmtFuDate(activeFollowUp.plannedAt) : null} />
+            </FieldGrid>
 
-              {/* Full delivery commitment history — every follow-up cycle recorded
-                  against this PO, newest first (already sorted -createdAt by the API). */}
-              {followUps.length > 0 && (
-                <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '10px' }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Follow-up No</TableCell>
-                        <TableCell>Type</TableCell>
-                        <TableCell>Status</TableCell>
-                        <TableCell>Planned</TableCell>
-                        <TableCell>Actual</TableCell>
-                        <TableCell>Next / Final Date</TableCell>
-                        <TableCell>Remarks</TableCell>
-                        <TableCell>By</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {followUps.map((fu) => (
-                        <TableRow key={fu._id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(`/procurement/follow-ups/${fu._id}`)}>
-                          <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{fu.followUpNumber}</Typography></TableCell>
-                          <TableCell><FuTypeChip type={fu.followUpType} /></TableCell>
-                          <TableCell><FuStatusChip status={fu.followUpStatus} /></TableCell>
-                          <TableCell>{fmtFuDate(fu.plannedAt)}</TableCell>
-                          <TableCell>{fmtFuDate(fu.actualAt)}</TableCell>
-                          <TableCell>
-                            {fu.finalMaterialDate
-                              ? <Typography variant="body2" sx={{ color: '#15803d', fontWeight: 600 }}>Final: {fmtFuDate(fu.finalMaterialDate)}</Typography>
-                              : fu.nextFollowUpDate
-                                ? <Typography variant="body2" sx={{ color: '#b45309' }}>Next: {fmtFuDate(fu.nextFollowUpDate)}</Typography>
-                                : '—'}
-                          </TableCell>
-                          <TableCell><Typography variant="body2" color="text.secondary" noWrap sx={{ maxWidth: 180 }}>{fu.remarks || '—'}</Typography></TableCell>
-                          <TableCell><Typography variant="body2" color="text.secondary" noWrap>{fu.performedByName || '—'}</Typography></TableCell>
-                        </TableRow>
+            {/* Full delivery commitment history — every follow-up cycle recorded
+                against this PO, newest first (already sorted -createdAt by the API). */}
+            {followUps.length > 0 && (
+              <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '10px' }}>
+                <Table size="small" sx={rowNavigationTableSx}>
+                  <TableHead>
+                    <TableRow>
+                      {['Follow-up No', 'Type', 'Status', 'Planned', 'Actual', 'Next / Final Date', 'Remarks', 'By'].map((h) => (
+                        <TableCell key={h} sx={pfmsTableHeadSx}>{h}</TableCell>
                       ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              )}
-            </Paper>
-          </Grid>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {followUps.map((fu) => (
+                      <TableRow key={fu._id} hover {...followUpRowNav.getTableRowProps(fu)}>
+                        <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{fu.followUpNumber}</Typography></TableCell>
+                        <TableCell><FuTypeChip type={fu.followUpType} /></TableCell>
+                        <TableCell><FuStatusChip status={fu.followUpStatus} /></TableCell>
+                        <TableCell>{fmtFuDate(fu.plannedAt)}</TableCell>
+                        <TableCell>{fmtFuDate(fu.actualAt)}</TableCell>
+                        <TableCell>
+                          {fu.finalMaterialDate
+                            ? <Typography variant="body2" sx={{ color: '#15803d', fontWeight: 600 }}>Final: {fmtFuDate(fu.finalMaterialDate)}</Typography>
+                            : fu.nextFollowUpDate
+                              ? <Typography variant="body2" sx={{ color: '#b45309' }}>Next: {fmtFuDate(fu.nextFollowUpDate)}</Typography>
+                              : '—'}
+                        </TableCell>
+                        <TableCell><Typography variant="body2" color="text.secondary" noWrap sx={{ maxWidth: 180 }}>{fu.remarks || '—'}</Typography></TableCell>
+                        <TableCell><Typography variant="body2" color="text.secondary" noWrap>{fu.performedByName || '—'}</Typography></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </SectionCard>
         )}
 
         {/* Step 1.6 — Proforma Invoice */}
         {(po.poStatus === 'RELEASED_TO_VENDOR' || po.piStatus !== 'NOT_RECEIVED') && (
-          <Grid item xs={12}>
-            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-                <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
-                  <FileText size={18} /> Proforma Invoice
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  {canCreatePi && (
-                    <Button size="small" variant="contained" startIcon={<FileText size={14} />} onClick={() => setPiFormOpen(true)}>
-                      Create PI
-                    </Button>
-                  )}
-                  {livePi && (
-                    <Button size="small" variant="outlined" startIcon={<Eye size={14} />}
-                      onClick={() => navigate(`/procurement/proforma-invoices/${livePi._id}`)}>
-                      View PI
-                    </Button>
-                  )}
-                  {canApprovePi && (
-                    <Button size="small" variant="outlined" color="success" startIcon={<CheckCircle2 size={14} />}
-                      onClick={() => setPiApprovalOpen(true)}>
-                      Approve PI
-                    </Button>
-                  )}
-                  {canMarkPiNotRequired && (
-                    <Button size="small" variant="outlined" color="warning" startIcon={<CircleSlash size={14} />}
-                      onClick={() => setPiNotReqOpen(true)}>
-                      Mark PI Not Required
-                    </Button>
-                  )}
-                </Box>
-              </Box>
-              {isPiNotRequired ? (
-                <Grid container spacing={2}>
-                  <Grid item xs={6} sm={2.4}><Field label="PI Status" value={<PoPiChip status={po.piStatus} />} /></Grid>
-                  <Grid item xs={6} sm={3}><Field label="Reason" value={po.piNotRequiredReason || '—'} /></Grid>
-                  <Grid item xs={6} sm={3}><Field label="Remarks" value={po.piNotRequiredRemarks || '—'} /></Grid>
-                  <Grid item xs={6} sm={2}><Field label="Marked By" value={po.piNotRequiredByName || '—'} /></Grid>
-                  <Grid item xs={6} sm={1.6}><Field label="Marked Date" value={fmtDate(po.piNotRequiredAt)} /></Grid>
-                </Grid>
-              ) : (
-                <Grid container spacing={2}>
-                  <Grid item xs={6} sm={2.4}><Field label="PI Status" value={<PoPiChip status={po.piStatus} />} /></Grid>
-                  <Grid item xs={6} sm={2.4}><Field label="PI Number" value={po.piNumber || livePi?.piNumber || '—'} /></Grid>
-                  <Grid item xs={6} sm={2.4}><Field label="PI Date" value={fmtFuDate(livePi?.piDate || po.piReceivedAt)} /></Grid>
-                  <Grid item xs={6} sm={2.4}><Field label="Paid Amount" value={livePi ? fmtPiINR(livePi.paidAmount) : '—'} /></Grid>
-                  <Grid item xs={6} sm={2.4}><Field label="Balance Amount" value={livePi ? fmtPiINR(livePi.balanceAmount) : '—'} /></Grid>
-                </Grid>
-              )}
-            </Paper>
-          </Grid>
+          <SectionCard
+            icon={<FileText size={18} />}
+            title="Proforma Invoice"
+            action={(
+              <>
+                {canCreatePi && (
+                  <Button size="small" variant="contained" startIcon={<FileText size={14} />} onClick={() => setPiFormOpen(true)}>Create PI</Button>
+                )}
+                {livePi && (
+                  <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => navigate(`/procurement/proforma-invoices/${livePi._id}`)}>View PI</Button>
+                )}
+                {canApprovePi && (
+                  <Button size="small" variant="outlined" color="success" startIcon={<CheckCircle2 size={14} />} onClick={() => setPiApprovalOpen(true)}>Approve PI</Button>
+                )}
+                {canMarkPiNotRequired && (
+                  <Button size="small" variant="outlined" color="warning" startIcon={<CircleSlash size={14} />} onClick={() => setPiNotReqOpen(true)}>Mark PI Not Required</Button>
+                )}
+              </>
+            )}
+          >
+            {isPiNotRequired ? (
+              <FieldGrid>
+                <Field label="PI Status" value={<PoPiChip status={po.piStatus} />} />
+                <Field label="Reason" value={po.piNotRequiredReason} />
+                <Field label="Remarks" value={po.piNotRequiredRemarks} />
+                <Field label="Marked By" value={po.piNotRequiredByName} />
+                <Field label="Marked Date" value={fmtDate(po.piNotRequiredAt)} />
+              </FieldGrid>
+            ) : (
+              <FieldGrid>
+                <Field label="PI Status" value={<PoPiChip status={po.piStatus} />} />
+                <Field label="PI Number" value={po.piNumber || livePi?.piNumber} />
+                <Field label="PI Date" value={fmtFuDate(livePi?.piDate || po.piReceivedAt)} />
+                <Field label="Paid Amount" value={livePi ? fmtPiINR(livePi.paidAmount) : null} />
+                <Field label="Balance Amount" value={livePi ? fmtPiINR(livePi.balanceAmount) : null} />
+              </FieldGrid>
+            )}
+          </SectionCard>
         )}
 
         {/* Step 1.8 — Goods Receipt Notes */}
         {grnRelevant && (
-          <Grid item xs={12}>
-            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-                <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
-                  <PackageCheck size={18} /> Goods Receipt ({grns.length})
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  {canCreateGrn && (
-                    <Button size="small" variant="contained" startIcon={<PackageCheck size={14} />} onClick={() => setGrnFormOpen(true)}>
-                      Create GRN
-                    </Button>
-                  )}
-                  {grnGate && (
-                    <Button size="small" variant="contained" color={grnGate.tone === 'success' ? 'success' : 'warning'}
-                      startIcon={grnGate.primary.icon} onClick={grnGate.primary.onClick}>
-                      {grnGate.primary.label}
-                    </Button>
-                  )}
-                  <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => navigate('/purchase-fms/grn')}>
-                    View GRNs
+          <SectionCard
+            icon={<PackageCheck size={18} />}
+            title={`Goods Receipt (${grns.length})`}
+            action={(
+              <>
+                {canCreateGrn && (
+                  <Button size="small" variant="contained" startIcon={<PackageCheck size={14} />} onClick={() => setGrnFormOpen(true)}>Create GRN</Button>
+                )}
+                {grnGate && (
+                  <Button size="small" variant="contained" color={grnGate.tone === 'success' ? 'success' : 'warning'} startIcon={grnGate.primary.icon} onClick={grnGate.primary.onClick}>
+                    {grnGate.primary.label}
                   </Button>
-                </Box>
+                )}
+                <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => navigate('/purchase-fms/grn')}>View GRNs</Button>
+              </>
+            )}
+          >
+            {grnBlock && (
+              <Box sx={{
+                mb: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#dc2626', 0.06),
+                border: '1px solid', borderColor: alpha('#dc2626', 0.2),
+                display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+              }}>
+                <AlertTriangle size={16} color="#dc2626" />
+                <Typography variant="body2" sx={{ fontWeight: 600, color: '#991b1b', flexGrow: 1 }}>{grnBlock.text}</Typography>
+                {grnBlock.button && (
+                  <Button size="small" variant="contained" color="error" onClick={grnBlock.button.onClick} disabled={grnBlock.button.disabled}>{grnBlock.button.label}</Button>
+                )}
               </Box>
-              {grnBlock && (
-                <Box sx={{
-                  mb: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#dc2626', 0.06),
-                  border: '1px solid', borderColor: alpha('#dc2626', 0.2),
-                  display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
-                }}>
-                  <AlertTriangle size={16} color="#dc2626" />
-                  <Typography variant="body2" sx={{ fontWeight: 600, color: '#991b1b', flexGrow: 1 }}>{grnBlock.text}</Typography>
-                  {grnBlock.button && (
-                    <Button size="small" variant="contained" color="error" onClick={grnBlock.button.onClick} disabled={grnBlock.button.disabled}>{grnBlock.button.label}</Button>
-                  )}
-                </Box>
-              )}
-              <Grid container spacing={2}>
-                <Grid item xs={6} sm={3}><Field label="Receipt Status" value={<PoStatusChip status={po.poStatus} />} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Ordered Qty" value={totalOrdered} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Received Qty" value={totalReceived} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Pending Qty" value={Math.max(0, totalOrdered - totalReceived)} /></Grid>
-              </Grid>
-              {grns.length > 0 && (
-                <Box sx={{ mt: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                  {grns.map((g) => (
-                    <Box key={g._id} onClick={() => navigate(`/procurement/grns/${g._id}`)}
-                      sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75, borderRadius: '10px', border: '1px solid', borderColor: 'divider', '&:hover': { borderColor: 'primary.main' } }}>
-                      <Typography variant="body2" fontWeight={700} color="primary.main">{g.grnNumber}</Typography>
-                      <Typography variant="caption" color="text.secondary">qty {g.totalReceivedQty}</Typography>
-                      <GrnStatusChip status={g.grnStatus} />
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </Paper>
-          </Grid>
+            )}
+            <FieldGrid>
+              <Field label="Receipt Status" value={<PoStatusChip status={po.poStatus} />} />
+              <Field label="Ordered Qty" value={totalOrdered} />
+              <Field label="Received Qty" value={totalReceived} />
+              <Field label="Pending Qty" value={Math.max(0, totalOrdered - totalReceived)} />
+            </FieldGrid>
+            {grns.length > 0 && (
+              <Box sx={{ mt: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                {grns.map((g) => (
+                  <Box key={g._id} onClick={() => navigate(`/procurement/grns/${g._id}`)}
+                    sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75, borderRadius: '10px', border: '1px solid', borderColor: 'divider', '&:hover': { borderColor: 'primary.main' } }}>
+                    <Typography variant="body2" fontWeight={700} color="primary.main">{g.grnNumber}</Typography>
+                    <Typography variant="caption" color="text.secondary">qty {g.totalReceivedQty}</Typography>
+                    <GrnStatusChip status={g.grnStatus} />
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </SectionCard>
         )}
 
-        {/* Items */}
-        <Grid item xs={12}>
-          <SectionCard icon={<FileText size={18} />} title={`Items (${po.items?.length || 0})`}>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>#</TableCell>
-                    <TableCell>Item Ref</TableCell>
-                    <TableCell>Item</TableCell>
-                    <TableCell>SKU</TableCell>
-                    <TableCell align="right">Qty</TableCell>
-                    <TableCell>Unit</TableCell>
-                    <TableCell align="right">Rate</TableCell>
-                    <TableCell align="right">Taxable</TableCell>
-                    <TableCell align="center">GST %</TableCell>
-                    <TableCell align="right">Tax</TableCell>
-                    <TableCell align="right">Total</TableCell>
-                    <TableCell align="right">Received</TableCell>
-                    <TableCell align="right">Pending</TableCell>
+        {/* Items + financial summary */}
+        <SectionCard icon={<FileText size={18} />} title={`Items (${po.items?.length || 0})`}>
+          <TableContainer sx={{ overflowX: 'auto' }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  {['#', 'Item Ref', 'Item', 'SKU'].map((h) => <TableCell key={h} sx={pfmsTableHeadSx}>{h}</TableCell>)}
+                  <TableCell align="right" sx={pfmsTableHeadSx}>Qty</TableCell>
+                  <TableCell sx={pfmsTableHeadSx}>Unit</TableCell>
+                  <TableCell align="right" sx={pfmsTableHeadSx}>Rate</TableCell>
+                  <TableCell align="right" sx={pfmsTableHeadSx}>Taxable</TableCell>
+                  <TableCell align="center" sx={pfmsTableHeadSx}>GST %</TableCell>
+                  <TableCell align="right" sx={pfmsTableHeadSx}>Tax</TableCell>
+                  <TableCell align="right" sx={pfmsTableHeadSx}>Total</TableCell>
+                  <TableCell align="right" sx={pfmsTableHeadSx}>Received</TableCell>
+                  <TableCell align="right" sx={pfmsTableHeadSx}>Pending</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(po.items || []).map((it, i) => (
+                  <TableRow key={it._id || i} hover>
+                    <TableCell>{i + 1}</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="primary.main" fontWeight={700}>
+                        {it.indentItemDisplayNumber || it.indentNumber || '—'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
+                    <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
+                    <TableCell align="right">{it.quantity}</TableCell>
+                    <TableCell>{it.unit}</TableCell>
+                    <TableCell align="right">{Number(it.rate || 0).toFixed(2)}</TableCell>
+                    <TableCell align="right">{Number(it.taxableAmount || 0).toFixed(2)}</TableCell>
+                    <TableCell align="center">{it.gstRate || 0}%</TableCell>
+                    <TableCell align="right">{Number(it.taxAmount || 0).toFixed(2)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700 }}>{Number(it.totalAmount || 0).toFixed(2)}</TableCell>
+                    <TableCell align="right" sx={{ color: '#0f766e' }}>{it.receivedQty || 0}</TableCell>
+                    <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{it.pendingQty || 0}</TableCell>
                   </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(po.items || []).map((it, i) => (
-                    <TableRow key={it._id || i} hover>
-                      <TableCell>{i + 1}</TableCell>
-                      <TableCell>
-                        <Typography variant="body2" color="primary.main" fontWeight={700}>
-                          {it.indentItemDisplayNumber || it.indentNumber || '—'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
-                      <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
-                      <TableCell align="right">{it.quantity}</TableCell>
-                      <TableCell>{it.unit}</TableCell>
-                      <TableCell align="right">{Number(it.rate || 0).toFixed(2)}</TableCell>
-                      <TableCell align="right">{Number(it.taxableAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell align="center">{it.gstRate || 0}%</TableCell>
-                      <TableCell align="right">{Number(it.taxAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700 }}>{Number(it.totalAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell align="right" sx={{ color: '#0f766e' }}>{it.receivedQty || 0}</TableCell>
-                      <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{it.pendingQty || 0}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-            <Divider sx={{ my: 2 }} />
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
-              <Box sx={{ textAlign: 'right' }}>
-                <Typography variant="caption" color="text.secondary" fontWeight={700}>TOTAL TAXABLE VALUE</Typography>
-                <Typography fontWeight={700}>{fmtINR(po.totalTaxableValue)}</Typography>
-              </Box>
-              <Box sx={{ textAlign: 'right' }}>
-                <Typography variant="caption" color="text.secondary" fontWeight={700}>GST</Typography>
-                <Typography fontWeight={700}>{fmtINR(po.totalGSTAmount)}</Typography>
-              </Box>
-              <Box sx={{ textAlign: 'right' }}>
-                <Typography variant="caption" color="primary.main" fontWeight={700}>GRAND TOTAL</Typography>
-                <Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(po.grandTotal)}</Typography>
-              </Box>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <Divider sx={{ my: 2 }} />
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
+            <Box sx={{ textAlign: 'right' }}>
+              <Typography variant="caption" color="text.secondary" fontWeight={700}>TOTAL TAXABLE VALUE</Typography>
+              <Typography fontWeight={700}>{fmtINR(po.totalTaxableValue)}</Typography>
             </Box>
-          </SectionCard>
-        </Grid>
+            <Box sx={{ textAlign: 'right' }}>
+              <Typography variant="caption" color="text.secondary" fontWeight={700}>GST</Typography>
+              <Typography fontWeight={700}>{fmtINR(po.totalGSTAmount)}</Typography>
+            </Box>
+            <Box sx={{ textAlign: 'right', px: 2, py: 1, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.06) }}>
+              <Typography variant="caption" color="primary.main" fontWeight={700}>GRAND TOTAL</Typography>
+              <Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(po.grandTotal)}</Typography>
+            </Box>
+          </Box>
+        </SectionCard>
 
-        {/* Approval + remarks */}
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<CheckCircle2 size={18} />} title="Approval">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Status" value={<PoApprovalChip status={po.approvalStatus} />} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Decided By" value={po.approval?.decidedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Decided At" value={fmtDate(po.approval?.decidedAt)} /></Grid>
-              {po.approval?.remarks ? <Grid item xs={12}><Field label="Remarks" value={po.approval.remarks} /></Grid> : null}
-            </Grid>
-          </SectionCard>
-        </Grid>
+        <SectionCard icon={<CheckCircle2 size={18} />} title="Approval">
+          <FieldGrid>
+            <Field label="Status" value={<PoApprovalChip status={po.approvalStatus} />} />
+            <Field label="Decided By" value={po.approval?.decidedBy} />
+            <Field label="Decided At" value={fmtDate(po.approval?.decidedAt)} />
+            {po.approval?.remarks ? <Field label="Remarks" value={po.approval.remarks} /> : null}
+          </FieldGrid>
+        </SectionCard>
 
         {po.remarks ? (
-          <Grid item xs={12} md={6}>
-            <SectionCard icon={<FileText size={18} />} title="Remarks">
-              <Typography variant="body2">{po.remarks}</Typography>
-            </SectionCard>
-          </Grid>
+          <SectionCard icon={<FileText size={18} />} title="Remarks">
+            <Typography variant="body2" sx={{ color: PFMS.ink }}>{po.remarks}</Typography>
+          </SectionCard>
         ) : null}
 
         {/* Activity */}
         {po.activityTimeline?.length ? (
-          <Grid item xs={12}>
-            <SectionCard icon={<ShoppingBag size={18} />} title="Activity">
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {[...po.activityTimeline].reverse().map((ev, i) => (
-                  <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 100 }} />
-                    <Typography variant="body2" color="text.secondary">{ev.description}</Typography>
-                    <Box sx={{ flexGrow: 1 }} />
-                    <Typography variant="caption" color="text.disabled">{fmtDate(ev.timestamp)}</Typography>
-                  </Box>
-                ))}
-              </Box>
-            </SectionCard>
-          </Grid>
+          <SectionCard icon={<ShoppingBag size={18} />} title="Activity">
+            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+              {[...po.activityTimeline].reverse().map((ev, i, arr) => (
+                <Box key={i} sx={{
+                  display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' },
+                  gap: { xs: 0.5, sm: 1.5 }, py: 1, borderBottom: i === arr.length - 1 ? 'none' : `1px solid ${PFMS.lineSoft}`,
+                }}>
+                  <Box sx={{ flexShrink: 0, minWidth: 108 }}><StatusChip tone={activityTone(ev.action)} label={ev.action.replace(/_/g, ' ')} /></Box>
+                  <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>{ev.description}</Typography>
+                  <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>{fmtDate(ev.timestamp)}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </SectionCard>
         ) : null}
-      </Grid>
+      </Box>
 
       {/* Drawer + dialogs */}
       <PurchaseOrderFormDrawer open={formOpen} po={po} onClose={() => setFormOpen(false)} />

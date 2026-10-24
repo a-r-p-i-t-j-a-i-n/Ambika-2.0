@@ -12,7 +12,7 @@ import {
   useUpdateProformaInvoiceMutation,
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
-import { fileHref } from '../indents/indentMeta';
+import { fileHref, UNITS, toKgsUnit } from '../indents/indentMeta';
 import { fmtINR } from './piMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
@@ -23,7 +23,6 @@ import { PFMS, pfmsCardSx } from '../pfmsTheme';
  * pulled from it automatically (editable). PI/unique numbers are generated
  * server-side. Approving later requires the PI document.
  */
-const UNITS = ['Pcs', 'Kg', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
 const GST_PRESETS = [0, 5, 12, 18, 28];
 const ACCEPT = '.pdf,image/*';
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -65,7 +64,7 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
       setPiDate(pi.piDate ? pi.piDate.slice(0, 10) : todayStr());
       setItems(pi.items?.length ? pi.items.map((it) => ({
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
-        quantity: it.quantity, unit: it.unit || 'Pcs', rate: it.rate, gstRate: it.gstRate,
+        quantity: it.quantity, unit: toKgsUnit(it.unit) || 'Pcs', rate: it.rate, gstRate: it.gstRate,
       })) : [emptyItem()]);
       setDoc(pi.piDocument?.fileUrl ? { ...pi.piDocument } : null);
       setRemarks(pi.remarks || '');
@@ -85,7 +84,7 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
     if (p?.items?.length) {
       setItems(p.items.map((it) => ({
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
-        quantity: it.quantity, unit: it.unit || 'Pcs', rate: it.rate, gstRate: it.gstRate,
+        quantity: it.quantity, unit: toKgsUnit(it.unit) || 'Pcs', rate: it.rate, gstRate: it.gstRate,
       })));
     }
   };
@@ -122,7 +121,7 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
       items: validItems.map((it) => ({
         itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
         skuId: it.skuId || undefined,
-        quantity: Number(it.quantity), unit: it.unit || 'Pcs',
+        quantity: Number(it.quantity), unit: toKgsUnit(it.unit) || 'Pcs',
         rate: Number(it.rate) || 0, gstRate: Number(it.gstRate) || 0,
       })),
       piDocument: doc ? { fileName: doc.fileName, fileUrl: doc.fileUrl, fileType: doc.fileType } : undefined,

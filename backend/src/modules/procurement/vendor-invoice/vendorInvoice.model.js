@@ -42,8 +42,15 @@ const invoiceItemSchema = new Schema({
   grnNumber: { type: String, trim: true, default: '' },
   qcId:      { type: Schema.Types.ObjectId, ref: 'IncomingQC' },
   qcNumber:  { type: String, trim: true, default: '' },
+  // The exact QC line (and its GRN line) this invoice line bills. A GRN can carry
+  // the same SKU on several lines (coils / batches), so qcId + SKU is not unique.
+  // Absent on invoices created before line-level refs — those fall back to
+  // qcId + SKU matching (see vendorInvoice.service.js resolveInvoicedByLine).
+  qcItemId:  { type: Schema.Types.ObjectId, default: null },
+  grnItemId: { type: Schema.Types.ObjectId, default: null },
+  batchNo:   { type: String, trim: true, default: '' },
 
-  skuId:    { type: Schema.Types.ObjectId, ref: 'SKU' },
+  skuId:   { type: Schema.Types.ObjectId, ref: 'SKU' },
   skuCode:  { type: String, trim: true, uppercase: true, default: '' },
   itemName: { type: String, trim: true, default: '' },
   unit:     { type: String, trim: true, default: 'Pcs' },
@@ -71,6 +78,13 @@ const vendorInvoiceSchema = new Schema({
 
   // Supplier's invoice number (entered, not auto).
   invoiceNumber:       { type: String, required: [true, 'Invoice number is required'], trim: true, index: true },
+  // Uniqueness key: the vendor invoice number normalised (normalizeInvoiceNumber).
+  // Present only while the invoice is LIVE (not rejected / deleted) and was
+  // created or renamed under the one-number-per-vendor rule — maintained by
+  // syncInvoiceNumberKey below, never sent by clients. Invoices recorded before
+  // the rule carry no key, so existing duplicates stay editable while their
+  // number is unchanged.
+  invoiceNumberKey:    { type: String, default: undefined },
   invoiceDate:         { type: Date, default: null },
   invoiceReceivedDate: { type: Date, default: Date.now },
 
@@ -137,6 +151,60 @@ const vendorInvoiceSchema = new Schema({
 vendorInvoiceSchema.index({ invoiceNumber: 'text', poNumber: 'text', grnNumber: 'text', vendorName: 'text' });
 vendorInvoiceSchema.index({ vendorId: 1, invoiceStatus: 1 });
 vendorInvoiceSchema.index({ invoiceDate: -1 });
+
+/** Vendor invoice number as compared for uniqueness: trimmed, case-insensitive. */
+export const normalizeInvoiceNumber = (n) => String(n ?? '').trim().toLowerCase();
+
+/**
+ * Would saving `next` change the stored invoice number? Any change counts —
+ * case-only too ("inv-1" → "INV-1"), since that re-keys the invoice and must be
+ * validated like any rename. Whitespace around it is trimmed by the schema, so
+ * it never counts. `next` null / undefined = number not being sent.
+ */
+export const invoiceNumberChanged = (current, next) =>
+  next != null && String(next).trim() !== String(current ?? '').trim();
+
+/**
+ * Keep invoiceNumberKey in step with the document (runs on every save):
+ *   rejected / deleted / no vendor → no key (the number is free again)
+ *   new, or number / vendor changed → key = normalised number
+ *   otherwise                       → unchanged (an older invoice stays unkeyed)
+ *
+ * The removal is always sent as $unset — markModified, because a document
+ * loaded WITHOUT a key (an older invoice) sees `undefined → undefined` as no
+ * change and would send nothing, leaving a key written to the database after
+ * the load (e.g. by a backfill) on a rejected / deleted invoice, which would
+ * keep blocking that number.
+ */
+export const syncInvoiceNumberKey = (doc) => {
+  const live = !doc.isDeleted && doc.invoiceStatus !== INVOICE_STATUS.REJECTED;
+  if (!live || !doc.vendorId) {
+    doc.invoiceNumberKey = undefined;
+    doc.markModified('invoiceNumberKey');
+  } else if (doc.isNew || doc.isModified('invoiceNumber') || doc.isModified('vendorId')) {
+    doc.invoiceNumberKey = normalizeInvoiceNumber(doc.invoiceNumber);
+  }
+};
+
+vendorInvoiceSchema.pre('save', function (next) {
+  syncInvoiceNumberKey(this);
+  next();
+});
+
+// Atomic "one live invoice number per vendor" guarantee — enforced by MongoDB on
+// every write, so two concurrent creates / renames with the same number can never
+// both succeed (one gets a duplicate-key error, mapped to a validation message in
+// vendorInvoice.service.js). The service's findOne pre-check stays as the friendly
+// first line and the only check against older, unkeyed invoices. Partial: only
+// keyed (live) invoices are indexed — same pattern as the Follow-up active index.
+vendorInvoiceSchema.index(
+  { vendorId: 1, invoiceNumberKey: 1 },
+  {
+    name: 'uniq_live_vendor_invoice_number',
+    unique: true,
+    partialFilterExpression: { invoiceNumberKey: { $type: 'string' } },
+  },
+);
 
 const VendorInvoice = model('VendorInvoice', vendorInvoiceSchema);
 export default VendorInvoice;

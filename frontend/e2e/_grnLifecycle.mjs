@@ -1,9 +1,11 @@
 /**
- * Shared browser steps for the GRN → MD signature → Incoming QC lifecycle.
+ * Shared browser steps for the GRN → Incoming QC lifecycle (+ the MD signature).
  *
  * Since QC-gated posting a GRN's stock is NOT posted when the GRN is completed:
- * the MD signs the GRN, Incoming QC is completed, and only then is the accepted
- * quantity posted (to the inventory module its SKU master Item Type decides).
+ * Incoming QC is completed and only then is the accepted quantity posted (to
+ * the inventory module its SKU master Item Type decides). The GRN's MD
+ * signature is recorded on its own and never holds QC or stock posting back —
+ * only payment waits for an MD approval.
  * Every GRN spec walks that same path through the real UI; these helpers are
  * the one copy of it. `scope` is the page or the Create / Edit GRN dialog — the
  * QC section is the same in both.
@@ -62,15 +64,19 @@ export const setQcSplit = async (scope, item, accepted, rejected) => {
 };
 
 /**
- * On a GRN whose receipt is completed and waiting for the MD: sign, then
- * complete the QC — accepting everything unless `split` is given as
+ * On a GRN whose receipt is completed: complete its QC — no MD signature is
+ * needed first. Accepts everything unless `split` is given as
  * [[itemName, accepted, rejected], …]. Returns the final stage text.
  */
-export const signAndCompleteQc = async (page, scope = page, { split = [], doubleClick = false } = {}) => {
-  await combinedBtn(scope).click();
-  await signAsMd(page);
+export const completeQc = async (page, scope = page, { split = [], doubleClick = false } = {}) => {
   for (const [item, acc, rej] of split) await setQcSplit(scope, item, acc, rej);
   await combinedBtn(scope).click();
   await confirmCompleteQc(page, { doubleClick });
   return stageText(scope);
+};
+
+/** The MD signs the GRN from its MD Approval card on the GRN page — independent of QC. */
+export const signGrnFromCard = async (page) => {
+  await page.locator('#grn-md-approval').getByRole('button', { name: 'Sign Document' }).click();
+  await signAsMd(page);
 };

@@ -1,13 +1,14 @@
 import React, { useState, useMemo } from 'react';
+import { serialColumn } from '../components/serialNumber';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, MenuItem,
+  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip,
   Autocomplete, FormControlLabel, Switch, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, MoreVertical, Eye, Pencil, CheckCircle2, CalendarClock,
-  PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock,
+  PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock, Plus,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -16,24 +17,38 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
+import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import { FuStatusChip, FuTypeChip, FOLLOWUP_STATUSES, fmtDate, fmtDelay, isDelayed } from './fuMeta';
 import FollowUpFormDrawer from './FollowUpFormDrawer';
 import FollowUpDoneDialog from './FollowUpDoneDialog';
 import FollowUpRescheduleDialog from './FollowUpRescheduleDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 const FollowUpList = () => {
   const navigate = useNavigate();
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
-  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [delayedOnly, setDelayedOnly] = useState(false);
+
+  const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
+  const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
+
+  // "Filters" covers Vendor, the date range and the Delayed-only toggle —
+  // Status stays always visible (disabled while Delayed-only is on, same as
+  // before: that toggle already implies its own status set).
+  const secondaryCount = [vendorFilter, from, to, delayedOnly].filter(Boolean).length;
+  const clearSecondary = () => { setVendorFilter(null); setFrom(''); setTo(''); setDelayedOnly(false); resetPage(); };
+  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [editFu, setEditFu] = useState(null);
@@ -41,6 +56,7 @@ const FollowUpList = () => {
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [readyOpen, setReadyOpen] = useState(false);
   const [activeFu, setActiveFu] = useState(null);
+  const rowNav = useRowNavigation({ to: (r) => `/procurement/follow-ups/${r._id}` });
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
 
@@ -89,10 +105,21 @@ const FollowUpList = () => {
   };
 
   const columns = [
+    serialColumn(),
     { field: 'followUpNumber', headerName: 'FOLLOW-UP NO', width: 125,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
     { field: 'poNumber', headerName: 'PO NUMBER', width: 140,
       renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
+    { field: 'expectedDeliveryDate', headerName: 'EXPECTED DELIVERY', width: 140,
+      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
+    { field: 'pendingQty', headerName: 'PENDING QTY', width: 115, type: 'number', sortable: false,
+      renderCell: (p) => (p.value == null
+        ? <Typography variant="caption" color="text.disabled">—</Typography>
+        : <Typography variant="body2" fontWeight={700} color={p.value > 0 ? 'warning.main' : 'success.main'}>
+            {p.value}{p.row.pendingQtyUnit ? ` ${p.row.pendingQtyUnit}` : ''}
+          </Typography>) },
+    { field: 'lastFollowUpAt', headerName: 'LAST FOLLOW-UP', width: 125, sortable: false,
+      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'indentNumber', headerName: 'INDENT NO', width: 110,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 160,
@@ -107,8 +134,30 @@ const FollowUpList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'followUpStatus', headerName: 'STATUS', width: 135,
       renderCell: (p) => <FuStatusChip status={p.value} /> },
+    // Next contact: the saved next date, else (while active) the planned date.
     { field: 'nextFollowUpDate', headerName: 'NEXT FOLLOW-UP', width: 130,
-      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
+      renderCell: (p) => {
+        const active = ['PENDING', 'RESCHEDULED'].includes(p.row.followUpStatus);
+        const next = p.value || (active ? p.row.plannedAt : null);
+        return (
+          <Typography variant="body2" sx={{ color: isDelayed(p.row) ? 'error.main' : 'text.secondary', fontWeight: isDelayed(p.row) ? 700 : 400 }}>
+            {fmtDate(next)}
+          </Typography>
+        );
+      } },
+    { field: 'contactPerson', headerName: 'CONTACT', width: 140, sortable: false,
+      renderCell: (p) => (
+        <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>
+          <Typography variant="body2" noWrap>{p.value || '—'}</Typography>
+          {p.row.vendorPhone ? <Typography variant="caption" color="text.secondary" noWrap>{p.row.vendorPhone}</Typography> : null}
+        </Box>
+      ) },
+    { field: 'remarks', headerName: 'REMARKS', flex: 1, minWidth: 160, sortable: false,
+      renderCell: (p) => (
+        <Tooltip title={p.value || ''} disableHoverListener={!p.value}>
+          <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography>
+        </Tooltip>
+      ) },
     { field: 'finalMaterialDate', headerName: 'FINAL MATERIAL', width: 125,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'timeDelayMinutes', headerName: 'TIME DELAY', width: 110, sortable: false,
@@ -129,15 +178,20 @@ const FollowUpList = () => {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
-      {/* Header — tracking/management only; follow-ups are created and driven
-          from a Purchase Order's detail page (single "Continue Follow-up" action). */}
+      {/* Header — follow-ups can be started here for any released PO, or from
+          a Purchase Order's detail page; both use the same create rules. */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Material Follow-ups ({stats.total || 0})</Typography>
+          <Typography sx={pfmsTitleSx}>Follow-ups ({stats.total || 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
-            Step 1.5 · Track every vendor delivery follow-up — open a Purchase Order to create or continue one
+            Step 1.5 · Track vendor delivery follow-ups for released POs — expected delivery, pending qty and contact history
           </Typography>
         </Box>
+        <Button variant="contained" disableElevation startIcon={<Plus size={17} />}
+          onClick={() => { setEditFu(null); setFormOpen(true); }}
+          sx={{ fontWeight: 700, borderRadius: '8px', whiteSpace: 'nowrap' }}>
+          Add Follow-up
+        </Button>
       </Box>
 
       {/* KPIs */}
@@ -149,30 +203,81 @@ const FollowUpList = () => {
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Ready For GRN"   value={stats.readyForGrn} color="#16a34a" /></Grid>
       </Grid>
 
-      {/* Filters */}
-      <Paper sx={{ ...pfmsCardSx, p: 1, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
-        <TextField size="small" placeholder="Search FU / PO / vendor…" value={search} onChange={(e) => setSearch(e.target.value)}
-          sx={{ width: { xs: '100%', sm: 230 } }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
-        <Autocomplete
-          size="small" sx={{ minWidth: 190 }}
-          options={partiesRes?.data || []}
-          value={vendorFilter}
-          getOptionLabel={(o) => o?.name || ''}
-          isOptionEqualToValue={(o, v) => o._id === v._id}
-          onChange={(_e, v) => setVendorFilter(v)}
-          renderInput={(params) => <TextField {...params} label="Vendor" />}
-        />
-        <TextField size="small" select label="Status" value={statusFilter} disabled={delayedOnly}
-          onChange={(e) => setStatusFilter(e.target.value)} sx={{ minWidth: 160 }}>
-          <MenuItem value="">All</MenuItem>
-          {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
-        </TextField>
-        <DateInputDDMMYYYY size="small" label="From" value={from} onChange={setFrom} />
-        <DateInputDDMMYYYY size="small" label="To" value={to} onChange={setTo} disabled={delayedOnly} />
-        <FormControlLabel
-          control={<Switch size="small" checked={delayedOnly} onChange={(e) => setDelayedOnly(e.target.checked)} />}
-          label={<Typography variant="caption" fontWeight={700}>Delayed only</Typography>}
+      {/* Filters — Search + Status stay visible (Status disables while
+          Delayed-only is on, same as before — that toggle implies its own
+          status set); Vendor, the date range and the toggle move into
+          Filters, which only counts those as active. */}
+      <Paper sx={{ ...pfmsCardSx, p: 1.25 }}>
+        <AdaptiveFilterBar
+          pinned={[
+            { key: 'search', minWidth: 220, node: (
+              <Box sx={{ flex: { xs: '1 1 100%', sm: '1 1 220px' }, minWidth: 0 }}>
+                <Typography component="label" htmlFor="fu-search" sx={pfmsFieldLabelSx}>Search</Typography>
+                <TextField id="fu-search" size="small" fullWidth placeholder="Search FU / PO / vendor…"
+                  value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start"><Search size={16} color={PFMS.faint} /></InputAdornment> }} />
+              </Box>
+            ) },
+            { key: 'status', minWidth: 160, node: (
+              <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
+                <Typography component="label" htmlFor="fu-status" sx={pfmsFieldLabelSx}>Status</Typography>
+                <TextField id="fu-status" size="small" select fullWidth value={statusFilter} disabled={delayedOnly}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                  <MenuItem value="">All</MenuItem>
+                  {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                </TextField>
+              </Box>
+            ) },
+          ]}
+          items={[
+            {
+              key: 'vendor', width: 200, active: Boolean(vendorFilter),
+              node: (
+                <Box sx={{ flex: '0 1 200px', minWidth: 180 }}>
+                  <Autocomplete
+                    size="small" fullWidth
+                    options={partiesRes?.data || []}
+                    value={vendorFilter}
+                    getOptionLabel={(o) => o?.name || ''}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    onChange={(_e, v) => onFilterChange(setVendorFilter)(v)}
+                    renderInput={(params) => <TextField {...params} label="Vendor" />}
+                  />
+                </Box>
+              ),
+            },
+            {
+              key: 'from', width: 150, active: Boolean(from),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="From" fullWidth value={from} onChange={onFilterChange(setFrom)} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'to', width: 150, active: Boolean(to),
+              node: (
+                <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
+                  <DateInputDDMMYYYY size="small" label="To" fullWidth value={to} onChange={onFilterChange(setTo)} disabled={delayedOnly} sx={{ width: '100%' }} />
+                </Box>
+              ),
+            },
+            {
+              key: 'delayedOnly', width: 150, active: delayedOnly,
+              node: (
+                <Box sx={{ flex: '0 0 150px', minWidth: 140, pb: 0.5 }}>
+                  <FormControlLabel
+                    control={<Switch size="small" checked={delayedOnly} onChange={(e) => onFilterChange(setDelayedOnly)(e.target.checked)} />}
+                    label={<Typography variant="caption" fontWeight={700}>Delayed only</Typography>}
+                    sx={{ ml: 0 }}
+                  />
+                </Box>
+              ),
+            },
+          ]}
+          onClearSecondary={clearSecondary}
+          onClearAll={clearAll}
+          anyActive={anyFilterActive}
         />
       </Paper>
 
@@ -187,12 +292,17 @@ const FollowUpList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          onRowClick={(p) => navigate(`/procurement/follow-ups/${p.id}`)}
+          // Row click opens Follow-up Details; Mark Done / Edit stay in the actions menu.
+          {...rowNav.gridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
+          // Secondary fields stay available from the column menu.
+          initialState={{ columns: { columnVisibilityModel: {
+            indentNumber: false, actualAt: false, finalMaterialDate: false, performedByName: false, plannedAt: false,
+          } } }}
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={{ border: 0, '& .MuiDataGrid-row': { cursor: 'pointer' } }}
+          sx={[{ border: 0 }, rowNavigationGridSx]}
         />
       </Paper>
 

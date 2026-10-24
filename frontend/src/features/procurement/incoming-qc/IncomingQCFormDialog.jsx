@@ -39,14 +39,14 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
   const [updateQc, { isLoading: updating }] = useUpdateIncomingQcMutation();
   const saving = creating || updating;
 
-  // GRNs eligible for QC: completed + qcStatus PENDING + MD Approved.
+  // GRNs eligible for QC: completed + qcStatus PENDING (MD approval never holds QC back).
   const { data: grnRes, isLoading: grnLoading } = useGetGrnsQuery(
     { limit: 200, sort: '-createdAt', qcStatus: 'PENDING' },
     { skip: !open || isEdit },
   );
   const grnOptions = (grnRes?.data || []).filter(
     (g) => ['RECEIVED', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(g.grnStatus)
-      && g.qcStatus === 'PENDING' && g.approvalStatus === 'MD_APPROVED',
+      && g.qcStatus === 'PENDING',
   );
 
   useEffect(() => {
@@ -101,9 +101,9 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
       getOptionLabel={(o) => (o ? `${o.grnNumber} — ${o.vendorName}` : '')}
       isOptionEqualToValue={(o, v) => o._id === v._id}
       onChange={(_e, v) => applyGrn(v)}
-      noOptionsText="No GRN is pending QC (must be MD Approved)"
+      noOptionsText="No completed GRN is pending QC"
       renderInput={(params) => (
-        <TextField {...params} label="GRN *" placeholder="Completed + MD Approved GRNs pending QC"
+        <TextField {...params} label="GRN *" placeholder="Completed GRNs pending QC"
           InputProps={{ ...params.InputProps, endAdornment: (<>{grnLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
       )}
     />

@@ -243,7 +243,8 @@ const verify = async () => {
     check(`GRN raised against ${p.poNumber}`, !!grn, grn?.grnNumber || 'none');
     if (!grn) continue;
     eq(`${grn.grnNumber} is completed`, grn.stockPosted, true);
-    // Posted at QC, after the MD signature — not at GRN completion.
+    // Posted at QC — not at GRN completion. The MD signs afterwards in the
+    // browser (it never holds QC back), so the GRN ends up MD-signed too.
     eq(`${grn.grnNumber} posting stage`, grn.stockPostingStage, 'QC_COMPLETION');
     eq(`${grn.grnNumber} MD-signed`, grn.approvalStatus, 'MD_APPROVED');
     eq(`${grn.grnNumber} QC passed`, grn.qcStatus, 'PASSED');

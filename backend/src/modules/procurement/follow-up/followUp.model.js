@@ -34,6 +34,15 @@ const communicationLogSchema = new Schema({
   timestamp: { type: Date, default: Date.now },
   by:        { type: Schema.Types.ObjectId, ref: 'User' },
   byName:    { type: String, trim: true, default: '' },
+  // Vendor-side person spoken to on this contact (optional).
+  contactPerson: { type: String, trim: true, default: '' },
+  // Snapshot of what this cycle recorded, so the history reads as a full
+  // timeline (CREATED / FOLLOWED_UP / RESCHEDULED / READY_FOR_GRN / DONE).
+  outcome:           { type: String, trim: true, default: '' },
+  actualAt:          { type: Date, default: null },
+  nextFollowUpDate:  { type: Date, default: null },
+  finalMaterialDate: { type: Date, default: null },
+  remarks:           { type: String, trim: true, default: '' },
 }, { _id: false });
 
 const followUpSchema = new Schema({
@@ -56,6 +65,8 @@ const followUpSchema = new Schema({
   vendorName:   { type: String, trim: true, default: '' },
   vendorEmail:  { type: String, trim: true, lowercase: true, default: '' },
   vendorPhone:  { type: String, trim: true, default: '' },
+  // Vendor-side contact person currently being chased for this delivery.
+  contactPerson: { type: String, trim: true, default: '' },
 
   // ── Sheet step identity ──
   stepNo:   { type: String, default: 'Step 1.5' },

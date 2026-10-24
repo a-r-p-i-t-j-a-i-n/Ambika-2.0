@@ -9,7 +9,6 @@ import {
   X, Save, PackageCheck, Building2, FileText, Eye, Upload, ExternalLink, ClipboardCheck, Lock,
   Plus, Trash2, ShoppingBag, Ban,
 } from 'lucide-react';
-import { useSelector } from 'react-redux';
 import { useSnackbar } from 'notistack';
 import {
   useGetPurchaseOrdersQuery,
@@ -46,7 +45,7 @@ const ACCEPT = '.pdf,image/*';
 
 /**
  * Create / edit a Goods Receipt Note (Step 1.8).
- * Only POs that are READY_FOR_GRN AND have PAYMENT_COMPLETED are selectable —
+ * Only POs that are READY_FOR_GRN with an approved / paid / not-required PI are selectable —
  * no direct/standalone GRN. Lines + quantities auto-load from the PO.
  */
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -83,10 +82,9 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const [savedGrn, setSavedGrn] = useState(null);
   const current = grn || savedGrn;
   const isEdit = Boolean(current?._id);
-  const isMd = useSelector((s) => s.auth.isRoot);
 
   // The saved GRN as the server has it now (it moves on as the user completes it,
-  // the MD signs it and QC is done — all without leaving this form).
+  // and QC is done — all without leaving this form).
   const { data: savedFreshRes } = useGetGrnByIdQuery(savedGrn?._id, { skip: !open || !savedGrn?._id || Boolean(grnProp) });
   const liveGrn = grnProp ? grn : (savedFreshRes?.data || savedGrn);
   const { data: qcRes } = useGetIncomingQcsByGrnQuery(liveGrn?._id, { skip: !open || !isGrnCompleted(liveGrn) });
@@ -172,10 +170,11 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const [previewUrl, setPreviewUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
 
-  // READY_FOR_GRN POs whose PI step is settled — payment completed OR PI marked
-  // Not Required (comma list → server $in). We drop fully-received below.
+  // READY_FOR_GRN POs whose PI step is settled — PI approved (the advance and its
+  // MD approval never hold GRN back), paid, or marked Not Required (comma list →
+  // server $in). We drop fully-received below.
   const { data: posRes, isLoading: posLoading } = useGetPurchaseOrdersQuery(
-    { limit: 200, sort: '-releasedAt', followUpStatus: 'READY_FOR_GRN', piStatus: 'PAYMENT_COMPLETED,PI_NOT_REQUIRED' },
+    { limit: 200, sort: '-releasedAt', followUpStatus: 'READY_FOR_GRN', piStatus: 'PI_APPROVED,READY_FOR_ADVANCE_PAYMENT,PAYMENT_COMPLETED,PI_NOT_REQUIRED' },
     { skip: !open || isEdit },
   );
   // Material delivery must be confirmed (Final Material Date present). A PO that
@@ -453,7 +452,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     }
     try {
       await completeGrn({ id: savedId, allowOverReceipt, remarks: header.remarks?.trim() || undefined }).unwrap();
-      enqueueSnackbar('GRN saved and completed — stock posts after MD signature and QC', { variant: 'success' });
+      enqueueSnackbar('GRN saved and completed — stock posts after QC', { variant: 'success' });
       onClose?.(true);
     } catch (err) {
       // The GRN is already saved as a draft at this point — only finalization
@@ -917,7 +916,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
               <GrnQcStatusChip stage={qcStage} />
               {grnLocked && <Chip size="small" variant="outlined" icon={<Lock size={12} />} label="GRN read-only" sx={{ fontWeight: 700 }} />}
             </Box>
-            <GrnQcSections grn={liveGrn} isMd={isMd} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
+            <GrnQcSections grn={liveGrn} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
           </Box>
         )}
       </Box>

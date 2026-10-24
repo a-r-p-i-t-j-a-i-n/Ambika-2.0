@@ -65,7 +65,7 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
       }).unwrap();
       // What the SERVER says actually happened, never what the form hoped for.
       const n = res?.data?.rmSummary?.awaitingQcLineCount ?? received.length;
-      enqueueSnackbar(`GRN completed — ${n} line(s) awaiting QC. Stock posts after the MD signs and QC is completed.`, { variant: 'success' });
+      enqueueSnackbar(`GRN completed — ${n} line(s) awaiting QC. Stock posts when the QC is completed.`, { variant: 'success' });
       onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to complete GRN — nothing was changed', { variant: 'error' });
@@ -92,7 +92,7 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
         </Box>
         <Alert severity="info" sx={{ mb: 2 }}>
           This finalises the receipt and updates the PO. Stock is <b>not</b> usable yet: accepted quantities are
-          posted after the MD signs the GRN and Incoming QC is completed. It cannot be undone.
+          posted when Incoming QC is completed. It cannot be undone.
         </Alert>
         {extraLines.length > 0 && (
           <Alert severity="error" sx={{ mb: 1.5 }}>

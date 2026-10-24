@@ -16,6 +16,8 @@ import { PFMS } from '../pfmsTheme';
  *   FULL_PAYMENT  → amount must equal the PI balance.
  *   SHORT_PAYMENT_COMPLETED → remarks required, must leave a balance.
  *   CANCELLED     → nothing is posted.
+ * MD approval of the PI is mandatory before any advance is paid (the server
+ * refuses it too); a CANCELLED entry posts nothing, so it is never held back.
  */
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -40,6 +42,10 @@ const AdvancePaymentFormDialog = ({ open, onClose, pi }) => {
   const isCancelled = paymentStatus === 'CANCELLED';
   const isShort = paymentStatus === 'SHORT_PAYMENT_COMPLETED';
   const isFull = paymentStatus === 'FULL_PAYMENT';
+  const mdStatus = pi?.mdApprovalStatus || 'NOT_REQUIRED';
+  // Awaiting the MD: a real payment cannot be submitted. A PI approved before
+  // this rule (NOT_REQUIRED) may be submitted — the server sends it to the MD.
+  const mdBlocked = !isCancelled && mdStatus === 'READY_FOR_MD_APPROVAL';
 
   useEffect(() => {
     if (!open) return;
@@ -145,6 +151,15 @@ const AdvancePaymentFormDialog = ({ open, onClose, pi }) => {
               placeholder={isShort ? 'e.g. Vendor agreed to close order with short receipt.' : ''}
               error={isShort && !remarks.trim()} />
           </Grid>
+          {!isCancelled && mdStatus !== 'MD_APPROVED' && (
+            <Grid item xs={12}>
+              <Alert severity="warning" data-testid="ap-md-gate">
+                {mdStatus === 'READY_FOR_MD_APPROVAL'
+                  ? 'Payment cannot be processed until the MD approves this Proforma Invoice.'
+                  : 'This PI has no MD approval yet. Submitting sends it to the MD — no payment is recorded until the MD approves it.'}
+              </Alert>
+            </Grid>
+          )}
           {!isCancelled && (
             <Grid item xs={12}>
               <Alert severity={after === 0 ? 'success' : 'info'}>
@@ -158,7 +173,7 @@ const AdvancePaymentFormDialog = ({ open, onClose, pi }) => {
       <DialogActions sx={{ p: 2, gap: 1 }}>
         <Button onClick={() => onClose?.(false)} disabled={isLoading}>Cancel</Button>
         <Button variant="contained" startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-          onClick={handleSubmit} disabled={isLoading}>
+          onClick={handleSubmit} disabled={isLoading || mdBlocked}>
           Record Payment
         </Button>
       </DialogActions>

@@ -6,15 +6,18 @@ import {
   TableCell, TableHead, TableRow, InputAdornment, Popover, MenuItem,
 } from '@mui/material';
 import {
-  Send, Search, CheckCircle2, XCircle, MailWarning, AlertTriangle, Paperclip,
+  Send, Search, CheckCircle2, XCircle, MailWarning, AlertTriangle, Paperclip, Eye, Download,
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useGetPurchaseOrdersQuery,
   useBulkReleasePurchaseOrdersMutation,
   useGetPoReleasePreviewMutation,
+  useGeneratePurchaseOrderPdfMutation,
 } from '../../../store/api/procurementApi';
+import { resolveFileUrl } from '../../../utils/fileUrl';
 import { poDisplayNumber } from './poMeta';
+import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
 
 const parseEmailList = (raw) => raw.split(',').map((e) => e.trim()).filter(Boolean);
@@ -127,6 +130,13 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
   const [previewFrom, setPreviewFrom] = useState('');
   const [previewMap, setPreviewMap] = useState(() => new Map());
 
+  // PO PDF preview/download — reuses the same on-demand generator as the PO
+  // list/detail (POST /:id/pdf). Generated URLs are cached per PO while open.
+  const [generatePoPdf] = useGeneratePurchaseOrderPdfMutation();
+  const [pdfCache, setPdfCache] = useState(() => new Map());
+  const [pdfBusy, setPdfBusy] = useState(''); // '' | 'preview' | 'download'
+  const [pdfPreviewPo, setPdfPreviewPo] = useState(null);
+
   useEffect(() => {
     if (!open) return;
     setSearch('');
@@ -139,6 +149,8 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     setConfirmOpen(false);
     setPreviewPoId('');
     setPreviewMap(new Map());
+    setPdfCache(new Map());
+    setPdfPreviewPo(null);
   }, [open]);
 
   // Resolve To/CC/BCC/subject for every eligible PO — refreshed (debounced) on
@@ -223,6 +235,64 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     setConfirmOpen(true);
   };
 
+  const ensurePdf = async (po) => {
+    const cached = pdfCache.get(po._id)
+      || (po.poPdfUrl && { poPdfUrl: po.poPdfUrl, poPdfFileName: po.poPdfFileName });
+    if (cached) return cached;
+    const res = await generatePoPdf({ id: po._id }).unwrap();
+    const info = { poPdfUrl: res?.data?.poPdfUrl, poPdfFileName: res?.data?.poPdfFileName };
+    if (!info.poPdfUrl) throw new Error('PDF was not generated');
+    setPdfCache((cur) => new Map(cur).set(po._id, info));
+    return info;
+  };
+
+  // Preview targets the PO shown in the Email Preview panel (the first selected,
+  // or the one picked in its "Previewing" dropdown when several are selected).
+  const handlePreviewPdf = async () => {
+    const po = eligible.find((p) => p._id === previewPoId);
+    if (!po) { enqueueSnackbar('Select a PO to preview its PDF', { variant: 'warning' }); return; }
+    setPdfBusy('preview');
+    try {
+      const info = await ensurePdf(po);
+      setPdfPreviewPo({ ...po, poNumber: poDisplayNumber(po), ...info });
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || err?.message || 'Failed to generate PDF', { variant: 'error' });
+    } finally { setPdfBusy(''); }
+  };
+
+  // Fetch as a blob so the filename sticks; fall back to opening the URL in a
+  // new tab if the signed file host blocks the cross-origin fetch.
+  const saveFile = async (url, fileName) => {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(String(resp.status));
+      const blobUrl = URL.createObjectURL(await resp.blob());
+      const a = document.createElement('a');
+      a.href = blobUrl; a.download = fileName;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch {
+      window.open(url, '_blank', 'noopener');
+    }
+  };
+
+  // Downloads every selected PO's PDF, one file each.
+  const handleDownloadPdf = async () => {
+    const pos = eligible.filter((p) => selected.has(p._id));
+    if (!pos.length) { enqueueSnackbar('Select at least one PO', { variant: 'warning' }); return; }
+    setPdfBusy('download');
+    let failed = 0;
+    for (const po of pos) {
+      try {
+        const info = await ensurePdf(po);
+        await saveFile(resolveFileUrl(info.poPdfUrl), info.poPdfFileName || `${poDisplayNumber(po)}.pdf`);
+      } catch { failed += 1; }
+    }
+    setPdfBusy('');
+    if (failed) enqueueSnackbar(`${failed} of ${pos.length} PDF(s) could not be generated`, { variant: 'error' });
+    else if (pos.length > 1) enqueueSnackbar(`Downloaded ${pos.length} PO PDFs`, { variant: 'success' });
+  };
+
   const loading = isLoading || isFetching;
   const previewedRow = previewMap.get(String(previewPoId));
   const previewedPo = eligible.find((po) => po._id === previewPoId);
@@ -237,6 +307,21 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
           <Chip size="small" color={phase === 'result' ? 'success' : 'default'}
             label={phase === 'result' ? `${result?.released || 0} released` : `${filtered.length} eligible`}
             sx={{ ml: 1, fontWeight: 700 }} />
+          {phase === 'select' && (
+            <Box sx={{ ml: 'auto', display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Button size="small" variant="outlined"
+                startIcon={pdfBusy === 'preview' ? <CircularProgress size={14} /> : <Eye size={15} />}
+                onClick={handlePreviewPdf} disabled={!selected.size || Boolean(pdfBusy) || releasing}
+                title={selected.size > 1 ? 'Previews the PO chosen in Email Preview' : undefined}>
+                Preview PDF
+              </Button>
+              <Button size="small" variant="outlined"
+                startIcon={pdfBusy === 'download' ? <CircularProgress size={14} /> : <Download size={15} />}
+                onClick={handleDownloadPdf} disabled={!selected.size || Boolean(pdfBusy) || releasing}>
+                {selected.size > 1 ? `Download PDFs (${selected.size})` : 'Download PDF'}
+              </Button>
+            </Box>
+          )}
         </DialogTitle>
 
         <DialogContent dividers sx={{ p: 0, flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
@@ -467,6 +552,8 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
           )}
         </DialogActions>
       </Dialog>
+
+      <PurchaseOrderPdfPreview open={Boolean(pdfPreviewPo)} po={pdfPreviewPo} onClose={() => setPdfPreviewPo(null)} />
 
       {/* Confirmation before anything is actually sent */}
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>

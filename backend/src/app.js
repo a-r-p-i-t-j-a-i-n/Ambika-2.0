@@ -62,6 +62,7 @@ import transporterRoutes from './modules/transporters/transporter.routes.js';
 import approvalRoutes from './modules/approvals/approval.routes.js';
 import fmsDoerRoutes from './modules/fms-doers/fmsDoer.routes.js';
 import { fmsWorkflowSync } from './modules/fms-doers/fmsDoerSync.middleware.js';
+import { getInvoiceNumberIndexStatus } from './modules/procurement/vendor-invoice/invoiceNumberIndexGuard.js';
 
 
 
@@ -113,12 +114,22 @@ const healthPayload = (_req, res) => {
     message: 'DPES API is running',
     env: env.NODE_ENV,
     timestamp: new Date().toISOString(),
+    // In-memory (no DB hit). Liveness stays 200 either way — see below.
+    checks: { vendorInvoiceNumberIndex: getInvoiceNumberIndexStatus().status },
   });
 };
 app.get('/', healthPayload);
 app.head('/', (_req, res) => res.sendStatus(200));
 app.get('/health', healthPayload);
 app.get('/api/health', healthPayload);
+// Readiness of the vendor invoice numbering safeguard (invoiceNumberIndexGuard):
+// 200 only once its unique index is confirmed in the database, 503 otherwise.
+// Separate from /api/health so one module's index can't fail the whole ERP's
+// liveness (the deploy job and keep-warm pingers poll /api/health).
+app.get('/api/health/invoice-numbering', (_req, res) => {
+  const s = getInvoiceNumberIndexStatus();
+  res.status(s.status === 'OK' ? 200 : 503).json({ success: s.status === 'OK', ...s });
+});
 
 // ── API Routes ──────────────────────────────────────────────
 app.use('/api/v1/auth',            authRoutes);

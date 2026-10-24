@@ -88,7 +88,7 @@ const verify = async () => {
     pos.map((p) => p.piStatus).join(','));
   const pis = await ProformaInvoice.find({}).lean();
   const pays = await AdvancePayment.find({}).lean();
-  check('C: one PI, approved, fully paid by one advance payment', pis.length === 1 && pis[0].approvalStatus === 'APPROVED' && pis[0].piStatus === 'PAYMENT_COMPLETED'
+  check('C: one PI, approved, MD-approved for the advance, fully paid by one advance payment', pis.length === 1 && pis[0].approvalStatus === 'APPROVED' && pis[0].mdApprovalStatus === 'MD_APPROVED' && pis[0].piStatus === 'PAYMENT_COMPLETED'
     && pays.length === 1 && pays[0].paymentStatus === 'FULL_PAYMENT' && Math.abs(pis[0].balanceAmount) < 0.01,
   `pis=${pis.length} pays=${pays.length} bal=${pis[0]?.balanceAmount}`);
   check('one follow-up per PO, each READY_FOR_GRN', (await PurchaseFollowUp.countDocuments({ followUpStatus: 'READY_FOR_GRN' })) === 3);

@@ -9,6 +9,7 @@ import { seedAccessControl } from './modules/access-control/role.seed.js';
 import { seedPricing } from './modules/pricing/pricing.seed.js';
 import { startO2DEscalationJob } from './jobs/o2d-fms.escalation.job.js';
 import { startFmsDoerSyncJob } from './jobs/fms-doer.sync.job.js';
+import { verifyInvoiceNumberIndex } from './modules/procurement/vendor-invoice/invoiceNumberIndexGuard.js';
 
 const startServer = async () => {
   // Connect to MongoDB
@@ -18,6 +19,13 @@ const startServer = async () => {
   await seedAccessControl();
   // Seed pricing baseline + CompanySettings singleton. Idempotent.
   await seedPricing();
+
+  // Vendor invoice numbering safeguard: confirm the unique index from the
+  // database itself (read-only — never creates or syncs indexes). Never throws;
+  // a missing / incorrect index is logged loudly, shown on
+  // /api/health/invoice-numbering, and blocks only invoice creates and number
+  // changes (503) — the rest of the ERP keeps running.
+  await verifyInvoiceNumberIndex();
 
   const server = http.createServer(app);
   
