@@ -1046,16 +1046,38 @@ const MainLayout = () => {
     [mini, isMobile, sections, location.pathname, location.search, openMenus, user, initials, go, handleLogout],
   );
 
+  // IMS → Stock Correction can also be opened from the address
+  // (?stockCorrection=1) — that is how the Delegation Suite's sidebar opens it
+  // over the screen in view. Closing it removes the flag again.
+  const correctionFromUrl = new URLSearchParams(location.search).get('stockCorrection') === '1';
+  const closeCorrection = () => {
+    setCorrectionOpen(false);
+    if (correctionFromUrl) {
+      const params = new URLSearchParams(location.search);
+      params.delete('stockCorrection');
+      const rest = params.toString();
+      navigate(`${location.pathname}${rest ? `?${rest}` : ''}`, { replace: true });
+    }
+  };
+  // Mounted only while open, so each opening starts from a clean form.
+  const correctionDrawer = (correctionOpen || correctionFromUrl) && (
+    <Suspense fallback={null}>
+      <StockCorrectionDrawer open onClose={closeCorrection} />
+    </Suspense>
+  );
+
   // Embedded in the Delegation Suite: the Suite's sidebar drives navigation,
   // owns sign-out and shows ERP notifications in its own bell, so render no
   // drawer, no app bar, no profile/logout and no bell — just the page itself at
-  // full width, starting right under the Suite's navbar.
+  // full width, starting right under the Suite's navbar (plus the Stock
+  // Correction popup when the Suite opens it).
   if (isEmbedded) {
     return (
       <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
         <Box component="main" sx={{ width: '100%', minWidth: 0 }}>
           <Outlet />
         </Box>
+        {correctionDrawer}
       </Box>
     );
   }
@@ -1167,13 +1189,8 @@ const MainLayout = () => {
         <Outlet />
       </Box>
 
-      {/* IMS → Stock Correction: a drawer over the current page. Mounted only
-          while open, so each opening starts from a clean form. */}
-      {correctionOpen && (
-        <Suspense fallback={null}>
-          <StockCorrectionDrawer open={correctionOpen} onClose={() => setCorrectionOpen(false)} />
-        </Suspense>
-      )}
+      {/* IMS → Stock Correction: a drawer over the current page. */}
+      {correctionDrawer}
     </Box>
   );
 };
