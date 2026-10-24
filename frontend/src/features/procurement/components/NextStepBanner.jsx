@@ -38,7 +38,11 @@ const NextStepBanner = ({ step }) => {
       <Box sx={{ width: 40, height: 40, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: PFMS.surface, color: t.fg, flexShrink: 0 }}>
         <ArrowRight size={20} />
       </Box>
-      <Box sx={{ minWidth: 220, flexGrow: 1 }}>
+      {/* 220px flex BASIS, not just a min-width: with the default `auto` basis
+          the line-wrap measured this block at its unwrapped one-line width, so
+          a long description pushed the text under the icon (narrow screens)
+          or the buttons onto a row of their own (desktop). */}
+      <Box sx={{ flex: '1 1 220px', minWidth: 0 }}>
         <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: t.fg }}>Next Step</Typography>
         <Typography sx={{ fontWeight: 800, color: 'text.primary' }}>{step.title}</Typography>
         {step.desc && <Typography variant="body2" color="text.secondary">{step.desc}</Typography>}

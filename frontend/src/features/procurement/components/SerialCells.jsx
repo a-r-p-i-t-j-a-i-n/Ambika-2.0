@@ -2,7 +2,7 @@ import React from 'react';
 import { TableCell, Typography } from '@mui/material';
 import {
   useGridApiContext, useGridSelector,
-  gridPaginatedVisibleSortedGridRowIdsSelector, gridPaginationModelSelector,
+  gridPaginatedVisibleSortedGridRowIdsSelector, gridExpandedSortedRowIdsSelector, gridPaginationModelSelector,
 } from '@mui/x-data-grid';
 import { PFMS } from '../pfmsTheme';
 
@@ -28,12 +28,15 @@ const numberSx = { color: PFMS.sub, fontVariantNumeric: 'tabular-nums', fontSize
  */
 export const SerialGridCell = ({ id }) => {
   const apiRef = useGridApiContext();
-  const ids = useGridSelector(apiRef, gridPaginatedVisibleSortedGridRowIdsSelector);
+  const pageIds = useGridSelector(apiRef, gridPaginatedVisibleSortedGridRowIdsSelector);
+  const shownIds = useGridSelector(apiRef, gridExpandedSortedRowIdsSelector);
   const { page = 0, pageSize = 0 } = useGridSelector(apiRef, gridPaginationModelSelector) || {};
+  // Client pagination: the grid slices the page itself (pageIds). Server
+  // pagination: the grid holds only the current page and the paginated selector
+  // is always empty (MUI X v7), so the rows it shows ARE the current page.
+  const ids = pageIds.length ? pageIds : shownIds;
   const index = ids.indexOf(id);
   if (index < 0) return null;
-  // Server pagination hands the grid one page of rows; client pagination slices
-  // them itself — `ids` is the current page either way.
   return <Typography component="span" variant="body2" sx={numberSx}>{page * pageSize + index + 1}</Typography>;
 };
 

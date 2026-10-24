@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, MoreVertical, Eye, Pencil, CheckCircle2, CalendarClock,
+  Search, MoreVertical, Eye, Pencil, CheckCircle2,
   PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock, Plus,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -19,10 +19,9 @@ import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
-import { FuStatusChip, FuTypeChip, FOLLOWUP_STATUSES, fmtDate, fmtDelay, isDelayed } from './fuMeta';
+import { FuStatusChip, FuTypeChip, FOLLOWUP_STATUSES, FU_STATUS_LABEL, fmtDate, fmtDelay, isDelayed } from './fuMeta';
 import FollowUpFormDrawer from './FollowUpFormDrawer';
 import FollowUpDoneDialog from './FollowUpDoneDialog';
-import FollowUpRescheduleDialog from './FollowUpRescheduleDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
@@ -53,7 +52,6 @@ const FollowUpList = () => {
   const [formOpen, setFormOpen] = useState(false);
   const [editFu, setEditFu] = useState(null);
   const [doneOpen, setDoneOpen] = useState(false);
-  const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [readyOpen, setReadyOpen] = useState(false);
   const [activeFu, setActiveFu] = useState(null);
   const rowNav = useRowNavigation({ to: (r) => `/procurement/follow-ups/${r._id}` });
@@ -84,18 +82,15 @@ const FollowUpList = () => {
   const onView = (r) => { navigate(`/procurement/follow-ups/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditFu(r); setFormOpen(true); closeMenu(); };
   const onDone = (r) => { setActiveFu(r); setDoneOpen(true); closeMenu(); };
-  const onReschedule = (r) => { setActiveFu(r); setRescheduleOpen(true); closeMenu(); };
   const onReady = (r) => { setActiveFu(r); setReadyOpen(true); closeMenu(); };
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
-    const isRescheduled = r.followUpStatus === 'RESCHEDULED';
     const isActive = ['PENDING', 'RESCHEDULED'].includes(r.followUpStatus);
     if (isActive) {
       a.push({ key: 'edit', label: 'Edit Pending', icon: <Pencil size={16} />, fn: () => onEdit(r) });
-      // RESCHEDULED follow-ups stay active — "Follow-up Again" reopens the cycle.
-      a.push({ key: 'done', label: isRescheduled ? 'Follow-up Again' : 'Mark Done', icon: <CheckCircle2 size={16} />, fn: () => onDone(r) });
-      a.push({ key: 'reschedule', label: 'Reschedule', icon: <CalendarClock size={16} />, fn: () => onReschedule(r) });
+      // One action for every cycle — its outcome (next date / final date) decides what happens.
+      a.push({ key: 'done', label: 'Update Follow-up', icon: <CheckCircle2 size={16} />, fn: () => onDone(r) });
     }
     // Ready For GRN only once delivery is confirmed via a Final Material Date.
     if (r.followUpStatus === 'DONE' && r.finalMaterialDate) {
@@ -179,7 +174,8 @@ const FollowUpList = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       {/* Header — follow-ups can be started here for any released PO, or from
-          a Purchase Order's detail page; both use the same create rules. */}
+          a Purchase Order's detail page; both use the same create rules.
+          "Add Follow-up" opens the Update Follow-up form with a PO picker. */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
           <Typography sx={pfmsTitleSx}>Follow-ups ({stats.total || 0})</Typography>
@@ -188,7 +184,7 @@ const FollowUpList = () => {
           </Typography>
         </Box>
         <Button variant="contained" disableElevation startIcon={<Plus size={17} />}
-          onClick={() => { setEditFu(null); setFormOpen(true); }}
+          onClick={() => { setActiveFu(null); setDoneOpen(true); }}
           sx={{ fontWeight: 700, borderRadius: '8px', whiteSpace: 'nowrap' }}>
           Add Follow-up
         </Button>
@@ -224,7 +220,7 @@ const FollowUpList = () => {
                 <TextField id="fu-status" size="small" select fullWidth value={statusFilter} disabled={delayedOnly}
                   SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
-                  {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                  {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{(FU_STATUS_LABEL[s] || s).replace(/_/g, ' ').toUpperCase()}</MenuItem>)}
                 </TextField>
               </Box>
             ) },
@@ -319,7 +315,6 @@ const FollowUpList = () => {
       {/* Form + dialogs */}
       <FollowUpFormDrawer open={formOpen} followUp={editFu} onClose={() => { setFormOpen(false); setEditFu(null); }} />
       <FollowUpDoneDialog open={doneOpen} followUp={activeFu} onClose={() => { setDoneOpen(false); setActiveFu(null); }} />
-      <FollowUpRescheduleDialog open={rescheduleOpen} followUp={activeFu} onClose={() => { setRescheduleOpen(false); setActiveFu(null); }} />
       <FollowUpReadyForGrnDialog open={readyOpen} followUp={activeFu} onClose={() => { setReadyOpen(false); setActiveFu(null); }} />
     </Box>
   );

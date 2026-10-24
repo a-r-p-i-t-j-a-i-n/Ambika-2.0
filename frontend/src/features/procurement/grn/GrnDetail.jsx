@@ -252,7 +252,7 @@ const GrnDetail = () => {
             <Grid container spacing={2}>
               <Grid item xs={6} sm={4}><Field label="GRN Date" value={fmtDate(grn.grnDate)} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Unique Id" value={grn.uniqueId || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="How Received" value={howReceivedLabel(grn.howItemReceived)} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Material Receipt Type" value={howReceivedLabel(grn.howItemReceived)} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Challan No" value={grn.challanNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Invoice No" value={grn.invoiceNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Invoice Date" value={fmtDate(grn.invoiceDate)} /></Grid>

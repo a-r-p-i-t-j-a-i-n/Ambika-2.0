@@ -638,7 +638,6 @@ const IndentList = () => {
             // Auto row height: keep cells vertically centred with a little padding
             // so multi-item Product lists aren't cramped.
             '& .MuiDataGrid-cell': { display: 'flex', alignItems: 'center', py: 0.5 },
-            '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': { outline: 'none' },
             '& .MuiDataGrid-row:nth-of-type(even)': { bgcolor: ALT_ROW_BG },
             '& .MuiDataGrid-row:nth-of-type(even):hover': { bgcolor: PFMS.surfaceAlt },
           }, rowNavigationGridSx]}

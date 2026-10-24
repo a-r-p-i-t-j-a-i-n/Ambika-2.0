@@ -261,7 +261,12 @@ const run = async () => {
     // "Create Follow-up" form is only for legacy POs without that date.
     await btn(/^Update Follow-up$/).click();
     await page.waitForTimeout(700);
-    await typeDate(/Final Date of Material/);
+    // The outcome dropdown decides which date the form asks for. The select is
+    // also labelled by its value, so the date field is matched with its " *".
+    await dialog().getByLabel(/^Follow-up Outcome/).first().click();
+    await page.getByRole('option', { name: 'Final Date of Material' }).click();
+    await page.waitForTimeout(300);
+    await typeDate(/^Final Date of Material \*/);
     await shot(`${key}-followup-done`);
     await dialog().getByRole('button', { name: /Confirm & Ready for GRN/ }).click();
     check(`${key}: final material date confirmed → ready for GRN`, await toast(/ready for GRN/i));

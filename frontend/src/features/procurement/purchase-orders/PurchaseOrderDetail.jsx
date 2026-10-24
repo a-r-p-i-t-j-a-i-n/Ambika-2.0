@@ -277,7 +277,7 @@ const PurchaseOrderDetail = () => {
   const deliveryFollowUpsClosed = po.poStatus === 'FULLY_RECEIVED';
 
   // ── Unified follow-up action (Issue 1 — one button, not two entry points) ──
-  // - open cycle (pending/resched)        → Update Follow-up / Follow-up Again
+  // - open cycle (pending/resched)        → Update Follow-up
   // - no active record, PO already has an
   //   Expected Delivery Date              → Update Follow-up (the first record
   //   is created transparently, skipping the bare "New Material Follow-up"
@@ -319,7 +319,7 @@ const PurchaseOrderDetail = () => {
       ? { label: 'Mark Ready for GRN', icon: <PackageCheck size={14} />, onClick: () => setFuReadyOpen(true) }
       : (activeFollowUp || po.expectedDeliveryDate)
         ? {
-            label: activeFollowUp?.followUpStatus === 'RESCHEDULED' ? 'Follow-up Again' : 'Update Follow-up',
+            label: 'Update Follow-up',
             icon: startingFollowUp ? <CircularProgress size={14} color="inherit" /> : <PhoneCall size={14} />,
             onClick: startOrContinueFollowUp,
             disabled: startingFollowUp,

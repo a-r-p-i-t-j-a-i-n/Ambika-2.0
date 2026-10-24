@@ -103,7 +103,7 @@ const SECTION = { p: 2.5, ...pfmsCardSx };
 const OTHER_GRID = '1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px';
 const JSL_GRID = '1.1fr 0.7fr 0.9fr 0.8fr 0.6fr 0.85fr 0.85fr 0.9fr 0.9fr 0.8fr 0.85fr 36px';
 
-const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null, reviseFrom = null }) => {
+const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null, presetItemIds = null, reviseFrom = null }) => {
   const { enqueueSnackbar } = useSnackbar();
   const isEdit = Boolean(po?._id);
   const isRevise = Boolean(reviseFrom?._id);
@@ -462,15 +462,18 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
   // Preset indent (opened from Indent Detail / list): pre-select that indent's
   // approved items in the picker once the global list loads. Runs once per open.
+  // `presetItemIds` (PO list's Pending for PO row) narrows it to those items.
   const presetAppliedRef = useRef(false);
   useEffect(() => {
     if (!open) { presetAppliedRef.current = false; return; }
     if (!approvedItemMode || !presetIndent?._id || presetAppliedRef.current) return;
     if (!approvedItemOptions.length) return;
-    const mine = approvedItemOptions.filter((o) => String(o.indentId) === String(presetIndent._id));
+    const wanted = presetItemIds?.length ? new Set(presetItemIds.map(String)) : null;
+    const mine = approvedItemOptions.filter((o) => String(o.indentId) === String(presetIndent._id)
+      && (!wanted || wanted.has(String(o.indentItemId))));
     if (mine.length) { applyApprovedItems(mine); presetAppliedRef.current = true; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, approvedItemMode, presetIndent, approvedItemOptions]);
+  }, [open, approvedItemMode, presetIndent, presetItemIds, approvedItemOptions]);
 
   // Log exactly why a rate couldn't be auto-fetched — pinpoints whether it's a
   // wrong vendor, a missing SKU, a SKU/case mismatch, or a product absent from
