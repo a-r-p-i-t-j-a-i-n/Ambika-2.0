@@ -28,7 +28,9 @@ const { Schema, model } = mongoose;
  *     the client's Summary Scrap sheet, so manual Scrap In/Out — which is not a
  *     cut — never writes here. That is what keeps every dashboard figure in
  *     this module numerically identical to what it reported before stock
- *     existed.
+ *     existed. The one other writer is Stock Correction, when the scrap
+ *     recorded for a coil SKU is put right: its entry is marked CORRECTION
+ *     (see entryType) and carries only the change.
  *   • InventoryMovement answers "how much scrap do we hold, and where did it
  *     go?"
  *
@@ -69,6 +71,15 @@ export const SCRAP_DISPOSITIONS = ['DONE', 'JOB_WORK', 'REJECTED', 'PENDING'];
 /** Whether the coil was actually cut. UNCUT rows are not scrap — see above. */
 export const SCRAP_BATCH_STATUS = ['CUT', 'UNCUT'];
 
+/** What a record is: a cut, or a correction of a coil SKU's scrap (see entryType). */
+export const SCRAP_ENTRY_TYPES = ['CUT', 'CORRECTION'];
+
+/**
+ * In an aggregation: 1 for a cut, 0 for a correction — so "cuts" and
+ * "batches" count cuts while every scrap total still adds the correction in.
+ */
+export const CUT_COUNT = { $sum: { $cond: [{ $eq: ['$entryType', 'CORRECTION'] }, 0, 1] } };
+
 const scrapRecordSchema = new Schema({
   ...baseSchemaFields,
 
@@ -92,8 +103,27 @@ const scrapRecordSchema = new Schema({
 
   coilWeightKg:    { type: Number, default: 0, min: 0 },   // went into the machine
   circlesWeightKg: { type: Number, default: 0, min: 0 },   // came out as usable circles
-  scrapKg:         { type: Number, default: 0, min: 0 },   // the difference
+  // The difference. Only a CORRECTION may be negative: it is the change it
+  // made to the coil SKU's scrap, down as well as up.
+  scrapKg: {
+    type: Number,
+    default: 0,
+    validate: {
+      validator(v) { return v >= 0 || this.entryType === 'CORRECTION'; },
+      message: 'Scrap cannot be below zero.',
+    },
+  },
   yieldRatioPct:   { type: Number, default: null },        // circles ÷ coil, as a percent
+
+  /**
+   * CUT — one cut of a coil (every record before Stock Correction existed,
+   * which carry no value here and are read as CUT).
+   * CORRECTION — a Stock Correction of the coil SKU's scrap at one location:
+   * `scrapKg` is the change (counted − recorded), with no coil or circle
+   * weight, so it moves the SKU's scrap total and nothing else — never its
+   * number of cuts, never its yield. Written by stockCorrection.service.js.
+   */
+  entryType: { type: String, enum: SCRAP_ENTRY_TYPES, default: undefined },
 
   disposition: { type: String, enum: SCRAP_DISPOSITIONS, default: 'PENDING', index: true },
   // The sheet's "Actual" column — the date the scrap was checked.

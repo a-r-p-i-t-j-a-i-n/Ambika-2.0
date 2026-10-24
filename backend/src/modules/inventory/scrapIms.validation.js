@@ -55,6 +55,29 @@ export const scrapByCoilQuerySchema = Joi.object({
   limit: Joi.number().integer().min(1).max(500),
 }).unknown(true);
 
+/**
+ * Scrap master data — one row per COIL SKU (getMasterBySku), and the cuts of
+ * one coil SKU behind its row (getSkuHistory). The register's location, dates
+ * and search, with the same meanings; the row order; paging for the SKUs.
+ */
+const scrapMasterFilters = {
+  location: scrapFilters.location,
+  from:     ymdDate,
+  to:       ymdDate,
+  search:   scrapFilters.search,
+};
+export const scrapMasterQuerySchema = Joi.object({
+  ...scrapMasterFilters,
+  // Newest cut first (default), oldest first, coil SKU A → Z, or most scrap.
+  sort:  Joi.string().trim().lowercase().valid('latest', 'oldest', 'az', 'scrap').allow('', null),
+  page:  Joi.number().integer().min(1),
+  limit: Joi.number().integer().min(1).max(200),
+}).unknown(true);
+export const scrapSkuHistoryQuerySchema = Joi.object({
+  ...scrapMasterFilters,
+  coilSkuCode: Joi.string().trim().max(60).required(),
+}).unknown(true);
+
 export const scrapRecordParamSchema = Joi.object({ id: objectId.required() });
 
 /* ══ Manual Scrap In / Scrap Out ═══════════════════════════════════════════ */

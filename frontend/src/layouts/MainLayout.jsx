@@ -1,4 +1,6 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, {
+  useState, useMemo, useRef, useCallback, lazy, Suspense,
+} from 'react';
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
   Typography, IconButton, AppBar, Toolbar, useTheme, useMediaQuery,
@@ -11,7 +13,7 @@ import {
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
   ReceiptText, FileSpreadsheet,
   Boxes, PackagePlus, PackageMinus, History, Layers, Recycle, PackageCheck, Factory,
-  Cpu, HardHat, Disc3,
+  Cpu, HardHat, Disc3, ListOrdered,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -24,6 +26,9 @@ import { usePermissions } from '../hooks/usePermission';
 import AmbikaLogo from '../assets/ambikalogo.jpeg';
 import NotificationBell from '../features/notifications/NotificationBell';
 import { isEmbedded } from '../utils/embed';
+
+// Loaded the first time someone opens it, so it adds nothing to every page.
+const StockCorrectionDrawer = lazy(() => import('../features/ims/StockCorrectionDrawer'));
 
 const EXPANDED_WIDTH = 268;
 const COLLAPSED_WIDTH = 76;
@@ -96,7 +101,7 @@ const navSectionsFull = [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/ims' },
               { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/ims/stock' },
               { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
-              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
+              { text: 'Stock Out',             icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
               { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
@@ -109,7 +114,7 @@ const navSectionsFull = [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
               { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/rm-ims/stock' },
               { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
-              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
+              { text: 'Stock Out',             icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
               { text: 'Cut Coils into Circles', icon: <Recycle size={19} />,        path: '/rm-ims/conversion' },
               { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
               { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
@@ -135,6 +140,7 @@ const navSectionsFull = [
             children: [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/scrap-ims' },
               { text: 'Scrap Master Data',     icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
+              { text: 'Scrap Cut History',     icon: <ListOrdered size={19} />,     path: '/scrap-ims/history' },
               // Scrap grouped by the physical coil it came off — "how much
               // scrap came off THAT coil". The module's own strip lists it too,
               // but this sidebar is how people actually navigate, and a page
@@ -145,6 +151,9 @@ const navSectionsFull = [
               { text: 'Scrap Movement',        icon: <History size={19} />,         path: '/scrap-ims/movements' },
             ],
           },
+          // Not a page: opens the Stock Correction drawer over whatever screen
+          // is open — set any RM / Consumables / FG item to its physical count.
+          { text: 'Stock Correction',      icon: <ClipboardCheck size={19} />,  action: 'stockCorrection' },
         ],
       },
     ],
@@ -256,7 +265,7 @@ const navSectionsSimple = [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/ims' },
               { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/ims/stock' },
               { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/ims/stock-in' },
-              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
+              { text: 'Stock Out',             icon: <PackageMinus size={19} />,    path: '/ims/stock-out' },
               { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/ims/reorder' },
               { text: 'Movement History',      icon: <History size={19} />,         path: '/ims/movements' },
             ],
@@ -269,7 +278,7 @@ const navSectionsSimple = [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/rm-ims' },
               { text: 'Stock & Master Data',   icon: <Boxes size={19} />,           path: '/rm-ims/stock' },
               { text: 'Stock In',              icon: <PackagePlus size={19} />,     path: '/rm-ims/stock-in' },
-              { text: 'Stock Out (Issue)',     icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
+              { text: 'Stock Out',             icon: <PackageMinus size={19} />,    path: '/rm-ims/stock-out' },
               { text: 'Cut Coils into Circles', icon: <Recycle size={19} />,        path: '/rm-ims/conversion' },
               { text: 'Buying List',           icon: <ShoppingCart size={19} />,    path: '/rm-ims/reorder' },
               { text: 'Movement History',      icon: <History size={19} />,         path: '/rm-ims/movements' },
@@ -295,6 +304,7 @@ const navSectionsSimple = [
             children: [
               { text: 'Dashboard',             icon: <LayoutDashboard size={19} />, path: '/scrap-ims' },
               { text: 'Scrap Master Data',     icon: <Recycle size={19} />,         path: '/scrap-ims/records' },
+              { text: 'Scrap Cut History',     icon: <ListOrdered size={19} />,     path: '/scrap-ims/history' },
               // Scrap grouped by the physical coil it came off — "how much
               // scrap came off THAT coil". The module's own strip lists it too,
               // but this sidebar is how people actually navigate, and a page
@@ -305,6 +315,9 @@ const navSectionsSimple = [
               { text: 'Scrap Movement',        icon: <History size={19} />,         path: '/scrap-ims/movements' },
             ],
           },
+          // Not a page: opens the Stock Correction drawer over whatever screen
+          // is open — set any RM / Consumables / FG item to its physical count.
+          { text: 'Stock Correction',      icon: <ClipboardCheck size={19} />,  action: 'stockCorrection' },
         ],
       },
       {
@@ -428,7 +441,9 @@ const PAGE_TITLES = {
   '/rm-ims':                 'Raw Material IMS',
   '/fg-ims/stock':           'Finished Goods — Stock & Master',
   '/fg-ims/item':            'Finished Goods — Item',
-  '/scrap-ims/records':      'Scrap — Register',
+  '/scrap-ims/records':      'Scrap — Master Data',
+  '/scrap-ims/history':      'Scrap — Cut History',
+  '/scrap-ims/sku':          'Scrap — Coil SKU',
   '/scrap-ims/scrap-in':     'Scrap — Scrap In',
   '/scrap-ims/scrap-out':    'Scrap — Scrap Out',
   '/scrap-ims/movements':    'Scrap — Scrap Movement',
@@ -443,6 +458,8 @@ const PAGE_TITLES = {
 
 const MainLayout = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
+  // IMS → Stock Correction opens a drawer, not a page.
+  const [correctionOpen, setCorrectionOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   // Tracks which expandable nav groups (e.g. Pricing Hub) the user has
   // toggled. `undefined` for a group falls back to auto-open when the active
@@ -762,6 +779,19 @@ const MainLayout = () => {
       // Pricing children share /pricing and disambiguate via the `stream` query
       // param; payment/transport steps share a pathname and use `part`; all other
       // leaves match by path (top-level uses a prefix, nested uses exact).
+      // ── An action, not a page (Stock Correction): opens its drawer in place. ──
+      if (item.action) {
+        const runAction = () => {
+          if (item.action === 'stockCorrection') setCorrectionOpen(true);
+          if (isMobile) setMobileOpen(false);
+        };
+        const button = leafButton(item, false, { indent, onClick: runAction });
+        return (
+          <ListItem key={item.text} disablePadding sx={{ mb: 0.25 }}>
+            {mini ? <Tooltip title={item.text} placement="right" arrow><Box sx={{ width: '100%' }}>{button}</Box></Tooltip> : button}
+          </ListItem>
+        );
+      }
       const childPath = item.path.split('?')[0];
       const stream = new URLSearchParams(location.search).get('stream');
       const childPart = new URLSearchParams(location.search).get('part');
@@ -1135,6 +1165,14 @@ const MainLayout = () => {
       >
         <Outlet />
       </Box>
+
+      {/* IMS → Stock Correction: a drawer over the current page. Mounted only
+          while open, so each opening starts from a clean form. */}
+      {correctionOpen && (
+        <Suspense fallback={null}>
+          <StockCorrectionDrawer open={correctionOpen} onClose={() => setCorrectionOpen(false)} />
+        </Suspense>
+      )}
     </Box>
   );
 };

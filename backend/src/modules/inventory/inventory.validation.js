@@ -50,3 +50,9 @@ export const refParamSchema = Joi.object({
   refType: Joi.string().max(40).required(),
   refId:   Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });
+
+/** One item's history page (/ims/ledger/:skuId, /fg-ims/ledger/:skuId). */
+export const itemLedgerQuerySchema = Joi.object({
+  page:  Joi.number().integer().min(1),
+  limit: Joi.number().integer().min(1).max(200),
+}).unknown(true);

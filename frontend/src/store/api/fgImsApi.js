@@ -32,6 +32,11 @@ export const fgImsApi = baseApi.injectEndpoints({
       query: (skuId) => `/fg-ims/policy/${skuId}`,
       providesTags: (_r, _e, skuId) => [{ type: 'FgPolicy', id: skuId }],
     }),
+    // One item's history, newest first, with its in/out totals.
+    getFgItemLedger: builder.query({
+      query: ({ skuId, ...params }) => ({ url: `/fg-ims/ledger/${skuId}`, params }),
+      providesTags: ['FgMovement'],
+    }),
     getFgMovements: builder.query({
       query: (params = {}) => ({ url: '/fg-ims/movements', params }),
       providesTags: ['FgMovement'],
@@ -59,6 +64,7 @@ export const {
   useGetFgHistoryQuery,
   useGetFgPolicyQuery,
   useGetFgMovementsQuery,
+  useGetFgItemLedgerQuery,
   useUpsertFgPolicyMutation,
   useFgProduceMutation,
   useFgDispatchMutation,

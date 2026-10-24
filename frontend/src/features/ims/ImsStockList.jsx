@@ -17,6 +17,8 @@ import {
   ImsShell, Panel, TableScroll, KpiTile, StatusChip, StatusLegend, EmptyNote, Th, Eyebrow,
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, imsTableSx,
 } from './imsMeta';
+import QtyRangeFilter from './QtyRangeFilter';
+import { NO_QTY_RANGE, matchesQtyRange } from './qtyRange';
 import { useGetImsOverviewQuery, useGetImsForecastQuery } from '../../store/api/imsApi';
 import PolicyDrawer from './PolicyDrawer';
 import { TYPE_META } from '../masters/itemTypeMeta';
@@ -208,11 +210,12 @@ const ImsStockList = () => {
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
+  // Available qty — below / above / between (QtyRangeFilter).
+  const [qtyRange, setQtyRange] = useState(NO_QTY_RANGE);
   const [status, setStatus] = useState(params.get('status') || 'ALL');
   const [sort, setSort] = useState('urgency');
   const [editSku, setEditSku] = useState(null);
   const [forecast, setForecast] = useState(null);
-  const [showGlossary, setShowGlossary] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
 
@@ -253,7 +256,8 @@ const ImsStockList = () => {
 
   const filtered = useMemo(() => {
     const list = rows.filter((r) => (status === 'ALL' || r.status === status)
-      && (!category || (r.itemType || UNMAPPED_KEY) === category));
+      && (!category || (r.itemType || UNMAPPED_KEY) === category)
+      && matchesQtyRange(qtyRange, r.onHand));
     const sorters = {
       urgency: (a, b) => urgency(a) - urgency(b) || (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9),
       cover: (a, b) => (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9),
@@ -262,9 +266,9 @@ const ImsStockList = () => {
       onhand: (a, b) => Number(b.onHand || 0) - Number(a.onHand || 0),
     };
     return [...list].sort(sorters[sort] || sorters.urgency);
-  }, [rows, status, category, sort]);
+  }, [rows, status, category, sort, qtyRange]);
 
-  useEffect(() => { setPage(0); }, [search, category, status, sort, rowsPerPage]);
+  useEffect(() => { setPage(0); }, [search, category, status, sort, rowsPerPage, qtyRange]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const exportCsv = () => {
@@ -290,7 +294,7 @@ const ImsStockList = () => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
-  const activeFilters = (status !== 'ALL' ? 1 : 0) + (category ? 1 : 0) + (search ? 1 : 0);
+  const activeFilters = (status !== 'ALL' ? 1 : 0) + (category ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
 
   return (
     <ImsShell
@@ -329,6 +333,7 @@ const ImsStockList = () => {
             <MenuItem value="">All categories</MenuItem>
             {categories.map(([key, label]) => <MenuItem key={key} value={key}>{label}</MenuItem>)}
           </TextField>
+          <QtyRangeFilter value={qtyRange} onChange={setQtyRange} />
           <TextField select size="small" label="Sort by" value={sort} onChange={(e) => setSort(e.target.value)} sx={{ minWidth: 165 }}>
             <MenuItem value="urgency">Most urgent first</MenuItem>
             <MenuItem value="cover">Least days of cover</MenuItem>
@@ -336,16 +341,12 @@ const ImsStockList = () => {
             <MenuItem value="name">Item name (A–Z)</MenuItem>
             <MenuItem value="code">Item code</MenuItem>
           </TextField>
-          <Button size="small" startIcon={<Info size={14} />} onClick={() => setShowGlossary((v) => !v)}
-            sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', color: showGlossary ? O2D.brand : O2D.sub }}>
-            What do these columns mean?
-          </Button>
           <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, whiteSpace: 'nowrap', ml: 'auto' }}>
             <b>{filtered.length}</b> of {rows.length}
           </Typography>
           {activeFilters > 0 && (
             <Button size="small" startIcon={<X size={12} />}
-              onClick={() => { setSearch(''); setCategory(''); pickStatus('ALL'); }}
+              onClick={() => { setSearch(''); setCategory(''); setQtyRange(NO_QTY_RANGE); pickStatus('ALL'); }}
               sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.body }}>
               Clear ({activeFilters})
             </Button>
@@ -356,20 +357,6 @@ const ImsStockList = () => {
           <StatusLegend counts={counts} value={status} onPick={pickStatus} />
         </Box>
 
-        {/* The glossary — hidden by default, one click away forever after. */}
-        <Collapse in={showGlossary}>
-          <Box sx={{ mt: 1, p: 1.25, borderRadius: '7px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.lineSoft}` }}>
-            <Eyebrow>How to read this table</Eyebrow>
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 0.6, mt: 0.75 }}>
-              {GLOSSARY.map(([term, meaning]) => (
-                <Stack key={term} direction="row" spacing={0.75}>
-                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: O2D.ink, minWidth: 88, flexShrink: 0 }}>{term}</Typography>
-                  <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>{meaning}</Typography>
-                </Stack>
-              ))}
-            </Box>
-          </Box>
-        </Collapse>
       </Paper>
 
       <Panel dense>

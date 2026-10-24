@@ -26,7 +26,7 @@ const H = FIELD.ims;
  * either would quietly inflate every reorder level built on ADC.
  */
 const REASONS = [
-  { value: 'PRODUCTION_ISSUE', label: 'Production issue', hint: 'Material issued to the line to be used in production.' },
+  { value: 'PRODUCTION_ISSUE', label: 'Used in production', hint: 'Material issued to the line to be used in production.' },
   { value: 'MAINTENANCE', label: 'Maintenance / upkeep', hint: 'Used servicing or maintaining the machines.' },
   { value: 'SAMPLE_TESTING', label: 'Sample / testing', hint: 'Taken for a sample, a trial or quality testing.' },
   { value: 'OTHER', label: 'Other', hint: 'Anything else — type your own reason so History can explain it later.' },

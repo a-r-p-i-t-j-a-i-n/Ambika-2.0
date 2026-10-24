@@ -10,6 +10,7 @@ export const DOC_PREFIX = {
   O2D_TRACKER:      'AGL-O2D',
   RM_CONVERSION:    'AGL/RMC',   // Raw-material coil→circle conversion
   PRODUCTION_PLAN:  'AGL/PP',    // Party-wise production plan (order not required)
+  STOCK_CORRECTION: 'AGL/SC',    // IMS stock correction (physical count → system)
 };
 
 // ── Sales Order Statuses ────────────────────────────────────

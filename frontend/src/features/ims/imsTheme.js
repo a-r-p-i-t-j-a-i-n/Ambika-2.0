@@ -53,7 +53,8 @@ export const moveToken = (t) => (t === 'IN' ? MOVE_TOKENS.IN : MOVE_TOKENS.OUT);
 // Transaction type → plain-English label. Internal codes never reach the screen.
 export const TXN_LABEL = {
   GRN_IN: 'Vendor receipt', OPENING: 'Opening stock', ADJUST_IN: 'Added manually',
-  ADJUST_OUT: 'Removed manually', CONSUME_OUT: 'Issued to production', QC_REJECT_OUT: 'QC rejected',
+  // "Stock out", not "Issued…" — on the floor "issue" reads as "a problem".
+  ADJUST_OUT: 'Removed manually', CONSUME_OUT: 'Stock out', QC_REJECT_OUT: 'QC rejected',
   RETURN_OUT: 'Returned to vendor', TRANSFER_IN: 'Transferred in', TRANSFER_OUT: 'Transferred out',
   DISPATCH_OUT: 'Dispatched',
   // Raw-material only — the two halves of a coil → circle conversion.
