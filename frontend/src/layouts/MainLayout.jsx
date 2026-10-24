@@ -1035,7 +1035,7 @@ const MainLayout = () => {
   // multiplied a handful of renders into enough nested updates to blow past
   // React's ceiling, so ANY navigation between two different nav groups could
   // abort with "Maximum update depth exceeded" and drop the user on the error
-  // screen. Memoising keeps the transitions still between real changes.
+  // screen. hiii Memoising keeps the transitions still between real changes.
   const mini = isMobile ? false : collapsed;
   const drawerContent = useMemo(
     // renderDrawerContent closes over exactly the values listed below (`go` and
