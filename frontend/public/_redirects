@@ -2,8 +2,8 @@
 # HTTPS origin (Netlify forwards server-side). This avoids the browser blocking the
 # http:// backend as "mixed content" and sidesteps CORS.
 # ⚠️ To switch backends, change the target URL on these two lines and redeploy.
-/api/*       http://32.236.114.49:3006/api/:splat       200
-/uploads/*   http://32.236.114.49:3006/uploads/:splat   200
+/api/*       http://3.105.199.228:3005/api/:splat       200
+/uploads/*   http://3.105.199.228:3005/uploads/:splat   200
 
 # Netlify / Cloudflare Pages SPA fallback. MUST stay last — any request that doesn't
 # match a real file, the API proxy, or a _headers rule is served index.html so React

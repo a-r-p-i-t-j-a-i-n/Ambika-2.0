@@ -10,6 +10,8 @@ import { useLoginMutation } from '../../store/api/authApi';
 import { setCredentials } from '../../store/slices/authSlice';
 import { baseApi } from '../../store/api/baseApi';
 import AmbikaLogo from '../../assets/ambikalogo.jpeg';
+import { AppBootLoader } from '../../components/AppLoader';
+import { isEmbedded } from '../../utils/embed';
 
 // A connection/server hiccup is NOT a bad password — auto-retry those, and only
 // show "check your credentials" for a real 400/401.
@@ -86,6 +88,11 @@ const Login = () => {
   };
 
   const busy = isLoading || retrying;
+
+  // Inside the Delegation Suite the user is signed in by a Suite ticket
+  // (EmbedBridge), so this form must never appear there — show the loader
+  // while EmbedBridge takes the user back to their screen.
+  if (isEmbedded) return <AppBootLoader />;
 
   return (
     <Box

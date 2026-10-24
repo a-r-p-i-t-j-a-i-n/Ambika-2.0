@@ -1,3 +1,6 @@
+// Must stay the FIRST import: when the ERP runs inside the Delegation Suite it
+// puts a storage fallback in place before the store below reads localStorage.
+import './utils/embed';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
@@ -8,6 +11,7 @@ import { store } from './store';
 import theme from './theme/index';
 import App from './App.jsx';
 import ErrorBoundary from './components/ErrorBoundary';
+import EmbedBridge from './components/EmbedBridge';
 import { toastComponents } from './components/Toast';
 
 // ─── Local Inter font weights (replaces blocking Google Fonts CDN call) ───
@@ -35,7 +39,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             {/* Opt in to the v7 behaviors early — silences the console's
                 "React Router Future Flag" warnings and eases the v7 upgrade. */}
             <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-              <App />
+              {/* Inside the Delegation Suite: sign-in by Suite ticket + route
+                  sync. Standalone: renders <App /> exactly as before. */}
+              <EmbedBridge>
+                <App />
+              </EmbedBridge>
             </BrowserRouter>
           </SnackbarProvider>
         </ThemeProvider>
