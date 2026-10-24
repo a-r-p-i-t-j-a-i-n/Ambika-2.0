@@ -20,6 +20,7 @@ import { scrapImsController as c } from './scrapIms.controller.js';
 import {
   scrapOverviewQuerySchema, scrapDashboardQuerySchema, scrapRecordParamSchema,
   scrapMovementsQuerySchema, scrapOutHistoryQuerySchema, scrapInSchema, scrapOutSchema, scrapByCoilQuerySchema,
+  scrapMasterQuerySchema, scrapSkuHistoryQuerySchema,
   createScrapBuyerSchema, scrapBuyerQuerySchema, scrapBuyerParamSchema,
 } from './scrapIms.validation.js';
 
@@ -40,6 +41,9 @@ router.get('/dashboard', validate(scrapDashboardQuerySchema, 'query'), c.getDash
 // and a literal path registered after a parameterised sibling at the same depth
 // is a trap waiting for the next person who adds one.
 router.get('/by-coil', validate(scrapByCoilQuerySchema, 'query'), c.getByCoil);
+// Scrap master data: one row per coil SKU, and the cuts behind one row.
+router.get('/by-sku', validate(scrapMasterQuerySchema, 'query'), c.getMasterBySku);
+router.get('/by-sku/history', validate(scrapSkuHistoryQuerySchema, 'query'), c.getSkuHistory);
 router.get('/record/:id', validate(scrapRecordParamSchema, 'params'), c.getRecord);
 
 // ── Scrap stock: the balance and its ledger ──

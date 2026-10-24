@@ -201,7 +201,9 @@ export const checkStockInReason = (reason, customReason) => {
  * every reorder level built on ADC. Those belong in a separate adjustment flow.
  */
 export const STOCK_OUT_REASONS = {
-  PRODUCTION_ISSUE: 'Production issue',
+  // Shown as "Used in production" — "issue" read as "a problem" on the floor.
+  // The code stays PRODUCTION_ISSUE, so nothing stored changes meaning.
+  PRODUCTION_ISSUE: 'Used in production',
   MAINTENANCE:      'Maintenance / upkeep',
   SAMPLE_TESTING:   'Sample / testing',
   OTHER:            'Other',

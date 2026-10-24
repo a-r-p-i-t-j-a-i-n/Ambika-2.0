@@ -486,8 +486,8 @@ export const CONVERSION = {
     matters: 'Pieces are the stock balance for circles — this is the figure everything is planned on.',
   },
   weightKg: {
-    means: 'The weight recorded alongside the piece count.',
-    source: 'Entered when the circles were produced or received.',
+    means: 'The weight in kg — recorded alongside the piece count for circles. For an item counted in kg (a coil) it is the quantity itself.',
+    source: 'Entered when the circles were produced, received or taken out — optional.',
     matters: 'A record only. It is never used for Max Level, Available % or Days Cover.',
   },
   sizeLabel: {

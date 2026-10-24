@@ -581,6 +581,13 @@ export const fgImsService = {
     });
   },
 
+  /** One finished good's history, newest first, with its in/out totals. */
+  async getItemLedger(skuId, query = {}) {
+    const ok = await SKU.exists({ _id: skuId, itemType: { $in: FG_ITEM_TYPES }, isDeleted: { $ne: true } });
+    if (!ok) throw new AppError('Finished good not found', 404);
+    return inventoryService.getItemLedger(skuId, query);
+  },
+
   /** Movement history scoped to finished-good SKUs. */
   async getMovements(query = {}) {
     const skus = await SKU.find({ itemType: { $in: FG_ITEM_TYPES }, isDeleted: { $ne: true } }).select('_id').lean();

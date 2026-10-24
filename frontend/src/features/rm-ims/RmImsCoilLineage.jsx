@@ -117,6 +117,11 @@ const RmImsCoilLineage = () => {
   // A manual-entry coil has no goods receipt — said once, and no receipt
   // paperwork is shown for it, because there is none.
   const isManual = r.source === 'MANUAL';
+  // A coil's circles, scrap and yield are entered with its FULL cut and
+  // worked out for the whole coil — until it is fully cut they read "—", as on
+  // the Coil to Circle history. The status is the ledger's (totals.coil).
+  const coilDone = (t.coil?.status || t.status) === 'FULLY_CUT';
+  const PENDING_SUB = 'Entered with the full cut';
   const identity = [
     isManual && 'Manual entry — no GRN',
     r.grnNo && `GRN ${r.grnNo}`,
@@ -196,10 +201,10 @@ const RmImsCoilLineage = () => {
           sub={isManual ? 'Entered for the whole coil (no GRN)' : 'What physically arrived'} />
         <KpiTile label="Total cut" value={kg(t.cutKg)} icon={Scissors} color="#0f766e"
           sub={`${num(t.rounds)} cutting round${t.rounds === 1 ? '' : 's'}`} />
-        <KpiTile label="Output / circles" value={kg(t.circlesKg)} icon={CircleDashed} color="#4338ca"
-          sub="Usable blanks produced" />
-        <KpiTile label="Total scrap" value={kg(t.scrapKg)} icon={Recycle} color="#b45309"
-          sub={t.scrapPct != null ? `${num(t.scrapPct)}% of what was cut` : 'Nothing cut yet'} />
+        <KpiTile label="Output / circles" value={coilDone ? kg(t.circlesKg) : '—'} icon={CircleDashed} color="#4338ca"
+          sub={coilDone ? 'Usable blanks produced' : PENDING_SUB} />
+        <KpiTile label="Total scrap" value={coilDone ? kg(t.scrapKg) : '—'} icon={Recycle} color="#b45309"
+          sub={!coilDone ? PENDING_SUB : t.scrapPct != null ? `${num(t.scrapPct)}% of what was cut` : 'Nothing cut yet'} />
         <KpiTile label="Remaining" value={kg(t.remainingKg)} icon={Disc3}
           color={t.overCut ? '#b91c1c' : t.fullyCut ? O2D.sub : '#15803d'}
           sub="Received minus everything cut" />
@@ -215,8 +220,8 @@ const RmImsCoilLineage = () => {
           <Metric label="GRN" value={r.grnNo || (isManual ? 'None — manual entry' : '—')} sub={r.indentCode ? `Indent ${r.indentCode}` : null} />
           <Metric label="PO" value={r.poNo || '—'} sub={r.piNo ? `PI ${r.piNo}` : null} />
           <Metric label="Supplier" value={r.supplier || '—'} />
-          <Metric label="Average yield" value={t.avgYieldPct != null ? `${num(t.avgYieldPct)}%` : '—'}
-            sub="Circles ÷ coil cut, across every round" />
+          <Metric label="Average yield" value={coilDone && t.avgYieldPct != null ? `${num(t.avgYieldPct)}%` : '—'}
+            sub={coilDone ? 'Circles ÷ coil cut, across every round' : PENDING_SUB} />
         </Stack>
       </Panel>
 
@@ -235,12 +240,12 @@ const RmImsCoilLineage = () => {
                 <TableCell sx={{ width: 40 }} />
                 <TableCell align="center" sx={{ width: 70, whiteSpace: 'nowrap' }}>Round</TableCell>
                 <TableCell sx={{ whiteSpace: 'nowrap' }}>Date</TableCell>
-                <TableCell align="right"><Th label="Cut (kg)" hint="How much coil went into the machine in this round." /></TableCell>
+                <TableCell align="right"><Th label="Coil Used (kg)" hint="How much coil went into the machine in this round." /></TableCell>
                 <TableCell align="right"><Th label="Output (kg)" hint="Weight of the usable circles this round produced." /></TableCell>
                 <TableCell align="right"><Th label="Scrap (kg)" hint="Cut weight minus circle weight — the offcut this round left behind." /></TableCell>
                 <TableCell align="right"><Th label="Yield" hint={H.yieldPct} /></TableCell>
                 <TableCell align="right">
-                  <Th label="Remaining (kg)" hint="What was left of the coil after this round: received weight minus everything cut up to and including it. Scrap is NOT subtracted again — it was already part of the cut weight." />
+                  <Th label="Coil Left (kg)" hint="What was left of the coil after this round: received weight minus everything cut up to and including it. Scrap is NOT subtracted again — it was already part of the cut weight." />
                 </TableCell>
                 <TableCell sx={{ whiteSpace: 'nowrap' }}>Scrap</TableCell>
               </TableRow>
@@ -288,8 +293,9 @@ const RmImsCoilLineage = () => {
                         <Typography sx={{ fontSize: '0.64rem', color: O2D.sub, fontFamily: 'ui-monospace, monospace' }}>{x.conversionNumber}</Typography>
                       </TableCell>
                       <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: O2D.ink }}>{num(x.cutKg)}</TableCell>
-                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.body }}>{num(x.circlesKg)}</TableCell>
-                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: '#b45309' }}>{num(x.scrapKg)}</TableCell>
+                      {/* A partial round: its circles, scrap and yield come with the full cut. */}
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: x.outputPending ? O2D.faint : O2D.body }}>{x.outputPending ? '—' : num(x.circlesKg)}</TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: x.outputPending ? O2D.faint : '#b45309' }}>{x.outputPending ? '—' : num(x.scrapKg)}</TableCell>
                       <TableCell align="right">{x.yieldPct != null ? <YieldChip pct={x.yieldPct} /> : '—'}</TableCell>
                       <TableCell align="right" sx={{
                         fontVariantNumeric: 'tabular-nums', fontWeight: 700,
@@ -339,6 +345,14 @@ const RmImsCoilLineage = () => {
                                 </Button>
                               )}
                             </Stack>
+                            {/* The full cut that finished the coil carries the whole coil's
+                                circles and scrap — said, so they never read as this round's. */}
+                            {x.settledKg > x.cutKg + 0.001 && (
+                              <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mb: 1 }} data-testid="round-settled-note">
+                                This full cut entered the circles of {kg(x.settledKg)} of the coil — its own {kg(x.cutKg)} and{' '}
+                                {kg(x.settledKg - x.cutKg)} cut in the partial rounds before it. Scrap and yield are over all of it.
+                              </Typography>
+                            )}
 
                             <TableScroll>
                               <Table size="small" sx={imsTableSx(620)}>
@@ -354,7 +368,10 @@ const RmImsCoilLineage = () => {
                                 <TableBody>
                                   {x.circles.length === 0 && (
                                     <TableRow><TableCell colSpan={5} sx={{ border: 0, p: 0 }}>
-                                      <EmptyNote dense icon={CircleDashed} title="No circles recorded for this round" />
+                                      {x.outputPending
+                                        ? <EmptyNote dense icon={CircleDashed} title="Partial cut — only the coil weight is entered"
+                                          hint="Its circles are entered with this coil's full cut, which works out the scrap and yield for the whole coil." />
+                                        : <EmptyNote dense icon={CircleDashed} title="No circles recorded for this round" />}
                                     </TableCell></TableRow>
                                   )}
                                   {x.circles.map((c, i) => (

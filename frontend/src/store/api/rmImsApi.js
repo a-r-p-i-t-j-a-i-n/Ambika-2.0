@@ -99,6 +99,11 @@ export const rmImsApi = baseApi.injectEndpoints({
       query: (params) => ({ url: '/rm-ims/cutting-history/circles', params: params || undefined }),
       providesTags: ['RmConversion'],
     }),
+    // The coil SKUs every recorded cut was made from — the history's "Coil SKU" filter.
+    getRmCuttingHistoryCoils: builder.query({
+      query: () => '/rm-ims/cutting-history/coils',
+      providesTags: ['RmConversion'],
+    }),
     /**
      * The circle sizes the identified coil is approved to produce.
      *
@@ -163,6 +168,7 @@ export const {
   useGetRmCoilLineageQuery,
   useGetRmCuttingHistoryQuery,
   useGetRmCuttingHistoryCirclesQuery,
+  useGetRmCuttingHistoryCoilsQuery,
   useGetRmConversionLedgerQuery,
   useGetRmCircleOptionsQuery,
   useLookupRmManualCoilQuery,

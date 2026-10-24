@@ -717,6 +717,13 @@ export const imsService = {
     return skus.map((s) => s._id);
   },
 
+  /** One Consumables & Packaging item's history, newest first, with its in/out totals. */
+  async getItemLedger(skuId, query = {}) {
+    const ok = await SKU.exists({ _id: skuId, itemType: { $in: IMS_ITEM_TYPES }, isDeleted: { $ne: true } });
+    if (!ok) throw new AppError('Consumables & Packaging item not found', 404);
+    return inventoryService.getItemLedger(skuId, query);
+  },
+
   /**
    * Movement history scoped to consumable/packaging items.
    *

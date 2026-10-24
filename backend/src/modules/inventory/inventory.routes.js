@@ -16,6 +16,7 @@ import {
   mongoIdParamSchema,
   refParamSchema,
 } from './inventory.validation.js';
+import { stockCorrectionSkuQuerySchema, stockCorrectionSchema } from './stockCorrection.validation.js';
 
 const router = Router();
 router.use(protect);
@@ -29,5 +30,9 @@ router.get('/movements', validate(movementQuerySchema, 'query'), c.getMovements)
 router.get('/movements/by-ref/:refType/:refId', validate(refParamSchema, 'params'), c.getMovementsByRef);
 
 router.post('/adjust', validate(adjustStockSchema), c.adjust);
+
+// Stock correction — set any RM / Consumables / FG item to its physical count.
+router.get('/stock-correction/skus', validate(stockCorrectionSkuQuerySchema, 'query'), c.getCorrectionSkus);
+router.post('/stock-correction', validate(stockCorrectionSchema), c.correctStock);
 
 export default router;

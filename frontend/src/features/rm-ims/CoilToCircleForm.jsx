@@ -5,17 +5,15 @@ import {
   Tooltip, Radio, RadioGroup, FormControl, FormLabel,
 } from '@mui/material';
 import {
-  Plus, Trash2, Save, Disc3, CircleDashed, AlertTriangle, Scissors, ArrowUpRight,
-  Receipt, Pencil,
+  Plus, Trash2, Save, Disc3, CircleDashed, AlertTriangle, History,
 } from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
-import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { FIELD } from '../ims/imsFieldHelp';
 
 import {
   Panel, TableScroll, Th, StepHead,
-  CutStatusChip, cuttingStatusOf,
+  cuttingStatusOf,
   newRequestId,
   RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
   O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx,
@@ -54,39 +52,34 @@ const manualOption = (m) => ({
   row: m,
 });
 
-/**
- * "Scrap checked?" — has the scrap this cut produced been physically weighed
- * and verified, full stop. Exactly two states, on purpose: this field answers
- * ONE question, and it is not "where was this cut done" — that question has
- * its own field ("Received At"), which is what actually decides whether the
- * scrap becomes Ambika-owned stock (see the override warning below). A PLG01
- * cut and a JW001 cut can each be "Not yet checked" or "Verified" — the two
- * ideas are independent, and conflating them is exactly the mistake this
- * list used to invite (a third option here once read "Sent for job work",
- * which was really restating the location, not a verification state).
- *
- * The model/ScrapRecord enum still carries that old third value (`JOB_WORK`)
- * and a fourth (`REJECTED`) for historical rows imported before this screen
- * existed — neither is removed from the data, only from this picker, so
- * nothing already recorded changes meaning. See coilConversion.model.js.
- */
-const SCRAP_STATES = [
-  { value: 'PENDING', label: 'Not yet checked', hint: 'Scrap weight has not been physically verified against the store.' },
-  { value: 'DONE', label: 'Verified', hint: 'Scrap has been weighed and accounted for.' },
-];
+// "Scrap checked?" is no longer asked on this form: the client does not verify
+// scrap at the cutting entry. The server records every cut's scrap as "Not yet
+// checked" (PENDING, its default), as it always did for an untouched field.
 
-const capsSx = { fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub };
 const helperSx = (color = O2D.sub) => ({ component: 'div', sx: { fontSize: '0.66rem', color, mx: 0 } });
-const linkSx = { p: 0, border: 0, bgcolor: 'transparent', color: O2D.brand, fontWeight: 700, fontSize: 'inherit', cursor: 'pointer', textDecoration: 'underline' };
 
 /**
  * THE COIL → CIRCLE ENTRY FORM — one cutting round of one physical coil.
  *
- * Opened from the "+ Coil to Circle" button on the Coil to Circle page, in a
- * dialog. Everything the form does is its own and unchanged by where it sits:
- * the coil lookup, Full / Partial, the approved-circle mapping, the stock and
- * over-cut checks, and the one-id-per-submission duplicate guard.
+ * Opened in a dialog from "New Cutting Entry" on the Coil to Circle page, or
+ * from a partially cut coil's "Full Cut" action in the history. Everything
+ * the form does is its own and unchanged by where it sits: the coil lookup,
+ * Full / Partial, the approved-circle mapping, the stock and over-cut checks,
+ * and the one-id-per-submission duplicate guard.
  *
+ * ── PARTIAL AND FULL ────────────────────────────────────────────────────────
+ *   Partial cutting   only the coil weight cut this round. The circles are
+ *                     counted once the coil is finished, so none are asked.
+ *   Full cutting      the rest of the coil, and the circles of the WHOLE coil
+ *                     (every round's): pieces and weight. Scrap and yield are
+ *                     worked out over the whole coil — this round plus the
+ *                     partial rounds before it.
+ *   No receipt        no coil to finish later, so one entry: weight + circles.
+ *
+ *   preset                  { batchNo, coilKey, cutType } — opened for one coil
+ *                           (the history's row action): its batch is looked up
+ *                           and that exact coil bound, then the cutting type is
+ *                           chosen. Everything stays editable.
  *   onSaved(saved)          after the server accepted the round — the page
  *                           closes the dialog; the history refreshes itself
  *                           through RTK Query's tags.
@@ -98,8 +91,9 @@ const linkSx = { p: 0, border: 0, bgcolor: 'transparent', color: O2D.brand, font
  * A failed save leaves every field exactly as it was, with the server's own
  * message on screen, so it can be corrected and saved again.
  */
-const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
-  const navigate = useNavigate();
+const CoilToCircleForm = ({
+  onSaved, onCancel, onStateChange, preset = null,
+}) => {
   const { data: ov } = useGetRmOverviewQuery({});
   const items = useMemo(() => ov?.data || [], [ov]);
   // Only coils the Coil → Circle sheet maps can be cut here. The server says
@@ -140,7 +134,9 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
   const [boundManual, setBoundManual] = useState(null);
   // A manual coil picked in the dropdown: bound as soon as the exact lookup of
   // its batch confirms it (the dropdown row is a search hit, not its record).
-  const [pendingChoice, setPendingChoice] = useState(null);
+  // Opened for one coil (`preset`), that coil — so a batch on two coils still
+  // binds the one whose row was clicked.
+  const [pendingChoice, setPendingChoice] = useState(() => preset?.coilKey || null);
   // The Batch Number dropdown's open state: it closes the moment a coil is
   // bound, so the list never sits over the fields the coil just filled in.
   const [listOpen, setListOpen] = useState(false);
@@ -155,15 +151,16 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
   // asked only once a physical coil is identified. Never pre-selected. Stored
   // with the coil it was made for (see `cutType` below).
   const [cutChoice, setCutChoice] = useState({ coilKey: null, type: null });
-  const [debouncedBatch, setDebouncedBatch] = useState('');
+  // A preset batch is looked up at once, not after the typing pause.
+  const [debouncedBatch, setDebouncedBatch] = useState(() => String(preset?.batchNo || '').trim());
   // One id per submission, so a double-click, a browser retry or a second tab
   // are recognised as the same cut instead of cutting the coil twice. A fresh
   // id is taken only after a SUCCESSFUL save, so correcting a rejected cut and
   // trying again is still accepted.
   const [requestId, setRequestId] = useState(newRequestId);
   const [head, setHead] = useState({
-    conversionDate: dayjs().format('YYYY-MM-DD'), batchNo: '', coilWeightKg: '', rate: '',
-    scrapVerified: 'PENDING', allowNegative: false,
+    conversionDate: dayjs().format('YYYY-MM-DD'), batchNo: String(preset?.batchNo || '').trim(), coilWeightKg: '', rate: '',
+    allowNegative: false,
     /**
      * "No receipt available" — this coil has no goods receipt AND no batch
      * number, so it cannot be named at all.
@@ -347,7 +344,7 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
    *
    * The form returns to "no coil": no binding, no rate, the default location,
    * no round weight, no cutting type. What the operator entered that does not
-   * belong to a coil — the date, the scrap check, the circles counted — stays;
+   * belong to a coil — the date, the circles counted — stays;
    * a circle size the next coil cannot produce is dropped when that coil is
    * known (see the effect on `allowedIds`).
    */
@@ -535,8 +532,12 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
    * and what its own receipt can still hold (its weight less the rounds cut
    * from it). For every coil with a ledger of its own the two agree — or the
    * ledger is the smaller, through earlier unlinked cuts — so nothing else
-   * changes. A shared coil is never cut "Full": the server measures Full
-   * against the whole ledger, not this coil.
+   * changes. The server measures Full and Partial against the same smaller
+   * figure, so a shared coil is finished with a Full cut like any other.
+   *
+   * `pendingKg` is what earlier PARTIAL rounds cut without recording circles:
+   * the Full cut's circles account for it too, so the coil's scrap and yield
+   * are worked out over this round's weight plus it (see `basisKg`).
    */
   const lineage = useGetRmCoilLineageQuery(receipt?.id, { skip: !receipt?.id });
   const lin = lineage.data?.meta;
@@ -558,6 +559,8 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
       ledgerKg,
       rounds: linFresh ? lin.totals.rounds : null,
       roundsCutKg: linFresh ? lin.totals.cutKg : null,
+      // Unknown (null) until this coil's rounds have loaded.
+      pendingKg: linFresh ? round2(lin.totals.pendingKg || 0) : null,
       otherOutKg: linFresh ? Math.max(0, lin.totals.coil.otherOutKg) : 0,
       status: linFresh && !sharedLedger ? lin.totals.coil.status : cuttingStatusOf({ cutKg: alreadyCutKg, remainingKg: availableKg }),
     };
@@ -575,6 +578,7 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
       alreadyCutKg: round2(existingManual.originalWeightKg - existingManual.availableKg),
       rounds: existingManual.rounds,
       roundsCutKg: round2(existingManual.cutKg),
+      pendingKg: round2(existingManual.pendingKg || 0),
       otherOutKg: 0,
       status: existingManual.status,
       manual: true,
@@ -585,13 +589,12 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
         alreadyCutKg: 0,
         rounds: 0,
         roundsCutKg: 0,
+        pendingKg: 0,
         otherOutKg: 0,
         status: cuttingStatusOf({ cutKg: 0, remainingKg: manualTotalNum }),
         manual: true,
         isNew: true,
       } : null;
-  // Which coil this round belongs to, for labels — whichever way it was named.
-  const coilLabel = receipt?.batchNo || existingManual?.batchNo || (coilFacts?.manual ? typedBatch : '');
 
   /**
    * IS THERE A COIL TO CUT?
@@ -624,27 +627,46 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
    *                     not copied into the field: it IS coilFacts.availableKg,
    *                     so a refreshed lineage can never leave a stale number
    *                     behind. The server re-checks it against the ledger.
-   *   Partial cutting → the weight the operator typed.
+   *   Partial cutting → the weight the operator typed. It must leave some of
+   *                     the coil: the last of it is the Full cut, the round
+   *                     that records the circles (the server refuses the same).
    *
    * "Cutting type" is the operator's instruction for THIS round. It is not the
    * coil's status, which stays derived from the weights (cuttingStatusOf).
    */
   const isFull = !!coilFacts && cutType === 'FULL';
+  const isPartial = cutType === 'PARTIAL';
   const coilWt = isFull ? coilFacts.availableKg : Number(head.coilWeightKg || 0);
-  const scrap = round2(coilWt - circlesWeight);
-  const yieldPct = coilWt > 0 ? round2((circlesWeight / coilWt) * 100) : 0;
+  /**
+   * WHICH CUTS RECORD CIRCLES — the Full cut, for the whole coil, and a cut
+   * with no receipt (no coil to finish later, so it is one entry). A Partial
+   * round records only its weight, and step 2 is not shown for it.
+   *
+   * A Full cut's circles came off this round's weight AND what the earlier
+   * partial rounds cut (`pendingKg`), so its scrap is worked out over both —
+   * the same sum the server makes (`settledKg`). The form only uses it to
+   * refuse circles heavier than the coil; scrap and yield are the history's.
+   */
+  const recordsCircles = isFull || untraceable;
+  const pendingKg = isFull ? coilFacts.pendingKg : 0;
+  const basisKg = recordsCircles ? round2(coilWt + (pendingKg || 0)) : 0;
+  const scrap = round2(basisKg - circlesWeight);
   // A circle line is only complete with BOTH figures: the pieces are what goes
   // into circle stock (circles are counted, not weighed), and the weight is what
   // yield and scrap are worked out from.
   const validCircles = circles.filter((c) => c.sku && Number(c.weightKg) > 0 && Number(c.pcs) > 0);
   const missingPcs = circles.filter((c) => c.sku && Number(c.weightKg) > 0 && !(Number(c.pcs) > 0));
-  const overCut = scrap < 0;
+  const overCut = recordsCircles && scrap < 0;
   // Once there is a coil, Full or Partial must be chosen on purpose — never
-  // pre-selected. (A cut with no receipt can only be Partial.)
-  const cutTypeMissing = identified && !cutType;
+  // pre-selected. A cut with no receipt has nothing to choose: it is one entry.
+  const cutTypeMissing = identified && !untraceable && !cutType;
   // Nothing left on the coil: a full cut has nothing to take.
-  // (Nor on a batch whose ledger another receipt shares — see coilFacts.)
-  const fullImpossible = isFull && (coilFacts.availableKg <= 0.001 || !!coilFacts.sharedLedger);
+  const fullImpossible = isFull && coilFacts.availableKg <= 0.001;
+  // What the earlier rounds cut is only known once this coil's rounds have
+  // loaded — until then a Full cut's scrap cannot be worked out.
+  const basisLoading = isFull && pendingKg == null;
+  // A Partial round that would take the last of the coil: that is the Full cut.
+  const partialTakesAll = isPartial && !!coilFacts && coilWt > 0 && round2(coilFacts.availableKg - coilWt) <= 0.001;
 
   // Where a coil was identified, its own remaining weight is the limit — the
   // item's total across every batch would let a spent coil through. A cut with
@@ -656,12 +678,17 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
   // never silent: the resulting negative balance is spelled out below.
   const overdrawn = !!coil && coilWt > available && head.allowNegative;
   /**
-   * A manual coil still comes OUT OF RM STOCK, by grade, exactly as the server
-   * checks it — a coil with no GRN is not a way round the stock check. Its own
-   * remaining weight (above) is the first limit; this is the second.
+   * Every cut still comes OUT OF RM STOCK, by grade, exactly as the server
+   * checks it — a coil with no GRN is not a way round the stock check. The
+   * coil's own remaining weight (above) is the first limit; this is the
+   * second. Judged only once the grade's stock figure has loaded.
    */
   const gradeOnHand = Number(coil?.onHand || 0);
-  const gradeShort = !!coilFacts?.manual && !!coil && coilWt > 0 && coilWt > gradeOnHand && !head.allowNegative;
+  const gradeShort = !untraceable && !!coil && Number.isFinite(coil.onHand)
+    && coilWt > 0 && coilWt > gradeOnHand && !head.allowNegative;
+  // The override switch is offered only where it changes something: a cut
+  // with no receipt, or a grade whose stock is short (or once it is on).
+  const showOverride = untraceable || gradeShort || head.allowNegative;
   // What this round leaves behind, for the "after this round" summary.
   const after = coilFacts && coilWt > 0 ? (() => {
     const remainingKg = round2(coilFacts.availableKg - coilWt);
@@ -679,9 +706,11 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
   // client withdrew mid-shift, would otherwise reach the server as a 400 the
   // operator only discovers on save. The server stays the authority either way.
   const blockedCircles = validCircles.filter((c) => !allowedIds.has(String(c.sku.skuId)));
-  const ready = identified && !!coil && coilWt > 0 && validCircles.length > 0 && !missingPcs.length
-    && !overCut && !shortCoil && !gradeShort && !blockedCircles.length
-    && !cutTypeMissing && !fullImpossible;
+  // A Partial round asks for no circles; the others need complete, approved lines.
+  const circlesReady = !recordsCircles
+    || (validCircles.length > 0 && !missingPcs.length && !overCut && !blockedCircles.length);
+  const ready = identified && !!coil && coilWt > 0 && circlesReady
+    && !shortCoil && !gradeShort && !cutTypeMissing && !fullImpossible && !partialTakesAll && !basisLoading;
   const activeLocation = RECEIVED_AT_OPTIONS.find((w) => w.value === head.warehouse);
   /**
    * The operator has picked a DIFFERENT cutting location than the one this
@@ -703,15 +732,64 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
    * Every field the operator can touch, compared with how the form opens. The
    * auto-fill only ever runs after a batch number is typed or a coil picked, so
    * an untouched form is never reported as dirty.
+   *
+   * Opened for one coil (`preset`), the form fills itself in — so it is
+   * compared with how it stood once that coil was bound and its cutting type
+   * chosen, and closing it straight away asks nothing.
    */
   const [openedOn] = useState(() => dayjs().format('YYYY-MM-DD'));
-  const dirty = !!receipt || !!boundManual || !!pickedCoil || !!cutType
-    || head.batchNo.trim() !== '' || head.coilWeightKg !== '' || head.rate !== ''
-    || head.manualFallback || head.allowNegative || head.scrapVerified !== 'PENDING'
-    || head.warehouse !== DEFAULT_RECEIVED_AT || head.conversionDate !== openedOn
-    || manualTotal !== ''
-    || circles.some((c) => c.sku || c.sizeLabel || c.pcs !== '' || c.weightKg !== '');
-  useEffect(() => { onStateChange?.({ dirty, saving: isLoading }); }, [dirty, isLoading, onStateChange]);
+  const snapshot = JSON.stringify([
+    head, circles, cutType, manualTotal, receipt?.id || null, boundManual?.id || null, pickedCoil?.skuId || null,
+  ]);
+  const [presetBaseline, setPresetBaseline] = useState(null);
+  const dirty = preset?.batchNo
+    ? (presetBaseline != null ? snapshot !== presetBaseline : batchKey(head.batchNo) !== batchKey(preset.batchNo))
+    : (!!receipt || !!boundManual || !!pickedCoil || !!cutType
+      || head.batchNo.trim() !== '' || head.coilWeightKg !== '' || head.rate !== ''
+      || head.manualFallback || head.allowNegative
+      || head.warehouse !== DEFAULT_RECEIVED_AT || head.conversionDate !== openedOn
+      || manualTotal !== ''
+      || circles.some((c) => c.sku || c.sizeLabel || c.pcs !== '' || c.weightKg !== ''));
+  /**
+   * HAS THIS COIL BEEN CUT BEFORE? — said plainly above the cutting type, so a
+   * coil that was partially cut is never treated like a fresh one: how many
+   * times, when last, how much is cut and how much is left; then the choice
+   * is put as a question — cut some more (Partial) or finish it (Full).
+   */
+  const linRounds = receipt && linFresh ? (lineage.data?.data || []) : [];
+  const lastCutAt = (linRounds.length ? linRounds[linRounds.length - 1].date : null) || existingManual?.lastCutAt || null;
+  const cutBefore = !!coilFacts && !coilFacts.isNew && coilFacts.alreadyCutKg > 0.001;
+  const coilDone = !!coilFacts && coilFacts.availableKg <= 0.001;
+  const boundBatch = receipt?.batchNo || existingManual?.batchNo || '';
+
+  // The page shows the coil's status in the dialog's header (RmImsConversion).
+  const coilBrief = coilFacts && boundBatch ? `${boundBatch}|${coilFacts.status}|${coilFacts.availableKg}` : '';
+  useEffect(() => {
+    onStateChange?.({
+      dirty,
+      saving: isLoading,
+      coil: coilBrief ? { batchNo: boundBatch, status: coilFacts.status, availableKg: coilFacts.availableKg } : null,
+    });
+  }, [dirty, isLoading, onStateChange, coilBrief]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * OPENED FOR ONE COIL — once that exact coil is bound, choose the cutting
+   * type its row asked for (Full only while the coil has weight left), then
+   * take the form as it stands as "untouched". If the coil is not the one
+   * found (cut away meanwhile, or another coil typed), nothing is chosen.
+   * Adjusted during render (React's "adjust state when something changes"),
+   * so the form never paints a frame with the coil bound and no type chosen.
+   */
+  const [presetApplied, setPresetApplied] = useState(() => !preset?.batchNo);
+  if (!presetApplied && identified && coilKey === preset.coilKey) {
+    setPresetApplied(true);
+    const canFull = !!coilFacts && coilFacts.availableKg > 0.001;
+    if (preset.cutType === 'PARTIAL' || (preset.cutType === 'FULL' && canFull)) {
+      setCutChoice({ coilKey, type: preset.cutType });
+    }
+  } else if (presetApplied && preset?.batchNo && presetBaseline == null) {
+    setPresetBaseline(snapshot);
+  }
 
   const submit = async () => {
     if (submitting.current) return undefined;
@@ -727,11 +805,14 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
     if (cutTypeMissing) return enqueueSnackbar('Choose Full cutting or Partial cutting for this round.', { variant: 'warning' });
     if (fullImpossible) return enqueueSnackbar('This coil is already fully cut — nothing is left for a full cut.', { variant: 'error' });
     if (!(coilWt > 0)) return enqueueSnackbar('Enter how much of the coil is cut this round (more than 0 kg).', { variant: 'warning' });
+    if (partialTakesAll) return enqueueSnackbar('This takes everything left on the coil. Choose Full cutting: it finishes the coil and records its circles.', { variant: 'warning' });
     if (shortCoil) return enqueueSnackbar(`Only ${num(available)} KG is available from this physical coil.`, { variant: 'error' });
     if (gradeShort) return enqueueSnackbar(`Only ${num(gradeOnHand)} KG of ${coil.skuCode} is in RM stock. Turn on "Allow cutting more coil than we hold" to override.`, { variant: 'error' });
-    if (missingPcs.length) return enqueueSnackbar('Enter the number of pieces for every circle produced.', { variant: 'warning' });
-    if (!validCircles.length) return enqueueSnackbar('Add at least one circle with pieces and a weight.', { variant: 'warning' });
-    if (blockedCircles.length) {
+    if (basisLoading) return enqueueSnackbar('Loading this coil\'s earlier rounds — save again in a moment.', { variant: 'info' });
+    if (recordsCircles && missingPcs.length) return enqueueSnackbar('Enter the number of pieces for every circle produced.', { variant: 'warning' });
+    if (recordsCircles && !validCircles.length) return enqueueSnackbar('Add at least one circle with pieces and a weight.', { variant: 'warning' });
+    if (recordsCircles && overCut) return enqueueSnackbar('The circles weigh more than the coil they came from — check the weights.', { variant: 'error' });
+    if (recordsCircles && blockedCircles.length) {
       return enqueueSnackbar(
         `${blockedCircles.map((c) => c.sku.skuCode).join(', ')} cannot be produced from coil ${coil.skuCode}.`,
         { variant: 'error' },
@@ -757,20 +838,26 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
         manualCoilId: existingManual ? existingManual.id : undefined,
         manualCoil: newManual ? { batchNo: typedBatch, totalWeightKg: manualTotalNum } : undefined,
         // FULL makes the server take the coil's remaining weight — and refuse
-        // if it differs from `coilWeightKg`.
-        cuttingType: cutType || undefined,
+        // if it differs from `coilWeightKg`. A cut with no receipt sends none:
+        // it is one entry, weight and circles together.
+        cuttingType: untraceable ? undefined : (cutType || undefined),
         // No fallback to the grade's master rate: blank means "use this coil's
         // own receipt rate", which the server applies from the linked receipt.
         coilSkuId: coil.skuId, coilWeightKg: coilWt, rate: Number(head.rate || 0),
-        scrapVerified: head.scrapVerified, allowNegative: head.allowNegative,
+        allowNegative: head.allowNegative,
         warehouse: head.warehouse,
-        circles: validCircles.map((c) => ({
+        // A Partial round sends no circles — they come with the Full cut.
+        circles: recordsCircles ? validCircles.map((c) => ({
           circleSkuId: c.sku.skuId, sizeLabel: c.sizeLabel || c.sku.skuName,
           pcs: Number(c.pcs || 0), weightKg: Number(c.weightKg),
-        })),
+        })) : undefined,
       }).unwrap();
       const saved = res?.data || {};
-      enqueueSnackbar(`Conversion ${saved.conversionNumber || ''} saved — yield ${num(saved.yieldRatioPct)}%.`, { variant: 'success' });
+      enqueueSnackbar(isPartial
+        ? `Partial cut ${saved.conversionNumber || ''} saved — ${num(coilWt)} kg cut${after ? `, ${num(after.remainingKg)} kg left on the coil` : ''}. Enter its circles with the Full cut.`
+        : isFull
+          ? `Full cut ${saved.conversionNumber || ''} saved — the coil is finished. Yield ${num(saved.yieldRatioPct)}% for the whole coil.`
+          : `Conversion ${saved.conversionNumber || ''} saved — yield ${num(saved.yieldRatioPct)}%.`, { variant: 'success' });
       if (saved.receiptBinding === 'AUTO' && saved.coilReceiptId) {
         enqueueSnackbar(`Linked to coil ${saved.batchNo || ''} from its goods receipt — open the coil to see every round.`, { variant: 'info' });
       }
@@ -780,10 +867,8 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
       /*
        * The next cut starts from the same clean form every time. In particular
        * none of these is a sticky preference: "No receipt available" is a
-       * statement about ONE coil, Received At is a fact about the cut just
-       * saved (a JW001 cut must not leave the next coil sitting on JW001), and
-       * "has THIS cut's scrap been checked" cannot default to "Verified" for a
-       * coil nobody has looked at yet.
+       * statement about ONE coil, and Received At is a fact about the cut just
+       * saved (a JW001 cut must not leave the next coil sitting on JW001).
        */
       setReceipt(null);
       setBoundManual(null);
@@ -792,7 +877,7 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
       setRequestId(newRequestId());
       setHead((h) => ({
         ...h, batchNo: '', coilWeightKg: '', rate: '', manualFallback: false,
-        warehouse: DEFAULT_RECEIVED_AT, scrapVerified: 'PENDING',
+        warehouse: DEFAULT_RECEIVED_AT,
       }));
       setDebouncedBatch('');
       setCircles([blankCircle()]);
@@ -837,25 +922,22 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
         : 'No matching coil/GRN found. Enter the coil details manually.',
       color: STOCK_TOKENS.LOW.color,
     },
+    // Short on purpose: the coil's weights sit beside "Total coil weight".
     bound: receipt
       ? (coilFacts.availableKg <= 0.001
-        // Found, and shown with its history — but there is nothing left to cut.
-        ? { text: `Existing received coil found · ${receipt.skuName} · This coil is fully cut — nothing is left on it to cut.`, color: STOCK_TOKENS.OUT_OF_STOCK.color }
+        // Found — but there is nothing left to cut.
+        ? { text: 'Coil found · fully cut — nothing is left on it.', color: STOCK_TOKENS.OUT_OF_STOCK.color }
         : coilFacts.sharedLedger
-          // One batch on two receipts of this coil grade: say so, and say what
-          // that limits — this coil's own weight, Partial only.
+          // One batch on two receipts of this coil grade: say what that limits.
           ? {
-            text: `Existing received coil found · ${receipt.skuName}${receipt.grnNumber ? ` · ${receipt.grnNumber}` : ''} · this batch is also on another receipt of ${receipt.skuCode}, so their stock is shared: up to this coil's own ${num(coilFacts.availableKg)} kg, Partial cutting only.`,
+            text: `Coil found${receipt.grnNumber ? ` · ${receipt.grnNumber}` : ''} · this batch is on another receipt too — this coil can take up to its own ${num(coilFacts.availableKg)} kg.`,
             color: STOCK_TOKENS.LOW.color,
           }
-          : {
-            text: `Existing received coil found · ${receipt.skuName} · ${num(coilFacts.availableKg)} kg available to cut · ₹${num(receipt.unitCost)}/kg${receipt.grnNumber ? ` · ${receipt.grnNumber}` : ''}`,
-            color: STOCK_TOKENS.OK.color,
-          })
+          : { text: `Coil found${receipt.grnNumber ? ` · ${receipt.grnNumber}` : ''}`, color: STOCK_TOKENS.OK.color })
       : existingManual
         ? (existingManual.availableKg <= 0.001
-          ? { text: `Existing manual coil found (no GRN) · ${existingManual.skuCode} · This coil is fully cut — nothing is left on it to cut.`, color: STOCK_TOKENS.OUT_OF_STOCK.color }
-          : { text: `Existing manual coil found (no GRN) · ${existingManual.skuCode} · ${num(existingManual.availableKg)} kg remaining. This cut continues it.`, color: STOCK_TOKENS.OK.color })
+          ? { text: 'Manual coil found (no GRN) · fully cut — nothing is left on it.', color: STOCK_TOKENS.OUT_OF_STOCK.color }
+          : { text: 'Manual coil found (no GRN)', color: STOCK_TOKENS.OK.color })
         : { text: '', color: O2D.sub },
   }[batchState];
 
@@ -971,46 +1053,21 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
   );
 
   /**
-   * TOTAL COIL WEIGHT / ALREADY CUT / REMAINING WEIGHT (+ the coil's status).
-   *
-   * Information, not inputs: read straight from `coilFacts` — the goods
-   * receipt and the batch ledger, the same remaining figure the server checks
-   * a round against. Rendered only once a coil is identified.
+   * WHAT THE COIL HAS LEFT — one line under "Total coil weight", read straight
+   * from `coilFacts` (the goods receipt and the batch ledger: the same
+   * remaining figure the server checks a round against). This is an entry
+   * form, so the coil's figures are a line, not a panel of cards.
    */
-  const coilFactsTiles = coilFacts && (
-    <Box data-testid="coil-facts" sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1, mt: 1.25 }}>
-      {[
-        ['Total coil weight', `${num(coilFacts.originalKg)} kg`, O2D.ink,
-          coilFacts.manual ? 'Entered for the whole coil — it has no goods receipt.' : 'What this coil weighed on its goods receipt.'],
-        ['Already cut', `${num(coilFacts.alreadyCutKg)} kg`, O2D.body,
-          coilFacts.rounds == null ? 'Loading this coil\'s rounds…'
-            : coilFacts.otherOutKg > 0.001
-              ? `${coilFacts.rounds} round${coilFacts.rounds === 1 ? '' : 's'} here (${num(coilFacts.roundsCutKg)} kg) + ${num(coilFacts.otherOutKg)} kg earlier, not linked to a round`
-              : `${coilFacts.rounds} previous round${coilFacts.rounds === 1 ? '' : 's'}`],
-        ['Remaining weight', `${num(coilFacts.availableKg)} kg`,
-          coilFacts.availableKg > 0.001 ? '#0f766e' : STOCK_TOKENS.OUT_OF_STOCK.color,
-          'Total coil weight minus already cut — the most this round can take.'],
-      ].map(([label, value, color, sub]) => (
-        <Box key={label} sx={{ px: 1.1, py: 0.6, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, minWidth: 0 }}>
-          <Typography sx={capsSx}>{label}</Typography>
-          <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-          <Typography sx={{ fontSize: '0.6rem', color: O2D.faint }}>{sub}</Typography>
-        </Box>
-      ))}
-      <Box sx={{ px: 1.1, py: 0.6, borderRadius: '7px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-        <Typography sx={capsSx}>Cutting status</Typography>
-        <Box sx={{ mt: 0.4 }}><CutStatusChip status={coilFacts.status} /></Box>
-        <Typography sx={{ fontSize: '0.6rem', color: O2D.faint, mt: 0.3 }}>Worked out from the weights — never set by hand.</Typography>
-      </Box>
-    </Box>
-  );
+  const coilLeftText = coilFacts && !coilFacts.isNew
+    ? `Already cut ${num(coilFacts.alreadyCutKg)} kg · ${num(coilFacts.availableKg)} kg left`
+    : null;
 
   return (
     <Stack spacing={1.25} sx={{ minWidth: 0, '& > *': { minWidth: 0 } }} data-testid="coil-to-circle-form">
       {/* ── Step 1 — the coil ── */}
       <Panel>
         <StepHead n={1} title="Which coil is being cut?"
-          hint="Type or pick the coil's batch number — a coil on record is filled in automatically; a coil with no record is entered here. Then say how much of it is cut in this round."
+          hint="Type or pick the batch number — the coil's details fill in by themselves."
           done={identified && coilWt > 0} />
 
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.4fr 2fr 1fr 1fr' }, gap: 1.25, mt: 1.25 }}>
@@ -1032,12 +1089,12 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
             error={manualTotalBad}
             InputLabelProps={{ shrink: true }}
             inputProps={{ min: 0, step: 'any', 'data-testid': 'manual-total-input' }}
-            helperText={receipt ? 'From this coil\'s goods receipt.'
-              : existingManual ? 'Recorded on this coil\'s first round — it does not change.'
-                : untraceable ? 'Not recorded — there is no coil to keep it against.'
-                  : isNewCoil ? (manualTotalBad ? 'Enter the coil\'s weight — a number above 0 kg.' : 'The whole coil before any cutting — not this round\'s cut.')
-                    : 'From the coil\'s record, or entered for a new coil.'}
-            FormHelperTextProps={helperSx(manualTotalBad ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub)} />
+            helperText={coilLeftText
+              || (untraceable ? 'Not needed — no coil to keep it against.'
+                : isNewCoil ? (manualTotalBad ? 'Enter the coil\'s weight — a number above 0 kg.' : 'The whole coil, before any cutting.')
+                  : undefined)}
+            FormHelperTextProps={helperSx(manualTotalBad ? STOCK_TOKENS.OUT_OF_STOCK.color
+              : coilLeftText ? (coilFacts.availableKg > 0.001 ? '#0f766e' : STOCK_TOKENS.OUT_OF_STOCK.color) : O2D.sub)} />
         </Box>
 
         {/* ── "NO RECEIPT AVAILABLE" — only while the batch is blank: it is for
@@ -1056,148 +1113,113 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
                   </Typography>
                   <Typography sx={{ fontSize: '0.66rem', color: untraceable ? STOCK_TOKENS.LOW.color : O2D.faint }}>
                     {untraceable
-                      ? 'This cut will not be traceable to a coil: its scrap shows under “Untraceable” in Scrap IMS, and only Partial cutting is possible. Untick it to type the batch number instead.'
-                      : 'Records the cut without a coil, so its scrap cannot be traced. Only for a coil with no batch number to type above.'}
+                      ? 'Not traceable to a coil — one entry: the weight cut and its circles. Untick it to type the batch number.'
+                      : 'Only for a coil with no batch number to type above.'}
                   </Typography>
                 </Box>
               )} />
           </Box>
         )}
 
-        {/* ── WHICH MANUAL COIL THIS CUT BELONGS TO ── */}
-        {coilFacts?.manual && (
-          <Paper elevation={0} data-testid="manual-coil-banner" sx={{
-            mt: 1.5, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.OK.border}`, bgcolor: STOCK_TOKENS.OK.tint,
-          }}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Box sx={{ color: STOCK_TOKENS.OK.color, display: 'flex' }}><Pencil size={15} /></Box>
-              <Box sx={{ minWidth: 0 }}>
-                <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: O2D.ink }}>
-                  Manual coil {coilLabel} · {coil?.skuCode || existingManual?.skuCode} · no GRN
-                </Typography>
-                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
-                  {existingManual
-                    ? `Entered ${dayjs(existingManual.enteredAt).format('DD MMM YYYY')} · ${existingManual.rounds} round${existingManual.rounds === 1 ? '' : 's'} so far. This cut continues the same coil.`
-                    : 'A new manual coil. It is recorded with its total weight when this round is saved, and its later rounds continue from it.'}
-                </Typography>
-              </Box>
-              {existingManual && (
-                <Button size="small" endIcon={<ArrowUpRight size={13} />} sx={{ ml: { sm: 'auto' }, textTransform: 'none', fontWeight: 700, fontSize: '0.72rem' }}
-                  onClick={() => navigate(`/rm-ims/coil/${existingManual.id}`)}>
-                  View this coil's history
-                </Button>
-              )}
-            </Stack>
-            {coilFactsTiles}
-          </Paper>
-        )}
-        {/* ── WHICH PHYSICAL COIL THIS CUT BELONGS TO ──────────────────────
-            The scrap this cut leaves is traced back through here and nowhere
-            else, so the link is stated on the form. A batch typed over it
-            releases it at once, so it never describes a different coil. */}
-        {receipt && (
-          <Paper elevation={0} data-testid="selected-coil" sx={{
-            mt: 1.5, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.OK.border}`, bgcolor: STOCK_TOKENS.OK.tint,
-          }}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Box sx={{ color: STOCK_TOKENS.OK.color, display: 'flex' }}><Receipt size={15} /></Box>
-              <Box sx={{ minWidth: 0 }}>
-                <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: O2D.ink }}>
-                  Physical coil {receipt.batchNo} · {receipt.skuCode}
-                </Typography>
-                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
-                  {[receipt.grnNumber && `GRN ${receipt.grnNumber}`, receipt.poNumber && `PO ${receipt.poNumber}`, receipt.supplier]
-                    .filter(Boolean).join(' · ') || 'Its scrap will be traceable back to this coil.'}
-                </Typography>
-              </Box>
-              <Stack direction="row" spacing={0.5} sx={{ ml: { sm: 'auto' } }}>
-                <Button size="small" endIcon={<ArrowUpRight size={13} />}
-                  onClick={() => navigate(`/rm-ims/coil/${receipt.id}`)}
-                  sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem' }}>
-                  View this coil's history
-                </Button>
-                <Button size="small" color="inherit"
-                  onClick={clearCoil}
-                  sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.sub }}>
-                  Clear coil
-                </Button>
-              </Stack>
-            </Stack>
-            {coilFactsTiles}
-          </Paper>
-        )}
-        {/* No coil identified yet: no figure cards at all — they appear with
-            the coil, in the banner above. */}
-
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.5 }}>
+        {/* The coil that was found is said in the Batch Number line and its
+            weights under "Total coil weight" — no separate panel, so the form
+            reads as one form. Clearing the batch field lets go of the coil. */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 1.25, mt: 1.5 }}>
           <TextField select size="small" label="Received At" value={head.warehouse}
-            onChange={(e) => setHead((h) => ({ ...h, warehouse: e.target.value }))}
-            helperText={activeLocation?.hint}
-            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
+            onChange={(e) => setHead((h) => ({ ...h, warehouse: e.target.value }))}>
             {RECEIVED_AT_OPTIONS.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
           </TextField>
-          <TextField select size="small" label="Scrap checked?" value={head.scrapVerified}
-            onChange={(e) => setHead((h) => ({ ...h, scrapVerified: e.target.value }))}
-            helperText={SCRAP_STATES.find((s) => s.value === head.scrapVerified)?.hint}
-            FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}>
-            {SCRAP_STATES.map((s) => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
-          </TextField>
+          {/* Filled from the coil's own record; asked only when it has none. */}
           <TextField size="small" type="number" label="Rate (₹ per kg)" value={head.rate}
             onChange={(e) => setHead((h) => ({ ...h, rate: e.target.value }))}
-            helperText={receipt
-              ? `From this coil's goods receipt (₹${num(receipt.unitCost)}/kg). Used to value the circles produced.`
-              : existingManual?.rate
-                ? `From this coil's manual entry (₹${num(existingManual.rate)}/kg). Used to value the circles produced.`
-                : (isNewCoil || untraceable || existingManual)
-                  ? 'The rate paid for this coil, where known. Used to value the circles produced.'
-                  : 'Filled from the coil\'s record once its batch number is found. Used to value the circles produced.'}
+            helperText={(isNewCoil || untraceable || (existingManual && !existingManual.rate)) ? 'The rate paid for this coil, where known.' : undefined}
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
         </Box>
 
         {/* ── THIS CUTTING ROUND ────────────────────────────────────────────
             With a physical coil linked, the operator says what this round is:
-            Full (everything left — the system fills the weight) or Partial
-            (type the weight; the rest stays for a later round). That choice is
-            the INSTRUCTION for this round; the coil's status after it is still
-            worked out from the weights, never from the choice. */}
+            Full (everything left — the system fills the weight — and the
+            circles of the whole coil in step 2) or Partial (type the weight;
+            nothing else is asked, the rest stays for a later round). That
+            choice is the INSTRUCTION for this round; the coil's status after it
+            is still worked out from the weights, never from the choice. */}
         <Box data-testid="this-cutting-round" sx={{
           mt: 1.5, px: 1.5, py: 1.25, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt,
-          display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.3fr 1fr 1fr' }, gap: 1.5, alignItems: 'start',
+          display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.3fr 1fr' }, gap: 1.5, alignItems: 'start',
         }}>
-          {/* Always on screen; usable only once there is a coil to cut.
-              Full needs a linked coil (it takes what THAT coil has left), so a
-              "No receipt available" cut can only be Partial. */}
-          <FormControl disabled={noCoil}>
-            <FormLabel id="cut-type-label" sx={{ fontSize: '0.7rem', fontWeight: 800, color: O2D.ink, '&.Mui-focused': { color: O2D.ink }, '&.Mui-disabled': { color: O2D.faint } }}>
-              Cutting type
-            </FormLabel>
-            <RadioGroup row aria-labelledby="cut-type-label" value={cutType || ''}
-              onChange={(e) => setCutType(e.target.value)}>
-              <FormControlLabel value="FULL" disabled={noCoil || !coilFacts || coilFacts.availableKg <= 0.001 || !!coilFacts.sharedLedger}
-                control={<Radio size="small" />}
-                label={(
-                  <Box>
-                    <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'inherit' }}>Full cutting</Typography>
-                    <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
-                      {!coilFacts ? (noCoil ? 'Choose the coil first' : 'Needs a physical coil')
-                        : coilFacts.sharedLedger ? 'Not on a batch shared with another receipt — use Partial'
-                          : coilFacts.availableKg > 0.001 ? `Cut everything left — ${num(coilFacts.availableKg)} kg` : 'Nothing left on this coil'}
-                    </Typography>
-                  </Box>
-                )} />
-              <FormControlLabel value="PARTIAL" disabled={noCoil} control={<Radio size="small" />}
-                label={(
-                  <Box>
-                    <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'inherit' }}>Partial cutting</Typography>
-                    <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
-                      {noCoil ? 'Choose the coil first' : 'Cut part; the rest stays for a later round'}
-                    </Typography>
-                  </Box>
-                )} />
-            </RadioGroup>
-          </FormControl>
+          {/* Cut before: what has already happened to this coil, first. */}
+          {cutBefore && (
+            <Stack direction="row" spacing={1} alignItems="flex-start" data-testid="coil-cut-before"
+              sx={{
+                gridColumn: '1 / -1', px: 1.25, py: 0.9, borderRadius: '7px',
+                border: `1px solid ${(coilDone ? STOCK_TOKENS.OUT_OF_STOCK : STOCK_TOKENS.LOW).border}`,
+                bgcolor: (coilDone ? STOCK_TOKENS.OUT_OF_STOCK : STOCK_TOKENS.LOW).tint,
+              }}>
+              <Box sx={{ color: (coilDone ? STOCK_TOKENS.OUT_OF_STOCK : STOCK_TOKENS.LOW).color, display: 'flex', pt: 0.2 }}><History size={16} /></Box>
+              <Typography sx={{ fontSize: '0.76rem', color: O2D.ink, lineHeight: 1.45 }}>
+                {coilDone ? (
+                  <><b>This coil is already fully cut</b> — {num(coilFacts.alreadyCutKg)} kg of {num(coilFacts.originalKg)} kg. Nothing is left on it to cut.</>
+                ) : (
+                  <>
+                    <b>This coil was cut before</b>
+                    {coilFacts.rounds ? ` — ${coilFacts.rounds} time${coilFacts.rounds === 1 ? '' : 's'}` : ''}
+                    {lastCutAt ? `, last on ${dayjs(lastCutAt).format('DD MMM YYYY')}` : ''}
+                    : {num(coilFacts.alreadyCutKg)} kg of {num(coilFacts.originalKg)} kg cut, <b>{num(coilFacts.availableKg)} kg left</b>.
+                    {coilFacts.pendingKg > 0.001 && ` The circles of the ${num(coilFacts.pendingKg)} kg cut so far are entered with the full cut.`}
+                  </>
+                )}
+              </Typography>
+            </Stack>
+          )}
+          {/* Always on screen; usable only once there is a coil to cut. A
+              "No receipt available" cut has no coil to finish later, so there
+              is nothing to choose: it is one entry, weight and circles. */}
+          {untraceable ? (
+            <Box data-testid="cut-type-none">
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: O2D.ink }}>Cutting type</Typography>
+              <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mt: 0.4 }}>
+                One entry — no coil to finish later, so enter the weight cut and the circles it produced.
+              </Typography>
+            </Box>
+          ) : (
+            <FormControl disabled={noCoil}>
+              <FormLabel id="cut-type-label" sx={{ fontSize: '0.7rem', fontWeight: 800, color: O2D.ink, '&.Mui-focused': { color: O2D.ink }, '&.Mui-disabled': { color: O2D.faint } }}>
+                {/* A coil cut before is asked what happens next; a fresh one, which cut. */}
+                {cutBefore && !coilDone ? 'What do you want to do now?' : 'Cutting type'}
+              </FormLabel>
+              <RadioGroup row aria-labelledby="cut-type-label" value={cutType || ''}
+                onChange={(e) => setCutType(e.target.value)}>
+                <FormControlLabel value="PARTIAL" disabled={noCoil || coilDone} control={<Radio size="small" />}
+                  label={(
+                    <Box>
+                      <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'inherit' }}>
+                        {cutBefore ? 'Partial cut again' : 'Partial cutting'}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
+                        {noCoil ? 'Choose the coil first'
+                          : coilDone ? 'Nothing left on this coil'
+                            : cutBefore ? 'Cut some more — enter only the weight' : 'Enter only the weight cut'}
+                      </Typography>
+                    </Box>
+                  )} />
+                <FormControlLabel value="FULL" disabled={noCoil || !coilFacts || coilFacts.availableKg <= 0.001}
+                  control={<Radio size="small" />}
+                  label={(
+                    <Box>
+                      <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'inherit' }}>
+                        {cutBefore ? 'Full cut — finish it' : 'Full cutting'}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.62rem', color: O2D.sub }}>
+                        {!coilFacts ? (noCoil ? 'Choose the coil first' : 'Needs a physical coil')
+                          : coilFacts.availableKg <= 0.001 ? 'Nothing left on this coil'
+                            : cutBefore ? `Cut the remaining ${num(coilFacts.availableKg)} kg and enter all its circles`
+                              : 'Cut the whole coil and enter its circles'}
+                      </Typography>
+                    </Box>
+                  )} />
+              </RadioGroup>
+            </FormControl>
+          )}
 
           {/* The weight this round takes. Full: the system's figure, read-only.
               Partial: typed. Sent as `coilWeightKg` — exactly what the server
@@ -1208,64 +1230,39 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
             disabled={noCoil || cutTypeMissing}
             placeholder={noCoil ? 'Choose the coil first' : cutTypeMissing ? 'Choose Full or Partial first' : undefined}
             InputLabelProps={noCoil || cutTypeMissing ? { shrink: true } : undefined}
-            error={shortCoil || gradeShort || badWeight}
+            error={shortCoil || gradeShort || badWeight || partialTakesAll}
             inputProps={{ min: 0, step: 'any', readOnly: isFull }}
             sx={isFull ? { '& .MuiInputBase-root': { bgcolor: O2D.surfaceAlt } } : { '& .MuiInputBase-root': { bgcolor: O2D.surface } }}
-            helperText={(
-              <>
-                {noCoil ? (untraceable ? 'Choose the coil being cut above first.'
-                  : isNewCoil ? 'Choose the coil and enter its total weight above first — it is a new coil.'
-                    : batchState === 'ambiguous' ? 'Pick which coil this is from the Batch Number list first.'
-                      : 'Enter the batch number above to choose the coil.')
-                  : cutTypeMissing ? 'Choose the cutting type to enter this round\'s weight.'
-                    : isFull ? `Full cutting — the whole remaining ${num(coilFacts.availableKg)} kg, set by the system.`
-                      : badWeight ? 'Enter a weight above 0 kg. '
-                        : shortCoil ? (coilFacts
-                          ? `Only ${num(available)} KG is available from this physical coil. `
-                          : `Only ${num(available)} KG of ${coil.skuCode} is in RM stock. `)
-                          : gradeShort ? `Only ${num(gradeOnHand)} KG of ${coil.skuCode} is in RM stock. `
-                            : coilFacts ? `Up to ${num(coilFacts.availableKg)} kg remaining. `
-                              : (coil ? `${num(coil.onHand)} in store. ` : 'Pick a coil first. ')}
-                {/* "Use all" is Full cutting — the same calculation, not a copy. */}
-                {cutType === 'PARTIAL' && coilFacts && !coilFacts.sharedLedger && coilFacts.availableKg > 0.001 && (
-                  <Box component="button" type="button" onClick={() => setCutType('FULL')} sx={linkSx}>
-                    Use all {num(coilFacts.availableKg)} kg (Full cutting)
-                  </Box>
-                )}
-              </>
-            )}
-            FormHelperTextProps={{ component: 'div', sx: { fontSize: '0.66rem', color: (shortCoil || gradeShort || badWeight) ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }} />
-
-          {/* AFTER THIS ROUND — what the round takes and leaves on the coil.
-              Derived, before saving; the status is the coil's, from weights. */}
-          <Box data-testid="round-outcome" sx={{ minWidth: 0 }}>
-            <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: O2D.sub }}>
-              After this round
-            </Typography>
-            {[
-              ['Cut this round', after ? `${num(coilWt)} kg` : '—', O2D.ink],
-              ['Remaining weight', after ? `${num(after.remainingKg)} kg` : '—',
-                after && after.remainingKg < 0 ? STOCK_TOKENS.OUT_OF_STOCK.color : '#0f766e'],
-            ].map(([label, value, color]) => (
-              <Stack key={label} direction="row" justifyContent="space-between" spacing={1} sx={{ mt: 0.25 }}>
-                <Typography sx={{ fontSize: '0.7rem', color: O2D.sub }}>{label}</Typography>
-                <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-              </Stack>
-            ))}
-            <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} sx={{ mt: 0.25 }}>
-              <Typography sx={{ fontSize: '0.7rem', color: O2D.sub }}>Status</Typography>
-              {after ? <CutStatusChip status={after.status} /> : <Typography sx={{ fontSize: '0.8rem', color: O2D.faint }}>—</Typography>}
-            </Stack>
-          </Box>
+            // One line: what to do next, what is wrong, or what this round
+            // leaves on the coil — the round's figures, without a panel for them.
+            helperText={noCoil ? (untraceable ? 'Choose the coil being cut above first.'
+              : isNewCoil ? 'Choose the coil and enter its total weight above first.'
+                : batchState === 'ambiguous' ? 'Pick which coil this is from the Batch Number list first.'
+                  : 'Enter the batch number above first.')
+              : cutTypeMissing ? 'Choose Full or Partial.'
+                : isFull ? 'All that is left on the coil — filled in for you.'
+                  : badWeight ? 'Enter a weight above 0 kg.'
+                    : partialTakesAll ? 'That is all that is left — choose Full cutting.'
+                      : shortCoil ? (coilFacts
+                        ? `Only ${num(available)} KG is available from this physical coil.`
+                        : `Only ${num(available)} KG of ${coil.skuCode} is in RM stock.`)
+                        : gradeShort ? `Only ${num(gradeOnHand)} KG of ${coil.skuCode} is in RM stock.`
+                          : after ? `${num(after.remainingKg)} kg will be left on the coil.`
+                            : coilFacts ? `Less than the ${num(coilFacts.availableKg)} kg left.`
+                              : (coil ? `${num(coil.onHand)} in store.` : 'Pick a coil first.')}
+            FormHelperTextProps={{ component: 'div', sx: { fontSize: '0.66rem', color: (shortCoil || gradeShort || badWeight || partialTakesAll) ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.sub, mx: 0 } }} />
         </Box>
 
-        {/* Last in the round: the existing over-cut override, unchanged. */}
-        <FormControlLabel
-          sx={{ mt: 0.75 }}
-          control={<Switch size="small" checked={head.allowNegative}
-            onChange={(e) => setHead((h) => ({ ...h, allowNegative: e.target.checked }))} />}
-          label={<Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>Allow cutting more coil than we hold</Typography>}
-        />
+        {/* Last in the round: the existing over-cut override — offered only
+            where it changes something (see `showOverride`). */}
+        {showOverride && (
+          <FormControlLabel
+            sx={{ mt: 0.75 }}
+            control={<Switch size="small" checked={head.allowNegative}
+              onChange={(e) => setHead((h) => ({ ...h, allowNegative: e.target.checked }))} />}
+            label={<Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>Allow cutting more coil than we hold</Typography>}
+          />
+        )}
         {/* The override is allowed, never silent: the negative balance it
             leaves is spelled out right under the switch that allowed it. */}
         {!overCut && overdrawn && (
@@ -1314,14 +1311,20 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
             receipt available" is offered (above) while the batch is blank. */}
       </Panel>
 
-      {/* ── Step 2 — the circles ── */}
+      {/* ── Step 2 — the circles: only for a cut that records them. A Partial
+          round records its weight alone; its circles come with the Full cut. ── */}
+      {recordsCircles && (
       <Panel>
         <StepHead
           n={2}
-          title="What came out?"
-          hint={coil
-            ? `Only the circle sizes the client has approved for ${coil.skuCode} can be chosen — the pieces made and their weight.`
-            : 'Every circle size produced from this coil — the pieces made and their weight.'}
+          title={isFull ? 'Circles cut from this coil' : 'Circles cut'}
+          // One line: which weight the circles are counted from. A coil cut
+          // the old way already has some circles entered — only the rest now.
+          hint={isFull
+            ? (round2((coilFacts.roundsCutKg || 0) - (pendingKg || 0)) > 0.001
+              ? `Enter the circles from the last ${num(basisKg)} kg — the earlier rounds' circles are already entered.`
+              : `Enter every circle cut from the whole coil (${num(basisKg)} kg).`)
+            : 'Enter the circles this cut produced.'}
           done={validCircles.length > 0 && !missingPcs.length}
         />
 
@@ -1363,12 +1366,13 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
         )}
 
         <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-          <Table size="small" sx={imsTableSx(860)}>
+          <Table size="small" sx={imsTableSx(620)}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                {/* No "Size label" box: it was optional, and the circle's own
+                    name is saved as its label (see submit). */}
                 <TableCell><Th label="Circle produced" hint={H.circleProduced} /></TableCell>
-                <TableCell><Th label="Size label" hint={H.sizeLabel} /></TableCell>
                 {/* Both figures are required, and they do different jobs: PIECES go
                     into circle stock, WEIGHT drives yield and scrap. */}
                 <TableCell align="right"><Th label="Pieces (PCS)" hint={H.pieces} /></TableCell>
@@ -1410,10 +1414,6 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
                       )}
                     />
                   </TableCell>
-                  <TableCell sx={{ width: 210 }}>
-                    <TextField size="small" value={c.sizeLabel} onChange={(e) => setC(i, 'sizeLabel', e.target.value)}
-                      placeholder={'e.g. Cu - 0.8mm - 8.50"'} fullWidth />
-                  </TableCell>
                   <TableCell align="right" sx={{ width: 110 }}>
                     <TextField size="small" type="number" value={c.pcs} onChange={(e) => setC(i, 'pcs', e.target.value)}
                       error={!!c.sku && Number(c.weightKg) > 0 && !(Number(c.pcs) > 0)}
@@ -1441,9 +1441,10 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
           Add another circle size
         </Button>
 
-        {/* What stops a round being saved because of its circles, said next to
-            the circles. The rest of the round's checks are on "Cut this round"
-            and the over-cut switch in step 1. */}
+        {/* No scrap / yield preview: this is the entry form. The server works
+            out both for the whole coil (settledKg) and the history shows them.
+            What stops a round being saved because of its circles is said next
+            to the circles; the rest is on "Cut this round" in step 1. */}
         {missingPcs.length > 0 && (
           <Paper elevation={0} data-testid="missing-pcs-warning" sx={{
             mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
@@ -1466,29 +1467,16 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
             <Stack direction="row" spacing={1} alignItems="center">
               <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
               <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
-                The circles weigh {num(Math.abs(scrap))}kg more than the coil. Metal cannot be created — check the weights.
-              </Typography>
-            </Stack>
-          </Paper>
-        )}
-        {ready && yieldPct < 85 && (
-          <Paper elevation={0} data-testid="low-yield-warning" sx={{
-            mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-            border: '1px solid #fde68a', bgcolor: '#fffbeb',
-          }}>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Box sx={{ color: '#b45309', display: 'flex' }}><Scissors size={16} /></Box>
-              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#b45309' }}>
-                {num(100 - yieldPct)}% of this coil is going to scrap. Worth a look at the cutting pattern before saving.
+                The circles weigh {num(Math.abs(scrap))}kg more than the {isFull ? `${num(basisKg)} kg of coil they came from` : 'coil'}. Metal cannot be created — check the weights.
               </Typography>
             </Stack>
           </Paper>
         )}
       </Panel>
+      )}
 
-      {/* ── Save / Cancel — straight after the circles. The round's own figures
-          are beside "Cut this round" (After this round); scrap and yield are
-          worked out from the weights and shown in the history once saved. ── */}
+      {/* ── Save / Cancel — straight after the circles. Scrap and yield are
+          worked out on saving and shown in the history. ── */}
       {/* On a phone Save takes the rest of the row, so its label stays on one line. */}
       <Stack direction="row" justifyContent="flex-end" spacing={1} data-testid="form-footer">
         {onCancel && (
@@ -1500,7 +1488,7 @@ const CoilToCircleForm = ({ onSaved, onCancel, onStateChange }) => {
         <Button variant="contained" disableElevation onClick={submit} disabled={isLoading || !ready}
           startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
           sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand, whiteSpace: 'nowrap', flex: { xs: 1, sm: 'none' } }}>
-          Save this conversion
+          {isPartial ? 'Save partial cut' : isFull ? 'Save full cut' : 'Save this conversion'}
         </Button>
       </Stack>
     </Stack>

@@ -8,7 +8,7 @@ import { Recycle, Search, Download, Eye, AlertTriangle, Disc3 } from 'lucide-rea
 import dayjs from 'dayjs';
 import {
   ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiTile, EmptyNote, Th,
-  LocationChip, DispositionChip, BatchStatusChip, YieldChip, kg,
+  LocationChip, BatchStatusChip, YieldChip, kg,
   yieldBand, YIELD_GOOD_PCT, YIELD_HIGH_PCT,
   LOCATION_TOKENS, DISPOSITION_TOKENS,
   O2D, O2D_TIP, num, imsTableSx,
@@ -26,7 +26,6 @@ const ScrapImsList = () => {
   const [rowsPerPage, setRowsPerPage] = useState(50);
 
   const location = params.get('location') || 'ALL';
-  const disposition = params.get('disposition') || 'ALL';
   const batchStatus = params.get('batchStatus') || 'ALL';
 
   const setParam = (key, value) => {
@@ -39,10 +38,9 @@ const ScrapImsList = () => {
     page: page + 1,
     limit: rowsPerPage,
     ...(location !== 'ALL' ? { location } : {}),
-    ...(disposition !== 'ALL' ? { disposition } : {}),
     ...(batchStatus !== 'ALL' ? { batchStatus } : {}),
     ...(search ? { search } : {}),
-  }), [page, rowsPerPage, location, disposition, batchStatus, search]);
+  }), [page, rowsPerPage, location, batchStatus, search]);
 
   const { data, isFetching, isError, error } = useGetScrapOverviewQuery(query);
   const rows = data?.data || [];
@@ -51,8 +49,7 @@ const ScrapImsList = () => {
 
   useEffect(() => { setPage(0); }, [search]);
 
-  const activeFilters = (location !== 'ALL' ? 1 : 0) + (disposition !== 'ALL' ? 1 : 0)
-    + (batchStatus !== 'ALL' ? 1 : 0) + (search ? 1 : 0);
+  const activeFilters = (location !== 'ALL' ? 1 : 0) + (batchStatus !== 'ALL' ? 1 : 0) + (search ? 1 : 0);
 
   const exportCsv = () => {
     const header = ['Date', 'Batch No', 'Location', 'Coil SKU', 'Coil Name', 'Coil weight (kg)',
@@ -74,8 +71,8 @@ const ScrapImsList = () => {
   return (
     <ScrapShell
       icon={Recycle}
-      title="Scrap master data"
-      subtitle="Every coil cut on record — what it produced, what was left, and whether it was checked."
+      title="Scrap cut history"
+      subtitle="Every coil cut on record, one row each — what it produced and what was left. Scrap master data has them by coil SKU."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!rows.length}
           sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
@@ -104,10 +101,6 @@ const ScrapImsList = () => {
             <MenuItem value="ALL">All locations</MenuItem>
             <MenuItem value="PLG01">{LOCATION_TOKENS.PLG01.label}</MenuItem>
             <MenuItem value="JW001">{LOCATION_TOKENS.JW001.label}</MenuItem>
-          </TextField>
-          <TextField select size="small" label="Checked?" value={disposition} onChange={(e) => setParam('disposition', e.target.value)} sx={{ minWidth: 160 }}>
-            <MenuItem value="ALL">Any</MenuItem>
-            {Object.entries(DISPOSITION_TOKENS).map(([k, t]) => <MenuItem key={k} value={k}>{t.label}</MenuItem>)}
           </TextField>
           <TextField select size="small" label="Cut?" value={batchStatus} onChange={(e) => setParam('batchStatus', e.target.value)} sx={{ minWidth: 150 }}>
             <MenuItem value="ALL">Any</MenuItem>
@@ -140,25 +133,28 @@ const ScrapImsList = () => {
                 <TableCell align="right"><Th label="Circles weight" hint={H.circlesWeight} /></TableCell>
                 <TableCell align="right"><Th label="Scrap" hint={H.scrapKg} /></TableCell>
                 <TableCell align="right"><Th label="Yield" hint={H.yieldPct} /></TableCell>
-                <TableCell><Th label="Checked?" hint={H.scrapVerified} /></TableCell>
                 <TableCell><Th label="Cut?" hint={H.batchStatus} /></TableCell>
                 <TableCell align="right" />
               </TableRow>
             </TableHead>
             <TableBody>
               {isFetching && !rows.length && (
-                <TableRow><TableCell colSpan={12} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={280} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} sx={{ border: 0, p: 1.5 }}><Skeleton variant="rounded" height={280} /></TableCell></TableRow>
               )}
               {!isFetching && !rows.length && (
-                <TableRow><TableCell colSpan={12} sx={{ border: 0 }}>
+                <TableRow><TableCell colSpan={11} sx={{ border: 0 }}>
                   {/* A failed load is said as a failure, never as "no match". */}
                   <EmptyNote icon={Search}
-                    title={isError ? 'Could not load the scrap master data.' : 'No scrap records match these filters'}
+                    title={isError ? 'Could not load the cut history.' : 'No cuts match these filters'}
                     hint={isError ? (error?.data?.message || 'The server did not answer. Refresh the page to try again.')
-                      : 'Try clearing the location or check filter, or searching a different batch.'} />
+                      : 'Try clearing the location or cut filter, or searching a different batch.'} />
                 </TableCell></TableRow>
               )}
-              {rows.map((r, i) => (
+              {rows.map((r, i) => {
+                // A Stock Correction of the coil SKU's scrap: its change, not a cut.
+                const correction = r.entryType === 'CORRECTION';
+                const none = <Box component="span" sx={{ color: O2D.faint }}>—</Box>;
+                return (
                 <TableRow key={r._id} hover sx={r.batchStatus === 'UNCUT' ? { bgcolor: '#fffbeb' } : undefined}>
                   <TableCell align="center" sx={{ width: 62, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>
                     {page * rowsPerPage + i + 1}
@@ -176,7 +172,11 @@ const ScrapImsList = () => {
                       coil, so there is nothing honest to open, and it says so
                       on hover instead of pretending to be a link. */}
                   <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                    {(r.coilReceiptId || r.manualCoilId) ? (
+                    {correction ? (
+                      <Tooltip arrow slotProps={O2D_TIP} title={r.remarks || 'Stock correction of this coil SKU\'s scrap'}>
+                        <Box component="span" sx={{ cursor: 'help', color: '#7c3aed', fontWeight: 700, fontFamily: 'inherit' }}>Stock correction</Box>
+                      </Tooltip>
+                    ) : (r.coilReceiptId || r.manualCoilId) ? (
                       <Tooltip arrow slotProps={O2D_TIP} title="Open this physical coil — every round it was cut in, what each round produced, and how much coil was left after it">
                         <Box
                           role="button" tabIndex={0}
@@ -203,12 +203,12 @@ const ScrapImsList = () => {
                     <Typography sx={{ fontSize: '0.64rem', color: O2D.sub, fontFamily: 'ui-monospace, monospace' }}>{r.coilSkuCode}</Typography>
                   </TableCell>
                   <TableCell><LocationChip location={r.location} /></TableCell>
-                  <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{kg(r.coilWeightKg)}</TableCell>
+                  <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{correction ? none : kg(r.coilWeightKg)}</TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>
-                    {r.batchStatus === 'UNCUT' ? <Box component="span" sx={{ color: O2D.faint }}>—</Box> : kg(r.circlesWeightKg)}
+                    {r.batchStatus === 'UNCUT' || correction ? none : kg(r.circlesWeightKg)}
                   </TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: r.batchStatus === 'UNCUT' ? O2D.faint : SCRAP_ACCENT }}>
-                    {r.batchStatus === 'UNCUT'
+                    {correction ? `${r.scrapKg < 0 ? '−' : '+'}${kg(Math.abs(r.scrapKg))}` : r.batchStatus === 'UNCUT'
                       ? (
                         <Tooltip arrow slotProps={O2D_TIP} title="This coil was never cut, so no scrap came off it. The sheet reports the whole coil because its circle weight is blank — it is excluded from every total.">
                           <Box component="span" sx={{ cursor: 'help' }}>not scrap</Box>
@@ -216,25 +216,20 @@ const ScrapImsList = () => {
                       )
                       : kg(r.scrapKg)}
                   </TableCell>
-                  <TableCell align="right"><YieldChip pct={r.yieldRatioPct} disposition={r.disposition} /></TableCell>
-                  <TableCell>
-                    <DispositionChip disposition={r.disposition} />
-                    {r.verifiedAt && (
-                      <Typography sx={{ fontSize: '0.6rem', color: O2D.faint, mt: 0.2 }}>
-                        {dayjs(r.verifiedAt).format('DD MMM YYYY')}
-                      </Typography>
+                  <TableCell align="right">{correction ? none : <YieldChip pct={r.yieldRatioPct} disposition={r.disposition} />}</TableCell>
+                  <TableCell><BatchStatusChip batchStatus={r.batchStatus} entryType={r.entryType} remarks={r.remarks} /></TableCell>
+                  <TableCell align="right" sx={{ width: 50 }}>
+                    {!correction && (
+                      <Tooltip arrow slotProps={O2D_TIP} title="Open this cut — the circles it produced and the conversion behind it">
+                        <IconButton size="small" onClick={() => navigate(`/scrap-ims/record/${r._id}`)} sx={{ color: O2D.sub }}>
+                          <Eye size={15} />
+                        </IconButton>
+                      </Tooltip>
                     )}
                   </TableCell>
-                  <TableCell><BatchStatusChip batchStatus={r.batchStatus} /></TableCell>
-                  <TableCell align="right" sx={{ width: 50 }}>
-                    <Tooltip arrow slotProps={O2D_TIP} title="Open this cut — the circles it produced and the conversion behind it">
-                      <IconButton size="small" onClick={() => navigate(`/scrap-ims/record/${r._id}`)} sx={{ color: O2D.sub }}>
-                        <Eye size={15} />
-                      </IconButton>
-                    </Tooltip>
-                  </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </TableScroll>

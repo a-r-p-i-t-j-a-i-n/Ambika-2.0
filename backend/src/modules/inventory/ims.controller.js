@@ -51,4 +51,9 @@ export const imsController = {
     const { docs, pagination } = await imsService.getMovements(req.query);
     res.json(ApiResponse.ok('IMS movements', docs, pagination));
   }),
+
+  getItemLedger: asyncHandler(async (req, res) => {
+    const { docs, pagination } = await imsService.getItemLedger(req.params.skuId, req.query);
+    res.json(ApiResponse.ok('Item history', docs, pagination));
+  }),
 };
