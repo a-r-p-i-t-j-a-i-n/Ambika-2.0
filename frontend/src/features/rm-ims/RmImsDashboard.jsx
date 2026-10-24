@@ -74,7 +74,7 @@ const RmImsDashboard = () => {
   const reorderList = d?.reorderList || [];
 
   // Average yield across the recent conversions — the single number that says
-  // whether the cutting floor is wasting metal.
+  // whether the cutting floor is wasting metal. hi 
   const avgYield = conversions.length
     ? Math.round((conversions.reduce((t, c) => t + Number(c.yieldRatioPct || 0), 0) / conversions.length) * 10) / 10
     : null;
