@@ -24,6 +24,7 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHea
 import IndentFormDrawer from './indents/IndentFormDrawer';
 import PurchaseOrderFormDrawer from './purchase-orders/PurchaseOrderFormDrawer';
 import FollowUpFormDrawer from './follow-ups/FollowUpFormDrawer';
+import { FU_STATUS_LABEL } from './follow-ups/fuMeta';
 import ProformaInvoiceFormDrawer from './proforma-invoices/ProformaInvoiceFormDrawer';
 import GrnFormDialog from './grn/GrnFormDialog';
 import IncomingQCFormDialog from './incoming-qc/IncomingQCFormDialog';
@@ -33,6 +34,8 @@ import TallyEntryFormDialog from './tally-entry/TallyEntryFormDialog';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
+// Display text for a step's status; filtering and grouping keep the stored value.
+const statusLabel = (tab, s) => (tab === 'followup' && FU_STATUS_LABEL[s]) || s;
 const col = (field, headerName, extra = {}) => ({ field, headerName, flex: 1, minWidth: 120, sortable: true, ...extra });
 
 // One column set per Purchase FMS step (mirrors the 11 procurement screens).
@@ -62,7 +65,7 @@ const COLUMNS = {
     col('followUpType', 'Type', { minWidth: 120, valueGetter: (v, r) => r.followUpType || '—' }),
     col('nextFollowUpDate', 'Next Follow-up', { minWidth: 130, valueGetter: (v, r) => dd(r.nextFollowUpDate) }),
     col('finalMaterialDate', 'Material Date', { minWidth: 130, valueGetter: (v, r) => dd(r.finalMaterialDate) }),
-    col('followUpStatus', 'Status', { minWidth: 120 }),
+    col('followUpStatus', 'Status', { minWidth: 120, valueGetter: (v, r) => statusLabel('followup', r.followUpStatus) }),
     col('performedByName', 'By', { minWidth: 130, valueGetter: (v, r) => r.performedByName || '—' }),
   ],
   pi: [
@@ -521,10 +524,10 @@ const PurchaseMasterData = () => {
             <TextField
               select size="small" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
               sx={{ width: { xs: 'calc(50% - 4px)', sm: 160 }, ...fieldSx }}
-              SelectProps={{ displayEmpty: true, renderValue: (v) => (v || 'All statuses') }}
+              SelectProps={{ displayEmpty: true, renderValue: (v) => (statusLabel(tab, v) || 'All statuses') }}
             >
               <MenuItem value="">All statuses</MenuItem>
-              {statuses.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+              {statuses.map((s) => <MenuItem key={s} value={s}>{statusLabel(tab, s)}</MenuItem>)}
             </TextField>
             {mainExtras.map((f) => renderExtra(f, { xs: 'calc(50% - 4px)', sm: 160 }))}
             <ToggleButtonGroup size="small" exclusive value={scope} onChange={(_, v) => v && setScope(v)} sx={{ height: 34 }}>
@@ -664,7 +667,7 @@ const PurchaseMasterData = () => {
                 return keys.map((s) => (
                   <Box key={s} sx={{ minWidth: 260, flex: '0 0 260px' }}>
                     <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1, px: 0.5 }}>
-                      <Typography sx={{ fontWeight: 800, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s}</Typography>
+                      <Typography sx={{ fontWeight: 800, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{statusLabel(tab, s)}</Typography>
                       <Chip size="small" label={groups[s].length} sx={{ height: 18, fontSize: '0.62rem' }} />
                     </Stack>
                     <Stack spacing={1}>

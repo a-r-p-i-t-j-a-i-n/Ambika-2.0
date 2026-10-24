@@ -579,7 +579,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             </ToggleButtonGroup>
           )}
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={5}>
+            <Grid item xs={12} sm={6}>
               {isWithoutPo ? (
                 isEdit ? (
                   <TextField label="Vendor" fullWidth value={header.vendorName || ''} disabled />
@@ -622,15 +622,9 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                 />
               )}
             </Grid>
-            <Grid item xs={6} sm={3.5}>
+            <Grid item xs={6} sm={3}>
               <DateInputDDMMYYYY label="GRN Date" fullWidth value={header.grnDate}
                 onChange={(val) => setHeader((h) => ({ ...h, grnDate: val }))} />
-            </Grid>
-            <Grid item xs={6} sm={3.5}>
-              <TextField label="How Item Received" select fullWidth value={header.howItemReceived}
-                onChange={(e) => setHeader((h) => ({ ...h, howItemReceived: e.target.value }))}>
-                {HOW_ITEM_RECEIVED.map((v) => <MenuItem key={v} value={v}>{howReceivedLabel(v)}</MenuItem>)}
-              </TextField>
             </Grid>
             <Grid item xs={6} sm={3}><TextField label="Challan No" fullWidth value={header.challanNumber} onChange={(e) => setHeader((h) => ({ ...h, challanNumber: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Invoice No" fullWidth value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} /></Grid>
@@ -638,6 +632,12 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             <Grid item xs={6} sm={3}><TextField label="Vehicle No" fullWidth value={header.vehicleNumber} onChange={(e) => setHeader((h) => ({ ...h, vehicleNumber: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
+            <Grid item xs={6} sm={3}>
+              <TextField label="Material Receipt Type" select fullWidth value={header.howItemReceived}
+                onChange={(e) => setHeader((h) => ({ ...h, howItemReceived: e.target.value }))}>
+                {HOW_ITEM_RECEIVED.map((v) => <MenuItem key={v} value={v}>{howReceivedLabel(v)}</MenuItem>)}
+              </TextField>
+            </Grid>
 
             {/* Inventory destination is automatic: each line goes where its SKU
                 master Item Type says (shown on the line). Only Raw Material

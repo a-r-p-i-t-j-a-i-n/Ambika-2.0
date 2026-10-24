@@ -550,7 +550,7 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
     if (y > 700) { doc.addPage(); y = M; }
     const invoiceReceived = grn.invoiceNumber ? 'Yes' : 'No';
     doc.font('Helvetica-Bold').fontSize(8.5).fill(navy).text(`Invoice Received: ${invoiceReceived}`, M, y);
-    doc.font('Helvetica').fontSize(8.5).text(`Invoice No: ${grn.invoiceNumber || '—'}   How Received: ${(grn.howItemReceived || '').replace(/_/g, ' ')}`, M, y + 14);
+    doc.font('Helvetica').fontSize(8.5).text(`Invoice No: ${grn.invoiceNumber || '—'}   Material Receipt Type: ${(grn.howItemReceived || '').replace(/_/g, ' ')}`, M, y + 14);
     doc.font('Helvetica-Bold').fontSize(8.5).text('Remarks:', M, y + 34);
     doc.font('Helvetica').fontSize(8.5).text(grn.remarks || '—', M, y + 47, { width: W - 180 });
 

@@ -1,6 +1,9 @@
 import PurchaseFollowUp, { FOLLOWUP_STATUS, FOLLOWUP_TYPE } from './followUp.model.js';
 import VendorPurchaseOrder, { PO_STATUS, PO_FOLLOWUP_STATUS } from '../purchase-order/purchaseOrder.model.js';
 import { parseLeadDays } from '../purchase-order/purchaseOrder.service.js';
+import {
+  followUpDateError, isNextDateCycle, isNextBeforeActual, NEXT_BEFORE_ACTUAL, isBeforeToday, NEXT_BEFORE_TODAY,
+} from './followUp.dates.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateFollowUpNumber } from '../../../utils/docNumberGenerator.js';
@@ -199,9 +202,27 @@ export const followUpService = {
     if (![FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus)) {
       throw new AppError('Only pending follow-ups can be edited', 400);
     }
+    // A planned-date move is named in the audit entry (the edit form round-trips
+    // the date as YYYY-MM-DD, so compare calendar days, not timestamps).
+    const day = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+    const prevPlannedAt = fu.plannedAt;
+    const plannedMoved = data.plannedAt && day(data.plannedAt) !== day(prevPlannedAt);
+    // A "Next Date to Follow Up" cycle keeps its next date equal to the planned
+    // date, and that next date stays on or after the cycle's Actual Date.
+    const syncNext = plannedMoved && isNextDateCycle(fu);
+    if (syncNext && isNextBeforeActual(fu.actualAt, data.plannedAt)) {
+      throw new AppError(`${NEXT_BEFORE_ACTUAL} (${new Date(fu.actualAt).toDateString()})`, 400);
+    }
     Object.assign(fu, data);
+    if (syncNext) fu.nextFollowUpDate = fu.plannedAt;
     fu.updatedBy = user?._id;
-    fu.activityTimeline.push({ action: 'UPDATE', description: 'Follow-up updated', actorId: user?._id });
+    fu.activityTimeline.push({
+      action: 'UPDATE',
+      description: plannedMoved
+        ? `Follow-up updated — planned date changed from ${new Date(prevPlannedAt).toDateString()} to ${new Date(data.plannedAt).toDateString()}${syncNext ? '; next follow-up date updated to match' : ''}`
+        : 'Follow-up updated',
+      actorId: user?._id,
+    });
     return fu.save();
   },
 
@@ -234,7 +255,13 @@ export const followUpService = {
     if (![FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus)) {
       throw new AppError('Only pending/rescheduled follow-ups can be updated', 400);
     }
+    // The two dates are different outcomes, never alternatives for one another.
+    if (data.finalMaterialDate && data.nextFollowUpDate) {
+      throw new AppError('Enter either a Next Follow-up Date or a Final Material Date, not both', 400);
+    }
     const actualAt = data.actualAt ? new Date(data.actualAt) : new Date();
+    const dateError = followUpDateError({ actualAt, nextFollowUpDate: data.nextFollowUpDate });
+    if (dateError) throw new AppError(dateError, 400);
     const hasFinal = !!data.finalMaterialDate;
     const hasNext = !hasFinal && !!data.nextFollowUpDate;
 
@@ -299,6 +326,7 @@ export const followUpService = {
     if ([FOLLOWUP_STATUS.READY_FOR_GRN, FOLLOWUP_STATUS.CLOSED].includes(fu.followUpStatus)) {
       throw new AppError(`Cannot reschedule a ${fu.followUpStatus} follow-up`, 400);
     }
+    if (isBeforeToday(data.nextFollowUpDate)) throw new AppError(NEXT_BEFORE_TODAY, 400);
     fu.followUpStatus = FOLLOWUP_STATUS.RESCHEDULED;
     fu.nextFollowUpDate = new Date(data.nextFollowUpDate);
     fu.isActiveFollowUp = true; // still the active cycle for this PO

@@ -8,7 +8,20 @@ export const FOLLOWUP_TYPES = ['CALL', 'EMAIL', 'WHATSAPP', 'VISIT', 'OTHER'];
 
 const TYPE_LABEL = { CALL: 'Call', EMAIL: 'Email', WHATSAPP: 'WhatsApp', VISIT: 'Visit', OTHER: 'Other' };
 
-export const FuStatusChip = ({ status }) => <StatusChip status={status} />;
+// Display-only: RESCHEDULED is stored when an update sets a Next Date to Follow
+// Up, so it reads as that outcome. The stored value and its meaning are unchanged.
+export const FU_STATUS_LABEL = { RESCHEDULED: 'Next Follow-up Set' };
+
+export const FuStatusChip = ({ status }) => <StatusChip status={status} label={FU_STATUS_LABEL[status]} />;
+
+// Activity entries keep their stored action codes. A RESCHEDULED entry written
+// when an update set a Next Date ("Follow-up continued — next on …") reads as
+// that outcome; genuine reschedules (RESCHEDULE, other descriptions) are untouched.
+export const fuActivityLabel = (ev) => (
+  ev?.action === 'RESCHEDULED' && /^Follow-up continued/.test(ev.description || '')
+    ? FU_STATUS_LABEL.RESCHEDULED.toUpperCase()
+    : ev?.action
+);
 export const PoFollowUpChip = ({ status }) => <StatusChip status={status} />;
 
 // Follow-up channel is a category (not a status) → neutral styling, no color coding.

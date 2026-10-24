@@ -61,6 +61,10 @@ const hoverFocusSx = (rowSelector) => (theme) => ({
 /** sx for a DataGrid using useRowNavigation (merge into the grid's sx). */
 export const rowNavigationGridSx = (theme) => ({
   ...hoverFocusSx(`.MuiDataGrid-row.${CLICKABLE_CLASS}`)(theme),
+  // A mouse click focuses the clicked cell, and the grid's default focus
+  // outline then boxes that one cell as if only it were the link. The row
+  // hover is the click feedback; keyboard focus keeps its ring below.
+  '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': { outline: 'none' },
   '& .MuiDataGrid-cell:focus-visible, & .MuiDataGrid-cell:focus-within:has(:focus-visible)': {
     outline: `2px solid ${alpha(theme.palette.primary.main, 0.55)}`,
     outlineOffset: -2,

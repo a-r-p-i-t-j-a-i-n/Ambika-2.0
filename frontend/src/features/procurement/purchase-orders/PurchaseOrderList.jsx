@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
+  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Tabs, Tab,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -16,6 +16,7 @@ import {
   useGetPurchaseOrderStatsQuery,
   useCancelPurchaseOrderMutation,
   useGeneratePurchaseOrderPdfMutation,
+  useGetAllApprovedItemsQuery,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -28,6 +29,7 @@ import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import BulkReleasePoDialog from './BulkReleasePoDialog';
+import PendingForPoGrid from './PendingForPoGrid';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
@@ -52,6 +54,15 @@ const PurchaseOrderList = () => {
   const clearSecondary = () => { setVendorFilter(null); setFrom(''); setTo(''); resetPage(); };
   const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
+
+  // 'orders' = the PO list; 'pending' = approved indent items not yet on an
+  // active PO (same source as the Create PO drawer's item picker).
+  const [view, setView] = useState('orders');
+  const { data: pendingRes, isFetching: pendingFetching } = useGetAllApprovedItemsQuery();
+  const pendingItems = pendingRes?.data?.items || [];
+  // Create PO from a pending row — the drawer pre-selects just that item.
+  const [presetIndent, setPresetIndent] = useState(null);
+  const [presetItemIds, setPresetItemIds] = useState(null);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editPo, setEditPo] = useState(null);
@@ -87,6 +98,12 @@ const PurchaseOrderList = () => {
   const onView = (r) => { navigate(`/procurement/purchase-orders/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setReviseFromPo(null); setEditPo(r); setFormOpen(true); closeMenu(); };
   const onRevise = (r) => { setEditPo(null); setReviseFromPo(r); setFormOpen(true); closeMenu(); };
+  const onCreateFromPending = (item) => {
+    setEditPo(null); setReviseFromPo(null);
+    setPresetIndent({ _id: item.indentId, indentNumber: item.indentNumber });
+    setPresetItemIds([item.indentItemId]);
+    setFormOpen(true);
+  };
   const onApprove = (r) => { setActivePo(r); setApprovalOpen(true); closeMenu(); };
   const onRelease = (r) => { setActivePo(r); setReleaseOpen(true); closeMenu(); };
   // A DRAFT/APPROVED (not yet released) PO has no stored poPdfUrl — release()
@@ -203,6 +220,15 @@ const PurchaseOrderList = () => {
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Fully Received"   value={stats.fullyReceived}   color="#16a34a" /></Grid>
       </Grid>
 
+      <Tabs value={view} onChange={(_e, v) => setView(v)}
+        sx={{ minHeight: 40, '& .MuiTab-root': { minHeight: 40, fontWeight: 700, textTransform: 'none' } }}>
+        <Tab value="orders" label="Purchase Orders" />
+        <Tab value="pending" label={`Pending for PO (${pendingItems.length})`} />
+      </Tabs>
+
+      {view === 'pending' ? (
+        <PendingForPoGrid items={pendingItems} loading={pendingFetching} onCreatePo={onCreateFromPending} />
+      ) : (<>
       {/* Filters — Search + Status stay visible; Vendor and the date range
           move into Filters, which only counts those as active. */}
       <Paper sx={{ ...pfmsCardSx, p: 1.25 }}>
@@ -286,6 +312,7 @@ const PurchaseOrderList = () => {
           sx={[{ border: 0 }, rowNavigationGridSx]}
         />
       </Paper>
+      </>)}
 
       {/* Row actions */}
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
@@ -299,7 +326,8 @@ const PurchaseOrderList = () => {
 
       {/* Drawer + dialogs */}
       <PurchaseOrderFormDrawer open={formOpen} po={editPo} reviseFrom={reviseFromPo}
-        onClose={() => { setFormOpen(false); setEditPo(null); setReviseFromPo(null); }} />
+        presetIndent={presetIndent} presetItemIds={presetItemIds}
+        onClose={() => { setFormOpen(false); setEditPo(null); setReviseFromPo(null); setPresetIndent(null); setPresetItemIds(null); }} />
       <PurchaseOrderApprovalDialog open={approvalOpen} po={activePo} onClose={() => { setApprovalOpen(false); setActivePo(null); }} />
       <PurchaseOrderReleaseDialog open={releaseOpen} po={activePo} onClose={() => { setReleaseOpen(false); setActivePo(null); }} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={activePo} onClose={() => { setPdfOpen(false); setActivePo(null); }} />
