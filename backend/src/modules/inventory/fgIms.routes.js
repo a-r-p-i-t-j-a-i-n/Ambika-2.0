@@ -13,6 +13,7 @@ import {
   fgOverviewQuerySchema, fgForecastQuerySchema, fgHistoryQuerySchema, fgSkuParamSchema,
   fgPolicySchema, fgProduceSchema, fgDispatchSchema, fgMovementQuerySchema,
 } from './fgIms.validation.js';
+import { itemLedgerQuerySchema } from './inventory.validation.js';
 
 const router = Router();
 router.use(protect);
@@ -23,6 +24,8 @@ router.get('/replenish', validate(fgOverviewQuerySchema, 'query'), c.getReplenis
 router.get('/forecast/:skuId', validate(fgSkuParamSchema, 'params'), validate(fgForecastQuerySchema, 'query'), c.getForecast);
 router.get('/history/:skuId', validate(fgSkuParamSchema, 'params'), validate(fgHistoryQuerySchema, 'query'), c.getStockHistory);
 router.get('/movements', validate(fgMovementQuerySchema, 'query'), c.getMovements);
+// One item's history, newest first, with its in/out totals.
+router.get('/ledger/:skuId', validate(fgSkuParamSchema, 'params'), validate(itemLedgerQuerySchema, 'query'), c.getItemLedger);
 
 router.get('/policy/:skuId', validate(fgSkuParamSchema, 'params'), c.getPolicy);
 router.put('/policy/:skuId', validate(fgSkuParamSchema, 'params'), validate(fgPolicySchema), c.upsertPolicy);

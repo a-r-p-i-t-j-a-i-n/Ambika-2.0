@@ -457,3 +457,67 @@ test('C2 — a PARTIAL round typed at exactly the remaining weight still finishe
   assert.equal(rounds[0].status, 'FULLY_CUT');
   assert.equal(totals.status, CUT_STATUS.FULLY_CUT);
 });
+
+// ── P. Partial rounds wait for the full cut ──────────────────────────────────
+// A partial round records only the coil weight it cut (settledKg 0, no circles,
+// no scrap). The full cut records the circles of the WHOLE coil and settles
+// every earlier partial round with its own weight.
+test('P1 — partial rounds have no scrap or yield; the full cut settles the whole coil', () => {
+  const { rounds, totals } = deriveRounds({
+    receivedKg: 1000,
+    conversions: [
+      cut('p1', '2026-10-01', 300, 0, { settledKg: 0, scrapKg: 0, yieldRatioPct: null, cuttingType: 'PARTIAL' }),
+      cut('p2', '2026-10-02', 200, 0, { settledKg: 0, scrapKg: 0, yieldRatioPct: null, cuttingType: 'PARTIAL' }),
+      // 500 cut in this round + 500 from the partial rounds = 1,000 settled.
+      cut('f', '2026-10-03', 500, 800, { settledKg: 1000, scrapKg: 200, cuttingType: 'FULL' }),
+    ],
+  });
+  assert.deepEqual(rounds.map((r) => r.outputPending), [true, true, false]);
+  assert.deepEqual(rounds.map((r) => r.scrapKg), [null, null, 200]);
+  assert.deepEqual(rounds.map((r) => r.yieldPct), [null, null, 80]);
+  assert.deepEqual(rounds.map((r) => r.settledKg), [0, 0, 1000]);
+  assert.deepEqual(rounds.map((r) => r.remainingAfterKg), [700, 500, 0]);
+  assert.equal(totals.cutKg, 1000);
+  assert.equal(totals.settledKg, 1000);
+  assert.equal(totals.pendingKg, 0);
+  assert.equal(totals.circlesKg, 800);
+  assert.equal(totals.scrapKg, 200);
+  // The yield of the coil: 800 of 1,000 — not 800 of the last round's 500.
+  assert.equal(totals.avgYieldPct, 80);
+  assert.equal(totals.scrapPct, 20);
+  assert.equal(totals.status, CUT_STATUS.FULLY_CUT);
+});
+
+test('P2 — a coil cut only partially so far has no yield, and says how much is waiting', () => {
+  const { totals } = deriveRounds({
+    receivedKg: 1000,
+    conversions: [cut('p1', '2026-10-01', 400, 0, { settledKg: 0, scrapKg: 0, yieldRatioPct: null })],
+  });
+  assert.equal(totals.cutKg, 400);
+  assert.equal(totals.pendingKg, 400);
+  assert.equal(totals.scrapKg, 0);
+  assert.equal(totals.avgYieldPct, null);
+  assert.equal(totals.scrapPct, null);
+  assert.equal(totals.status, CUT_STATUS.PARTIALLY_CUT);
+});
+
+test('P3 — rounds saved before settledKg existed each settled their own weight, unchanged', () => {
+  const { rounds, totals } = deriveRounds({
+    receivedKg: 2000,
+    conversions: [cut('a', '2026-10-01', 1000, 850), cut('b', '2026-10-02', 500, 400)],
+  });
+  assert.deepEqual(rounds.map((r) => r.settledKg), [1000, 500]);
+  assert.deepEqual(rounds.map((r) => r.outputPending), [false, false]);
+  assert.equal(totals.pendingKg, 0);
+  assert.equal(totals.avgYieldPct, 83.33);
+});
+
+test('P4 — the history row takes yield and scrap % over the settled cut only', () => {
+  // 1,000 cut, 600 of it settled with 480 kg of circles; 400 still waiting.
+  const row = summariseCoilRow({ receivedKg: 2000, cutKg: 1000, settledKg: 600, circlesKg: 480, scrapKg: 120, rounds: 2 });
+  assert.equal(row.pendingKg, 400);
+  assert.equal(row.avgYieldPct, 80);
+  assert.equal(row.scrapPct, 20);
+  // Without settledKg, every cut counts as settled — exactly as before.
+  assert.equal(summariseCoilRow({ receivedKg: 2000, cutKg: 1000, circlesKg: 940, scrapKg: 60 }).avgYieldPct, 94);
+});

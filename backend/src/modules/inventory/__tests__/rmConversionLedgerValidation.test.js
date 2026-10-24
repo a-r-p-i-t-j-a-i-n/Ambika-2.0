@@ -53,3 +53,15 @@ test('pages start at 1 and hold at most 200 rows', () => {
   assert.ok(validate({ limit: 201 }).error);
   assert.equal(validate({ page: 3, limit: 100 }).error, undefined);
 });
+
+test('sort: latest, oldest or az (any case); blank is the default; anything else is refused', () => {
+  for (const v of ['latest', 'OLDEST', 'az', '']) assert.equal(validate({ sort: v }).error, undefined, v);
+  assert.equal(validate({ sort: 'AZ' }).value.sort, 'az');
+  assert.ok(validate({ sort: 'size' }).error);
+});
+
+test('coilSkuId: a SKU id, or blank; anything else is refused', () => {
+  assert.equal(validate({ coilSkuId: '507f1f77bcf86cd799439011' }).error, undefined);
+  assert.equal(validate({ coilSkuId: '' }).error, undefined);
+  assert.ok(validate({ coilSkuId: 'JSL202-07' }).error);
+});

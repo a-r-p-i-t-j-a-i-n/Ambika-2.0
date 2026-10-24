@@ -10,7 +10,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import {
-  RmShell, O2D, O2D_TIP, STOCK_TOKENS,
+  RmShell, O2D, O2D_TIP, STOCK_TOKENS, CutStatusChip, num,
 } from './rmImsMeta';
 import CuttingHistoryPanel from './CuttingHistoryPanel';
 import CoilToCircleForm from './CoilToCircleForm';
@@ -33,6 +33,10 @@ import CoilToCircleForm from './CoilToCircleForm';
  *
  * `?new=1` opens the form straight away, for the "Cut a coil" shortcuts
  * elsewhere in RM IMS.
+ *
+ * A partially cut coil's row action ("Full Cut", or "Partial cut" in its
+ * menu) opens the same form for THAT coil: its batch is filled in, the exact
+ * coil bound and the cutting type chosen (`preset`).
  */
 const RmImsConversion = () => {
   const navigate = useNavigate();
@@ -40,6 +44,8 @@ const RmImsConversion = () => {
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [params, setParams] = useSearchParams();
   const [formOpen, setFormOpen] = useState(() => params.get('new') === '1');
+  // The coil the form was opened for, from a history row — null from the button.
+  const [preset, setPreset] = useState(null);
   const [formState, setFormState] = useState({ dirty: false, saving: false });
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [lastCut, setLastCut] = useState(null);
@@ -54,10 +60,17 @@ const RmImsConversion = () => {
     setParams(next, { replace: true });
   }, [params, setParams]);
 
-  const openForm = () => {
+  const openForm = (forCoil = null) => {
+    setPreset(forCoil);
     setFormState({ dirty: false, saving: false });
     setFormOpen(true);
   };
+  // A history row's "Full Cut" / "Partial cut": the form, for that coil.
+  const cutCoil = (row, cutType) => openForm({
+    batchNo: row.batchNo,
+    coilKey: row.coilSource === 'MANUAL' ? `mc:${row.manualCoilId}` : `grn:${row.coilReceiptId}`,
+    cutType,
+  });
   const closeForm = () => { setConfirmDiscard(false); setFormOpen(false); };
   // Every way out — Close, Cancel, Esc, a click outside — comes through here.
   const requestClose = () => {
@@ -83,10 +96,10 @@ const RmImsConversion = () => {
       title="Coil to Circle"
       subtitle="Track coil cutting history, circle output and remaining weight."
       actions={(
-        <Button variant="contained" disableElevation onClick={openForm} startIcon={<Plus size={16} />}
+        <Button variant="contained" disableElevation onClick={() => openForm()} startIcon={<Plus size={16} />}
           data-testid="open-coil-to-circle"
           sx={{ textTransform: 'none', fontWeight: 800, borderRadius: '7px', bgcolor: O2D.brand, px: 2, py: 0.75, fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
-          Record Cutting Round
+          New Cutting Entry
         </Button>
       )}
     >
@@ -114,7 +127,7 @@ const RmImsConversion = () => {
         </Paper>
       )}
 
-      <CuttingHistoryPanel refreshKey={refreshKey} />
+      <CuttingHistoryPanel refreshKey={refreshKey} onCutCoil={cutCoil} />
 
       {/* ── The entry form ── */}
       <Dialog
@@ -124,11 +137,16 @@ const RmImsConversion = () => {
         maxWidth={false}
         scroll="paper"
         aria-labelledby="coil-to-circle-form-title"
+        // Held at the top, so the form grows downwards (step 2 appears with a
+        // Full cut) instead of jumping around the middle of the screen.
+        sx={{ '& .MuiDialog-container': { alignItems: fullScreen ? 'stretch' : 'flex-start' } }}
         PaperProps={{
           'data-testid': 'coil-to-circle-dialog',
+          // As tall as the form, never taller than the screen: a Partial cut is
+          // short, and a fixed height left a large empty space under it.
           sx: {
-            width: '100%', maxWidth: 1180, height: fullScreen ? '100%' : '94vh',
-            m: fullScreen ? 0 : 2, borderRadius: fullScreen ? 0 : '12px', bgcolor: O2D.canvas,
+            width: '100%', maxWidth: 1180, height: fullScreen ? '100%' : 'auto', maxHeight: fullScreen ? '100%' : '94vh',
+            mx: fullScreen ? 0 : 2, my: fullScreen ? 0 : '3vh', borderRadius: fullScreen ? 0 : '12px', bgcolor: O2D.canvas,
             display: 'flex', flexDirection: 'column', overflow: 'hidden',
           },
         }}
@@ -138,14 +156,30 @@ const RmImsConversion = () => {
           <Box sx={{ width: 32, height: 32, borderRadius: '7px', display: 'grid', placeItems: 'center', bgcolor: `${O2D.brand}1a`, color: O2D.brand, flexShrink: 0 }}>
             <Recycle size={17} />
           </Box>
-          <Box sx={{ minWidth: 0, mr: 'auto' }}>
+          {/* flex: 1, not mr: auto — the Stack's spacing resets its children's
+              margins, which left the close button mid-header. */}
+          <Box sx={{ minWidth: 0, flex: 1 }}>
             <Typography id="coil-to-circle-form-title" sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>
-              Coil to Circle — record a cutting round
+              {preset?.cutType === 'FULL' ? `Full cut — coil ${preset.batchNo}`
+                : preset?.cutType === 'PARTIAL' ? `Partial cut — coil ${preset.batchNo}`
+                  : 'Coil to Circle — new cutting entry'}
             </Typography>
             <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>
-              One entry takes the coil out of stock, puts the circles in, and records the scrap.
+              Partial cut: only the weight cut. Full cut: finish the coil and enter its circles.
             </Typography>
           </Box>
+          {/* The coil the form found — and where it stands — at a glance. */}
+          {formState.coil && (
+            <Stack direction="row" spacing={0.75} alignItems="center" data-testid="dialog-coil-status"
+              sx={{ display: { xs: 'none', sm: 'flex' }, px: 1, py: 0.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt, flexShrink: 0 }}>
+              <Disc3 size={14} color={O2D.sub} />
+              <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: O2D.ink, fontFamily: 'ui-monospace, monospace' }}>{formState.coil.batchNo}</Typography>
+              <CutStatusChip status={formState.coil.status} />
+              <Typography sx={{ fontSize: '0.72rem', color: O2D.sub, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                {num(formState.coil.availableKg)} kg left
+              </Typography>
+            </Stack>
+          )}
           <Tooltip arrow slotProps={O2D_TIP} title={formState.saving ? 'Saving — wait for it to finish' : 'Close'}>
             <span>
               <IconButton onClick={requestClose} disabled={formState.saving} aria-label="Close the Coil to Circle form" data-testid="close-coil-to-circle">
@@ -155,7 +189,7 @@ const RmImsConversion = () => {
           </Tooltip>
         </Stack>
         <DialogContent sx={{ p: { xs: 1.25, md: 1.75 }, bgcolor: O2D.canvas }}>
-          <CoilToCircleForm onSaved={onSaved} onCancel={requestClose} onStateChange={onFormState} />
+          <CoilToCircleForm onSaved={onSaved} onCancel={requestClose} onStateChange={onFormState} preset={preset} />
         </DialogContent>
       </Dialog>
 

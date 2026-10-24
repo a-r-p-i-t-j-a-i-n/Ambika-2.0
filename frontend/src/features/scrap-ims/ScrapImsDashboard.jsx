@@ -94,7 +94,7 @@ const ScrapImsDashboard = () => {
           color={yieldBand(s.avgYield)?.color || "#15803d"} icon={TrendingUp} />
         {s.uncutBatches > 0 && (
           <KpiTile label="Coils not cut" value={num(s.uncutBatches)} sub="Flagged — not counted as scrap"
-            color="#b45309" icon={AlertTriangle} onClick={() => navigate('/scrap-ims/records?batchStatus=UNCUT')} />
+            color="#b45309" icon={AlertTriangle} onClick={() => navigate('/scrap-ims/history?batchStatus=UNCUT')} />
         )}
       </Stack>
 
@@ -267,9 +267,9 @@ const ScrapImsDashboard = () => {
       {/* ── Recent ── */}
       <Panel title="Latest cuts" hint="The most recent coils cut, newest first."
         actions={(
-          <Button size="small" onClick={() => navigate('/scrap-ims/records')}
+          <Button size="small" onClick={() => navigate('/scrap-ims/history')}
             sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', color: SCRAP_ACCENT }}>
-            Full register
+            Full cut history
           </Button>
         )}
       >

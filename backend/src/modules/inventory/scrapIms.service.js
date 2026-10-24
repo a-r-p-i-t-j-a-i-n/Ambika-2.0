@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import ScrapRecord, { SCRAP_LOCATIONS, SCRAP_DISPOSITIONS } from './scrapRecord.model.js';
+import ScrapRecord, { SCRAP_LOCATIONS, SCRAP_DISPOSITIONS, CUT_COUNT } from './scrapRecord.model.js';
 import CoilConversion from './coilConversion.model.js';
 import InventoryStock from './inventoryStock.model.js';
 import InventoryMovement, { TXN_TYPE } from './inventoryMovement.model.js';
@@ -136,6 +136,93 @@ const buildMovementFilter = (skuId, query = {}) => {
   return filter;
 };
 
+/**
+ * The circles a scrap record's cut produced — off its conversion: the one it
+ * names (`conversionId`, every cut keyed into the app), or for a cut imported
+ * from the client's workbook the conversion row of the same batch
+ * (…|SCRAP|<batch> ↔ …|CONVERSION|<batch>, the pairing cutLocationStages in
+ * rmIms.service.js makes the other way). An empty list where neither exists.
+ */
+const circleLookupStages = () => [
+  {
+    $addFields: {
+      convRef: {
+        $cond: [
+          { $regexMatch: { input: { $ifNull: ['$sourceRef', ''] }, regex: /\|SCRAP\|/ } },
+          { $replaceOne: { input: '$sourceRef', find: '|SCRAP|', replacement: '|CONVERSION|' } },
+          '-',
+        ],
+      },
+    },
+  },
+  {
+    $lookup: {
+      from: CoilConversion.collection.name, localField: 'conversionId', foreignField: '_id',
+      pipeline: [{ $project: { circles: 1, cuttingType: 1, coilWeightKg: 1 } }], as: 'convOwn',
+    },
+  },
+  {
+    $lookup: {
+      from: CoilConversion.collection.name, localField: 'convRef', foreignField: 'sourceRef',
+      pipeline: [{ $match: { isDeleted: { $ne: true } } }, { $project: { circles: 1, cuttingType: 1, coilWeightKg: 1 } }], as: 'convImport',
+    },
+  },
+  // `conv` — the cut itself: its circles, its cutting type (Full / Partial)
+  // and the coil weight IT cut (a full cut's scrap record carries the whole
+  // coil it settled, which can be more).
+  { $addFields: { conv: { $ifNull: [{ $arrayElemAt: ['$convOwn', 0] }, { $arrayElemAt: ['$convImport', 0] }] } } },
+  { $addFields: { circles: { $ifNull: ['$conv.circles', []] } } },
+  { $project: { convOwn: 0, convImport: 0, convRef: 0 } },
+];
+
+/** Search over a scrap record and its circles: batch, coil SKU, circle SKU, conversion. */
+const masterSearchMatch = (search) => {
+  const r = rx(search);
+  return {
+    $or: [
+      { batchNo: r }, { coilSkuCode: r }, { coilSkuName: r }, { conversionNumber: r },
+      { 'circles.circleSkuCode': r }, { 'circles.circleSkuName': r },
+    ],
+  };
+};
+
+/** Circles by circle SKU — code, name, pieces and weight, once each. */
+const circleTotals = (circles = []) => {
+  const byCode = new Map();
+  for (const c of circles) {
+    const code = c?.circleSkuCode;
+    if (!code) continue;
+    const t = byCode.get(code) || { code, name: c.circleSkuName || '', pcs: 0, kg: 0 };
+    t.pcs = round2(t.pcs + Number(c.pcs || 0));
+    t.kg = round2(t.kg + Number(c.weightKg || 0));
+    if (!t.name && c.circleSkuName) t.name = c.circleSkuName;
+    byCode.set(code, t);
+  }
+  return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code));
+};
+
+/**
+ * Yield, worked out ONE way everywhere on Scrap master data: circle weight ÷
+ * coil weight, over the kilograms (weighted) — a big month counts for more
+ * than a small one, which is what the metal did. Null with nothing cut.
+ */
+const yieldOf = (circlesKg, coilKg) => (coilKg > 0 ? round2((circlesKg / coilKg) * 100) : null);
+// The calendar month (YYYY-MM) a date falls in, read in IST — the same month
+// the aggregation's $dateToString(timezone +05:30) gives it.
+const IST_MS = 5.5 * 3600 * 1000;
+const dayjsMonth = (d) => {
+  const t = new Date(new Date(d).getTime() + IST_MS);
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`;
+};
+const monthRow = (m) => ({
+  month: m.month || null,
+  cuts: m.cuts || 0,
+  coilKg: round2(m.coilKg),
+  circlesKg: round2(m.circlesKg),
+  scrapKg: round2(m.scrapKg),
+  yieldPct: yieldOf(m.circlesKg, m.coilKg),
+});
+
 export const scrapImsService = {
   SCRAP_LOCATIONS,
   SCRAP_DISPOSITIONS,
@@ -182,14 +269,14 @@ export const scrapImsService = {
             coilKg: { $sum: '$coilWeightKg' },
             circlesKg: { $sum: '$circlesWeightKg' },
             avgYield: { $avg: '$yieldRatioPct' },
-            batches: { $sum: 1 },
+            batches: CUT_COUNT,
           },
         },
       ]),
       ScrapRecord.countDocuments(onlyStatus(filter, 'UNCUT')),
       ScrapRecord.aggregate([
         { $match: onlyStatus(filter, 'CUT') },
-        { $group: { _id: '$location', scrapKg: { $sum: '$scrapKg' }, batches: { $sum: 1 }, avgYield: { $avg: '$yieldRatioPct' } } },
+        { $group: { _id: '$location', scrapKg: { $sum: '$scrapKg' }, batches: CUT_COUNT, avgYield: { $avg: '$yieldRatioPct' } } },
       ]),
     ]);
 
@@ -231,7 +318,7 @@ export const scrapImsService = {
       this._summarise(filter),
       ScrapRecord.aggregate([
         { $match: filter },
-        { $group: { _id: { d: '$disposition', l: '$location' }, n: { $sum: 1 }, scrapKg: { $sum: '$scrapKg' } } },
+        { $group: { _id: { d: '$disposition', l: '$location' }, n: CUT_COUNT, scrapKg: { $sum: '$scrapKg' } } },
         { $sort: { n: -1 } },
       ]),
       ScrapRecord.aggregate([
@@ -240,7 +327,7 @@ export const scrapImsService = {
           $group: {
             _id: { code: '$coilSkuCode', name: '$coilSkuName' },
             scrapKg: { $sum: '$scrapKg' }, coilKg: { $sum: '$coilWeightKg' },
-            batches: { $sum: 1 }, avgYield: { $avg: '$yieldRatioPct' },
+            batches: CUT_COUNT, avgYield: { $avg: '$yieldRatioPct' },
           },
         },
         { $sort: { scrapKg: -1 } },
@@ -250,7 +337,7 @@ export const scrapImsService = {
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m', date: '$scrapDate', timezone: 'Asia/Kolkata' } },
-            scrapKg: { $sum: '$scrapKg' }, batches: { $sum: 1 }, avgYield: { $avg: '$yieldRatioPct' },
+            scrapKg: { $sum: '$scrapKg' }, batches: CUT_COUNT, avgYield: { $avg: '$yieldRatioPct' },
           },
         },
         { $sort: { _id: 1 } },
@@ -275,7 +362,8 @@ export const scrapImsService = {
       monthly: monthly.map((m) => ({ month: m._id, scrapKg: round2(m.scrapKg), batches: m.batches, avgYield: round2(m.avgYield) })),
       uncut: uncutRows,
       // Every recorded cut, newest first — the activity strip.
-      recent: await ScrapRecord.find(cut)
+      // Cuts only: a correction has no coil or circles to show here.
+      recent: await ScrapRecord.find({ ...cut, entryType: { $ne: 'CORRECTION' } })
         .select('batchNo scrapDate location coilSkuCode coilSkuName coilWeightKg circlesWeightKg scrapKg yieldRatioPct disposition conversionNumber')
         .sort({ scrapDate: -1 }).limit(12).lean(),
     };
@@ -327,9 +415,9 @@ export const scrapImsService = {
           scrapKg:   { $sum: '$scrapKg' },
           cutKg:     { $sum: '$coilWeightKg' },
           circlesKg: { $sum: '$circlesWeightKg' },
-          // One scrap record per cut, so a count of records IS a count of
-          // cutting rounds for this coil.
-          rounds:    { $sum: 1 },
+          // One scrap record per cut, so a count of cut records IS a count
+          // of cutting rounds for this coil.
+          rounds:    CUT_COUNT,
           batchNo:     { $first: '$batchNo' },
           coilSkuId:   { $first: '$coilSkuId' },
           coilSkuCode: { $first: '$coilSkuCode' },
@@ -459,6 +547,331 @@ export const scrapImsService = {
         pagination: {
           page, limit, total: tracedCount, pages: Math.ceil(tracedCount / limit) || 1,
         },
+      },
+    };
+  },
+
+  /**
+   * SCRAP MASTER DATA — one row per COIL SKU.
+   *
+   * Every cut of that coil grade, whichever physical coil or purchase it came
+   * from, added up: coil cut, circles (pieces and weight, by circle SKU),
+   * scrap (split by where it was cut), and the yield over all of it. `months`
+   * is the same, month by month (IST), so the screen can show how the yield of
+   * one coil grade moved — September 80%, October 82% — beside the overall.
+   *
+   * Built on this register's own records — cut coils only (onlyStatus CUT), so
+   * every figure agrees with the Scrap dashboard. A partial cutting round has
+   * no scrap record (its scrap comes with the coil's full cut), so the figures
+   * are always settled ones.
+   *
+   * Filters: location, from / to (the cut date, IST), search (batch, coil SKU,
+   * circle SKU, conversion). The summary covers every matching SKU, not the page.
+   */
+  async getMasterBySku(query = {}) {
+    const page = Math.max(Number(query.page) || 1, 1);
+    const limit = Math.min(Number(query.limit) || 25, 200);
+    const search = String(query.search || '').trim();
+    const match = onlyStatus(buildFilter({ location: query.location, from: query.from, to: query.to }), 'CUT');
+    const sortStage = {
+      oldest: { lastCutAt: 1, _id: 1 },
+      az: { _id: 1 },
+      scrap: { scrapKg: -1, _id: 1 },
+    }[String(query.sort || '').toLowerCase()] || { lastCutAt: -1, _id: 1 };
+    const sumWhere = (loc) => ({ $sum: { $cond: [{ $eq: ['$location', loc] }, '$scrapKg', 0] } });
+
+    const [agg] = await ScrapRecord.aggregate([
+      { $match: match },
+      ...circleLookupStages(),
+      ...(search ? [{ $match: masterSearchMatch(search) }] : []),
+      { $addFields: { month: { $dateToString: { format: '%Y-%m', date: '$scrapDate', timezone: '+05:30' } } } },
+      // By coil SKU and month first, so each SKU carries its months.
+      {
+        $group: {
+          _id: { sku: '$coilSkuCode', month: '$month' },
+          coilSkuName: { $last: '$coilSkuName' },
+          cuts: CUT_COUNT,
+          coilKg: { $sum: '$coilWeightKg' },
+          circlesKg: { $sum: '$circlesWeightKg' },
+          scrapKg: { $sum: '$scrapKg' },
+          plantScrapKg: sumWhere('PLG01'),
+          jobWorkScrapKg: sumWhere('JW001'),
+          circles: { $push: '$circles' },
+          firstCutAt: { $min: '$scrapDate' },
+          lastCutAt: { $max: '$scrapDate' },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.sku',
+          coilSkuName: { $last: '$coilSkuName' },
+          cuts: { $sum: '$cuts' },
+          coilKg: { $sum: '$coilKg' },
+          circlesKg: { $sum: '$circlesKg' },
+          scrapKg: { $sum: '$scrapKg' },
+          plantScrapKg: { $sum: '$plantScrapKg' },
+          jobWorkScrapKg: { $sum: '$jobWorkScrapKg' },
+          circles: { $push: '$circles' },
+          months: {
+            $push: {
+              month: '$_id.month', cuts: '$cuts', coilKg: '$coilKg', circlesKg: '$circlesKg', scrapKg: '$scrapKg',
+            },
+          },
+          firstCutAt: { $min: '$firstCutAt' },
+          lastCutAt: { $max: '$lastCutAt' },
+        },
+      },
+      { $sort: sortStage },
+      {
+        $facet: {
+          rows: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+          stats: [{
+            $group: {
+              _id: null,
+              skus: { $sum: 1 },
+              cuts: { $sum: '$cuts' },
+              coilKg: { $sum: '$coilKg' },
+              circlesKg: { $sum: '$circlesKg' },
+              scrapKg: { $sum: '$scrapKg' },
+              plantScrapKg: { $sum: '$plantScrapKg' },
+              jobWorkScrapKg: { $sum: '$jobWorkScrapKg' },
+            },
+          }],
+          // Pieces need the circles themselves; counted over every matching SKU.
+          pcs: [
+            { $unwind: '$circles' }, { $unwind: '$circles' }, { $unwind: '$circles' },
+            { $group: { _id: null, pcs: { $sum: '$circles.pcs' } } },
+          ],
+        },
+      },
+    ]).option({ allowDiskUse: true });
+
+    const docs = (agg?.rows || []).map((r) => {
+      // circles: [month][record][circle] — every circle of every cut of the SKU.
+      const circleSkus = circleTotals((r.circles || []).flat(2));
+      const months = (r.months || []).map(monthRow).sort((a, b) => String(a.month).localeCompare(String(b.month)));
+      return {
+        coilSkuCode: r._id || '',
+        coilSkuName: r.coilSkuName || '',
+        cuts: r.cuts || 0,
+        coilKg: round2(r.coilKg),
+        circlesKg: round2(r.circlesKg),
+        circlesPcs: round2(circleSkus.reduce((s, c) => s + c.pcs, 0)),
+        scrapKg: round2(r.scrapKg),
+        plantScrapKg: round2(r.plantScrapKg),
+        jobWorkScrapKg: round2(r.jobWorkScrapKg),
+        yieldPct: yieldOf(r.circlesKg, r.coilKg),
+        circleSkus,
+        months,
+        firstCutAt: r.firstCutAt || null,
+        lastCutAt: r.lastCutAt || null,
+      };
+    });
+
+    const s = agg?.stats?.[0] || {};
+    const total = s.skus || 0;
+    return {
+      docs,
+      summary: {
+        skus: total,
+        cuts: s.cuts || 0,
+        coilKg: round2(s.coilKg),
+        circlesKg: round2(s.circlesKg),
+        circlesPcs: round2(agg?.pcs?.[0]?.pcs || 0),
+        scrapKg: round2(s.scrapKg),
+        plantScrapKg: round2(s.plantScrapKg),
+        jobWorkScrapKg: round2(s.jobWorkScrapKg),
+        yieldPct: yieldOf(s.circlesKg, s.coilKg),
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) || 1 },
+      },
+    };
+  },
+
+  /**
+   * ONE COIL SKU — its own page under Scrap master data: every cut of the
+   * grade, one row each, newest first, under the same filters as its row.
+   *
+   *   CUT      a cut with its scrap recorded (the register's own record): the
+   *            coil weight THIS cut took, the circles by circle SKU, the scrap
+   *            and the yield — a full cut's over the whole coil it settled;
+   *   PARTIAL  a partial cutting round — only its coil weight; its circles,
+   *            scrap and yield are entered with the coil's full cut;
+   *   UNCUT    a coil on the client's sheet that was never cut — listed, never
+   *            added into any figure (see the header of this file).
+   *
+   * The summary is the page's cards: the settled figures of the CUT rows —
+   * the same ones as the SKU's row on Scrap master data — plus what is still
+   * waiting for a full cut (Σ cut − Σ settled per coil: a "now" figure, not
+   * narrowed by the filters), the circles by circle SKU and the yield by month.
+   */
+  async getSkuHistory(query = {}) {
+    const code = String(query.coilSkuCode || '').trim().toUpperCase();
+    if (!code) throw new AppError('Name the coil SKU.', 400);
+    const search = String(query.search || '').trim();
+    const LIMIT = 5000;
+
+    // Scrap records of both statuses: CUT rows count, UNCUT rows are shown.
+    const records = await ScrapRecord.aggregate([
+      { $match: buildFilter({ location: query.location, from: query.from, to: query.to, coilSkuCode: code }) },
+      ...circleLookupStages(),
+      ...(search ? [{ $match: masterSearchMatch(search) }] : []),
+      { $sort: { scrapDate: -1, createdAt: -1, _id: -1 } },
+      { $limit: LIMIT },
+    ]);
+
+    // Partial rounds of the grade — they have no scrap record (their scrap is
+    // inside the coil's full cut). The same filters, asked of the cut itself.
+    const convMatch = { coilSkuCode: code, isDeleted: { $ne: true }, settledKg: 0 };
+    if (query.from || query.to) {
+      convMatch.conversionDate = {};
+      if (query.from) convMatch.conversionDate.$gte = new Date(`${query.from}T00:00:00.000+05:30`);
+      if (query.to) convMatch.conversionDate.$lte = new Date(`${query.to}T23:59:59.999+05:30`);
+    }
+    if (query.location) convMatch.cutLocation = query.location;
+    if (search) {
+      const r = rx(search);
+      convMatch.$or = [{ batchNo: r }, { conversionNumber: r }, { coilSkuCode: r }, { coilSkuName: r }];
+    }
+    const [partials, pend] = await Promise.all([
+      CoilConversion.find(convMatch).sort({ conversionDate: -1, createdAt: -1 }).limit(LIMIT).lean(),
+      // What is still waiting for a full cut, coil by coil (never below 0).
+      CoilConversion.aggregate([
+        { $match: { coilSkuCode: code, isDeleted: { $ne: true }, $or: [{ coilReceiptId: { $type: 'objectId' } }, { manualCoilId: { $type: 'objectId' } }] } },
+        {
+          $group: {
+            _id: { $ifNull: ['$coilReceiptId', '$manualCoilId'] },
+            cut: { $sum: '$coilWeightKg' },
+            settled: { $sum: { $ifNull: ['$settledKg', '$coilWeightKg'] } },
+          },
+        },
+        { $project: { pending: { $max: [0, { $subtract: ['$cut', '$settled'] }] } } },
+        { $group: { _id: null, kg: { $sum: '$pending' }, coils: { $sum: { $cond: [{ $gt: ['$pending', 0.001] }, 1, 0] } } } },
+      ]),
+    ]);
+
+    const months = new Map();
+    const totals = {
+      cuts: 0, coilKg: 0, circlesKg: 0, scrapKg: 0, plantScrapKg: 0, jobWorkScrapKg: 0, uncut: 0,
+    };
+    const allCircles = [];
+    let coilSkuName = '';
+    const cutRows = records.map((d) => {
+      coilSkuName = coilSkuName || d.coilSkuName || '';
+      const uncut = d.batchStatus === 'UNCUT';
+      // A Stock Correction of the SKU's scrap: its change counts in the scrap
+      // figures (and the month it was made), but it is not a cut.
+      const correction = d.entryType === 'CORRECTION';
+      const circleSkus = circleTotals(d.circles);
+      if (uncut) {
+        totals.uncut += 1;
+      } else {
+        const month = d.scrapDate ? dayjsMonth(d.scrapDate) : null;
+        const m = months.get(month) || { month, cuts: 0, coilKg: 0, circlesKg: 0, scrapKg: 0 };
+        if (!correction) m.cuts += 1;
+        m.coilKg += Number(d.coilWeightKg || 0);
+        m.circlesKg += Number(d.circlesWeightKg || 0);
+        m.scrapKg += Number(d.scrapKg || 0);
+        months.set(month, m);
+        if (!correction) totals.cuts += 1;
+        totals.coilKg += Number(d.coilWeightKg || 0);
+        totals.circlesKg += Number(d.circlesWeightKg || 0);
+        totals.scrapKg += Number(d.scrapKg || 0);
+        if (d.location === 'PLG01') totals.plantScrapKg += Number(d.scrapKg || 0);
+        if (d.location === 'JW001') totals.jobWorkScrapKg += Number(d.scrapKg || 0);
+        allCircles.push(...(d.circles || []));
+      }
+      if (correction) {
+        return {
+          id: String(d._id),
+          kind: 'CORRECTION',
+          cuttingType: null,
+          date: d.scrapDate || null,
+          batchNo: '',
+          location: d.location || null,
+          conversionNumber: d.conversionNumber || '',
+          scrapRecordId: String(d._id),
+          coilReceiptId: null,
+          manualCoilId: null,
+          cutKg: null,
+          basisKg: 0,
+          circlesKg: null,
+          circlesPcs: null,
+          circleSkus: [],
+          // The change it made (− when the scrap was over-recorded).
+          scrapKg: round2(d.scrapKg),
+          yieldPct: null,
+          // "AGL/SC-004/26-27 by Gaurav: 6,042.67 kg recorded → 6,000 kg counted · reason"
+          remarks: d.remarks || '',
+        };
+      }
+      return {
+        id: String(d._id),
+        kind: uncut ? 'UNCUT' : 'CUT',
+        cuttingType: d.conv?.cuttingType || null,
+        date: d.scrapDate || null,
+        batchNo: d.batchNo || '',
+        location: d.location || null,
+        conversionNumber: d.conversionNumber || '',
+        scrapRecordId: String(d._id),
+        coilReceiptId: d.coilReceiptId || null,
+        manualCoilId: d.manualCoilId || null,
+        // What THIS cut took off the coil, and what its circles came from —
+        // more than that on a full cut that settled earlier partial rounds.
+        cutKg: round2(d.conv?.coilWeightKg ?? d.coilWeightKg),
+        basisKg: round2(d.coilWeightKg),
+        circlesKg: uncut ? null : round2(d.circlesWeightKg),
+        circlesPcs: uncut ? null : round2(circleSkus.reduce((t, c) => t + c.pcs, 0)),
+        circleSkus,
+        scrapKg: uncut ? null : round2(d.scrapKg),
+        yieldPct: uncut ? null : yieldOf(Number(d.circlesWeightKg || 0), Number(d.coilWeightKg || 0)),
+      };
+    });
+    const partialRows = partials.map((c) => {
+      coilSkuName = coilSkuName || c.coilSkuName || '';
+      return {
+        id: String(c._id),
+        kind: 'PARTIAL',
+        cuttingType: 'PARTIAL',
+        date: c.conversionDate || null,
+        batchNo: c.batchNo || '',
+        location: c.cutLocation || null,
+        conversionNumber: c.conversionNumber || '',
+        scrapRecordId: null,
+        coilReceiptId: c.coilReceiptId || null,
+        manualCoilId: c.manualCoilId || null,
+        cutKg: round2(c.coilWeightKg),
+        basisKg: 0,
+        circlesKg: null,
+        circlesPcs: null,
+        circleSkus: [],
+        scrapKg: null,
+        yieldPct: null,
+      };
+    });
+    const at = (r) => new Date(r.date || 0).getTime();
+    const docs = [...cutRows, ...partialRows].sort((a, b) => at(b) - at(a));
+    const circleSkus = circleTotals(allCircles);
+
+    return {
+      docs,
+      summary: {
+        coilSkuCode: code,
+        coilSkuName,
+        cuts: totals.cuts,
+        coilKg: round2(totals.coilKg),
+        circlesKg: round2(totals.circlesKg),
+        circlesPcs: round2(circleSkus.reduce((sum, c) => sum + c.pcs, 0)),
+        scrapKg: round2(totals.scrapKg),
+        plantScrapKg: round2(totals.plantScrapKg),
+        jobWorkScrapKg: round2(totals.jobWorkScrapKg),
+        yieldPct: yieldOf(totals.circlesKg, totals.coilKg),
+        circleSkus,
+        months: [...months.values()].map(monthRow).sort((a, b) => String(a.month).localeCompare(String(b.month))),
+        partialRounds: partialRows.length,
+        pendingKg: round2(pend?.[0]?.kg || 0),
+        pendingCoils: pend?.[0]?.coils || 0,
+        uncut: totals.uncut,
+        truncated: records.length >= LIMIT || partials.length >= LIMIT,
       },
     };
   },

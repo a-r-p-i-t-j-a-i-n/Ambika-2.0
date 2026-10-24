@@ -297,17 +297,75 @@ const applyStockDelta = async (p) => {
  * and over, until the request times out. The claim is its own atomic step and
  * the transaction never sees it.
  *
- * @returns {{ replay: true, count: number } | { replay: false, claimed: boolean }}
+ * ── A CLAIM IS NOT PROOF THE ENTRY HAPPENED ────────────────────────────────
+ * A request can claim its key and then die before it settles or releases it —
+ * the server restarted, the database connection dropped mid-save. Answering
+ * every later retry "already saved" from that orphaned claim told operators a
+ * correction had posted when nothing had moved. So a key that never settled is
+ * checked against the ledger: movements carrying this id mean the entry did
+ * commit (it is settled on the dead request's behalf); none, and the claim is
+ * young, means it is still running — or a double-click overtook it, which is
+ * given a moment to finish; none for ABANDONED_CLAIM_MS means it died, and the
+ * retry takes the claim over and posts.
+ *
+ * @returns {{ replay: true, count: number, pending?: true } | { replay: false, claimed: boolean }}
+ *   `pending` — claimed by a request still running; nothing to hand back yet.
  */
+// Far longer than any live posting runs, so only a dead request's claim is
+// ever taken over.
+const ABANDONED_CLAIM_MS = 5 * 60 * 1000;
+// How long a replay waits for the request it overtook (a double-click).
+const PENDING_WAIT_MS = 1500;
+
 const claimRequestKey = async (key, meta = {}) => {
   if (!key) return { replay: false, claimed: false };
-  try {
-    await InventoryRequestKey.create([{ _id: key, ...meta }]);
-    return { replay: false, claimed: true };
-  } catch (e) {
-    if (!isDuplicateKey(e)) throw e;
-    const prior = await InventoryRequestKey.findById(key).lean();
-    return { replay: true, count: prior?.count || 0 };
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await InventoryRequestKey.create([{ _id: key, ...meta }]);
+      return { replay: false, claimed: true };
+    } catch (e) {
+      if (!isDuplicateKey(e)) throw e;
+    }
+    const deadline = Date.now() + PENDING_WAIT_MS;
+    for (;;) {
+      const prior = await InventoryRequestKey.findById(key).lean();
+      // Released by its failed first attempt meanwhile — claim it afresh.
+      if (!prior) break;
+      // Finished. A count covers keys settled before `settled` existed.
+      if (prior.settled || prior.count > 0) return { replay: true, count: prior.count || 0 };
+      const posted = await InventoryMovement.countDocuments({ clientRequestId: key });
+      if (posted) {
+        await settleRequestKey(key, posted);
+        return { replay: true, count: posted };
+      }
+      if (Date.now() - new Date(prior.createdAt).getTime() > ABANDONED_CLAIM_MS) {
+        // Guarded on the claim's own timestamp, so of two retries racing for
+        // it exactly one wins; the other re-reads and finds it young.
+        const taken = await InventoryRequestKey.findOneAndUpdate(
+          { _id: key, settled: { $ne: true }, createdAt: prior.createdAt },
+          { $set: { ...meta, createdAt: new Date() } },
+          { new: true },
+        ).lean();
+        if (taken) {
+          logger.warn(`[inventory] request ${key} was claimed ${prior.createdAt.toISOString?.() || prior.createdAt} and never finished — nothing was posted, so this retry posts it`);
+          return { replay: false, claimed: true };
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) return { replay: true, pending: true, count: 0 };
+      await sleep(150);
+    }
+  }
+  return { replay: true, pending: true, count: 0 };
+};
+
+/** Run a key's bookkeeping write, retried — a lost one is what orphans a claim. */
+const keyWrite = async (what, key, op) => {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try { await op(); return; } catch (e) {
+      if (attempt === 3) { logger.error(`[inventory] could not ${what} request key ${key}: ${e.message}`); return; }
+      await sleep(100 * attempt);
+    }
   }
 };
 
@@ -319,13 +377,13 @@ const claimRequestKey = async (key, meta = {}) => {
  */
 const releaseRequestKey = async (key) => {
   if (!key) return;
-  await InventoryRequestKey.deleteOne({ _id: key }).catch(() => {});
+  await keyWrite('release', key, () => InventoryRequestKey.deleteOne({ _id: key }));
 };
 
-/** Record how many lines the claimed entry wrote, for a replay to report. */
+/** Mark the claimed entry finished, with how many lines it wrote for a replay to report. */
 const settleRequestKey = async (key, count) => {
   if (!key) return;
-  await InventoryRequestKey.updateOne({ _id: key }, { $set: { count } }).catch(() => {});
+  await keyWrite('settle', key, () => InventoryRequestKey.updateOne({ _id: key }, { $set: { count, settled: true } }));
 };
 
 /**
@@ -459,6 +517,11 @@ const runStockEntry = async ({ items, clientRequestId, mergeDuplicates, meta, pr
   const key = ledgerText(clientRequestId);
 
   const claim = await claimRequestKey(key, meta);
+  // Still being written by the request that claimed it: not done yet, so this
+  // must not report success — and must not write a second time either.
+  if (claim.pending) {
+    throw new AppError('This entry is still being saved. Give it a moment, then check the stock before saving again.', 409);
+  }
   // Already recorded by an earlier, identical submission — say so and write
   // nothing. The caller reports success, because the work IS done.
   if (claim.replay) return { count: claim.count, results: [], duplicate: true };
@@ -516,6 +579,46 @@ export const inventoryService = {
       .filter().search(['movementNumber', 'skuCode', 'skuName', 'refNumber', 'poNumber', 'piNumber', 'vendorName'])
       .sort().select().paginate();
     return features.exec();
+  },
+
+  /**
+   * ONE ITEM'S HISTORY — every movement of a SKU, a page at a time, with what
+   * came in and went out across ALL of them (not just the page shown).
+   *
+   * Newest first by the DAY it happened (IST), then by when it was saved
+   * within the day: a movement's date is sometimes a bare day and sometimes a
+   * full time, and imported rows were all saved on the import day, so neither
+   * field alone orders the history as it happened. The module's own reader
+   * checks the SKU is one of its items before calling this.
+   */
+  async getItemLedger(skuId, query = {}) {
+    const page = Math.max(Number(query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(query.limit) || 25, 1), 200);
+    const [agg] = await InventoryMovement.aggregate([
+      { $match: { skuId: new mongoose.Types.ObjectId(String(skuId)), isDeleted: { $ne: true } } },
+      { $addFields: { _day: { $dateToString: { format: '%Y-%m-%d', date: '$movementDate', timezone: '+05:30' } } } },
+      { $sort: { _day: -1, createdAt: -1, _id: -1 } },
+      {
+        $facet: {
+          rows: [{ $skip: (page - 1) * limit }, { $limit: limit }, { $project: { _day: 0 } }],
+          totals: [{ $group: { _id: '$movementType', qty: { $sum: '$quantity' }, n: { $sum: 1 } } }],
+        },
+      },
+    ]);
+    const byDir = new Map((agg?.totals || []).map((t) => [t._id, t]));
+    const total = (byDir.get(MOVEMENT_TYPE.IN)?.n || 0) + (byDir.get(MOVEMENT_TYPE.OUT)?.n || 0);
+    return {
+      docs: agg?.rows || [],
+      pagination: {
+        page, limit, total, pages: Math.ceil(total / limit),
+        totals: {
+          inQty: round2(byDir.get(MOVEMENT_TYPE.IN)?.qty || 0),
+          outQty: round2(byDir.get(MOVEMENT_TYPE.OUT)?.qty || 0),
+          inCount: byDir.get(MOVEMENT_TYPE.IN)?.n || 0,
+          outCount: byDir.get(MOVEMENT_TYPE.OUT)?.n || 0,
+        },
+      },
+    };
   },
 
   /** Every movement created by a given source document (e.g. a GRN). */

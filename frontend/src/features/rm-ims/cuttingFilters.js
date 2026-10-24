@@ -8,12 +8,23 @@ import { useEffect, useState } from 'react';
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 export const NO_FILTERS = {
-  batchNo: '', from: '', to: '', circleSkuId: '', location: '',
+  batchNo: '', from: '', to: '', circleSkuId: '', coilSkuId: '', location: '',
   entryType: '', status: '', search: '',
+  // Row order — '' is the default, newest cut first; 'oldest' or 'az'.
+  sort: '',
 };
 const TEXT_KEYS = ['batchNo', 'search'];
-// Behind "More filters"; the rest are on the bar itself.
-const SECONDARY_KEYS = ['batchNo', 'status'];
+// Behind "More filters"; the rest are on the bar itself. Record type is also
+// the tabs over the table, so it lives here rather than on the bar.
+const SECONDARY_KEYS = ['entryType', 'batchNo', 'status'];
+// What counts as "a filter set": not the order, and a date range once.
+const countSet = (f) => Object.entries(f).filter(([k, v]) => v && k !== 'sort' && !(k === 'to' && f.from)).length;
+// The row orders the Date & sort field offers ('' is the default).
+export const SORTS = [
+  { value: '', label: 'Latest to oldest', short: 'Latest first' },
+  { value: 'oldest', label: 'Oldest to latest', short: 'Oldest first' },
+  { value: 'az', label: 'Coil SKU A → Z', short: 'SKU A–Z' },
+];
 export const LOCATION_OPTIONS = [
   { value: 'PLG01', label: 'PLG01 — Plant' },
   { value: 'JW001', label: 'JW001 — Job Work' },
@@ -61,6 +72,12 @@ export const useCuttingFilters = () => {
     setApplied((a) => ({ ...a, [k]: v }));
     setPage(0);
   };
+  // Several at once — a date range is one choice, so one page reset.
+  const setMany = (patch) => {
+    setInput((f) => ({ ...f, ...patch }));
+    setApplied((a) => ({ ...a, ...patch }));
+    setPage(0);
+  };
   const reset = () => { setInput(NO_FILTERS); setApplied(NO_FILTERS); setPage(0); };
 
   const params = {};
@@ -73,10 +90,11 @@ export const useCuttingFilters = () => {
     params,
     setText,
     setNow,
+    setMany,
     reset,
     dateError: !!(applied.from && applied.to && applied.from > applied.to),
     anyFilter: Object.values(input).some(Boolean),
-    activeCount: Object.values(input).filter(Boolean).length,
+    activeCount: countSet(input),
     secondaryActive: SECONDARY_KEYS.filter((k) => input[k]).length,
   };
 };

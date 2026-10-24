@@ -22,6 +22,10 @@ const inventoryRequestKeySchema = new Schema({
   sourceModule: { type: String, trim: true, default: '' },  // IMS | FG_IMS | …
   action:       { type: String, trim: true, default: '' },  // receive | issue | produce | dispatch
   count:        { type: Number, default: 0 },               // lines the first request wrote
+  // True once the first request finished writing. A key still false was
+  // claimed by a request that may have died mid-save — never treat it as done
+  // without checking the ledger (see claimRequestKey).
+  settled:      { type: Boolean, default: false },
   performedBy:  { type: Schema.Types.ObjectId, ref: 'User' },
 
   createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 7 },

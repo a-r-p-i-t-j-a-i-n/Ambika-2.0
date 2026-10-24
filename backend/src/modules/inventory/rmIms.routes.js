@@ -53,6 +53,8 @@ router.get('/conversion-ledger', validate(rmConversionLedgerQuerySchema, 'query'
 // `?scope=all`: the circles of EVERY recorded cut, the imported ones included —
 // what the All conversions "Circle SKU" filter offers.
 router.get('/cutting-history/circles', validate(rmCuttingCirclesQuerySchema, 'query'), c.getCuttingHistoryCircles);
+// The coil SKUs every recorded cut was made from — the history's "Coil SKU" filter.
+router.get('/cutting-history/coils', c.getCuttingHistoryCoils);
 
 router.get('/policy/:skuId', validate(rmSkuParamSchema, 'params'), c.getPolicy);
 router.put('/policy/:skuId', validate(rmSkuParamSchema, 'params'), validate(rmPolicySchema), c.upsertPolicy);

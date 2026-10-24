@@ -78,6 +78,8 @@ const RmImsMovements       = lazyWithRetry(() => import('./features/rm-ims/RmIms
 // Scrap IMS — the register of what each coil cut left behind, and the scrap stock it feeds
 const ScrapImsDashboard    = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsDashboard'));
 const ScrapImsList         = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsList'));
+const ScrapImsMaster       = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsMaster'));
+const ScrapImsSkuDetail    = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsSkuDetail'));
 const ScrapImsByCoil       = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsByCoil'));
 const ScrapImsDetail       = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsDetail'));
 const ScrapImsStockIn      = lazyWithRetry(() => import('./features/scrap-ims/ScrapImsStockIn'));
@@ -210,7 +212,10 @@ function App() {
             <Route path="/rm-ims/movements" element={<RmImsMovements />} />
 
             <Route path="/scrap-ims" element={<ScrapImsDashboard />} />
-            <Route path="/scrap-ims/records" element={<ScrapImsList />} />
+            <Route path="/scrap-ims/records" element={<ScrapImsMaster />} />
+            <Route path="/scrap-ims/history" element={<ScrapImsList />} />
+            {/* One coil SKU of Scrap master data — every cut of it. */}
+            <Route path="/scrap-ims/sku/:code" element={<ScrapImsSkuDetail />} />
             {/* Scrap grouped by the physical coil it came off. Declared before
                 `/scrap-ims/record/:id` is irrelevant here (different segment),
                 but it is kept beside the register because it reads the same

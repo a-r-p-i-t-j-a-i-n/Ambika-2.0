@@ -13,6 +13,8 @@ import {
   KindChip, AvailMeter, availBand, uomOf,
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr, imsTableSx,
 } from './rmImsMeta';
+import QtyRangeFilter from '../ims/QtyRangeFilter';
+import { NO_QTY_RANGE, matchesQtyRange } from '../ims/qtyRange';
 import { useGetRmOverviewQuery, useUpsertRmPolicyMutation } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 import AwaitingQcNote from '../ims/AwaitingQcNote';
@@ -38,7 +40,7 @@ const NotConfigured = () => (
  * so nobody mistakes somebody's estimate for a confirmed order.
  */
 const InTransitCell = ({ row: r }) => (
-  <Box sx={{ display: 'inline-block', textAlign: 'right' }}>
+  <Box sx={{ display: 'inline-block', textAlign: 'center' }}>
     <InTransitFigure row={r} />
     <AwaitingQcNote qty={r.awaitingQc} grnNumbers={r.awaitingQcGrnNumbers} fmt={num} />
   </Box>
@@ -60,7 +62,7 @@ const InTransitFigure = ({ row: r }) => {
     ].filter(Boolean).join(' ');
     return (
       <Tooltip arrow slotProps={O2D_TIP} title={title}>
-        <Box sx={{ display: 'inline-block', cursor: 'help', textAlign: 'right' }}>
+        <Box sx={{ display: 'inline-block', cursor: 'help', textAlign: 'center' }}>
           <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.body, lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
             {num(r.inTransit)}
           </Typography>
@@ -75,7 +77,7 @@ const InTransitFigure = ({ row: r }) => {
   return (
     <Tooltip arrow slotProps={O2D_TIP}
       title="Typed into the planning policy by hand — no open purchase order backs it. Raise the PO in Purchase FMS and this becomes a live figure.">
-      <Box sx={{ display: 'inline-block', cursor: 'help', textAlign: 'right' }}>
+      <Box sx={{ display: 'inline-block', cursor: 'help', textAlign: 'center' }}>
         <Typography sx={{ fontSize: '0.8rem', color: O2D.body, lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
           {num(r.inTransit)}
         </Typography>
@@ -101,7 +103,7 @@ const AdcCell = ({ row: r }) => {
       title={measured
         ? `Measured: ${num(r.consumption90dQty)} issued over the last ${r.consumption90dDays} days ÷ ${r.consumption90dDays}.`
         : `The planned ${String(r.consumptionMode || '').toLowerCase()} rate. Nothing has been issued in the last ${r.consumption90dDays} days, so there is no measured rate to use yet.`}>
-      <Box sx={{ display: 'inline-block', cursor: 'help', textAlign: 'right' }}>
+      <Box sx={{ display: 'inline-block', cursor: 'help', textAlign: 'center' }}>
         <Typography sx={{ fontSize: '0.8rem', color: O2D.body, lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>{num(r.adc)}</Typography>
         <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: measured ? STOCK_TOKENS.OK.color : O2D.faint }}>
           {measured ? 'measured' : 'planned'}
@@ -421,8 +423,9 @@ const RmImsStockList = () => {
   const [kind, setKind] = useState(params.get('kind') || 'ALL');
   const [status, setStatus] = useState(params.get('status') || 'ALL');
   const [search, setSearch] = useState('');
+  // Available qty — below / above / between (QtyRangeFilter).
+  const [qtyRange, setQtyRange] = useState(NO_QTY_RANGE);
   const [edit, setEdit] = useState(null);
-  const [showGlossary, setShowGlossary] = useState(false);
   const [showUnmatched, setShowUnmatched] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
@@ -448,13 +451,14 @@ const RmImsStockList = () => {
   }, [kindRows]);
 
   const filtered = useMemo(() => {
-    const list = status === 'ALL' ? kindRows : kindRows.filter((r) => r.status === status);
+    const list = (status === 'ALL' ? kindRows : kindRows.filter((r) => r.status === status))
+      .filter((r) => matchesQtyRange(qtyRange, r.onHand));
     // Worst first, then thinnest availability — the order a planner works in.
     return [...list].sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
       || (a.availablePct ?? 1e9) - (b.availablePct ?? 1e9));
-  }, [kindRows, status]);
+  }, [kindRows, status, qtyRange]);
 
-  useEffect(() => { setPage(0); }, [search, kind, status, rowsPerPage]);
+  useEffect(() => { setPage(0); }, [search, kind, status, rowsPerPage, qtyRange]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const summary = useMemo(() => ({
@@ -493,7 +497,7 @@ const RmImsStockList = () => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
-  const activeFilters = (kind !== 'ALL' ? 1 : 0) + (status !== 'ALL' ? 1 : 0) + (search ? 1 : 0);
+  const activeFilters = (kind !== 'ALL' ? 1 : 0) + (status !== 'ALL' ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
 
   return (
     <RmShell
@@ -526,16 +530,13 @@ const RmImsStockList = () => {
           <TextField select size="small" label="Material" value={kind} onChange={(e) => setParam('kind', e.target.value, setKind)} sx={{ minWidth: 175 }}>
             {KIND_FILTERS.map((k) => <MenuItem key={k.value} value={k.value}>{k.label}</MenuItem>)}
           </TextField>
-          <Button size="small" startIcon={<Info size={14} />} onClick={() => setShowGlossary((v) => !v)}
-            sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', color: showGlossary ? O2D.brand : O2D.sub }}>
-            What do these columns mean?
-          </Button>
+          <QtyRangeFilter value={qtyRange} onChange={setQtyRange} />
           <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, whiteSpace: 'nowrap', ml: 'auto' }}>
             <b>{filtered.length}</b> of {rows.length}
           </Typography>
           {activeFilters > 0 && (
             <Button size="small" startIcon={<X size={12} />}
-              onClick={() => { setSearch(''); setParam('kind', 'ALL', setKind); setParam('status', 'ALL', setStatus); }}
+              onClick={() => { setSearch(''); setQtyRange(NO_QTY_RANGE); setParam('kind', 'ALL', setKind); setParam('status', 'ALL', setStatus); }}
               sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.body }}>
               Clear ({activeFilters})
             </Button>
@@ -546,19 +547,6 @@ const RmImsStockList = () => {
           <StatusLegend counts={counts} value={status} onPick={(s) => setParam('status', s, setStatus)} />
         </Box>
 
-        <Collapse in={showGlossary}>
-          <Box sx={{ mt: 1, p: 1.25, borderRadius: '7px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.lineSoft}` }}>
-            <Eyebrow>How to read this table</Eyebrow>
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 0.6, mt: 0.75 }}>
-              {GLOSSARY.map(([term, meaning]) => (
-                <Stack key={term} direction="row" spacing={0.75}>
-                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: O2D.ink, minWidth: 118, flexShrink: 0 }}>{term}</Typography>
-                  <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>{meaning}</Typography>
-                </Stack>
-              ))}
-            </Box>
-          </Box>
-        </Collapse>
       </Paper>
 
       {/* Open PO lines procurement holds that could not be attributed to a raw
@@ -601,24 +589,24 @@ const RmImsStockList = () => {
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
                 <TableCell><Th label="SKU Code" hint={H.skuCode} /></TableCell>
                 <TableCell><Th label="Item Name" hint={H.skuName} /></TableCell>
-                <TableCell>Material</TableCell>
-                <TableCell><Th label="UOM" hint={H.unit} /></TableCell>
-                <TableCell align="right"><Th label="Total Available Quantity" hint={H.onHand} /></TableCell>
-                <TableCell align="right"><Th label="Material In Transit" hint={H.inTransit} /></TableCell>
-                <TableCell align="right"><Th label="Booked Qty" hint={H.booked} /></TableCell>
-                <TableCell align="right"><Th label="Daily Avg Consumption" hint={H.adc} /></TableCell>
-                <TableCell align="right"><Th label="Daily Consumption" hint={H.dailyConsumption} /></TableCell>
+                <TableCell align="center">Material</TableCell>
+                <TableCell align="center"><Th label="UOM" hint={H.unit} /></TableCell>
+                <TableCell align="center"><Th label="Total Available Quantity" hint={H.onHand} /></TableCell>
+                <TableCell align="center"><Th label="Material In Transit" hint={H.inTransit} /></TableCell>
+                <TableCell align="center"><Th label="Booked Qty" hint={H.booked} /></TableCell>
+                <TableCell align="center"><Th label="Daily Avg Consumption" hint={H.adc} /></TableCell>
+                <TableCell align="center"><Th label="Daily Consumption" hint={H.dailyConsumption} /></TableCell>
                 {/* Safety Factor sits beside the levels it drives, and carries the
                     same label and the same ×-suffix as the Consumables stock list,
                     so a planner reads it the same way in either module. */}
-                <TableCell align="right"><Th label="Safety Factor" hint={H.safetyFactor} /></TableCell>
-                <TableCell align="right"><Th label="Lead Time (From Indent to Receipt)" hint={H.leadDays} /></TableCell>
-                <TableCell align="right"><Th label="Reorder at" hint={H.reorderPoint} /></TableCell>
-                <TableCell align="right"><Th label="Max Level" hint={H.maxLevel} /></TableCell>
-                <TableCell align="right"><Th label="Available %" hint={H.availablePct} /></TableCell>
-                <TableCell align="right"><Th label="Cover" hint={H.daysCover} /></TableCell>
+                <TableCell align="center"><Th label="Safety Factor" hint={H.safetyFactor} /></TableCell>
+                <TableCell align="center"><Th label="Lead Time (From Indent to Receipt)" hint={H.leadDays} /></TableCell>
+                <TableCell align="center"><Th label="Reorder at" hint={H.reorderPoint} /></TableCell>
+                <TableCell align="center"><Th label="Max Level" hint={H.maxLevel} /></TableCell>
+                <TableCell align="center"><Th label="Available %" hint={H.availablePct} /></TableCell>
+                <TableCell align="center"><Th label="Cover" hint={H.daysCover} /></TableCell>
                 <TableCell><Th label="Vendor Name" hint={H.vendorName} /></TableCell>
-                <TableCell><Th label="Status" hint={H.status} /></TableCell>
+                <TableCell align="center"><Th label="Status" hint={H.status} /></TableCell>
                 <TableCell align="right" />
               </TableRow>
             </TableHead>
@@ -652,11 +640,11 @@ const RmImsStockList = () => {
                     <TableCell sx={{ maxWidth: 240 }}>
                       <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 700, color: O2D.ink }} title={r.skuName}>{r.skuName}</Typography>
                     </TableCell>
-                    <TableCell><KindChip kind={r.kind} /></TableCell>
-                    <TableCell>
+                    <TableCell align="center"><KindChip kind={r.kind} /></TableCell>
+                    <TableCell align="center">
                       <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: O2D.sub }}>{uomOf(r)}</Typography>
                     </TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>
+                    <TableCell align="center" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>
                       {num(r.onHand)}
                       {/* Circles are counted in pieces AND weighed. The weight is
                           shown under the count, never added to it. */}
@@ -669,21 +657,21 @@ const RmImsStockList = () => {
                         </Tooltip>
                       )}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}><InTransitCell row={r} /></TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.booked ? O2D.body : O2D.faint }}>{num0(r.booked)}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}><AdcCell row={r} /></TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.dailyConsumption ? O2D.body : O2D.faint }}>
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums' }}><InTransitCell row={r} /></TableCell>
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums', color: r.booked ? O2D.body : O2D.faint }}>{num0(r.booked)}</TableCell>
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums' }}><AdcCell row={r} /></TableCell>
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums', color: r.dailyConsumption ? O2D.body : O2D.faint }}>
                       {r.dailyConsumption == null ? '—' : num(r.dailyConsumption)}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.body }}>
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.body }}>
                       {r.hasPolicy ? `${num(r.safetyFactor)}×` : <NotConfigured />}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.body }}>
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.body }}>
                       {r.hasPolicy ? `${num(r.leadDays)}d` : <NotConfigured />}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num0(r.reorderPoint)}</TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                      <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num0(r.reorderPoint)}</TableCell>
+                    <TableCell align="center" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                      <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                         <span>{num0(r.maxLevel)}</span>
                         {/* "M" = this Max Level was typed in and ignores the formula,
                             so the Safety Factor beside it does not explain it. */}
@@ -698,8 +686,8 @@ const RmImsStockList = () => {
                         )}
                       </Stack>
                     </TableCell>
-                    <TableCell align="right"><AvailMeter pct={r.availablePct} /></TableCell>
-                    <TableCell align="right" sx={{
+                    <TableCell align="center"><AvailMeter pct={r.availablePct} /></TableCell>
+                    <TableCell align="center" sx={{
                       fontVariantNumeric: 'tabular-nums', fontWeight: 700,
                       color: band && band.color === '#b91c1c' ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.body,
                     }}>
@@ -710,7 +698,7 @@ const RmImsStockList = () => {
                         {r.vendorName || '—'}
                       </Typography>
                     </TableCell>
-                    <TableCell><StatusChip status={r.status} /></TableCell>
+                    <TableCell align="center"><StatusChip status={r.status} /></TableCell>
                     <TableCell align="right" sx={{ width: 84, whiteSpace: 'nowrap' }}>
                       <Tooltip arrow slotProps={O2D_TIP} title="Open this item — stock, planning, purchase orders and its day-by-day history">
                         <IconButton size="small" onClick={() => navigate(`/rm-ims/item/${r.skuId}`)} sx={{ color: O2D.sub }}><Eye size={15} /></IconButton>

@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Chip, Tooltip } from '@mui/material';
 import {
   LayoutDashboard, Recycle, Factory, Truck, Scissors, AlertTriangle,
-  ArrowDownToLine, ArrowUpFromLine, ScrollText, Disc3,
+  ArrowDownToLine, ArrowUpFromLine, ScrollText, Disc3, ListOrdered, ClipboardCheck,
 } from 'lucide-react';
 import { ImsShell, O2D, O2D_TIP, num } from '../ims/imsMeta';
 
@@ -23,6 +23,8 @@ export const SCRAP_ACCENT = '#b45309';
 export const SCRAP_NAV = [
   { label: 'Overview', short: 'Overview', path: '/scrap-ims', icon: LayoutDashboard, exact: true },
   { label: 'Scrap master data', short: 'Master data', path: '/scrap-ims/records', icon: Recycle },
+  // Every cut, one row each — the per-cut register master data groups by coil SKU.
+  { label: 'Cut history', short: 'History', path: '/scrap-ims/history', icon: ListOrdered },
   /**
    * Scrap by the PHYSICAL coil it came off.
    *
@@ -144,15 +146,23 @@ export const BATCH_STATUS_TOKENS = {
     label: 'Not cut', color: '#b45309', bg: '#fef3c7', border: '#fde68a',
     meaning: 'This coil was never cut, so no scrap came off it. The sheet reports the whole coil as scrap because its circle weight is blank — excluded from every total here.',
   },
+  // Not a batch status: a record that is a Stock Correction of the coil SKU's
+  // scrap (entryType CORRECTION) — shown in the same column, in its place.
+  CORRECTION: {
+    label: 'Correction', color: '#7c3aed', bg: '#f3e8ff', border: '#e9d5ff',
+    meaning: 'A stock correction of this coil SKU\'s scrap — the change it made. Not a cut: no coil, circles or yield.',
+  },
 };
 export const batchStatusToken = (s) => BATCH_STATUS_TOKENS[s] || BATCH_STATUS_TOKENS.CUT;
 
-export const BatchStatusChip = ({ batchStatus }) => {
-  const t = batchStatusToken(batchStatus);
+/** A record's status — or, for a correction, what it corrected (`remarks`). */
+export const BatchStatusChip = ({ batchStatus, entryType, remarks }) => {
+  const correction = entryType === 'CORRECTION';
+  const t = batchStatusToken(correction ? 'CORRECTION' : batchStatus);
   return (
-    <Tooltip arrow title={t.meaning} slotProps={O2D_TIP}>
+    <Tooltip arrow title={correction && remarks ? remarks : t.meaning} slotProps={O2D_TIP}>
       <Chip
-        size="small" icon={batchStatus === 'UNCUT' ? <AlertTriangle size={11} /> : <Scissors size={11} />}
+        size="small" icon={correction ? <ClipboardCheck size={11} /> : batchStatus === 'UNCUT' ? <AlertTriangle size={11} /> : <Scissors size={11} />}
         label={t.label}
         sx={{
           height: 21, fontWeight: 700, fontSize: '0.67rem', borderRadius: '999px', cursor: 'help',
@@ -263,6 +273,9 @@ export const kg = (v) => (v == null ? '—' : `${num(v)} kg`);
 export const SCRAP_TXN_TOKENS = {
   SCRAP_IN: { label: 'In', color: '#15803d', bg: '#dcfce7', border: '#bbf7d0' },
   SCRAP_OUT: { label: 'Out', color: '#b91c1c', bg: '#fee2e2', border: '#fecaca' },
+  // IMS → Stock Correction: the yard counted, the balance set to the count.
+  ADJUST_IN: { label: 'Correction +', color: '#1d4ed8', bg: '#dbeafe', border: '#bfdbfe' },
+  ADJUST_OUT: { label: 'Correction −', color: '#7c3aed', bg: '#ede9fe', border: '#ddd6fe' },
 };
 
 export const ScrapTxnChip = ({ txnType }) => {

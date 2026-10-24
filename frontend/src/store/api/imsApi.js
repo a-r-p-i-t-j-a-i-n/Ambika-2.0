@@ -35,6 +35,11 @@ export const imsApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/ims/movements', params }),
       providesTags: ['ImsMovement'],
     }),
+    // One item's history, newest first, with its in/out totals.
+    getImsItemLedger: builder.query({
+      query: ({ skuId, ...params }) => ({ url: `/ims/ledger/${skuId}`, params }),
+      providesTags: ['ImsMovement'],
+    }),
     upsertImsPolicy: builder.mutation({
       query: ({ skuId, ...body }) => ({ url: `/ims/policy/${skuId}`, method: 'PUT', body }),
       invalidatesTags: (_r, _e, { skuId }) => ['ImsOverview', 'ImsDashboard', { type: 'ImsPolicy', id: skuId }],
@@ -58,6 +63,7 @@ export const {
   useGetImsHistoryQuery,
   useGetImsPolicyQuery,
   useGetImsMovementsQuery,
+  useGetImsItemLedgerQuery,
   useUpsertImsPolicyMutation,
   useImsReceiveMutation,
   useImsIssueMutation,

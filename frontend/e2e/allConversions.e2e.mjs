@@ -211,9 +211,9 @@ const run = async () => {
 
   /* ── The page: its header, one table, no second "All conversions" section ── */
   const header = flat(await page.locator('body').innerText());
-  check('the header: "Coil to Circle", "Track coil cutting history, circle output and remaining weight.", "Record Cutting Round"; the RM tab is "Coil to Circle"',
+  check('the header: "Coil to Circle", "Track coil cutting history, circle output and remaining weight.", "New Cutting Entry"; the RM tab is "Coil to Circle"',
     /Track coil cutting history, circle output and remaining weight\./.test(header)
-      && flat(await page.getByTestId('open-coil-to-circle').innerText()) === 'Record Cutting Round'
+      && flat(await page.getByTestId('open-coil-to-circle').innerText()) === 'New Cutting Entry'
       && (await page.getByRole('link', { name: 'Coil to Circle' }).or(page.getByRole('tab', { name: 'Coil to Circle' })).or(page.getByRole('button', { name: 'Coil to Circle' })).count()) >= 1);
   const one = {
     history: await page.getByRole('table', { name: 'Coil to Circle history' }).count(),
@@ -543,7 +543,7 @@ const run = async () => {
   check('Try again recovers (now a genuine no-match)', await page.getByTestId('history-empty').isVisible());
   await reset();
 
-  /* ── 14. A real cut, through "Record Cutting Round" — the table picks it up ── */
+  /* ── 14. A real cut, through "New Cutting Entry" — the table picks it up ── */
   const before = [];
   for (let p = 0; p < 2; p += 1) { before.push(...await ids()); if (p < 1) await next(); }
   const dialog = page.getByTestId('coil-to-circle-dialog');
@@ -557,7 +557,7 @@ const run = async () => {
     return r && !r.disabled;
   }, null, { timeout: 15000 });
   const facts = flat(await dialog.getByTestId('coil-facts').innerText());
-  check('14. "Record Cutting Round" opens the existing form, which identifies the coil from its batch: AC-PLG-1, 5,000 kg, 3,500 kg left',
+  check('14. "New Cutting Entry" opens the existing form, which identifies the coil from its batch: AC-PLG-1, 5,000 kg, 3,500 kg left',
     /Total coil weight 5,000 kg/i.test(facts) && /3,500 kg/.test(facts), facts);
   await dialog.getByRole('radio', { name: /partial cutting/i }).check();
   await dialog.getByLabel(/^cut this round/i).first().fill('50');
