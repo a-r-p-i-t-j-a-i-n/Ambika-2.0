@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -123,6 +124,7 @@ const IncomingQCList = () => {
     { field: 'totalRejected', headerName: 'REJECTED', width: 95, align: 'right', headerAlign: 'right', renderCell: (p) => <Typography variant="body2" sx={{ color: p.value > 0 ? '#be123c' : 'text.secondary', fontWeight: p.value > 0 ? 700 : 400 }}>{p.value}</Typography> },
     { field: 'overallResult', headerName: 'RESULT', width: 125, renderCell: (p) => <QcResultChip result={p.value} /> },
     { field: 'qcStatus', headerName: 'STATUS', width: 125, renderCell: (p) => <QcStatusChip status={p.value} /> },
+    ...stepTimingColumns(),
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
       renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
   ];

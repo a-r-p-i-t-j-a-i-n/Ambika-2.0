@@ -1,6 +1,7 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { vendorInvoiceService, getAdvancePosition } from './vendorInvoice.service.js';
 import { userHasPermission } from '../../../middleware/permission.middleware.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
 // May the user invoice more than the QC-accepted (excess) qty?
@@ -9,7 +10,8 @@ const canOverrideExcess = (req) =>
 
 export const vendorInvoiceController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await vendorInvoiceService.getAll(req.query);
+    const { docs: rows, pagination } = await vendorInvoiceService.getAll(req.query);
+    const docs = await attachStepTiming('VENDOR_INVOICE', rows);
     res.json(ApiResponse.ok('Vendor invoices retrieved', docs, pagination));
   }),
 

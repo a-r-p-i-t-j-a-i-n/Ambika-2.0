@@ -1110,7 +1110,7 @@ const MainLayout = () => {
         </Toolbar>
       </AppBar>
 
-      {/* Sidebar — exactly ONE nav tree is mounted at a time.
+      {/* Sidebar — exactly ONE nav tree is mounted at a time. hi
           Previously both drawers rendered at every breakpoint, the off-breakpoint
           one merely hidden with `display: none` (and the mobile one held open by
           `keepMounted`). That doubled the nav — including its nine <Collapse>

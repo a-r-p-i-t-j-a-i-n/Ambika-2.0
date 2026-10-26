@@ -1,10 +1,12 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { followUpService } from './followUp.service.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
 export const followUpController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await followUpService.getAll(req.query);
+    const { docs: rows, pagination } = await followUpService.getAll(req.query);
+    const docs = await attachStepTiming('FOLLOW_UP', rows);
     res.json(ApiResponse.ok('Follow-ups retrieved', docs, pagination));
   }),
 

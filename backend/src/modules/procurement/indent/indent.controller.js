@@ -1,10 +1,12 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { indentService } from './indent.service.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
 export const indentController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await indentService.getAll(req.query);
+    const { docs: rows, pagination } = await indentService.getAll(req.query);
+    const docs = await attachStepTiming('INDENT', rows);
     res.json(ApiResponse.ok('Indents retrieved', docs, pagination));
   }),
 

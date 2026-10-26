@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Tabs, Tab,
@@ -183,6 +184,7 @@ const PurchaseOrderList = () => {
     { field: 'createdBy', headerName: 'CREATED BY', width: 120, sortable: false,
       valueGetter: (_v, row) => row.createdBy?.name || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
+    ...stepTimingColumns(),
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
       renderCell: (p) => (
         <Tooltip title="Actions">

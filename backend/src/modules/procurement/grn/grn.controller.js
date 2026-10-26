@@ -1,10 +1,12 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { grnService } from './grn.service.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
 export const grnController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await grnService.getAll(req.query);
+    const { docs: rows, pagination } = await grnService.getAll(req.query);
+    const docs = await attachStepTiming('GRN', rows);
     res.json(ApiResponse.ok('GRNs retrieved', docs, pagination));
   }),
 

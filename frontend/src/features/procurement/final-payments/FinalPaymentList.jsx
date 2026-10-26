@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -114,6 +115,7 @@ const FinalPaymentList = () => {
     { field: 'paymentMode', headerName: 'MODE', width: 110, renderCell: (p) => <Typography variant="body2" color="text.secondary">{paymentModeLabel(p.value)}</Typography> },
     { field: 'paymentReferenceNumber', headerName: 'REF NO', width: 110, renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     { field: 'paymentStatus', headerName: 'STATUS', width: 140, renderCell: (p) => <PaymentStatusChip status={p.value} /> },
+    ...stepTimingColumns(),
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center', renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
   ];
 

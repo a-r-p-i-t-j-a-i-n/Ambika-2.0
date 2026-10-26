@@ -1,6 +1,7 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { purchaseOrderService } from './purchaseOrder.service.js';
 import { userHasPermission } from '../../../middleware/permission.middleware.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse, AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -35,7 +36,8 @@ const createdMessage = (po) => (po.approvalStatus === 'APPROVED'
 
 export const purchaseOrderController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await purchaseOrderService.getAll(req.query);
+    const { docs: rows, pagination } = await purchaseOrderService.getAll(req.query);
+    const docs = await attachStepTiming('PO', rows);
     res.json(ApiResponse.ok('Purchase orders retrieved', docs, pagination));
   }),
 

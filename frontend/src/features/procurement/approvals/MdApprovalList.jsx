@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Grid, Autocomplete, Alert, Chip, Tooltip,
 } from '@mui/material';
@@ -59,7 +60,10 @@ const MdApprovalList = () => {
     ...(from ? { from: `${from}T00:00:00` } : {}),
     ...(to ? { to: `${to}T23:59:59` } : {}),
   }, { refetchOnMountOrArgChange: true });
-  const rows = data?.data?.rows || [];
+  // The MD's signature is this step's completion (signedAt / signedByName).
+  const rows = (data?.data?.rows || []).map((r) => ({
+    ...r, stepTiming: { done: !!r.signedAt, actualAt: r.signedAt, doneByName: r.signedByName },
+  }));
   const summary = data?.data?.summary || {};
   const vendors = data?.data?.vendors || [];
 
@@ -97,6 +101,7 @@ const MdApprovalList = () => {
       renderCell: (p) => <Typography noWrap sx={{ fontSize: '0.76rem', color: PFMS.sub }}>{p.value}</Typography> },
     { field: 'approvalStatus', headerName: 'Approval Status', width: 140,
       renderCell: (p) => <MdViewStatusChip status={p.value} /> },
+    ...stepTimingColumns({ planned: false, doer: false, titleCase: true }),
   ];
 
   return (
