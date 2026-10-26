@@ -13,6 +13,10 @@ const env = {
   // sign-in tickets that POST /auth/sso accepts. Optional: when it is empty,
   // single sign-on answers 503 and normal email/password login is unaffected.
   ERP_SSO_SECRET: process.env.ERP_SSO_SECRET || '',
+  // The Delegation Suite backend's API base, e.g. https://<suite-server>/api/v1.
+  // When set (with ERP_SSO_SECRET), O2D steps are sent there as Delegation
+  // tasks (modules/o2d-fms/o2d-delegation.js). Empty = off.
+  SUITE_API_URL: (process.env.SUITE_API_URL || '').trim().replace(/\/+$/, ''),
 
   COMPANY_NAME:    process.env.COMPANY_NAME    || 'M/s AMBIKA GLOBAL',
   COMPANY_CODE:    process.env.COMPANY_CODE    || 'AGL',

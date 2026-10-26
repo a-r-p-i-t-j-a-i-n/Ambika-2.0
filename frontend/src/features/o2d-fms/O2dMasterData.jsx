@@ -23,6 +23,7 @@ import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
 import { actionLinkMeta, resolveEntityLink, TRIGGER_TO_ACTION } from './actionLinks';
 import { exportRowsToExcel, printTablePdf } from '../../utils/exportMasterData';
 import { resolveFileUrl } from '../../utils/fileUrl';
+import { useHiddenSteps, stepKey } from '../../utils/embed';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const dt = (d) => (d ? dayjs(d).format('DD MMM YYYY · hh:mm A') : '—');
@@ -563,7 +564,15 @@ const StepLogDrawer = ({ open, onClose, tab, row, resolve }) => {
  */
 const O2dMasterData = () => {
   const theme = useTheme();
-  const [tab, setTab] = useState('so'); // 1.01 Order Received — first step first
+  // Steps the MD switched off for this employee in the Delegation Suite lose
+  // their tab here too (none when Ambika 2.0 is used on its own).
+  const hiddenSteps = useHiddenSteps('o2d');
+  const visibleTabs = useMemo(
+    () => (hiddenSteps.size ? TABS.filter((t) => !hiddenSteps.has(stepKey(STEP_META[t.key]?.code))) : TABS),
+    [hiddenSteps],
+  );
+  const [pickedTab, setTab] = useState('so'); // 1.01 Order Received — first step first
+  const tab = visibleTabs.some((t) => t.key === pickedTab) ? pickedTab : (visibleTabs[0]?.key || 'so');
   const [view, setView] = useState('table');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -734,6 +743,14 @@ const O2dMasterData = () => {
       </Box>
 
       <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, pb: 6, minWidth: 0, overflowX: 'hidden' }}>
+        {visibleTabs.length === 0 ? (
+          <Paper elevation={0} sx={{ borderRadius: '8px', p: 4, textAlign: 'center', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+            <Typography sx={{ fontWeight: 800, color: O2D.ink }}>No O2D steps are switched on for you</Typography>
+            <Typography sx={{ fontSize: '0.8rem', color: O2D.sub, mt: 0.5 }}>
+              Ask your MD to switch them on in Delegation → Employees → lock icon → Ambika 2.0 ERP.
+            </Typography>
+          </Paper>
+        ) : (<>
         {/* ── GLOBAL filters (apply to every step tab) + export ── */}
         <Paper elevation={0} sx={{ borderRadius: '8px', p: 1, mb: 1.25, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
@@ -780,7 +797,7 @@ const O2dMasterData = () => {
               steps read as STEPS, not thin text tabs: bold code, name beneath,
               blue card when active, light-blue lift on hover. */}
           <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', px: 1.25, py: 1, borderBottom: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
-            {TABS.map((t) => {
+            {visibleTabs.map((t) => {
               const meta = STEP_META[t.key] || {};
               const active = tab === t.key;
               return (
@@ -948,6 +965,7 @@ const O2dMasterData = () => {
             </Box>
           )}
         </Paper>
+        </>)}
       </Box>
 
       {/* Links & Log drawer — the full "who did what, when, why" audit for a step. */}

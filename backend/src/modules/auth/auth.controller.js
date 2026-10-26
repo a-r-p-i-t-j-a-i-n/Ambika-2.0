@@ -3,9 +3,11 @@ import { authService } from './auth.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import jwt from 'jsonwebtoken';
 import env from '../../config/env.js';
+import { sessionGrantsOf } from '../../middleware/auth.middleware.js';
 
-const signToken = (id) => {
-  return jwt.sign({ id }, env.JWT_SECRET, {
+// `grants`: extra permissions for this session only (Delegation sign-in).
+const signToken = (id, grants = []) => {
+  return jwt.sign(grants.length ? { id, grants } : { id }, env.JWT_SECRET, {
     expiresIn: env.JWT_EXPIRES_IN,
   });
 };
@@ -90,7 +92,10 @@ export const authController = {
       return ssoFail(res, 403, 'This ERP account is inactive', 'inactive');
     }
 
-    const token = signToken(user._id);
+    // The Suite's lock-icon switches can add a few permissions (e.g. Delete
+    // on an O2D step → orders.delete) to this session only; nothing is saved
+    // on the ERP account.
+    const token = signToken(user._id, sessionGrantsOf(payload.grants));
     user.password = undefined;
     return res.json(ApiResponse.ok('Signed in', { token, user }));
   }),

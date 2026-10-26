@@ -9,6 +9,7 @@ import { seedAccessControl } from './modules/access-control/role.seed.js';
 import { seedPricing } from './modules/pricing/pricing.seed.js';
 import { startO2DEscalationJob } from './jobs/o2d-fms.escalation.job.js';
 import { startFmsDoerSyncJob } from './jobs/fms-doer.sync.job.js';
+import { startO2dDelegationSync } from './modules/o2d-fms/o2d-delegation.js';
 import { verifyInvoiceNumberIndex } from './modules/procurement/vendor-invoice/invoiceNumberIndexGuard.js';
 
 const startServer = async () => {
@@ -47,6 +48,11 @@ const startServer = async () => {
   // FMS doer tasks — startup backfill + periodic reconcile.
   if (process.env.FMS_DOER_SYNC !== 'off') {
     startFmsDoerSyncJob();
+  }
+
+  // O2D steps → Delegation Suite tasks (only when SUITE_API_URL is set).
+  if (process.env.O2D_DELEGATION_SYNC !== 'off') {
+    startO2dDelegationSync();
   }
 
   server.on('error', (err) => {

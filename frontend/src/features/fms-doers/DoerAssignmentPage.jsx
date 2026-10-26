@@ -1,20 +1,27 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Box, Typography, Paper, TextField, MenuItem, Table, TableHead, TableBody, TableRow, TableCell,
+  Box, Typography, Paper, Table, TableHead, TableBody, TableRow, TableCell,
   TableContainer, Button, Tooltip, IconButton, Alert, CircularProgress, Link as MuiLink,
-  Dialog, DialogTitle, DialogContent, DialogActions,
+  Dialog, DialogTitle, DialogContent, DialogActions, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import { UserCog, History, ListChecks, RefreshCw } from 'lucide-react';
 import { Link as RouterLink } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import {
-  useGetFmsCatalogsQuery, useGetDoerAssignmentsQuery, useGetAssignableUsersQuery,
+  useGetDoerAssignmentsQuery, useGetAssignableUsersQuery,
   useSetDoerAssignmentMutation, useApplyDoerToOpenTasksMutation, useSyncFmsTasksMutation,
 } from '../../store/api/fmsDoerApi';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from '../procurement/pfmsTheme';
 import { AssignmentStatusChip, PermissionStatusChip, userName } from './fmsDoerMeta';
 import DoerPickerDialog from './DoerPickerDialog';
 import AssignmentHistoryDialog from './AssignmentHistoryDialog';
+import O2dDoerPlan from './O2dDoerPlan';
+
+// The FMS flows this page sets up — O2D first (the default).
+const FMS_CHOICES = [
+  { key: 'O2D', label: 'O2D FMS' },
+  { key: 'PURCHASE', label: 'Purchase FMS' },
+];
 
 /**
  * FMS → Doer Assignment. Pick an FMS, then one primary doer per step.
@@ -23,14 +30,14 @@ import AssignmentHistoryDialog from './AssignmentHistoryDialog';
  */
 const DoerAssignmentPage = () => {
   const { enqueueSnackbar } = useSnackbar();
-  const [fmsKey, setFmsKey] = useState('PURCHASE');
+  const [fmsKey, setFmsKey] = useState('O2D');
+  const isO2d = fmsKey === 'O2D';
   const [editStep, setEditStep] = useState(null);
   const [historyStep, setHistoryStep] = useState(null);
   const [applyStep, setApplyStep] = useState(null);
 
-  const { data: catRes } = useGetFmsCatalogsQuery();
-  const catalogs = catRes?.data || [];
-  const { data, isLoading, isFetching } = useGetDoerAssignmentsQuery(fmsKey);
+  // O2D has its own setup screen (O2dDoerPlan); this table is for Purchase.
+  const { data, isLoading, isFetching } = useGetDoerAssignmentsQuery(fmsKey, { skip: isO2d });
   const fms = data?.data?.fms;
   const steps = data?.data?.steps || [];
   const { data: usersRes, isFetching: usersLoading } = useGetAssignableUsersQuery(
@@ -83,16 +90,13 @@ const DoerAssignmentPage = () => {
         <Box>
           <Typography sx={pfmsTitleSx}>FMS Doer Assignment</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
-            One primary doer per step · being the doer does not grant permissions
+            {isO2d
+              ? 'Lead time, main doer, buddy and mandatory for every O2D step'
+              : 'One primary doer per step · being the doer does not grant permissions'}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-          <TextField select size="small" label="FMS" value={fmsKey} onChange={(e) => setFmsKey(e.target.value)} sx={{ minWidth: 200 }}>
-            {(catalogs.length ? catalogs : [{ key: 'PURCHASE', label: 'Purchase FMS' }]).map((c) => (
-              <MenuItem key={c.key} value={c.key}>{c.label}</MenuItem>
-            ))}
-          </TextField>
-          {fms?.editable && (
+          {!isO2d && fms?.editable && (
             <Tooltip title="Re-check which items are waiting at each step">
               <span>
                 <Button variant="outlined" startIcon={syncing ? <CircularProgress size={14} /> : <RefreshCw size={16} />} onClick={onSync} disabled={syncing}>
@@ -104,6 +108,15 @@ const DoerAssignmentPage = () => {
         </Box>
       </Box>
 
+      {/* Which FMS to set up — O2D by default. */}
+      <ToggleButtonGroup exclusive size="small" value={fmsKey} onChange={(_e, v) => v && setFmsKey(v)} aria-label="FMS"
+        sx={{ alignSelf: 'flex-start', bgcolor: PFMS.surface }}>
+        {FMS_CHOICES.map((c) => (
+          <ToggleButton key={c.key} value={c.key} sx={{ textTransform: 'none', fontWeight: 700, px: 2.25 }}>{c.label}</ToggleButton>
+        ))}
+      </ToggleButtonGroup>
+
+      {isO2d ? <O2dDoerPlan /> : (<>
       {fms && !fms.editable && (
         <Alert severity="info" variant="outlined" sx={{ bgcolor: PFMS.surface }}>
           {fms.label} already has its own doer configuration and task runtime. Its current doers are shown below read-only —
@@ -206,6 +219,7 @@ const DoerAssignmentPage = () => {
           </Table>
         </TableContainer>
       </Paper>
+      </>)}
 
       <DoerPickerDialog
         open={Boolean(editStep)}
