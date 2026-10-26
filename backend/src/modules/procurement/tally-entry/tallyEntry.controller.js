@@ -1,10 +1,12 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { tallyEntryService } from './tallyEntry.service.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
 export const tallyEntryController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await tallyEntryService.getAll(req.query);
+    const { docs: rows, pagination } = await tallyEntryService.getAll(req.query);
+    const docs = await attachStepTiming('TALLY', rows);
     res.json(ApiResponse.ok('Tally entries retrieved', docs, pagination));
   }),
 

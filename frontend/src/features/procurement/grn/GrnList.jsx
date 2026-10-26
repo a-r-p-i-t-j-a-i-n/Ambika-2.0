@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Chip,
@@ -158,6 +159,7 @@ const GrnList = () => {
           )}
         </Box>
       ) },
+    ...stepTimingColumns(),
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
       renderCell: (p) => (
         <Tooltip title="Actions">

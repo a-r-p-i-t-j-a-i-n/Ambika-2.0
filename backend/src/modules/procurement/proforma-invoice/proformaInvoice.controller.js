@@ -1,10 +1,12 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { proformaInvoiceService } from './proformaInvoice.service.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
 export const proformaInvoiceController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await proformaInvoiceService.getAll(req.query);
+    const { docs: rows, pagination } = await proformaInvoiceService.getAll(req.query);
+    const docs = await attachStepTiming('PI', rows);
     res.json(ApiResponse.ok('Proforma invoices retrieved', docs, pagination));
   }),
 

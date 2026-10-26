@@ -25,6 +25,7 @@ import IndentFormDrawer from './indents/IndentFormDrawer';
 import PurchaseOrderFormDrawer from './purchase-orders/PurchaseOrderFormDrawer';
 import FollowUpFormDrawer from './follow-ups/FollowUpFormDrawer';
 import { FU_STATUS_LABEL } from './follow-ups/fuMeta';
+import { stepTimingText } from './components/stepTimingColumns';
 import ProformaInvoiceFormDrawer from './proforma-invoices/ProformaInvoiceFormDrawer';
 import GrnFormDialog from './grn/GrnFormDialog';
 import IncomingQCFormDialog from './incoming-qc/IncomingQCFormDialog';
@@ -37,6 +38,13 @@ const dd = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
 // Display text for a step's status; filtering and grouping keep the stored value.
 const statusLabel = (tab, s) => (tab === 'followup' && FU_STATUS_LABEL[s]) || s;
 const col = (field, headerName, extra = {}) => ({ field, headerName, flex: 1, minWidth: 120, sortable: true, ...extra });
+// Planned / Actual / Done By / Assigned Doer — the same values the step lists show (stepTimingColumns).
+const timingCols = () => [
+  col('stepPlannedAt', 'Planned Date', { minWidth: 140, sortable: false, valueGetter: (v, r) => stepTimingText(r).planned }),
+  col('stepActualAt', 'Actual Date & Time', { minWidth: 170, sortable: false, valueGetter: (v, r) => stepTimingText(r).actual }),
+  col('stepDoneBy', 'Done By', { minWidth: 130, sortable: false, valueGetter: (v, r) => stepTimingText(r).doneBy }),
+  col('stepDoer', 'Assigned Doer', { minWidth: 150, sortable: false, valueGetter: (v, r) => { const t = stepTimingText(r); return t.step ? `${t.doer} · ${t.step}` : t.doer; } }),
+];
 
 // One column set per Purchase FMS step (mirrors the 11 procurement screens).
 const COLUMNS = {
@@ -47,6 +55,7 @@ const COLUMNS = {
     col('items', 'Items', { minWidth: 220, sortable: false, valueGetter: (v, r) => (r.items || []).map((i) => `${i.itemName || i.productNameRevised || i.skuCode} (${num(i.quantity)})`).join(', ') || '—' }),
     col('approvalStatus', 'Approval', { minWidth: 130 }),
     col('overallStatus', 'Stage', { minWidth: 150 }),
+    ...timingCols(),
   ],
   po: [
     col('poNumber', 'PO Number', { minWidth: 160 }),
@@ -57,6 +66,7 @@ const COLUMNS = {
     col('releaseStatus', 'Release', { minWidth: 110 }),
     col('poStatus', 'PO Status', { minWidth: 130 }),
     col('expectedDeliveryDate', 'Expected', { minWidth: 120, valueGetter: (v, r) => dd(r.expectedDeliveryDate) }),
+    ...timingCols(),
   ],
   followup: [
     col('followUpNumber', 'Follow-up No', { minWidth: 150 }),
@@ -66,7 +76,7 @@ const COLUMNS = {
     col('nextFollowUpDate', 'Next Follow-up', { minWidth: 130, valueGetter: (v, r) => dd(r.nextFollowUpDate) }),
     col('finalMaterialDate', 'Material Date', { minWidth: 130, valueGetter: (v, r) => dd(r.finalMaterialDate) }),
     col('followUpStatus', 'Status', { minWidth: 120, valueGetter: (v, r) => statusLabel('followup', r.followUpStatus) }),
-    col('performedByName', 'By', { minWidth: 130, valueGetter: (v, r) => r.performedByName || '—' }),
+    ...timingCols(),
   ],
   pi: [
     col('piNumber', 'PI Number', { minWidth: 150 }),
@@ -77,6 +87,7 @@ const COLUMNS = {
     col('paidAmount', 'Paid ₹', { minWidth: 110, type: 'number', valueGetter: (v, r) => Number(r.paidAmount || 0) }),
     col('balanceAmount', 'Balance ₹', { minWidth: 110, type: 'number', valueGetter: (v, r) => Number(r.balanceAmount || 0) }),
     col('piStatus', 'Status', { minWidth: 130 }),
+    ...timingCols(),
   ],
   advance: [
     col('paymentNumber', 'Payment No', { minWidth: 150 }),
@@ -87,6 +98,7 @@ const COLUMNS = {
     col('balanceAmount', 'Balance ₹', { minWidth: 110, type: 'number', valueGetter: (v, r) => Number(r.balanceAmount || 0) }),
     col('paymentMode', 'Mode', { minWidth: 110, valueGetter: (v, r) => r.paymentMode || '—' }),
     col('paymentStatus', 'Status', { minWidth: 120 }),
+    ...timingCols(),
   ],
   grn: [
     col('grnNumber', 'GRN Number', { minWidth: 160 }),
@@ -97,6 +109,7 @@ const COLUMNS = {
     col('totalValue', 'Value ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.totalValue || 0) }),
     col('grnStatus', 'GRN Status', { minWidth: 130 }),
     col('qcStatus', 'QC Status', { minWidth: 120, valueGetter: (v, r) => r.qcStatus || '—' }),
+    ...timingCols(),
   ],
   qc: [
     col('qcNumber', 'QC Number', { minWidth: 150 }),
@@ -108,6 +121,7 @@ const COLUMNS = {
     col('totalRejected', 'Rejected', { minWidth: 100, type: 'number', valueGetter: (v, r) => Number(r.totalRejected || 0) }),
     col('overallResult', 'Result', { minWidth: 110, valueGetter: (v, r) => r.overallResult || '—' }),
     col('qcStatus', 'Status', { minWidth: 110 }),
+    ...timingCols(),
   ],
   vendorInvoice: [
     col('invoiceNumber', 'Invoice No', { minWidth: 150 }),
@@ -117,6 +131,7 @@ const COLUMNS = {
     col('invoiceAmount', 'Invoice ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.invoiceAmount || 0) }),
     col('netPayableAmount', 'Net Payable ₹', { minWidth: 130, type: 'number', valueGetter: (v, r) => Number(r.netPayableAmount || 0) }),
     col('invoiceStatus', 'Status', { minWidth: 140 }),
+    ...timingCols(),
   ],
   voucher: [
     col('voucherNumber', 'Voucher No', { minWidth: 150 }),
@@ -127,6 +142,7 @@ const COLUMNS = {
     col('paidAmount', 'Paid ₹', { minWidth: 110, type: 'number', valueGetter: (v, r) => Number(r.paidAmount || 0) }),
     col('balanceAmount', 'Balance ₹', { minWidth: 110, type: 'number', valueGetter: (v, r) => Number(r.balanceAmount || 0) }),
     col('voucherStatus', 'Status', { minWidth: 130 }),
+    ...timingCols(),
   ],
   tally: [
     col('entryNumber', 'Entry No', { minWidth: 150 }),
@@ -136,6 +152,7 @@ const COLUMNS = {
     col('tallyVoucherNumber', 'Tally Voucher', { minWidth: 140, valueGetter: (v, r) => r.tallyVoucherNumber || '—' }),
     col('tallyLedgerName', 'Ledger', { minWidth: 140, valueGetter: (v, r) => r.tallyLedgerName || '—' }),
     col('tallyEntryStatus', 'Status', { minWidth: 120 }),
+    ...timingCols(),
   ],
   final: [
     col('paymentNumber', 'Payment No', { minWidth: 150 }),
@@ -146,6 +163,7 @@ const COLUMNS = {
     col('balanceAfterPayment', 'Balance ₹', { minWidth: 120, type: 'number', valueGetter: (v, r) => Number(r.balanceAfterPayment || 0) }),
     col('paymentMode', 'Mode', { minWidth: 110, valueGetter: (v, r) => r.paymentMode || '—' }),
     col('paymentStatus', 'Status', { minWidth: 120 }),
+    ...timingCols(),
   ],
 };
 
