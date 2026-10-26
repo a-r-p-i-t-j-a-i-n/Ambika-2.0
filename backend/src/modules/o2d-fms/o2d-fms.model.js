@@ -18,6 +18,7 @@
 
 import mongoose from 'mongoose';
 import { AttachmentSchema, baseSchemaFields, baseSchemaOptions } from '../../database/BaseSchema.js';
+import { signalO2dChange } from './o2d-events.js';
 
 const { Schema, model } = mongoose;
 
@@ -291,6 +292,16 @@ const ProcessStepSchema = new Schema({
   assignedTo:  { type: Schema.Types.ObjectId, ref: 'User', default: null },
   buddyUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   completedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  // FMS → Doer Assignment: copied from the default template when the order
+  // starts. An optional (false) step can be skipped by its doer with a reason.
+  mandatory:     { type: Boolean, default: true },
+  skipReason:    { type: String, default: null },
+  skippedByName: { type: String, default: null },
+  // When this step's doers were last decided: given from FMS → Doer
+  // Assignment when the step came due, reassigned on the order, or set by
+  // "Update running orders". Until then (null) the step takes whatever Doer
+  // Assignment says at the moment it comes due (o2d-delegation.js).
+  doersSettledAt: { type: Date, default: null },
 
   // Phased/split dispatch progress (only populated on the quantity-gated dispatch step).
   // Denormalised summary so list/board/My-Tasks can show "1,000 / 5,000" without loading
@@ -358,6 +369,11 @@ O2DProcessSchema.index({ intakeId: 1 },     { unique: true, partialFilterExpress
 O2DProcessSchema.index({ currentStepCode: 1, isCompleted: 1 });
 O2DProcessSchema.index({ 'steps.assignedTo': 1, 'steps.status': 1 });
 
+// Any change to an order's flow → let the Delegation task sync run soon.
+O2DProcessSchema.post('save', () => signalO2dChange());
+O2DProcessSchema.post('findOneAndUpdate', () => signalO2dChange());
+O2DProcessSchema.post('updateOne', () => signalO2dChange());
+
 // ── TaskTemplate (the reusable "how-to" for each step) ──────────────────────
 export const LEAD_TIME_UNIT = Object.freeze({
   MINUTES: 'MINUTES', HOURS: 'HOURS', DAYS: 'DAYS', WEEKS: 'WEEKS', MONTHS: 'MONTHS',
@@ -395,6 +411,8 @@ const TemplateStepSchema = new Schema({
   // Legacy single fields (back-compat).
   assigneeUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   buddyUserId:    { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  // FMS → Doer Assignment: false = the step's doer may skip it (with a reason).
+  mandatory:      { type: Boolean, default: true },
 }, { _id: true });
 
 const TaskTemplateSchema = new Schema({

@@ -7,7 +7,7 @@ import {
 import {
   User, ClipboardList, Wrench, Clock, CheckCircle2, Link2, AlertTriangle, UserCog,
   Users, MessageSquare, Send, Paperclip, HelpCircle, FormInput, ShieldCheck, ArrowRight, Zap,
-  ExternalLink, Truck, Boxes, Workflow, Maximize2, Circle, Info,
+  ExternalLink, Truck, Boxes, Workflow, Maximize2, Circle, Info, SkipForward,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -16,6 +16,7 @@ import {
   useUploadFileMutation, useAddStepAttachmentsMutation, useRemoveStepAttachmentMutation,
   useAnswerVerificationMutation, useFillFormFieldMutation, useApproveStepMutation,
   useMarkActionDoneMutation, useGetConsignmentsQuery, useSetChecklistProofMutation,
+  useSkipStepMutation,
 } from '../../../store/api/o2dFmsApi';
 import ProofChecklistItem, { hasProof } from './ProofChecklistItem';
 import { useGetScheduleQuery } from '../../../store/api/dispatchControlApi';
@@ -258,6 +259,8 @@ const FormFieldRow = ({ item, disabled, onSave }) => {
  */
 const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: canActProp, canManage, asPage = false, autoComplete = false, consignment: consignmentProp = null, hideHeader = false, slimSop = false, hideLinked = false }) => {
   const myId = useSelector((s) => s.auth?.user?._id);
+  const myName = useSelector((s) => s.auth?.user?.name);
+  const myEmail = useSelector((s) => s.auth?.user?.email);
   // The popup now mirrors the full page: a status hero + two columns (task left,
   // who/when/refs right). So OUTSIDE the page (dialog), we also slim the body —
   // moving the Who/How/When tiles, timing row and linked records into the sidebar.
@@ -280,6 +283,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const [justSubmitted, setJustSubmitted] = useState(false);
   const [markActionDone] = useMarkActionDoneMutation();
   const [completeStep, { isLoading: completing }] = useCompleteStepMutation();
+  // Optional steps (FMS → Doer Assignment) can be skipped with a reason.
+  const [skipStep, { isLoading: skipping }] = useSkipStepMutation();
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipReason, setSkipReason] = useState('');
   const [assignStep, { isLoading: assigning }] = useAssignStepMutation();
   const [toggleItem] = useToggleChecklistItemMutation();
   const [setChecklistProof] = useSetChecklistProofMutation();
@@ -724,20 +731,71 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
     && !(consSummary ? (consSummary.fullyDispatched && (ep ? consSummary[`all${ep.kind === 'INVOICE' ? 'Invoiced' : ep.kind === 'POD' ? 'Delivered' : 'Paid'}`] : false))
       : (ep && ep.total > 0 && ep.done >= ep.total && ep.fullyDispatched));
   const gatedBlocked = qtyGatedBlocked || consGatedBlocked;
-  const markDoneBtn = (!stepDone && canAct) ? (
-    <Tooltip title={gatedBlocked ? (qtyGatedBlocked ? 'It also completes automatically once all phases are dispatched — or mark it done now.' : 'It also completes automatically once every consignment is done — or mark it done now.') : ''}>
-      <span>
-        {/* Always available once the checklist / proofs are met — the auto-complete
-            gate no longer disables the button; the user stays in control. */}
-        <Button onClick={handleComplete} disabled={completing || checklistBlocks} variant="contained" startIcon={<CheckCircle2 size={16} />}>
-          Mark Done
-        </Button>
-      </span>
-    </Tooltip>
+  // Optional step (set "not mandatory" in FMS → Doer Assignment): its doer or
+  // buddy may skip it with a reason; the order then moves to the next step.
+  const isSkipped = liveStep.status === 'SKIPPED';
+  const canSkip = !stepDone && canAct && !isSkipped && liveStep.mandatory === false;
+  const handleSkip = async () => {
+    setError('');
+    try {
+      await skipStep({ id: processId, stepCode: liveStep.stepCode, reason: skipReason.trim() }).unwrap();
+      setSkipOpen(false);
+      setSkipReason('');
+      onClose?.(true);
+    } catch (e) {
+      setSkipOpen(false);
+      setError(e?.data?.message || 'Could not skip the step.');
+    }
+  };
+  const skipControl = canSkip ? (
+    <>
+      <Button onClick={() => setSkipOpen(true)} disabled={skipping} variant="outlined" color="inherit"
+        startIcon={<SkipForward size={16} />} sx={{ textTransform: 'none' }}>
+        Skip step
+      </Button>
+      <Dialog open={skipOpen} onClose={() => (skipping ? null : setSkipOpen(false))} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Skip {liveStep.stepCode}?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            This step is optional. The order moves to the next step and the skip is recorded with your reason — it is not counted as late.
+          </Typography>
+          <TextField autoFocus fullWidth multiline minRows={2} label="Reason for skipping" value={skipReason}
+            onChange={(e) => setSkipReason(e.target.value)} inputProps={{ maxLength: 500 }} />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setSkipOpen(false)} disabled={skipping}>Cancel</Button>
+          <Button variant="contained" onClick={handleSkip} disabled={skipping || skipReason.trim().length < 3}>
+            {skipping ? 'Skipping…' : 'Skip step'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  ) : null;
+
+  // A skipped step is finished — no Mark Done on it.
+  const markDoneBtn = (!stepDone && canAct && !isSkipped) ? (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      {skipControl}
+      <Tooltip title={gatedBlocked ? (qtyGatedBlocked ? 'It also completes automatically once all phases are dispatched — or mark it done now.' : 'It also completes automatically once every consignment is done — or mark it done now.') : ''}>
+        <span>
+          {/* Always available once the checklist / proofs are met — the auto-complete
+              gate no longer disables the button; the user stays in control. */}
+          <Button onClick={handleComplete} disabled={completing || checklistBlocks} variant="contained" startIcon={<CheckCircle2 size={16} />}>
+            Mark Done
+          </Button>
+        </span>
+      </Tooltip>
+    </Box>
   ) : null;
 
   const body = (
         <Stack spacing={1}>
+          {/* Skipped optional step — who skipped it and why. */}
+          {isSkipped && liveStep.skipReason && (
+            <Alert severity="info" variant="outlined" icon={<SkipForward size={18} />}>
+              Skipped{liveStep.skippedByName ? ` by ${liveStep.skippedByName}` : ''} — {liveStep.skipReason}
+            </Alert>
+          )}
           {/* ── Consignment context — shown when this task was opened for ONE specific
                 delivery challan of a multi-dispatch order, so it's unmistakable which
                 challan's work this is and every action deep-links to that DC. ── */}
@@ -890,8 +948,26 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
               </Box>
             </Paper>
           )}
+          {/* Only the step's doers / buddies (or a manager) can work on it.
+              Say so — with emails, since two accounts can share a name. */}
+          {!canAct && !done && (
+            <Alert severity="info" sx={{ py: 0.5 }}>
+              You can view this step but not work on it — only its doers and buddies can
+              {(() => {
+                const people = [...doerList, ...buddyList]
+                  .filter((u) => u?.name)
+                  .map((u) => (u.email ? `${u.name} (${u.email})` : u.name));
+                return people.length ? `: ${people.join(', ')}` : '';
+              })()}.
+              {myEmail ? ` You're signed in as ${myName || 'you'} (${myEmail}).` : ''}
+            </Alert>
+          )}
+          {/* Late is only a warning — a step can be done any time until it is
+              marked done; it is then recorded as done late. */}
           {liveStep.isOverdue && !done && (
-            <Alert icon={<AlertTriangle size={18} />} severity="warning" sx={{ py: 0.5 }}>This step is past its planned time.</Alert>
+            <Alert icon={<AlertTriangle size={18} />} severity="warning" sx={{ py: 0.5 }}>
+              Running late — this step was planned for {fmt(liveStep.planned)}. You can still complete it now; it will be recorded as done late.
+            </Alert>
           )}
 
           {/* ── Phased / split dispatch: per-phase breakdown + overall qty progress.

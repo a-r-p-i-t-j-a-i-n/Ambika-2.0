@@ -11,6 +11,7 @@
  * The effective set is computed as:
  *     union(permissions of each assigned role)
  *       + permissionGrants
+ *       + session grants (Delegation Suite sign-in, see auth.middleware)
  *       − permissionDenies
  *
  * A user whose effective set contains the sentinel '*' (ROOT_PERMISSION) bypasses
@@ -50,7 +51,7 @@ const loadRolePermissions = async (roleKey) => {
   return entry;
 };
 
-const computeEffectivePermissions = async (user) => {
+const computeEffectivePermissions = async (user, sessionGrants = []) => {
   if (!user) return new Set();
 
   const effective = new Set();
@@ -72,6 +73,9 @@ const computeEffectivePermissions = async (user) => {
   // 3) Direct grants (overlay on top of role perms).
   for (const p of user.permissionGrants || []) effective.add(p);
 
+  // 3b) Grants carried by this session's token (Delegation Suite sign-in).
+  for (const p of sessionGrants) effective.add(p);
+
   // 4) Direct denies (revoke even if granted by role).
   for (const p of user.permissionDenies || []) effective.delete(p);
 
@@ -85,7 +89,7 @@ const computeEffectivePermissions = async (user) => {
 
 export const attachUserPermissions = asyncHandler(async (req, _res, next) => {
   if (!req.user) return next();
-  req.userPermissions = await computeEffectivePermissions(req.user);
+  req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants);
   req.userIsRoot = req.userPermissions.has(ROOT_PERMISSION);
   next();
 });
@@ -99,7 +103,7 @@ const userHas = (permSet, slug) => permSet.has(ROOT_PERMISSION) || permSet.has(s
  */
 export const requirePermission = (...slugs) => asyncHandler(async (req, _res, next) => {
   if (!req.userPermissions) {
-    req.userPermissions = await computeEffectivePermissions(req.user);
+    req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants);
   }
   const ok = slugs.some((s) => userHas(req.userPermissions, s));
   if (!ok) {
@@ -114,7 +118,7 @@ export const requirePermission = (...slugs) => asyncHandler(async (req, _res, ne
 /** AND-logic variant. Use sparingly. */
 export const requireAllPermissions = (...slugs) => asyncHandler(async (req, _res, next) => {
   if (!req.userPermissions) {
-    req.userPermissions = await computeEffectivePermissions(req.user);
+    req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants);
   }
   const ok = slugs.every((s) => userHas(req.userPermissions, s));
   if (!ok) {

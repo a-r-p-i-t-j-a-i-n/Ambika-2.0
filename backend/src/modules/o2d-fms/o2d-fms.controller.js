@@ -72,6 +72,27 @@ export const o2dFmsController = {
     res.json(ApiResponse.ok(`Step '${req.params.stepCode}' completed`, process));
   }),
 
+  skipStep: asyncHandler(async (req, res) => {
+    const process = await o2dFmsService.skipStep(req.params.id, req.params.stepCode, req.body, req.user, { privileged: isPriv(req) });
+    res.json(ApiResponse.ok(`Step '${req.params.stepCode}' skipped`, process));
+  }),
+
+  // FMS → Doer Assignment (O2D)
+  getDoerPlan: asyncHandler(async (_req, res) => {
+    res.json(ApiResponse.ok('O2D doer assignment', await o2dFmsService.getDoerPlan()));
+  }),
+  doerPlanUsers: asyncHandler(async (_req, res) => {
+    res.json(ApiResponse.ok('Assignable people', await o2dFmsService.listDoerPlanUsers()));
+  }),
+  saveDoerPlan: asyncHandler(async (req, res) => {
+    const plan = await o2dFmsService.saveDoerPlan(req.body.steps, req.user, { applyToOpenOrders: req.body.applyToOpenOrders === true });
+    res.json(ApiResponse.ok('O2D doer assignment saved', plan));
+  }),
+
+  applyDoerPlanToOpenOrders: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Running orders updated', await o2dFmsService.applyDoerPlanToOpenOrders(req.user)));
+  }),
+
   markActionDone: asyncHandler(async (req, res) => {
     const process = await o2dFmsService.markActionDone(
       req.params.id, req.params.stepCode, { actionKey: req.body.actionKey, link: req.body.link }, req.user, isPriv(req));

@@ -70,6 +70,45 @@ const subscribeHidden = (listener) => {
 export const useHiddenSteps = (flow) =>
   useSyncExternalStore(subscribeHidden, () => hiddenSteps[flow] || EMPTY);
 
+// ── What this employee may change on the O2D Step Board (same lock icon) ────
+// `shell:prefs { rights: { o2d: { noEdit: [...], delete: [...], noAdd } } }`,
+// step keys as above; `rights: null` (MD / Admin) means no limits from the
+// Suite. Standalone nothing is limited — the ERP's own permissions decide.
+const NO_LIMITS = Object.freeze({
+  canEdit: () => true,
+  canDelete: () => true,
+  canAdd: true,
+});
+let o2dRights = NO_LIMITS;
+let o2dRightsKey = '';
+
+export const setStepRights = (rights) => {
+  const o2d = rights?.o2d;
+  const list = (value) => (Array.isArray(value) ? value.filter((s) => typeof s === 'string') : []);
+  const next = o2d ? { noEdit: list(o2d.noEdit).sort(), delete: list(o2d.delete).sort(), noAdd: o2d.noAdd === true } : null;
+  const key = JSON.stringify(next);
+  if (key === o2dRightsKey) return;
+  o2dRightsKey = key;
+  if (!next) {
+    o2dRights = NO_LIMITS;
+  } else {
+    const noEdit = new Set(next.noEdit);
+    const canDelete = new Set(next.delete);
+    o2dRights = {
+      canEdit: (code) => !noEdit.has(stepKey(code)),
+      canDelete: (code) => canDelete.has(stepKey(code)),
+      canAdd: !next.noAdd,
+    };
+  }
+  hiddenListeners.forEach((listener) => listener());
+};
+
+/**
+ * `{ canEdit(code), canDelete(code), canAdd }` for the O2D Step Board. These
+ * only narrow what the ERP's own permissions already allow.
+ */
+export const useO2dRights = () => useSyncExternalStore(subscribeHidden, () => o2dRights);
+
 // Inside a cross-site frame some browsers (e.g. Chrome incognito, or with
 // third-party cookies blocked) refuse access to localStorage and throw on the
 // first read. The auth slice reads the token while the store is created, so

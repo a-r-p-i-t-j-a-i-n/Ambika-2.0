@@ -26,6 +26,8 @@ import {
   planOrderSchema,
   attachmentsSchema,
   attachmentParamSchema,
+  doerPlanSchema,
+  skipStepSchema,
 } from './o2d-fms.validation.js';
 
 const router = Router();
@@ -103,6 +105,25 @@ router.patch('/processes/:id/steps/:stepCode/complete',
 router.patch('/processes/:id/steps/:stepCode/assign',
   requirePermission('o2dfms.manage'),
   validate(processStepParamSchema, 'params'), validate(assignStepSchema), c.assignStep);
+
+// Skip an OPTIONAL step (set in FMS → Doer Assignment) — the service checks the
+// caller is its doer / buddy (or privileged) and that the step may be skipped.
+router.patch('/processes/:id/steps/:stepCode/skip',
+  requirePermission('o2dfms.view'),
+  validate(processStepParamSchema, 'params'), validate(skipStepSchema), c.skipStep);
+
+// ── FMS → Doer Assignment (O2D): lead time, main doer, buddy, mandatory ──
+// Read by anyone who sees O2D (the Step Board shows who does each step);
+// changed only by whoever manages doers / configures O2D.
+router.get('/doer-plan',
+  requirePermission('o2dfms.view', 'fms.manageDoers', 'o2dfms.config'), c.getDoerPlan);
+router.get('/doer-plan/users',
+  requirePermission('fms.manageDoers', 'o2dfms.config'), c.doerPlanUsers);
+router.put('/doer-plan',
+  requirePermission('fms.manageDoers', 'o2dfms.config'), validate(doerPlanSchema), c.saveDoerPlan);
+// The saved plan's doers onto every order already running (steps not done yet).
+router.post('/doer-plan/apply-open',
+  requirePermission('fms.manageDoers', 'o2dfms.config'), c.applyDoerPlanToOpenOrders);
 
 router.patch('/processes/:id/steps/:stepCode/checklist/:itemId',
   requirePermission('o2dfms.view'),

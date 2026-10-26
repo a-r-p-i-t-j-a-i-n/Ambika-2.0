@@ -1035,7 +1035,7 @@ const MainLayout = () => {
   // multiplied a handful of renders into enough nested updates to blow past
   // React's ceiling, so ANY navigation between two different nav groups could
   // abort with "Maximum update depth exceeded" and drop the user on the error
-  // screen. Memoising keeps the transitions still between real changes.
+  // screen. hiii Memoising keeps the transitions still between real changes.
   const mini = isMobile ? false : collapsed;
   const drawerContent = useMemo(
     // renderDrawerContent closes over exactly the values listed below (`go` and
@@ -1110,7 +1110,7 @@ const MainLayout = () => {
         </Toolbar>
       </AppBar>
 
-      {/* Sidebar — exactly ONE nav tree is mounted at a time.
+      {/* Sidebar — exactly ONE nav tree is mounted at a time. hi  hh
           Previously both drawers rendered at every breakpoint, the off-breakpoint
           one merely hidden with `display: none` (and the mobile one held open by
           `keepMounted`). That doubled the nav — including its nine <Collapse>
