@@ -6,7 +6,9 @@ import { ApiResponse } from '../../../utils/apiResponse.js';
 export const indentController = {
   getAll: asyncHandler(async (req, res) => {
     const { docs: rows, pagination } = await indentService.getAll(req.query);
-    const docs = await attachStepTiming('INDENT', rows);
+    // The Step 1.2 / 1.3 lists show that step's own timing on every row.
+    const timingKey = req.query.fmsStep ? `INDENT_${req.query.fmsStep}` : 'INDENT';
+    const docs = await attachStepTiming(timingKey, rows);
     res.json(ApiResponse.ok('Indents retrieved', docs, pagination));
   }),
 

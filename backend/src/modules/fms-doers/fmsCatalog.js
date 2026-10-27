@@ -21,6 +21,7 @@ import IncomingQC from '../procurement/incoming-qc/incomingQc.model.js';
 import VendorInvoice from '../procurement/vendor-invoice/vendorInvoice.model.js';
 import VendorVoucher from '../procurement/voucher/voucher.model.js';
 import { vendorInvoiceService } from '../procurement/vendor-invoice/vendorInvoice.service.js';
+import { QUOTE_COMPARATIVE_PENDING, QUOTATION_APPROVAL_PENDING } from '../procurement/indent/quotationSteps.js';
 
 const live = { isDeleted: { $ne: true } };
 
@@ -122,13 +123,13 @@ const PURCHASE_STEPS = [
     key: 'QUOTE_COMPARATIVE', code: '1.2', label: 'Receive Quote & Comparative',
     description: 'Approved indent awaiting vendor quotes / comparative.',
     permissions: [],
-    sources: [byFilter('INDENT', { overallStatus: 'QUOTE_PENDING' })],
+    sources: [byFilter('INDENT', QUOTE_COMPARATIVE_PENDING)],
   },
   {
     key: 'QUOTATION_APPROVAL', code: '1.3', label: 'Approved Quotation',
     description: 'Quotes received — approve the quotation.',
     permissions: [],
-    sources: [byFilter('INDENT', { overallStatus: { $in: ['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'] } })],
+    sources: [byFilter('INDENT', QUOTATION_APPROVAL_PENDING)],
   },
   {
     key: 'PO_CREATE', code: '1.4', label: 'Create PO',

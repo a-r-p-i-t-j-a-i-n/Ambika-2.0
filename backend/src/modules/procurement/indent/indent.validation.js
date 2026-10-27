@@ -8,6 +8,7 @@ import {
   VENDOR_QUOTE_STATUS,
   ITEM_APPROVAL_STATUS,
 } from './indent.model.js';
+import { QUOTATION_FMS_STEPS, QUOTATION_STEP_STATES } from './quotationSteps.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
@@ -229,6 +230,8 @@ const itemApprovedQuotation = Joi.object({
   itemName:  Joi.string().trim().max(300).allow('', null),
   statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED').default('YES'),
   approvedQuotationDocuments: Joi.array().items(uploadedFile).default([]),
+  // Approved vendor (Vendor Master) — required by the service for each YES item.
+  vendorId:  objectId.allow('', null),
   actualAt:  Joi.date().allow('', null),
   remarks:   Joi.string().trim().max(1000).allow('', null),
 });
@@ -261,6 +264,9 @@ export const indentQuerySchema = Joi.object({
   approvalStatus: Joi.string().valid(...Object.values(INDENT_APPROVAL_STATUS)),
   overallStatus:  Joi.string().valid(...Object.values(INDENT_OVERALL_STATUS)),
   department:     Joi.string().max(80),
+  // Step 1.2 / 1.3 main-workflow views (quotationSteps.js).
+  fmsStep:        Joi.string().valid(...QUOTATION_FMS_STEPS),
+  stepState:      Joi.string().valid(...QUOTATION_STEP_STATES),
   populate:       Joi.string(),
   timestamp:      Joi.object().unknown(true), // supports timestamp[gte]/[lte] date range
 }).unknown(true);

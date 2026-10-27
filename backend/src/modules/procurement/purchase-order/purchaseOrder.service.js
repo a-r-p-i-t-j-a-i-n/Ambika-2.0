@@ -11,6 +11,10 @@ import VendorPurchaseOrder, {
 } from './purchaseOrder.model.js';
 import GoodsReceiptNote from '../grn/grn.model.js';
 import PurchaseIndent, { INDENT_OVERALL_STATUS, ITEM_PROCUREMENT_STATUS, buildItemDisplayNumber, isItemApprovalEffective } from '../indent/indent.model.js';
+import {
+  ITEM_VENDOR_SOURCE, ITEM_VENDOR_STATE, QUOTATION_PATH,
+  itemVendorState, poVendorProblems, fixedVendorIds, usesApprovedVendorList,
+} from '../indent/itemVendor.js';
 import Party from '../../clients/party.model.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
@@ -18,6 +22,7 @@ import { AppError } from '../../../utils/apiResponse.js';
 import { generateVendorPoNumber, generateVendorPoDraftNumber } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import { pricingHistoryService } from '../../vendors/pricingHistory.service.js';
+import { inventoryService } from '../../inventory/inventory.service.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { emailService } from '../../../services/email.service.js';
 import { logger } from '../../../utils/logger.js';
@@ -238,13 +243,13 @@ const approvedItemIdSet = (indent) => {
  * the set of indent-item ids and skuCodes — the skuCode set covers legacy POs whose
  * lines predate `indentItemId`.
  */
-const activePoedItemIds = async (indentId, { excludePoId } = {}) => {
+const activePoedItemIds = async (indentId, { excludePoId, session } = {}) => {
   const pos = await VendorPurchaseOrder.find({
     $or: [{ indentId }, { indentIds: indentId }],
     isDeleted: { $ne: true },
     poStatus: { $ne: PO_STATUS.CANCELLED },
     ...(excludePoId ? { _id: { $ne: excludePoId } } : {}),
-  }).select('poNumber draftNumber items.indentItemId items.skuCode').lean();
+  }).select('poNumber draftNumber items.indentItemId items.skuCode').session(session || null).lean();
   const ids = new Map();   // indentItemId(string) → poNumber (or draftNumber pre-approval)
   const skus = new Map();  // skuCode(upper) → poNumber  (legacy fallback)
   for (const po of pos) {
@@ -258,6 +263,52 @@ const activePoedItemIds = async (indentId, { excludePoId } = {}) => {
     }
   }
   return { ids, skus };
+};
+
+/** Item display reference (Ind-50.1/26-27) for an indent item. */
+const itemRefOf = (indent, item) => {
+  const i = (indent.items || []).findIndex((it) => String(it._id) === String(item._id));
+  return buildItemDisplayNumber(indent.indentNumber, Number(item.itemLineNo) || (i + 1));
+};
+
+/**
+ * Refuse a PO whose vendor differs from the vendor fixed for any of its indent
+ * items — the approved-quotation vendor, or the one picked on Pending for PO —
+ * or that carries a quotation-required item with no approved vendor recorded
+ * (itemVendor.js). Indents approved per vendor (Step 1.3 approvedVendors[]) are
+ * held to that list instead. Lines are matched to indent items by indentItemId,
+ * falling back to skuCode for older payloads. `indents` are the PO's source
+ * indents (mongoose docs or lean). `opts.skipMissing` — see poVendorProblems.
+ */
+const assertPoVendor = async (indents, lines, vendorId, opts = {}) => {
+  const indentById = new Map(indents.map((i) => [String(i._id), i]));
+  const single = indents.length === 1 ? indents[0] : null;
+  const entries = [];
+  const listChecked = new Set();
+  const problems = [];
+  for (const line of lines) {
+    const indent = indentById.get(String(line.indentId || '')) || single;
+    if (!indent) continue;
+    if (usesApprovedVendorList(indent)) {
+      if (listChecked.has(String(indent._id))) continue;
+      listChecked.add(String(indent._id));
+      const avs = indent.quotationApprovalStep.approvedVendors;
+      if (!avs.some((av) => String(av.vendorId) === String(vendorId))) {
+        problems.push(`${indent.indentNumber}: the PO vendor must be one of the vendors approved at Step 1.3 (${avs.map((av) => av.vendorName).filter(Boolean).join(', ')})`);
+      }
+      continue;
+    }
+    const item = line.indentItemId
+      ? (indent.items || []).find((it) => String(it._id) === String(line.indentItemId))
+      : (indent.items || []).find((it) => line.skuCode && String(it.skuCode || '').toUpperCase() === String(line.skuCode).toUpperCase());
+    if (item) entries.push({ indent, item, ref: itemRefOf(indent, item) });
+  }
+  const ids = fixedVendorIds(entries);
+  const fixed = ids.length
+    ? await Vendor.find({ _id: { $in: ids } }).select('name isActive isDeleted').lean()
+    : [];
+  problems.push(...poVendorProblems(entries, vendorId, new Map(fixed.map((v) => [String(v._id), v])), opts));
+  if (problems.length) throw new AppError(problems.join('; '), 400);
 };
 
 /** Recompute an indent's overall status from its per-item procurement status. */
@@ -279,12 +330,15 @@ const rollupIndentStatus = (indent) => {
  *    vendor is POed, else PARTIAL_PO_CREATED.
  *  - Item-level indents (no approvedVendors): stamp procurementStatus/poId/poNumber on
  *    the covered indent items and roll the overall status up from the item statuses.
- * Mutates and saves the passed mongoose indent document.
+ * Mutates and saves the passed mongoose indent document, inside the caller's
+ * transaction when `session` is given. Throws when the PO could not be linked
+ * (the approved vendor or an indent item is already taken by another PO), so
+ * the PO creation that called it fails as a whole.
  * `refNumber` is the PO's current reference (draftNumber at creation time —
  * poNumber isn't assigned until approval; see syncIndentPoNumber below, which
  * re-stamps the final poNumber once it exists).
  */
-const linkIndentToPo = async (indent, vendorId, po, refNumber, user) => {
+const linkIndentToPo = async (indent, vendorId, po, refNumber, user, session = null) => {
   const approvedVendors = indent.quotationApprovalStep?.approvedVendors || [];
   if (approvedVendors.length) {
     approvedVendors.forEach((av) => {
@@ -293,6 +347,9 @@ const linkIndentToPo = async (indent, vendorId, po, refNumber, user) => {
         av.poNumber = refNumber;
       }
     });
+    if (!approvedVendors.some((av) => String(av.poId) === String(po._id))) {
+      throw new AppError(`Indent ${indent.indentNumber} already has a PO for this vendor — refresh and try again`, 409);
+    }
     const allLinked = approvedVendors.every((av) => !!av.poId);
     indent.overallStatus = allLinked
       ? INDENT_OVERALL_STATUS.PO_READY
@@ -310,6 +367,14 @@ const linkIndentToPo = async (indent, vendorId, po, refNumber, user) => {
         it.poNumber = refNumber;
       }
     });
+    // Every line raised against an item of this indent must now point at this PO.
+    const taken = (po.items || [])
+      .filter((l) => l.indentItemId && String(l.indentId) === String(indent._id))
+      .map((l) => (indent.items || []).find((it) => String(it._id) === String(l.indentItemId)))
+      .find((it) => !it || String(it.poId) !== String(po._id));
+    if (taken !== undefined) {
+      throw new AppError(`${taken ? taken.itemName : 'An item'} on indent ${indent.indentNumber} is already on another PO — refresh and try again`, 409);
+    }
     rollupIndentStatus(indent);
   }
   indent.activityTimeline.push({
@@ -318,7 +383,50 @@ const linkIndentToPo = async (indent, vendorId, po, refNumber, user) => {
     actorId: user?._id,
   });
   indent.updatedBy = user?._id;
-  await indent.save();
+  await indent.save(session ? { session } : undefined);
+};
+
+/**
+ * Every PO line that names an indent item must name one that is on its indent —
+ * otherwise it could never be linked (and would dodge the vendor check).
+ */
+const assertLinesOnIndents = (indents, lines) => {
+  const indentById = new Map(indents.map((i) => [String(i._id), i]));
+  const bad = lines.find((l) => {
+    if (!l.indentItemId) return false;
+    const indent = indentById.get(String(l.indentId || ''));
+    return !indent || !(indent.items || []).some((it) => String(it._id) === String(l.indentItemId));
+  });
+  if (bad) {
+    const where = bad.indentNumber ? `indent ${bad.indentNumber}` : 'its indent';
+    throw new AppError(`"${bad.itemName || 'An item'}" is not an item of ${where} — refresh and try again`, 400);
+  }
+};
+
+/**
+ * Insert a PO inside the caller's transaction (Model.create takes an array when
+ * a session is passed).
+ */
+const insertPo = async (doc, session) => {
+  const [po] = await VendorPurchaseOrder.create([doc], session ? { session } : undefined);
+  return po;
+};
+
+/**
+ * Run a PO creation as one unit — insert the PO and link every source indent,
+ * or neither (inventoryService.runAtomically, as GRN and Incoming QC do). On a
+ * replica set a concurrent write to one of the indents (a vendor change, a
+ * Step 1.3 re-approval, another PO for the same item) makes this attempt fail
+ * with a write conflict; the helper replays `work`, which re-reads and re-checks
+ * the latest state. A standalone mongod has no transactions: the helper then
+ * runs `work` once without a session — the same, non-atomic, behaviour as
+ * before. The returned PO is detached from the (ended) session so callers can
+ * save it again.
+ */
+const createPoAtomically = async (work) => {
+  const po = await inventoryService.runAtomically(work);
+  po?.$session?.(null);
+  return po;
 };
 
 /**
@@ -792,6 +900,7 @@ export const purchaseOrderService = {
         if (approvedQuantity <= 0) return; // only items with an approved qty
         const lineNo = Number(it.itemLineNo) || (i + 1);
         const display = buildItemDisplayNumber(indent.indentNumber, lineNo);
+        const vs = itemVendorState(indent, it);
         items.push({
           indentId: indent._id,
           indentNumber: indent.indentNumber,
@@ -805,109 +914,189 @@ export const purchaseOrderService = {
           unit: it.unit || 'Pcs',
           approvedQuantity,
           quoteNotRequired: stepSkipped || notRequiredItemIds.has(String(it._id)),
+          // Vendor selection (itemVendor.js): the vendor the PO must use, if fixed.
+          quotationPath: vs.path,
+          vendorState: vs.state,
+          vendorId: vs.vendorId,
+          vendorName: vs.vendorName,
+          vendorSource: vs.vendorSource,
         });
       });
+    }
+    // Flag fixed vendors since deleted / deactivated in the Vendor Master — the
+    // PO would be refused for them (assertPoVendor), so say so up front.
+    const ids = [...new Set(items.filter((r) => r.vendorId).map((r) => String(r.vendorId)))];
+    if (ids.length) {
+      const vendors = await Vendor.find({ _id: { $in: ids } }).select('isActive isDeleted').lean();
+      const usable = new Set(vendors.filter((v) => !v.isDeleted && v.isActive !== false).map((v) => String(v._id)));
+      items.forEach((r) => { if (r.vendorId) r.vendorUnavailable = !usable.has(String(r.vendorId)); });
     }
     return { items };
   },
 
-  async create(data, user) {
-    // Rule: PO only from Approved Indent + Approved Quotation.
-    const indent = await PurchaseIndent.findOne({ _id: data.indentId, isDeleted: { $ne: true } });
+  /**
+   * Pending for PO — fix the vendor for one approved, not-yet-PO'd indent item.
+   *  - Quotation NOT required: pick, change or clear (vendorId null) the vendor
+   *    the PO must use (vendorSource PO_PREPARATION).
+   *  - Quotation required: only CONFIRM the approved vendor of a quotation that
+   *    was approved before vendors were recorded. A vendor already set by the
+   *    Step 1.3 approval is never overwritten here (same vendor = no-op).
+   * The vendor must be an active Vendor Master record. Refused once the item is
+   * on an active PO (cancel the PO first) or the indent is not PO-ready. The save
+   * is conditional on the item's state as read, so a concurrent PO or change
+   * gets a 409 instead of being overwritten.
+   */
+  async setItemVendor({ indentId, indentItemId, vendorId }, user) {
+    const indent = await PurchaseIndent.findOne({ _id: indentId, isDeleted: { $ne: true } }).lean();
     if (!indent) throw new AppError('Indent not found', 404);
     if (!PO_CREATABLE_INDENT_STATES.includes(indent.overallStatus)) {
-      throw new AppError('Purchase Order can only be created after the quotation is approved (Step 1.3)', 400);
+      throw new AppError(`Indent ${indent.indentNumber} is not ready for PO (${indent.overallStatus}) — its vendor cannot be set yet`, 400);
+    }
+    if (usesApprovedVendorList(indent)) {
+      throw new AppError(`Indent ${indent.indentNumber} was approved per vendor at Step 1.3 — pick one of those vendors in the PO form`, 400);
+    }
+    const item = (indent.items || []).find((it) => String(it._id) === String(indentItemId));
+    if (!item || !approvedItemIdSet(indent).has(String(item._id))) {
+      throw new AppError('This item is not approved for PO', 400);
+    }
+    const ref = itemRefOf(indent, item);
+    const { ids: poedIds, skus: poedSkus } = await activePoedItemIds(indent._id);
+    const onPo = poedIds.get(String(item._id)) || (item.skuCode && poedSkus.get(String(item.skuCode).toUpperCase()));
+    if (onPo || item.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED) {
+      const poRef = onPo || item.poNumber;
+      throw new AppError(`${ref} is already on ${poRef ? `PO ${poRef}` : 'a PO'} — cancel that PO to change its vendor`, 400);
     }
 
-    // Rule: one active PO per vendor on an indent. When the indent approved
-    // multiple vendors (Step 1.3), each approved vendor may have its own PO, so
-    // the guard is scoped to (indent + vendor). For legacy single-vendor indents
-    // the scope collapses to one active PO per indent. Only a CANCELLED PO frees
-    // the slot — draft/approved/released/received POs all block re-creation.
-    const isMultiVendor = (indent.quotationApprovalStep?.approvedVendors?.length || 0) > 0;
-    const activePo = await VendorPurchaseOrder.findOne({
-      indentId: indent._id,
-      ...(isMultiVendor ? { vendorId: data.vendorId } : {}),
-      isDeleted: { $ne: true },
-      poStatus: { $ne: PO_STATUS.CANCELLED },
-    }).select('poNumber draftNumber poStatus vendorName').lean();
-    if (activePo) {
-      const scope = isMultiVendor ? `vendor ${activePo.vendorName || ''}`.trim() : `Indent ${indent.indentNumber}`;
-      throw new AppError(`${scope} already has an active PO (${activePo.poNumber || activePo.draftNumber}). Cancel it before creating a new one.`, 400);
+    const current = itemVendorState(indent, item);
+    // Same field names as the Pending-for-PO rows (getAllApprovedItems).
+    const asRow = (st) => ({ indentId: indent._id, indentItemId: item._id, quotationPath: st.path, vendorState: st.state, vendorId: st.vendorId, vendorName: st.vendorName, vendorSource: st.vendorSource });
+    const required = current.path === QUOTATION_PATH.REQUIRED;
+    if (!vendorId) {
+      if (required) throw new AppError(`${ref} needs the vendor from its approved quotation — it cannot be cleared`, 400);
+      if (current.state !== ITEM_VENDOR_STATE.SET) return asRow(current);
+    }
+    let vendor = null;
+    if (vendorId) {
+      vendor = await Vendor.findOne({ _id: vendorId, isDeleted: { $ne: true } }).select('name isActive').lean();
+      if (!vendor) throw new AppError('Vendor not found in the Vendor Master', 400);
+      if (vendor.isActive === false) throw new AppError(`Vendor "${vendor.name}" is inactive in the Vendor Master`, 400);
+      if (current.state === ITEM_VENDOR_STATE.SET && String(current.vendorId) === String(vendor._id)) {
+        return asRow(current); // retry / same pick — no change
+      }
+      if (required && current.state === ITEM_VENDOR_STATE.SET) {
+        throw new AppError(`${ref} was approved for vendor "${current.vendorName}" at Step 1.3 — the approved vendor cannot be changed here`, 400);
+      }
     }
 
-    const party = await resolveVendor(data.vendorId);
-    if (!party) throw new AppError('Vendor not found', 404);
+    const source = required ? ITEM_VENDOR_SOURCE.APPROVED_QUOTATION : ITEM_VENDOR_SOURCE.PO_PREPARATION;
+    const set = vendor
+      ? { vendorId: vendor._id, vendorName: vendor.name, vendorSource: source, vendorSelectedAt: new Date(), vendorSelectedById: user?._id || null }
+      : { vendorId: null, vendorName: '', vendorSource: '', vendorSelectedAt: new Date(), vendorSelectedById: user?._id || null };
+    const $set = Object.fromEntries(Object.entries(set).map(([k, v]) => [`items.$[it].${k}`, v]));
+    let description;
+    if (!vendor) description = `${ref}: vendor selection cleared (was ${current.vendorName})`;
+    else if (required) description = `${ref}: approved vendor confirmed — ${vendor.name} (quotation approved before vendors were recorded)`;
+    else description = `${ref}: vendor ${current.state === ITEM_VENDOR_STATE.SET ? `changed from ${current.vendorName} to` : 'selected —'} ${vendor.name} (quotation not required)`;
 
-    // Finished Goods are sell-side only — never purchasable.
-    await assertPurchasable(data.items);
+    // Conditional on what was read: indent still PO-ready, item still off any PO
+    // and still carrying the vendor it had.
+    const res = await PurchaseIndent.updateOne(
+      {
+        _id: indent._id,
+        overallStatus: { $in: PO_CREATABLE_INDENT_STATES },
+        items: { $elemMatch: { _id: item._id, procurementStatus: { $ne: ITEM_PROCUREMENT_STATUS.PO_CREATED }, vendorId: item.vendorId ?? null } },
+      },
+      {
+        $set: { ...$set, updatedBy: user?._id },
+        $push: { activityTimeline: { action: 'ITEM_VENDOR', description, actorId: user?._id, timestamp: new Date() } },
+      },
+      { arrayFilters: [{ 'it._id': item._id }] },
+    );
+    if (!res.matchedCount) throw new AppError(`${ref} was just changed by someone else — refresh and try again`, 409);
+    return asRow(itemVendorState(indent, { ...item, ...set }));
+  },
 
-    const poFormatType = data.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
-    const { lines, totals } = computeLines(data.items, poFormatType);
-    // Single-indent PO: every line belongs to this indent.
-    lines.forEach((l) => { l.indentId = indent._id; l.indentNumber = indent.indentNumber; });
-    // Stamp the item-level display reference (Ind-50.1/26-27) from the indent.
-    stampLineDisplayNumbers(lines, [indent]);
+  async create(data, user) {
+    // Every check runs once before a draft number is taken (so a refused request
+    // never consumes one) and again inside the transaction, on the latest state.
+    const plan = async (session) => {
+      // Rule: PO only from Approved Indent + Approved Quotation.
+      const indent = await PurchaseIndent.findOne({ _id: data.indentId, isDeleted: { $ne: true } }).session(session || null);
+      if (!indent) throw new AppError('Indent not found', 404);
+      if (!PO_CREATABLE_INDENT_STATES.includes(indent.overallStatus)) {
+        throw new AppError('Purchase Order can only be created after the quotation is approved (Step 1.3)', 400);
+      }
+
+      // Rule: one active PO per vendor on an indent. When the indent approved
+      // multiple vendors (Step 1.3), each approved vendor may have its own PO, so
+      // the guard is scoped to (indent + vendor). For legacy single-vendor indents
+      // the scope collapses to one active PO per indent. Only a CANCELLED PO frees
+      // the slot — draft/approved/released/received POs all block re-creation.
+      const isMultiVendor = (indent.quotationApprovalStep?.approvedVendors?.length || 0) > 0;
+      const activePo = await VendorPurchaseOrder.findOne({
+        indentId: indent._id,
+        ...(isMultiVendor ? { vendorId: data.vendorId } : {}),
+        isDeleted: { $ne: true },
+        poStatus: { $ne: PO_STATUS.CANCELLED },
+      }).select('poNumber draftNumber poStatus vendorName').session(session || null).lean();
+      if (activePo) {
+        const scope = isMultiVendor ? `vendor ${activePo.vendorName || ''}`.trim() : `Indent ${indent.indentNumber}`;
+        throw new AppError(`${scope} already has an active PO (${activePo.poNumber || activePo.draftNumber}). Cancel it before creating a new one.`, 400);
+      }
+
+      const party = await resolveVendor(data.vendorId);
+      if (!party) throw new AppError('Vendor not found', 404);
+
+      // Finished Goods are sell-side only — never purchasable.
+      await assertPurchasable(data.items);
+
+      const poFormatType = data.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
+      const { lines, totals } = computeLines(data.items, poFormatType);
+      // Single-indent PO: every line belongs to this indent.
+      lines.forEach((l) => { l.indentId = indent._id; l.indentNumber = indent.indentNumber; });
+      assertLinesOnIndents([indent], lines);
+      // The vendor must be the one fixed for the indent's items (approved quotation
+      // / Pending-for-PO pick) — never silently substituted.
+      await assertPoVendor([indent], lines, party._id);
+      // Stamp the item-level display reference (Ind-50.1/26-27) from the indent.
+      stampLineDisplayNumbers(lines, [indent]);
+      return { indent, party, poFormatType, lines, totals };
+    };
+    await plan(null);
     // Draft-only reference — the final poNumber is assigned on approval so the
     // sequence follows approval order, not draft-creation order.
     const draftNumber = await generateVendorPoDraftNumber(data.poDate || new Date());
 
-    const po = await VendorPurchaseOrder.create({
-      draftNumber,
-      poFormatType,
-      poDate: data.poDate || new Date(),
-      indentId: indent._id,
-      indentNumber: indent.indentNumber,
-      indentIds: [indent._id],
-      indentNumbers: [indent.indentNumber],
-      vendorId: party._id,
-      ...vendorSnapshot(party, data),
-      deliveryTerms: data.deliveryTerms || '',
-      paymentTerms: data.paymentTerms || '',
-      leadTime: data.leadTime || '',
-      expectedDeliveryDate: data.expectedDeliveryDate || null,
-      remarks: data.remarks || '',
-      items: lines,
-      ...totals,
-      approvalStatus: PO_APPROVAL_STATUS.DRAFT,
-      releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
-      poStatus: PO_STATUS.DRAFT,
-      createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `PO created from ${indent.indentNumber} (draft ${draftNumber})`, actorId: user?._id }],
+    return createPoAtomically(async (session) => {
+      const { indent, party, poFormatType, lines, totals } = await plan(session);
+      const po = await insertPo({
+        draftNumber,
+        poFormatType,
+        poDate: data.poDate || new Date(),
+        indentId: indent._id,
+        indentNumber: indent.indentNumber,
+        indentIds: [indent._id],
+        indentNumbers: [indent.indentNumber],
+        vendorId: party._id,
+        ...vendorSnapshot(party, data),
+        deliveryTerms: data.deliveryTerms || '',
+        paymentTerms: data.paymentTerms || '',
+        leadTime: data.leadTime || '',
+        expectedDeliveryDate: data.expectedDeliveryDate || null,
+        remarks: data.remarks || '',
+        items: lines,
+        ...totals,
+        approvalStatus: PO_APPROVAL_STATUS.DRAFT,
+        releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
+        poStatus: PO_STATUS.DRAFT,
+        createdBy: user?._id,
+        activityTimeline: [{ action: 'CREATE', description: `PO created from ${indent.indentNumber} (draft ${draftNumber})`, actorId: user?._id }],
+      }, session);
+      // Link the indent (approved vendor or items + status roll-up) in the same
+      // unit — a failure here fails the PO.
+      await linkIndentToPo(indent, party._id, po, draftNumber, user, session);
+      return po;
     });
-
-    // Move the indent forward (linkage for future Follow-up / GRN). Non-fatal.
-    try {
-      const update = {
-        $set: { overallStatus: INDENT_OVERALL_STATUS.PO_READY },
-        $push: { activityTimeline: { action: 'PO_CREATED', description: `PO ${draftNumber} created (draft — pending approval)`, actorId: user?._id, timestamp: new Date() } },
-      };
-      const arrayFilters = [];
-      // Multi-vendor: stamp the PO linkage onto the matching approved vendor so
-      // the indent reflects which vendor still needs a PO.
-      if (isMultiVendor) {
-        update.$set['quotationApprovalStep.approvedVendors.$[v].poId'] = po._id;
-        update.$set['quotationApprovalStep.approvedVendors.$[v].poNumber'] = draftNumber;
-        arrayFilters.push({ 'v.vendorId': party._id });
-      } else {
-        // Item-level grain: stamp procurement status on the indent items this PO
-        // covers (legacy payload has no indentItemId, so match by skuCode).
-        const skus = [...new Set(lines.map((l) => String(l.skuCode || '').toUpperCase()).filter(Boolean))];
-        if (skus.length) {
-          update.$set['items.$[it].procurementStatus'] = ITEM_PROCUREMENT_STATUS.PO_CREATED;
-          update.$set['items.$[it].poId'] = po._id;
-          update.$set['items.$[it].poNumber'] = draftNumber;
-          arrayFilters.push({ 'it.skuCode': { $in: skus } });
-        }
-      }
-      await PurchaseIndent.updateOne(
-        { _id: indent._id },
-        update,
-        arrayFilters.length ? { arrayFilters } : {},
-      );
-    } catch (err) { logger.error(`[po] indent status update failed: ${err.message}`); }
-
-    return po;
   },
 
   /**
@@ -921,101 +1110,110 @@ export const purchaseOrderService = {
     if (!indentIds.length) throw new AppError('Select at least one approved indent', 400);
     if (!data.items?.length) throw new AppError('At least one item is required', 400);
 
-    // Load + validate every selected indent.
-    const indents = await PurchaseIndent.find({ _id: { $in: indentIds }, isDeleted: { $ne: true } });
-    if (indents.length !== indentIds.length) throw new AppError('One or more indents not found', 404);
-    const indentById = new Map(indents.map((i) => [String(i._id), i]));
-    for (const ind of indents) {
-      if (!PO_CREATABLE_INDENT_STATES.includes(ind.overallStatus)) {
-        throw new AppError(`Indent ${ind.indentNumber} is not ready for PO (approve its quotation first)`, 400);
-      }
-    }
-
-    const party = await resolveVendor(data.vendorId);
-    if (!party) throw new AppError('Vendor not found', 400);
-
-    // Every item row must belong to one of the selected indents.
-    if (data.items.some((it) => !indentById.has(String(it.indentId || '')))) {
-      throw new AppError('Every PO item must belong to one of the selected indents', 400);
-    }
-
-    // Conflict guard, scoped per indent:
-    //  - Multi-vendor (approvedVendors) indents keep the "one active PO per (indent,
-    //    vendor)" rule, since items are committed at the vendor grain.
-    //  - Item-level indents reject only the specific items already on an active PO,
-    //    so the same indent's remaining approved items can still be POed separately.
-    for (const ind of indents) {
-      const isMulti = (ind.quotationApprovalStep?.approvedVendors?.length || 0) > 0;
-      if (isMulti) {
-        const activePo = await VendorPurchaseOrder.findOne({
-          $or: [{ indentIds: ind._id }, { indentId: ind._id }],
-          vendorId: party._id,
-          isDeleted: { $ne: true },
-          poStatus: { $ne: PO_STATUS.CANCELLED },
-        }).select('poNumber draftNumber').lean();
-        if (activePo) {
-          throw new AppError(`Indent ${ind.indentNumber} already has an active PO (${activePo.poNumber || activePo.draftNumber}) for this vendor. Cancel it before creating a new one.`, 400);
-        }
-      } else {
-        const { ids: poedIds, skus: poedSkus } = await activePoedItemIds(ind._id);
-        const offenders = data.items
-          .filter((it) => String(it.indentId) === String(ind._id))
-          .filter((it) => (it.indentItemId && poedIds.has(String(it.indentItemId)))
-            || (!it.indentItemId && it.skuCode && poedSkus.has(String(it.skuCode).toUpperCase())));
-        if (offenders.length) {
-          const names = offenders.map((o) => o.itemName || o.skuCode).filter(Boolean).join(', ');
-          throw new AppError(`Already on an active PO for ${ind.indentNumber}: ${names}. Refresh and try again.`, 400);
+    // Every check runs once before a draft number is taken (so a refused request
+    // never consumes one) and again inside the transaction, on the latest state.
+    const plan = async (session) => {
+      // Load + validate every selected indent.
+      const indents = await PurchaseIndent.find({ _id: { $in: indentIds }, isDeleted: { $ne: true } }).session(session || null);
+      if (indents.length !== indentIds.length) throw new AppError('One or more indents not found', 404);
+      const indentById = new Map(indents.map((i) => [String(i._id), i]));
+      for (const ind of indents) {
+        if (!PO_CREATABLE_INDENT_STATES.includes(ind.overallStatus)) {
+          throw new AppError(`Indent ${ind.indentNumber} is not ready for PO (approve its quotation first)`, 400);
         }
       }
-    }
 
-    await assertPurchasable(data.items);
+      const party = await resolveVendor(data.vendorId);
+      if (!party) throw new AppError('Vendor not found', 400);
 
-    const poFormatType = data.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
-    const { lines, totals } = computeLines(data.items, poFormatType);
-    lines.forEach((l) => {
-      if (!l.indentNumber && l.indentId) l.indentNumber = indentById.get(String(l.indentId))?.indentNumber || '';
-    });
-    // Stamp each line's item-level display reference from its source indent item.
-    stampLineDisplayNumbers(lines, indents);
+      // Every item row must belong to one of the selected indents.
+      if (data.items.some((it) => !indentById.has(String(it.indentId || '')))) {
+        throw new AppError('Every PO item must belong to one of the selected indents', 400);
+      }
 
-    const orderedIndents = indentIds.map((id) => indentById.get(id)).filter(Boolean);
+      // Conflict guard, scoped per indent:
+      //  - Multi-vendor (approvedVendors) indents keep the "one active PO per (indent,
+      //    vendor)" rule, since items are committed at the vendor grain.
+      //  - Item-level indents reject only the specific items already on an active PO,
+      //    so the same indent's remaining approved items can still be POed separately.
+      for (const ind of indents) {
+        const isMulti = (ind.quotationApprovalStep?.approvedVendors?.length || 0) > 0;
+        if (isMulti) {
+          const activePo = await VendorPurchaseOrder.findOne({
+            $or: [{ indentIds: ind._id }, { indentId: ind._id }],
+            vendorId: party._id,
+            isDeleted: { $ne: true },
+            poStatus: { $ne: PO_STATUS.CANCELLED },
+          }).select('poNumber draftNumber').session(session || null).lean();
+          if (activePo) {
+            throw new AppError(`Indent ${ind.indentNumber} already has an active PO (${activePo.poNumber || activePo.draftNumber}) for this vendor. Cancel it before creating a new one.`, 400);
+          }
+        } else {
+          const { ids: poedIds, skus: poedSkus } = await activePoedItemIds(ind._id, { session });
+          const offenders = data.items
+            .filter((it) => String(it.indentId) === String(ind._id))
+            .filter((it) => (it.indentItemId && poedIds.has(String(it.indentItemId)))
+              || (!it.indentItemId && it.skuCode && poedSkus.has(String(it.skuCode).toUpperCase())));
+          if (offenders.length) {
+            const names = offenders.map((o) => o.itemName || o.skuCode).filter(Boolean).join(', ');
+            throw new AppError(`Already on an active PO for ${ind.indentNumber}: ${names}. Refresh and try again.`, 400);
+          }
+        }
+      }
+
+      await assertPurchasable(data.items);
+
+      const poFormatType = data.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
+      const { lines, totals } = computeLines(data.items, poFormatType);
+      lines.forEach((l) => {
+        if (!l.indentNumber && l.indentId) l.indentNumber = indentById.get(String(l.indentId))?.indentNumber || '';
+      });
+      assertLinesOnIndents(indents, lines);
+      // One PO = one vendor, and it must be the vendor fixed for every item on it.
+      await assertPoVendor(indents, lines, party._id);
+      // Stamp each line's item-level display reference from its source indent item.
+      stampLineDisplayNumbers(lines, indents);
+
+      const orderedIndents = indentIds.map((id) => indentById.get(id)).filter(Boolean);
+      return { party, poFormatType, lines, totals, orderedIndents };
+    };
+    await plan(null);
     // Draft-only reference — the final poNumber is assigned on approval so the
     // sequence follows approval order, not draft-creation order.
     const draftNumber = await generateVendorPoDraftNumber(data.poDate || new Date());
 
-    const po = await VendorPurchaseOrder.create({
-      draftNumber,
-      poFormatType,
-      poDate: data.poDate || new Date(),
-      indentId: orderedIndents[0]._id,
-      indentNumber: orderedIndents[0].indentNumber,
-      indentIds: orderedIndents.map((i) => i._id),
-      indentNumbers: orderedIndents.map((i) => i.indentNumber),
-      vendorId: party._id,
-      ...vendorSnapshot(party, data),
-      deliveryTerms: data.deliveryTerms || '',
-      paymentTerms: data.paymentTerms || '',
-      leadTime: data.leadTime || '',
-      expectedDeliveryDate: data.expectedDeliveryDate || null,
-      remarks: data.remarks || '',
-      items: lines,
-      ...totals,
-      approvalStatus: PO_APPROVAL_STATUS.DRAFT,
-      releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
-      poStatus: PO_STATUS.DRAFT,
-      createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `PO created from ${orderedIndents.map((i) => i.indentNumber).join(', ')} (draft ${draftNumber})`, actorId: user?._id }],
+    return createPoAtomically(async (session) => {
+      const { party, poFormatType, lines, totals, orderedIndents } = await plan(session);
+      const po = await insertPo({
+        draftNumber,
+        poFormatType,
+        poDate: data.poDate || new Date(),
+        indentId: orderedIndents[0]._id,
+        indentNumber: orderedIndents[0].indentNumber,
+        indentIds: orderedIndents.map((i) => i._id),
+        indentNumbers: orderedIndents.map((i) => i.indentNumber),
+        vendorId: party._id,
+        ...vendorSnapshot(party, data),
+        deliveryTerms: data.deliveryTerms || '',
+        paymentTerms: data.paymentTerms || '',
+        leadTime: data.leadTime || '',
+        expectedDeliveryDate: data.expectedDeliveryDate || null,
+        remarks: data.remarks || '',
+        items: lines,
+        ...totals,
+        approvalStatus: PO_APPROVAL_STATUS.DRAFT,
+        releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
+        poStatus: PO_STATUS.DRAFT,
+        createdBy: user?._id,
+        activityTimeline: [{ action: 'CREATE', description: `PO created from ${orderedIndents.map((i) => i.indentNumber).join(', ')} (draft ${draftNumber})`, actorId: user?._id }],
+      }, session);
+      // Link every involved indent and recompute its status in the same unit — a
+      // failure on any indent fails the PO.
+      for (const ind of orderedIndents) {
+        await linkIndentToPo(ind, party._id, po, draftNumber, user, session);
+      }
+      return po;
     });
-
-    // Link every involved indent and recompute its status (non-fatal per indent).
-    for (const ind of orderedIndents) {
-      try {
-        await linkIndentToPo(ind, party._id, po, draftNumber, user);
-      } catch (err) { logger.error(`[po] multi-indent link failed for ${ind.indentNumber}: ${err.message}`); }
-    }
-
-    return po;
   },
 
   /**
@@ -1132,15 +1330,42 @@ export const purchaseOrderService = {
     const { vendorId: _v, items, ...rest } = data;
     Object.assign(po, rest); // applies poFormatType (if sent) before recompute
     if (items) {
+      // A draft edit may change, drop or add plain lines, but never attach an
+      // indent item that isn't already on this PO — that would skip the
+      // already-on-a-PO check, the item link and the vendor check. New indent
+      // items go on a new PO from Pending for PO.
+      const onPo = new Set((po.items || []).filter((l) => l.indentItemId).map((l) => String(l.indentItemId)));
+      const poIndents = new Set((po.indentIds?.length ? po.indentIds : [po.indentId]).filter(Boolean).map(String));
+      const foreign = items.find((it) => (it.indentItemId && !onPo.has(String(it.indentItemId)))
+        || (it.indentId && !poIndents.has(String(it.indentId))));
+      if (foreign) {
+        throw new AppError(`"${foreign.itemName || foreign.skuCode || 'An item'}" is not on this PO — raise a new PO for it from Pending for PO`, 400);
+      }
       await assertPurchasable(items);
       const { lines, totals } = computeLines(items, po.poFormatType);
       po.items = lines;
       Object.assign(po, totals);
     }
+    // A draft edit must not move the PO off the vendor fixed for its items.
+    if (data.vendorId || items) {
+      const indentIds = (po.indentIds?.length ? po.indentIds : [po.indentId]).filter(Boolean);
+      const indents = await PurchaseIndent.find({ _id: { $in: indentIds }, isDeleted: { $ne: true } }).lean();
+      await assertPoVendor(indents, po.items, po.vendorId, { skipMissing: true });
+    }
     po.updatedBy = user?._id;
     po.activityTimeline.push({ action: 'UPDATE', description: 'Draft PO updated', actorId: user?._id });
-    const saved = await po.save();
-    return saved;
+    // Save only while the PO is still a draft: an approval / rejection / delete
+    // that landed after this edit read the PO wins, instead of the edit changing
+    // an approved PO underneath it.
+    po.$where = { approvalStatus: PO_APPROVAL_STATUS.DRAFT, isDeleted: { $ne: true } };
+    try {
+      return await po.save();
+    } catch (err) {
+      if (['DocumentNotFoundError', 'VersionError', 'ParallelSaveError'].includes(err?.name)) {
+        throw new AppError(`PO ${po.poNumber || po.draftNumber || ''} was just approved, rejected or deleted — refresh and try again`.replace('  ', ' '), 409);
+      }
+      throw err;
+    }
   },
 
   async remove(id, user) {

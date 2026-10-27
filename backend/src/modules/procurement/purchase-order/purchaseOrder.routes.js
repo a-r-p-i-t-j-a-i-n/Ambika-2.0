@@ -10,6 +10,7 @@ import { purchaseOrderController as c } from './purchaseOrder.controller.js';
 import {
   createPoSchema,
   createFromItemsSchema,
+  setItemVendorSchema,
   revisePoSchema,
   previewPoSchema,
   updatePoSchema,
@@ -43,6 +44,9 @@ router.get('/stats', c.getStats);
 // Global approved-item picker (all PO-creatable indents) for the New PO form's
 // Approved Item(s) dropdown. Declared before '/:id' so it isn't shadowed.
 router.get('/approved-items', c.getAllApprovedItems);
+// Pending for PO — fix the vendor for one approved item (quotation not required),
+// or confirm the approved vendor of an older approved quotation.
+router.patch('/approved-items/vendor', validate(setItemVendorSchema), c.setItemVendor);
 
 // Bulk release multiple approved, not-yet-released POs — declared before
 // '/:id' routes so it isn't shadowed.

@@ -28,6 +28,7 @@ import { useGetSkusQuery, useGetSkuLookupQuery } from '../../../store/api/skuApi
 import { useGetRmOverviewQuery } from '../../../store/api/rmImsApi';
 import { fileHref } from '../indents/indentMeta';
 import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel, isGrnCompleted } from './grnMeta';
+import { DEFAULT_HOW_ITEM_RECEIVED, lineReceiptType } from './grnReceiptType';
 import { resolveGrnQcStage } from './grnQcStage';
 import GrnQcStatusChip from './GrnQcStatusChip';
 import { GrnQcSections } from './GrnQcSection';
@@ -59,7 +60,25 @@ const emptyWopoItem = () => ({
   itemName: '', skuCode: '', skuId: '', unit: 'Pcs',
   orderedQty: 0, previouslyReceivedQty: 0, pendingBefore: 0,
   invoiceQty: '', receivedQty: '', rate: '', batchNo: '', remarks: '',
+  howItemReceived: DEFAULT_HOW_ITEM_RECEIVED,
 });
+
+// Row grids — minmax(0, …) so every row lines up with its header row and a
+// long value can never push the table wider than the dialog. The Material
+// Receipt Type column keeps 140px so its longest word always fits.
+const PO_ROW_COLS = 'minmax(0,1.5fr) minmax(0,0.65fr) minmax(0,0.65fr) minmax(0,0.8fr) minmax(0,0.75fr) minmax(0,0.95fr) minmax(0,0.95fr) minmax(140px,1.45fr) minmax(0,1fr) minmax(0,1fr)';
+const WOPO_ROW_COLS = 'minmax(0,1.5fr) minmax(0,0.7fr) minmax(0,0.9fr) minmax(0,0.85fr) minmax(140px,1.4fr) minmax(0,0.95fr) minmax(0,1fr) minmax(0,0.4fr)';
+
+// Material Receipt Type of ONE material row — the same options and labels the
+// GRN header dropdown used. The selected label wraps instead of being cut off
+// in a narrow column.
+const ReceiptTypeSelect = ({ value, onChange, error, lineKey }) => (
+  <TextField size="small" select label="Material Receipt Type" value={value || ''}
+    onChange={(e) => onChange(e.target.value)} error={error} helperText={error ? 'Required' : undefined}
+    SelectProps={{ SelectDisplayProps: { 'data-testid': 'grn-line-receipt-type', 'data-line': lineKey, style: { whiteSpace: 'normal', lineHeight: 1.3, fontSize: '0.85rem' } } }}>
+    {HOW_ITEM_RECEIVED.map((v) => <MenuItem key={v} value={v}>{howReceivedLabel(v)}</MenuItem>)}
+  </TextField>
+);
 
 // Read-only qty display — the mobile-only caption keeps each stacked row legible
 // once the column headers (desktop-only) are hidden.
@@ -101,7 +120,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const [wopoVendor, setWopoVendor] = useState(null);
   const [header, setHeader] = useState({
     grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '',
-    vehicleNumber: '', receivedBy: '', preparedBy: '', howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '',
+    vehicleNumber: '', receivedBy: '', preparedBy: '', remarks: '',
     // Where the Raw Material landed — asked for (and required) only when a Raw
     // Material line is received, and never pre-filled: it must be chosen.
     // Every line's inventory destination comes from its SKU master Item Type.
@@ -196,6 +215,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.quantity || 0, previouslyReceivedQty: it.receivedQty || 0,
         pendingBefore: pending, invoiceQty: pending, receivedQty: pending, rate: it.rate || 0, batchNo: '', remarks: '',
+        howItemReceived: DEFAULT_HOW_ITEM_RECEIVED,
       };
     })
     .filter((l) => l.pendingBefore > 0);
@@ -221,7 +241,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         challanNumber: grn.challanNumber || '', invoiceNumber: grn.invoiceNumber || '',
         invoiceDate: grn.invoiceDate ? grn.invoiceDate.slice(0, 10) : '',
         vehicleNumber: grn.vehicleNumber || '', receivedBy: grn.receivedBy || '', preparedBy: grn.preparedBy || '',
-        howItemReceived: grn.howItemReceived || 'FULL_MATERIAL_RECEIVED', remarks: grn.remarks || '',
+        remarks: grn.remarks || '',
         rmReceivedAtLocation: grn.rmReceivedAtLocation || '',
         vendorId: grn.vendorId || '', vendorName: grn.vendorName || '', vendorGST: grn.vendorGST || '',
         vendorAddress: grn.vendorAddress || '', vendorPhone: grn.vendorPhone || '',
@@ -233,12 +253,15 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
         unit: it.unit || 'Pcs', orderedQty: it.orderedQty, previouslyReceivedQty: it.previouslyReceivedQty,
         pendingBefore: round2((it.orderedQty || 0) - (it.previouslyReceivedQty || 0)),
         invoiceQty: it.invoiceQty, receivedQty: it.receivedQty, rate: it.rate, batchNo: it.batchNo || '', remarks: it.remarks || '',
+        // The line's own type; a draft saved before the type moved onto lines
+        // shows its header value on every row (and saves it per line).
+        howItemReceived: lineReceiptType(it, grn) || DEFAULT_HOW_ITEM_RECEIVED,
       })));
     } else {
       setMode('PO');
       setHeader({
         grnDate: todayStr(), challanNumber: '', invoiceNumber: '', invoiceDate: '', vehicleNumber: '', receivedBy: '', preparedBy: '',
-        howItemReceived: 'FULL_MATERIAL_RECEIVED', remarks: '', rmReceivedAtLocation: '',
+        remarks: '', rmReceivedAtLocation: '',
         vendorId: '', vendorName: '', vendorGST: '', vendorAddress: '', vendorPhone: '',
       });
       setDoc(null);
@@ -249,7 +272,19 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, grn, presetPo]);
 
-  const applyPos = (list) => { setPos(list || []); setItems(linesFromPos(list)); };
+  // Changing the PO selection rebuilds the rows. A row whose PO line is still
+  // selected keeps the Material Receipt Type chosen for it — matched by its own
+  // PO + PO line, never by position, so one SKU's choice can't land on another.
+  const applyPos = (list) => {
+    setPos(list || []);
+    setItems((cur) => {
+      const typeByLine = new Map(cur.map((it) => [`${it.poId}|${it.poItemId}`, it.howItemReceived]));
+      return linesFromPos(list).map((l) => {
+        const kept = typeByLine.get(`${l.poId}|${l.poItemId}`);
+        return kept ? { ...l, howItemReceived: kept } : l;
+      });
+    });
+  };
   const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
 
   const totals = useMemo(() => items.reduce((acc, it) => {
@@ -361,6 +396,13 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       enqueueSnackbar(`Batch Number is required for ${rmKindOf(noBatch)}.`, { variant: 'warning' });
       return false;
     }
+    // Every received row carries its own Material Receipt Type.
+    const noReceiptType = validItems.find((it) => !it.howItemReceived);
+    if (noReceiptType) {
+      const sku = noReceiptType.skuCode ? ` (${noReceiptType.skuCode})` : '';
+      enqueueSnackbar(`Select the Material Receipt Type for "${noReceiptType.itemName || 'item'}"${sku}`, { variant: 'warning' });
+      return false;
+    }
     // Lines the SKU master says cannot be received (the server refuses them too).
     const blocked = validItems.find((it) => routingProblemOf(itemTypeOf(it)));
     if (blocked) {
@@ -384,6 +426,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '', skuId: it.skuId || undefined,
       unit: it.unit || 'Pcs', invoiceQty: round2(it.invoiceQty || it.receivedQty), receivedQty: round2(it.receivedQty),
       rate: round2(it.rate), batchNo: it.batchNo?.trim() || '', remarks: it.remarks?.trim() || '',
+      howItemReceived: it.howItemReceived,
     } : {
       // poId isn't required by the server (it resolves each line's PO itself
       // from poItemId/skuCode), but passing it through keeps the preview PDF
@@ -394,6 +437,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       orderedQty: it.orderedQty, previouslyReceivedQty: it.previouslyReceivedQty,
       invoiceQty: round2(it.invoiceQty), receivedQty: round2(it.receivedQty),
       rate: round2(it.rate), batchNo: it.batchNo?.trim() || '', remarks: it.remarks?.trim() || '',
+      howItemReceived: it.howItemReceived,
     })),
   });
 
@@ -632,12 +676,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             <Grid item xs={6} sm={3}><TextField label="Vehicle No" fullWidth value={header.vehicleNumber} onChange={(e) => setHeader((h) => ({ ...h, vehicleNumber: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField label="Material Receipt Type" select fullWidth value={header.howItemReceived}
-                onChange={(e) => setHeader((h) => ({ ...h, howItemReceived: e.target.value }))}>
-                {HOW_ITEM_RECEIVED.map((v) => <MenuItem key={v} value={v}>{howReceivedLabel(v)}</MenuItem>)}
-              </TextField>
-            </Grid>
+            {/* Material Receipt Type is chosen per SKU, on each Material Receipt row. */}
 
             {/* Inventory destination is automatic: each line goes where its SKU
                 master Item Type says (shown on the line). Only Raw Material
@@ -692,10 +731,10 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             <>
               <Box sx={{
                 display: { xs: 'none', md: 'grid' },
-                gridTemplateColumns: '1.6fr 0.9fr 1fr 0.9fr 0.95fr 1.05fr 0.4fr',
+                gridTemplateColumns: WOPO_ROW_COLS,
                 gap: 1, px: 1, mb: 0.5,
               }}>
-                {['Description / SKU', 'Unit', 'Received Qty', 'Rate', 'Batch No', 'Remarks', ''].map((h, i) => (
+                {['Description / SKU', 'Unit', 'Received Qty', 'Rate', 'Material Receipt Type', 'Batch No', 'Remarks', ''].map((h, i) => (
                   <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
                 ))}
               </Box>
@@ -705,7 +744,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                   return (
                     <Box key={idx} sx={{
                       display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', md: '1.6fr 0.9fr 1fr 0.9fr 0.95fr 1.05fr 0.4fr' },
+                      gridTemplateColumns: { xs: '1fr', md: WOPO_ROW_COLS },
                       gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
                       borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
                       '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
@@ -734,6 +773,9 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                       <TextField size="small" type="number" label="Rate" value={it.rate}
                         onChange={(e) => setItem(idx, { rate: e.target.value })}
                         inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
+                      <ReceiptTypeSelect value={it.howItemReceived} lineKey={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
+                        error={!it.howItemReceived && round2(it.receivedQty) > 0}
+                        onChange={(v) => setItem(idx, { howItemReceived: v })} />
                       <TextField size="small"
                         label={rmKindOf(it) ? 'Batch No *' : 'Batch No'}
                         placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'optional'}
@@ -768,10 +810,10 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             <>
               <Box sx={{
                 display: { xs: 'none', md: 'grid' },
-                gridTemplateColumns: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 1.12fr 1.08fr',
+                gridTemplateColumns: PO_ROW_COLS,
                 gap: 1, px: 1, mb: 0.5,
               }}>
-                {['Description', 'SKU', 'Ordered Qty', 'Already Received', 'Pending Qty', 'Invoice Qty', 'Received Qty', 'Batch No', 'Remarks'].map((h, i) => (
+                {['Description', 'SKU', 'Ordered Qty', 'Already Received', 'Pending Qty', 'Invoice Qty', 'Received Qty', 'Material Receipt Type', 'Batch No', 'Remarks'].map((h, i) => (
                   <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
                 ))}
               </Box>
@@ -794,7 +836,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                         return (
                           <Box key={idx} sx={{
                             display: 'grid',
-                            gridTemplateColumns: { xs: '1fr', md: '1.7fr 0.7fr 0.75fr 0.95fr 0.85fr 1.05fr 1.05fr 1.12fr 1.08fr' },
+                            gridTemplateColumns: { xs: '1fr', md: PO_ROW_COLS },
                             gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
                             borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
                             '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
@@ -804,7 +846,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                               <Typography variant="caption" color="text.disabled">{it.unit}</Typography>
                               <Box>{destinationTag(it)}</Box>
                             </Box>
-                            <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
+                            <Typography variant="body2" color="primary.main" fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>{it.skuCode || '—'}</Typography>
                             <QtyCell label="Ordered Qty" value={it.orderedQty} />
                             <QtyCell label="Already Received" value={it.previouslyReceivedQty} />
                             <QtyCell label="Pending Qty" value={pendingBefore} color={pendingBefore > 0 ? '#b45309' : '#0f766e'} />
@@ -816,6 +858,9 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                               onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
                               helperText={extra ? `Pending: ${pendingBefore} · Extra ${extraQty}` : `Pending: ${pendingBefore}`}
                               inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
+                            <ReceiptTypeSelect value={it.howItemReceived} lineKey={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
+                              error={!it.howItemReceived && round2(it.receivedQty) > 0}
+                              onChange={(v) => setItem(idx, { howItemReceived: v })} />
                             {/* Required for Coil and Circle only — every other item
                                 keeps the original optional field untouched. */}
                             <TextField size="small"

@@ -57,6 +57,11 @@ export const purchaseOrderController = {
     res.json(ApiResponse.ok('Approved items retrieved', data));
   }),
 
+  setItemVendor: asyncHandler(async (req, res) => {
+    const data = await purchaseOrderService.setItemVendor(req.body, req.user);
+    res.json(ApiResponse.ok('Item vendor saved', data));
+  }),
+
   createFromItems: asyncHandler(async (req, res) => {
     assertDirectSaveAllowed(req);
     const draft = await purchaseOrderService.createFromItems(req.body, req.user);

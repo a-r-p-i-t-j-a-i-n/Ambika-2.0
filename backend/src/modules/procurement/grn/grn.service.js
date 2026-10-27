@@ -274,6 +274,31 @@ const computeLines = (items = []) => {
   };
 };
 
+// ── Material Receipt Type, per line ──────────────────────────────────────────
+// Chosen per SKU on the GRN form. The header howItemReceived is kept as the
+// fallback for lines that carry none (GRNs saved before the move, or an older
+// client that still sends one header value) and, on newer GRNs, as a summary.
+const RECEIPT_TYPES = Object.values(HOW_ITEM_RECEIVED);
+const isReceiptType = (v) => RECEIPT_TYPES.includes(v);
+
+/**
+ * Give every line its own Material Receipt Type: the one it carries, else
+ * `fallback` (a header value), else FULL_MATERIAL_RECEIVED — the header's
+ * long-standing default. A line that already has a type is returned as is.
+ */
+export const withLineReceiptTypes = (lines = [], fallback = null) => {
+  const dflt = isReceiptType(fallback) ? fallback : HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED;
+  return lines.map((l) => (isReceiptType(l.howItemReceived) ? l : { ...l, howItemReceived: dflt }));
+};
+
+/** Header summary of the lines: the one type they all share, or null when they differ. */
+export const summarizeReceiptType = (lines = []) => {
+  const types = new Set(lines.map((l) => l.howItemReceived).filter(isReceiptType));
+  return types.size === 1 ? [...types][0] : null;
+};
+
+const receiptTypeLabel = (v) => String(v || '').replace(/_/g, ' ');
+
 // GRN states whose received qty counts toward the PO (stock already posted).
 const POSTED_GRN_STATUSES = [GRN_STATUS.RECEIVED, GRN_STATUS.PARTIAL_RECEIVED, GRN_STATUS.FULLY_RECEIVED];
 
@@ -493,14 +518,19 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
 
     y = cardTop + cardH + 14;
 
-    // Items table.
+    // Items table. Each line's own Material Receipt Type; a line saved before
+    // the type moved off the header reads the header's value.
+    const lineType = (it) => it.howItemReceived || grn.howItemReceived || '';
     const cols = [
-      { key: 'sr', label: 'SR', w: 26, align: 'center' },
-      { key: 'name', label: 'DESCRIPTION OF GOODS', w: 220, align: 'left' },
-      { key: 'invoice', label: 'INVOICE QTY', w: 80, align: 'right' },
-      { key: 'received', label: 'RECEIVED QTY', w: 90, align: 'right' },
-      { key: 'unit', label: 'UNIT', w: W - 26 - 220 - 80 - 90, align: 'center' },
+      { key: 'sr', label: 'SR', w: 24, align: 'center' },
+      { key: 'name', label: 'DESCRIPTION OF GOODS', w: 178, align: 'left' },
+      // Wide enough for the longest label (FULL MATERIAL RECEIVED) on one line.
+      { key: 'receipt', label: 'RECEIPT TYPE', w: 108, align: 'left' },
+      { key: 'invoice', label: 'INVOICE QTY', w: 66, align: 'right' },
+      { key: 'received', label: 'RECEIVED QTY', w: 72, align: 'right' },
+      { key: 'unit', label: 'UNIT', w: W - 24 - 178 - 108 - 66 - 72, align: 'center' },
     ];
+    const receiptCol = cols.find((c) => c.key === 'receipt');
     const drawHead = () => {
       doc.rect(M, y, W, 20).fill(navy);
       let x = M; doc.font('Helvetica-Bold').fontSize(7.5).fill('#ffffff');
@@ -524,7 +554,9 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
       doc.font('Helvetica').fontSize(8.5);
       const nameH = doc.heightOfString(itemName, { width: nameCol.w - 8 });
       const subH = subStr ? 10 : 0;
-      const rowH = Math.max(18, nameH + subH + PADY * 2 - 2);
+      const receiptStr = receiptTypeLabel(lineType(it)) || '—';
+      const receiptH = doc.font('Helvetica').fontSize(7.5).heightOfString(receiptStr, { width: receiptCol.w - 8 });
+      const rowH = Math.max(18, nameH + subH + PADY * 2 - 2, receiptH + PADY * 2 - 2);
 
       if (y + rowH > 770) { doc.addPage(); y = M; drawHead(); }
       if (i % 2 === 1) doc.rect(M, y, W, rowH).fill('#f8fafc');
@@ -537,6 +569,8 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
           if (subStr) {
             doc.font('Helvetica').fontSize(7).fill('#64748b').text(subStr, x + 8, y + PADY + nameH + 1, { width: c.w - 12 });
           }
+        } else if (c.key === 'receipt') {
+          doc.font('Helvetica').fontSize(7.5).fill(navy).text(receiptStr, x + 4, y + PADY, { width: c.w - 8 });
         } else {
           doc.font('Helvetica').fontSize(8.5).fill(navy).text(cells[c.key], x + 4, y + PADY, { width: c.w - 8, align: c.align, ellipsis: true });
         }
@@ -549,8 +583,10 @@ export const buildGrnPdfBuffer = (grn, company = {}, signature = null) => new Pr
     y += 16;
     if (y > 700) { doc.addPage(); y = M; }
     const invoiceReceived = grn.invoiceNumber ? 'Yes' : 'No';
+    const allTypes = [...new Set((grn.items || []).map(lineType).filter(Boolean))];
+    const typeSummary = allTypes.length > 1 ? 'Per item (see table)' : receiptTypeLabel(allTypes[0] || grn.howItemReceived);
     doc.font('Helvetica-Bold').fontSize(8.5).fill(navy).text(`Invoice Received: ${invoiceReceived}`, M, y);
-    doc.font('Helvetica').fontSize(8.5).text(`Invoice No: ${grn.invoiceNumber || '—'}   Material Receipt Type: ${(grn.howItemReceived || '').replace(/_/g, ' ')}`, M, y + 14);
+    doc.font('Helvetica').fontSize(8.5).text(`Invoice No: ${grn.invoiceNumber || '—'}   Material Receipt Type: ${typeSummary}`, M, y + 14);
     doc.font('Helvetica-Bold').fontSize(8.5).text('Remarks:', M, y + 34);
     doc.font('Helvetica').fontSize(8.5).text(grn.remarks || '—', M, y + 47, { width: W - 180 });
 
@@ -682,7 +718,9 @@ export const grnService = {
     // Rule 2: auto-load lines from every PO (pending only). Ordered / already
     // received qty always come from the POs + their completed GRNs, never the client.
     const received = await receivedByPoLines(pos);
-    const sourceItems = data.items?.length ? snapshotFromPos(pos, received, data.items) : pos.flatMap((po) => (po.items || [])
+    // Each line keeps its own Material Receipt Type; the header value only
+    // fills a line that names none.
+    const sourceItems = withLineReceiptTypes(data.items?.length ? snapshotFromPos(pos, received, data.items) : pos.flatMap((po) => (po.items || [])
       .filter((it) => round2((it.quantity || 0) - (received.get(`${po._id}|${it._id}`) || 0)) > 0)
       .map((it) => {
         const prev = received.get(`${po._id}|${it._id}`) || 0;
@@ -696,7 +734,7 @@ export const grnService = {
           orderedQty: it.quantity, previouslyReceivedQty: prev,
           invoiceQty: pending, receivedQty: pending, rate: it.rate, batchNo: '', remarks: '',
         };
-      }));
+      })), data.howItemReceived);
     if (!sourceItems.length) throw new AppError('Nothing left to receive on the selected PO(s)', 400);
 
     await assertPurchasable(sourceItems);
@@ -731,7 +769,7 @@ export const grnService = {
       // GRN's own store and stays MAIN — the two are never mapped onto each other.
       // The retired Inventory Type / Add to RM Stock stay at their defaults.
       rmReceivedAtLocation: locationOrNull(data.rmReceivedAtLocation),
-      howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
+      howItemReceived: summarizeReceiptType(lines),
       challanDocument: data.challanDocument?.fileUrl ? { ...data.challanDocument, uploadedAt: new Date() } : undefined,
       invoiceDocument: data.invoiceDocument?.fileUrl ? { ...data.invoiceDocument, uploadedAt: new Date() } : undefined,
       items: lines,
@@ -756,12 +794,13 @@ export const grnService = {
    * never fires for a receipt that has no PO to be "over" against.
    */
   async createWithoutPo(data, user) {
-    const sourceItems = (data.items || []).map((it) => ({
+    const sourceItems = withLineReceiptTypes((data.items || []).map((it) => ({
       skuId: it.skuId || undefined, skuCode: it.skuCode?.trim() || '', itemName: it.itemName.trim(),
       unit: it.unit || 'Pcs', orderedQty: 0, previouslyReceivedQty: 0,
       invoiceQty: round2(it.invoiceQty ?? it.receivedQty), receivedQty: round2(it.receivedQty),
       rate: round2(it.rate), batchNo: it.batchNo?.trim() || '', remarks: it.remarks?.trim() || '',
-    }));
+      howItemReceived: it.howItemReceived || null,
+    })), data.howItemReceived);
     if (!sourceItems.length) throw new AppError('Add at least one item to receive', 400);
 
     await assertPurchasable(sourceItems);
@@ -790,7 +829,7 @@ export const grnService = {
       preparedBy: data.preparedBy || user?.name || '',
       warehouse: data.warehouse || 'MAIN',
       rmReceivedAtLocation: locationOrNull(data.rmReceivedAtLocation),
-      howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
+      howItemReceived: summarizeReceiptType(lines),
       challanDocument: data.challanDocument?.fileUrl ? { ...data.challanDocument, uploadedAt: new Date() } : undefined,
       invoiceDocument: data.invoiceDocument?.fileUrl ? { ...data.invoiceDocument, uploadedAt: new Date() } : undefined,
       items: lines,
@@ -883,9 +922,13 @@ export const grnService = {
     if (!isOpenDraft(grn)) throw new AppError('Only draft GRNs can be edited', 400);
     const {
       items, challanDocument, invoiceDocument,
-      vendorId, vendorName, vendorGST, vendorAddress, vendorPhone,
+      vendorId, vendorName, vendorGST, vendorAddress, vendorPhone, howItemReceived,
       ...rest
     } = data;
+    // Fills a line that names no Material Receipt Type: the request's header
+    // value (an older client), else the GRN's saved header (a legacy draft's
+    // only value). Read before anything below changes the header.
+    const receiptTypeFallback = howItemReceived || grn.howItemReceived;
     Object.assign(grn, rest);
     // Vendor snapshot is editable only on a W/O PO draft — a PO-backed GRN's
     // vendor always mirrors its PO and is never edited independently of it.
@@ -919,7 +962,10 @@ export const grnService = {
     }
     // Every save re-derives each line's destination from the SKU master (lines
     // as sent, or as stored) and refuses what cannot be routed.
-    grn.items = await routeDraftLines(grn.items.map(plain), grn.rmReceivedAtLocation, grn.warehouse || 'MAIN');
+    grn.items = await routeDraftLines(
+      withLineReceiptTypes(grn.items.map(plain), receiptTypeFallback), grn.rmReceivedAtLocation, grn.warehouse || 'MAIN',
+    );
+    grn.howItemReceived = summarizeReceiptType(grn.items);
     grn.updatedBy = user?._id;
     grn.activityTimeline.push({ action: 'UPDATE', description: 'Draft GRN updated', actorId: user?._id });
     return saveOpenDraft(grn);
@@ -1010,7 +1056,9 @@ export const grnService = {
         const sourceItems = grn.items.map((it) => ({ ...plain(it), orderedQty: 0, previouslyReceivedQty: 0 }));
         const { lines, totals } = computeLines(sourceItems);
         lines.forEach((l) => { l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
-        grn.items = lines;
+        // A draft saved before Material Receipt Type moved onto lines gets its
+        // header value on every line, so the completed record carries it per line.
+        grn.items = withLineReceiptTypes(lines, grn.howItemReceived);
         Object.assign(grn, totals);
       } else {
         const poIds = grn.poIds?.length ? grn.poIds : [grn.poId];
@@ -1020,7 +1068,7 @@ export const grnService = {
         // Re-derive ordered / already-received / pending from the current DB state
         // — the draft's snapshot may predate other GRNs completed on these PO(s).
         const { lines, totals } = await refreshLines(pos, grn.items);
-        grn.items = lines;
+        grn.items = withLineReceiptTypes(lines, grn.howItemReceived);
         Object.assign(grn, totals);
       }
 
@@ -1200,6 +1248,7 @@ export const grnService = {
         const g = await read(GoodsReceiptNote.findById(grn._id));
         const allPosFullyReceived = pos.length > 0 && pos.every((po) => poFullyReceivedById.get(String(po._id)));
         g.items = finalItems;
+        g.howItemReceived = summarizeReceiptType(finalItems);
         Object.assign(g, finalTotals);
         g.grnStatus = g.isWithoutPo ? GRN_STATUS.RECEIVED : (allPosFullyReceived ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED);
         g.qcStatus = GRN_QC_STATUS.PENDING; // ready for Step 1.9 Incoming QC
@@ -1292,14 +1341,14 @@ export const grnService = {
       }
     }
 
-    const { lines, totals } = computeLines(data.items || []);
+    const { lines, totals } = computeLines(withLineReceiptTypes(data.items || [], data.howItemReceived));
     const grnLike = {
       grnNumber: data.grnNumber || '(draft — generated on completion)',
       grnDate: data.grnDate || new Date(),
       poNumber, poNumbers, isWithoutPo: !!data.isWithoutPo,
       challanNumber: data.challanNumber || '',
       invoiceNumber: data.invoiceNumber || '',
-      howItemReceived: data.howItemReceived || HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED,
+      howItemReceived: summarizeReceiptType(lines),
       receivedBy: data.receivedBy || user?.name || '',
       preparedBy: data.preparedBy || user?.name || '',
       remarks: data.remarks || '',

@@ -13,6 +13,12 @@ import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateIndentNumber } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
+import {
+  QUOTATION_FMS_STEPS, QUOTATION_STEP_STATES, DOWNSTREAM_OF_QUOTATION, quotationStepFilter, isDownstreamOfQuotation,
+  quoteComparativePlannedAt,
+} from './quotationSteps.js';
+import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
+import Vendor from '../../vendors/vendor.model.js';
 
 // Human-readable delay between a planned and actual date.
 const computeDelay = (plannedAt, actualAt) => {
@@ -197,6 +203,33 @@ const buildItemApprovedQuotations = (items = []) => items.map((it) => {
   };
 });
 
+// Step 1.3 — the approved vendor of every quoted (YES) item in an item-wise
+// approval. Each must be an active Vendor Master record; the name is taken from
+// the master, never from the client. `built` is buildItemApprovedQuotations(raw).
+const resolveApprovedVendorPicks = async (indent, raw, built) => {
+  const picks = [];
+  built.forEach((iq, i) => {
+    if (iq.statusDone !== 'YES' || !iq.itemId) return;
+    const item = indent.items.id?.(iq.itemId);
+    if (!item || !isItemApprovalEffective(indent, item)) return;
+    const vendorId = raw[i]?.vendorId;
+    if (!vendorId) throw new AppError(`Select the approved vendor for "${item.itemName}"`, 400);
+    picks.push({ item, vendorId: String(vendorId) });
+  });
+  const ids = [...new Set(picks.map((p) => p.vendorId))];
+  const vendors = ids.length
+    ? await Vendor.find({ _id: { $in: ids }, isDeleted: { $ne: true } }).select('name isActive').lean()
+    : [];
+  const byId = new Map(vendors.map((v) => [String(v._id), v]));
+  picks.forEach((p) => {
+    const v = byId.get(p.vendorId);
+    if (!v) throw new AppError(`The vendor selected for "${p.item.itemName}" was not found in the Vendor Master`, 400);
+    if (v.isActive === false) throw new AppError(`Vendor "${v.name}" (selected for "${p.item.itemName}") is inactive in the Vendor Master`, 400);
+    p.vendorName = v.name;
+  });
+  return picks;
+};
+
 // Normalise an incoming payload into the canonical items[] shape. Falls back to
 // the legacy single-product fields so older clients keep working.
 const buildItems = (data = {}) => {
@@ -310,9 +343,14 @@ export const indentService = {
   },
 
   async getAll(query) {
+    // Step 1.2 / 1.3 workflow views (?fmsStep=QUOTE_COMPARATIVE&stepState=PENDING)
+    // — resolved here, never passed to ApiFeatures as raw field filters.
+    const { fmsStep, stepState, ...rest } = query;
+    const base = { isDeleted: { $ne: true } };
+    const stepFilter = fmsStep ? quotationStepFilter(fmsStep, stepState) : null;
     const features = new ApiFeatures(
-      PurchaseIndent.find({ isDeleted: { $ne: true } }),
-      query,
+      PurchaseIndent.find(stepFilter ? { ...base, ...stepFilter } : base),
+      rest,
     )
       .filter()
       .search(['indentNumber', 'productNameRevised', 'skuCode', 'raisedBy', 'department', 'items.itemName', 'items.skuCode'])
@@ -347,7 +385,23 @@ export const indentService = {
         },
       },
     ]);
-    return rows[0] || { total: 0, pendingApproval: 0, approved: 0, quotePending: 0, quotationApproved: 0 };
+    const stats = rows[0] || { total: 0, pendingApproval: 0, approved: 0, quotePending: 0, quotationApproved: 0 };
+
+    // Step 1.2 / 1.3 state counts for the main-workflow step lists — counted with
+    // the exact filters those lists use, so a tile always matches its rows.
+    const pairs = QUOTATION_FMS_STEPS.flatMap((step) => QUOTATION_STEP_STATES.map((state) => [step, state]));
+    const counts = await Promise.all(pairs.map(([step, state]) => PurchaseIndent.countDocuments({
+      isDeleted: { $ne: true }, ...quotationStepFilter(step, state),
+    })));
+    stats.quotationSteps = {};
+    pairs.forEach(([step, state], i) => {
+      stats.quotationSteps[step] = { ...stats.quotationSteps[step], [state]: counts[i] };
+    });
+    QUOTATION_FMS_STEPS.forEach((step) => {
+      const c = stats.quotationSteps[step];
+      c.ALL = c.PENDING + c.DONE + c.NOT_REQUIRED;
+    });
+    return stats;
   },
 
   async update(id, data, user) {
@@ -460,12 +514,14 @@ export const indentService = {
     };
     if (approvedCount > 0) {
       // At least one item approved — advance the workflow: approved → quote pending.
+      // Step 1.2 is planned 3 working days after this approval; an already
+      // stamped planned date is never moved.
       indent.approvalStatus = INDENT_APPROVAL_STATUS.APPROVED;
       indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_PENDING;
       indent.quoteStep = {
         ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
         status: QUOTE_STEP_STATUS.PENDING,
-        plannedAt: indent.quoteStep?.plannedAt || now,
+        plannedAt: indent.quoteStep?.plannedAt || quoteComparativePlannedAt(now),
       };
     } else {
       // Every item was rejected — the indent itself is rejected and closed.
@@ -584,7 +640,7 @@ export const indentService = {
           indent.quoteStep = {
             ...(indent.quoteStep?.toObject?.() || indent.quoteStep || {}),
             status: QUOTE_STEP_STATUS.PENDING,
-            plannedAt: indent.quoteStep?.plannedAt || now,
+            plannedAt: indent.quoteStep?.plannedAt || quoteComparativePlannedAt(now), // same rule as approve()
           };
         } else {
           indent.approvalStatus = INDENT_APPROVAL_STATUS.REJECTED;
@@ -711,6 +767,16 @@ export const indentService = {
     if (step13Approved && data.statusDone !== 'YES') {
       throw new AppError('The quotation has already been approved (Step 1.3) — Step 1.2 cannot be changed to "Quote Not Required"', 400);
     }
+    // Once a PO was raised (or the service moved on), the only Step 1.2 edit left
+    // is the file correction after an approved quotation, which keeps the status.
+    // Anything else would move the indent back (PO_READY → QUOTATION_APPROVED /
+    // QUOTE_RECEIVED) — e.g. a retried "Quote Not Required" submit.
+    if (isDownstreamOfQuotation(indent) && !(step13Approved && data.statusDone === 'YES')) {
+      throw new AppError(`Indent ${indent.indentNumber || ''} has already moved past the quotation steps (${indent.overallStatus}) — Step 1.2 can no longer be changed`.replace('  ', ' '), 400);
+    }
+    // Save only if no other request moved the indent since it was read (a
+    // concurrent Step 1.3 approval or PO creation) — see the save below.
+    const statusWhenRead = indent.overallStatus;
 
     const vendors = Array.isArray(data.vendors) && data.vendors.length
       ? buildVendorQuotes(data.vendors)
@@ -882,12 +948,28 @@ export const indentService = {
         actorId: user?._id,
       });
     }
-    return indent.save();
+    indent.$where = { overallStatus: statusWhenRead };
+    try {
+      return await indent.save();
+    } catch (err) {
+      if (['DocumentNotFoundError', 'VersionError', 'ParallelSaveError'].includes(err?.name)) {
+        throw new AppError(`Indent ${indent.indentNumber || ''} was just updated by someone else — refresh and try again`.replace('  ', ' '), 409);
+      }
+      throw err;
+    }
   },
 
   // Step 1.3 — Approved Quotation 1.03 (with approved-quotation upload).
   async approveQuotation(id, data, user) {
     const indent = await findOrThrow(id);
+    if (indent.approvalStatus !== INDENT_APPROVAL_STATUS.APPROVED) {
+      throw new AppError('Quotation can only be approved for an approved indent', 400);
+    }
+    // A PO was raised (or the service moved on): re-approving would reset the
+    // indent to QUOTATION_APPROVED and drop the approved vendors' PO links.
+    if (isDownstreamOfQuotation(indent)) {
+      throw new AppError(`The quotation for indent ${indent.indentNumber || ''} is already approved and the indent has moved on (${indent.overallStatus})`.replace('  ', ' '), 400);
+    }
 
     // Step 1.3 does not exist when Step 1.2 was "Quote Not Required" — it was
     // auto-skipped and the indent went straight to PO eligibility. Reject any
@@ -951,6 +1033,11 @@ export const indentService = {
         throw new AppError('At least one approved quotation document is required when status is Yes', 400);
       }
     }
+    // Item-wise approval names the vendor each quoted item is approved for; the
+    // PO for that item is held to it (itemVendor.js).
+    const vendorPicks = hasItemQuotations && !multiVendor
+      ? await resolveApprovedVendorPicks(indent, data.itemApprovedQuotations, itemApprovedQuotations)
+      : [];
     const actualAt = data.actualAt ? new Date(data.actualAt) : new Date();
 
     // Mirror the first document into the legacy single field so older PO/views
@@ -988,17 +1075,37 @@ export const indentService = {
       ? approvedVendors.filter((v) => v.approvedQuotationDocument?.fileUrl).length
       : legacyDocuments.length;
     const rejectedDocCount = Math.max(0, step12DocCount - approvedDocCount);
+    const vendorNote = vendorPicks.length
+      ? ` · approved vendor: ${[...new Set(vendorPicks.map((p) => p.vendorName))].join(', ')}`
+      : '';
     const timelineDesc = multiVendor
       ? `Step 1.3 — ${approvedVendors.length} approved vendor(s)`
-      : `Step 1.3 — ${approvedDocCount} quotation(s) approved (reused from Step 1.2)${rejectedDocCount ? `, ${rejectedDocCount} rejected` : ''}`;
+      : `Step 1.3 — ${approvedDocCount} quotation(s) approved (reused from Step 1.2)${rejectedDocCount ? `, ${rejectedDocCount} rejected` : ''}${vendorNote}`;
+
+    // Approved vendor onto each quoted item, in the same update as the approval.
+    const now = new Date();
+    const vendorSet = {};
+    const arrayFilters = [];
+    vendorPicks.forEach((p, k) => {
+      Object.assign(vendorSet, {
+        [`items.$[v${k}].vendorId`]: p.vendorId,
+        [`items.$[v${k}].vendorName`]: p.vendorName,
+        [`items.$[v${k}].vendorSource`]: ITEM_VENDOR_SOURCE.APPROVED_QUOTATION,
+        [`items.$[v${k}].vendorSelectedAt`]: now,
+        [`items.$[v${k}].vendorSelectedById`]: user?._id || null,
+      });
+      arrayFilters.push({ [`v${k}._id`]: p.item._id });
+    });
 
     // Use $set so the whole sub-document is replaced at the DB level. This
     // overwrites any legacy shape (older docs stored `approvedQuotation` as a
     // String) instead of merging onto it, which would throw a cast error.
+    // Conditional on the state checked above, so a PO created in the meantime
+    // is never overwritten.
     const updated = await PurchaseIndent.findOneAndUpdate(
-      { _id: id, isDeleted: { $ne: true } },
+      { _id: id, isDeleted: { $ne: true }, overallStatus: { $nin: DOWNSTREAM_OF_QUOTATION } },
       {
-        $set: { quotationApprovalStep, overallStatus, updatedBy: user?._id },
+        $set: { quotationApprovalStep, overallStatus, updatedBy: user?._id, ...vendorSet },
         $push: {
           activityTimeline: {
             action: 'APPROVE_QUOTATION',
@@ -1008,9 +1115,9 @@ export const indentService = {
           },
         },
       },
-      { new: true, runValidators: true },
+      { new: true, runValidators: true, ...(arrayFilters.length ? { arrayFilters } : {}) },
     );
-    if (!updated) throw new AppError('Indent not found', 404);
+    if (!updated) throw new AppError(`Indent ${indent.indentNumber || ''} was just updated by someone else — refresh and try again`.replace('  ', ' '), 409);
     return updated;
   },
 };

@@ -140,8 +140,10 @@ const FileChipRow = ({ docs }) => {
 // inside its own container instead, which keeps every field reachable without
 // hiding any of them. This is also what fixes "wrapped SKU" — SKU keeps a
 // fixed 110px column regardless of viewport, it no longer gets squeezed.
-const ITEM_COLS = 'minmax(200px,1.6fr) 110px 80px 70px 90px 90px 140px minmax(150px,1fr)';
-const ITEM_HEADERS = ['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Status', 'Remarks'];
+const ITEM_COLS = 'minmax(200px,1.6fr) 110px 80px 70px 90px 90px 140px minmax(170px,1fr) minmax(150px,1fr)';
+const ITEM_HEADERS = ['Product', 'SKU', 'Qty', 'Unit', 'Revised', 'Approved', 'Status', 'Vendor', 'Remarks'];
+// Where the item's vendor came from (backend indent/itemVendor.js).
+const VENDOR_SOURCE_CAPTION = { APPROVED_QUOTATION: 'Approved quotation', PO_PREPARATION: 'Selected on Pending for PO' };
 const NUMERIC_ITEM_COLS = new Set(['Qty', 'Revised', 'Approved']);
 
 const ItemsTable = ({ items, indentNumber }) => (
@@ -171,6 +173,14 @@ const ItemsTable = ({ items, indentNumber }) => (
             <Tooltip title={it.rejectionReason}>
               <Typography variant="caption" color="error.main" noWrap sx={{ display: 'block', mt: 0.25 }}>{it.rejectionReason}</Typography>
             </Tooltip>
+          ) : null}
+        </Box>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" fontWeight={it.vendorName ? 600 : 400} color={it.vendorName ? 'text.primary' : 'text.secondary'} noWrap title={it.vendorName || ''}>
+            {it.vendorName || '—'}
+          </Typography>
+          {it.vendorName && VENDOR_SOURCE_CAPTION[it.vendorSource] ? (
+            <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>{VENDOR_SOURCE_CAPTION[it.vendorSource]}</Typography>
           ) : null}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{it.remarks || '—'}</Typography>
