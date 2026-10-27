@@ -6,7 +6,7 @@ import AppLoader from './AppLoader';
 import { setCredentials, logout } from '../store/slices/authSlice';
 import { baseApi } from '../store/api/baseApi';
 import { accessControlApi } from '../store/api/accessControlApi';
-import { isEmbedded, isShellMessage, postToShell, setHiddenSteps } from '../utils/embed';
+import { isEmbedded, isShellMessage, postToShell, setHiddenSteps, setStepRights } from '../utils/embed';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EmbedBridge — the ERP half of the Delegation Suite embedding.
@@ -112,8 +112,10 @@ const EmbeddedSession = ({ children }) => {
       } else if (type === 'shell:navigate' && isAppPath(path) && path !== pathRef.current) {
         navigate(path, { replace: true });
       } else if (type === 'shell:prefs') {
-        // O2D / Purchase steps switched off for this employee in the Suite.
+        // O2D / Purchase steps switched off for this employee in the Suite,
+        // and what they may change on the O2D Step Board.
         setHiddenSteps(event.data.hidden);
+        setStepRights(event.data.rights);
       }
     };
 

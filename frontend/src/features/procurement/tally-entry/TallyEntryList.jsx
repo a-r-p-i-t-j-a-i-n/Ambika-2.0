@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, LinearProgress,
@@ -18,7 +19,7 @@ import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
-import { TallyStatusChip, TALLY_STATUSES, CHECKLIST_TOTAL, checklistProgress, fmtDate } from './tallyMeta';
+import { TallyStatusChip, TALLY_STATUSES, CHECKLIST_TOTAL, checklistProgress } from './tallyMeta';
 import TallyEntryFormDialog from './TallyEntryFormDialog';
 import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
@@ -90,11 +91,9 @@ const TallyEntryList = () => {
     { field: 'voucherNumber', headerName: 'VOUCHER', width: 130, renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
     { field: 'invoiceNumber', headerName: 'INVOICE', width: 130, renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 150, renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
-    { field: 'plannedAt', headerName: 'PLANNED', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
-    { field: 'actualAt', headerName: 'ACTUAL', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
+    ...stepTimingColumns(),
     { field: '__progress', headerName: 'CHECKLIST', width: 110, sortable: false, renderCell: (p) => <ProgressCell row={p.row} /> },
     { field: 'tallyEntryStatus', headerName: 'STATUS', width: 130, renderCell: (p) => <TallyStatusChip status={p.value} /> },
-    { field: 'performedByName', headerName: 'PERFORMED BY', width: 130, renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center', renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
   ];
 

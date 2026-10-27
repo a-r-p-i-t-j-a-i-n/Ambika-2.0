@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   Grid, Autocomplete, Chip,
@@ -83,8 +84,7 @@ const AdvancePaymentList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     { field: 'paymentStatus', headerName: 'STATUS', width: 140,
       renderCell: (p) => <PaymentStatusChip status={p.value} /> },
-    { field: 'performedByName', headerName: 'BY', width: 110,
-      renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
+    ...stepTimingColumns(),
   ];
 
   return (

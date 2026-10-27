@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Tooltip, Chip, Pagination,
@@ -378,6 +379,7 @@ const IndentList = () => {
     { field: 'approvedQuotationDate', headerName: 'Approved Quotation Date', width: 190, sortable: false,
       valueGetter: (_v, row) => row.quotationApprovalStep?.actualAt || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value ? fmtDate(p.value) : '—'}</Typography> },
+    ...stepTimingColumns(),
     { field: '__actions', headerName: 'Action', width: 118, sortable: false, filterable: false,
       disableColumnMenu: true, hideable: false, align: 'right', headerAlign: 'right',
       renderCell: (p) => {

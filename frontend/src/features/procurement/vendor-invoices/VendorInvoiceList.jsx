@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
@@ -179,6 +180,7 @@ const VendorInvoiceList = () => {
     { field: 'invoiceStatus', headerName: 'STATUS', width: 160, renderCell: (p) => <InvoiceStatusChip status={p.value} /> },
     { field: 'voucher', headerName: 'VOUCHER', width: 160, sortable: false, filterable: false,
       renderCell: (p) => <InvoiceVoucherCell row={p.row} onResolved={handleVoucherResolved} /> },
+    ...stepTimingColumns(),
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center', renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
   ];
 

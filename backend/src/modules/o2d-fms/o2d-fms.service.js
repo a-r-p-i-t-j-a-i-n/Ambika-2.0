@@ -41,10 +41,17 @@ import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
 import { notificationsService } from '../notifications/notification.service.js';
+import env from '../../config/env.js';
+import { authService } from '../auth/auth.service.js';
+import { delegationLinkOn, fetchSuitePeople } from './suite-client.js';
 
 // Notify every assigned doer (and every buddy) that a step is waiting on them.
 const notifyStepOwners = async (process, step) => {
-  const link = `/o2d-fms/task/${process._id}/${encodeURIComponent(step.stepCode)}`;
+  // With the Delegation link on (o2d-delegation.js), each due step reaches its
+  // doers as a Delegation task with its own notification — no second
+  // "Your turn" here.
+  if (env.SUITE_API_URL && env.ERP_SSO_SECRET) return;
+  const link =`/o2d-fms/task/${process._id}/${encodeURIComponent(step.stepCode)}`;
   const title = `Your turn: ${step.taskTitle || step.stepCode}`;
   const body = `Order ${process.soNumber || ''} — ${process.partyName || ''}`;
   const doers = stepDoerIds(step);
@@ -394,6 +401,19 @@ const consignmentStepDone = (actionKey, c) => {
 const CONSIGNMENT_TRIGGERS = [TRIGGER_KEY.INVOICE, TRIGGER_KEY.POD, TRIGGER_KEY.PAYMENT];
 const isConsignmentGated = (def) => !!(def && (def.consignmentGated || CONSIGNMENT_TRIGGERS.includes(def.triggerKey)));
 
+// FMS → Doer Assignment: every step except the FIRST (where the order starts)
+// may be made optional. Skipping a step that a business action would complete
+// (dispatch plan, dispatch, invoice…) is safe: advanceByTrigger ignores SKIPPED
+// steps and the action gates treat them as passed.
+
+// Lead time for the Doer Assignment screen: whole days when it divides evenly,
+// otherwise hours (to 2 decimals).
+const toDaysOrHours = (mins) => {
+  const m = Number(mins) || 0;
+  if (m > 0 && m % 1440 === 0) return { value: m / 1440, unit: 'DAYS' };
+  return { value: Math.round((m / 60) * 100) / 100, unit: 'HOURS' };
+};
+
 /**
  * Build the consignment ledger for an order — one row per Delivery Challan with its
  * downstream lifecycle (invoice / eway / POD / payment / transport) read from the real
@@ -649,6 +669,9 @@ export const o2dFmsService = {
         buddies,
         assignedTo: assignees[0] || null,   // primary mirror
         buddyUserId: buddies[0] || null,
+        // FMS → Doer Assignment. The first step (where the order starts) is
+        // always mandatory; any other step follows its setting.
+        mandatory: i === 0 ? true : tpl?.mandatory !== false,
         taskTitle: tpl?.taskTitle || def.name,
         instructions: tpl?.instructions || def.description || null,
         checklist: (tpl?.checklist || []).map((c) => ({ text: c.text, done: false })),
@@ -780,8 +803,13 @@ export const o2dFmsService = {
   // One row per Delivery Challan across ALL orders — the Step Board's dispatch
   // step reads like the client's sheet: each split dispatch is its own row with
   // SKUs, qty, invoice figures, transporter and L.R. straight from the documents.
-  async listBoardConsignments() {
-    const challans = await DeliveryChallan.find({ isDeleted: { $ne: true } })
+  // `soNumbers` (optional) limits it to those orders — the Delegation task sync
+  // only needs the open ones.
+  async listBoardConsignments({ soNumbers: onlySo } = {}) {
+    const challans = await DeliveryChallan.find({
+      isDeleted: { $ne: true },
+      ...(Array.isArray(onlySo) ? { soNumber: { $in: onlySo } } : {}),
+    })
       .select('dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate newTrackDate cancelledAt cancelledByName cancelReason')
       .populate('createdBy', 'name')
       .sort({ dcDate: 1, createdAt: 1 })
@@ -1219,6 +1247,8 @@ export const o2dFmsService = {
     step.buddies = buddies || [];
     step.assignedTo = step.assignees[0] || null;   // primary mirror
     step.buddyUserId = step.buddies[0] || null;
+    // Decided for this order — Doer Assignment no longer overrides it.
+    step.doersSettledAt = new Date();
     process.activityTimeline.push({
       action: 'STEP_REASSIGNED',
       description: `${stepCode} reassigned (${step.assignees.length} doer(s), ${step.buddies.length} buddy(ies))`,
@@ -1229,6 +1259,319 @@ export const o2dFmsService = {
       await notifyStepOwners(process, step);
     }
     const defMap = await loadDefMap();
+    return enrichSteps(process, defMap);
+  },
+
+  // ── FMS → Doer Assignment (O2D) ─────────────────────────────────────────
+  // One simple setup per step — lead time, main doer, buddy, mandatory — kept
+  // in the DEFAULT task template of the FMS new orders run on, which
+  // `_seedSteps` already applies to every new order (plan dates, doers,
+  // buddies). Orders already running keep what they started with.
+
+  /** Every active step of the live O2D flow with its current setup. */
+  async getDoerPlan() {
+    const fmsKey = ACTIVE_FMS_KEY;
+    const [defs, template] = await Promise.all([
+      StepDefinition.find({ isActive: true, isDeleted: { $ne: true }, ...fmsScope(fmsKey) }).sort({ sequence: 1 }).lean(),
+      TaskTemplate.findOne({ isDefault: true, isActive: true, isDeleted: { $ne: true }, ...fmsScope(fmsKey) }).lean(),
+    ]);
+    const tplByStep = new Map((template?.steps || []).map((t) => [t.stepCode, t]));
+    const uniq = (list) => [...new Set(list.filter(Boolean).map(String))];
+
+    const wanted = new Set();
+    for (const def of defs) {
+      const tpl = tplByStep.get(def.stepCode);
+      [...(tpl?.assigneeUserIds || []), tpl?.assigneeUserId, ...(tpl?.buddyUserIds || []), tpl?.buddyUserId, def.defaultOwnerUserId]
+        .filter(Boolean).forEach((id) => wanted.add(String(id)));
+    }
+    const users = wanted.size ? await User.find({ _id: { $in: [...wanted] } }).select('name role email isActive').lean() : [];
+    const byId = new Map(users.map((u) => [String(u._id), u]));
+    const brief = (id) => {
+      const u = id && byId.get(String(id));
+      return u ? { id: String(u._id), name: u.name, role: u.role || '', email: u.email || '', isActive: u.isActive !== false } : null;
+    };
+
+    const steps = defs.map((def, i) => {
+      const tpl = tplByStep.get(def.stepCode);
+      const doerIds = uniq([...(tpl?.assigneeUserIds || []), tpl?.assigneeUserId]);
+      const buddyIds = uniq([...(tpl?.buddyUserIds || []), tpl?.buddyUserId]);
+      const planMins = leadTimeToMins(tpl?.leadTime);
+      // The first step (where the order starts) is always mandatory.
+      const skippable = i > 0;
+      // Who a new order gets today when no doer is set: the step's default owner.
+      const fallbackDoer = def.defaultOwnerUserId ? brief(def.defaultOwnerUserId) : null;
+      // Every main doer and buddy — any one of them can complete the step, and
+      // once one does it is done for all of them (one shared step record).
+      const doers = doerIds.length ? doerIds.map(brief).filter(Boolean) : (fallbackDoer ? [fallbackDoer] : []);
+      const buddies = buddyIds.map(brief).filter(Boolean);
+      return {
+        stepCode: def.stepCode,
+        name: def.name,
+        sequence: def.sequence,
+        leadTime: toDaysOrHours(planMins ?? def.slaMinutes),
+        doers,
+        buddies,
+        // First of each, for screens that show one name.
+        doer: doers[0] || null,
+        buddy: buddies[0] || null,
+        mandatory: skippable ? tpl?.mandatory !== false : true,
+        canBeOptional: skippable,
+      };
+    });
+    return { fmsKey, templateId: template?._id || null, templateName: template?.name || null, steps };
+  },
+
+  /** Active people who can be picked as doer / buddy. */
+  // With the Delegation link on, only Delegation employees (Delegation →
+  // Employees is the one employee list), each matched to their ERP account by
+  // email; someone who has never opened the ERP is listed as `new:<email>` and
+  // gets an account when first saved as a doer (saveDoerPlan). Without the
+  // link (the ERP on its own): every active ERP user.
+  async listDoerPlanUsers() {
+    if (delegationLinkOn()) {
+      let people;
+      try {
+        people = await fetchSuitePeople();
+      } catch (err) {
+        throw new AppError(`Could not load the employee list from Delegation (${err.message}). Please try again in a moment.`, 503);
+      }
+      const accounts = people.length
+        ? await User.find({ email: { $in: people.map((p) => p.email) } }).select('email isActive').lean()
+        : [];
+      const byEmail = new Map(accounts.map((a) => [String(a.email).toLowerCase(), a]));
+      return people.map((p) => {
+        const account = byEmail.get(p.email);
+        return {
+          id: account ? String(account._id) : `new:${p.email}`,
+          name: p.name,
+          role: p.roleLabel || p.role || '',
+          email: p.email,
+          // Switched off in the ERP — can't be given steps until switched on.
+          ...(account && account.isActive === false ? { inactive: true } : {}),
+        };
+      });
+    }
+    // Email too: two accounts can share a name and only the email tells them apart.
+    const users = await User.find({ isActive: { $ne: false } }).select('name role email').sort('name').lean();
+    return users.map((u) => ({ id: String(u._id), name: u.name, role: u.role || '', email: u.email || '' }));
+  },
+
+  /**
+   * Save the setup for the CHANGED steps. Writes ONLY lead time, doer, buddy
+   * and mandatory into the default template's steps — every other template
+   * detail (checklists, forms, links…) is kept. Creates the default template
+   * if there is none.
+   */
+  async saveDoerPlan(rows = [], actor, opts = {}) {
+    const fmsKey = ACTIVE_FMS_KEY;
+    const defs = await StepDefinition.find({ isActive: true, isDeleted: { $ne: true }, ...fmsScope(fmsKey) }).sort({ sequence: 1 }).lean();
+    const defByCode = new Map(defs.map((d) => [d.stepCode, d]));
+    // The first step (where the order starts) is always mandatory.
+    const firstStepCode = defs[0]?.stepCode;
+
+    // Delegation employees picked who have no ERP account yet (`new:<email>`)
+    // get one now — exactly as their first ERP sign-in would make it.
+    const madeFor = new Map();
+    const newRefs = [...new Set(rows.flatMap((r) => [...(r.doerIds || []), ...(r.buddyIds || [])])
+      .map(String).filter((id) => id.startsWith('new:')))];
+    if (newRefs.length) {
+      if (!delegationLinkOn()) throw new AppError('This ERP is not linked to Delegation', 400);
+      const people = await fetchSuitePeople();
+      const personByEmail = new Map(people.map((p) => [p.email, p]));
+      for (const ref of newRefs) {
+        const email = ref.slice(4).trim().toLowerCase();
+        const person = personByEmail.get(email);
+        if (!person) throw new AppError(`${email} is not an active Delegation employee`, 400);
+        let user = await authService.findByEmail(email);
+        if (!user) {
+          try {
+            user = await authService.createFromSuite({ email, name: person.name, mobile: person.mobile, suiteRole: person.role });
+          } catch (err) {
+            if (err?.name === 'ValidationError') {
+              throw new AppError(`${person.name} needs a name and a valid 10-digit mobile number in Delegation → Employees before they can be given O2D steps`, 422);
+            }
+            throw err;
+          }
+        }
+        if (!user) throw new AppError(`Could not set up an ERP account for ${person.name}`, 500);
+        madeFor.set(ref, String(user._id));
+      }
+    }
+    const resolveRefs = (list) => (list || []).map((id) => madeFor.get(String(id)) || String(id));
+    // eslint-disable-next-line no-param-reassign
+    rows = rows.map((r) => ({ ...r, doerIds: resolveRefs(r.doerIds), buddyIds: resolveRefs(r.buddyIds) }));
+
+    const ids = new Set();
+    for (const r of rows) {
+      if (!defByCode.has(r.stepCode)) throw new AppError(`Step '${r.stepCode}' is not part of the O2D flow`, 400);
+      const doerIds = (r.doerIds || []).map(String);
+      const buddyIds = (r.buddyIds || []).map(String);
+      if (doerIds.some((id) => buddyIds.includes(id))) {
+        throw new AppError(`Step ${r.stepCode}: the same person cannot be both a main doer and a buddy`, 400);
+      }
+      [...doerIds, ...buddyIds].forEach((id) => ids.add(id));
+    }
+    if (ids.size) {
+      const found = await User.find({ _id: { $in: [...ids] } }).select('isActive').lean();
+      const active = new Set(found.filter((u) => u.isActive !== false).map((u) => String(u._id)));
+      const missing = [...ids].filter((id) => !active.has(id));
+      if (missing.length) throw new AppError('A selected person is not an active user — pick someone else', 400);
+    }
+
+    let template = await TaskTemplate.findOne({ isDefault: true, isActive: true, isDeleted: { $ne: true }, ...fmsScope(fmsKey) });
+    if (!template) {
+      template = new TaskTemplate({
+        fmsKey, name: 'O2D Doer Assignment', description: 'Created from FMS → Doer Assignment',
+        isDefault: true, isActive: true, steps: [], createdBy: actor?._id || null,
+      });
+    }
+
+    for (const r of rows) {
+      let ts = template.steps.find((s) => s.stepCode === r.stepCode);
+      if (!ts) {
+        template.steps.push({ stepCode: r.stepCode });
+        ts = template.steps[template.steps.length - 1];
+      }
+      // Lead time is sent only when it was changed; otherwise the step keeps
+      // what it has (its template value, or the step's own SLA).
+      if (r.leadTime) ts.leadTime = { value: Number(r.leadTime.value), unit: r.leadTime.unit };
+      // Several main doers and buddies; the single legacy fields mirror the first.
+      const doerIds = r.doerIds || [];
+      const buddyIds = r.buddyIds || [];
+      ts.assigneeUserIds = doerIds;
+      ts.assigneeUserId = doerIds[0] || null;
+      ts.buddyUserIds = buddyIds;
+      ts.buddyUserId = buddyIds[0] || null;
+      ts.mandatory = r.stepCode === firstStepCode ? true : r.mandatory !== false;
+    }
+    template.updatedBy = actor?._id || null;
+    await template.save();
+    const openOrdersUpdated = opts.applyToOpenOrders ? await this._applyDoersToOpenOrders(rows, actor) : 0;
+    return { ...(await this.getDoerPlan()), openOrdersUpdated };
+  },
+
+  /** "Update running orders": the saved plan's doers onto every order already running. */
+  async applyDoerPlanToOpenOrders(actor) {
+    const template = await TaskTemplate.findOne({ isDefault: true, isActive: true, isDeleted: { $ne: true }, ...fmsScope(ACTIVE_FMS_KEY) }).lean();
+    const rows = (template?.steps || []).map((t) => ({
+      stepCode: t.stepCode,
+      doerIds: (t.assigneeUserIds?.length ? t.assigneeUserIds : [t.assigneeUserId]).filter(Boolean),
+      buddyIds: (t.buddyUserIds?.length ? t.buddyUserIds : [t.buddyUserId]).filter(Boolean),
+    }));
+    return { openOrdersUpdated: await this._applyDoersToOpenOrders(rows, actor) };
+  },
+
+  /**
+   * Doer Assignment → orders already running: each step not finished yet
+   * takes that step's main doers and buddies from the plan. Done / skipped
+   * steps keep their history; lead times and plan dates are not touched. A
+   * step with no main doer in the plan is left as it is. The Delegation link
+   * follows by itself (the old doer's open task is cancelled as reassigned,
+   * the new doer gets the task). Returns how many orders changed.
+   */
+  async _applyDoersToOpenOrders(rows, actor) {
+    const plan = new Map(rows
+      .map((r) => [r.stepCode, { doers: (r.doerIds || []).map(String), buddies: (r.buddyIds || []).map(String) }])
+      .filter(([, p]) => p.doers.length));
+    if (!plan.size) return 0;
+    const finished = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED];
+    const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+    const candidates = await O2DProcess.find({
+      isDeleted: { $ne: true },
+      isCompleted: { $ne: true },
+      steps: { $elemMatch: { stepCode: { $in: [...plan.keys()] }, status: { $nin: finished } } },
+    }).select('_id').lean();
+
+    let updated = 0;
+    for (const { _id } of candidates) {
+      // eslint-disable-next-line no-await-in-loop
+      const changed = await withVersionRetry(async () => {
+        const p = await O2DProcess.findById(_id);
+        if (!p) return false;
+        const codes = [];
+        for (const s of p.steps) {
+          const want = plan.get(s.stepCode);
+          if (!want || finished.includes(s.status)) continue;
+          const doers = (s.assignees?.length ? s.assignees : [s.assignedTo]).filter(Boolean).map(String);
+          const buddies = (s.buddies?.length ? s.buddies : [s.buddyUserId]).filter(Boolean).map(String);
+          if (sameList(doers, want.doers) && sameList(buddies, want.buddies)) continue;
+          s.assignees = want.doers;
+          s.assignedTo = want.doers[0] || null;
+          s.buddies = want.buddies;
+          s.buddyUserId = want.buddies[0] || null;
+          s.doersSettledAt = new Date();
+          codes.push(s.stepCode);
+        }
+        if (!codes.length) return false;
+        p.activityTimeline.push({
+          action: 'STEP_REASSIGNED',
+          description: `${codes.join(', ')} — doers updated from Doer Assignment`,
+          actorId: actor?._id || null,
+        });
+        await p.save();
+        return true;
+      });
+      if (changed) updated += 1;
+    }
+    return updated;
+  },
+
+  /**
+   * Skip an OPTIONAL step (set as not mandatory in Doer Assignment), with a
+   * reason. Only the step the order is waiting at, only by its doer / buddy
+   * (or a privileged user). The order then moves on exactly as completeStep
+   * moves it on; a skip is never counted as late.
+   */
+  async skipStep(processId, stepCode, { reason } = {}, user, opts = {}) {
+    const text = String(reason || '').trim();
+    if (text.length < 3) throw new AppError('Give a short reason for skipping this step', 400);
+
+    const process = await O2DProcess.findById(processId);
+    if (!process) throw new AppError('O2D process not found', 404);
+    const idx = process.steps.findIndex((s) => s.stepCode === stepCode);
+    if (idx === -1) throw new AppError(`Step '${stepCode}' not found on this process`, 404);
+    const step = process.steps[idx];
+
+    assertCanAct(step, user, opts.privileged);
+    const finished = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED, O2D_STEP_STATUS.SKIPPED];
+    if (finished.includes(step.status)) throw new AppError(`Step '${stepCode}' is already done or skipped`, 409);
+    if (step.mandatory !== false) throw new AppError('This step is mandatory and cannot be skipped', 422);
+
+    if (idx === 0) throw new AppError('The first step of the order cannot be skipped', 422);
+    const defMap = await loadDefMap();
+    const waitingAt = process.currentStepCode || process.steps.find((s) => !finished.includes(s.status))?.stepCode;
+    if (waitingAt !== stepCode) throw new AppError('Only the step this order is waiting at can be skipped', 409);
+
+    const at = new Date();
+    step.status = O2D_STEP_STATUS.SKIPPED;
+    step.actual = at;
+    step.delayMins = 0;
+    step.completedBy = user?._id || null;
+    step.skipReason = text;
+    step.skippedByName = user?.name || null;
+
+    // Advance — the same as completeStep.
+    const next = process.steps[idx + 1];
+    if (next) {
+      const nextDef = defMap.get(next.stepCode);
+      if (!next.planned) next.planned = addMinutes(at, next.leadTimeMins ?? nextDef?.slaMinutes ?? 60);
+      next.startedAt = at;
+      process.currentStepCode = next.stepCode;
+      await notifyStepOwners(process, next);
+    } else {
+      process.isCompleted = true;
+      process.completedAt = at;
+      process.currentStepCode = null;
+    }
+
+    process.activityTimeline.push({
+      action: 'STEP_SKIPPED',
+      description: `${stepCode} skipped — ${text}`,
+      actorId: user?._id || null,
+    });
+
+    await process.save();
     return enrichSteps(process, defMap);
   },
 
@@ -1792,6 +2135,7 @@ export const o2dFmsService = {
       if (!step) continue;
       if (sp.taskTitle !== undefined) step.taskTitle = sp.taskTitle;
       if (sp.instructions !== undefined) step.instructions = sp.instructions;
+      const whoBefore = `${stepDoerIds(step).sort()}|${stepBuddyIds(step).sort()}`;
       if (sp.assignees !== undefined) {
         step.assignees = sp.assignees || [];
         step.assignedTo = step.assignees[0] || null;
@@ -1806,6 +2150,9 @@ export const o2dFmsService = {
         step.buddyUserId = sp.buddyUserId || null;
         step.buddies = sp.buddyUserId ? [sp.buddyUserId] : [];
       }
+      // Who does it was changed for this order → Doer Assignment no longer
+      // overrides it when the step comes due.
+      if (`${stepDoerIds(step).sort()}|${stepBuddyIds(step).sort()}` !== whoBefore) step.doersSettledAt = new Date();
       if (sp.leadTime !== undefined) {
         const mins = leadTimeToMins(sp.leadTime);
         if (mins != null) {
@@ -2253,5 +2600,8 @@ export const o2dFmsService = {
     return { id };
   },
 };
+
+// Shared with the Delegation task sync (o2d-delegation.js).
+export { loadDefMap, stepDoerIds, stepBuddyIds };
 
 export default o2dFmsService;

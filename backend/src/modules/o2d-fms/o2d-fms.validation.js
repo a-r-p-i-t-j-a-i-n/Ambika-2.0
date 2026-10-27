@@ -4,6 +4,34 @@ const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/).message('Invalid id');
 
 export const mongoIdParamSchema = Joi.object({ id: objectId.required() });
 
+const newPersonRef = Joi.string().trim().max(220).pattern(/^new:[^\s@]+@[^\s@]+$/i);
+
+// FMS → Doer Assignment (O2D): one row per CHANGED step — lead time (only when
+// it was changed), main doers, buddies, mandatory.
+export const doerPlanSchema = Joi.object({
+  steps: Joi.array().min(1).items(Joi.object({
+    stepCode: Joi.string().trim().required(),
+    leadTime: Joi.object({
+      value: Joi.number().positive().max(10000).required()
+        .messages({ 'number.positive': 'Lead time must be more than 0' }),
+      unit: Joi.string().valid('HOURS', 'DAYS').required(),
+    }).optional(),
+    // An ERP user id, or `new:<email>` — a Delegation employee with no ERP
+    // account yet (made on save).
+    doerIds: Joi.array().items(Joi.alternatives().try(objectId, newPersonRef)).max(20).unique().default([]),
+    buddyIds: Joi.array().items(Joi.alternatives().try(objectId, newPersonRef)).max(20).unique().default([]),
+    mandatory: Joi.boolean().default(true),
+  })).required(),
+  // Also give orders already running (steps not done yet) these doers.
+  applyToOpenOrders: Joi.boolean().default(false),
+});
+
+// Skip an optional O2D step — a reason is required.
+export const skipStepSchema = Joi.object({
+  reason: Joi.string().trim().min(3).max(500).required()
+    .messages({ 'string.min': 'Give a short reason for skipping this step' }),
+});
+
 export const processStepParamSchema = Joi.object({
   id: objectId.required(),
   stepCode: Joi.string().trim().required(),

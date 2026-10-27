@@ -1,10 +1,12 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { finalPaymentService } from './finalPayment.service.js';
+import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
 export const finalPaymentController = {
   getAll: asyncHandler(async (req, res) => {
-    const { docs, pagination } = await finalPaymentService.getAll(req.query);
+    const { docs: rows, pagination } = await finalPaymentService.getAll(req.query);
+    const docs = await attachStepTiming('FINAL_PAYMENT', rows);
     res.json(ApiResponse.ok('Final payments retrieved', docs, pagination));
   }),
 

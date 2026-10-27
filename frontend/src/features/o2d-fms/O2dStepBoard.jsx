@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
-import { useGetProcessesQuery, useGetBoardConsignmentsQuery } from '../../store/api/o2dFmsApi';
+import { useGetProcessesQuery, useGetBoardConsignmentsQuery, useGetO2dDoerPlanQuery } from '../../store/api/o2dFmsApi';
 import { useDeleteOrderMutation } from '../../store/api/orderApi';
 import {
   useDeleteChallanMutation, useCancelChallanMutation, useRestoreChallanMutation,
@@ -21,7 +21,7 @@ import { resolveActionLink, resolveEntityLink, actionLinkMeta } from './actionLi
 import BoardRowEditDialog from './BoardRowEditDialog';
 import BulkEmailDialog from './BulkEmailDialog';
 import { O2D } from './o2dTheme';
-import { useHiddenSteps, stepKey } from '../../utils/embed';
+import { useHiddenSteps, useO2dRights, stepKey } from '../../utils/embed';
 
 // ── Ambika 2.0 step-first O2D board ─────────────────────────────────────────
 // The client's doers don't browse orders — they own ONE step of the flow and
@@ -112,8 +112,14 @@ const ctxOf = (p) => ({ soNumber: p.soNumber, orderId: p.salesOrderId, processId
 const BOARD_HIDDEN_ACTIONS = ['PPC'];
 const boardKeysOf = (s) => stepKeysOf(s).filter((k) => !BOARD_HIDDEN_ACTIONS.includes(k));
 
+// "Order Entry" IS the work only while the order is not punched in yet (1.01).
+// Once it exists (2.02 Tally check and later) it would just reopen that order,
+// so the row offers "Do Task" instead — the step page: checklist, Mark Done.
+const isWorkAction = (p, key) => !(key === 'ORDER_ENTRY' && p.salesOrderId);
+
 // PENDING rows: the step's "do the work" links — the form opens directly.
 const rowDoLinks = (p, s) => boardKeysOf(s)
+  .filter((key) => isWorkAction(p, key))
   .map((key) => {
     const to = resolveActionLink(key, ctxOf(p));
     if (!to) return null;
@@ -418,9 +424,13 @@ const O2dStepBoard = () => {
   const { stepCode } = useParams();
   const { enqueueSnackbar } = useSnackbar();
   const { can, isRoot } = usePermissions();
-  // Order deletion is MD/root-only server-side (`orders.delete`) — hide the
-  // button entirely for everyone else instead of showing a dead control.
-  const canDelete = can('orders.delete') || isRoot;
+  // Order deletion needs `orders.delete` server-side (MD/root, or a Delegation
+  // sign-in whose lock icon allows Delete on a step) — hide the button
+  // entirely for everyone else instead of showing a dead control.
+  const canDeleteOrders = can('orders.delete') || isRoot;
+  // Delegation Suite → Employees → lock icon: Edit / Delete per step and the
+  // New Sales Order button (no limits when Ambika 2.0 is used on its own).
+  const rights = useO2dRights();
   const [deleteChallan] = useDeleteChallanMutation();
   const [cancelChallan] = useCancelChallanMutation();
   const [restoreChallan] = useRestoreChallanMutation();
@@ -436,6 +446,14 @@ const O2dStepBoard = () => {
   // Steps the MD switched off for this employee in the Delegation Suite
   // (empty when Ambika 2.0 is used on its own).
   const hiddenSteps = useHiddenSteps('o2d');
+  // FMS → Doer Assignment: each step's main doer, buddy and mandatory flag.
+  const { data: planRes } = useGetO2dDoerPlanQuery();
+  const planByStep = useMemo(() => new Map((planRes?.data?.steps || []).map((p) => [p.stepCode, {
+    ...p,
+    // Every main doer / buddy of the step, as one line of names.
+    doerNames: (p.doers || []).map((d) => d.name).filter(Boolean).join(', '),
+    buddyNames: (p.buddies || []).map((b) => b.name).filter(Boolean).join(', '),
+  }])), [planRes]);
 
   // The flow is the same for every order, so the step rail is simply the union
   // of embedded steps across the loaded processes, in sequence order. Carries
@@ -473,6 +491,9 @@ const O2dStepBoard = () => {
 
   const activeCode = stepCode && steps.some((s) => s.code === stepCode) ? stepCode : steps[0]?.code;
   const activeStep = steps.find((s) => s.code === activeCode);
+  // Edit = the pencil + Cancel dispatch; Delete = the bin — on this step's rows.
+  const canEdit = rights.canEdit(activeCode);
+  const canDelete = canDeleteOrders && rights.canDelete(activeCode);
   // Per-challan steps (2.06–2.13): the table splits into one row per challan.
   const isPerDcStep = !!activeStep?.perDc;
   const isEmailStep = !!activeStep?.isEmail;
@@ -724,7 +745,10 @@ const O2dStepBoard = () => {
     return hide.length ? DC_COLUMNS.filter((c) => !hide.includes(c.key)) : DC_COLUMNS;
   }, [activeCode]);
 
-  const colCount = 11 + fieldCols.length + (canDelete ? 1 : 0) + (isPerDcStep ? 2 + dcCols.length : 0) + (isEmailStep ? 1 : 0) + extraCols.length;
+  // 10 fixed columns + Edit; per-challan steps add Split + Cancel (Cancel goes
+  // with Edit).
+  const colCount = 10 + (canEdit ? 1 : 0) + fieldCols.length + (canDelete ? 1 : 0)
+    + (isPerDcStep ? 1 + (canEdit ? 1 : 0) + dcCols.length : 0) + (isEmailStep ? 1 : 0) + extraCols.length;
 
   // ── Frozen panes ──
   // Action + SO Number (+ Split on the dispatch step) stay pinned while the
@@ -791,15 +815,17 @@ const O2dStepBoard = () => {
             onChange={(_, opt) => { if (opt) navigate(`/challans?so=${encodeURIComponent(opt.so)}`); }}
             renderInput={(params) => <TextField {...params} label="Quick dispatch" placeholder="SO / party…" />}
           />
-          <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />}
-            onClick={() => navigate('/orders?new=1')}
-            sx={{
-              whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '6px',
-              bgcolor: O2D.brand, flexShrink: 0, px: { md: 1.1, xl: 1.6 },
-            }}>
-            <Box component="span" sx={{ display: { xs: 'none', xl: 'inline' } }}>New Sales Order</Box>
-            <Box component="span" sx={{ display: { xs: 'inline', xl: 'none' } }}>New Order</Box>
-          </Button>
+          {rights.canAdd && (
+            <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />}
+              onClick={() => navigate('/orders?new=1')}
+              sx={{
+                whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '6px',
+                bgcolor: O2D.brand, flexShrink: 0, px: { md: 1.1, xl: 1.6 },
+              }}>
+              <Box component="span" sx={{ display: { xs: 'none', xl: 'inline' } }}>New Sales Order</Box>
+              <Box component="span" sx={{ display: { xs: 'inline', xl: 'none' } }}>New Order</Box>
+            </Button>
+          )}
         </Stack>
       </Box>
 
@@ -810,6 +836,9 @@ const O2dStepBoard = () => {
             {steps.map((s) => {
               const active = s.code === activeCode;
               const open = openCounts[s.code] || 0;
+              // Who does this step: the assigned main doer (Doer Assignment), else the SOP owner.
+              const plan = planByStep.get(s.code);
+              const who = plan?.doerNames || s.ownerName;
               return (
                 <Tooltip
                   key={s.code} arrow placement="bottom"
@@ -827,7 +856,12 @@ const O2dStepBoard = () => {
                   title={(
                     <Box>
                       <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: O2D.brand }}>{s.code} · {s.name}</Typography>
-                      {s.ownerName && <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mt: 0.25 }}>Who: {s.ownerName}</Typography>}
+                      {who && (
+                        <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mt: 0.25 }}>
+                          Who: {who}{plan?.buddyNames ? ` · Buddy: ${plan.buddyNames}` : ''}
+                        </Typography>
+                      )}
+                      {plan?.mandatory === false && <Typography sx={{ fontSize: '0.7rem', color: O2D.sub }}>Optional step — can be skipped</Typography>}
                       {s.whenText && <Typography sx={{ fontSize: '0.7rem', color: O2D.sub }}>When: {s.whenText}</Typography>}
                     </Box>
                   )}
@@ -893,9 +927,19 @@ const O2dStepBoard = () => {
             <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap
               sx={{ px: 1.5, py: 1, borderBottom: `1px solid ${O2D.lineSoft}` }}>
               <Typography sx={{ fontSize: '0.85rem', fontWeight: 800, color: O2D.ink }}>{activeStep.code} · {activeStep.name}</Typography>
-              {activeStep.ownerName && (
-                <Chip size="small" icon={<User size={12} />} label={activeStep.ownerName}
-                  sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: alpha(O2D.brand, 0.08), color: O2D.brand, '& .MuiChip-icon': { color: O2D.brand } }} />
+              {(planByStep.get(activeStep.code)?.doerNames || activeStep.ownerName) && (
+                <Tooltip title="Main doers — any one of them can complete this step">
+                  <Chip size="small" icon={<User size={12} />} label={planByStep.get(activeStep.code)?.doerNames || activeStep.ownerName}
+                    sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: alpha(O2D.brand, 0.08), color: O2D.brand, '& .MuiChip-icon': { color: O2D.brand } }} />
+                </Tooltip>
+              )}
+              {planByStep.get(activeStep.code)?.buddyNames && (
+                <Chip size="small" label={`Buddy: ${planByStep.get(activeStep.code).buddyNames}`}
+                  sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: '#f8fafc', color: O2D.sub, border: `1px solid ${O2D.line}` }} />
+              )}
+              {planByStep.get(activeStep.code)?.mandatory === false && (
+                <Chip size="small" label="Optional"
+                  sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }} />
               )}
               {activeStep.whenText && (
                 <Chip size="small" icon={<CalendarClock size={12} />} label={activeStep.whenText}
@@ -957,8 +1001,8 @@ const O2dStepBoard = () => {
                     <TableCell>Delay</TableCell>
                     <TableCell sx={{ minWidth: 120 }}>Who</TableCell>
                     <TableCell align="center" sx={{ width: 52 }}>Task</TableCell>
-                    {isPerDcStep && <TableCell align="center" sx={{ width: 74 }}>Cancel</TableCell>}
-                    <TableCell align="center" sx={{ width: 52 }}>Edit</TableCell>
+                    {isPerDcStep && canEdit && <TableCell align="center" sx={{ width: 74 }}>Cancel</TableCell>}
+                    {canEdit && <TableCell align="center" sx={{ width: 52 }}>Edit</TableCell>}
                     {canDelete && <TableCell align="right" sx={{ width: 56 }}>Delete</TableCell>}
                   </TableRow>
                 </TableHead>
@@ -1238,7 +1282,7 @@ const O2dStepBoard = () => {
                             quantity goes back to the plan, and 2.06→2.13 for this
                             challan all read cancelled. Already-cancelled rows show
                             a static marker instead of a second button. */}
-                        {isPerDcStep && (
+                        {isPerDcStep && canEdit && (
                           <TableCell align="center">
                             {!dc ? <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>
                               : rowCancelled ? (
@@ -1280,19 +1324,21 @@ const O2dStepBoard = () => {
                         {/* Edit THIS row in place — an Excel-style popup, no
                             redirect. A challan row edits its Delivery Challan;
                             an order row edits the Sales Order basics. */}
-                        <TableCell align="center">
-                          <Tooltip title={dc ? `Edit ${dc.dcNumber}` : (p.salesOrderId ? 'Edit this order' : 'No sales order linked yet')} arrow>
-                            <span>
-                              <IconButton
-                                size="small" disabled={!dc && !p.salesOrderId}
-                                onClick={() => setEditRow({ p, s, dc })}
-                                sx={{ color: O2D.brand, '&:hover': { bgcolor: alpha(O2D.brand, 0.08) } }}
-                              >
-                                <Pencil size={15} />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                        </TableCell>
+                        {canEdit && (
+                          <TableCell align="center">
+                            <Tooltip title={dc ? `Edit ${dc.dcNumber}` : (p.salesOrderId ? 'Edit this order' : 'No sales order linked yet')} arrow>
+                              <span>
+                                <IconButton
+                                  size="small" disabled={!dc && !p.salesOrderId}
+                                  onClick={() => setEditRow({ p, s, dc })}
+                                  sx={{ color: O2D.brand, '&:hover': { bgcolor: alpha(O2D.brand, 0.08) } }}
+                                >
+                                  <Pencil size={15} />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                        )}
                         {canDelete && (
                           <TableCell align="right">
                             <Tooltip

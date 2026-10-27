@@ -35,6 +35,7 @@ import accessControlRoutes from './modules/access-control/access-control.routes.
 import pricingRoutes from './modules/pricing/pricing.routes.js';
 import quoteRoutes from './modules/quotes/quote.routes.js';
 import o2dFmsRoutes from './modules/o2d-fms/o2d-fms.routes.js';
+import suiteLinkRoutes from './modules/o2d-fms/suite-link.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
 import orderIntakeRoutes from './modules/order-intake/order-intake.routes.js';
 // Purchase FMS
@@ -159,6 +160,7 @@ app.use('/api/v1/quotes',           quoteRoutes);
 app.use('/api/v1/sales-invoices',   salesInvoiceRoutes); // O2D Step 2.7/2.8 — invoice & e-way
 app.use('/api/v1/o2d-fulfillment',  o2dFulfillmentRoutes); // O2D Steps 2.9–2.13 — delivery/payment/transport
 app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (process tracking)
+app.use('/api/v1/suite-link',       suiteLinkRoutes); // Delegation Suite server → ERP (signed, no login)
 app.use('/api/v1/notifications',    notificationRoutes);
 app.use('/api/v1/order-intake',     orderIntakeRoutes);
 // FMS doer tasks follow Purchase FMS progress: after any successful write under

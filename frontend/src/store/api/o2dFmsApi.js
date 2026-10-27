@@ -75,6 +75,39 @@ export const o2dFmsApi = baseApi.injectEndpoints({
         { type: 'O2DProcess', id }, 'O2DProcess', 'O2DMyTasks', 'O2DDashboard',
       ],
     }),
+    // Skip an optional step (FMS → Doer Assignment) with a reason.
+    skipStep: builder.mutation({
+      query: ({ id, stepCode, reason }) => ({
+        url: `/o2d-fms/processes/${id}/steps/${stepCode}/skip`,
+        method: 'PATCH',
+        body: { reason },
+      }),
+      invalidatesTags: (r, e, { id }) => [
+        { type: 'O2DProcess', id }, 'O2DProcess', 'O2DMyTasks', 'O2DDashboard',
+      ],
+    }),
+    // FMS → Doer Assignment (O2D): lead time, main doer, buddy, mandatory per
+    // step. Stored in the default task template, hence the template tag.
+    getO2dDoerPlan: builder.query({
+      query: () => '/o2d-fms/doer-plan',
+      providesTags: ['O2DTemplate'],
+    }),
+    // Refetched after a save too: saving can make ERP accounts for Delegation
+    // employees picked for the first time, which changes their ids.
+    getO2dDoerPlanUsers: builder.query({
+      query: () => '/o2d-fms/doer-plan/users',
+      providesTags: ['O2DTemplate'],
+    }),
+    // { steps, applyToOpenOrders } — or just the steps array.
+    saveO2dDoerPlan: builder.mutation({
+      query: (arg) => ({ url: '/o2d-fms/doer-plan', method: 'PUT', body: Array.isArray(arg) ? { steps: arg } : arg }),
+      invalidatesTags: ['O2DTemplate', 'O2DProcess', 'O2DMyTasks'],
+    }),
+    // The saved plan's doers onto every order already running.
+    applyO2dDoerPlanToOpen: builder.mutation({
+      query: () => ({ url: '/o2d-fms/doer-plan/apply-open', method: 'POST' }),
+      invalidatesTags: ['O2DProcess', 'O2DMyTasks'],
+    }),
     assignStep: builder.mutation({
       query: ({ id, stepCode, assignees = [], buddies = [] }) => ({
         url: `/o2d-fms/processes/${id}/steps/${stepCode}/assign`,
@@ -264,6 +297,11 @@ export const {
   useGetProcessByIdQuery,
   useGetConsignmentsQuery,
   useGetProcessByOrderQuery,
+  useSkipStepMutation,
+  useGetO2dDoerPlanQuery,
+  useGetO2dDoerPlanUsersQuery,
+  useSaveO2dDoerPlanMutation,
+  useApplyO2dDoerPlanToOpenMutation,
   useCompleteStepMutation,
   useAssignStepMutation,
   useGetStepDefinitionsQuery,

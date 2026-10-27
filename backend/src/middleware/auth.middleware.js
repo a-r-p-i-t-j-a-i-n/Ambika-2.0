@@ -5,6 +5,14 @@ import env from '../config/env.js';
 import { AppError } from '../utils/apiResponse.js';
 import asyncHandler from './asyncHandler.js';
 
+// Permissions a Delegation Suite sign-in may add to one ERP session (the
+// Suite's Employees → lock icon; see authController.sso). Anything else in a
+// token is ignored.
+export const SESSION_GRANTABLE = new Set(['orders.delete']);
+
+export const sessionGrantsOf = (list) =>
+  (Array.isArray(list) ? list.filter((slug) => SESSION_GRANTABLE.has(slug)) : []);
+
 export const protect = asyncHandler(async (req, res, next) => {
   let token;
   const authHeader = req.headers.authorization;
@@ -24,6 +32,7 @@ export const protect = asyncHandler(async (req, res, next) => {
   }
 
   req.user = currentUser;
+  req.sessionGrants = sessionGrantsOf(decoded.grants);
   next();
 });
 

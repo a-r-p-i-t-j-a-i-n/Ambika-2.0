@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { serialColumn } from '../components/serialNumber';
+import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip,
@@ -119,14 +120,7 @@ const FollowUpList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 160,
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
-    { field: 'plannedAt', headerName: 'PLANNED', width: 105,
-      renderCell: (p) => (
-        <Typography variant="body2" sx={{ color: isDelayed(p.row) ? 'error.main' : 'text.secondary', fontWeight: isDelayed(p.row) ? 700 : 400 }}>
-          {fmtDate(p.value)}
-        </Typography>
-      ) },
-    { field: 'actualAt', headerName: 'ACTUAL', width: 105,
-      renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
+    ...stepTimingColumns(),
     { field: 'followUpStatus', headerName: 'STATUS', width: 135,
       renderCell: (p) => <FuStatusChip status={p.value} /> },
     // Next contact: the saved next date, else (while active) the planned date.
@@ -161,8 +155,6 @@ const FollowUpList = () => {
         : <Typography variant="caption" color="text.disabled">—</Typography>) },
     { field: 'followUpType', headerName: 'TYPE', width: 105,
       renderCell: (p) => <FuTypeChip type={p.value} /> },
-    { field: 'performedByName', headerName: 'PERFORMED BY', width: 125,
-      renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
       renderCell: (p) => (
         <Tooltip title="Actions">
@@ -294,7 +286,7 @@ const FollowUpList = () => {
           disableRowSelectionOnClick
           // Secondary fields stay available from the column menu.
           initialState={{ columns: { columnVisibilityModel: {
-            indentNumber: false, actualAt: false, finalMaterialDate: false, performedByName: false, plannedAt: false,
+            indentNumber: false, finalMaterialDate: false,
           } } }}
           rowHeight={50}
           columnHeaderHeight={44}
