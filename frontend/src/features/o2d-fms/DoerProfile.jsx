@@ -49,7 +49,7 @@ const DoerProfile = () => {
   const { userId } = useParams();
   const navigate = useNavigate();
   const goBack = useSmartBack('/o2d-fms/scores');
-  const { data, isLoading } = useGetDoerProfileQuery(userId, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetDoerProfileQuery(userId, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const p = data?.data;
 
   if (isLoading) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={520} /></Box>;

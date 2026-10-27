@@ -20,7 +20,7 @@ const timeAgo = (d) => {
 const NotificationBell = () => {
   const [anchor, setAnchor] = useState(null);
   const navigate = useNavigate();
-  const { data: countRes } = useGetUnreadCountQuery(undefined, { pollingInterval: 60_000 });
+  const { data: countRes } = useGetUnreadCountQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const { data: listRes } = useGetNotificationsQuery(undefined, { skip: !anchor });
   const [markRead] = useMarkNotificationReadMutation();
   const [markAll] = useMarkAllNotificationsReadMutation();

@@ -30,7 +30,7 @@ const STATUS_TONE = { DONE: '#0f766e', DELAYED: '#b45309', PENDING: '#475569', S
 
 const AllTasks = () => {
   const navigate = useNavigate();
-  const { data, isLoading } = useGetAllTasksQuery(undefined, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetAllTasksQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const tasks = data?.data || [];
 
   const [filterKey, setFilterKey] = useState('all'); // active stat-filter

@@ -481,7 +481,7 @@ const MainLayout = () => {
   // Live badge for the Approval Inbox sidebar entry.
   const { data: pendingRes } = useGetPendingRevisionsQuery(undefined, {
     skip: !isAuthenticated || (!can('pricing.approve') && !isRoot),
-    pollingInterval: 60_000,
+    pollingInterval: 60_000, skipPollingIfUnfocused: true,
   });
   const pendingCount = pendingRes?.data?.length || 0;
 
@@ -1112,7 +1112,7 @@ const MainLayout = () => {
         </Toolbar>
       </AppBar>
 
-      {/* Sidebar — exactly ONE nav tree is mounted at a time. hi  hh
+      {/* Sidebar —- exactly ONE nav tree is mounted at a time. hi  hh
           Previously both drawers rendered at every breakpoint, the off-breakpoint
           one merely hidden with `display: none` (and the mobile one held open by
           `keepMounted`). That doubled the nav — including its nine <Collapse>
