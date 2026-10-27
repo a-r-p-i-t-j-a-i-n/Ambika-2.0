@@ -218,10 +218,10 @@ const GrnQcSection = ({ grn, prepareGrn, poId, poNumber }) => {
   const editing = ['GRN_DRAFT', 'QC_READY', 'QC_DRAFT'].includes(stage.key);
 
   return (
-    <Paper id={poId ? `grn-qc-section-${poId}` : 'grn-qc-section'} sx={{ ...pfmsCardSx, p: { xs: 2, md: 3 }, scrollMarginTop: 80 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+    <Paper id={poId ? `grn-qc-section-${poId}` : 'grn-qc-section'} sx={{ ...pfmsCardSx, p: 2, scrollMarginTop: 80 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>
+          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, fontSize: '0.92rem', color: 'primary.main' }}>
             <ClipboardCheck size={18} /> Incoming QC{poNumber ? ` — PO ${poNumber}` : ''}
           </Typography>
           {qc?.qcNumber && <Chip size="small" variant="outlined" label={qc.qcNumber} sx={{ fontWeight: 700 }} />}

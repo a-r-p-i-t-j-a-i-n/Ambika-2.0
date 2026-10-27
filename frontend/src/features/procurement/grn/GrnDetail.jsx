@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import { useSelector } from 'react-redux';
 import {
-  Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
+  Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Tooltip,
   Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
 } from '@mui/material';
 import {
@@ -45,19 +45,38 @@ import { ClipboardCheck } from 'lucide-react';
 import WorkflowStepper from '../components/WorkflowStepper';
 import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import NextStepBanner from '../components/NextStepBanner';
-import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
-const Field = ({ label, value }) => (
-  <Box sx={{ minWidth: 0 }}>
-    <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
-    <Typography sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
+// ── Same spacing/typography scale as Indent, PO and Follow-up Detail
+// (SECTION_GAP/CARD_PAD/Field/FieldGrid/SectionCard), replacing the older
+// p:3 cards and the xs=6/sm=4 field grid. ──
+const SECTION_GAP = 2;
+const CARD_PAD = 2;
+
+const Field = ({ label, value, sx }) => (
+  <Box sx={{ minWidth: 0, ...sx }}>
+    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: PFMS.sub, mb: 0.4 }}>{label}</Typography>
+    {/* div, not p: the PI Number value is a link span and may grow into richer content */}
+    <Typography component="div" sx={{ fontSize: '0.86rem', fontWeight: 600, color: PFMS.ink, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
   </Box>
 );
 
+// Fields on common columns. The fixed 3-up grid squeezed every field to ~140px
+// in a half-width card (4-line values, a card twice as tall as its partner).
+// Columns are counted from the 150px minimum and share the remaining width, so
+// both cards fill their width evenly; phones keep an explicit two-up.
+const FieldGrid = ({ children, sx }) => (
+  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(auto-fill, minmax(150px, 1fr))' }, gap: 2, ...sx }}>
+    {children}
+  </Box>
+);
+const SPAN_2 = { gridColumn: 'span 2' };
+const FULL_ROW = { gridColumn: '1 / -1' };
+
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
+  <Paper sx={{ ...pfmsCardSx, p: CARD_PAD, minWidth: 0 }}>
+    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, fontWeight: 700, fontSize: '0.92rem', color: 'primary.main' }}>
       {icon} {title}
     </Typography>
     {children}
@@ -65,14 +84,28 @@ const SectionCard = ({ icon, title, children }) => (
 );
 
 // Divides the page into its two parts: the GRN (A) and its Incoming QC (B).
-const PageSection = ({ letter, title, subtitle }) => (
-  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, flexWrap: 'wrap', borderBottom: `2px solid ${PFMS.line}`, pb: 1 }}>
+const PageSection = ({ letter, title, subtitle, sx }) => (
+  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, flexWrap: 'wrap', borderBottom: `2px solid ${PFMS.line}`, pb: 1, ...sx }}>
     <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: PFMS.ink }}>
       <Box component="span" sx={{ color: 'primary.main', mr: 1 }}>{letter}</Box>{title}
     </Typography>
-    {subtitle && <Typography variant="body2" color="text.secondary">{subtitle}</Typography>}
+    {subtitle && <Typography variant="body2" sx={{ color: PFMS.sub }}>{subtitle}</Typography>}
   </Box>
 );
+
+// Material Receipt table. Headings may wrap (bottom-aligned so the row stays
+// even); numeric columns get a floor so a heading never breaks into a
+// one-word-per-line tower, and identifiers (PO, SKU, movement) stay on one
+// line. Remarks wraps inside a capped width — as a noWrap cell its full text
+// used to set the table's minimum width and squeeze every other column.
+// 16 columns: 12px cell padding instead of 16 lets the whole table fit at 1920.
+const receiptTableSx = { '& .MuiTableCell-root': { px: 1.5 } };
+const headSx = { ...pfmsTableHeadSx, whiteSpace: 'normal', lineHeight: 1.3, verticalAlign: 'bottom' };
+const numCellSx = { whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' };
+const NUM_COLS = [
+  ['Ordered', 72], ['Already Received', 88], ['Pending Before GRN', 88], ['Invoice', 72],
+  ['Received', 76], ['Short', 64], ['Pending After GRN', 88],
+];
 
 const scrollToId = (elId) => document.getElementById(elId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -195,18 +228,22 @@ const GrnDetail = () => {
   })();
 
   return (
-    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
-      {/* Hero */}
-      <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}>
-          <ArrowLeft size={20} />
-        </IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}>
-          <PackageCheck size={24} />
+    <Box sx={{ ...pfmsPageSx }}>
+      {/* Hero — same sizes as Indent/PO/Follow-up Detail. The identity block has
+          an explicit flex basis so long vendor names wrap inside it instead of
+          pushing the actions around unpredictably. */}
+      <Box sx={{ mb: SECTION_GAP, display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 1.5, flexWrap: 'wrap' }}>
+        <Tooltip title="Back">
+          <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}`, width: 38, height: 38 }}>
+            <ArrowLeft size={18} />
+          </IconButton>
+        </Tooltip>
+        <Box sx={{ width: 38, height: 38, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main', flexShrink: 0 }}>
+          <PackageCheck size={20} />
         </Box>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{grn.grnNumber}</Typography>
+        <Box sx={{ flex: { xs: '1 1 200px', md: '1 1 420px' }, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: PFMS.ink }}>{grn.grnNumber}</Typography>
             {grn.uniqueId && <Chip size="small" variant="outlined" label={grn.uniqueId} sx={{ fontWeight: 700 }} />}
             <GrnStatusChip status={grn.grnStatus} />
             <span data-testid="grn-hero-qc-status"><GrnQcStatusChip stage={qcStage} /></span>
@@ -219,12 +256,14 @@ const GrnDetail = () => {
               <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} />
             )}
           </Box>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: PFMS.sub, overflowWrap: 'anywhere' }}>
             {grn.vendorName} · {grn.isWithoutPo ? 'Without PO' : `PO ${(grn.poNumbers?.length ? grn.poNumbers : [grn.poNumber]).filter(Boolean).join(', ') || '—'}`} · {fmtDate(grn.grnDate)}
           </Typography>
         </Box>
-        <Box sx={{ flexGrow: 1 }} />
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Box sx={{
+          display: 'flex', gap: 1, flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' },
+          '& .MuiButtonBase-root': { flex: { xs: '1 1 auto', sm: '0 0 auto' } },
+        }}>
           {(grn.poIds?.length ? grn.poIds : (grn.poId ? [grn.poId] : [])).map((pid, i) => (
             <Button key={pid} variant="outlined" startIcon={<ShoppingBag size={16} />} onClick={() => navigate(`/procurement/purchase-orders/${pid}`)}>
               View PO{(grn.poNumbers?.length > 1) ? ` ${grn.poNumbers[i] || ''}` : ''}
@@ -240,203 +279,191 @@ const GrnDetail = () => {
 
       <NextStepBanner step={nextStep} />
 
-      <FmsDoerCard entityType="GRN" entityId={id} />
-      <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
-      <Grid container spacing={3}>
-        <Grid item xs={12}>
-          <PageSection letter="A" title="GRN Details" subtitle="Goods received against the PO · stock · MD approval" />
-        </Grid>
+      <FmsDoerCard entityType="GRN" entityId={id} sx={{ mb: SECTION_GAP }} />
+      <WorkflowStepper steps={wfSteps} sx={{ mb: SECTION_GAP }} />
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: SECTION_GAP }}>
+        <PageSection letter="A" title="GRN Details" subtitle="Goods received against the PO · stock · MD approval" />
 
-        {/* GRN + PO info */}
-        <Grid item xs={12} md={6}>
+        {/* GRN + Vendor/PO info. Side by side only from lg; below that they
+            stack full width. Split 3:2 because GRN Information carries ~13
+            fields to the vendor card's 9, so both end up with about the same
+            number of rows. Top-aligned rather than stretched, so a long Remarks
+            block never pads its partner with an empty band. */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 3fr) minmax(0, 2fr)' }, gap: SECTION_GAP, alignItems: 'start' }}>
           <SectionCard icon={<FileText size={18} />} title="GRN Information">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="GRN Date" value={fmtDate(grn.grnDate)} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Unique Id" value={grn.uniqueId || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Material Receipt Type" value={receiptTypeSummaryLabel(grn)} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Challan No" value={grn.challanNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Invoice No" value={grn.invoiceNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Invoice Date" value={fmtDate(grn.invoiceDate)} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Vehicle No" value={grn.vehicleNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Received By" value={grn.receivedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Prepared By" value={grn.preparedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label={<><Warehouse size={12} /> Warehouse</>} value={grn.warehouse || 'MAIN'} /></Grid>
+            <FieldGrid>
+              <Field label="GRN Date" value={fmtDate(grn.grnDate)} />
+              <Field label="Unique Id" value={grn.uniqueId || '—'} />
+              <Field label="Material Receipt Type" value={receiptTypeSummaryLabel(grn)} />
+              <Field label="Challan No" value={grn.challanNumber || '—'} />
+              <Field label="Invoice No" value={grn.invoiceNumber || '—'} />
+              <Field label="Invoice Date" value={fmtDate(grn.invoiceDate)} />
+              <Field label="Vehicle No" value={grn.vehicleNumber || '—'} />
+              <Field label="Received By" value={grn.receivedBy || '—'} />
+              <Field label="Prepared By" value={grn.preparedBy || '—'} />
+              <Field label={<Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}><Warehouse size={12} /> Warehouse</Box>} value={grn.warehouse || 'MAIN'} />
               {/* Shown beside Warehouse on purpose: they are different things.
                   Warehouse is the GRN's own store (MAIN); Received At is where
                   the Raw Material landed, and is what the RM movement uses. */}
               {/* GRNs completed before automatic routing keep showing the manual
                   choice they were posted under — never reinterpreted. Every other
                   GRN routes each line from its SKU master and posts after QC. */}
-              <Grid item xs={6} sm={4}>
-                {isGrnCompleted(grn) && !grn.stockPostingStage ? (
-                  <Field label="Inventory Type (earlier GRN)" value={grn.inventoryType
-                    ? inventoryTypeLabel(grn.inventoryType)
-                    : `— (Add to RM Stock: ${grn.addToRmStock ? 'Yes' : 'No'})`} />
-                ) : (
-                  <Field label="Stock Posting" value="After QC · destination per line from SKU master" />
-                )}
-              </Grid>
-              <Grid item xs={6} sm={4}><Field label="Received At" value={grn.rmReceivedAtLocation || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Completed At" value={fmtDate(grn.completedAt)} /></Grid>
-              {grn.remarks ? <Grid item xs={12}><Field label="Remarks" value={grn.remarks} /></Grid> : null}
-            </Grid>
+              {isGrnCompleted(grn) && !grn.stockPostingStage ? (
+                <Field label="Inventory Type (earlier GRN)" value={grn.inventoryType
+                  ? inventoryTypeLabel(grn.inventoryType)
+                  : `— (Add to RM Stock: ${grn.addToRmStock ? 'Yes' : 'No'})`} />
+              ) : (
+                <Field label="Stock Posting" value="After QC · destination per line from SKU master" />
+              )}
+              <Field label="Received At" value={grn.rmReceivedAtLocation || '—'} />
+              <Field label="Completed At" value={fmtDate(grn.completedAt)} />
+              {grn.remarks ? <Field label="Remarks" value={grn.remarks} sx={FULL_ROW} /> : null}
+            </FieldGrid>
           </SectionCard>
-        </Grid>
 
-        {/* Vendor + PO/PI linkage */}
-        <Grid item xs={12} md={6}>
+          {/* Vendor + PO/PI linkage */}
           <SectionCard icon={<Building2 size={18} />} title="Vendor · PO · PI">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Vendor" value={grn.vendorName || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="GST" value={grn.vendorGST || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Phone" value={grn.vendorPhone || '—'} /></Grid>
-              <Grid item xs={12} sm={4}><Field label="Address" value={grn.vendorAddress || '—'} /></Grid>
-              <Grid item xs={6} sm={4}>
-                <Field label={`PO Number${(grn.poNumbers?.length || 0) > 1 ? 's' : ''}`}
-                  value={grn.isWithoutPo ? 'Without PO' : ((grn.poNumbers?.length ? grn.poNumbers : [grn.poNumber]).filter(Boolean).join(', ') || '—')} />
-              </Grid>
-              <Grid item xs={6} sm={4}>
-                <Field label="PI Number" value={grn.piId
-                  ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${grn.piId}`)}>{grn.piNumber || 'View PI'}</Box>
-                  : (grn.piNumber || '—')} />
-              </Grid>
-              <Grid item xs={6} sm={4}><Field label="Indent" value={grn.indentNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Received Qty" value={grn.totalReceivedQty} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Receipt Value" value={fmtINR(grn.totalValue)} /></Grid>
-            </Grid>
+            {/* dense: when the two-column Address can't fit beside Phone, the
+                next field fills that gap instead of leaving a hole. */}
+            <FieldGrid sx={{ gridAutoFlow: 'row dense' }}>
+              <Field label="Vendor" value={grn.vendorName || '—'} />
+              <Field label="GST" value={grn.vendorGST || '—'} />
+              <Field label="Phone" value={grn.vendorPhone || '—'} />
+              {/* Two columns: an address is the one long free-text value here. */}
+              <Field label="Address" value={grn.vendorAddress || '—'} sx={SPAN_2} />
+              <Field label={`PO Number${(grn.poNumbers?.length || 0) > 1 ? 's' : ''}`}
+                value={grn.isWithoutPo ? 'Without PO' : ((grn.poNumbers?.length ? grn.poNumbers : [grn.poNumber]).filter(Boolean).join(', ') || '—')} />
+              <Field label="PI Number" value={grn.piId
+                ? <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => navigate(`/procurement/proforma-invoices/${grn.piId}`)}>{grn.piNumber || 'View PI'}</Box>
+                : (grn.piNumber || '—')} />
+              <Field label="Indent" value={grn.indentNumber || '—'} />
+              <Field label="Received Qty" value={grn.totalReceivedQty} />
+              <Field label="Receipt Value" value={fmtINR(grn.totalValue)} />
+            </FieldGrid>
           </SectionCard>
-        </Grid>
+        </Box>
 
-        {/* Material receipt table */}
-        <Grid item xs={12}>
-          <SectionCard icon={<ReceiptText size={18} />} title={`Material Receipt (${grn.items?.length || 0})`}>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>#</TableCell>
-                    {(grn.poNumbers?.length || 0) > 1 && <TableCell>PO</TableCell>}
-                    <TableCell>Description</TableCell>
-                    <TableCell>SKU</TableCell>
-                    <TableCell align="right">Ordered</TableCell>
-                    <TableCell align="right">Already Received</TableCell>
-                    <TableCell align="right">Pending Before GRN</TableCell>
-                    <TableCell align="right">Invoice</TableCell>
-                    <TableCell align="right">Received</TableCell>
-                    <TableCell align="right">Short</TableCell>
-                    <TableCell align="right">Pending After GRN</TableCell>
-                    <TableCell>Receipt Type</TableCell>
-                    <TableCell>Item Status</TableCell>
-                    <TableCell>Batch</TableCell>
-                    <TableCell>Stock</TableCell>
-                    <TableCell>Remarks</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(grn.items || []).map((it, i) => {
-                    // Legacy GRNs predate the persisted pendingBeforeGrn field — derive
-                    // it the same way the backend does so old records stay readable.
-                    const pendingBeforeGrn = it.pendingBeforeGrn ?? Math.max(0, (it.orderedQty || 0) - (it.previouslyReceivedQty || 0));
-                    // Item-wise receipt status, derived from this line's own pending/extra
-                    // qty (never from the PO or GRN as a whole) — an item is only "Fully
-                    // Received" once ITS pending-after-GRN qty is zero.
-                    // A W/O PO line has no PO to compare against — ordered/already
-                    // received/pending are not applicable, never fabricated as 0.
-                    const itemStatus = grn.isWithoutPo
-                      ? { label: 'Received', color: '#0f766e' }
-                      : (it.extraQty || 0) > 0
-                        ? { label: 'Extra Received', color: '#c2410c' }
-                        : (it.pendingQty || 0) > 0
-                          ? { label: 'Partially Received', color: '#b45309' }
-                          : { label: 'Fully Received', color: '#0f766e' };
-                    return (
-                      <TableRow key={it._id || i} hover>
-                        <TableCell>{i + 1}</TableCell>
-                        {(grn.poNumbers?.length || 0) > 1 && (
-                          <TableCell><Typography variant="body2" color="text.secondary">{it.poNumber || '—'}</Typography></TableCell>
+        {/* Material receipt table — scrolls sideways inside the card when
+            narrower than its columns; the page itself never scrolls. */}
+        <SectionCard icon={<ReceiptText size={18} />} title={`Material Receipt (${grn.items?.length || 0})`}>
+          <TableContainer sx={{ overflowX: 'auto' }}>
+            <Table size="small" sx={receiptTableSx}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={headSx}>#</TableCell>
+                  {(grn.poNumbers?.length || 0) > 1 && <TableCell sx={headSx}>PO</TableCell>}
+                  <TableCell sx={{ ...headSx, minWidth: 160 }}>Description</TableCell>
+                  <TableCell sx={headSx}>SKU</TableCell>
+                  {NUM_COLS.map(([h, w]) => <TableCell key={h} align="right" sx={{ ...headSx, minWidth: w }}>{h}</TableCell>)}
+                  <TableCell sx={{ ...headSx, minWidth: 120 }}>Receipt Type</TableCell>
+                  <TableCell sx={headSx}>Item Status</TableCell>
+                  <TableCell sx={{ ...headSx, minWidth: 120 }}>Batch</TableCell>
+                  <TableCell sx={{ ...headSx, minWidth: 130 }}>Stock</TableCell>
+                  <TableCell sx={{ ...headSx, minWidth: 130 }}>Remarks</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(grn.items || []).map((it, i) => {
+                  // Legacy GRNs predate the persisted pendingBeforeGrn field — derive
+                  // it the same way the backend does so old records stay readable.
+                  const pendingBeforeGrn = it.pendingBeforeGrn ?? Math.max(0, (it.orderedQty || 0) - (it.previouslyReceivedQty || 0));
+                  // Item-wise receipt status, derived from this line's own pending/extra
+                  // qty (never from the PO or GRN as a whole) — an item is only "Fully
+                  // Received" once ITS pending-after-GRN qty is zero.
+                  // A W/O PO line has no PO to compare against — ordered/already
+                  // received/pending are not applicable, never fabricated as 0.
+                  const itemStatus = grn.isWithoutPo
+                    ? { label: 'Received', color: '#0f766e' }
+                    : (it.extraQty || 0) > 0
+                      ? { label: 'Extra Received', color: '#c2410c' }
+                      : (it.pendingQty || 0) > 0
+                        ? { label: 'Partially Received', color: '#b45309' }
+                        : { label: 'Fully Received', color: '#0f766e' };
+                  return (
+                    <TableRow key={it._id || i} hover>
+                      <TableCell>{i + 1}</TableCell>
+                      {(grn.poNumbers?.length || 0) > 1 && (
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}><Typography variant="body2" color="text.secondary">{it.poNumber || '—'}</Typography></TableCell>
+                      )}
+                      <TableCell sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{it.itemName}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
+                      <TableCell align="right" sx={numCellSx}>{grn.isWithoutPo ? 'N/A' : it.orderedQty}</TableCell>
+                      <TableCell align="right" sx={numCellSx}>{grn.isWithoutPo ? 'N/A' : (it.previouslyReceivedQty || 0)}</TableCell>
+                      <TableCell align="right" sx={{ ...numCellSx, fontWeight: 700, color: pendingBeforeGrn > 0 ? '#b45309' : '#0f766e' }}>{grn.isWithoutPo ? 'N/A' : pendingBeforeGrn}</TableCell>
+                      <TableCell align="right" sx={numCellSx}>{it.invoiceQty}</TableCell>
+                      <TableCell align="right" sx={{ ...numCellSx, color: '#0f766e', fontWeight: 700 }}>{it.receivedQty}</TableCell>
+                      <TableCell align="right" sx={{ ...numCellSx, color: it.shortQty > 0 ? '#b45309' : 'text.secondary' }}>{it.shortQty || 0}</TableCell>
+                      <TableCell align="right" sx={{ ...numCellSx, color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{grn.isWithoutPo ? 'N/A' : (it.pendingQty || 0)}</TableCell>
+                      <TableCell data-testid="grn-line-receipt-type-value">{howReceivedLabel(lineReceiptType(it, grn))}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Chip size="small" label={itemStatus.label} sx={{ fontWeight: 700, color: itemStatus.color, bgcolor: alpha(itemStatus.color, 0.1) }} />
+                      </TableCell>
+                      <TableCell sx={{ overflowWrap: 'anywhere' }}>{it.batchNo || '—'}</TableCell>
+                      <TableCell data-testid="grn-line-stock">
+                        {it.inventoryDestination && (
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+                            {destinationText(it.inventoryDestination, it.stockWarehouse)}
+                          </Typography>
                         )}
-                        <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
-                        <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
-                        <TableCell align="right">{grn.isWithoutPo ? 'N/A' : it.orderedQty}</TableCell>
-                        <TableCell align="right">{grn.isWithoutPo ? 'N/A' : (it.previouslyReceivedQty || 0)}</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 700, color: pendingBeforeGrn > 0 ? '#b45309' : '#0f766e' }}>{grn.isWithoutPo ? 'N/A' : pendingBeforeGrn}</TableCell>
-                        <TableCell align="right">{it.invoiceQty}</TableCell>
-                        <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.receivedQty}</TableCell>
-                        <TableCell align="right" sx={{ color: it.shortQty > 0 ? '#b45309' : 'text.secondary' }}>{it.shortQty || 0}</TableCell>
-                        <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{grn.isWithoutPo ? 'N/A' : (it.pendingQty || 0)}</TableCell>
-                        <TableCell data-testid="grn-line-receipt-type-value">{howReceivedLabel(lineReceiptType(it, grn))}</TableCell>
-                        <TableCell>
-                          <Chip size="small" label={itemStatus.label} sx={{ fontWeight: 700, color: itemStatus.color, bgcolor: alpha(itemStatus.color, 0.1) }} />
-                        </TableCell>
-                        <TableCell>{it.batchNo || '—'}</TableCell>
-                        <TableCell data-testid="grn-line-stock">
-                          {it.inventoryDestination && (
-                            <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-                              {destinationText(it.inventoryDestination, it.stockWarehouse)}
-                            </Typography>
-                          )}
-                          {STOCK_STATUS[it.stockStatus] && (
-                            <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: STOCK_STATUS[it.stockStatus].color }}>
-                              {STOCK_STATUS[it.stockStatus].label}{it.stockStatus === 'POSTED' ? ` ${it.postedQty}` : ''}
-                            </Typography>
-                          )}
-                          <Typography variant="body2" color="text.secondary">{it.movementNumber || (it.inventoryDestination ? '' : '—')}</Typography>
-                        </TableCell>
-                        <TableCell><Typography variant="body2" color="text.secondary" noWrap>{it.remarks || '—'}</Typography></TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </SectionCard>
-        </Grid>
+                        {STOCK_STATUS[it.stockStatus] && (
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: STOCK_STATUS[it.stockStatus].color }}>
+                            {STOCK_STATUS[it.stockStatus].label}{it.stockStatus === 'POSTED' ? ` ${it.postedQty}` : ''}
+                          </Typography>
+                        )}
+                        <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>{it.movementNumber || (it.inventoryDestination ? '' : '—')}</Typography>
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 280 }}><Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{it.remarks || '—'}</Typography></TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </SectionCard>
 
         {/* Inventory updates (traceability) */}
         {isCompleted && (
-          <Grid item xs={12}>
-            <SectionCard icon={<Boxes size={18} />} title={`Inventory Updates (${movements.length})`}>
-              {movements.length ? (
-                <TableContainer>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Movement No</TableCell>
-                        <TableCell>SKU</TableCell>
-                        <TableCell>Txn</TableCell>
-                        <TableCell align="right">Qty In</TableCell>
-                        <TableCell align="right">Balance After</TableCell>
-                        <TableCell>Warehouse</TableCell>
-                        <TableCell>Batch</TableCell>
-                        <TableCell align="right">Unit Cost</TableCell>
+          <SectionCard icon={<Boxes size={18} />} title={`Inventory Updates (${movements.length})`}>
+            {movements.length ? (
+              <TableContainer sx={{ overflowX: 'auto' }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={headSx}>Movement No</TableCell>
+                      <TableCell sx={headSx}>SKU</TableCell>
+                      <TableCell sx={headSx}>Txn</TableCell>
+                      <TableCell align="right" sx={headSx}>Qty In</TableCell>
+                      <TableCell align="right" sx={headSx}>Balance After</TableCell>
+                      <TableCell sx={headSx}>Warehouse</TableCell>
+                      <TableCell sx={headSx}>Batch</TableCell>
+                      <TableCell align="right" sx={headSx}>Unit Cost</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {movements.map((m) => (
+                      <TableRow key={m._id} hover>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}><Typography variant="body2" fontWeight={700} color="primary.main">{m.movementNumber}</Typography></TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>{m.skuCode || m.skuName || '—'}</TableCell>
+                        <TableCell><Chip size="small" color="success" variant="outlined" label={m.txnType} sx={{ fontWeight: 700 }} /></TableCell>
+                        <TableCell align="right" sx={{ ...numCellSx, color: '#0f766e', fontWeight: 700 }}>+{m.quantity}</TableCell>
+                        <TableCell align="right" sx={{ ...numCellSx, fontWeight: 700 }}>{m.balanceAfter}</TableCell>
+                        <TableCell>{m.warehouse}</TableCell>
+                        <TableCell sx={{ overflowWrap: 'anywhere' }}>{m.batchNo || '—'}</TableCell>
+                        <TableCell align="right" sx={numCellSx}>{Number(m.unitCost || 0).toFixed(2)}</TableCell>
                       </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {movements.map((m) => (
-                        <TableRow key={m._id} hover>
-                          <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{m.movementNumber}</Typography></TableCell>
-                          <TableCell>{m.skuCode || m.skuName || '—'}</TableCell>
-                          <TableCell><Chip size="small" color="success" variant="outlined" label={m.txnType} sx={{ fontWeight: 700 }} /></TableCell>
-                          <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>+{m.quantity}</TableCell>
-                          <TableCell align="right" sx={{ fontWeight: 700 }}>{m.balanceAfter}</TableCell>
-                          <TableCell>{m.warehouse}</TableCell>
-                          <TableCell>{m.batchNo || '—'}</TableCell>
-                          <TableCell align="right">{Number(m.unitCost || 0).toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              ) : (
-                <Typography variant="body2" color="text.disabled">{grn.stockPostingStage ? 'Nothing posted yet — accepted quantities are posted when the MD has signed and Incoming QC is completed.' : 'No stock movements found for this GRN.'}</Typography>
-              )}
-            </SectionCard>
-          </Grid>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Typography variant="body2" color="text.disabled">{grn.stockPostingStage ? 'Nothing posted yet — accepted quantities are posted when the MD has signed and Incoming QC is completed.' : 'No stock movements found for this GRN.'}</Typography>
+            )}
+          </SectionCard>
         )}
 
         {/* MD Digital Approval & Signature */}
         {isCompleted && (
-          <Grid item xs={12} id="grn-md-approval" sx={{ scrollMarginTop: 80 }}>
+          <Box id="grn-md-approval" sx={{ scrollMarginTop: 80 }}>
             <MdApprovalCard
               documentType="GRN"
               documentId={grn._id}
@@ -445,35 +472,34 @@ const GrnDetail = () => {
               onPreviewPdf={() => setPdfOpen(true)}
               skip={grn.approvalStatus === 'NOT_REQUIRED'}
             />
-          </Grid>
+          </Box>
         )}
 
         {/* Section B — Step 1.9 Incoming QC, directly under the GRN */}
-        <Grid item xs={12} sx={{ mt: 1 }}>
-          <PageSection letter="B" title="Incoming QC" subtitle="Step 1.9 · Accepted / rejected / rework against the received quantity" />
-        </Grid>
-        <Grid item xs={12}>
-          <GrnQcSections grn={grn} />
-        </Grid>
+        <PageSection letter="B" title="Incoming QC" subtitle="Step 1.9 · Accepted / rejected / rework against the received quantity" sx={{ mt: 1 }} />
+        <GrnQcSections grn={grn} />
 
-        {/* Timeline */}
+        {/* Timeline — one grid per entry with a fixed label column (as on
+            Follow-up Detail), so descriptions line up; on phones the date sits
+            beside the label and the description takes the full width. */}
         {grn.activityTimeline?.length ? (
-          <Grid item xs={12}>
-            <SectionCard icon={<FileText size={18} />} title="Timeline">
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {[...grn.activityTimeline].reverse().map((ev, i) => (
-                  <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 110 }} />
-                    <Typography variant="body2" color="text.secondary">{ev.description}</Typography>
-                    <Box sx={{ flexGrow: 1 }} />
-                    <Typography variant="caption" color="text.disabled">{fmtDate(ev.timestamp)}</Typography>
-                  </Box>
-                ))}
-              </Box>
-            </SectionCard>
-          </Grid>
+          <SectionCard icon={<FileText size={18} />} title="Timeline">
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {[...grn.activityTimeline].reverse().map((ev, i) => (
+                <Box key={i} sx={{
+                  display: 'grid', alignItems: 'center', columnGap: 1.5, rowGap: 0.5,
+                  gridTemplateColumns: { xs: 'minmax(0, auto) 1fr', sm: '110px minmax(0, 1fr) auto' },
+                  gridTemplateAreas: { xs: '"label date" "desc desc"', sm: '"label desc date"' },
+                }}>
+                  <Chip size="small" label={ev.action} sx={{ gridArea: 'label', justifySelf: 'start', maxWidth: '100%', minWidth: { sm: 110 }, fontWeight: 700 }} />
+                  <Typography variant="body2" sx={{ gridArea: 'desc', color: PFMS.sub, minWidth: 0, overflowWrap: 'anywhere' }}>{ev.description}</Typography>
+                  <Typography variant="caption" sx={{ gridArea: 'date', justifySelf: 'end', whiteSpace: 'nowrap', color: PFMS.faint }}>{fmtDate(ev.timestamp)}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </SectionCard>
         ) : null}
-      </Grid>
+      </Box>
 
       {/* Dialogs */}
       <GrnFormDialog open={formOpen} grn={grn} onClose={() => setFormOpen(false)} />

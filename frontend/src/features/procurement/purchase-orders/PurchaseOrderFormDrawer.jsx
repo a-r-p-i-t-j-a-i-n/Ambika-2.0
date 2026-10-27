@@ -6,7 +6,7 @@ import {
 import { alpha } from '@mui/material/styles';
 import { X, Save, ShoppingBag, Plus, Trash2, Building2, FileText, AlertTriangle, Eye, CheckCircle2 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { usePermissions } from '../../../hooks/usePermission';
+import { useSelector } from 'react-redux';
 import {
   useGetIndentsQuery,
   useGetAllApprovedItemsQuery,
@@ -25,6 +25,7 @@ import AddVendorForItemModal from './AddVendorForItemModal';
 import { norm, matchVendorProduct, fillOtherRates } from './vendorRateMatch';
 import { itemRef, UNITS, toKgsUnit } from '../indents/indentMeta';
 import { VENDOR_SOURCE_LABEL, fixedVendorOf, itemVendorBlock, assignedVendorsOf } from './itemVendor';
+import { isMdForDirectSave } from './poDirectSave';
 
 /**
  * Create / edit a Vendor Purchase Order (Step 1.4).
@@ -112,11 +113,9 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const sourcePo = po || reviseFrom;
   const isCreate = !isEdit && !isRevise;
 
-  // "Save PO Directly" skips the approval step, so it's only offered when PO
-  // approval isn't required — the creator already holds PO approval authority
-  // (procurement.approve). The server enforces the same rule.
-  const { can } = usePermissions();
-  const canDirectSave = can('procurement.approve');
+  // "Save PO Directly" skips the approval step, so it's offered to the MD only;
+  // everyone else saves a draft for PO Approval. The server enforces the same rule.
+  const canDirectSave = useSelector((s) => isMdForDirectSave(s.auth.user));
   const [pendingMode, setPendingMode] = useState(''); // which create button is saving
 
   // Tracks which indent the JSL rows were last auto-built for, so a late-loading
@@ -748,7 +747,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       } else if (direct) {
         enqueueSnackbar(`PO ${poDisplayNumber(saved)} saved as draft — approve it from the PO detail`, { variant: 'warning' });
       } else {
-        enqueueSnackbar(`PO ${poDisplayNumber(saved)} saved as draft`, { variant: 'success' });
+        enqueueSnackbar(`PO ${poDisplayNumber(saved)} saved as draft — it now waits for approval in PO Approval`, { variant: 'success' });
       }
     };
 
@@ -1284,10 +1283,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
             {validItems.length} item(s) · {fmtINR(totals.grand)}
           </Typography>
           {isCreate && (
-            <Typography variant="caption" color="text.secondary" display="block">
+            <Typography variant="caption" color={canDirectSave ? 'text.secondary' : 'warning.dark'} display="block"
+              data-testid="po-save-mode-note">
               {canDirectSave
                 ? 'Draft stays editable and needs approval · Save PO Directly approves it now with the final PO number'
-                : 'PO approval is required for your role — save as draft and send it for approval'}
+                : 'Only the MD can save a PO directly — save it as a draft; it stays a draft until approved in PO Approval'}
             </Typography>
           )}
         </Box>
@@ -1309,17 +1309,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   </Button>
                 </span>
               </Tooltip>
-              <Tooltip title={canDirectSave
-                ? 'Creates the PO as approved with its final PO number — ready to release. No separate approval step.'
-                : 'Not available — PO approval is required for your role (needs PO approval rights).'}>
-                <span>
-                  <Button variant="contained" color="success"
-                    startIcon={pendingMode === 'DIRECT' ? <CircularProgress size={16} color="inherit" /> : <CheckCircle2 size={16} />}
-                    onClick={() => handleSubmit('DIRECT')} disabled={!canDirectSave || saving || previewing}>
-                    Save PO Directly
-                  </Button>
-                </span>
-              </Tooltip>
+              {canDirectSave && (
+                <Tooltip title="Creates the PO as approved with its final PO number — ready to release. No separate approval step (MD only).">
+                  <span>
+                    <Button variant="contained" color="success"
+                      startIcon={pendingMode === 'DIRECT' ? <CircularProgress size={16} color="inherit" /> : <CheckCircle2 size={16} />}
+                      onClick={() => handleSubmit('DIRECT')} disabled={saving || previewing}>
+                      Save PO Directly
+                    </Button>
+                  </span>
+                </Tooltip>
+              )}
             </>
           ) : (
             <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}

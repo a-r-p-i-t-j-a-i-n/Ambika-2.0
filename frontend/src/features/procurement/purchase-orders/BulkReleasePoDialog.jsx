@@ -1,10 +1,11 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
   Box, Typography, CircularProgress, Chip, Checkbox, Table, TableBody,
-  TableCell, TableHead, TableRow, InputAdornment, Popover, MenuItem,
+  TableCell, TableHead, TableRow, InputAdornment, Popover, MenuItem, IconButton, Tooltip,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
   Send, Search, CheckCircle2, XCircle, MailWarning, AlertTriangle, Paperclip, Eye, Download,
 } from 'lucide-react';
@@ -134,8 +135,12 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
   // list/detail (POST /:id/pdf). Generated URLs are cached per PO while open.
   const [generatePoPdf] = useGeneratePurchaseOrderPdfMutation();
   const [pdfCache, setPdfCache] = useState(() => new Map());
-  const [pdfBusy, setPdfBusy] = useState(''); // '' | 'preview' | 'download'
+  const [pdfBusy, setPdfBusy] = useState(''); // '' | 'preview' | 'download' | `row:<poId>`
   const [pdfPreviewPo, setPdfPreviewPo] = useState(null);
+  const [pdfGenerated, setPdfGenerated] = useState(false);
+  // Synchronous twin of pdfBusy: a double-click lands before the re-render that
+  // disables the icons, so the state alone can't stop a second request.
+  const pdfBusyRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -151,6 +156,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     setPreviewMap(new Map());
     setPdfCache(new Map());
     setPdfPreviewPo(null);
+    setPdfGenerated(false);
   }, [open]);
 
   // Resolve To/CC/BCC/subject for every eligible PO — refreshed (debounced) on
@@ -235,10 +241,13 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     setConfirmOpen(true);
   };
 
+  // Always renders a fresh PDF the first time a PO is previewed/downloaded while
+  // the dialog is open: on an unreleased PO a stored poPdfUrl is only an earlier
+  // preview (possibly from before draft edits), and release() regenerates it anyway.
   const ensurePdf = async (po) => {
-    const cached = pdfCache.get(po._id)
-      || (po.poPdfUrl && { poPdfUrl: po.poPdfUrl, poPdfFileName: po.poPdfFileName });
+    const cached = pdfCache.get(po._id);
     if (cached) return cached;
+    setPdfGenerated(true);
     const res = await generatePoPdf({ id: po._id }).unwrap();
     const info = { poPdfUrl: res?.data?.poPdfUrl, poPdfFileName: res?.data?.poPdfFileName };
     if (!info.poPdfUrl) throw new Error('PDF was not generated');
@@ -246,18 +255,25 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     return info;
   };
 
-  // Preview targets the PO shown in the Email Preview panel (the first selected,
-  // or the one picked in its "Previewing" dropdown when several are selected).
-  const handlePreviewPdf = async () => {
-    const po = eligible.find((p) => p._id === previewPoId);
-    if (!po) { enqueueSnackbar('Select a PO to preview its PDF', { variant: 'warning' }); return; }
-    setPdfBusy('preview');
+  // Read-only: only renders/stores the PDF — never touches selection, email or release.
+  const openPdfPreview = async (po, busyKey) => {
+    if (pdfBusyRef.current) return;
+    pdfBusyRef.current = true;
+    setPdfBusy(busyKey);
     try {
       const info = await ensurePdf(po);
       setPdfPreviewPo({ ...po, poNumber: poDisplayNumber(po), ...info });
     } catch (err) {
-      enqueueSnackbar(err?.data?.message || err?.message || 'Failed to generate PDF', { variant: 'error' });
-    } finally { setPdfBusy(''); }
+      enqueueSnackbar(`${poDisplayNumber(po)}: ${err?.data?.message || err?.message || 'Failed to generate PDF'}`, { variant: 'error' });
+    } finally { pdfBusyRef.current = false; setPdfBusy(''); }
+  };
+
+  // Header button targets the PO shown in the Email Preview panel (the first selected,
+  // or the one picked in its "Previewing" dropdown when several are selected).
+  const handlePreviewPdf = () => {
+    const po = eligible.find((p) => p._id === previewPoId);
+    if (!po) { enqueueSnackbar('Select a PO to preview its PDF', { variant: 'warning' }); return; }
+    openPdfPreview(po, 'preview');
   };
 
   // Fetch as a blob so the filename sticks; fall back to opening the URL in a
@@ -280,6 +296,8 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
   const handleDownloadPdf = async () => {
     const pos = eligible.filter((p) => selected.has(p._id));
     if (!pos.length) { enqueueSnackbar('Select at least one PO', { variant: 'warning' }); return; }
+    if (pdfBusyRef.current) return;
+    pdfBusyRef.current = true;
     setPdfBusy('download');
     let failed = 0;
     for (const po of pos) {
@@ -288,12 +306,16 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
         await saveFile(resolveFileUrl(info.poPdfUrl), info.poPdfFileName || `${poDisplayNumber(po)}.pdf`);
       } catch { failed += 1; }
     }
+    pdfBusyRef.current = false;
     setPdfBusy('');
     if (failed) enqueueSnackbar(`${failed} of ${pos.length} PDF(s) could not be generated`, { variant: 'error' });
     else if (pos.length > 1) enqueueSnackbar(`Downloaded ${pos.length} PO PDFs`, { variant: 'success' });
   };
 
-  const loading = isLoading || isFetching;
+  // Generating a PDF invalidates the PO list, so this query refetches after
+  // each first preview — keep the table (and its scroll position) in place for
+  // that background refresh instead of swapping it for a spinner.
+  const loading = isLoading || (isFetching && !pdfGenerated);
   const previewedRow = previewMap.get(String(previewPoId));
   const previewedPo = eligible.find((po) => po._id === previewPoId);
 
@@ -396,8 +418,9 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
               <Chip color="primary" variant="outlined" label={`${selected.size} selected`} sx={{ fontWeight: 700 }} />
             </Box>
 
-            {/* Table */}
-            <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+            {/* Table — the min height stops it collapsing to nothing when the
+                sections below fill a short (phone) dialog; the content scrolls instead. */}
+            <Box sx={{ flexGrow: 1, overflow: 'auto', minHeight: { xs: 260, sm: 140 } }}>
               {loading ? (
                 <Box sx={{ display: 'grid', placeItems: 'center', py: 8 }}><CircularProgress /></Box>
               ) : (
@@ -431,7 +454,31 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
                           <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
                             <Checkbox checked={selected.has(po._id)} onChange={() => toggleOne(po._id)} />
                           </TableCell>
-                          <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{poDisplayNumber(po)}</Typography></TableCell>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, whiteSpace: 'nowrap' }}>
+                              <Typography variant="body2" fontWeight={700} color="primary.main">{poDisplayNumber(po)}</Typography>
+                              {/* The span takes the click when the button is disabled, so it must
+                                  not bubble to the row (which toggles the checkbox). */}
+                              {/* Tooltip to the right: closing the PDF returns focus to this
+                                  icon, and a tooltip below it would cover the next row's icon. */}
+                              <Tooltip title="Preview PO PDF" placement="right">
+                                <span onClick={(e) => e.stopPropagation()}>
+                                  <IconButton size="small" aria-label={`Preview PO PDF for ${poDisplayNumber(po)}`}
+                                    data-testid="bulk-release-row-preview" data-po-id={po._id}
+                                    disabled={Boolean(pdfBusy) || releasing}
+                                    onClick={() => openPdfPreview(po, `row:${po._id}`)}
+                                    // same tinted, outlined eye button as the Purchase Orders list
+                                    sx={(t) => ({
+                                      width: 26, height: 26, borderRadius: '6px', color: 'primary.main',
+                                      bgcolor: alpha(t.palette.primary.main, 0.08), border: `1px solid ${alpha(t.palette.primary.main, 0.3)}`,
+                                      '&:hover': { bgcolor: alpha(t.palette.primary.main, 0.16) },
+                                    })}>
+                                    {pdfBusy === `row:${po._id}` ? <CircularProgress size={14} /> : <Eye size={16} strokeWidth={2.2} />}
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            </Box>
+                          </TableCell>
                           <TableCell>{po.vendorName || '—'}</TableCell>
                           <TableCell><RecipientCell label="To" emails={row?.to} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>
                           <TableCell><RecipientCell label="CC" emails={row?.cc} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>

@@ -26,6 +26,22 @@ export const fmsDoerApi = baseApi.injectEndpoints({
       query: ({ fmsKey, stepKey, ...body }) => ({ url: `/fms-doers/assignments/${fmsKey}/${stepKey}/apply-to-open-tasks`, method: 'POST', body }),
       invalidatesTags: ['FmsDoerAssignments', 'FmsTasks'],
     }),
+    // O2D-style plan grid (lead time · main doers · buddies per step).
+    getFmsDoerPlan: builder.query({
+      query: (fmsKey) => `/fms-doers/plan/${fmsKey}`,
+      providesTags: ['FmsDoerAssignments'],
+    }),
+    getFmsDoerPlanUsers: builder.query({
+      query: (fmsKey) => `/fms-doers/plan/${fmsKey}/users`,
+    }),
+    saveFmsDoerPlan: builder.mutation({
+      query: ({ fmsKey, ...body }) => ({ url: `/fms-doers/plan/${fmsKey}`, method: 'PUT', body }),
+      invalidatesTags: ['FmsDoerAssignments', 'FmsTasks'],
+    }),
+    applyFmsDoerPlanToOpen: builder.mutation({
+      query: ({ fmsKey, ...body }) => ({ url: `/fms-doers/plan/${fmsKey}/apply-open`, method: 'POST', body }),
+      invalidatesTags: ['FmsDoerAssignments', 'FmsTasks'],
+    }),
     getMyFmsTasks: builder.query({
       query: () => '/fms-doers/tasks/mine',
       providesTags: ['FmsTasks'],
@@ -56,6 +72,10 @@ export const {
   useGetAssignmentHistoryQuery,
   useSetDoerAssignmentMutation,
   useApplyDoerToOpenTasksMutation,
+  useGetFmsDoerPlanQuery,
+  useGetFmsDoerPlanUsersQuery,
+  useSaveFmsDoerPlanMutation,
+  useApplyFmsDoerPlanToOpenMutation,
   useGetMyFmsTasksQuery,
   useGetFmsTasksQuery,
   useGetFmsTasksByEntityQuery,

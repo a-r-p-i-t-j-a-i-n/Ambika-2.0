@@ -5,6 +5,7 @@ import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
   IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Tabs, Tab,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, Send, FileDown,
@@ -30,6 +31,7 @@ import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import BulkReleasePoDialog from './BulkReleasePoDialog';
+import PoItemsQuickViewDialog from './PoItemsQuickViewDialog';
 import PendingForPoGrid from './PendingForPoGrid';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
@@ -72,6 +74,7 @@ const PurchaseOrderList = () => {
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [bulkReleaseOpen, setBulkReleaseOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
+  const [itemsPo, setItemsPo] = useState(null); // row whose item quick view is open
   const [activePo, setActivePo] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
@@ -146,11 +149,30 @@ const PurchaseOrderList = () => {
 
   const columns = [
     serialColumn(),
-    { field: 'poNumber', headerName: 'PO NUMBER', width: 145,
+    // The eye opens the item quick view (popup — the list stays put); the
+    // full PO page stays on row click and the menu's View. It sits right after
+    // the number (not in the far-right actions column) so it is on screen
+    // without scrolling the wide grid sideways; tinted + outlined so it reads
+    // as a button. Width fits "AGL/PO-1234/26-27" + the button without ellipsis.
+    { field: 'poNumber', headerName: 'PO NUMBER', width: 215,
       renderCell: (p) => (
-        <Typography variant="body2" fontWeight={700} color={p.value ? 'primary.main' : 'text.secondary'}>
-          {poDisplayNumber(p.row)}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, width: '100%', minWidth: 0 }}>
+          <Typography variant="body2" fontWeight={700} color={p.value ? 'primary.main' : 'text.secondary'} noWrap sx={{ minWidth: 0 }}>
+            {poDisplayNumber(p.row)}
+          </Typography>
+          <Tooltip title="View Item Details">
+            <IconButton size="small" aria-label={`View item details for ${poDisplayNumber(p.row)}`}
+              data-testid="po-row-view"
+              onClick={(e) => { e.stopPropagation(); setItemsPo(p.row); }}
+              sx={(t) => ({
+                flexShrink: 0, width: 26, height: 26, borderRadius: '6px', color: 'primary.main',
+                bgcolor: alpha(t.palette.primary.main, 0.08), border: `1px solid ${alpha(t.palette.primary.main, 0.3)}`,
+                '&:hover': { bgcolor: alpha(t.palette.primary.main, 0.16) },
+              })}>
+              <Eye size={16} strokeWidth={2.2} />
+            </IconButton>
+          </Tooltip>
+        </Box>
       ) },
     { field: 'poDate', headerName: 'PO DATE', width: 100,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
@@ -334,6 +356,7 @@ const PurchaseOrderList = () => {
       <PurchaseOrderReleaseDialog open={releaseOpen} po={activePo} onClose={() => { setReleaseOpen(false); setActivePo(null); }} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={activePo} onClose={() => { setPdfOpen(false); setActivePo(null); }} />
       <BulkReleasePoDialog open={bulkReleaseOpen} onClose={() => setBulkReleaseOpen(false)} />
+      <PoItemsQuickViewDialog po={itemsPo} onClose={() => setItemsPo(null)} />
     </Box>
   );
 };

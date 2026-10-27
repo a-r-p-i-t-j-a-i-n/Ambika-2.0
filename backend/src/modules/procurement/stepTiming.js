@@ -35,8 +35,8 @@ export async function attachStepTiming(listKey, docs) {
           stepKey: { $in: def.steps.map((s) => s.key) },
           entityType: { $in: [...entityTypes] },
           entityId: { $in: [...entityIds] },
-        }).select('stepKey entityType entityId status assignedDoerId openedAt')
-          .populate('assignedDoerId', 'name').lean()
+        }).select('stepKey entityType entityId status assignedDoerId assignedDoerIds openedAt')
+          .populate('assignedDoerId', 'name').populate('assignedDoerIds', 'name').lean()
         : [],
       userIds.size ? User.find({ _id: { $in: [...userIds] } }).select('name').lean() : [],
     ]);

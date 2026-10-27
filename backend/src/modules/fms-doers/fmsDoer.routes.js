@@ -12,7 +12,7 @@ import validate from '../../middleware/validate.js';
 import { fmsDoerController as c } from './fmsDoer.controller.js';
 import {
   fmsParamSchema, stepParamSchema, mongoIdParamSchema,
-  setAssignmentSchema, reassignTaskSchema, applyConfigSchema,
+  setAssignmentSchema, reassignTaskSchema, applyConfigSchema, savePlanSchema,
   taskQuerySchema, entityQuerySchema,
 } from './fmsDoer.validation.js';
 
@@ -27,6 +27,12 @@ router.get('/assignments/:fmsKey/:stepKey/users', manage, validate(stepParamSche
 router.get('/assignments/:fmsKey/:stepKey/history', manage, validate(stepParamSchema, 'params'), c.history);
 router.put('/assignments/:fmsKey/:stepKey', manage, validate(stepParamSchema, 'params'), validate(setAssignmentSchema), c.setAssignment);
 router.post('/assignments/:fmsKey/:stepKey/apply-to-open-tasks', manage, validate(stepParamSchema, 'params'), validate(applyConfigSchema), c.applyToOpenTasks);
+
+// ── Doer plan (O2D-style grid: lead time · main doers · buddies per step) ──
+router.get('/plan/:fmsKey', manage, validate(fmsParamSchema, 'params'), c.plan);
+router.get('/plan/:fmsKey/users', manage, validate(fmsParamSchema, 'params'), c.planUsers);
+router.put('/plan/:fmsKey', manage, validate(fmsParamSchema, 'params'), validate(savePlanSchema), c.savePlan);
+router.post('/plan/:fmsKey/apply-open', manage, validate(fmsParamSchema, 'params'), validate(applyConfigSchema), c.applyPlan);
 
 // ── Tasks ──
 router.get('/tasks/mine', c.myTasks);
