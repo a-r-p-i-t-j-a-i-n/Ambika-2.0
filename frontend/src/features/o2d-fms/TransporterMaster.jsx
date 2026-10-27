@@ -10,6 +10,8 @@ import {
   useGetTransportersQuery, useCreateTransporterMutation,
   useUpdateTransporterMutation, useDeleteTransporterMutation,
 } from '../../store/api/transporterApi';
+import { usePermission } from '../../hooks/usePermission';
+import { useMasterRights } from '../../utils/embed';
 
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
@@ -37,6 +39,11 @@ const TransporterMaster = () => {
   const [updateTransporter, { isLoading: updating }] = useUpdateTransporterMutation();
   const [deleteTransporter] = useDeleteTransporterMutation();
   const saving = creating || updating;
+  // Inside the Delegation Suite, its lock icon can switch Edit off and Delete
+  // on for this person (Transporter Master); delete needs masters.deleteTransporter.
+  const rights = useMasterRights('transporterMaster');
+  const canEdit = rights.canEdit;
+  const canDelete = usePermission('masters.deleteTransporter') && rights.canDelete;
 
   const rows = useMemo(() => data?.data || [], [data]);
   const filtered = useMemo(() => {
@@ -80,13 +87,13 @@ const TransporterMaster = () => {
     { field: 'email', headerName: 'Email', flex: 1, minWidth: 180, valueGetter: (v, r) => r.email || '—' },
     { field: 'city', headerName: 'City / State', width: 160, valueGetter: (v, r) => [r.city, r.state].filter(Boolean).join(', ') || '—' },
     { field: 'gstNo', headerName: 'GST No', flex: 1, minWidth: 160, valueGetter: (v, r) => r.gstNo || '—' },
-    { field: '__actions', headerName: '', width: 90, sortable: false, filterable: false, align: 'center', headerAlign: 'center',
+    ...(canEdit || canDelete ? [{ field: '__actions', headerName: '', width: canEdit && canDelete ? 90 : 56, sortable: false, filterable: false, align: 'center', headerAlign: 'center',
       renderCell: (p) => (
         <>
-          <Tooltip title="Edit"><IconButton size="small" onClick={() => setDialog({ id: p.row._id, draft: fromDoc(p.row) })}><Pencil size={15} /></IconButton></Tooltip>
-          <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => remove(p.row._id)}><Trash2 size={15} /></IconButton></Tooltip>
+          {canEdit && <Tooltip title="Edit"><IconButton size="small" onClick={() => setDialog({ id: p.row._id, draft: fromDoc(p.row) })}><Pencil size={15} /></IconButton></Tooltip>}
+          {canDelete && <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => remove(p.row._id)}><Trash2 size={15} /></IconButton></Tooltip>}
         </>
-      ) },
+      ) }] : []),
   ];
 
   return (

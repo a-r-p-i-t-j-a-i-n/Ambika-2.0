@@ -21,6 +21,7 @@ import {
   useDeleteMachineOperatorMutation,
 } from '../../store/api/machineOperatorApi';
 import { usePermission } from '../../hooks/usePermission';
+import { useMasterRights } from '../../utils/embed';
 import {
   O2D, BRAND, BRAND_DK, NAVY, DANGER, O2D_TIP,
   Pill, Empty, CellText, PageHeading, NoRows, TipCell, headerTip,
@@ -45,7 +46,11 @@ const MachineOperatorsList = () => {
   const [selected, setSelected] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteOperator, { isLoading: isDeleting }] = useDeleteMachineOperatorMutation();
-  const canDelete = usePermission('masters.deleteOperator');
+  // Inside the Delegation Suite, its lock icon can switch Edit off and Delete
+  // on for this person (Machine Operators); delete still needs masters.deleteOperator.
+  const rights = useMasterRights('machineOperators');
+  const canEdit = rights.canEdit;
+  const canDelete = usePermission('masters.deleteOperator') && rights.canDelete;
 
   const { data, isLoading } = useGetMachineOperatorListQuery({
     page: paginationModel.page + 1,
@@ -175,21 +180,23 @@ const MachineOperatorsList = () => {
         );
       },
     },
-    {
-      field: 'actions', headerName: '', width: canDelete ? 104 : 68, sortable: false,
+    ...(canEdit || canDelete ? [{
+      field: 'actions', headerName: '', width: canEdit && canDelete ? 104 : 68, sortable: false,
       align: 'center', headerAlign: 'center',
       // No header tooltip — the header is blank, and each button carries its own.
       renderCell: (p) => (
         <Stack direction="row" spacing={0.25} sx={{ alignSelf: 'center' }}>
-          <Tooltip title="Edit operator">
-            <IconButton
-              size="small"
-              onClick={(e) => { e.stopPropagation(); handleEdit(p.row); }}
-              sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}
-            >
-              <Edit3 size={15} />
-            </IconButton>
-          </Tooltip>
+          {canEdit && (
+            <Tooltip title="Edit operator">
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handleEdit(p.row); }}
+                sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}
+              >
+                <Edit3 size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
           {canDelete && (
             <Tooltip title="Delete operator">
               <IconButton
@@ -203,7 +210,7 @@ const MachineOperatorsList = () => {
           )}
         </Stack>
       ),
-    },
+    }] : []),
   ];
 
   return (

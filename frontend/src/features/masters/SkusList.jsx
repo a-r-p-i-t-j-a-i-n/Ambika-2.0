@@ -18,6 +18,7 @@ import {
   useUpdateSkuMutation,
 } from '../../store/api/skuApi';
 import { usePermission } from '../../hooks/usePermission';
+import { useMasterRights } from '../../utils/embed';
 import {
   O2D, BRAND, BRAND_DK, NAVY, DANGER,
   Pill, Empty, CellText, PageHeading, NoRows,
@@ -203,7 +204,11 @@ const SkusList = () => {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [bulkUpsertSkus, { isLoading: isImporting }] = useBulkUpsertSkusMutation();
   const [deleteSku, { isLoading: isDeleting }] = useDeleteSkuMutation();
-  const canDelete = usePermission('masters.deleteSku');
+  // Inside the Delegation Suite, its lock icon can switch Edit off and Delete
+  // on for this person (SKU Master); delete still needs masters.deleteSku.
+  const rights = useMasterRights('skuMaster');
+  const canEdit = rights.canEdit;
+  const canDelete = usePermission('masters.deleteSku') && rights.canDelete;
 
   const { data, isLoading } = useGetSkusQuery({
     page: paginationModel.page + 1,
@@ -284,15 +289,17 @@ const SkusList = () => {
     { field: 'unit', headerName: 'Unit', width: 92, align: 'center', headerAlign: 'center',
       renderCell: (p) => <Pill color={O2D.sub}>{p.value || 'PCS'}</Pill>
     },
-    { field: 'actions', headerName: '', width: canDelete ? 104 : 68, sortable: false, align: 'center', headerAlign: 'center',
+    ...(canEdit || canDelete ? [{ field: 'actions', headerName: '', width: canEdit && canDelete ? 104 : 68, sortable: false, align: 'center', headerAlign: 'center',
       renderCell: (p) => (
         <Stack direction="row" spacing={0.25} sx={{ alignSelf: 'center' }}>
-          <Tooltip title="Edit SKU">
-            <IconButton size="small" onClick={() => handleEdit(p.row)}
-              sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}>
-              <Edit3 size={15} />
-            </IconButton>
-          </Tooltip>
+          {canEdit && (
+            <Tooltip title="Edit SKU">
+              <IconButton size="small" onClick={() => handleEdit(p.row)}
+                sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}>
+                <Edit3 size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
           {canDelete && (
             <Tooltip title="Delete SKU">
               <IconButton size="small" onClick={() => setDeleteTarget(p.row)}
@@ -303,7 +310,7 @@ const SkusList = () => {
           )}
         </Stack>
       )
-    },
+    }] : []),
   ];
 
   return (
@@ -317,11 +324,14 @@ const SkusList = () => {
             sx={{ ...fieldSx, width: { xs: '100%', sm: 250 } }}
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} color={O2D.faint} /></InputAdornment> }}
           />
-          <Button variant="outlined" startIcon={isImporting ? <CircularProgress size={15} /> : <Upload size={15} />}
-            disabled={isImporting} onClick={handleImportSheetItems}
-            sx={{ ...btnSx, bgcolor: O2D.surface, color: BRAND_DK, borderColor: O2D.line, '&:hover': { borderColor: BRAND, bgcolor: alpha(BRAND, 0.04) } }}>
-            Load Sheet SKUs
-          </Button>
+          {/* Rewrites existing SKUs from the sheet — an edit. */}
+          {canEdit && (
+            <Button variant="outlined" startIcon={isImporting ? <CircularProgress size={15} /> : <Upload size={15} />}
+              disabled={isImporting} onClick={handleImportSheetItems}
+              sx={{ ...btnSx, bgcolor: O2D.surface, color: BRAND_DK, borderColor: O2D.line, '&:hover': { borderColor: BRAND, bgcolor: alpha(BRAND, 0.04) } }}>
+              Load Sheet SKUs
+            </Button>
+          )}
           <Button variant="contained" startIcon={<Plus size={15} />} onClick={handleAdd}
             sx={{ ...btnSx, bgcolor: BRAND, '&:hover': { bgcolor: BRAND_DK } }}>
             Register SKU

@@ -16,6 +16,7 @@ import { useGetSkusQuery } from '../../store/api/skuApi';
 import { alpha } from '@mui/material/styles';
 import PartyFormDrawer from './PartyFormDrawer';
 import PartySkusDrawer from './PartySkusDrawer';
+import { useMasterRights } from '../../utils/embed';
 import { pageSx, panelSx, primaryBtnSx, BRAND, BRAND_DK, NAVY, O2D } from '../../components/pageKit';
 
 const PartyDetails = () => {
@@ -24,6 +25,8 @@ const PartyDetails = () => {
   const goBack = useSmartBack('/parties');
   const [editOpen, setEditOpen] = useState(false);
   const [skusOpen, setSkusOpen] = useState(false);
+  // Delegation Suite lock icon → Parties → Edit.
+  const { canEdit } = useMasterRights('parties');
 
   const { data: partyRes, isLoading: partyLoading } = useGetPartyByIdQuery(id);
   const party = partyRes?.data; // API wraps the doc in { success, message, data }
@@ -119,9 +122,11 @@ const PartyDetails = () => {
           </Stack>
         </Box>
         <Box sx={{ flexGrow: 1 }} />
-        <Button variant="contained" startIcon={<Pencil size={15} />} onClick={() => setEditOpen(true)} sx={primaryBtnSx}>
-          Edit Vendor
-        </Button>
+        {canEdit && (
+          <Button variant="contained" startIcon={<Pencil size={15} />} onClick={() => setEditOpen(true)} sx={primaryBtnSx}>
+            Edit Vendor
+          </Button>
+        )}
       </Box>
 
       <Grid container spacing={1.5}>

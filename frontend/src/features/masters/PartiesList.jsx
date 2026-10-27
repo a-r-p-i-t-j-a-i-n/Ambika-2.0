@@ -9,6 +9,8 @@ import { alpha } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import { useGetPartiesQuery, useDeletePartyMutation } from '../../store/api/partyApi';
+import { usePermission } from '../../hooks/usePermission';
+import { useMasterRights } from '../../utils/embed';
 import PartyFormDrawer from './PartyFormDrawer';
 import {
   O2D, BRAND, BRAND_DK, NAVY, DANGER,
@@ -31,6 +33,11 @@ const PartiesList = () => {
     search: searchTerm || undefined,
   });
   const [deleteParty, { isLoading: isDeleting }] = useDeletePartyMutation();
+  // Inside the Delegation Suite, its lock icon can switch Edit off and Delete
+  // on for this person (Parties); delete needs masters.deleteParty.
+  const rights = useMasterRights('parties');
+  const canEdit = rights.canEdit;
+  const canDelete = usePermission('masters.deleteParty') && rights.canDelete;
 
   const openCreate = () => { setEditParty(null); setDrawerOpen(true); };
   const openEdit = (party) => { setEditParty(party); setDrawerOpen(true); };
@@ -82,24 +89,28 @@ const PartiesList = () => {
         );
       }
     },
-    { field: '__actions', headerName: '', width: 100, align: 'center', headerAlign: 'center', sortable: false, filterable: false,
+    ...(canEdit || canDelete ? [{ field: '__actions', headerName: '', width: canEdit && canDelete ? 100 : 64, align: 'center', headerAlign: 'center', sortable: false, filterable: false,
       renderCell: (p) => (
         <Box sx={{ display: 'inline-flex', gap: 0.25, alignSelf: 'center' }}>
-          <Tooltip title="Edit vendor / party">
-            <IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(p.row); }}
-              sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}>
-              <Pencil size={15} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Delete party">
-            <IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p.row); }}
-              sx={{ color: DANGER, '&:hover': { bgcolor: alpha(DANGER, 0.1) } }}>
-              <Trash2 size={15} />
-            </IconButton>
-          </Tooltip>
+          {canEdit && (
+            <Tooltip title="Edit vendor / party">
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(p.row); }}
+                sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}>
+                <Pencil size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
+          {canDelete && (
+            <Tooltip title="Delete party">
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p.row); }}
+                sx={{ color: DANGER, '&:hover': { bgcolor: alpha(DANGER, 0.1) } }}>
+                <Trash2 size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       )
-    },
+    }] : []),
   ];
 
   const handleRowClick = (params) => {
