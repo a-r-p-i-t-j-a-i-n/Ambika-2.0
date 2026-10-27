@@ -1,22 +1,26 @@
 /**
- * SKU Master spells kilograms KGS, whatever was typed or imported.
+ * SKU Master keeps the unit exactly as entered — "kg", "Kg", "KG", "pcs",
+ * "Piece" — trimmed only. The stock ledger still spells kilograms KGS
+ * (normalizeSkuUnit), so stock rows keep one label per unit.
  *
- * A label only: every other unit is kept as given, and no quantity changes.
- * No database — documents and update casts are built in memory.
+ * No database — documents, update casts and Joi validation run in memory.
  *
  *   node --test "src/**\/__tests__/*.test.js"      (npm test)
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import SKU, { normalizeSkuUnit } from '../sku.model.js';
+import SKU, { normalizeSkuUnit, trimSkuUnit } from '../sku.model.js';
+import { createSkuSchema, updateSkuSchema, bulkUpsertSkuRowSchema } from '../sku.validation.js';
 
-test('every kilogram spelling becomes KGS', () => {
+const MIXED_CASE = ['KG', 'kg', 'Kg', 'KGS', 'Kgs', 'PCS', 'pcs', 'Piece', 'pieces', 'Nos', 'LTR'];
+
+test('the ledger spells every kilogram KGS', () => {
   for (const u of ['KG', 'kg', 'Kg', ' KG ', 'KGS', 'Kgs', 'kgs', 'Kilogram', 'KILOGRAMS', 'kilo']) {
     assert.equal(normalizeSkuUnit(u), 'KGS', u);
   }
 });
 
-test('other units are left exactly as given', () => {
+test('the ledger leaves other units exactly as given', () => {
   for (const u of ['PCS', 'BOX', 'LTR', 'MTR', 'NOS', 'SET', 'Pcs', 'MT', 'KGSM', '']) {
     assert.equal(normalizeSkuUnit(u), u, u);
   }
@@ -24,13 +28,38 @@ test('other units are left exactly as given', () => {
   assert.equal(normalizeSkuUnit(undefined), undefined);
 });
 
-test('a new SKU saved with KG is stored as KGS; the default stays PCS', () => {
-  assert.equal(new SKU({ name: 'x', code: 'X', unit: 'KG' }).unit, 'KGS');
-  assert.equal(new SKU({ name: 'x', code: 'X', unit: 'LTR' }).unit, 'LTR');
+test('the master unit setter only trims', () => {
+  for (const u of MIXED_CASE) assert.equal(trimSkuUnit(u), u, u);
+  assert.equal(trimSkuUnit('  Kg '), 'Kg');
+  assert.equal(trimSkuUnit(null), null);
+  assert.equal(trimSkuUnit(undefined), undefined);
+});
+
+test('a new SKU keeps the unit casing it was saved with; the default stays PCS', () => {
+  for (const u of MIXED_CASE) assert.equal(new SKU({ name: 'x', code: 'X', unit: u }).unit, u, u);
+  assert.equal(new SKU({ name: 'x', code: 'X', unit: ' pcs ' }).unit, 'pcs');
   assert.equal(new SKU({ name: 'x', code: 'X' }).unit, 'PCS');
 });
 
-test('an edit or sheet upsert that sets KG writes KGS', () => {
-  const q = SKU.findOneAndUpdate({ code: 'X' }, { $set: { unit: 'Kg', pcsPerBox: 5 } });
-  assert.deepEqual(q._castUpdate(q._update), { $set: { unit: 'KGS', pcsPerBox: 5 } });
+test('an edit or sheet upsert writes the unit as given, not uppercased or relabelled', () => {
+  for (const u of ['kg', 'Kg', 'KG', 'pcs', 'Piece']) {
+    const q = SKU.findOneAndUpdate({ code: 'X' }, { $set: { unit: u, pcsPerBox: 5 } });
+    assert.deepEqual(q._castUpdate(q._update), { $set: { unit: u, pcsPerBox: 5 } }, u);
+  }
+});
+
+test('API validation accepts mixed-case units and passes them through unchanged', () => {
+  for (const u of MIXED_CASE) {
+    const create = createSkuSchema.validate({ name: 'x', code: 'X', itemType: 'CONSUMABLE', unit: u });
+    assert.equal(create.error, undefined, u);
+    assert.equal(create.value.unit, u, u);
+
+    const update = updateSkuSchema.validate({ unit: u });
+    assert.equal(update.error, undefined, u);
+    assert.equal(update.value.unit, u, u);
+
+    const row = bulkUpsertSkuRowSchema.validate({ name: 'x', code: 'X', unit: u });
+    assert.equal(row.error, undefined, u);
+    assert.equal(row.value.unit, u, u);
+  }
 });

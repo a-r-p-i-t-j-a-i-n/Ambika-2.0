@@ -14,6 +14,7 @@ import { useSnackbar } from 'notistack';
 import { useGetVendorByIdQuery, useUpdateVendorMutation, useGetVendorPricingHistoryQuery } from '../../../store/api/vendorApi';
 import { useGetSkuLookupQuery } from '../../../store/api/skuApi';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
+import VendorPoHistory from './VendorPoHistory';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 const SOURCE_LABEL = { VENDOR_MASTER: 'Vendor Master', PURCHASE_ORDER: 'Purchase Order' };
@@ -237,6 +238,9 @@ const VendorDetail = () => {
           </Table>
         </Box>
       </Paper>
+
+      {/* Purchase Orders raised against this vendor (derived from the PO records) */}
+      <VendorPoHistory vendorId={id} />
 
       {/* Add / Edit product dialog */}
       <Dialog open={Boolean(prodDialog)} onClose={() => setProdDialog(null)} fullWidth maxWidth="sm">

@@ -46,6 +46,7 @@ import Party from '../modules/clients/party.model.js';
 import Vendor from '../modules/vendors/vendor.model.js';
 import PurchaseIndent from '../modules/procurement/indent/indent.model.js';
 import VendorPurchaseOrder from '../modules/procurement/purchase-order/purchaseOrder.model.js';
+import SKU from '../modules/skus/sku.model.js';
 
 export const DB_NAME = 'ambika_e2e_vendorsel';
 export const E2E_URI = process.env.E2E_VENDORSEL_URI || `mongodb://127.0.0.1:27017/${DB_NAME}`;
@@ -107,10 +108,18 @@ const ok = async (method, path, body) => {
   return r.data;
 };
 
+// Indent items must be SKU Master items (indent/itemSku.js): one upserted SKU
+// per item name, named exactly like the item so name-based checks still hold.
+const skuItem = async (name, quantity) => {
+  const code = `E2E-${name}`.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 60);
+  const sku = await SKU.findOneAndUpdate({ code }, { $setOnInsert: { code, name, unit: 'PCS', itemType: 'CONSUMABLE' } }, { upsert: true, new: true }).lean();
+  return { skuId: String(sku._id), skuCode: sku.code, itemName: sku.name, quantity, unit: 'Pcs' };
+};
+
 const newApprovedIndent = async (names) => {
   const ind = await ok('POST', '/procurement/indents', {
     department: 'Stores', remarks: `vendor-selection e2e ${RUN}`,
-    items: names.map((n, i) => ({ itemName: `${n} ${RUN}`, quantity: 10 + i, unit: 'Pcs' })),
+    items: await Promise.all(names.map((n, i) => skuItem(`${n} ${RUN}`, 10 + i))),
   });
   await ok('POST', `/procurement/indents/${ind._id}/submit`, {});
   return ok('POST', `/procurement/indents/${ind._id}/approve`, {
