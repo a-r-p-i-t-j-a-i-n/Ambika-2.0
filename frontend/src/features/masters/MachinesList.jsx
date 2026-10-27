@@ -19,6 +19,7 @@ import {
 import { useSnackbar } from 'notistack';
 import { useGetMachinesQuery, useDeleteMachineMutation } from '../../store/api/machineApi';
 import { usePermission } from '../../hooks/usePermission';
+import { useMasterRights } from '../../utils/embed';
 import {
   O2D, BRAND, BRAND_DK, NAVY, DANGER,
   Pill, Empty, CellText, PageHeading, NoRows, TipCell, headerTip, O2D_TIP,
@@ -47,7 +48,11 @@ const MachinesList = () => {
   const [selected, setSelected] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteMachine, { isLoading: isDeleting }] = useDeleteMachineMutation();
-  const canDelete = usePermission('masters.deleteMachine');
+  // Inside the Delegation Suite, its lock icon can switch Edit off and Delete
+  // on for this person (Machines); delete still needs masters.deleteMachine.
+  const rights = useMasterRights('machines');
+  const canEdit = rights.canEdit;
+  const canDelete = usePermission('masters.deleteMachine') && rights.canDelete;
 
   const { data, isLoading } = useGetMachinesQuery({
     page: paginationModel.page + 1,
@@ -169,21 +174,23 @@ const MachinesList = () => {
         );
       },
     },
-    {
-      field: 'actions', headerName: '', width: canDelete ? 104 : 68, sortable: false,
+    ...(canEdit || canDelete ? [{
+      field: 'actions', headerName: '', width: canEdit && canDelete ? 104 : 68, sortable: false,
       align: 'center', headerAlign: 'center',
       // No header tooltip — the header is blank, and each button carries its own.
       renderCell: (p) => (
         <Stack direction="row" spacing={0.25} sx={{ alignSelf: 'center' }}>
-          <Tooltip title="Edit machine">
-            <IconButton
-              size="small"
-              onClick={(e) => { e.stopPropagation(); handleEdit(p.row); }}
-              sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}
-            >
-              <Edit3 size={15} />
-            </IconButton>
-          </Tooltip>
+          {canEdit && (
+            <Tooltip title="Edit machine">
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); handleEdit(p.row); }}
+                sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}
+              >
+                <Edit3 size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
           {canDelete && (
             <Tooltip title="Delete machine">
               <IconButton
@@ -197,7 +204,7 @@ const MachinesList = () => {
           )}
         </Stack>
       ),
-    },
+    }] : []),
   ];
 
   return (

@@ -51,7 +51,7 @@ const loadRolePermissions = async (roleKey) => {
   return entry;
 };
 
-const computeEffectivePermissions = async (user, sessionGrants = []) => {
+const computeEffectivePermissions = async (user, sessionGrants = [], sessionDenies = []) => {
   if (!user) return new Set();
 
   const effective = new Set();
@@ -79,6 +79,9 @@ const computeEffectivePermissions = async (user, sessionGrants = []) => {
   // 4) Direct denies (revoke even if granted by role).
   for (const p of user.permissionDenies || []) effective.delete(p);
 
+  // 4b) Switched off for this session's Delegation Suite sign-in.
+  for (const p of sessionDenies) effective.delete(p);
+
   // Root overrides everything.
   if (isRoot) {
     effective.add(ROOT_PERMISSION);
@@ -89,7 +92,7 @@ const computeEffectivePermissions = async (user, sessionGrants = []) => {
 
 export const attachUserPermissions = asyncHandler(async (req, _res, next) => {
   if (!req.user) return next();
-  req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants);
+  req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants, req.sessionDenies);
   req.userIsRoot = req.userPermissions.has(ROOT_PERMISSION);
   next();
 });
@@ -103,7 +106,7 @@ const userHas = (permSet, slug) => permSet.has(ROOT_PERMISSION) || permSet.has(s
  */
 export const requirePermission = (...slugs) => asyncHandler(async (req, _res, next) => {
   if (!req.userPermissions) {
-    req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants);
+    req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants, req.sessionDenies);
   }
   const ok = slugs.some((s) => userHas(req.userPermissions, s));
   if (!ok) {
@@ -118,7 +121,7 @@ export const requirePermission = (...slugs) => asyncHandler(async (req, _res, ne
 /** AND-logic variant. Use sparingly. */
 export const requireAllPermissions = (...slugs) => asyncHandler(async (req, _res, next) => {
   if (!req.userPermissions) {
-    req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants);
+    req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants, req.sessionDenies);
   }
   const ok = slugs.every((s) => userHas(req.userPermissions, s));
   if (!ok) {
@@ -128,6 +131,20 @@ export const requireAllPermissions = (...slugs) => asyncHandler(async (req, _res
     ));
   }
   next();
+});
+
+/**
+ * For actions every signed-in user may do (e.g. editing a master): refused
+ * only when this session's Delegation Suite sign-in switched `slug` off
+ * (Employees → lock icon). Everyone else — and MD / root always — goes through.
+ */
+export const unlessSessionDenies = (slug) => asyncHandler(async (req, _res, next) => {
+  if (!(req.sessionDenies || []).includes(slug)) return next();
+  if (!req.userPermissions) {
+    req.userPermissions = await computeEffectivePermissions(req.user, req.sessionGrants, req.sessionDenies);
+  }
+  if (req.userPermissions.has(ROOT_PERMISSION)) return next();
+  return next(new AppError('Editing this is switched off for you. Ask your MD to switch it on in Employees → lock icon.', 403));
 });
 
 /** Exported for non-middleware contexts (service layer decisions). */

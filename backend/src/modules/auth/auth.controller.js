@@ -3,11 +3,16 @@ import { authService } from './auth.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import jwt from 'jsonwebtoken';
 import env from '../../config/env.js';
-import { sessionGrantsOf } from '../../middleware/auth.middleware.js';
+import { sessionDeniesOf, sessionGrantsOf } from '../../middleware/auth.middleware.js';
 
-// `grants`: extra permissions for this session only (Delegation sign-in).
-const signToken = (id, grants = []) => {
-  return jwt.sign(grants.length ? { id, grants } : { id }, env.JWT_SECRET, {
+// `grants` / `denies`: permissions added / switched off for this session only
+// (Delegation sign-in).
+const signToken = (id, grants = [], denies = []) => {
+  return jwt.sign({
+    id,
+    ...(grants.length ? { grants } : {}),
+    ...(denies.length ? { denies } : {}),
+  }, env.JWT_SECRET, {
     expiresIn: env.JWT_EXPIRES_IN,
   });
 };
@@ -93,9 +98,9 @@ export const authController = {
     }
 
     // The Suite's lock-icon switches can add a few permissions (e.g. Delete
-    // on an O2D step → orders.delete) to this session only; nothing is saved
-    // on the ERP account.
-    const token = signToken(user._id, sessionGrantsOf(payload.grants));
+    // on an O2D step → orders.delete) or switch a few off (Edit on a master)
+    // for this session only; nothing is saved on the ERP account.
+    const token = signToken(user._id, sessionGrantsOf(payload.grants), sessionDeniesOf(payload.denies));
     user.password = undefined;
     return res.json(ApiResponse.ok('Signed in', { token, user }));
   }),

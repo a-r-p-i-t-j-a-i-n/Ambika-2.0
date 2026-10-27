@@ -8,10 +8,25 @@ import asyncHandler from './asyncHandler.js';
 // Permissions a Delegation Suite sign-in may add to one ERP session (the
 // Suite's Employees → lock icon; see authController.sso). Anything else in a
 // token is ignored.
-export const SESSION_GRANTABLE = new Set(['orders.delete']);
+export const SESSION_GRANTABLE = new Set([
+  'orders.delete',
+  // Master Data → Delete, per master.
+  'masters.deleteSku', 'masters.deleteParty', 'masters.deleteMachine',
+  'masters.deleteOperator', 'masters.deleteVendor', 'masters.deleteTransporter',
+]);
+
+// …and the ones it may switch off for that session (Master Data → Edit, per
+// master). Also only these.
+export const SESSION_DENIABLE = new Set([
+  'masters.editSku', 'masters.editParty', 'masters.editMachine',
+  'masters.editOperator', 'masters.editVendor', 'masters.editTransporter',
+]);
 
 export const sessionGrantsOf = (list) =>
   (Array.isArray(list) ? list.filter((slug) => SESSION_GRANTABLE.has(slug)) : []);
+
+export const sessionDeniesOf = (list) =>
+  (Array.isArray(list) ? list.filter((slug) => SESSION_DENIABLE.has(slug)) : []);
 
 export const protect = asyncHandler(async (req, res, next) => {
   let token;
@@ -33,6 +48,7 @@ export const protect = asyncHandler(async (req, res, next) => {
 
   req.user = currentUser;
   req.sessionGrants = sessionGrantsOf(decoded.grants);
+  req.sessionDenies = sessionDeniesOf(decoded.denies);
   next();
 });
 

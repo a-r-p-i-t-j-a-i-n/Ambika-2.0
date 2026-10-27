@@ -8,6 +8,8 @@ import { useSnackbar } from 'notistack';
 import {
   useGetSkusQuery, useCreateSkuMutation, useUpdateSkuMutation, useDeleteSkuMutation,
 } from '../../store/api/skuApi';
+import { usePermission } from '../../hooks/usePermission';
+import { useMasterRights } from '../../utils/embed';
 
 const UNITS = ['PCS', 'KGS', 'MTR', 'LTR', 'SET', 'BOX'];
 const ACCENT = '#2563eb';
@@ -53,6 +55,12 @@ const PartySkusDrawer = ({ open, onClose, party }) => {
   const [createSku, { isLoading: creating }] = useCreateSkuMutation();
   const [updateSku] = useUpdateSkuMutation();
   const [deleteSku] = useDeleteSkuMutation();
+  // Inside the Delegation Suite, its lock icon decides (SKU Master): with Edit
+  // off the linked SKUs are read-only here; Delete also needs masters.deleteSku.
+  // Adding a new SKU stays open, as on the SKU Master.
+  const rights = useMasterRights('skuMaster');
+  const canEdit = rights.canEdit;
+  const canDelete = usePermission('masters.deleteSku') && rights.canDelete;
 
   const [adding, setAdding] = useState(false);
   const [newRow, setNewRow] = useState(emptyRow);
@@ -204,20 +212,20 @@ const PartySkusDrawer = ({ open, onClose, party }) => {
                 return (
                   <TableRow key={sku._id} hover sx={{ bgcolor: dirty ? alpha('#d97706', 0.06) : 'inherit' }}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{i + 1}</TableCell>
-                    <TableCell><Cell value={r.name || ''} onChange={(v) => setDraft(sku._id, { name: v })} width={190} /></TableCell>
-                    <TableCell><Cell value={r.code || ''} onChange={(v) => setDraft(sku._id, { code: v })} width={130} /></TableCell>
-                    <TableCell><Cell value={r.category || ''} onChange={(v) => setDraft(sku._id, { category: v })} width={120} /></TableCell>
+                    <TableCell><Cell value={r.name || ''} onChange={(v) => setDraft(sku._id, { name: v })} width={190} disabled={!canEdit} /></TableCell>
+                    <TableCell><Cell value={r.code || ''} onChange={(v) => setDraft(sku._id, { code: v })} width={130} disabled={!canEdit} /></TableCell>
+                    <TableCell><Cell value={r.category || ''} onChange={(v) => setDraft(sku._id, { category: v })} width={120} disabled={!canEdit} /></TableCell>
                     <TableCell>
-                      <TextField select size="small" value={r.unit || 'PCS'} onChange={(e) => setDraft(sku._id, { unit: e.target.value })}
+                      <TextField select size="small" value={r.unit || 'PCS'} onChange={(e) => setDraft(sku._id, { unit: e.target.value })} disabled={!canEdit}
                         inputProps={{ style: { fontSize: '0.78rem', padding: '6px 8px' } }} sx={{ width: 88 }}>
                         {UNITS.map((u) => <MenuItem key={u} value={u} sx={{ fontSize: '0.8rem' }}>{u}</MenuItem>)}
                       </TextField>
                     </TableCell>
-                    <TableCell><Cell value={r.pcsPerBox ?? 1} onChange={(v) => setDraft(sku._id, { pcsPerBox: v })} type="number" width={82} /></TableCell>
-                    <TableCell><Cell value={r.weightPerPc ?? 0} onChange={(v) => setDraft(sku._id, { weightPerPc: v })} type="number" width={95} /></TableCell>
+                    <TableCell><Cell value={r.pcsPerBox ?? 1} onChange={(v) => setDraft(sku._id, { pcsPerBox: v })} type="number" width={82} disabled={!canEdit} /></TableCell>
+                    <TableCell><Cell value={r.weightPerPc ?? 0} onChange={(v) => setDraft(sku._id, { weightPerPc: v })} type="number" width={95} disabled={!canEdit} /></TableCell>
                     <TableCell sx={{ fontSize: '0.75rem', fontWeight: 700, whiteSpace: 'nowrap', color: 'text.secondary' }}>{boxWeightOf(r)} kg</TableCell>
-                    <TableCell><Cell value={r.sellingPrice ?? 0} onChange={(v) => setDraft(sku._id, { sellingPrice: v })} type="number" adornment="₹" width={110} /></TableCell>
-                    <TableCell><Cell value={r.gstRate ?? 18} onChange={(v) => setDraft(sku._id, { gstRate: v })} type="number" width={72} /></TableCell>
+                    <TableCell><Cell value={r.sellingPrice ?? 0} onChange={(v) => setDraft(sku._id, { sellingPrice: v })} type="number" adornment="₹" width={110} disabled={!canEdit} /></TableCell>
+                    <TableCell><Cell value={r.gstRate ?? 18} onChange={(v) => setDraft(sku._id, { gstRate: v })} type="number" width={72} disabled={!canEdit} /></TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={0.25} justifyContent="flex-end">
                         {dirty && (
@@ -236,9 +244,11 @@ const PartySkusDrawer = ({ open, onClose, party }) => {
                             </Tooltip>
                           </>
                         )}
-                        <Tooltip title="Remove from this party">
-                          <IconButton size="small" color="error" onClick={() => handleDelete(sku)}><Trash2 size={14} /></IconButton>
-                        </Tooltip>
+                        {canDelete && (
+                          <Tooltip title="Remove from this party">
+                            <IconButton size="small" color="error" onClick={() => handleDelete(sku)}><Trash2 size={14} /></IconButton>
+                          </Tooltip>
+                        )}
                       </Stack>
                     </TableCell>
                   </TableRow>
@@ -252,7 +262,7 @@ const PartySkusDrawer = ({ open, onClose, party }) => {
       {/* Footer */}
       <Stack direction="row" alignItems="center" spacing={1} sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
         <Typography variant="caption" color="text.secondary">
-          {skus.length ? `${num(skus.length)} SKU(s) linked · edit any field then hit save on that row` : 'Nothing linked yet'}
+          {skus.length ? (canEdit ? `${num(skus.length)} SKU(s) linked · edit any field then hit save on that row` : `${num(skus.length)} SKU(s) linked · editing is switched off for you`) : 'Nothing linked yet'}
         </Typography>
         <Box sx={{ flex: 1 }} />
         <Button size="small" variant="outlined" onClick={onClose}>Close</Button>

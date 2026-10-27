@@ -18,7 +18,7 @@ import { Router } from 'express';
 import { machineController } from './machine.controller.js';
 import validate from '../../../middleware/validate.js';
 import { protect } from '../../../middleware/auth.middleware.js';
-import { attachUserPermissions, requirePermission } from '../../../middleware/permission.middleware.js';
+import { attachUserPermissions, requirePermission, unlessSessionDenies } from '../../../middleware/permission.middleware.js';
 import { auditMiddleware } from '../../../middlewares/audit.middleware.js';
 import {
   createMachineSchema,
@@ -32,6 +32,10 @@ import {
 
 const router = Router();
 
+// Editing a machine (its details and its operators) is open to signed-in users
+// unless the Delegation Suite switched it off for this person (lock icon).
+const editMachine = unlessSessionDenies('masters.editMachine');
+
 router.use(protect);
 router.use(auditMiddleware('Machine', 'masters'));
 
@@ -44,8 +48,8 @@ router.route('/')
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), machineController.getById)
-  .put(validate(mongoIdParamSchema, 'params'), validate(updateMachineSchema), machineController.update)
-  .patch(validate(mongoIdParamSchema, 'params'), validate(updateMachineSchema), machineController.update)
+  .put(validate(mongoIdParamSchema, 'params'), editMachine, validate(updateMachineSchema), machineController.update)
+  .patch(validate(mongoIdParamSchema, 'params'), editMachine, validate(updateMachineSchema), machineController.update)
   .delete(
     validate(mongoIdParamSchema, 'params'),
     attachUserPermissions,
@@ -55,11 +59,12 @@ router.route('/:id')
 
 router.route('/:id/operators')
   .get(validate(mongoIdParamSchema, 'params'), machineController.getOperators)
-  .post(validate(mongoIdParamSchema, 'params'), validate(assignOperatorSchema), machineController.assignOperator);
+  .post(validate(mongoIdParamSchema, 'params'), editMachine, validate(assignOperatorSchema), machineController.assignOperator);
 
 router.delete(
   '/:id/operators/:operatorId',
   validate(machineOperatorParamSchema, 'params'),
+  editMachine,
   machineController.unassignOperator,
 );
 
