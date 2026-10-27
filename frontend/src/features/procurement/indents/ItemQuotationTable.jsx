@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import {
-  Box, Typography, Button, IconButton, Stack, CircularProgress, TextField, MenuItem, Tooltip,
+  Box, Typography, Button, IconButton, Stack, CircularProgress, TextField, MenuItem, Tooltip, Autocomplete,
 } from '@mui/material';
 import { Upload, FileText, X, ExternalLink } from 'lucide-react';
 import { fileHref } from './indentMeta';
@@ -12,7 +12,10 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
  * file upload, actual date and remarks. The parent owns the `rows` state and
  * the upload mutation; this component is purely presentational + event wiring.
  *
- * Row shape: { itemId, skuCode, itemName, qty, unit, statusDone, files:[{fileName,fileUrl,fileType}], actualAt, remarks }
+ * Row shape: { itemId, skuCode, itemName, qty, unit, statusDone, files:[{fileName,fileUrl,fileType}], actualAt, remarks, vendor }
+ *
+ * Step 1.3 passes `vendorOptions` to add an Approved Vendor column (Vendor Master,
+ * required for each approved item); `row.vendor` = { _id, name } | null.
  */
 const ItemQuotationTable = ({
   rows,
@@ -27,6 +30,8 @@ const ItemQuotationTable = ({
   onUploadRow,
   onRemoveFile,
   onPatchRow,
+  vendorOptions = null, // Step 1.3: Vendor Master records → shows the Approved Vendor column
+  vendorsLoading = false,
 }) => {
   const inputRefs = useRef([]);
 
@@ -38,12 +43,17 @@ const ItemQuotationTable = ({
     );
   }
 
-  const COLS = hideStatus
-    ? '1.5fr 0.9fr 0.55fr 0.55fr 2fr 1.15fr 1.3fr'
-    : '1.5fr 0.9fr 0.55fr 0.55fr 1.2fr 2fr 1.15fr 1.3fr';
-  const headers = hideStatus
-    ? ['Item Name', 'SKU', qtyLabel, 'Unit', uploadLabel, 'Actual Date', 'Remarks']
-    : ['Item Name', 'SKU', qtyLabel, 'Unit', 'Status Done?', uploadLabel, 'Actual Date', 'Remarks'];
+  const showVendor = Array.isArray(vendorOptions);
+  const COLS = [
+    '1.5fr 0.9fr 0.55fr 0.55fr',
+    hideStatus ? '' : '1.2fr',
+    showVendor ? '1.9fr' : '',
+    '2fr 1.15fr 1.3fr',
+  ].filter(Boolean).join(' ');
+  const headers = ['Item Name', 'SKU', qtyLabel, 'Unit',
+    ...(hideStatus ? [] : ['Status Done?']),
+    ...(showVendor ? ['Approved Vendor *'] : []),
+    uploadLabel, 'Actual Date', 'Remarks'];
 
   return (
     <Box>
@@ -119,6 +129,33 @@ const ItemQuotationTable = ({
                       <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
                     ))}
                   </TextField>
+                </Box>
+              )}
+
+              {/* Approved vendor (Step 1.3) — only items that had a quotation need one */}
+              {showVendor && (
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="caption" sx={{ display: { md: 'none' }, color: 'text.secondary', fontWeight: 700 }}>Approved Vendor{needsFile ? ' *' : ''}</Typography>
+                  {needsFile ? (
+                    <Autocomplete
+                      size="small"
+                      options={vendorOptions}
+                      loading={vendorsLoading}
+                      value={row.vendor || null}
+                      onChange={(_e, v) => onPatchRow(idx, { vendor: v ? { _id: v._id, name: v.name } : null })}
+                      getOptionLabel={(o) => o?.name || ''}
+                      isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
+                      noOptionsText={vendorsLoading ? 'Loading vendors…' : 'No active vendors in the Vendor Master'}
+                      renderInput={(params) => (
+                        <TextField {...params} placeholder="Select vendor" error={!row.vendor}
+                          inputProps={{ ...params.inputProps, 'data-testid': `approved-vendor-${idx}` }} />
+                      )}
+                    />
+                  ) : (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      Quote not required — vendor is chosen on Pending for PO.
+                    </Typography>
+                  )}
                 </Box>
               )}
 

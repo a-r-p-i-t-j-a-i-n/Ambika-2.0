@@ -24,6 +24,7 @@ import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import AddVendorForItemModal from './AddVendorForItemModal';
 import { norm, matchVendorProduct, fillOtherRates } from './vendorRateMatch';
 import { itemRef, UNITS, toKgsUnit } from '../indents/indentMeta';
+import { VENDOR_SOURCE_LABEL, fixedVendorOf, itemVendorBlock, assignedVendorsOf } from './itemVendor';
 
 /**
  * Create / edit a Vendor Purchase Order (Step 1.4).
@@ -124,6 +125,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
   const [indent, setIndent] = useState(null);
   const [selectedApprovedItems, setSelectedApprovedItems] = useState([]); // New PO item-picker (OTHER create)
+  // Assigned Vendor dropdown (New PO): '' = choose approved items manually.
+  const [assignedVendorId, setAssignedVendorId] = useState('');
   const [vendor, setVendor] = useState(null);
   const [poFormatType, setPoFormatType] = useState('OTHER'); // 'JSL' | 'OTHER'
   const [approvedVendors, setApprovedVendors] = useState([]); // from Step 1.3 (multi-vendor)
@@ -168,7 +171,28 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     undefined,
     { skip: !open || !approvedItemMode },
   );
-  const approvedItemOptions = approvedItemsRes?.data?.items || [];
+  const approvedItemOptions = useMemo(() => approvedItemsRes?.data?.items || [], [approvedItemsRes]);
+
+  // Vendor fixed for the selected items (approved quotation / Pending-for-PO pick):
+  // the PO must use it, so the Vendor field is filled from it and locked.
+  // Assigned Vendor dropdown: the vendors already fixed for approved items (approved
+  // quotation / Pending-for-PO pick) — of the indent the form was opened from, else
+  // of every approved item. Picking one fills its items; the item picker then lists
+  // only that vendor's items (plus whatever is already selected).
+  const assignedVendors = useMemo(() => assignedVendorsOf(presetIndent?._id
+    ? approvedItemOptions.filter((o) => String(o.indentId) === String(presetIndent._id))
+    : approvedItemOptions), [approvedItemOptions, presetIndent]);
+  const pickerOptions = useMemo(() => {
+    if (!assignedVendorId) return approvedItemOptions;
+    const picked = new Set(selectedApprovedItems.map((o) => String(o.indentItemId)));
+    return approvedItemOptions.filter((o) => picked.has(String(o.indentItemId))
+      || (o.vendorState === 'SET' && String(o.vendorId) === assignedVendorId));
+  }, [approvedItemOptions, assignedVendorId, selectedApprovedItems]);
+
+  const fixedVendor = useMemo(
+    () => (approvedItemMode ? fixedVendorOf(selectedApprovedItems) : null),
+    [approvedItemMode, selectedApprovedItems],
+  );
 
   const indentsLoading = approvedLoading || poReadyLoading;
   const indentOptions = useMemo(() => {
@@ -233,6 +257,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       })) : [emptyItemFor(fmt)]);
     } else {
       setIndent(null); setVendor(null); setApprovedVendors([]); setApprovedVendorId('');
+      setAssignedVendorId('');
       setSelectedApprovedItems([]);
       setPoFormatType('OTHER');
       setHeader({ poDate: todayStr(), expectedDeliveryDate: '', leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '' });
@@ -255,12 +280,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     if (!open || lockRates || poFormatType !== 'JSL') return;
     const jindal = findJslVendor(vendorOptions);
     if (!jindal) return; // catalog list not loaded yet — effect re-runs when it arrives
-    if (vendor?._id !== jindal._id) applyJslVendorTerms(jindal);
+    // A vendor fixed for the items wins — a mismatch is reported, never overridden.
+    if (vendor?._id !== jindal._id && !fixedVendor) applyJslVendorTerms(jindal);
     // Fill missing rates from the (possibly late-loaded) catalog, keeping manual edits.
     const products = vendorProducts.length ? vendorProducts : (jindal.products || []);
     setItems((cur) => fillJslRates(cur, { products }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, lockRates, poFormatType, vendorOptions, vendorProducts, selectedApprovedItems]);
+  }, [open, lockRates, poFormatType, vendorOptions, vendorProducts, selectedApprovedItems, fixedVendor]);
 
   // The indent's source line items (multi-item, with a legacy single-product fallback).
   const indentSourceItems = (ind) => {
@@ -455,9 +481,25 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   // approved quantity, rows shaped to the current format. Rates auto-fill from the
   // Vendor Master (OTHER) / Jindal catalog (JSL). The same indent's other items stay
   // available for separate POs.
-  const applyApprovedItems = (vals) => {
+  // `assigned` (optional) sets the Assigned Vendor dropdown along with the items.
+  const applyApprovedItems = (vals, assigned) => {
+    if (assigned !== undefined) setAssignedVendorId(assigned);
     setSelectedApprovedItems(vals);
     setItems(buildRowsFromApproved(vals, poFormatType));
+    // Items fixed to one vendor (approved quotation / Pending-for-PO pick) fill the
+    // Vendor field with it; the field stays locked while they are selected.
+    const fixed = fixedVendorOf(vals);
+    if (fixed && !fixed.conflict && String(vendor?._id || '') !== fixed.vendorId) {
+      applyVendor(vendorOptions.find((o) => String(o._id) === fixed.vendorId) || { _id: fixed.vendorId, name: fixed.vendorName });
+    }
+  };
+
+  // Assigned Vendor picked: carry that vendor and all its eligible items (in the
+  // dropdown's scope) into the form. '' goes back to choosing items manually and
+  // keeps the current selection.
+  const chooseAssignedVendor = (id) => {
+    if (!id) { setAssignedVendorId(''); return; }
+    applyApprovedItems(assignedVendors.find((g) => g.vendorId === id)?.items || [], id);
   };
 
   // Preset indent (opened from Indent Detail / list): pre-select that indent's
@@ -470,8 +512,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     if (!approvedItemOptions.length) return;
     const wanted = presetItemIds?.length ? new Set(presetItemIds.map(String)) : null;
     const mine = approvedItemOptions.filter((o) => String(o.indentId) === String(presetIndent._id)
-      && (!wanted || wanted.has(String(o.indentItemId))));
-    if (mine.length) { applyApprovedItems(mine); presetAppliedRef.current = true; }
+      && (!wanted || wanted.has(String(o.indentItemId))) && !itemVendorBlock(o));
+    const vendorsOfMine = assignedVendorsOf(mine);
+    // A whole indent whose items are fixed to several vendors can't go on one PO:
+    // open on the Assigned Vendor dropdown instead of preselecting a conflict.
+    if (!wanted && vendorsOfMine.length > 1) { presetAppliedRef.current = true; return; }
+    if (mine.length) {
+      applyApprovedItems(mine, vendorsOfMine.length === 1 ? vendorsOfMine[0].vendorId : '');
+      presetAppliedRef.current = true;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, approvedItemMode, presetIndent, presetItemIds, approvedItemOptions]);
 
@@ -556,7 +605,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   // Auto-select when exactly one vendor matches; drop a vendor that no longer
   // covers the selected SKUs once the item selection changes.
   useEffect(() => {
-    if (isJsl || !skuFilteredVendors) return;
+    if (isJsl || !skuFilteredVendors || fixedVendor) return;
     if (skuFilteredVendors.length === 1) {
       if (vendor?._id !== skuFilteredVendors[0]._id) applyVendor(skuFilteredVendors[0]);
     } else if (vendor?._id && !skuFilteredVendors.some((v) => v._id === vendor._id)) {
@@ -564,6 +613,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skuFilteredVendors]);
+
+  // Why the selected items can't go on this PO's vendor ('' = they can).
+  const vendorConflict = (() => {
+    if (!fixedVendor) return '';
+    if (fixedVendor.conflict) return `The selected items are fixed to different vendors (${fixedVendor.vendors.join(', ')}) — raise one PO per vendor.`;
+    const jindal = isJsl ? findJslVendor(vendorOptions) : null;
+    if (jindal && String(jindal._id) !== fixedVendor.vendorId) {
+      return `The selected item(s) must be bought from "${fixedVendor.vendorName}" — a JSL PO is always ${JSL_VENDOR_NAME}. Use the Other format.`;
+    }
+    return '';
+  })();
 
   // After adding a vendor for the selected item(s): select it and auto-fill rates.
   const handleVendorAdded = (added) => {
@@ -657,8 +717,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const handleSubmit = async (saveMode = 'DRAFT') => {
     if (!vendor?._id) { enqueueSnackbar('Vendor is mandatory', { variant: 'warning' }); return; }
     if (!header.expectedDeliveryDate) { enqueueSnackbar('Expected Delivery Date is required', { variant: 'warning' }); return; }
+    if (vendorConflict) { enqueueSnackbar(vendorConflict, { variant: 'warning' }); return; }
     if (approvedItemMode) {
       if (!selectedApprovedItems.length) { enqueueSnackbar('Select at least one approved item', { variant: 'warning' }); return; }
+      const blocked = selectedApprovedItems.find((o) => itemVendorBlock(o));
+      if (blocked) { enqueueSnackbar(`${blocked.indentItemDisplayNumber}: ${itemVendorBlock(blocked)}`, { variant: 'warning' }); return; }
     } else if (!isEdit && !isRevise && !indent?._id) {
       enqueueSnackbar('Select an approved indent first', { variant: 'warning' }); return;
     }
@@ -756,7 +819,23 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                 <MenuItem value="JSL">JSL</MenuItem>
               </TextField>
             </Grid>
-            <Grid item xs={12} sm={8} />
+            <Grid item xs={12} sm={8}>
+              {approvedItemMode && assignedVendors.length > 0 ? (
+                <TextField select fullWidth label="Assigned Vendor" value={assignedVendorId}
+                  onChange={(e) => chooseAssignedVendor(e.target.value)}
+                  inputProps={{ 'data-testid': 'assigned-vendor' }}
+                  helperText={!assignedVendorId && assignedVendors.length > 1 && presetIndent?._id && !selectedApprovedItems.length
+                    ? `This indent's items are assigned to ${assignedVendors.length} vendors — pick one (one PO per vendor)`
+                    : 'Vendors already fixed for approved items — picking one adds its items'}>
+                  <MenuItem value=""><em>All approved items — choose manually</em></MenuItem>
+                  {assignedVendors.map((g) => (
+                    <MenuItem key={g.vendorId} value={g.vendorId}>
+                      {g.vendorName} — {g.items.length} item{g.items.length === 1 ? '' : 's'}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              ) : null}
+            </Grid>
             <Grid item xs={12} sm={6}>
               {isEdit ? (
                 <TextField label="Indent Number" fullWidth value={indent?.indentNumber || ''} disabled />
@@ -767,11 +846,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                 <Autocomplete
                   multiple
                   disableCloseOnSelect
-                  options={approvedItemOptions}
+                  options={pickerOptions}
                   loading={approvedItemsLoading}
                   value={selectedApprovedItems}
                   getOptionLabel={(o) => (o ? `${o.indentItemDisplayNumber || o.itemDisplayNumber || o.indentNumber} — ${o.itemName}` : '')}
                   isOptionEqualToValue={(o, v) => String(o.indentItemId) === String(v.indentItemId)}
+                  getOptionDisabled={(o) => !!itemVendorBlock(o)}
                   onChange={(_e, vals) => applyApprovedItems(vals)}
                   filterOptions={(opts, { inputValue }) => {
                     const q = inputValue.trim().toLowerCase();
@@ -791,11 +871,20 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                       <Typography variant="caption" color="text.secondary">
                         {[o.itemName, o.skuCode && `SKU: ${o.skuCode}`, `Approved: ${o.approvedQuantity}`].filter(Boolean).join(' · ')}
                       </Typography>
+                      {itemVendorBlock(o) ? (
+                        <Typography variant="caption" sx={{ display: 'block', color: 'error.main', fontWeight: 600 }}>{itemVendorBlock(o)}</Typography>
+                      ) : o.vendorState === 'SET' ? (
+                        <Typography variant="caption" sx={{ display: 'block', color: '#0f766e', fontWeight: 600 }}>
+                          Vendor: {o.vendorName} · {VENDOR_SOURCE_LABEL[o.vendorSource]}
+                        </Typography>
+                      ) : null}
                     </Box>
                   )}
                   renderInput={(params) => (
                     <TextField {...params} label="Approved Item(s) *" placeholder="Select one or more approved items"
-                      helperText="Item-wise PO — only approved, not-yet-PO'd items are listed"
+                      helperText={assignedVendorId
+                        ? `Showing the items assigned to ${assignedVendors.find((g) => g.vendorId === assignedVendorId)?.vendorName || 'this vendor'}`
+                        : "Item-wise PO — only approved, not-yet-PO'd items are listed"}
                       InputProps={{ ...params.InputProps, endAdornment: (<>{approvedItemsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
                   )}
                 />
@@ -820,9 +909,10 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                 </TextField>
               ) : (
                 <Autocomplete
-                  options={vendorOptionsFiltered}
+                  options={fixedVendor ? vendorOptions : vendorOptionsFiltered}
                   loading={vendorsLoading}
                   value={vendor}
+                  disabled={!!fixedVendor && !fixedVendor.conflict}
                   getOptionLabel={(o) => (o?.name || '')}
                   isOptionEqualToValue={(o, v) => o._id === v._id}
                   onChange={(_e, v) => applyVendor(v)}
@@ -864,19 +954,21 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   )}
                   renderInput={(params) => (
                     <TextField {...params} label="Vendor *" placeholder="Select from Vendor Master"
-                      error={noVendorForSku}
+                      error={!!vendorConflict || (!fixedVendor && noVendorForSku)}
                       helperText={
-                        noVendorForSku
+                        vendorConflict || (fixedVendor
+                          ? `${VENDOR_SOURCE_LABEL[fixedVendor.vendorSource]} — the PO must use this vendor`
+                          : null) || (noVendorForSku
                           ? 'No vendor found for selected SKU. Add vendor for this item.'
                           : (skuFilteredVendors
                             ? 'Filtered to vendors whose catalog carries the selected SKU(s).'
-                            : ' ')
+                            : ' '))
                       }
                       InputProps={{ ...params.InputProps, endAdornment: (<>{vendorsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
                   )}
                 />
               )}
-              {approvedItemMode && !isJsl && selectedApprovedItems.length > 0 && (
+              {approvedItemMode && !isJsl && selectedApprovedItems.length > 0 && !fixedVendor && (
                 <Button size="small" startIcon={<Plus size={15} />} onClick={() => setAddVendorOpen(true)}
                   sx={{ mt: 0.5, textTransform: 'none' }}>
                   Add Vendor for this Item

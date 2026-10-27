@@ -384,6 +384,8 @@ const PAGE_TITLES = {
 
   // Purchase FMS — unified workflow page (step navigation lives inside it)
   '/purchase-fms/purchase-indents':    'Purchase FMS — Purchase Indents',
+  '/purchase-fms/receive-quotes':      'Purchase FMS — Receive Quote & Comparative',
+  '/purchase-fms/approved-quotations': 'Purchase FMS — Approved Quotation',
   '/purchase-fms/purchase-orders':     'Purchase FMS — Purchase Orders',
   '/purchase-fms/follow-ups':          'Purchase FMS — Follow-ups',
   // Old step slug — kept so a title still resolves for the instant before

@@ -291,6 +291,14 @@ const indentItemSchema = new Schema({
   procurementStatus: { type: String, enum: Object.values(ITEM_PROCUREMENT_STATUS), default: ITEM_PROCUREMENT_STATUS.PENDING },
   poId:     { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', default: null },
   poNumber: { type: String, trim: true, default: '' },
+  // Vendor that will supply this item (Vendor Master) — see itemVendor.js. Set by
+  // the Step 1.3 approval (APPROVED_QUOTATION) or picked on Pending for PO when no
+  // quotation was required (PO_PREPARATION). The PO for this item must use it.
+  vendorId:           { type: Schema.Types.ObjectId, ref: 'Vendor', default: null },
+  vendorName:         { type: String, trim: true, default: '' },
+  vendorSource:       { type: String, enum: ['', 'APPROVED_QUOTATION', 'PO_PREPARATION'], default: '' },
+  vendorSelectedAt:   { type: Date, default: null },
+  vendorSelectedById: { type: Schema.Types.ObjectId, ref: 'User', default: null },
 }, { _id: true });
 
 const indentSchema = new Schema({

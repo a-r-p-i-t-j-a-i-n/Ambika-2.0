@@ -213,3 +213,11 @@ export const poQuerySchema = Joi.object({
 export const mongoIdParamSchema = Joi.object({
   id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });
+
+// Pending for PO — fix (or, when no quotation was required, clear) the vendor
+// for one approved indent item. vendorId null/'' clears.
+export const setItemVendorSchema = Joi.object({
+  indentId:     objectId.required(),
+  indentItemId: objectId.required(),
+  vendorId:     objectId.allow('', null).required(),
+});

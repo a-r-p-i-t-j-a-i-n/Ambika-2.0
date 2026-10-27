@@ -119,6 +119,10 @@ const grnItemSchema = new Schema({
   amount:  { type: Number, default: 0, min: 0 }, // receivedQty × rate
   batchNo: { type: String, trim: true, default: '' },
   remarks: { type: String, trim: true, default: '' },
+  // Material Receipt Type of THIS line (chosen per SKU on the GRN form). null
+  // only on lines saved before it moved off the header — readers fall back to
+  // the GRN's header howItemReceived for those (see lineReceiptType).
+  howItemReceived: { type: String, enum: [...Object.values(HOW_ITEM_RECEIVED), null], default: null },
 
   // Set after stock posting (back-reference to the ledger row).
   movementId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement' },
@@ -189,7 +193,14 @@ const grnSchema = new Schema({
   receivedBy:    { type: String, trim: true, default: '' },
   preparedBy:    { type: String, trim: true, default: '' },
   warehouse:     { type: String, trim: true, default: 'MAIN' }, // inventory default warehouse
-  howItemReceived: { type: String, enum: Object.values(HOW_ITEM_RECEIVED), default: HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED },
+  /**
+   * Material Receipt Type is chosen PER LINE (items[].howItemReceived). This
+   * header value is kept, never discarded: on GRNs saved before the move it is
+   * the only value, and their lines read it as their own. On newer GRNs the
+   * service derives it from the lines — the one type every line shares, or
+   * null when the lines differ.
+   */
+  howItemReceived: { type: String, enum: [...Object.values(HOW_ITEM_RECEIVED), null], default: HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED },
 
   // ── Lines & totals ──
   items: { type: [grnItemSchema], default: [] },

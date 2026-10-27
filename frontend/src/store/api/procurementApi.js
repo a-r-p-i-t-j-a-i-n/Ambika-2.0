@@ -98,6 +98,11 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/procurement/purchase-orders/approved-items', params }),
       providesTags: ['Indent', 'PurchaseOrder'],
     }),
+    // Pending for PO — fix (or clear) the vendor of one approved indent item.
+    setItemVendor: builder.mutation({
+      query: (body) => ({ url: '/procurement/purchase-orders/approved-items/vendor', method: 'PATCH', body }),
+      invalidatesTags: (_r, _e, { indentId }) => ['Indent', { type: 'Indent', id: indentId }],
+    }),
     createPurchaseOrder: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders', method: 'POST', body }),
       invalidatesTags: ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
@@ -607,6 +612,7 @@ export const {
   useGetPurchaseOrderStatsQuery,
   useGetPurchaseOrderQuery,
   useGetAllApprovedItemsQuery,
+  useSetItemVendorMutation,
   useCreatePurchaseOrderMutation,
   useCreatePurchaseOrderFromItemsMutation,
   usePreviewPurchaseOrderPdfMutation,
