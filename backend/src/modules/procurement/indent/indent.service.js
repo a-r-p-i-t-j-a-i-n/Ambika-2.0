@@ -18,6 +18,7 @@ import {
   quoteComparativePlannedAt,
 } from './quotationSteps.js';
 import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
+import { bindIndentItemsToSkuMaster } from './itemSku.js';
 import Vendor from '../../vendors/vendor.model.js';
 
 // Human-readable delay between a planned and actual date.
@@ -315,9 +316,10 @@ const mirrorLegacy = (indent) => {
 
 export const indentService = {
   async create(data, user) {
-    const items = buildItems(data);
-    if (!items.length) throw new AppError('Add at least one item to the indent', 400);
-    if (items.some((it) => !it.itemName)) throw new AppError('Every item needs a product name', 400);
+    const raw = buildItems(data);
+    if (!raw.length) throw new AppError('Add at least one item to the indent', 400);
+    // Item Name / SKU Code come from the SKU Master record, not the request.
+    const items = await bindIndentItemsToSkuMaster(raw);
     // Finished Goods are sell-side only — never indentable.
     await assertPurchasable(items.map((it) => ({ skuId: it.skuId, skuCode: it.skuCode })));
 
@@ -412,9 +414,10 @@ export const indentService = {
 
     // Items (replace wholesale when provided in either shape).
     if (Array.isArray(data.items) || data.productNameRevised !== undefined) {
-      const items = buildItems(data);
-      if (!items.length) throw new AppError('Add at least one item to the indent', 400);
-      if (items.some((it) => !it.itemName)) throw new AppError('Every item needs a product name', 400);
+      const raw = buildItems(data);
+      if (!raw.length) throw new AppError('Add at least one item to the indent', 400);
+      // Same rule as create: every item resolves to an active SKU Master record.
+      const items = await bindIndentItemsToSkuMaster(raw);
       await assertPurchasable(items.map((it) => ({ skuId: it.skuId, skuCode: it.skuCode })));
       indent.items = items;
       mirrorLegacy(indent);

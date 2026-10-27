@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box, Typography, TextField, Button, IconButton, Divider,
-  Grid, MenuItem, Autocomplete, CircularProgress, Tooltip, Paper,
+  Grid, MenuItem, Autocomplete, createFilterOptions, CircularProgress, Tooltip, Paper,
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
@@ -30,6 +30,10 @@ const ITEM_TYPES = [
  * Editing is only allowed while the indent is a DRAFT (backend enforces this).
  */
 const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', unit: 'Pcs', quantity: '', remarks: '' });
+// The lookup endpoint builds a RegExp from `search`, so typed text is escaped.
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Match the typed text against name OR code; cap the rendered list.
+const filterSkuOptions = createFilterOptions({ limit: 200, stringify: (o) => `${o.name || ''} ${o.code || ''}` });
 const blankHeader = () => ({ raisedBy: '', department: 'Stores', requestType: 'MATERIAL_PURCHASE', remarks: '' });
 
 // Map an existing indent (new items[] or legacy single-product) → editable rows.
@@ -64,9 +68,32 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
   const [updateIndent, { isLoading: updating }] = useUpdateIndentMutation();
   const saving = creating || updating;
 
+  // Products come from the SKU Master only (the server re-reads name + code
+  // from the SKU record on save). The first 2000 load up front; typing also
+  // searches the master, so a larger catalogue is still fully reachable.
   const { data: skuRes, isLoading: skusLoading } = useGetSkuLookupQuery({ limit: 2000 }, { skip: !open });
+  const [skuSearch, setSkuSearch] = useState('');
+  const [skuTerm, setSkuTerm] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setSkuTerm(skuSearch.trim()), 300);
+    return () => clearTimeout(t);
+  }, [skuSearch]);
+  const { data: skuSearchRes, isFetching: skuSearching } = useGetSkuLookupQuery(
+    { search: escapeRegex(skuTerm), limit: 50 }, { skip: !open || skuTerm.length < 2 },
+  );
   // Purchase FMS: exclude Finished Goods from the product picker.
-  const skuOptions = (skuRes?.data || []).filter(isPurchasableSku);
+  const skuOptions = useMemo(() => {
+    const byId = new Map();
+    [...(skuRes?.data || []), ...(skuSearchRes?.data || [])]
+      .filter(isPurchasableSku)
+      .forEach((s) => byId.set(String(s._id), s));
+    // A row's saved SKU stays selectable even if it is outside the loaded list.
+    items.forEach((it) => {
+      if (it.skuId && !byId.has(String(it.skuId))) byId.set(String(it.skuId), { _id: it.skuId, name: it.itemName, code: it.skuCode, unit: it.unit });
+    });
+    return [...byId.values()];
+  }, [skuRes, skuSearchRes, items]);
+  const skuById = useMemo(() => new Map(skuOptions.map((s) => [String(s._id), s])), [skuOptions]);
 
   // Employee directory for the "Raised By" picker.
   const { data: empRes, isLoading: empLoading } = useGetEmployeesQuery(undefined, { skip: !open });
@@ -139,22 +166,33 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
   const addRow = () => setItems((cur) => [...cur, emptyItem()]);
   const removeRow = (idx) => setItems((cur) => (cur.length > 1 ? cur.filter((_, i) => i !== idx) : cur));
 
+  // A row that names a product but has no SKU — only an older draft typed by
+  // hand can be in this state; it must be re-picked from the SKU Master.
+  const unlinked = (it) => Boolean(it.itemName.trim()) && !it.skuId;
+
   const validate = () => {
     const e = {};
-    const valid = items.filter((it) => it.itemName.trim() && Number(it.quantity) > 0);
+    const valid = items.filter((it) => it.skuId && Number(it.quantity) > 0);
     if (!valid.length) e.items = 'Add at least one product with a quantity';
     items.forEach((it, i) => {
       if (it.itemName.trim() && !(Number(it.quantity) > 0)) e[`qty_${i}`] = true;
+      if (unlinked(it)) e[`sku_${i}`] = true;
     });
+    const firstUnlinked = items.find(unlinked);
+    if (firstUnlinked) e.items = `"${firstUnlinked.itemName.trim()}" is not in SKU Master — pick the product from the SKU list`;
     setErrors(e);
     return !e.items;
   };
 
   const handleSubmit = async () => {
-    if (!validate()) { enqueueSnackbar('Add at least one product with a quantity', { variant: 'warning' }); return; }
+    if (!validate()) {
+      const first = items.find(unlinked);
+      enqueueSnackbar(first ? `"${first.itemName.trim()}" is not in SKU Master — pick the product from the SKU list` : 'Add at least one product with a quantity', { variant: 'warning' });
+      return;
+    }
     const payload = {
       items: items
-        .filter((it) => it.itemName.trim() && Number(it.quantity) > 0)
+        .filter((it) => it.skuId && Number(it.quantity) > 0)
         .map((it) => ({
           itemName: it.itemName.trim(),
           skuCode: it.skuCode.trim(),
@@ -273,28 +311,40 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
                 border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
                 '&:hover': { bgcolor: { md: alpha('#2563eb', 0.03) } },
               }}>
+                {/* SKU Master only — typing searches, it never creates a free-text item. */}
                 <Autocomplete
                   size="small"
-                  freeSolo
                   options={skuOptions}
-                  loading={skusLoading}
-                  getOptionLabel={(o) => (typeof o === 'string' ? o : o.name || '')}
-                  value={it.itemName}
-                  onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
+                  loading={skusLoading || skuSearching}
+                  filterOptions={filterSkuOptions}
+                  getOptionLabel={(o) => o?.name || ''}
+                  isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
+                  value={it.skuId ? (skuById.get(String(it.skuId)) || null) : null}
+                  onInputChange={(_e, v, reason) => { if (reason === 'input') setSkuSearch(v); }}
                   onChange={(_e, val) => {
-                    if (val && typeof val === 'object') {
-                      // Auto-fetch the unit from the SKU master on selection; if the
-                      // SKU has no unit, default to Pcs. Re-runs every time the item is
-                      // changed, so picking a different SKU always refreshes the unit.
-                      setItem(idx, { itemName: val.name, skuCode: val.code || '', skuId: val._id || '', unit: normalizeUnit(val.unit) || 'Pcs' });
-                    }
+                    // Auto-fetch the unit from the SKU master on selection; if the
+                    // SKU has no unit, default to Pcs. Re-runs every time the item is
+                    // changed, so picking a different SKU always refreshes the unit.
+                    if (val) setItem(idx, { itemName: val.name, skuCode: val.code || '', skuId: val._id, unit: normalizeUnit(val.unit) || 'Pcs' });
+                    else setItem(idx, { itemName: '', skuCode: '', skuId: '' });
                   }}
+                  renderOption={(props, o) => (
+                    <li {...props} key={o._id}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: PFMS.ink }}>{o.name}</Typography>
+                        <Typography variant="caption" sx={{ color: PFMS.sub }}>{o.code}{o.unit ? ` · ${o.unit}` : ''}</Typography>
+                      </Box>
+                    </li>
+                  )}
+                  noOptionsText="No matching SKU in SKU Master — use “New Product” to add it"
                   renderInput={(params) => (
-                    <TextField {...params} placeholder="Product name" />
+                    <TextField {...params} placeholder="Product name — search SKU Master" error={!!errors[`sku_${idx}`]}
+                      helperText={unlinked(it) ? `Not in SKU Master: "${it.itemName.trim()}" — pick the SKU` : undefined}
+                      inputProps={{ ...params.inputProps, 'data-testid': 'indent-sku-picker' }} />
                   )}
                 />
                 <TextField size="small" placeholder="SKU" value={it.skuCode}
-                  onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
+                  InputProps={{ readOnly: true }} inputProps={{ 'data-testid': 'indent-sku-code', 'aria-label': 'SKU code (from SKU Master)' }} />
                 <TextField size="small" type="number" placeholder="0" value={it.quantity} error={!!errors[`qty_${idx}`]}
                   onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} />
                 <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
