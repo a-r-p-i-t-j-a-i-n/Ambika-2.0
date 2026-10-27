@@ -1,16 +1,16 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { purchaseOrderService } from './purchaseOrder.service.js';
-import { userHasPermission } from '../../../middleware/permission.middleware.js';
+import { isMdForDirectSave, DIRECT_SAVE_MD_ONLY } from './poDirectSave.js';
 import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse, AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
 
-// "Save PO Directly" is only allowed when PO approval is not required — i.e. the
-// creator already holds PO approval authority (procurement.approve; root/MD
-// included). Everyone else must save a draft and go through the approval step.
+// "Save PO Directly" is the MD's action only — checked against the
+// authenticated user record (req.user), never a client-sent role. Everyone else
+// saves a draft and it goes through PO Approval.
 const assertDirectSaveAllowed = (req) => {
-  if (req.body.saveMode === 'DIRECT' && !userHasPermission(req, 'procurement.approve')) {
-    throw new AppError('PO approval is required — save as draft and send it for approval', 403);
+  if (req.body.saveMode === 'DIRECT' && !isMdForDirectSave(req.user)) {
+    throw new AppError(DIRECT_SAVE_MD_ONLY, 403);
   }
 };
 
@@ -22,7 +22,7 @@ const approveIfDirect = async (req, po) => {
   try {
     return await purchaseOrderService.approve(po._id, {
       decision: 'APPROVED',
-      remarks: 'Saved directly — approval not required (creator holds PO approval rights)',
+      remarks: 'Saved directly by the MD — no separate approval step',
     }, req.user);
   } catch (err) {
     logger.error(`[po] direct save approval failed for ${po.draftNumber}: ${err.message}`);
@@ -134,6 +134,11 @@ export const purchaseOrderController = {
 
   // Revise a cancelled PO → new draft PO (linked back via revisedFromPoId).
   revise: asyncHandler(async (req, res) => {
+    // A revision is always saved as a draft, even by the MD.
+    assertDirectSaveAllowed(req);
+    if (req.body.saveMode === 'DIRECT') {
+      throw new AppError('A revised PO is always saved as a draft — approve it in PO Approval', 400);
+    }
     const po = await purchaseOrderService.revise(req.params.id, req.body, req.user);
     res.status(201).json(ApiResponse.created('Revised purchase order created', po));
   }),

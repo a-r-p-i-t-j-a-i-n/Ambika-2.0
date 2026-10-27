@@ -13,7 +13,7 @@ import {
 } from '../../../store/api/procurementApi';
 import { useGetSkuLookupQuery, useCreateSkuMutation } from '../../../store/api/skuApi';
 import { useGetEmployeesQuery } from '../../../store/api/authApi';
-import { UNITS, DEPARTMENTS, normalizeUnit } from './indentMeta';
+import { UNITS, DEPARTMENTS } from './indentMeta';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
 import { TYPE_META, typeDestinationHint } from '../../masters/itemTypeMeta';
 
@@ -34,6 +34,9 @@ const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', unit: 'Pcs', qu
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Match the typed text against name OR code; cap the rendered list.
 const filterSkuOptions = createFilterOptions({ limit: 200, stringify: (o) => `${o.name || ''} ${o.code || ''}` });
+// A SKU's unit exactly as SKU Master stores it (trimmed only); `fallback`,
+// then Pcs, when the SKU has none.
+const skuUnit = (sku, fallback) => String(sku?.unit || '').trim() || String(fallback || '').trim() || 'Pcs';
 const blankHeader = () => ({ raisedBy: '', department: 'Stores', requestType: 'MATERIAL_PURCHASE', remarks: '' });
 
 // Map an existing indent (new items[] or legacy single-product) → editable rows.
@@ -41,13 +44,13 @@ const rowsFromIndent = (indent) => {
   if (indent?.items?.length) {
     return indent.items.map((it) => ({
       itemName: it.itemName || '', skuCode: it.skuCode || '', skuId: it.skuId || '',
-      unit: normalizeUnit(it.unit) || 'Pcs', quantity: it.quantity ?? '', remarks: it.remarks || '',
+      unit: skuUnit(it), quantity: it.quantity ?? '', remarks: it.remarks || '',
     }));
   }
   if (indent?.productNameRevised) {
     return [{
       itemName: indent.productNameRevised, skuCode: indent.skuCode || '', skuId: indent.skuId || '',
-      unit: normalizeUnit(indent.unit) || 'Pcs', quantity: indent.quantity ?? '', remarks: '',
+      unit: skuUnit(indent), quantity: indent.quantity ?? '', remarks: '',
     }];
   }
   return [emptyItem()];
@@ -136,7 +139,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
           itemName: sku.name || newSku.name.trim(),
           skuCode: sku.code || newSku.code.trim().toUpperCase(),
           skuId: sku._id || '',
-          unit: normalizeUnit(sku.unit) || newSku.unit || 'Pcs',
+          unit: skuUnit(sku, newSku.unit),
         };
         // Reuse a trailing empty row if present, else append.
         const onlyTrailingEmpty = cur.length && !cur[cur.length - 1].itemName?.trim();
@@ -198,7 +201,7 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
           skuCode: it.skuCode.trim(),
           skuId: it.skuId || undefined,
           quantity: Number(it.quantity),
-          unit: it.unit.trim() || 'Pcs',
+          unit: skuUnit(skuById.get(String(it.skuId)), it.unit),
           remarks: it.remarks.trim(),
         })),
       raisedBy: header.raisedBy.trim(),
@@ -322,10 +325,10 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
                   value={it.skuId ? (skuById.get(String(it.skuId)) || null) : null}
                   onInputChange={(_e, v, reason) => { if (reason === 'input') setSkuSearch(v); }}
                   onChange={(_e, val) => {
-                    // Auto-fetch the unit from the SKU master on selection; if the
-                    // SKU has no unit, default to Pcs. Re-runs every time the item is
-                    // changed, so picking a different SKU always refreshes the unit.
-                    if (val) setItem(idx, { itemName: val.name, skuCode: val.code || '', skuId: val._id, unit: normalizeUnit(val.unit) || 'Pcs' });
+                    // The unit is the SKU master's, exactly as stored there ("kg",
+                    // "NOS", "Sheet") — the server re-reads it on save too. Only a
+                    // SKU with no unit falls back to Pcs.
+                    if (val) setItem(idx, { itemName: val.name, skuCode: val.code || '', skuId: val._id, unit: skuUnit(val) });
                     else setItem(idx, { itemName: '', skuCode: '', skuId: '' });
                   }}
                   renderOption={(props, o) => (
@@ -347,9 +350,8 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
                   InputProps={{ readOnly: true }} inputProps={{ 'data-testid': 'indent-sku-code', 'aria-label': 'SKU code (from SKU Master)' }} />
                 <TextField size="small" type="number" placeholder="0" value={it.quantity} error={!!errors[`qty_${idx}`]}
                   onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} />
-                <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
-                  {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
-                </TextField>
+                <TextField size="small" placeholder="Unit" value={it.skuId ? skuUnit(skuById.get(String(it.skuId)), it.unit) : ''}
+                  InputProps={{ readOnly: true }} inputProps={{ 'data-testid': 'indent-unit', 'aria-label': 'Unit (from SKU Master)' }} />
                 <TextField size="small" placeholder="Optional" value={it.remarks}
                   onChange={(e) => setItem(idx, { remarks: e.target.value })} />
                 <Tooltip title={items.length > 1 ? 'Remove item' : 'At least one item required'}>

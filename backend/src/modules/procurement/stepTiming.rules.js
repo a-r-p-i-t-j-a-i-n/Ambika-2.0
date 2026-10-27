@@ -283,7 +283,10 @@ export const resolveStepTiming = (doc, def, { tasks = [], names = new Map(), met
     plannedAt: toDate(step.planned?.(doc)),
     actualAt: done ? toDate(step.actual?.(doc)) : null,
     doneByName: done ? (str(step.byName?.(doc)) || str(byId ? names.get(String(byId)) : null)) : null,
-    assignedDoerName: str(task?.assignedDoerId?.name),
+    // Several main doers (FMS → Doer Assignment) → all their names.
+    assignedDoerName: str(task?.assignedDoerIds?.length
+      ? task.assignedDoerIds.map((u) => u?.name).filter(Boolean).join(', ')
+      : task?.assignedDoerId?.name),
     done,
   };
 };

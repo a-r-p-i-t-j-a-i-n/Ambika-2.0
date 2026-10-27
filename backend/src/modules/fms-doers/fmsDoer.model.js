@@ -26,7 +26,14 @@ const historyEntrySchema = new Schema({
   byName:     { type: String, trim: true, default: '' }, // snapshot for audit rendering
   reason:     { type: String, trim: true, default: '' },
   note:       { type: String, trim: true, default: '' },
+  // The step's whole new setup in words (main doers · buddies · lead time).
+  detail:     { type: String, trim: true, default: '' },
   at:         { type: Date, default: Date.now },
+}, { _id: false });
+
+const leadTimeSchema = new Schema({
+  value: { type: Number, min: 0 },
+  unit:  { type: String, enum: ['HOURS', 'DAYS'], default: 'HOURS' },
 }, { _id: false });
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -34,10 +41,15 @@ const fmsDoerAssignmentSchema = new Schema({
   ...baseSchemaFields,
   fmsKey:     { type: String, required: true, trim: true, uppercase: true },
   stepKey:    { type: String, required: true, trim: true, uppercase: true },
-  // Primary doer. null = step intentionally left unassigned.
+  // Main doers, as on O2D: any one of them can do the step. doerUserId mirrors
+  // the first one (rows saved before several doers existed have only it).
+  doerUserIds: { type: [{ type: Schema.Types.ObjectId, ref: 'User' }], default: [] },
+  // First main doer. null = step intentionally left unassigned.
   doerUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-  // Reserved for backup / parallel doers (not used by v1 — one primary doer).
+  // Buddies — the backup for the main doers (they see the task "as buddy").
   backupUserIds: { type: [{ type: Schema.Types.ObjectId, ref: 'User' }], default: [] },
+  // Time allowed at this step; gives each task its due date. null = none.
+  leadTime: { type: leadTimeSchema, default: null },
   history: { type: [historyEntrySchema], default: [] },
 }, baseSchemaOptions);
 
@@ -70,12 +82,18 @@ const fmsTaskSchema = new Schema({
 
   status: { type: String, enum: Object.values(FMS_TASK_STATUS), default: FMS_TASK_STATUS.OPEN, index: true },
 
-  // Responsible doer (snapshot at open; changes only via explicit reassignment).
+  // Responsible doers (snapshot at open; change only via explicit reassignment).
+  // assignedDoerId is the first main doer; tasks opened before several doers
+  // existed have only it.
   assignedDoerId:   { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+  assignedDoerIds:  { type: [{ type: Schema.Types.ObjectId, ref: 'User' }], default: undefined },
+  buddyIds:         { type: [{ type: Schema.Types.ObjectId, ref: 'User' }], default: undefined },
   assignedAt:       { type: Date, default: null },
   assignmentSource: { type: String, enum: ['CONFIG', 'MANUAL', 'NONE'], default: 'NONE' },
 
   openedAt:  { type: Date, default: Date.now },
+  // Due date = openedAt + the step's lead time when the task opened. null = none.
+  plannedAt: { type: Date, default: null },
   openedVia: { type: String, enum: ['WORKFLOW', 'SYNC'], default: 'WORKFLOW' },
 
   // Actual performer — the authenticated user whose action moved the item on.
@@ -93,6 +111,8 @@ fmsTaskSchema.index(
   { unique: true, partialFilterExpression: { status: 'OPEN' } },
 );
 fmsTaskSchema.index({ assignedDoerId: 1, status: 1 });
+fmsTaskSchema.index({ assignedDoerIds: 1, status: 1 });
+fmsTaskSchema.index({ buddyIds: 1, status: 1 });
 fmsTaskSchema.index({ entityType: 1, entityId: 1 });
 
 export const FmsDoerAssignment = mongoose.models.FmsDoerAssignment || model('FmsDoerAssignment', fmsDoerAssignmentSchema);

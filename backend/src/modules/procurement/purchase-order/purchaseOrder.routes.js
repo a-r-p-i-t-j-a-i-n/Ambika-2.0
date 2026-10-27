@@ -4,7 +4,7 @@
  */
 import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
-import { requirePermission, attachUserPermissions } from '../../../middleware/permission.middleware.js';
+import { requirePermission } from '../../../middleware/permission.middleware.js';
 import validate from '../../../middleware/validate.js';
 import { purchaseOrderController as c } from './purchaseOrder.controller.js';
 import {
@@ -29,12 +29,12 @@ router.use(protect);
 
 router.route('/')
   .get(validate(poQuerySchema, 'query'), c.getAll)
-  // attachUserPermissions — the controller checks procurement.approve for "Save PO Directly".
-  .post(attachUserPermissions, validate(createPoSchema), c.create);
+  // saveMode DIRECT ("Save PO Directly") is MD-only — enforced in the controller.
+  .post(validate(createPoSchema), c.create);
 
 // Item-wise PO from the New PO form's "Approved Item(s)" picker (one vendor,
 // hand-picked approved items; source indents derived server-side).
-router.post('/create-from-items', attachUserPermissions, validate(createFromItemsSchema), c.createFromItems);
+router.post('/create-from-items', validate(createFromItemsSchema), c.createFromItems);
 
 // Preview a PO PDF from draft form data — no DB save.
 router.post('/preview-pdf', validate(previewPoSchema), c.previewPdf);

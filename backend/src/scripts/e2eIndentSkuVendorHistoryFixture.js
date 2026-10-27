@@ -40,8 +40,10 @@ const RUN = Date.now().toString(36).toUpperCase();
 
 export const SKUS = {
   BOLT: { code: 'SH-BOLT', name: 'SH Bolt M8 (SKU Master name)', unit: 'PCS', itemType: 'CONSUMABLE' },
-  NUT: { code: 'SH-NUT', name: 'SH Nut M8', unit: 'PCS', itemType: 'CONSUMABLE' },
-  WASHER: { code: 'SH-WASHER', name: 'SH Washer M8', unit: 'KGS', itemType: 'CONSUMABLE' },
+  // Units the old fixed dropdown would have rewritten (Nos → Pcs, kg → KGS):
+  // the indent must show them exactly as SKU Master has them.
+  NUT: { code: 'SH-NUT', name: 'SH Nut M8', unit: 'Nos', itemType: 'CONSUMABLE' },
+  WASHER: { code: 'SH-WASHER', name: 'SH Washer M8', unit: 'kg', itemType: 'CONSUMABLE' },
   INACTIVE: { code: 'SH-OLD', name: 'SH Retired Part', unit: 'PCS', itemType: 'CONSUMABLE', isActive: false },
   FG: { code: 'SH-FG', name: 'SH Finished Tray', unit: 'PCS', itemType: 'FINISHED_GOOD' },
 };
@@ -167,7 +169,8 @@ const api = async () => {
   check('item name + code come from the SKU record', t0.itemName === SKUS.BOLT.name && t0.skuCode === SKUS.BOLT.code && String(t0.skuId) === String(sku.BOLT._id),
     `${t0.itemName} / ${t0.skuCode}`);
   check('…not from Vendor Master\'s catalogue name', t0.itemName !== vA.products[0].productName);
-  check('quantity, unit and remarks kept as entered', t0.quantity === 5 && t0.unit === 'Box' && t0.remarks === `r ${RUN}`);
+  check('unit comes from the SKU record, not the request', t0.unit === SKUS.BOLT.unit, t0.unit);
+  check('quantity and remarks kept as entered', t0.quantity === 5 && t0.remarks === `r ${RUN}`);
   const byCode = await call('POST', '/procurement/indents', { department: 'Stores', items: [{ skuCode: 'sh-nut', itemName: 'x', quantity: 1 }] });
   check('an item named only by SKU code binds to that SKU', byCode.status === 201 && byCode.data.items[0].itemName === SKUS.NUT.name);
   const free = await call('POST', '/procurement/indents', { department: 'Stores', items: [{ itemName: `Free typed ${RUN}`, quantity: 1 }] });
@@ -184,9 +187,10 @@ const api = async () => {
   console.log('\n── 2. Draft edit ──');
   const draftId = typed.data._id;
   const edited = await call('PATCH', `/procurement/indents/${draftId}`, { items: [
-    { skuId: String(sku.WASHER._id), itemName: 'typed again', skuCode: 'X', quantity: 2, unit: 'KGS' },
+    { skuId: String(sku.WASHER._id), itemName: 'typed again', skuCode: 'X', quantity: 2, unit: 'Pcs' },
   ] });
   check('editing a draft re-binds the item to the SKU', edited.status === 200 && edited.data.items[0].itemName === SKUS.WASHER.name && edited.data.items[0].skuCode === SKUS.WASHER.code);
+  check('…and its unit to the SKU unit', edited.data?.items?.[0]?.unit === SKUS.WASHER.unit, edited.data?.items?.[0]?.unit);
   const leg = await PurchaseIndent.findOne({ indentNumber: LEGACY_DRAFTS.API }).lean();
   const legHeader = await call('PATCH', `/procurement/indents/${leg._id}`, { remarks: `header only ${RUN}` });
   check('legacy hand-typed draft: header-only edit still allowed, item untouched', legHeader.status === 200 && legHeader.data.items[0].itemName === LEGACY_ITEM);

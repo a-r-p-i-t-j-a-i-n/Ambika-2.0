@@ -6,7 +6,7 @@ import { useGetAssignmentHistoryQuery } from '../../store/api/fmsDoerApi';
 import { fmtDateTime } from './fmsDoerMeta';
 import { PFMS } from '../procurement/pfmsTheme';
 
-const ACTION_LABEL = { ASSIGNED: 'Assigned', REASSIGNED: 'Changed', UNASSIGNED: 'Unassigned' };
+const ACTION_LABEL = { ASSIGNED: 'Assigned', REASSIGNED: 'Changed', UNASSIGNED: 'Unassigned', UPDATED: 'Updated' };
 
 /** Audit history of one step's doer assignment (who changed it, from → to, when, why). */
 const AssignmentHistoryDialog = ({ open, onClose, fmsKey, step }) => {
@@ -26,8 +26,11 @@ const AssignmentHistoryDialog = ({ open, onClose, fmsKey, step }) => {
         {rows.map((h, i) => (
           <Box key={i} sx={{ py: 1.25, borderBottom: i < rows.length - 1 ? `1px solid ${PFMS.lineSoft}` : 'none' }}>
             <Typography sx={{ fontWeight: 700, color: PFMS.ink }}>
-              {ACTION_LABEL[h.action] || h.action}: {h.from?.name || '—'} → {h.to?.name || 'Unassigned'}
+              {h.action === 'UPDATED'
+                ? `${ACTION_LABEL.UPDATED}: lead time / buddies`
+                : `${ACTION_LABEL[h.action] || h.action}: ${h.from?.name || '—'} → ${h.to?.name || 'Unassigned'}`}
             </Typography>
+            {h.detail && <Typography variant="body2" sx={{ color: PFMS.ink, mt: 0.25 }}>{h.detail}</Typography>}
             <Typography variant="caption" color="text.secondary" display="block">
               by {h.by?.name || '—'} · {fmtDateTime(h.at)}
             </Typography>

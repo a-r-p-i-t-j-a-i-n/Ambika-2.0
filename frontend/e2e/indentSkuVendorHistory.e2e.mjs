@@ -103,6 +103,10 @@ check('item name shown is the SKU Master name', (await input.inputValue()) === '
 await d.getByRole('button', { name: 'Add Item' }).click();
 await pick({ getByPlaceholder: (p) => d.getByPlaceholder(p).nth(1) }, 'sh-nut', /SH Nut M8/);
 check('typing a SKU code finds it too', (await d.getByTestId('indent-sku-code').nth(1).inputValue()) === 'SH-NUT');
+const unitCell = (i) => d.getByTestId('indent-unit').nth(i);
+check('unit cell is read-only', (await unitCell(0).getAttribute('readonly')) !== null);
+check('unit = SKU Master unit (PCS)', (await unitCell(0).inputValue()) === 'PCS', await unitCell(0).inputValue());
+check('unit outside the old dropdown shown as stored (Nos, not Pcs)', (await unitCell(1).inputValue()) === 'Nos', await unitCell(1).inputValue());
 await d.getByPlaceholder('0').nth(0).fill('7');
 await d.getByPlaceholder('0').nth(1).fill('3');
 await shot('01-new-indent');
@@ -112,6 +116,7 @@ const latest = ((await api('/procurement/indents?limit=5&sort=-createdAt')).data
 check('saved items = SKU Master name + code', latest?.items?.length === 2
   && latest.items[0].itemName === 'SH Bolt M8 (SKU Master name)' && latest.items[0].skuCode === 'SH-BOLT'
   && latest.items[1].itemName === 'SH Nut M8' && latest.items[1].skuCode === 'SH-NUT', JSON.stringify(latest?.items?.map((i) => [i.itemName, i.skuCode, i.quantity])));
+check('saved units = SKU Master units', latest?.items?.[0]?.unit === 'PCS' && latest?.items?.[1]?.unit === 'Nos', JSON.stringify(latest?.items?.map((i) => i.unit)));
 
 // ── 2. Legacy hand-typed draft ───────────────────────────────────────────────
 console.log('\n── 2. Legacy draft edit ──');
@@ -125,10 +130,11 @@ await e.getByRole('button', { name: 'Save Changes' }).click();
 check('saving is blocked, naming the item', await snack(/"Hand typed bracket \(no SKU\)" is not in SKU Master/));
 await shot('02-legacy-flagged');
 await pick(e, 'SH Washer', /SH Washer M8/);
+check('picked SKU unit shown with its master casing (kg, not KGS)', (await e.getByTestId('indent-unit').first().inputValue()) === 'kg', await e.getByTestId('indent-unit').first().inputValue());
 await e.getByRole('button', { name: 'Save Changes' }).click();
 check('after picking the SKU it saves', await snack(/Indent updated/));
 const legNow = (await api(`/procurement/indents/${leg._id}`)).data;
-check('legacy draft item now bound to the SKU', legNow?.items?.[0]?.itemName === 'SH Washer M8' && legNow.items[0].skuCode === 'SH-WASHER');
+check('legacy draft item now bound to the SKU', legNow?.items?.[0]?.itemName === 'SH Washer M8' && legNow.items[0].skuCode === 'SH-WASHER' && legNow.items[0].unit === 'kg', legNow?.items?.[0]?.unit);
 
 // ── 3. Vendor PO history ─────────────────────────────────────────────────────
 console.log('\n── 3. Vendor Detail: Purchase Order History ──');
