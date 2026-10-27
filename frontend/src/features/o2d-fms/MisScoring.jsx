@@ -43,7 +43,7 @@ const Panel = ({ title, subtitle, children, height = 300 }) => (
 
 const MisScoring = () => {
   const navigate = useNavigate();
-  const { data, isLoading } = useGetMisScoresQuery(undefined, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetMisScoresQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const doers = useMemo(() => data?.data?.doers || [], [data]);
   const totals = data?.data?.totals || {};
 

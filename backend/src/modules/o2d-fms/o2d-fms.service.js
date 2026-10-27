@@ -193,14 +193,51 @@ const enrichSteps = (process, defMap) => {
   return obj;
 };
 
-const loadDefMap = async () => {
-  const defs = await StepDefinition.find({ isDeleted: { $ne: true } }).lean();
-  // V1 and CURRENT_SHEET can share stepCodes (1.01, 2.02…). Sort so the ACTIVE
-  // FMS's defs are inserted LAST and therefore win the Map key — keeping the live
-  // flow's names, trigger keys and requirements correct.
-  defs.sort((a, b) => ((a.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0) - ((b.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0));
-  return new Map(defs.map((d) => [d.stepCode, d]));
+// Step definitions are read on nearly every O2D request and change only from
+// the definition screens below (which clear this), so they are kept for a
+// short while. The time limit covers the seed scripts, which write directly.
+// Callers only read the Map and its definitions.
+const DEF_MAP_TTL_MS = 30000;
+let defMapCache = null; // { at, promise }
+
+const clearDefMapCache = () => { defMapCache = null; };
+
+const loadDefMap = () => {
+  if (defMapCache && Date.now() - defMapCache.at < DEF_MAP_TTL_MS) return defMapCache.promise;
+  const entry = {
+    at: Date.now(),
+    promise: StepDefinition.find({ isDeleted: { $ne: true } }).lean().then((defs) => {
+      // V1 and CURRENT_SHEET can share stepCodes (1.01, 2.02…). Sort so the ACTIVE
+      // FMS's defs are inserted LAST and therefore win the Map key — keeping the live
+      // flow's names, trigger keys and requirements correct.
+      defs.sort((a, b) => ((a.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0) - ((b.fmsKey === ACTIVE_FMS_KEY) ? 1 : 0));
+      return new Map(defs.map((d) => [d.stepCode, d]));
+    }),
+  };
+  defMapCache = entry;
+  // A failed read is not kept — the next call tries again.
+  entry.promise.catch(() => { if (defMapCache === entry) defMapCache = null; });
+  return entry.promise;
 };
+
+// listProcesses({ view: 'list' }) — the order list without what only the order
+// and task pages show. Checklist items keep their text / done state (the board
+// counts them); only their proof files are left out.
+const LIST_VIEW_EXCLUDE = [
+  '-activityTimeline', '-consignmentLog',
+  '-steps.comments', '-steps.attachments', '-steps.verifications', '-steps.instructions',
+  '-steps.checklist.proofs',
+  '-steps.emailLog.body', '-steps.emailLog.cc', '-steps.emailLog.attachments',
+].join(' ');
+
+// Everything getMyTasks reads from an order (checklist items only for their
+// count and done state).
+const MY_TASKS_FIELDS = [
+  'salesOrderId', 'soNumber', 'partyName', 'isCompleted', 'consignmentLog',
+  ...['_id', 'stepCode', 'status', 'taskTitle', 'instructions', 'requiresLink', 'checklist.done',
+    'dispatchProgress', 'executionProgress', 'delayMins', 'planned', 'actual',
+    'actionLinks', 'actionLink', 'assignees', 'assignedTo', 'buddies', 'buddyUserId'].map((f) => `steps.${f}`),
+].join(' ');
 
 // Self-heal older direct-Sales-Order processes whose "Order Received"
 // (ORDER_INTAKE) step was recorded as SKIPPED — punching the order IN is the
@@ -420,6 +457,24 @@ const toDaysOrHours = (mins) => {
  * documents, plus aggregate counts that drive the gated steps' completion. Single
  * source of truth = the documents, so nothing can drift.
  */
+// The challan / invoice fields a consignment row reads (toConsignmentRow).
+const LEDGER_CHALLAN_FIELDS = 'soNumber dcNumber dcDate createdAt createdBy status deliveryStatus deliveryDate newTrackDate isUnplanned phaseRefs phaseRef cancelledAt cancelledByName cancelReason totalQuantityPcs totalBoxes pdfUrl';
+const LEDGER_INVOICE_FIELDS = 'soNumber dcId invoiceNo invoiceDate status invoiceAmount amountReceived balance ewayBillUrls ewayBillUrl emailToClient';
+
+// Per-challan step audit (who did 2.06–2.13 for THIS challan, and when).
+const consignmentLogByDc = (consignmentLog) => {
+  const logByDc = new Map();
+  (consignmentLog || []).forEach((l) => {
+    const key = String(l.dcId);
+    const m = logByDc.get(key) || {};
+    m[l.stepCode] = { doneByName: l.doneByName || null, doneAt: l.doneAt || null, status: l.status || 'DONE' };
+    logByDc.set(key, m);
+  });
+  return logByDc;
+};
+
+const byDcId = (docs) => new Map(docs.filter((d) => d.dcId).map((d) => [String(d.dcId), d]));
+
 const computeConsignments = async (soNumber, consignmentLog = []) => {
   const blank = {
     total: 0, invoicedDone: 0, deliveredDone: 0, paidDone: 0,
@@ -430,17 +485,10 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
 
   const [order, challans] = await Promise.all([
     SalesOrder.findOne({ soNumber }).select('totalOrderQty totalDispatchedQty totalBalanceQty').lean(),
-    DeliveryChallan.find({ soNumber, isDeleted: { $ne: true } }).populate('createdBy', 'name').sort({ dcDate: 1, createdAt: 1 }).lean(),
+    DeliveryChallan.find({ soNumber, isDeleted: { $ne: true } }).select(LEDGER_CHALLAN_FIELDS).populate('createdBy', 'name').sort({ dcDate: 1, createdAt: 1 }).lean(),
   ]);
 
-  // Per-challan step audit (who did 2.06–2.13 for THIS challan, and when).
-  const logByDc = new Map();
-  (consignmentLog || []).forEach((l) => {
-    const key = String(l.dcId);
-    const m = logByDc.get(key) || {};
-    m[l.stepCode] = { doneByName: l.doneByName || null, doneAt: l.doneAt || null, status: l.status || 'DONE' };
-    logByDc.set(key, m);
-  });
+  const logByDc = consignmentLogByDc(consignmentLog);
   const orderedQty = Number(order?.totalOrderQty || 0);
   const dispatchedQty = Number(order?.totalDispatchedQty || 0);
   const balanceQty = order?.totalBalanceQty != null ? Number(order.totalBalanceQty) : Math.max(0, orderedQty - dispatchedQty);
@@ -452,82 +500,14 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
 
   const dcIds = challans.map((c) => c._id);
   const [invoices, payments, transportBills] = await Promise.all([
-    Invoice.find({ soNumber }).select('dcId invoiceNo invoiceDate status invoiceAmount amountReceived balance ewayBillUrls ewayBillUrl emailToClient').lean(),
+    Invoice.find({ soNumber }).select(LEDGER_INVOICE_FIELDS).lean(),
     Payment.find({ dcId: { $in: dcIds }, type: 'CLIENT_PAYMENT' }).select('dcId confirmation followUp').lean(),
     TransportBill.find({ dcId: { $in: dcIds } }).select('dcId receipt payment').lean(),
   ]);
-  const invByDc = new Map(invoices.filter((iv) => iv.dcId).map((iv) => [String(iv.dcId), iv]));
-  const payByDc = new Map(payments.filter((p) => p.dcId).map((p) => [String(p.dcId), p]));
-  const tbByDc = new Map(transportBills.filter((t) => t.dcId).map((t) => [String(t.dcId), t]));
-
-  const consignments = challans.map((c) => {
-    const inv = invByDc.get(String(c._id)) || null;
-    const pay = payByDc.get(String(c._id)) || null;
-    const tb = tbByDc.get(String(c._id)) || null;
-    const phaseNo = c.isUnplanned
-      ? 'Unplanned'
-      : ([...new Set((c.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || c.phaseRef?.phaseNo || '—');
-    const delivered = c.deliveryStatus === 'Delivered' || c.status === 'DELIVERED';
-    const cancelled = c.status === 'CANCELLED';
-    // Per-challan who/when log. 2.06 (Actual Dispatch) falls back to the challan's
-    // own creator + date when not explicitly logged.
-    const log = { ...(logByDc.get(String(c._id)) || {}) };
-    if (!log['2.06'] && c.createdBy) {
-      log['2.06'] = { doneByName: c.createdBy.name || null, doneAt: c.dcDate || c.createdAt || null, status: 'DONE' };
-    }
-    return {
-      dcId: c._id,
-      dcNumber: c.dcNumber,
-      cancelled,
-      cancelledAt: c.cancelledAt || null,
-      cancelledByName: c.cancelledByName || null,
-      cancelReason: c.cancelReason || null,
-      log,
-      dcDate: c.dcDate,
-      qty: Number(c.totalQuantityPcs || 0),
-      boxes: Number(c.totalBoxes || 0),
-      phaseNo,
-      isUnplanned: !!c.isUnplanned,
-      dcStatus: c.status,
-      // The generated delivery-challan PDF for THIS challan (challan.pdfUrl). Lets
-      // the tracker show step 2.06's PDF action per consignment — generated or not —
-      // instead of one shared step-level flag that would mark every challan done the
-      // moment the first PDF was made.
-      pdfUrl: c.pdfUrl || null,
-      delivery: {
-        delivered,
-        status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'),
-        date: c.deliveryDate || null,
-        // When 2.09 was answered "Not Delivered", the date it will be chased again.
-        newTrackDate: c.newTrackDate || null,
-        // True once ANY outcome has been recorded — drives the action's done-state.
-        recorded: Boolean(c.deliveryStatus),
-      },
-      invoice: {
-        has: !!inv, invoiceNo: inv?.invoiceNo || null, status: inv?.status || null, date: inv?.invoiceDate || null,
-        amount: Number(inv?.invoiceAmount || 0), received: Number(inv?.amountReceived || 0), balance: Number(inv?.balance || 0),
-        // Email-to-client (2.08) status so the tracker card can show Sent / Failed.
-        emailStatus: inv?.emailToClient?.emailStatus || null, // 'SENT' | 'FAILED' | null
-        emailSentAt: inv?.emailToClient?.actual || null,
-      },
-      eway: { has: !!(inv && ((inv.ewayBillUrls || []).length || inv.ewayBillUrl)) },
-      payment: {
-        has: !!pay, status: pay?.confirmation?.status || (pay ? 'PENDING' : null),
-        // Step 2.10's own outcome. `has` only says a payment record exists — which
-        // 2.11 also creates — so the follow-up step needs its own signal to avoid
-        // reading as done before anyone followed up.
-        followUpStatus: pay?.followUp?.status || null,
-        followUpDate: pay?.followUp?.actual || null,
-        confirmed: pay?.confirmation?.status === 'DONE', received: Number(pay?.confirmation?.receivedAmount || 0),
-        // Explicit doer-recorded outcome (PENDING | NOT_RECEIVED | RECEIVED) + note,
-        // so the task/tracker can show "Not received" as a real state, not a blank.
-        outcome: pay?.confirmation?.outcome || 'PENDING',
-        note: pay?.confirmation?.note || '',
-        receivedDate: pay?.confirmation?.receivedDate || null,
-      },
-      transport: { receiptStatus: tb?.receipt?.status || null, paymentStatus: tb?.payment?.status || null },
-    };
-  });
+  const invByDc = byDcId(invoices);
+  const payByDc = byDcId(payments);
+  const tbByDc = byDcId(transportBills);
+  const consignments = challans.map((c) => toConsignmentRow(c, logByDc, invByDc, payByDc, tbByDc));
 
   const total = consignments.length;
   const invoicedDone = consignments.filter((c) => c.invoice.has).length;
@@ -543,6 +523,115 @@ const computeConsignments = async (soNumber, consignmentLog = []) => {
       allPaid: total > 0 && paidDone === total,
       fullyDispatched, orderedQty, dispatchedQty, balanceQty,
     },
+  };
+};
+
+/**
+ * The consignment rows (computeConsignments().consignments) of many orders in
+ * four queries in all, instead of six per order. Returns
+ * `rowsFor(soNumber, consignmentLog)`; each order is read with its own log and
+ * only its own invoices, exactly as computeConsignments reads it.
+ */
+const loadConsignmentRows = async (soNumbers) => {
+  const wanted = [...new Set((soNumbers || []).filter(Boolean))];
+  const challans = wanted.length
+    ? await DeliveryChallan.find({ soNumber: { $in: wanted }, isDeleted: { $ne: true } })
+      .select(LEDGER_CHALLAN_FIELDS).populate('createdBy', 'name').sort({ dcDate: 1, createdAt: 1 }).lean()
+    : [];
+  const challansBySo = new Map();
+  challans.forEach((c) => {
+    if (!challansBySo.has(c.soNumber)) challansBySo.set(c.soNumber, []);
+    challansBySo.get(c.soNumber).push(c);
+  });
+  const dcIds = challans.map((c) => c._id);
+  const [invoices, payments, transportBills] = dcIds.length
+    ? await Promise.all([
+      Invoice.find({ soNumber: { $in: [...challansBySo.keys()] } }).select(LEDGER_INVOICE_FIELDS).lean(),
+      Payment.find({ dcId: { $in: dcIds }, type: 'CLIENT_PAYMENT' }).select('dcId confirmation followUp').lean(),
+      TransportBill.find({ dcId: { $in: dcIds } }).select('dcId receipt payment').lean(),
+    ])
+    : [[], [], []];
+  const invoicesBySo = new Map();
+  invoices.forEach((iv) => {
+    if (!invoicesBySo.has(iv.soNumber)) invoicesBySo.set(iv.soNumber, []);
+    invoicesBySo.get(iv.soNumber).push(iv);
+  });
+  const payByDc = byDcId(payments);
+  const tbByDc = byDcId(transportBills);
+  return (soNumber, consignmentLog) => {
+    const logByDc = consignmentLogByDc(consignmentLog);
+    const invByDc = byDcId(invoicesBySo.get(soNumber) || []);
+    return (challansBySo.get(soNumber) || []).map((c) => toConsignmentRow(c, logByDc, invByDc, payByDc, tbByDc));
+  };
+};
+
+// One consignment-ledger row: a Delivery Challan with its downstream lifecycle.
+const toConsignmentRow = (c, logByDc, invByDc, payByDc, tbByDc) => {
+  const inv = invByDc.get(String(c._id)) || null;
+  const pay = payByDc.get(String(c._id)) || null;
+  const tb = tbByDc.get(String(c._id)) || null;
+  const phaseNo = c.isUnplanned
+    ? 'Unplanned'
+    : ([...new Set((c.phaseRefs || []).map((x) => x.phaseNo).filter(Boolean))].join(', ') || c.phaseRef?.phaseNo || '—');
+  const delivered = c.deliveryStatus === 'Delivered' || c.status === 'DELIVERED';
+  const cancelled = c.status === 'CANCELLED';
+  // Per-challan who/when log. 2.06 (Actual Dispatch) falls back to the challan's
+  // own creator + date when not explicitly logged.
+  const log = { ...(logByDc.get(String(c._id)) || {}) };
+  if (!log['2.06'] && c.createdBy) {
+    log['2.06'] = { doneByName: c.createdBy.name || null, doneAt: c.dcDate || c.createdAt || null, status: 'DONE' };
+  }
+  return {
+    dcId: c._id,
+    dcNumber: c.dcNumber,
+    cancelled,
+    cancelledAt: c.cancelledAt || null,
+    cancelledByName: c.cancelledByName || null,
+    cancelReason: c.cancelReason || null,
+    log,
+    dcDate: c.dcDate,
+    qty: Number(c.totalQuantityPcs || 0),
+    boxes: Number(c.totalBoxes || 0),
+    phaseNo,
+    isUnplanned: !!c.isUnplanned,
+    dcStatus: c.status,
+    // The generated delivery-challan PDF for THIS challan (challan.pdfUrl). Lets
+    // the tracker show step 2.06's PDF action per consignment — generated or not —
+    // instead of one shared step-level flag that would mark every challan done the
+    // moment the first PDF was made.
+    pdfUrl: c.pdfUrl || null,
+    delivery: {
+      delivered,
+      status: c.deliveryStatus || (delivered ? 'Delivered' : 'Pending'),
+      date: c.deliveryDate || null,
+      // When 2.09 was answered "Not Delivered", the date it will be chased again.
+      newTrackDate: c.newTrackDate || null,
+      // True once ANY outcome has been recorded — drives the action's done-state.
+      recorded: Boolean(c.deliveryStatus),
+    },
+    invoice: {
+      has: !!inv, invoiceNo: inv?.invoiceNo || null, status: inv?.status || null, date: inv?.invoiceDate || null,
+      amount: Number(inv?.invoiceAmount || 0), received: Number(inv?.amountReceived || 0), balance: Number(inv?.balance || 0),
+      // Email-to-client (2.08) status so the tracker card can show Sent / Failed.
+      emailStatus: inv?.emailToClient?.emailStatus || null, // 'SENT' | 'FAILED' | null
+      emailSentAt: inv?.emailToClient?.actual || null,
+    },
+    eway: { has: !!(inv && ((inv.ewayBillUrls || []).length || inv.ewayBillUrl)) },
+    payment: {
+      has: !!pay, status: pay?.confirmation?.status || (pay ? 'PENDING' : null),
+      // Step 2.10's own outcome. `has` only says a payment record exists — which
+      // 2.11 also creates — so the follow-up step needs its own signal to avoid
+      // reading as done before anyone followed up.
+      followUpStatus: pay?.followUp?.status || null,
+      followUpDate: pay?.followUp?.actual || null,
+      confirmed: pay?.confirmation?.status === 'DONE', received: Number(pay?.confirmation?.receivedAmount || 0),
+      // Explicit doer-recorded outcome (PENDING | NOT_RECEIVED | RECEIVED) + note,
+      // so the task/tracker can show "Not received" as a real state, not a blank.
+      outcome: pay?.confirmation?.outcome || 'PENDING',
+      note: pay?.confirmation?.note || '',
+      receivedDate: pay?.confirmation?.receivedDate || null,
+    },
+    transport: { receiptStatus: tb?.receipt?.status || null, paymentStatus: tb?.payment?.status || null },
   };
 };
 
@@ -786,17 +875,19 @@ export const o2dFmsService = {
   },
 
   async listProcesses(query) {
-    const features = new ApiFeatures(
-      O2DProcess.find({ isDeleted: { $ne: true } })
-        // Names only — the Step Board's "Who" / "done by" columns need them
-        // without a per-process round-trip.
-        .populate('steps.assignees', 'name')
-        .populate('steps.completedBy', 'name'),
-      query,
-    )
+    // `view=list` (Step Board, FMS Tracker, Master FMS): everything those
+    // screens read, without what only the order / task pages show — email
+    // bodies, comments, attachments, proofs and the activity timeline.
+    const { view, ...rest } = query || {};
+    let find = O2DProcess.find({ isDeleted: { $ne: true } })
+      // Names only — the Step Board's "Who" / "done by" columns need them
+      // without a per-process round-trip.
+      .populate('steps.assignees', 'name')
+      .populate('steps.completedBy', 'name');
+    if (view === 'list') find = find.select(LIST_VIEW_EXCLUDE);
+    const features = new ApiFeatures(find, rest)
       .filter().search(['soNumber', 'poNumber', 'partyName', 'uniqueO2DId']).sort().paginate();
-    const { docs, pagination } = await features.exec();
-    const defMap = await loadDefMap();
+    const [{ docs, pagination }, defMap] = await Promise.all([features.exec(), loadDefMap()]);
     return { docs: docs.map((d) => enrichSteps(d, defMap)), pagination };
   },
 
@@ -804,14 +895,19 @@ export const o2dFmsService = {
   // step reads like the client's sheet: each split dispatch is its own row with
   // SKUs, qty, invoice figures, transporter and L.R. straight from the documents.
   // `soNumbers` (optional) limits it to those orders — the Delegation task sync
-  // only needs the open ones.
-  async listBoardConsignments({ soNumbers: onlySo } = {}) {
-    const challans = await DeliveryChallan.find({
+  // only needs the open ones. `lite` (the sync) leaves out what only the board
+  // shows: SKU lines, who made the challan, transport details and document
+  // links; every state / date / log field is the same.
+  async listBoardConsignments({ soNumbers: onlySo, lite = false } = {}) {
+    let challanQuery = DeliveryChallan.find({
       isDeleted: { $ne: true },
       ...(Array.isArray(onlySo) ? { soNumber: { $in: onlySo } } : {}),
     })
-      .select('dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate newTrackDate cancelledAt cancelledByName cancelReason')
-      .populate('createdBy', 'name')
+      .select(lite
+        ? 'dcNumber soNumber dcDate createdAt status deliveryStatus deliveryDate newTrackDate cancelledAt cancelledByName cancelReason'
+        : 'dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate newTrackDate cancelledAt cancelledByName cancelReason');
+    if (!lite) challanQuery = challanQuery.populate('createdBy', 'name');
+    const challans = await challanQuery
       .sort({ dcDate: 1, createdAt: 1 })
       .limit(2000)
       .lean();
@@ -819,7 +915,9 @@ export const o2dFmsService = {
     const soNumbers = [...new Set(challans.map((ch) => ch.soNumber).filter(Boolean))];
     const [invoices, payments, transportBills, procs] = await Promise.all([
       Invoice.find({ dcId: { $in: dcIds } })
-        .select('dcId invoiceNo invoiceDate invoiceAmount amountReceived balance emailToClient invoiceUrls ewayBillUrls pdirUrls invoiceUrl ewayBillUrl')
+        .select(lite
+          ? 'dcId invoiceNo invoiceDate invoiceAmount amountReceived balance emailToClient'
+          : 'dcId invoiceNo invoiceDate invoiceAmount amountReceived balance emailToClient invoiceUrls ewayBillUrls pdirUrls invoiceUrl ewayBillUrl')
         .lean(),
       Payment.find({ dcId: { $in: dcIds }, type: 'CLIENT_PAYMENT' })
         .select('dcId confirmation followUp')
@@ -1652,7 +1750,12 @@ export const o2dFmsService = {
     else if (intakeId) q = { intakeId };
     else if (soNumber) q = { soNumber };
     if (!q) return null;
-    const p = await O2DProcess.findOne({ ...q, isDeleted: { $ne: true } }).lean();
+    const [p, defMap] = await Promise.all([
+      O2DProcess.findOne({ ...q, isDeleted: { $ne: true } })
+        .select('currentStepCode steps.stepCode steps.status steps.actionLinks steps.actionLink')
+        .lean(),
+      action ? loadDefMap() : null,
+    ]);
     if (!p) return null;
 
     // When the caller names the action they just did (e.g. ACTUAL_DISPATCH), land
@@ -1661,7 +1764,6 @@ export const o2dFmsService = {
     // step. This is what makes a phased "record dispatch" reopen the Actual
     // Dispatch step (2.06) with its checklist, instead of jumping ahead to 2.08.
     if (action) {
-      const defMap = await loadDefMap();
       const enriched = enrichSteps(p, defMap);
       const keysOf = (s) => (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : []));
       const target = (enriched.steps || []).find((s) => keysOf(s).includes(action) || s.triggerKey === action);
@@ -1693,10 +1795,15 @@ export const o2dFmsService = {
     else if (soNumber) q = { soNumber };
     if (!q) return { allowed: true, ungated: true };
 
-    const process = await O2DProcess.findOne({ ...q, isDeleted: { $ne: true } });
+    // Only the step fields the gate reads; the step definitions load alongside.
+    const [process, defMap] = await Promise.all([
+      O2DProcess.findOne({ ...q, isDeleted: { $ne: true } })
+        .select('soNumber steps.stepCode steps.status steps.actionLinks steps.actionLink steps.taskTitle')
+        .lean(),
+      loadDefMap(),
+    ]);
     if (!process) return { allowed: true, ungated: true, reason: 'No FMS process for this order yet.' };
 
-    const defMap = await loadDefMap();
     const enriched = enrichSteps(process, defMap); // sorted by sequence; has name/sequence/triggerKey/actionLinks
     const steps = enriched.steps || [];
     const keysOf = (s) => (s.actionLinks?.length ? s.actionLinks : (s.actionLink ? [s.actionLink] : []));
@@ -1773,21 +1880,34 @@ export const o2dFmsService = {
         { buddies: user._id }, { buddyUserId: user._id },
       ] } },
     };
-    const processes = await O2DProcess.find(filter).lean();
-    const defMap = await loadDefMap();
+    // Only what a task row reads — not the email bodies, comments, attachments
+    // or activity history of every order this user was ever on.
+    const [processes, defMap] = await Promise.all([
+      O2DProcess.find(filter).select(MY_TASKS_FIELDS).lean(),
+      loadDefMap(),
+    ]);
+
+    // Per-consignment steps recur per delivery challan. For every order that has
+    // any and isn't fully complete, read its challan ledger so we can tell whether
+    // a step still has a challan waiting on it (even if the shared step was marked
+    // done for an earlier challan). That keeps it surfacing as an actionable task.
+    // All those orders are read together; if that fails, each order is read on
+    // its own as before.
+    const hasPerConsOf = (p) => !p.isCompleted && !!p.soNumber
+      && (p.steps || []).some((s) => stepActionKeysOf(s).some((k) => PER_CONSIGNMENT_ACTIONS.includes(k)));
+    let rowsFor = null;
+    try { rowsFor = await loadConsignmentRows(processes.filter(hasPerConsOf).map((p) => p.soNumber)); }
+    catch { rowsFor = null; }
 
     const tasks = [];
     for (const p of processes) {
-      // Per-consignment steps recur per delivery challan. If this order has any and
-      // isn't fully complete, compute its challan ledger once so we can tell whether a
-      // step still has a challan waiting on it (even if the shared step was marked done
-      // for an earlier challan). That keeps it surfacing as an actionable task.
-      const hasPerCons = !p.isCompleted
-        && (p.steps || []).some((s) => stepActionKeysOf(s).some((k) => PER_CONSIGNMENT_ACTIONS.includes(k)));
       let consignments = null;
-      if (hasPerCons && p.soNumber) {
-        try { consignments = (await computeConsignments(p.soNumber, p.consignmentLog || [])).consignments; }
-        catch { consignments = null; }
+      if (hasPerConsOf(p)) {
+        try {
+          consignments = rowsFor
+            ? rowsFor(p.soNumber, p.consignmentLog || [])
+            : (await computeConsignments(p.soNumber, p.consignmentLog || [])).consignments;
+        } catch { consignments = null; }
       }
 
       for (const s of p.steps) {
@@ -1874,10 +1994,14 @@ export const o2dFmsService = {
   /** Manager/MD view — every step across every order as a task row, with the
    *  doers, status and timing. Frontend filters & computes stats client-side. */
   async getAllTasks() {
-    const processes = await O2DProcess.find({ isDeleted: { $ne: true } })
-      .populate('steps.assignees steps.assignedTo steps.completedBy', 'name')
-      .lean();
-    const defMap = await loadDefMap();
+    const [processes, defMap] = await Promise.all([
+      O2DProcess.find({ isDeleted: { $ne: true } })
+        // Only what a task row reads (checklist items for their count / done).
+        .select('soNumber source partyName steps.stepCode steps.taskTitle steps.status steps.assignees steps.assignedTo steps.completedBy steps.planned steps.actual steps.delayMins steps.checklist.done')
+        .populate('steps.assignees steps.assignedTo steps.completedBy', 'name')
+        .lean(),
+      loadDefMap(),
+    ]);
     const now = Date.now();
     const tasks = [];
     for (const p of processes) {
@@ -2423,8 +2547,10 @@ export const o2dFmsService = {
     const uid = new mongoose.Types.ObjectId(String(userId));
     const now = new Date();
     const DONE = ['DONE', 'DELAYED'];
+    // Orders with a step of this person's first (uses the steps.assignedTo
+    // index), then only those steps — the same rows as unwinding every order.
     const baseMatch = [
-      { $match: { isDeleted: { $ne: true } } },
+      { $match: { isDeleted: { $ne: true }, 'steps.assignedTo': uid } },
       { $unwind: '$steps' },
       { $match: { 'steps.assignedTo': uid } },
     ];
@@ -2528,7 +2654,9 @@ export const o2dFmsService = {
     const fmsKey = data.fmsKey || DEFAULT_FMS_KEY;
     const exists = await StepDefinition.findOne({ stepCode: data.stepCode, isDeleted: { $ne: true }, ...fmsScope(fmsKey) });
     if (exists) throw new AppError(`Step code '${data.stepCode}' already exists in this FMS`, 409);
-    return StepDefinition.create({ ...data, fmsKey, createdBy: actor?._id });
+    const created = await StepDefinition.create({ ...data, fmsKey, createdBy: actor?._id });
+    clearDefMapCache();
+    return created;
   },
 
   async updateDefinition(id, data, actor) {
@@ -2536,19 +2664,25 @@ export const o2dFmsService = {
     if (!def) throw new AppError('Step definition not found', 404);
     Object.assign(def, data, { updatedBy: actor?._id });
     await def.save();
+    clearDefMapCache();
     return def.toObject();
   },
 
   async reorderDefinitions(orderList, actor) {
     // orderList = [{ id, sequence }]
-    await Promise.all(orderList.map(({ id, sequence }) =>
-      StepDefinition.updateOne({ _id: id }, { $set: { sequence, updatedBy: actor?._id } })));
+    try {
+      await Promise.all(orderList.map(({ id, sequence }) =>
+        StepDefinition.updateOne({ _id: id }, { $set: { sequence, updatedBy: actor?._id } })));
+    } finally {
+      clearDefMapCache(); // some may have been saved even if one failed
+    }
     return this.listDefinitions();
   },
 
   async deactivateDefinition(id, actor) {
     const def = await StepDefinition.findByIdAndUpdate(
       id, { $set: { isActive: false, updatedBy: actor?._id } }, { new: true });
+    clearDefMapCache();
     if (!def) throw new AppError('Step definition not found', 404);
     return def.toObject();
   },

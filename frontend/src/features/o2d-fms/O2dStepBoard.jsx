@@ -441,7 +441,7 @@ const O2dStepBoard = () => {
   const [deleteOrder, { isLoading: deleting }] = useDeleteOrderMutation();
   const [confirmRow, setConfirmRow] = useState(null); // { p, dc } pending delete confirmation
   const [sortBy, setSortBy] = useState('recentFirst');
-  const { data, isLoading, refetch } = useGetProcessesQuery({ limit: 300, sort: '-createdAt' }, { pollingInterval: 60_000 });
+  const { data, isLoading, refetch } = useGetProcessesQuery({ limit: 300, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const rows = useMemo(() => data?.data || [], [data]);
   // Steps the MD switched off for this employee in the Delegation Suite
   // (empty when Ambika 2.0 is used on its own).
@@ -518,7 +518,7 @@ const O2dStepBoard = () => {
 
   // Every Delivery Challan across all orders, grouped by SO — the dispatch
   // step renders one table row per challan, exactly like the client's sheet.
-  const { data: consRes } = useGetBoardConsignmentsQuery(undefined, { pollingInterval: 60_000 });
+  const { data: consRes } = useGetBoardConsignmentsQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const dcBySo = useMemo(() => {
     const map = new Map();
     (consRes?.data || []).forEach((dc) => {

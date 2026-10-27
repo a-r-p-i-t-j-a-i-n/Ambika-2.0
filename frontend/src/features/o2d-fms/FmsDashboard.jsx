@@ -203,7 +203,7 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
 const STATS_PER_PAGE = 6;
 
 const FmsDashboard = () => {
-  const { data, isLoading } = useGetFmsDashboardQuery(undefined, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetFmsDashboardQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const navigate = useNavigate();
   const d = data?.data || {};
   const totals = d.totals || { total: 0, completed: 0, inProgress: 0 };

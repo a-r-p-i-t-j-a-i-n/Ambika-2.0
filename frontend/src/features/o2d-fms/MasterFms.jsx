@@ -412,7 +412,7 @@ const TimelineView = ({ rows, navigate }) => {
 // ── Master FMS — every order's flow on one screen ────────────────────────────
 const MasterFms = () => {
   const navigate = useNavigate();
-  const { data, isLoading } = useGetProcessesQuery({ limit: 200, sort: '-createdAt' }, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetProcessesQuery({ limit: 200, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const all = data?.data || [];
 
   const [view, setView] = useState('pipeline');   // pipeline | matrix | cards

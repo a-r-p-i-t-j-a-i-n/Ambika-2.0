@@ -55,7 +55,7 @@ const statusChip = (t) => {
 
 const MyTasksWorkspace = () => {
   // Poll so updates made by the MD (re-plan / reassign) appear without a manual refresh.
-  const { data, isLoading } = useGetMyTasksQuery(undefined, { pollingInterval: 30_000, refetchOnMountOrArgChange: true });
+  const { data, isLoading } = useGetMyTasksQuery(undefined, { pollingInterval: 30_000, skipPollingIfUnfocused: true, refetchOnMountOrArgChange: true });
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');

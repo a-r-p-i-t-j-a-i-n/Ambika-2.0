@@ -65,7 +65,7 @@ const SORT_OPTS = [
 const ProcessList = () => {
   const navigate = useNavigate();
   // Load a wide set and filter entirely client-side so every filter composes.
-  const { data, isLoading } = useGetProcessesQuery({ limit: 300, sort: '-createdAt' }, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetProcessesQuery({ limit: 300, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const rows = useMemo(() => data?.data || [], [data]);
 
   const [search, setSearch] = useState('');
