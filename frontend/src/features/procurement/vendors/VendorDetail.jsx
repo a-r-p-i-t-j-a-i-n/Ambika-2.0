@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
   Box, Paper, Stack, Typography, alpha, useTheme, Button, IconButton, Chip,
@@ -15,6 +15,7 @@ import { useGetVendorByIdQuery, useUpdateVendorMutation, useGetVendorPricingHist
 import { useGetSkuLookupQuery } from '../../../store/api/skuApi';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import VendorPoHistory from './VendorPoHistory';
+import { useMasterRights } from '../../../utils/embed';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 const SOURCE_LABEL = { VENDOR_MASTER: 'Vendor Master', PURCHASE_ORDER: 'Purchase Order' };
@@ -69,6 +70,14 @@ const Field = ({ icon: Icon, label, value }) => (
 
 const emptyProduct = { productName: '', skuCode: '', skuId: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' };
 
+// The "Edit details" form's starting values.
+const detailsDraftOf = (vendor) => ({
+  contactPerson: vendor.contactPerson || '', phone: vendor.phone || '', email: vendor.email || '',
+  address: vendor.address || '', gstNo: vendor.gstNo || '', panNo: vendor.panNo || '',
+  gstRate: vendor.gstRate || 0, tdsRate: vendor.tdsRate || 0, creditPeriodDays: vendor.creditPeriodDays || 0,
+  toEmails: (vendor.toEmails || []).join(', '), ccEmails: (vendor.ccEmails || []).join(', '), bccEmails: (vendor.bccEmails || []).join(', '),
+});
+
 const VendorDetail = () => {
   const theme = useTheme();
   const navigate = useNavigate();
@@ -83,6 +92,17 @@ const VendorDetail = () => {
   const [prodDialog, setProdDialog] = useState(null);
   const [editVendor, setEditVendor] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Delegation Suite lock icon → Vendor Details → Edit (details and products).
+  const { canEdit } = useMasterRights('vendorDetails');
+
+  // Arrived from the vendor list's Edit button → open the form once the
+  // vendor has loaded (state adjusted during render, React's pattern for it).
+  const location = useLocation();
+  const [openEditOnLoad, setOpenEditOnLoad] = useState(location.state?.edit === true);
+  if (openEditOnLoad && vendor) {
+    setOpenEditOnLoad(false);
+    if (canEdit) setEditVendor(detailsDraftOf(vendor));
+  }
 
   // SKU master — source of truth for a product's Unit, same as the Indent
   // form. Only fetched while the Add/Edit Product dialog is actually open.
@@ -167,14 +187,11 @@ const VendorDetail = () => {
             <Button variant="outlined" startIcon={<History size={14} />} onClick={() => setHistoryOpen(true)}>
               Pricing History
             </Button>
-            <Button variant="outlined" startIcon={<Pencil size={14} />} onClick={() => setEditVendor({
-              contactPerson: vendor.contactPerson || '', phone: vendor.phone || '', email: vendor.email || '',
-              address: vendor.address || '', gstNo: vendor.gstNo || '', panNo: vendor.panNo || '',
-              gstRate: vendor.gstRate || 0, tdsRate: vendor.tdsRate || 0, creditPeriodDays: vendor.creditPeriodDays || 0,
-              toEmails: (vendor.toEmails || []).join(', '), ccEmails: (vendor.ccEmails || []).join(', '), bccEmails: (vendor.bccEmails || []).join(', '),
-            })}>
-              Edit details
-            </Button>
+            {canEdit && (
+              <Button variant="outlined" startIcon={<Pencil size={14} />} onClick={() => setEditVendor(detailsDraftOf(vendor))}>
+                Edit details
+              </Button>
+            )}
           </Stack>
         </Stack>
 
@@ -195,9 +212,12 @@ const VendorDetail = () => {
       <Paper sx={{ ...pfmsCardSx, overflow: 'hidden' }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 2, py: 1.25, borderBottom: `1px solid ${theme.palette.divider}` }}>
           <Typography sx={{ fontWeight: 800, color: BRAND_DK }}>Supplied Products & Rates</Typography>
-          <Button variant="contained" size="small" startIcon={<Plus size={15} />} onClick={() => setProdDialog({ mode: 'add', draft: { ...emptyProduct } })}>
-            Add Product
-          </Button>
+          {/* Products are saved on the vendor record — part of editing it. */}
+          {canEdit && (
+            <Button variant="contained" size="small" startIcon={<Plus size={15} />} onClick={() => setProdDialog({ mode: 'add', draft: { ...emptyProduct } })}>
+              Add Product
+            </Button>
+          )}
         </Stack>
         <Box sx={{ overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 720, '& td, & th': { fontSize: '0.8rem' } }}>
@@ -210,7 +230,7 @@ const VendorDetail = () => {
                 <TableCell sx={{ fontWeight: 800 }} align="right">Rate ₹</TableCell>
                 <TableCell sx={{ fontWeight: 800 }} align="right">GST %</TableCell>
                 <TableCell sx={{ fontWeight: 800 }}>Notes</TableCell>
-                <TableCell sx={{ fontWeight: 800 }} align="right">Actions</TableCell>
+                {canEdit && <TableCell sx={{ fontWeight: 800 }} align="right">Actions</TableCell>}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -223,15 +243,19 @@ const VendorDetail = () => {
                   <TableCell align="right">{p.rate != null ? num(p.rate) : '—'}</TableCell>
                   <TableCell align="right">{p.gstRate || 0}%</TableCell>
                   <TableCell sx={{ color: 'text.secondary', maxWidth: 200, whiteSpace: 'normal' }}>{p.notes || '—'}</TableCell>
-                  <TableCell align="right">
-                    <Tooltip title="Edit"><IconButton size="small" onClick={() => setProdDialog({ mode: 'edit', index: i, draft: { productName: p.productName || '', skuCode: p.skuCode || '', skuId: p.skuId || '', unit: p.unit || 'Pcs', rate: p.rate ?? '', gstRate: p.gstRate ?? '', notes: p.notes || '' } })}><Pencil size={15} /></IconButton></Tooltip>
-                    <Tooltip title="Remove"><IconButton size="small" color="error" onClick={() => deleteProduct(i)}><Trash2 size={15} /></IconButton></Tooltip>
-                  </TableCell>
+                  {canEdit && (
+                    <TableCell align="right">
+                      <Tooltip title="Edit"><IconButton size="small" onClick={() => setProdDialog({ mode: 'edit', index: i, draft: { productName: p.productName || '', skuCode: p.skuCode || '', skuId: p.skuId || '', unit: p.unit || 'Pcs', rate: p.rate ?? '', gstRate: p.gstRate ?? '', notes: p.notes || '' } })}><Pencil size={15} /></IconButton></Tooltip>
+                      <Tooltip title="Remove"><IconButton size="small" color="error" onClick={() => deleteProduct(i)}><Trash2 size={15} /></IconButton></Tooltip>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
               {products.length === 0 && (
-                <TableRow><TableCell colSpan={8} sx={{ textAlign: 'center', color: 'text.disabled', py: 3 }}>
-                  No products yet — click <strong>Add Product</strong> to add what this vendor supplies.
+                <TableRow><TableCell colSpan={canEdit ? 8 : 7} sx={{ textAlign: 'center', color: 'text.disabled', py: 3 }}>
+                  {canEdit
+                    ? <>No products yet — click <strong>Add Product</strong> to add what this vendor supplies.</>
+                    : 'No products yet.'}
                 </TableCell></TableRow>
               )}
             </TableBody>

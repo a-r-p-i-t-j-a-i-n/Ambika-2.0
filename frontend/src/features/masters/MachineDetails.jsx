@@ -24,6 +24,7 @@ import {
 } from './components/masterUi';
 import AssignmentPanel from './components/AssignmentPanel';
 import MachineFormDrawer from './MachineFormDrawer';
+import { useMasterRights } from '../../utils/embed';
 import { MACHINE_STATUS_META, machineTypeMeta, MACHINE_FIELD_HELP as HELP } from './machineMeta';
 
 const labelSx = {
@@ -55,6 +56,8 @@ const MachineDetails = () => {
   const goBack = useSmartBack('/machines');
   const { enqueueSnackbar } = useSnackbar();
   const [editOpen, setEditOpen] = useState(false);
+  // Delegation Suite lock icon → Machines → Edit (details and operators).
+  const { canEdit } = useMasterRights('machines');
 
   const { data, isLoading } = useGetMachineQuery(id);
   const machine = data?.data;
@@ -129,12 +132,14 @@ const MachineDetails = () => {
           </Typography>
         </Box>
         <Box sx={{ flex: 1 }} />
-        <Button
-          variant="contained" startIcon={<Pencil size={15} />} onClick={() => setEditOpen(true)}
-          sx={{ ...btnSx, bgcolor: BRAND, '&:hover': { bgcolor: BRAND_DK }, width: { xs: '100%', md: 'auto' } }}
-        >
-          Edit
-        </Button>
+        {canEdit && (
+          <Button
+            variant="contained" startIcon={<Pencil size={15} />} onClick={() => setEditOpen(true)}
+            sx={{ ...btnSx, bgcolor: BRAND, '&:hover': { bgcolor: BRAND_DK }, width: { xs: '100%', md: 'auto' } }}
+          >
+            Edit
+          </Button>
+        )}
       </Box>
 
       <Grid container spacing={1.5}>
@@ -230,6 +235,7 @@ const MachineDetails = () => {
             pickerLabel="Search operators to assign"
             emptyHint="No operator assigned to this machine yet."
             busy={busy}
+            canEdit={canEdit}
           />
         </Grid>
       </Grid>
