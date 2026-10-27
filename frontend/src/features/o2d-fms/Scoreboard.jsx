@@ -13,7 +13,7 @@ const tone = (pct) => (pct >= 85 ? '#0f766e' : pct >= 60 ? '#b45309' : '#be123c'
 const hrs = (m) => (m >= 60 ? `${(m / 60).toFixed(1)} h` : `${Math.round(m || 0)} m`);
 
 const Scoreboard = () => {
-  const { data, isLoading } = useGetFmsScoresQuery(undefined, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetFmsScoresQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const rows = data?.data || [];
   const chart = rows.map((r) => ({ name: r.name || 'Unknown', punctuality: r.punctuality, accuracy: r.accuracy }));
 

@@ -169,7 +169,7 @@ export const parseKey = (key) => {
 };
 
 const challansBySo = async (soNumbers) => {
-  const rows = soNumbers.length ? await o2dFmsService.listBoardConsignments({ soNumbers }) : [];
+  const rows = soNumbers.length ? await o2dFmsService.listBoardConsignments({ soNumbers, lite: true }) : [];
   const map = new Map();
   rows.forEach((dc) => {
     if (!map.has(dc.soNumber)) map.set(dc.soNumber, []);
@@ -186,10 +186,15 @@ const emailsById = async (ids) => {
     .map((u) => [String(u._id), String(u.email).trim().toLowerCase()]));
 };
 
+// The step fields a round reads — not the checklists, comments, attachments
+// or email bodies of every open order.
+const DUE_STEP_FIELDS = ['stepCode', 'status', 'startedAt', 'planned', 'leadTimeMins', 'actionLinks', 'actionLink',
+  'taskTitle', 'assignees', 'assignedTo', 'buddies', 'buddyUserId', 'doersSettledAt'].map((f) => `steps.${f}`).join(' ');
+
 /** Every O2D step (or challan step) waiting on someone right now → [{ p, s, def, dc, plannedAt }]. */
 const collectDue = async (defMap) => {
   const processes = await O2DProcess.find({ isDeleted: { $ne: true }, isCompleted: { $ne: true } })
-    .select('salesOrderId soNumber poNumber partyName steps')
+    .select(`salesOrderId soNumber poNumber partyName ${DUE_STEP_FIELDS}`)
     .lean();
   const dcsBySo = await challansBySo([...new Set(processes.map((p) => p.soNumber).filter(Boolean))]);
 
@@ -232,14 +237,17 @@ const collectDue = async (defMap) => {
  * first round too. A step with no main doer in Doer Assignment is left as it
  * is. Returns how many steps changed hands.
  */
-export const settleDueStepDoers = async () => {
-  const defMap = await loadDefMap();
-  const due = await collectDue(defMap);
+export const settleDueStepDoers = async () => (await settleDue(await collectDue(await loadDefMap()))).changed;
+
+// settleDueStepDoers on an already-collected due list → { changed, written }:
+// `written` counts every step saved, even with the same people (their order
+// may differ), so the caller knows when to read the due list again.
+const settleDue = async (due) => {
   const unsettled = new Map();
   due.forEach(({ p, s }) => {
     if (!s.doersSettledAt) unsettled.set(`${p._id}:${s.stepCode}`, { p, s });
   });
-  if (!unsettled.size) return 0;
+  if (!unsettled.size) return { changed: 0, written: 0 };
 
   const active = (list) => (list || []).filter((u) => u?.id && u.isActive !== false).map((u) => String(u.id));
   const plan = new Map(((await o2dFmsService.getDoerPlan())?.steps || []).map((row) => [row.stepCode, {
@@ -248,6 +256,7 @@ export const settleDueStepDoers = async () => {
   }]));
   const sorted = (list) => [...list].sort().join(',');
   let changed = 0;
+  let written = 0;
   for (const { p, s } of unsettled.values()) {
     const want = plan.get(s.stepCode);
     if (!want?.doers.length) continue;
@@ -275,17 +284,17 @@ export const settleDueStepDoers = async () => {
         } : {}),
       },
     );
+    if (res.modifiedCount) written += 1;
     if (differs && res.modifiedCount) changed += 1;
   }
   if (changed) logger.info(`[o2d→delegation] ${changed} due step(s) given their doers from Doer Assignment`);
-  return changed;
+  return { changed, written };
 };
 
 /** Every O2D step (or challan step) waiting on someone right now, as Delegation task items. */
-export const computeDueItems = async () => {
-  const defMap = await loadDefMap();
-  const raw = await collectDue(defMap);
+export const computeDueItems = async () => dueItemsFrom(await collectDue(await loadDefMap()));
 
+const dueItemsFrom = async (raw) => {
   const ids = new Set();
   raw.forEach(({ s }) => [...stepDoerIds(s), ...stepBuddyIds(s)].forEach((id) => ids.add(id)));
   const emailOf = await emailsById(ids);
@@ -318,11 +327,15 @@ export const computeDueItems = async () => {
 export const computeOutcomes = async (keys) => {
   const refs = keys.map((key) => ({ key, ref: parseKey(key) }));
   const ids = [...new Set(refs.filter((r) => r.ref).map((r) => r.ref.processId))];
-  const processes = ids.length
-    ? await O2DProcess.find({ _id: { $in: ids } }).select('soNumber isDeleted steps').lean()
-    : [];
+  const [processes, defMap] = await Promise.all([
+    ids.length
+      ? O2DProcess.find({ _id: { $in: ids } })
+        .select('soNumber isDeleted steps.stepCode steps.status steps.actual steps.completedBy steps.skipReason')
+        .lean()
+      : [],
+    loadDefMap(),
+  ]);
   const byId = new Map(processes.map((p) => [String(p._id), p]));
-  const defMap = await loadDefMap();
   const needDc = new Set(refs
     .filter((r) => r.ref?.dcId)
     .map((r) => byId.get(r.ref.processId)?.soNumber)
@@ -362,14 +375,21 @@ const runRound = async () => {
   if (running) { runAgain = true; return; }
   running = true;
   try {
+    // One read of the open orders serves the whole round; it is read again
+    // only when steps that just came due were given their doers.
+    const defMap = await loadDefMap();
+    let raw = await collectDue(defMap);
     // Steps that just came due take who Doer Assignment says now — before
     // the Delegation tasks are worked out, so the task goes to that person.
+    let reread = false;
     try {
-      await settleDueStepDoers();
+      reread = (await settleDue(raw)).written > 0;
     } catch (err) {
       logger.warn(`[o2d→delegation] could not apply Doer Assignment to due steps: ${err.message}`);
+      reread = true; // some may have been saved before it stopped
     }
-    const due = await computeDueItems();
+    if (reread) raw = await collectDue(defMap);
+    const due = await dueItemsFrom(raw);
     const res = await postToSuite('/erp/fms/sync', { source: SOURCE, due });
     const check = (Array.isArray(res?.data?.check) ? res.data.check : []).filter((k) => typeof k === 'string');
     if (check.length) {

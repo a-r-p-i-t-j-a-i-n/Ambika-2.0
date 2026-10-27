@@ -36,7 +36,7 @@ const EmptyRow = ({ cols, text }) => (
 
 // ── My FMS Tasks ─────────────────────────────────────────────────────────────
 const MyTasks = () => {
-  const { data, isLoading } = useGetMyFmsTasksQuery(undefined, { pollingInterval: 60_000 });
+  const { data, isLoading } = useGetMyFmsTasksQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const tasks = data?.data || [];
   return (
     <Paper sx={{ ...pfmsCardSx, overflow: 'hidden' }}>

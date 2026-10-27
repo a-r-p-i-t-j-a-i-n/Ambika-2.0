@@ -2,8 +2,9 @@ import React from 'react';
 import StatusChip from '../components/StatusChip';
 
 /** Dropdown option sets shared across the Indent screens. */
-// Kilograms are KGS, spelled as SKU Master spells them (sku.model.js
-// normalizeSkuUnit), so a unit inherited from the master reads the same here.
+// Kilograms are KGS, spelled as the stock ledger spells them (sku.model.js
+// normalizeSkuUnit). SKU Master keeps whatever casing was entered ("kg",
+// "Kg"); normalizeUnit below matches it case-insensitively.
 export const UNITS = ['Pcs', 'KGS', 'Meter', 'Roll', 'Box', 'Set', 'Litre', 'Dozen'];
 
 // The SKU master stores units as entered during import (e.g. "KGS", "LTR",

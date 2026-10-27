@@ -100,7 +100,7 @@ const TaskPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const entryDone = searchParams.get('entryDone') === '1'; // returned from a connected form
-  const { data, isLoading, refetch, isFetching } = useGetProcessByIdQuery(processId, { pollingInterval: 30_000 });
+  const { data, isLoading, refetch, isFetching } = useGetProcessByIdQuery(processId, { pollingInterval: 30_000, skipPollingIfUnfocused: true });
   const { can, isRoot } = usePermissions();
 
   const process = data?.data;

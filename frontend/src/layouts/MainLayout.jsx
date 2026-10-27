@@ -481,7 +481,7 @@ const MainLayout = () => {
   // Live badge for the Approval Inbox sidebar entry.
   const { data: pendingRes } = useGetPendingRevisionsQuery(undefined, {
     skip: !isAuthenticated || (!can('pricing.approve') && !isRoot),
-    pollingInterval: 60_000,
+    pollingInterval: 60_000, skipPollingIfUnfocused: true,
   });
   const pendingCount = pendingRes?.data?.length || 0;
 

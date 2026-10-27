@@ -108,7 +108,7 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
       code: form.code.trim().toUpperCase(),
       itemType: form.itemType,
       category: form.category.trim(),
-      unit: form.unit || 'PCS',
+      unit: form.unit.trim() || 'PCS',
       pcsPerBox: Number(form.pcsPerBox) || 1,
       weightPerPc: Number(form.weightPerPc) || 0,
       weightPerBox: Number(form.weightPerBox) || 0,
@@ -173,7 +173,7 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
         />
 
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-          <TextField label="Unit" value={form.unit} onChange={(e) => updateField('unit', e.target.value.toUpperCase())} />
+          <TextField label="Unit" value={form.unit} onChange={(e) => updateField('unit', e.target.value)} />
           <TextField label="Lead Days" type="number" value={form.leadDays} onChange={(e) => updateField('leadDays', e.target.value)} />
           <TextField label="Pcs Per Box" type="number" value={form.pcsPerBox} onChange={(e) => updateField('pcsPerBox', e.target.value)} />
           <TextField label="Weight Per Pc" type="number" value={form.weightPerPc} onChange={(e) => updateField('weightPerPc', e.target.value)} />

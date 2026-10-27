@@ -37,6 +37,7 @@ import User from '../modules/auth/auth.model.js';
 import Party from '../modules/clients/party.model.js';
 import PurchaseIndent from '../modules/procurement/indent/indent.model.js';
 import Vendor from '../modules/vendors/vendor.model.js';
+import SKU from '../modules/skus/sku.model.js';
 import { FmsTask } from '../modules/fms-doers/fmsDoer.model.js';
 import { quoteComparativePlannedAt, quotationApprovalPlannedAt } from '../modules/procurement/indent/quotationSteps.js';
 
@@ -87,9 +88,17 @@ const ok = async (method, path, body) => {
   return r.data;
 };
 
+// Indent items must be SKU Master items (indent/itemSku.js): one upserted SKU
+// per item name, named exactly like the item so name-based checks still hold.
+const skuItem = async (name, quantity) => {
+  const code = `E2E-${name}`.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 60);
+  const sku = await SKU.findOneAndUpdate({ code }, { $setOnInsert: { code, name, unit: 'PCS', itemType: 'CONSUMABLE' } }, { upsert: true, new: true }).lean();
+  return { skuId: String(sku._id), skuCode: sku.code, itemName: sku.name, quantity, unit: 'Pcs' };
+};
+
 const newApprovedIndent = async (items, extra = {}) => {
   const ind = await ok('POST', '/procurement/indents', {
-    department: 'Stores', remarks: 'quote-steps e2e', items: items.map((n, i) => ({ itemName: n, quantity: 10 + i, unit: 'Pcs' })), ...extra,
+    department: 'Stores', remarks: 'quote-steps e2e', items: await Promise.all(items.map((n, i) => skuItem(n, 10 + i))), ...extra,
   });
   await ok('POST', `/procurement/indents/${ind._id}/submit`, {});
   return ok('POST', `/procurement/indents/${ind._id}/approve`, {
@@ -246,8 +255,8 @@ const api = async () => {
     `${corr.status} ${corr.message} · ${b5.overallStatus}`);
 
   console.log('\n[C] Rejected / draft indents');
-  const draft = await ok('POST', '/procurement/indents', { department: 'Stores', items: [{ itemName: 'E2E Draft Item', quantity: 1 }] });
-  const rej = await ok('POST', '/procurement/indents', { department: 'Stores', items: [{ itemName: 'E2E Rejected Item', quantity: 1 }] });
+  const draft = await ok('POST', '/procurement/indents', { department: 'Stores', items: [await skuItem('E2E Draft Item', 1)] });
+  const rej = await ok('POST', '/procurement/indents', { department: 'Stores', items: [await skuItem('E2E Rejected Item', 1)] });
   await ok('POST', `/procurement/indents/${rej._id}/submit`, {});
   await ok('POST', `/procurement/indents/${rej._id}/reject`, { remarks: 'not needed' });
   for (const [label, id] of [['draft', draft._id], ['rejected', rej._id]]) {
@@ -302,7 +311,7 @@ const api = async () => {
   check('P: no 1.03 planned date while 1.02 is pending', quotationApprovalPlannedAt(await fresh(p._id)) === null
     && await stateOf('QUOTATION_APPROVAL', p._id) === null);
 
-  const draftB = await ok('POST', '/procurement/indents', { department: 'Stores', items: [{ itemName: 'E2E Bulk Planned', quantity: 3 }] });
+  const draftB = await ok('POST', '/procurement/indents', { department: 'Stores', items: [await skuItem('E2E Bulk Planned', 3)] });
   await ok('POST', `/procurement/indents/${draftB._id}/submit`, {});
   const bulk = await ok('POST', '/procurement/indents/bulk-approve', { indents: [{ indentId: draftB._id }] });
   const pb = await fresh(draftB._id);

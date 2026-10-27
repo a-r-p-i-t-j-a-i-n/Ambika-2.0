@@ -396,7 +396,7 @@ const IndentDetail = () => {
           {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {isDraft && <Button variant="contained" startIcon={<Send size={16} />} onClick={onSubmit}>Submit</Button>}
           {isPending && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
-          {isApproved && !quoteDone && <Button variant="contained" startIcon={<FileText size={16} />} onClick={() => setComparativeOpen(true)}>Receive Quote / Comparative</Button>}
+          {/* Receive Quote / Comparative (Step 1.2) lives only in the Next Step banner, which shows it under the same condition. */}
           {step12Done && !quotationDone && !quoteSkipped && <Button variant="contained" color="success" startIcon={<FileCheck2 size={16} />} onClick={() => setQuotationOpen(true)}>Approved Quotation 1.03</Button>}
           {canStartServiceQc(indent) && (
             <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} disabled={startingServiceQc} onClick={() => startServiceQc(indent)}>Start Service QC</Button>

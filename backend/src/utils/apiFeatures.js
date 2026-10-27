@@ -143,12 +143,15 @@ export class ApiFeatures {
    * Execute the query and return docs + pagination meta.
    */
   async exec() {
-    // Clone the query filter to count total documents
+    // Clone the query filter to count total documents — counted alongside the
+    // page itself, so a list costs one database wait instead of two.
     const filterConditions = this.query.getFilter();
     const model = this.query.model;
-    this._totalCount = await model.countDocuments(filterConditions);
-
-    const docs = await this.query.lean();
+    const [totalCount, docs] = await Promise.all([
+      model.countDocuments(filterConditions),
+      this.query.lean(),
+    ]);
+    this._totalCount = totalCount;
 
     const { page = 1, limit = PAGINATION.DEFAULT_LIMIT } = this._pagination;
     const totalPages = Math.ceil(this._totalCount / limit);
