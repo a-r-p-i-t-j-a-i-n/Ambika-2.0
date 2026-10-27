@@ -50,6 +50,16 @@ import MdApprovalButton from "./approvals/MdApprovalButton";
 // Master Data and Vendor Details moved to their own sidebar entries under
 // Purchase (see MainLayout) and are no longer part of this stepper.
 const IndentList = lazyWithRetry(() => import("./indents/IndentList"));
+// Steps 1.02 / 1.03 — one list component, one step each.
+const QuotationStepList = lazyWithRetry(
+  () => import("./indents/QuotationStepList"),
+);
+const QuoteComparativeStep = () => (
+  <QuotationStepList step="QUOTE_COMPARATIVE" />
+);
+const QuotationApprovalStep = () => (
+  <QuotationStepList step="QUOTATION_APPROVAL" />
+);
 const PurchaseOrderList = lazyWithRetry(
   () => import("./purchase-orders/PurchaseOrderList"),
 );
@@ -92,6 +102,12 @@ const MD_APPROVAL_SLUG = "md-approvals";
 // Voucher screens (incl. Expense vouchers, which have no invoice) keep
 // their own routes — see the 'payment-vouchers' redirect below.
 //
+// Receive Quote & Comparative (1.02) and Approved Quotation (1.03) are their
+// own steps between the indent and the PO. Both live on the indent record and
+// reuse the indent's Step 1.2 / 1.3 dialogs and APIs (also still reachable
+// from the Purchase Indents screen and Indent Detail). "Quote Not Required"
+// at 1.02 skips 1.03 and makes the indent PO-ready.
+//
 // Follow-ups is the vendor-delivery tracker across all released POs — the
 // same FollowUpList the standalone /procurement/follow-ups route renders.
 // Per-PO follow-ups are still also driven from the Purchase Order detail
@@ -101,6 +117,16 @@ export const PURCHASE_FMS_STEPS = [
     slug: "purchase-indents",
     label: "Purchase Indents",
     Component: IndentList,
+  },
+  {
+    slug: "receive-quotes",
+    label: "Receive Quote & Comparative",
+    Component: QuoteComparativeStep,
+  },
+  {
+    slug: "approved-quotations",
+    label: "Approved Quotation",
+    Component: QuotationApprovalStep,
   },
   {
     slug: "purchase-orders",
@@ -145,6 +171,10 @@ const useStepCounts = () => {
 
   return {
     "purchase-indents": indentStats?.data?.total,
+    // The quotation steps count what is waiting there (pending) — their
+    // indents are already in the Purchase Indents total.
+    "receive-quotes": indentStats?.data?.quotationSteps?.QUOTE_COMPARATIVE?.PENDING,
+    "approved-quotations": indentStats?.data?.quotationSteps?.QUOTATION_APPROVAL?.PENDING,
     "purchase-orders": poStats?.data?.total,
     "follow-ups": fuStats?.data?.total,
     "pi-forms": piStats?.data?.total,

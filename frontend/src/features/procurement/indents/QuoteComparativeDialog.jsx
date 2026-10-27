@@ -8,6 +8,7 @@ import { useSnackbar } from 'notistack';
 import { useQuoteComparativeMutation } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import { istTodayStr } from '../../../utils/istDate';
 import ItemQuotationTable from './ItemQuotationTable';
 import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote, fileHref } from './indentMeta';
 
@@ -20,7 +21,8 @@ import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote, file
  * `quotationDocuments[]` / `quotationUploaded` fields for older screens.
  */
 const ACCEPT = '.pdf,image/*,.xls,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// Default Actual Date = today in India (the UTC date is yesterday before 05:30 IST).
+const todayStr = () => istTodayStr();
 
 const STATUS_OPTIONS = [
   { value: 'YES', label: 'Yes' },

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
-  Grid, MenuItem, Typography, CircularProgress, Divider,
+  Grid, MenuItem, Typography, CircularProgress, Divider, Alert,
 } from '@mui/material';
 import { Save } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useApproveQuotationMutation } from '../../../store/api/procurementApi';
+import { useGetVendorsQuery } from '../../../store/api/vendorApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import ItemQuotationTable from './ItemQuotationTable';
 import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } from './indentMeta';
@@ -19,6 +20,9 @@ import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } fro
  * automatically and the user simply removes the ones that are not approved. The
  * remaining files (same URLs, no re-upload) are submitted as the approved
  * quotation via `itemApprovedQuotations[]`. Requires Step 1.2 done.
+ *
+ * Each quoted item also names its Approved Vendor (Vendor Master). It is saved on
+ * the indent item and the Purchase Order for that item must use it.
  */
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -52,6 +56,10 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
   const [rows, setRows] = useState([]); // [{ itemId, skuId, skuCode, itemName, qty, unit, statusDone, files, actualAt, remarks }]
 
   const [approveQuotation, { isLoading: saving }] = useApproveQuotationMutation();
+  const { data: vendorsRes, isLoading: vendorsLoading, isError: vendorsError, refetch: refetchVendors } = useGetVendorsQuery(
+    { limit: 500, sort: 'name' }, { skip: !open },
+  );
+  const vendorOptions = (vendorsRes?.data || []).filter((v) => v.isActive !== false);
 
   useEffect(() => {
     if (!open) return;
@@ -97,6 +105,8 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
         files,
         actualAt: s?.actualAt ? s.actualAt.slice(0, 10) : '',
         remarks: s?.remarks || '',
+        // Approved vendor already recorded for this item (re-edit before any PO).
+        vendor: it.vendorSource === 'APPROVED_QUOTATION' && it.vendorId ? { _id: String(it.vendorId), name: it.vendorName } : null,
       };
     }));
   }, [open, indent]);
@@ -115,6 +125,11 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
       enqueueSnackbar(`Keep at least one approved quotation for "${missing.itemName}"`, { variant: 'warning' });
       return;
     }
+    const noVendor = rows.find((r) => r.statusDone === 'YES' && r.itemId && !r.vendor?._id);
+    if (noVendor) {
+      enqueueSnackbar(`Select the approved vendor for "${noVendor.itemName}"`, { variant: 'warning' });
+      return;
+    }
     // statusDone is NOT sent — Step 1.3 carries it from Step 1.2 (the backend
     // derives it). The kept documents reuse Step 1.2's file references verbatim
     // (same URL + uploadedAt) so nothing is uploaded or stored twice.
@@ -128,6 +143,7 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           itemName: r.itemName,
           statusDone: r.statusDone,
           approvedQuotationDocuments: r.files.map((f) => ({ fileName: f.fileName, fileUrl: f.fileUrl, fileType: f.fileType, uploadedAt: f.uploadedAt })),
+          vendorId: r.statusDone === 'YES' ? (r.vendor?._id || null) : null,
           actualAt: r.actualAt || actualAt,
           remarks: r.remarks?.trim() || '',
         })),
@@ -173,9 +189,17 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           noUpload
           onRemoveFile={removeFile}
           onPatchRow={patchRow}
+          vendorOptions={vendorOptions}
+          vendorsLoading={vendorsLoading}
         />
+        {vendorsError && (
+          <Alert severity="error" sx={{ mt: 1 }} action={<Button size="small" onClick={() => refetchVendors()}>Retry</Button>}>
+            Could not load the Vendor Master — the approved vendor cannot be selected.
+          </Alert>
+        )}
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
           Quotations from Step 1.2 are loaded automatically. Remove the ones not approved — the remaining quotation(s) are saved as the approved quotation. No re-upload needed.
+          Select the vendor whose quotation is approved for each item — its Purchase Order will use that vendor.
         </Typography>
 
         <Divider sx={{ my: 1.5 }} />

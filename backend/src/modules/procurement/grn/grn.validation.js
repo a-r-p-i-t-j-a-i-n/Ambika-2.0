@@ -47,6 +47,10 @@ const grnItemSchema = Joi.object({
   rate:        Joi.number().min(0).default(0),
   batchNo:     Joi.string().trim().max(60).allow('', null),
   remarks:     Joi.string().trim().max(500).allow('', null),
+  // Material Receipt Type of this line. Left out (an older client), the
+  // service gives the line the request's header howItemReceived instead.
+  howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)).allow('', null)
+    .messages({ 'any.only': `Material Receipt Type must be one of: ${Object.values(HOW_ITEM_RECEIVED).join(', ')}` }),
 });
 
 export const createGrnSchema = Joi.object({
@@ -91,6 +95,8 @@ export const createGrnSchema = Joi.object({
   warehouse:       Joi.string().trim().max(40).allow('', null),
   // Required (by the service) whenever a Raw Material line is received.
   rmReceivedAtLocation: rmReceivedAtField,
+  // Header Material Receipt Type — only the fallback for a line that names
+  // none (an older client); each line carries its own items[].howItemReceived.
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)).default(HOW_ITEM_RECEIVED.FULL_MATERIAL_RECEIVED),
   challanDocument: grnDocumentSchema.default(null),
   invoiceDocument: grnDocumentSchema.default(null),

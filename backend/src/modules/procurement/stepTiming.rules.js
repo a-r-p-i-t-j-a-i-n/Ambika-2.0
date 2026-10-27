@@ -16,6 +16,8 @@
  *     rejected / cancelled row shows its last recorded decision, else nothing.
  */
 
+import { quotationApprovalPlannedAt } from './indent/quotationSteps.js';
+
 const lastTimeline = (d, action) => {
   const log = d.activityTimeline || [];
   for (let i = log.length - 1; i >= 0; i -= 1) if (log[i]?.action === action) return log[i];
@@ -64,6 +66,8 @@ export const STEP_TIMING = {
         // the Step 1.2 user on it — nobody performed it, so it is never shown.
         skipped: (d) => !!d.quotationApprovalStep?.skipped,
         done: (d) => !!d.quotationApprovalStep?.actualAt || QUOTATION_APPROVAL_DONE.has(d.overallStatus),
+        // 1 working day after Step 1.2's actual date — none until 1.2 is done.
+        planned: quotationApprovalPlannedAt,
         actual: (d) => d.quotationApprovalStep?.actualAt,
         byUserId: (d) => d.quotationApprovalStep?.updatedBy,
       },
@@ -205,6 +209,30 @@ const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const time = (v) => toDate(v)?.getTime() || 0;
 
 /** Doer task for this row's step: the first entity (in priority order) that has one. */
+// The Step 1.2 / Step 1.3 main-workflow lists show THAT step's timing on every
+// row (pending, done or not required), not the indent's current step — built
+// from the INDENT steps above so the rules stay in one place.
+const indentStep = (key) => STEP_TIMING.INDENT.steps.find((s) => s.key === key);
+STEP_TIMING.INDENT_QUOTE_COMPARATIVE = {
+  entities: STEP_TIMING.INDENT.entities,
+  terminated: STEP_TIMING.INDENT.terminated,
+  steps: [indentStep('QUOTE_COMPARATIVE')],
+};
+// A skipped Step 1.3 counts as done for the row but has no actual or performer
+// (the stamps on it belong to the Step 1.2 user who chose "Quote Not Required").
+const approvalStep = indentStep('QUOTATION_APPROVAL');
+STEP_TIMING.INDENT_QUOTATION_APPROVAL = {
+  entities: STEP_TIMING.INDENT.entities,
+  terminated: STEP_TIMING.INDENT.terminated,
+  steps: [{
+    key: approvalStep.key,
+    done: (d) => approvalStep.skipped(d) || approvalStep.done(d),
+    planned: approvalStep.planned,
+    actual: (d) => (approvalStep.skipped(d) ? null : approvalStep.actual(d)),
+    byUserId: (d) => (approvalStep.skipped(d) ? null : approvalStep.byUserId(d)),
+  }],
+};
+
 export const pickTask = (tasks, entities, stepKey, done) => {
   for (const e of entities) {
     if (!e) continue;

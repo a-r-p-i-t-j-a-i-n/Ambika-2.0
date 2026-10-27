@@ -21,6 +21,7 @@ import {
   useGetVendorInvoicesByQcQuery,
 } from '../../../store/api/procurementApi';
 import { GrnStatusChip, howReceivedLabel, fmtINR, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
+import { lineReceiptType, receiptTypeSummaryLabel } from './grnReceiptType';
 import GrnFormDialog from './GrnFormDialog';
 import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
@@ -252,7 +253,7 @@ const GrnDetail = () => {
             <Grid container spacing={2}>
               <Grid item xs={6} sm={4}><Field label="GRN Date" value={fmtDate(grn.grnDate)} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Unique Id" value={grn.uniqueId || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Material Receipt Type" value={howReceivedLabel(grn.howItemReceived)} /></Grid>
+              <Grid item xs={6} sm={4}><Field label="Material Receipt Type" value={receiptTypeSummaryLabel(grn)} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Challan No" value={grn.challanNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Invoice No" value={grn.invoiceNumber || '—'} /></Grid>
               <Grid item xs={6} sm={4}><Field label="Invoice Date" value={fmtDate(grn.invoiceDate)} /></Grid>
@@ -324,6 +325,7 @@ const GrnDetail = () => {
                     <TableCell align="right">Received</TableCell>
                     <TableCell align="right">Short</TableCell>
                     <TableCell align="right">Pending After GRN</TableCell>
+                    <TableCell>Receipt Type</TableCell>
                     <TableCell>Item Status</TableCell>
                     <TableCell>Batch</TableCell>
                     <TableCell>Stock</TableCell>
@@ -362,6 +364,7 @@ const GrnDetail = () => {
                         <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.receivedQty}</TableCell>
                         <TableCell align="right" sx={{ color: it.shortQty > 0 ? '#b45309' : 'text.secondary' }}>{it.shortQty || 0}</TableCell>
                         <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{grn.isWithoutPo ? 'N/A' : (it.pendingQty || 0)}</TableCell>
+                        <TableCell data-testid="grn-line-receipt-type-value">{howReceivedLabel(lineReceiptType(it, grn))}</TableCell>
                         <TableCell>
                           <Chip size="small" label={itemStatus.label} sx={{ fontWeight: 700, color: itemStatus.color, bgcolor: alpha(itemStatus.color, 0.1) }} />
                         </TableCell>
