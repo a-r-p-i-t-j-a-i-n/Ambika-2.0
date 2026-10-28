@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
-  Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
+  Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Tooltip,
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, CheckCircle2, ReceiptText, Building2, FileText, ClipboardCheck,
@@ -30,16 +30,38 @@ const INV_ITEM_COLS = '2fr 0.8fr 0.8fr 0.6fr 0.9fr 0.9fr 0.95fr 1.4fr';
 const CMP_COLS = '1.8fr 1fr 0.5fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.85fr 0.95fr';
 const CMP_HEAD = ['Item Name', 'SKU', 'Unit', 'PO Ordered', 'GRN Recv', 'QC Accepted', 'QC Rejected', 'Invoice Qty', 'Variance', 'Status'];
 
-const Field = ({ label, value }) => (
-  <Box sx={{ minWidth: 0 }}>
-    <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
-    <Typography sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
+// ── Same spacing/typography scale as Indent, PO, GRN and Final Payment Detail
+// and the embedded VoucherPanel (SECTION_GAP/CARD_PAD/Field/FieldGrid/
+// SectionCard), replacing the older p:3 cards and the md=6 Grid whose cards
+// ended at different heights. ──
+const SECTION_GAP = 2;
+const CARD_PAD = 2;
+
+const Field = ({ label, value, sx }) => (
+  <Box sx={{ minWidth: 0, ...sx }}>
+    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: PFMS.sub, mb: 0.4 }}>{label}</Typography>
+    {/* div, not p: several values are chips / a link button */}
+    <Typography component="div" sx={{ fontSize: '0.86rem', fontWeight: 600, color: PFMS.ink, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
   </Box>
 );
+
+// Explicit column counts per breakpoint (not auto-fill, which leaves a lone
+// field on its own row).
+const FieldGrid = ({ cols, children }) => (
+  <Box sx={{
+    display: 'grid', gap: 2,
+    gridTemplateColumns: Object.fromEntries(Object.entries(cols).map(([bp, n]) => [bp, `repeat(${n}, minmax(0, 1fr))`])),
+  }}>
+    {children}
+  </Box>
+);
+const FULL_ROW = { gridColumn: '1 / -1' };
+
+// Column flex + height 100%: cards sharing a grid row end on the same line.
 const SectionCard = ({ icon, title, action, children }) => (
-  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-      <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main' }}>{icon} {title}</Typography>
+  <Paper sx={{ ...pfmsCardSx, p: CARD_PAD, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+      <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, fontSize: '0.92rem', color: 'primary.main' }}>{icon} {title}</Typography>
       {action}
     </Box>
     {children}
@@ -101,22 +123,28 @@ const VendorInvoiceDetail = () => {
   })();
 
   return (
-    <Box sx={{ ...pfmsPageSx, p: { xs: 1.5, md: 2.5 } }}>
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}><ArrowLeft size={20} /></IconButton>
-        <Box sx={{ width: 46, height: 46, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><ReceiptText size={24} /></Box>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: PFMS.ink }}>{inv.invoiceNumber}</Typography>
+    <Box sx={{ ...pfmsPageSx }}>
+      {/* Hero — same sizes as the other detail pages; the identity block has an
+          explicit flex basis so long names wrap inside it. */}
+      <Box sx={{ mb: SECTION_GAP, display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 1.5, flexWrap: 'wrap' }}>
+        <Tooltip title="Back">
+          <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}`, width: 38, height: 38 }}><ArrowLeft size={18} /></IconButton>
+        </Tooltip>
+        <Box sx={{ width: 38, height: 38, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main', flexShrink: 0 }}><ReceiptText size={20} /></Box>
+        <Box sx={{ flex: { xs: '1 1 200px', md: '1 1 360px' }, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: PFMS.ink }}>{inv.invoiceNumber}</Typography>
             <InvoiceStatusChip status={inv.invoiceStatus} />
             {inv.debitNoteRequired && <Chip size="small" color="warning" variant="outlined" label="Debit Note" sx={{ fontWeight: 700 }} />}
           </Box>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: PFMS.sub, overflowWrap: 'anywhere' }}>
             {inv.vendorName} · GRN {(inv.grnNumbers?.length ? inv.grnNumbers : [inv.grnNumber]).filter(Boolean).join(', ') || '—'} · {fmtDate(inv.invoiceDate)}
           </Typography>
         </Box>
-        <Box sx={{ flexGrow: 1 }} />
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Box sx={{
+          display: 'flex', gap: 1, flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' },
+          '& .MuiButtonBase-root': { flex: { xs: '1 1 auto', sm: '0 0 auto' } },
+        }}>
           {inv.qcId && <Button variant="outlined" startIcon={<ClipboardCheck size={16} />} onClick={() => navigate(`/procurement/incoming-qc/${inv.qcId}`)}>View QC</Button>}
           {canEdit && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {canApproveReject && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
@@ -127,59 +155,52 @@ const VendorInvoiceDetail = () => {
 
       <NextStepBanner step={nextStep} />
 
-      <FmsDoerCard entityType="INVOICE" entityId={id} />
-      <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<FileText size={18} />} title="Invoice & Linkage">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Invoice No" value={inv.invoiceNumber} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Invoice Date" value={fmtDate(inv.invoiceDate)} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Received" value={fmtDate(inv.invoiceReceivedDate)} /></Grid>
-              <Grid item xs={12} sm={4}>
-                <Field label={`GRNs (${(inv.grnNumbers?.length || (inv.grnNumber ? 1 : 0))})`} value={
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                    {(inv.grnNumbers?.length ? inv.grnNumbers : [inv.grnNumber]).filter(Boolean).map((g, i) => <Chip key={i} size="small" label={g} />)}
-                  </Box>
-                } />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <Field label={`QCs (${(inv.qcNumbers?.length || (inv.qcNumber ? 1 : 0))})`} value={
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                    {(inv.qcNumbers?.length ? inv.qcNumbers : [inv.qcNumber]).filter(Boolean).map((q, i) => <Chip key={i} size="small" variant="outlined" label={q} />)}
-                  </Box>
-                } />
-              </Grid>
-              <Grid item xs={6} sm={4}><Field label="PO" value={inv.poNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="PI" value={inv.piNumber || '—'} /></Grid>
-              <Grid item xs={6} sm={4}>
-                <Field label="Document" value={inv.invoiceDocument?.fileUrl
-                  ? <Button size="small" startIcon={<ExternalLink size={13} />} href={fileHref(inv.invoiceDocument.fileUrl)} target="_blank" rel="noopener">{inv.invoiceDocument.fileName || 'View'}</Button>
-                  : '—'} />
-              </Grid>
-            </Grid>
-          </SectionCard>
-        </Grid>
+      <FmsDoerCard entityType="INVOICE" entityId={id} sx={{ mb: SECTION_GAP }} />
+      <WorkflowStepper steps={wfSteps} sx={{ mb: SECTION_GAP }} />
+      {/* One grid: Invoice & Linkage | Vendor side by side from lg (3:2, as on
+          GRN Detail — the invoice card carries 8 fields to the vendor's 2–5),
+          every other section a full-width row. */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 3fr) minmax(0, 2fr)' }, gap: SECTION_GAP }}>
+        <SectionCard icon={<FileText size={18} />} title="Invoice & Linkage">
+          <FieldGrid cols={{ xs: 2, sm: 4, lg: 3, xl: 4 }}>
+            <Field label="Invoice No" value={inv.invoiceNumber} />
+            <Field label="Invoice Date" value={fmtDate(inv.invoiceDate)} />
+            <Field label="Received" value={fmtDate(inv.invoiceReceivedDate)} />
+            <Field label={`GRNs (${(inv.grnNumbers?.length || (inv.grnNumber ? 1 : 0))})`} value={
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {(inv.grnNumbers?.length ? inv.grnNumbers : [inv.grnNumber]).filter(Boolean).map((g, i) => <Chip key={i} size="small" label={g} sx={{ maxWidth: '100%' }} />)}
+              </Box>
+            } />
+            <Field label={`QCs (${(inv.qcNumbers?.length || (inv.qcNumber ? 1 : 0))})`} value={
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {(inv.qcNumbers?.length ? inv.qcNumbers : [inv.qcNumber]).filter(Boolean).map((q, i) => <Chip key={i} size="small" variant="outlined" label={q} sx={{ maxWidth: '100%' }} />)}
+              </Box>
+            } />
+            <Field label="PO" value={inv.poNumber || '—'} />
+            <Field label="PI" value={inv.piNumber || '—'} />
+            <Field label="Document" value={inv.invoiceDocument?.fileUrl
+              ? <Button size="small" startIcon={<ExternalLink size={13} />} href={fileHref(inv.invoiceDocument.fileUrl)} target="_blank" rel="noopener" sx={{ ml: -0.6, textAlign: 'left', overflowWrap: 'anywhere' }}>{inv.invoiceDocument.fileName || 'View'}</Button>
+              : '—'} />
+          </FieldGrid>
+        </SectionCard>
 
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<Building2 size={18} />} title="Vendor">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={6}><Field label="Vendor" value={inv.vendorName || '—'} /></Grid>
-              <Grid item xs={6} sm={6}><Field label="GST" value={inv.vendorGST || '—'} /></Grid>
-              {inv.debitNoteRequired ? (
-                <>
-                  <Grid item xs={6} sm={4}><Field label="Debit Note No" value={inv.debitNoteNumber || '—'} /></Grid>
-                  <Grid item xs={6} sm={4}><Field label="Debit Note Amt" value={fmtINR(inv.debitNoteAmount)} /></Grid>
-                  <Grid item xs={12} sm={4}><Field label="Reason" value={inv.debitNoteReason || '—'} /></Grid>
-                </>
-              ) : null}
-            </Grid>
-          </SectionCard>
-        </Grid>
+        <SectionCard icon={<Building2 size={18} />} title="Vendor">
+          <FieldGrid cols={{ xs: 2, sm: 3, lg: 2 }}>
+            <Field label="Vendor" value={inv.vendorName || '—'} />
+            <Field label="GST" value={inv.vendorGST || '—'} />
+            {inv.debitNoteRequired ? (
+              <>
+                <Field label="Debit Note No" value={inv.debitNoteNumber || '—'} />
+                <Field label="Debit Note Amt" value={fmtINR(inv.debitNoteAmount)} />
+                <Field label="Reason" value={inv.debitNoteReason || '—'} sx={{ gridColumn: 'span 2' }} />
+              </>
+            ) : null}
+          </FieldGrid>
+        </SectionCard>
 
         {/* Order vs Received comparison */}
         {inv.items?.length ? (
-          <Grid item xs={12}>
+          <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
             <SectionCard icon={<FileText size={18} />} title="Order vs Received Comparison">
               <Box sx={{ overflowX: 'auto' }}>
                 <Box sx={{ minWidth: 940 }}>
@@ -212,12 +233,12 @@ const VendorInvoiceDetail = () => {
                 </Box>
               </Box>
             </SectionCard>
-          </Grid>
+          </Box>
         ) : null}
 
         {/* Invoice items */}
         {inv.items?.length ? (
-          <Grid item xs={12}>
+          <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
             <SectionCard icon={<FileText size={18} />} title={`Invoice Items (${inv.items.length})`}>
               <Box sx={{ overflowX: 'auto' }}>
                 <Box sx={{ minWidth: 820 }}>
@@ -246,29 +267,33 @@ const VendorInvoiceDetail = () => {
                 </Box>
               </Box>
             </SectionCard>
-          </Grid>
+          </Box>
         ) : null}
 
         {/* Financials */}
-        <Grid item xs={12}>
+        {/* Compact: the totals sit beside the fields from lg (fields 3-up there,
+            one row of 6 from xl) instead of a full-width band underneath. */}
+        <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
           <SectionCard icon={<ReceiptText size={18} />} title="Financials">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={2}><Field label="Invoice Amount" value={fmtINR(inv.invoiceAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Taxable" value={fmtINR(inv.taxableAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="GST" value={fmtINR(inv.gstAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="TDS" value={fmtINR(inv.tdsAmount)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Other" value={fmtINR(inv.otherCharges)} /></Grid>
-              <Grid item xs={6} sm={2}><Field label="Debit Note" value={fmtINR(inv.debitNoteAmount)} /></Grid>
-            </Grid>
-            <Box sx={{ mt: 2, p: 2, borderRadius: '12px', bgcolor: alpha('#1d4ed8', 0.04), display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
-              <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>ADVANCE PAID</Typography><Typography fontWeight={700} sx={{ color: '#0f766e' }}>{fmtINR(inv.advancePaid)}</Typography></Box>
-              <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="primary.main" fontWeight={700}>NET PAYABLE</Typography><Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(inv.netPayableAmount)}</Typography></Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) auto' }, gap: 2, alignItems: 'center' }}>
+              <FieldGrid cols={{ xs: 2, sm: 3, xl: 6 }}>
+                <Field label="Invoice Amount" value={fmtINR(inv.invoiceAmount)} />
+                <Field label="Taxable" value={fmtINR(inv.taxableAmount)} />
+                <Field label="GST" value={fmtINR(inv.gstAmount)} />
+                <Field label="TDS" value={fmtINR(inv.tdsAmount)} />
+                <Field label="Other" value={fmtINR(inv.otherCharges)} />
+                <Field label="Debit Note" value={fmtINR(inv.debitNoteAmount)} />
+              </FieldGrid>
+              <Box sx={{ px: 2, py: 1.25, borderRadius: '8px', bgcolor: alpha('#1d4ed8', 0.04), display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
+                <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>ADVANCE PAID</Typography><Typography fontWeight={700} sx={{ color: '#0f766e' }}>{fmtINR(inv.advancePaid)}</Typography></Box>
+                <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="primary.main" fontWeight={700}>NET PAYABLE</Typography><Typography variant="h6" fontWeight={800} color="primary.dark" sx={{ lineHeight: 1.3 }}>{fmtINR(inv.netPayableAmount)}</Typography></Box>
+              </Box>
             </Box>
           </SectionCard>
-        </Grid>
+        </Box>
 
         {/* Payment Voucher — master-detail: the invoice's voucher managed in place */}
-        <Grid item xs={12}>
+        <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 800, color: PFMS.ink, mb: 1.5 }}>
             <Banknote size={18} /> Payment Voucher
           </Typography>
@@ -281,7 +306,7 @@ const VendorInvoiceDetail = () => {
               showInvoiceLink={false}
             />
           ) : (
-            <Paper sx={{ ...pfmsCardSx, p: 3 }}>
+            <Paper sx={{ ...pfmsCardSx, p: CARD_PAD }}>
               {inv.invoiceStatus === 'REJECTED' ? (
                 <Typography color="text.secondary">Invoice rejected — no voucher can be created.</Typography>
               ) : inv.invoiceStatus === 'PAYMENT_COMPLETED' ? (
@@ -309,38 +334,38 @@ const VendorInvoiceDetail = () => {
               )}
             </Paper>
           )}
-        </Grid>
+        </Box>
 
         {/* Approval + remarks */}
-        <Grid item xs={12} md={6}>
+        {/* Same 3:2 column line as Invoice & Linkage | Vendor; full row when
+            there is no timeline, so it never sits beside a hole. */}
+        <Box sx={{ minWidth: 0, ...(inv.activityTimeline?.length ? {} : FULL_ROW) }}>
           <SectionCard icon={<CheckCircle2 size={18} />} title="Approval">
-            <Grid container spacing={2}>
-              <Grid item xs={6} sm={4}><Field label="Status" value={<InvoiceStatusChip status={inv.invoiceStatus} />} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Approved By" value={inv.approvedBy || '—'} /></Grid>
-              <Grid item xs={6} sm={4}><Field label="Approved At" value={fmtDate(inv.approvedAt)} /></Grid>
-              {inv.rejectedBy ? <Grid item xs={12}><Field label="Rejection" value={inv.rejectionRemarks || inv.rejectedBy} /></Grid> : null}
-              {inv.voucherNumber ? <Grid item xs={12}><Field label="Voucher" value={<Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => liveVoucher && navigate(`/procurement/vouchers/${liveVoucher._id}`)}>{inv.voucherNumber} {liveVoucher && <VoucherStatusChip status={liveVoucher.voucherStatus} />}</Box>} /></Grid> : null}
-            </Grid>
+            <FieldGrid cols={{ xs: 2, sm: 3 }}>
+              <Field label="Status" value={<InvoiceStatusChip status={inv.invoiceStatus} />} />
+              <Field label="Approved By" value={inv.approvedBy || '—'} />
+              <Field label="Approved At" value={fmtDate(inv.approvedAt)} />
+              {inv.rejectedBy ? <Field label="Rejection" value={inv.rejectionRemarks || inv.rejectedBy} sx={FULL_ROW} /> : null}
+              {inv.voucherNumber ? <Field label="Voucher" sx={FULL_ROW} value={<Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', fontWeight: 700 }} onClick={() => liveVoucher && navigate(`/procurement/vouchers/${liveVoucher._id}`)}>{inv.voucherNumber} {liveVoucher && <VoucherStatusChip status={liveVoucher.voucherStatus} />}</Box>} /> : null}
+            </FieldGrid>
           </SectionCard>
-        </Grid>
+        </Box>
 
         {inv.activityTimeline?.length ? (
-          <Grid item xs={12} md={6}>
-            <SectionCard icon={<FileText size={18} />} title="Timeline">
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {[...inv.activityTimeline].reverse().map((ev, i) => (
-                  <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 90 }} />
-                    <Typography variant="body2" color="text.secondary">{ev.description}</Typography>
-                    <Box sx={{ flexGrow: 1 }} />
-                    <Typography variant="caption" color="text.disabled">{fmtDate(ev.timestamp)}</Typography>
-                  </Box>
-                ))}
-              </Box>
-            </SectionCard>
-          </Grid>
+          <SectionCard icon={<FileText size={18} />} title="Timeline">
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {[...inv.activityTimeline].reverse().map((ev, i) => (
+                <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 90, flexShrink: 0 }} />
+                  {/* flex 1 + minWidth 0: long descriptions wrap, the date stays put */}
+                  <Typography variant="body2" color="text.secondary" sx={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' }}>{ev.description}</Typography>
+                  <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>{fmtDate(ev.timestamp)}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </SectionCard>
         ) : null}
-      </Grid>
+      </Box>
 
       <VendorInvoiceFormDialog open={formOpen} invoice={inv} onClose={() => setFormOpen(false)} />
       <VendorInvoiceApprovalDialog open={approvalOpen} invoice={inv} onClose={() => setApprovalOpen(false)} />

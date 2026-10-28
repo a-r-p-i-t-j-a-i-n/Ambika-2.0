@@ -3,12 +3,12 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip,
+  Menu, ListItemIcon, ListItemText, Grid, Tooltip,
   Autocomplete, FormControlLabel, Switch, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, MoreVertical, Eye, Pencil, CheckCircle2,
+  Search, Eye, Pencil, CheckCircle2,
   PackageCheck, PhoneCall, Hourglass, BadgeCheck, AlarmClock, Plus,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -26,6 +26,9 @@ import FollowUpDoneDialog from './FollowUpDoneDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 const FollowUpList = () => {
@@ -58,6 +61,7 @@ const FollowUpList = () => {
   const rowNav = useRowNavigation({ to: (r) => `/procurement/follow-ups/${r._id}` });
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = useMemo(() => ({
     page: paginationModel.page + 1,
@@ -155,12 +159,12 @@ const FollowUpList = () => {
         : <Typography variant="caption" color="text.disabled">—</Typography>) },
     { field: 'followUpType', headerName: 'TYPE', width: 105,
       renderCell: (p) => <FuTypeChip type={p.value} /> },
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
-      renderCell: (p) => (
-        <Tooltip title="Actions">
-          <IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton>
-        </Tooltip>
-      ) },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.followUpNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -281,7 +285,7 @@ const FollowUpList = () => {
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
           // Row click opens Follow-up Details; Mark Done / Edit stay in the actions menu.
-          {...rowNav.gridProps}
+          {...rowNav.gridProps} {...rowActionsGridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           // Secondary fields stay available from the column menu.
@@ -290,7 +294,7 @@ const FollowUpList = () => {
           } } }}
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={[{ border: 0 }, rowNavigationGridSx]}
+          sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
 
@@ -308,6 +312,23 @@ const FollowUpList = () => {
       <FollowUpFormDrawer open={formOpen} followUp={editFu} onClose={() => { setFormOpen(false); setEditFu(null); }} />
       <FollowUpDoneDialog open={doneOpen} followUp={activeFu} onClose={() => { setDoneOpen(false); setActiveFu(null); }} />
       <FollowUpReadyForGrnDialog open={readyOpen} followUp={activeFu} onClose={() => { setReadyOpen(false); setActiveFu(null); }} />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="Follow-up Details" number={quickRow?.followUpNumber}
+        status={quickRow ? <FuStatusChip status={quickRow.followUpStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'PO Number', value: quickRow.poNumber },
+          { label: 'Indent No', value: quickRow.indentNumber },
+          { label: 'Type', value: <FuTypeChip type={quickRow.followUpType} /> },
+          { label: 'Expected Delivery', value: fmtDate(quickRow.expectedDeliveryDate) },
+          { label: 'Pending Qty', value: quickRow.pendingQty == null ? '' : `${quickRow.pendingQty}${quickRow.pendingQtyUnit ? ` ${quickRow.pendingQtyUnit}` : ''}` },
+          { label: 'Last Follow-up', value: fmtDate(quickRow.lastFollowUpAt) },
+          { label: 'Next Follow-up', value: fmtDate(quickRow.nextFollowUpDate || (['PENDING', 'RESCHEDULED'].includes(quickRow.followUpStatus) ? quickRow.plannedAt : null)) },
+          { label: 'Final Material', value: fmtDate(quickRow.finalMaterialDate) },
+          { label: 'Contact', value: [quickRow.contactPerson, quickRow.vendorPhone].filter(Boolean).join(' · ') },
+          { label: 'Remarks', value: quickRow.remarks, span: 2 },
+        ] : []}
+        openFullLabel="Open full follow-up" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

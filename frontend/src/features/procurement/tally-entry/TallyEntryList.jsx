@@ -3,11 +3,11 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, LinearProgress,
+  Menu, ListItemIcon, ListItemText, Grid, Autocomplete, LinearProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, Ban,
+  Search, Plus, Eye, Pencil, CheckCircle2, Ban,
   FileSpreadsheet, Hourglass, CheckCheck, XCircle,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -26,6 +26,9 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const TallyEntryList = () => {
   const navigate = useNavigate();
   const rowNav = useRowNavigation({ to: (r) => `/procurement/tally-entries/${r._id}` });
@@ -48,6 +51,7 @@ const TallyEntryList = () => {
   const [activeEntry, setActiveEntry] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
     page: paginationModel.page + 1, limit: paginationModel.pageSize, sort: '-createdAt',
@@ -79,8 +83,8 @@ const TallyEntryList = () => {
     const pct = (done / CHECKLIST_TOTAL) * 100;
     return (
       <Box sx={{ width: '100%' }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="caption" fontWeight={700}>{done}/{CHECKLIST_TOTAL}</Typography></Box>
-        <LinearProgress variant="determinate" value={pct} sx={{ height: 6, borderRadius: 3, mt: 0.25 }} color={pct === 100 ? 'success' : 'warning'} />
+        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="caption" fontWeight={700} lineHeight={1.2}>{done}/{CHECKLIST_TOTAL}</Typography></Box>
+        <LinearProgress variant="determinate" value={pct} sx={{ height: 6, borderRadius: 3, mt: 0.5 }} color={pct === 100 ? 'success' : 'warning'} />
       </Box>
     );
   };
@@ -94,7 +98,12 @@ const TallyEntryList = () => {
     ...stepTimingColumns(),
     { field: '__progress', headerName: 'CHECKLIST', width: 110, sortable: false, renderCell: (p) => <ProgressCell row={p.row} /> },
     { field: 'tallyEntryStatus', headerName: 'STATUS', width: 130, renderCell: (p) => <TallyStatusChip status={p.value} /> },
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center', renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.entryNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -181,8 +190,8 @@ const TallyEntryList = () => {
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={52} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
+          {...rowNav.gridProps} {...rowActionsGridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
@@ -193,6 +202,16 @@ const TallyEntryList = () => {
 
       <TallyEntryFormDialog open={formOpen} entry={editEntry} onClose={() => { setFormOpen(false); setEditEntry(null); }} />
       <TallyEntryCompleteDialog open={completeOpen} entry={activeEntry} onClose={() => { setCompleteOpen(false); setActiveEntry(null); }} />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="Tally Entry Details" number={quickRow?.entryNumber}
+        status={quickRow ? <TallyStatusChip status={quickRow.tallyEntryStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'Voucher', value: quickRow.voucherNumber },
+          { label: 'Invoice', value: quickRow.invoiceNumber },
+          { label: 'Checklist', value: `${checklistProgress(quickRow.checklist)}/${CHECKLIST_TOTAL}` },
+        ] : []}
+        openFullLabel="Open full entry" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

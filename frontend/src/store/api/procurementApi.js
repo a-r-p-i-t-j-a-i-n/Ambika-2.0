@@ -98,6 +98,13 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/procurement/purchase-orders/approved-items', params }),
       providesTags: ['Indent', 'PurchaseOrder'],
     }),
+    // "Awaiting this step" — upstream records waiting at a step that has no
+    // record of its own yet (backend procurement/stepQueue.js). Read-only; it
+    // refreshes whenever any record it is built from changes.
+    getStepQueue: builder.query({
+      query: ({ queue, ...params }) => ({ url: `/procurement/step-queues/${queue}`, params }),
+      providesTags: ['Indent', 'PurchaseOrder', 'FollowUp', 'ProformaInvoice', 'AdvancePayment', 'Grn', 'IncomingQc', 'VendorInvoice', 'Voucher', 'TallyEntry', 'FinalPayment'],
+    }),
     // Pending for PO — fix (or clear) the vendor of one approved indent item.
     setItemVendor: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders/approved-items/vendor', method: 'PATCH', body }),
@@ -457,6 +464,11 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (invoiceId) => `/procurement/vouchers/by-invoice/${invoiceId}`,
       providesTags: (_r, _e, invoiceId) => [{ type: 'Voucher', id: `inv-${invoiceId}` }, 'Voucher'],
     }),
+    // PO / GRN an expense voucher can be raised against right now ({ type: 'PO' | 'GRN' }).
+    getVoucherExpenseLinks: builder.query({
+      query: (params) => ({ url: '/procurement/vouchers/expense-links', params }),
+      providesTags: ['Voucher', 'PurchaseOrder', 'Grn', 'VendorInvoice'],
+    }),
     createVoucher: builder.mutation({
       query: (body) => ({ url: '/procurement/vouchers', method: 'POST', body }),
       invalidatesTags: ['Voucher', 'VoucherStats', 'VendorInvoice'],
@@ -612,6 +624,7 @@ export const {
   useGetPurchaseOrderStatsQuery,
   useGetPurchaseOrderQuery,
   useGetAllApprovedItemsQuery,
+  useGetStepQueueQuery,
   useSetItemVendorMutation,
   useCreatePurchaseOrderMutation,
   useCreatePurchaseOrderFromItemsMutation,
@@ -694,6 +707,7 @@ export const {
   useGetVoucherStatsQuery,
   useGetVoucherByIdQuery,
   useGetVouchersByInvoiceQuery,
+  useGetVoucherExpenseLinksQuery,
   useCreateVoucherMutation,
   useGenerateVoucherPdfMutation,
   useUpdateVoucherMutation,

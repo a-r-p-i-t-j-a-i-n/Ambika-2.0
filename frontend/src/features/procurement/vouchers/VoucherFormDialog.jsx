@@ -9,13 +9,14 @@ import { Banknote, Info, Upload, FileText, X, ExternalLink } from 'lucide-react'
 import { useSnackbar } from 'notistack';
 import {
   useGetVendorInvoicesQuery,
+  useGetVoucherExpenseLinksQuery,
   useCreateVoucherMutation,
   useUpdateVoucherMutation,
   usePostVoucherMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
-import { fmtINR, EXPENSE_CATEGORIES } from './voucherMeta';
+import { fmtINR, fmtDate, EXPENSE_CATEGORIES, EXPENSE_TYPES, expenseTypeOf, expenseTypeMeta } from './voucherMeta';
 import { fileHref } from '../indents/indentMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 
@@ -27,6 +28,7 @@ const NO_SPIN = {
 const num = (n) => Number(n) || 0;
 const emptyPurchase = { invoiceId: '', voucherDate: '', remarks: '' };
 const emptyExpense = {
+  expenseType: 'DIRECT', poId: '', grnId: '',
   voucherDate: '', expenseCategory: '', vendorId: '', partyName: '', expenseInvoiceNo: '', expenseInvoiceDate: '',
   basicValue: '', freightCharges: '', packingForwardingCharges: '', otherCharges: '', taxAmount: '',
   taxableAmount: '', gstRatePercent: '',
@@ -37,7 +39,10 @@ const emptyExpense = {
 /**
  * Create / edit a Voucher (Step 1.11). Two formats:
  *  • PURCHASE — from a payment-pending Vendor Invoice (no payment captured here).
- *  • EXPENSE — direct company expense (category + amounts, no invoice/PO/GRN).
+ *  • EXPENSE — company expense / direct bill (category + amounts, never an
+ *    invoice). Expense Type: Direct (no PO/GRN), Against PO (no GRN) or Against
+ *    GRN (a GRN raised without a PO). A linked bill takes its vendor from that
+ *    PO / GRN; the backend enforces every rule (expenseLink.js).
  */
 const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
   const { enqueueSnackbar } = useSnackbar();
@@ -65,6 +70,28 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' }, { skip: !open || !isExpense });
   const partyOptions = partiesRes?.data || [];
 
+  // Expense Against PO / GRN: only the documents the backend would accept now.
+  const linkKind = ef.expenseType === 'AGAINST_PO' ? 'PO' : ef.expenseType === 'AGAINST_GRN' ? 'GRN' : null;
+  const { data: linkRes, isFetching: linksLoading } = useGetVoucherExpenseLinksQuery(
+    { type: linkKind, ...(isEdit ? { excludeVoucherId: voucher._id } : {}) },
+    { skip: !open || !isExpense || !linkKind, refetchOnMountOrArgChange: true },
+  );
+  const linkOptions = useMemo(() => {
+    const list = linkRes?.data || [];
+    // Editing: keep the voucher's own PO / GRN selectable even if the list has moved on.
+    if (isEdit && linkKind === 'PO' && voucher.poId && !list.some((o) => o._id === voucher.poId)) {
+      return [{ _id: voucher.poId, poNumber: voucher.poNumber, vendorId: voucher.vendorId, vendorName: voucher.vendorName }, ...list];
+    }
+    if (isEdit && linkKind === 'GRN' && voucher.grnId && !list.some((o) => o._id === voucher.grnId)) {
+      return [{ _id: voucher.grnId, grnNumber: voucher.grnNumbers?.[0], vendorId: voucher.vendorId, vendorName: voucher.vendorName }, ...list];
+    }
+    return list;
+  }, [linkRes, isEdit, linkKind, voucher]);
+  const linkedDoc = useMemo(() => {
+    const id = linkKind === 'PO' ? ef.poId : linkKind === 'GRN' ? ef.grnId : '';
+    return (id && linkOptions.find((o) => o._id === id)) || null;
+  }, [linkKind, ef.poId, ef.grnId, linkOptions]);
+
   const [createVoucher, { isLoading: creating }] = useCreateVoucherMutation();
   const [updateVoucher, { isLoading: updating }] = useUpdateVoucherMutation();
   const [postVoucher, { isLoading: posting }] = usePostVoucherMutation();
@@ -77,6 +104,7 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
       setVoucherType(voucher.voucherType || 'PURCHASE');
       setPf({ invoiceId: voucher.invoiceId || '', voucherDate: voucher.voucherDate ? voucher.voucherDate.slice(0, 10) : '', remarks: voucher.remarks || '' });
       setEf({
+        expenseType: expenseTypeOf(voucher) || 'DIRECT', poId: voucher.poId || '', grnId: voucher.grnId || '',
         voucherDate: voucher.voucherDate ? voucher.voucherDate.slice(0, 10) : '',
         expenseCategory: voucher.expenseCategory || '', vendorId: voucher.vendorId || '', partyName: voucher.partyName || voucher.vendorName || '',
         expenseInvoiceNo: voucher.expenseInvoiceNo || '', expenseInvoiceDate: voucher.expenseInvoiceDate ? voucher.expenseInvoiceDate.slice(0, 10) : '',
@@ -105,15 +133,36 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
 
   const setE = (k) => (e) => setEf((f) => ({ ...f, [k]: e.target.value }));
 
+  // A PO / GRN bill's vendor comes from that document — switching type drops
+  // the previous document and its vendor.
+  const changeExpenseType = (e) => {
+    const expenseType = e.target.value;
+    setEf((f) => (f.expenseType === expenseType ? f : { ...f, expenseType, poId: '', grnId: '', vendorId: '', partyName: '' }));
+  };
+  const pickLinkedDoc = (doc) => setEf((f) => {
+    if (!doc) return { ...f, poId: '', grnId: '', vendorId: '', partyName: '' };
+    const next = { ...f, vendorId: doc.vendorId || '', partyName: doc.vendorName || '' };
+    if (linkKind === 'PO') return { ...next, poId: doc._id, paymentTerms: f.paymentTerms || doc.paymentTerms || '' };
+    // The GRN's supplier invoice is usually the bill being passed.
+    return {
+      ...next, grnId: doc._id,
+      expenseInvoiceNo: f.expenseInvoiceNo || doc.invoiceNumber || '',
+      expenseInvoiceDate: f.expenseInvoiceDate || (doc.invoiceDate ? doc.invoiceDate.slice(0, 10) : ''),
+    };
+  });
+
   // When a taxable amount + GST rate are given, GST is derived (preview only —
   // the backend always computes the authoritative amount the same way).
   const gstAmount = useMemo(() => (
     (num(ef.taxableAmount) || num(ef.gstRatePercent)) ? Math.round(num(ef.taxableAmount) * num(ef.gstRatePercent)) / 100 : num(ef.taxAmount)
   ), [ef.taxableAmount, ef.gstRatePercent, ef.taxAmount]);
-  const expenseTotal = useMemo(() => (
+  // Bill value before TDS / advance — what the backend compares with the PO value.
+  const grossBill = useMemo(() => (
     num(ef.basicValue) + num(ef.freightCharges) + num(ef.packingForwardingCharges) + num(ef.otherCharges)
-    + gstAmount + num(ef.tcsAmount) - num(ef.tdsAmount) - num(ef.advanceAmount)
+    + gstAmount + num(ef.tcsAmount)
   ), [ef, gstAmount]);
+  const expenseTotal = grossBill - num(ef.tdsAmount) - num(ef.advanceAmount);
+  const overPoValue = linkKind === 'PO' && linkedDoc?.remainingAmount != null && grossBill > linkedDoc.remainingAmount + 0.005;
 
   const handleFile = async (e) => {
     const f = e.target.files?.[0]; e.target.value = '';
@@ -128,15 +177,24 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
 
   const buildPayload = () => {
     if (isExpense) {
-      if (!ef.expenseCategory) { enqueueSnackbar('Select an expense category', { variant: 'warning' }); return null; }
-      if (!ef.partyName.trim()) { enqueueSnackbar('Vendor / party name is required', { variant: 'warning' }); return null; }
-      if (ef.vendorId && !ef.expenseInvoiceNo.trim()) { enqueueSnackbar('Vendor Bill/Invoice No is required for a vendor-master bill', { variant: 'warning' }); return null; }
+      const warn = (msg) => { enqueueSnackbar(msg, { variant: 'warning' }); return null; };
+      if (linkKind === 'PO' && !ef.poId) return warn('Select the Purchase Order this expense is against');
+      if (linkKind === 'GRN' && !ef.grnId) return warn('Select the GRN this expense is against');
+      if (!ef.expenseCategory) return warn('Select an expense category');
+      if (!linkKind && !ef.partyName.trim()) return warn('Vendor / party name is required');
+      if (linkKind && !ef.expenseInvoiceNo.trim()) return warn(`Vendor Bill/Invoice No is required for an expense against a ${linkKind}`);
+      if (!linkKind && ef.vendorId && !ef.expenseInvoiceNo.trim()) return warn('Vendor Bill/Invoice No is required for a vendor-master bill');
+      if (overPoValue) return warn(`Bill value ${fmtINR(grossBill)} is above what is left on this PO (${fmtINR(linkedDoc.remainingAmount)})`);
       return {
         voucherType: 'EXPENSE',
+        expenseType: ef.expenseType,
+        poId: linkKind === 'PO' ? ef.poId : undefined,
+        grnId: linkKind === 'GRN' ? ef.grnId : undefined,
         voucherDate: ef.voucherDate || undefined,
         expenseCategory: ef.expenseCategory,
-        vendorId: ef.vendorId || undefined,
-        partyName: ef.partyName.trim(),
+        // null (not undefined) so an edit can also clear the vendor link.
+        vendorId: ef.vendorId || null,
+        partyName: ef.partyName.trim() || undefined,
         expenseInvoiceNo: ef.expenseInvoiceNo.trim() || undefined,
         expenseInvoiceDate: ef.expenseInvoiceDate || undefined,
         invoiceDocument: invoiceDoc ? { fileUrl: invoiceDoc.fileUrl, fileName: invoiceDoc.fileName } : undefined,
@@ -212,17 +270,81 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
           <FormLabel sx={{ fontSize: '0.8rem', fontWeight: 700 }}>Voucher Type *</FormLabel>
           <RadioGroup row value={voucherType} onChange={(e) => setVoucherType(e.target.value)}>
             <FormControlLabel value="PURCHASE" control={<Radio />} label="Purchase Voucher" disabled={isEdit} />
-            <FormControlLabel value="EXPENSE" control={<Radio />} label="Expense / Direct Bill (Without PO · GRN)" disabled={isEdit} />
+            <FormControlLabel value="EXPENSE" control={<Radio />} label="Expense / Direct Bill" disabled={isEdit} />
           </RadioGroup>
           {isExpense && (
             <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
-              Office, service, repair, maintenance or other vendor bills without a PO or GRN.
+              Office, service, repair, maintenance or other vendor bills — not from a Vendor Invoice.
             </Typography>
           )}
         </FormControl>
 
         {isExpense ? (
           <Grid container spacing={2}>
+            <Grid item xs={12} sm={linkKind ? 6 : 12}>
+              <TextField select fullWidth size="small" label="Expense Type *" value={ef.expenseType} onChange={changeExpenseType}
+                helperText={expenseTypeMeta(ef.expenseType).help} inputProps={{ 'data-testid': 'expense-type' }}>
+                {EXPENSE_TYPES.map((t) => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}
+              </TextField>
+            </Grid>
+            {linkKind && (
+              <Grid item xs={12} sm={6}>
+                <Autocomplete
+                  size="small"
+                  options={linkOptions}
+                  loading={linksLoading}
+                  value={linkedDoc}
+                  onChange={(_e, v) => pickLinkedDoc(v)}
+                  isOptionEqualToValue={(o, v) => o._id === v._id}
+                  getOptionLabel={(o) => `${(linkKind === 'PO' ? o.poNumber : o.grnNumber) || '—'} · ${o.vendorName || '—'}`}
+                  renderOption={(props, o) => (
+                    <li {...props} key={o._id}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" fontWeight={700} sx={{ color: 'text.primary' }}>
+                          {linkKind === 'PO' ? o.poNumber : o.grnNumber}
+                          <Typography component="span" variant="caption" color="text.secondary"> · {fmtDate(linkKind === 'PO' ? o.poDate : o.grnDate)}</Typography>
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" component="div" noWrap>
+                          {o.vendorName || '—'}
+                          {linkKind === 'PO'
+                            ? ` · PO value ${fmtINR(o.grandTotal)}${o.expensedAmount ? ` · left ${fmtINR(o.remainingAmount)}` : ''}`
+                            : `${o.invoiceNumber ? ` · Bill ${o.invoiceNumber}` : ''} · QC ${o.qcStatus || '—'}`}
+                        </Typography>
+                      </Box>
+                    </li>
+                  )}
+                  noOptionsText={linkKind === 'PO'
+                    ? 'No approved PO without a GRN or vendor invoice'
+                    : 'No completed GRN raised without a PO is waiting for a bill'}
+                  renderInput={(params) => (
+                    <TextField {...params} label={linkKind === 'PO' ? 'Purchase Order *' : 'GRN (raised without PO) *'}
+                      inputProps={{ ...params.inputProps, 'data-testid': 'expense-link' }}
+                      helperText={linkKind === 'PO' ? 'Approved POs with no GRN and no vendor invoice' : 'Completed GRNs raised without a PO, not yet billed'} />
+                  )}
+                />
+              </Grid>
+            )}
+            {linkKind && linkedDoc && (
+              <Grid item xs={12}>
+                <Box data-testid="expense-link-summary" sx={{ p: 1.5, borderRadius: '10px', bgcolor: '#f1f5f9', display: 'flex', flexWrap: 'wrap', columnGap: 3, rowGap: 0.5 }}>
+                  <Typography variant="caption" color="text.secondary">{linkKind} <b>{linkKind === 'PO' ? linkedDoc.poNumber : linkedDoc.grnNumber}</b></Typography>
+                  <Typography variant="caption" color="text.secondary">Vendor <b>{linkedDoc.vendorName || '—'}</b></Typography>
+                  {linkKind === 'PO' ? (
+                    <>
+                      {linkedDoc.grandTotal != null && <Typography variant="caption" color="text.secondary">PO value <b>{fmtINR(linkedDoc.grandTotal)}</b></Typography>}
+                      {linkedDoc.expensedAmount > 0 && <Typography variant="caption" color="text.secondary">Already billed <b>{fmtINR(linkedDoc.expensedAmount)}</b></Typography>}
+                      {linkedDoc.remainingAmount != null && <Typography variant="caption" color="text.secondary">Left to bill <b>{fmtINR(linkedDoc.remainingAmount)}</b></Typography>}
+                    </>
+                  ) : (
+                    <>
+                      {linkedDoc.grnDate && <Typography variant="caption" color="text.secondary">Received <b>{fmtDate(linkedDoc.grnDate)}</b></Typography>}
+                      {linkedDoc.totalValue > 0 && <Typography variant="caption" color="text.secondary">GRN value <b>{fmtINR(linkedDoc.totalValue)}</b></Typography>}
+                      {linkedDoc.qcStatus && <Typography variant="caption" color="text.secondary">QC <b>{linkedDoc.qcStatus}</b></Typography>}
+                    </>
+                  )}
+                </Box>
+              </Grid>
+            )}
             <Grid item xs={12} sm={4}>
               <DateInputDDMMYYYY fullWidth size="small" label="Voucher Date" value={ef.voucherDate} onChange={(v) => setEf((f) => ({ ...f, voucherDate: v }))} />
             </Grid>
@@ -232,6 +354,12 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
               </TextField>
             </Grid>
             <Grid item xs={12} sm={4}>
+              {linkKind ? (
+                <TextField fullWidth size="small" label={`Vendor (from ${linkKind})`} value={ef.partyName}
+                  placeholder={`Select a ${linkKind} first`} InputLabelProps={{ shrink: true }}
+                  InputProps={{ readOnly: true }} inputProps={{ 'data-testid': 'expense-vendor' }}
+                  helperText={`Always the ${linkKind}'s vendor`} />
+              ) : (
               <Autocomplete
                 size="small" freeSolo
                 options={partyOptions}
@@ -245,9 +373,10 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
                 onInputChange={(_e, v, reason) => { if (reason === 'input') setEf((f) => ({ ...f, vendorId: '', partyName: v })); }}
                 renderInput={(params) => <TextField {...params} label="Vendor / Party Name *" helperText="Pick from the vendor master, or type a one-off party name" />}
               />
+              )}
             </Grid>
             <Grid item xs={12} sm={4}>
-              <TextField fullWidth size="small" label={ef.vendorId ? 'Vendor Bill/Invoice No *' : 'Vendor Bill/Invoice No (optional)'}
+              <TextField fullWidth size="small" label={(ef.vendorId || linkKind) ? 'Vendor Bill/Invoice No *' : 'Vendor Bill/Invoice No (optional)'}
                 value={ef.expenseInvoiceNo} onChange={setE('expenseInvoiceNo')} />
             </Grid>
             <Grid item xs={12} sm={4}>
@@ -297,6 +426,13 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
                 <Amt label="TOTAL AMOUNT PAYABLE" value={expenseTotal} strong />
               </Box>
             </Grid>
+            {overPoValue && (
+              <Grid item xs={12}>
+                <Alert severity="warning" data-testid="expense-over-po" sx={{ borderRadius: '10px' }}>
+                  Bill value before TDS / advance ({fmtINR(grossBill)}) is above what is left on PO {linkedDoc.poNumber} ({fmtINR(linkedDoc.remainingAmount)}).
+                </Alert>
+              </Grid>
+            )}
             <Grid item xs={12}><TextField fullWidth size="small" multiline minRows={2} label="Remarks" value={ef.remarks} onChange={setE('remarks')} /></Grid>
           </Grid>
         ) : (

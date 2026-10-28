@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  Send, Search, CheckCircle2, XCircle, MailWarning, AlertTriangle, Paperclip, Eye, Download,
+  Send, Search, CheckCircle2, XCircle, MailWarning, AlertTriangle, Paperclip, FileText, Download, Eye,
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
@@ -19,7 +19,19 @@ import {
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import { poDisplayNumber } from './poMeta';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
+import PoItemsQuickViewDialog from './PoItemsQuickViewDialog';
 import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
+
+// Per-row PDF preview cell: last column, pinned to the table's right edge. The
+// row's hover/selected tints are translucent, so the opaque cell repaints them.
+const rowTint = (a) => (t) => `inset 1px 0 0 ${PFMS.line}, inset 0 0 0 100vmax ${alpha(t.palette.primary.main, a)}`;
+const previewCellSx = {
+  position: 'sticky', right: 0, zIndex: 1, width: 56, bgcolor: 'background.paper',
+  boxShadow: `inset 1px 0 0 ${PFMS.line}`,
+  '.MuiTableRow-hover:hover > &': { boxShadow: rowTint(0.04) },
+  '.Mui-selected > &': { boxShadow: rowTint(0.08) },
+  '.Mui-selected.MuiTableRow-hover:hover > &': { boxShadow: rowTint(0.12) },
+};
 
 const parseEmailList = (raw) => raw.split(',').map((e) => e.trim()).filter(Boolean);
 
@@ -125,6 +137,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
   const [result, setResult] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [previewPoId, setPreviewPoId] = useState('');
+  const [itemsPo, setItemsPo] = useState(null); // row eye → item-details popup
 
   const [bulkRelease, { isLoading: releasing }] = useBulkReleasePurchaseOrdersMutation();
   const [fetchPreview, { isLoading: previewLoading }] = useGetPoReleasePreviewMutation();
@@ -153,6 +166,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     setResult(null);
     setConfirmOpen(false);
     setPreviewPoId('');
+    setItemsPo(null);
     setPreviewMap(new Map());
     setPdfCache(new Map());
     setPdfPreviewPo(null);
@@ -332,7 +346,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
           {phase === 'select' && (
             <Box sx={{ ml: 'auto', display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <Button size="small" variant="outlined"
-                startIcon={pdfBusy === 'preview' ? <CircularProgress size={14} /> : <Eye size={15} />}
+                startIcon={pdfBusy === 'preview' ? <CircularProgress size={14} /> : <FileText size={15} />}
                 onClick={handlePreviewPdf} disabled={!selected.size || Boolean(pdfBusy) || releasing}
                 title={selected.size > 1 ? 'Previews the PO chosen in Email Preview' : undefined}>
                 Preview PDF
@@ -436,11 +450,12 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
                       <TableCell sx={pfmsTableHeadSx}>CC</TableCell>
                       <TableCell sx={pfmsTableHeadSx}>BCC</TableCell>
                       <TableCell sx={pfmsTableHeadSx}>Email Status</TableCell>
+                      <TableCell sx={{ ...previewCellSx, ...pfmsTableHeadSx, zIndex: 3 }} align="right">Preview</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {filtered.length === 0 && (
-                      <TableRow><TableCell colSpan={7}>
+                      <TableRow><TableCell colSpan={8}>
                         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
                           No POs are eligible for release (must be Approved and not yet released).
                         </Typography>
@@ -455,35 +470,36 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
                             <Checkbox checked={selected.has(po._id)} onChange={() => toggleOne(po._id)} />
                           </TableCell>
                           <TableCell>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, whiteSpace: 'nowrap' }}>
-                              <Typography variant="body2" fontWeight={700} color="primary.main">{poDisplayNumber(po)}</Typography>
-                              {/* The span takes the click when the button is disabled, so it must
-                                  not bubble to the row (which toggles the checkbox). */}
-                              {/* Tooltip to the right: closing the PDF returns focus to this
-                                  icon, and a tooltip below it would cover the next row's icon. */}
-                              <Tooltip title="Preview PO PDF" placement="right">
-                                <span onClick={(e) => e.stopPropagation()}>
-                                  <IconButton size="small" aria-label={`Preview PO PDF for ${poDisplayNumber(po)}`}
-                                    data-testid="bulk-release-row-preview" data-po-id={po._id}
-                                    disabled={Boolean(pdfBusy) || releasing}
-                                    onClick={() => openPdfPreview(po, `row:${po._id}`)}
-                                    // same tinted, outlined eye button as the Purchase Orders list
-                                    sx={(t) => ({
-                                      width: 26, height: 26, borderRadius: '6px', color: 'primary.main',
-                                      bgcolor: alpha(t.palette.primary.main, 0.08), border: `1px solid ${alpha(t.palette.primary.main, 0.3)}`,
-                                      '&:hover': { bgcolor: alpha(t.palette.primary.main, 0.16) },
-                                    })}>
-                                    {pdfBusy === `row:${po._id}` ? <CircularProgress size={14} /> : <Eye size={16} strokeWidth={2.2} />}
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                            </Box>
+                            <Typography variant="body2" fontWeight={700} color="primary.main" sx={{ whiteSpace: 'nowrap' }}>{poDisplayNumber(po)}</Typography>
                           </TableCell>
                           <TableCell>{po.vendorName || '—'}</TableCell>
                           <TableCell><RecipientCell label="To" emails={row?.to} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>
                           <TableCell><RecipientCell label="CC" emails={row?.cc} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>
                           <TableCell><RecipientCell label="BCC" emails={row?.bcc} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>
                           <TableCell><EmailStatusBadge status={row?.emailStatus} loading={rowLoading} /></TableCell>
+                          {/* This row's item details, no selection needed — last in the row and
+                              pinned right so it stays on screen when the table scrolls sideways. */}
+                          <TableCell align="right" sx={previewCellSx}>
+                            {/* The span takes the click when the button is disabled, so it must
+                                not bubble to the row (which toggles the checkbox). Tooltip to the
+                                left: closing the popup returns focus to this icon, and a tooltip
+                                below it would cover the next row's icon. */}
+                            <Tooltip title="View Item Details" placement="left">
+                              <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex' }}>
+                                <IconButton size="small" aria-label={`View item details for ${poDisplayNumber(po)}`}
+                                  data-testid="bulk-release-row-preview" data-po-id={po._id}
+                                  disabled={releasing}
+                                  onClick={() => setItemsPo(po)}
+                                  sx={(t) => ({
+                                    width: 30, height: 30, borderRadius: '6px', color: 'primary.main',
+                                    bgcolor: alpha(t.palette.primary.main, 0.08), border: `1px solid ${alpha(t.palette.primary.main, 0.3)}`,
+                                    '&:hover': { bgcolor: alpha(t.palette.primary.main, 0.16) },
+                                  })}>
+                                  <Eye size={16} strokeWidth={2.2} />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
                         </TableRow>
                       );
                     })}
@@ -601,6 +617,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
       </Dialog>
 
       <PurchaseOrderPdfPreview open={Boolean(pdfPreviewPo)} po={pdfPreviewPo} onClose={() => setPdfPreviewPo(null)} />
+      <PoItemsQuickViewDialog po={itemsPo} onClose={() => setItemsPo(null)} />
 
       {/* Confirmation before anything is actually sent */}
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>

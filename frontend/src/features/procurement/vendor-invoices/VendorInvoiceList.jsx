@@ -1,15 +1,15 @@
-import React, { useCallback, useState } from 'react';
+import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
+  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
   Chip, CircularProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { alpha } from '@mui/material/styles';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, FileDown,
+  Search, Plus, Eye, Pencil, CheckCircle2, FileDown,
   ReceiptText, Hourglass, BadgeCheck, Wallet, CheckCheck, Banknote,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -31,21 +31,17 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 // One invoice's live (non-cancelled) voucher, for the list's Voucher column —
 // a small self-contained cell so each row fetches only its own voucher via
 // the existing by-invoice endpoint (same one the Invoice Detail page already
-// uses), no new API surface. Reports the resolved voucher back to the list
-// via `onResolved` so the workflow chips below can filter on it too.
-const InvoiceVoucherCell = ({ row, onResolved }) => {
+// uses), no new API surface.
+const InvoiceVoucherCell = ({ row }) => {
   const relevant = ['PAYMENT_PENDING', 'PAYMENT_COMPLETED'].includes(row.invoiceStatus);
   const { data, isSuccess } = useGetVouchersByInvoiceQuery(row._id, { skip: !relevant });
   const live = (data?.data || []).find((x) => x.voucherStatus !== 'CANCELLED') || null;
-
-  React.useEffect(() => {
-    if (!relevant) { onResolved(row._id, null); return; }
-    if (isSuccess) onResolved(row._id, live);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relevant, isSuccess, live?._id, live?.voucherStatus, live?.approvalStatus]);
 
   if (!relevant) return <Typography variant="body2" color="text.disabled">—</Typography>;
   if (!isSuccess) return <CircularProgress size={14} />;
@@ -64,19 +60,18 @@ const InvoiceVoucherCell = ({ row, onResolved }) => {
 };
 
 // Combined invoice+voucher workflow quick filters. Each maps to a real,
-// existing server-side invoiceStatus value (no invented statuses); the ones
-// that need voucher-level detail additionally refine the current page's rows
-// using the voucher data the Voucher column cells resolve (see voucherMap
-// below) — since PAYMENT_PENDING is the one invoiceStatus a live voucher can
-// exist under, that server filter is always exact; the predicate only narrows
-// further within it.
+// existing server-side invoiceStatus value (no invented statuses). The ones
+// that also depend on the invoice's voucher (or on several statuses) are sent
+// as `workflow` and resolved by the server (backend vendor-invoice/
+// invoiceWorkflow.js), so the page, its pagination and the row count all
+// describe the same filtered set — they used to narrow only the current page.
 const WORKFLOW_CHIPS = [
   { id: 'ALL', label: 'All', serverStatus: '' },
-  { id: 'AWAITING_INVOICE', label: 'Awaiting Invoice Action', serverStatus: '', predicate: (r) => ['DRAFT', 'RECEIVED'].includes(r.invoiceStatus) },
-  { id: 'AWAITING_VOUCHER', label: 'Awaiting Voucher', serverStatus: 'PAYMENT_PENDING', predicate: (r, vm) => vm[r._id] === null },
-  { id: 'AWAITING_MD_APPROVAL', label: 'Awaiting MD Approval', serverStatus: 'PAYMENT_PENDING', predicate: (r, vm) => vm[r._id] && vm[r._id].approvalStatus === 'READY_FOR_MD_APPROVAL' },
-  { id: 'VOUCHER_POSTED', label: 'Voucher Posted / MD Approved', serverStatus: 'PAYMENT_PENDING', predicate: (r, vm) => vm[r._id] && vm[r._id].approvalStatus === 'MD_APPROVED' },
-  { id: 'PARTIALLY_PAID', label: 'Partially Paid', serverStatus: 'PAYMENT_PENDING', predicate: (r, vm) => vm[r._id]?.voucherStatus === 'PARTIALLY_PAID' },
+  { id: 'AWAITING_INVOICE', label: 'Awaiting Invoice Action', serverStatus: '', workflow: 'AWAITING_INVOICE' },
+  { id: 'AWAITING_VOUCHER', label: 'Awaiting Voucher', serverStatus: '', workflow: 'AWAITING_VOUCHER' },
+  { id: 'AWAITING_MD_APPROVAL', label: 'Awaiting MD Approval', serverStatus: '', workflow: 'AWAITING_MD_APPROVAL' },
+  { id: 'VOUCHER_POSTED', label: 'Voucher Posted / MD Approved', serverStatus: '', workflow: 'VOUCHER_POSTED' },
+  { id: 'PARTIALLY_PAID', label: 'Partially Paid', serverStatus: '', workflow: 'PARTIALLY_PAID' },
   { id: 'PAID_SHORT_CLOSED', label: 'Paid / Short Closed', serverStatus: 'PAYMENT_COMPLETED' },
   { id: 'REJECTED', label: 'Rejected', serverStatus: 'REJECTED' },
 ];
@@ -90,7 +85,6 @@ const VendorInvoiceList = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [from, setFrom] = useState(''); const [to, setTo] = useState('');
   const [workflowChip, setWorkflowChip] = useState('ALL');
-  const [voucherMap, setVoucherMap] = useState({}); // invoiceId -> voucher | null (resolved, no live voucher) | undefined (loading)
 
   const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
   const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
@@ -107,15 +101,6 @@ const VendorInvoiceList = () => {
   const anyFilterActive = Boolean(search || secondaryCount || workflowChip !== 'ALL');
   const clearAll = () => { resetSearch(); clearSecondary(); };
 
-  const handleVoucherResolved = useCallback((invoiceId, live) => {
-    setVoucherMap((m) => {
-      const prev = m[invoiceId];
-      if (prev === live) return m;
-      if (prev && live && prev._id === live._id && prev.voucherStatus === live.voucherStatus && prev.approvalStatus === live.approvalStatus) return m;
-      return { ...m, [invoiceId]: live };
-    });
-  }, []);
-
   const selectWorkflowChip = (chip) => {
     setWorkflowChip(chip.id);
     setStatusFilter(chip.serverStatus);
@@ -128,10 +113,13 @@ const VendorInvoiceList = () => {
   const [activeInv, setActiveInv] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
+  const activeChip = WORKFLOW_CHIPS.find((c) => c.id === workflowChip);
   const queryArgs = {
     page: paginationModel.page + 1, limit: paginationModel.pageSize, sort: '-createdAt',
     search: search || undefined, vendorId: vendorFilter?._id || undefined, invoiceStatus: statusFilter || undefined,
+    workflow: activeChip?.workflow || undefined,
     ...(from ? { 'invoiceDate[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'invoiceDate[lte]': `${to}T23:59:59` } : {}),
   };
   const { data, isLoading, isFetching } = useGetVendorInvoicesQuery(queryArgs);
@@ -179,14 +167,17 @@ const VendorInvoiceList = () => {
     { field: 'netPayableAmount', headerName: 'NET PAYABLE', width: 125, align: 'right', headerAlign: 'right', renderCell: (p) => <Typography variant="body2" fontWeight={700} sx={{ color: '#b45309' }}>{fmtINR(p.value)}</Typography> },
     { field: 'invoiceStatus', headerName: 'STATUS', width: 160, renderCell: (p) => <InvoiceStatusChip status={p.value} /> },
     { field: 'voucher', headerName: 'VOUCHER', width: 160, sortable: false, filterable: false,
-      renderCell: (p) => <InvoiceVoucherCell row={p.row} onResolved={handleVoucherResolved} /> },
+      renderCell: (p) => <InvoiceVoucherCell row={p.row} /> },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center', renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.invoiceNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
-  const allRows = data?.data || [];
-  const activeChip = WORKFLOW_CHIPS.find((c) => c.id === workflowChip);
-  const rows = activeChip?.predicate ? allRows.filter((r) => activeChip.predicate(r, voucherMap)) : allRows;
+  const rows = data?.data || [];
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
@@ -290,18 +281,13 @@ const VendorInvoiceList = () => {
             sx={{ fontWeight: 600 }}
           />
         ))}
-        {activeChip?.predicate && (
-          <Typography variant="caption" color="text.secondary" sx={{ ml: 1, alignSelf: 'center' }}>
-            Refines the current page by voucher status — widen the page size above to see more matches.
-          </Typography>
-        )}
       </Paper>
 
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={rows} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
+          {...rowNav.gridProps} {...rowActionsGridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
@@ -312,6 +298,19 @@ const VendorInvoiceList = () => {
 
       <VendorInvoiceFormDialog open={formOpen} invoice={editInv} onClose={() => { setFormOpen(false); setEditInv(null); }} />
       <VendorInvoiceApprovalDialog open={approvalOpen} invoice={activeInv} onClose={() => { setApprovalOpen(false); setActiveInv(null); }} />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="Vendor Invoice Details" number={quickRow?.invoiceNumber}
+        status={quickRow ? <InvoiceStatusChip status={quickRow.invoiceStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'Invoice Date', value: fmtDate(quickRow.invoiceDate) },
+          { label: 'GRN', value: (quickRow.grnNumbers?.length ? quickRow.grnNumbers : [quickRow.grnNumber]).filter(Boolean).join(', ') },
+          { label: 'PO', value: quickRow.poNumber },
+          { label: 'Invoice Amt', value: fmtINR(quickRow.invoiceAmount) },
+          { label: 'Advance', value: fmtINR(quickRow.advancePaid) },
+          { label: 'Net Payable', value: fmtINR(quickRow.netPayableAmount) },
+        ] : []}
+        openFullLabel="Open full invoice" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

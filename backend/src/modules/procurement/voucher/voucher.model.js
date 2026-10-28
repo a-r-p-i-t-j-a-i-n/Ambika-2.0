@@ -36,6 +36,20 @@ export const VOUCHER_TYPE = {
   EXPENSE:  'EXPENSE',
 };
 
+// What an EXPENSE voucher is raised against. Only DIRECT existed before, so an
+// expense voucher with no expenseType reads as DIRECT (see expenseTypeOf).
+export const EXPENSE_TYPE = {
+  DIRECT:      'DIRECT',      // without PO & GRN
+  AGAINST_PO:  'AGAINST_PO',  // existing PO, no GRN
+  AGAINST_GRN: 'AGAINST_GRN', // existing GRN raised without a PO
+};
+export const LINKED_EXPENSE_TYPES = [EXPENSE_TYPE.AGAINST_PO, EXPENSE_TYPE.AGAINST_GRN];
+
+/** Effective expense type of a voucher (null for purchase vouchers). */
+export const expenseTypeOf = (v) => (
+  v?.voucherType === 'EXPENSE' ? (v.expenseType || EXPENSE_TYPE.DIRECT) : null
+);
+
 // Expense voucher categories (master list).
 export const EXPENSE_CATEGORY = [
   'Computer Repair', 'Printer Repair', 'Stationery', 'Travel', 'Electricity',
@@ -52,7 +66,13 @@ const voucherSchema = new Schema({
   // Purchase (from invoice) vs Expense (direct). Existing records default PURCHASE.
   voucherType: { type: String, enum: Object.values(VOUCHER_TYPE), default: VOUCHER_TYPE.PURCHASE, index: true },
 
+  // EXPENSE only: DIRECT / AGAINST_PO / AGAINST_GRN. null on purchase vouchers
+  // and on expense vouchers saved before the field existed (= DIRECT).
+  expenseType: { type: String, enum: [...Object.values(EXPENSE_TYPE), null], default: null },
+
   // ── Linkage (Invoice → QC/GRN/PO → Vendor). invoiceId only for PURCHASE. ──
+  // An AGAINST_PO expense sets poId/poNumber; an AGAINST_GRN expense sets
+  // grnId + grnIds/grnNumbers (one GRN). Both take the vendor from that document.
   invoiceId:     { type: Schema.Types.ObjectId, ref: 'VendorInvoice', index: true },
   invoiceNumber: { type: String, trim: true, index: true },
   vendorId:      { type: Schema.Types.ObjectId, ref: 'Party', index: true },
