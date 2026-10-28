@@ -111,8 +111,36 @@ const MY_FILTERS = [
 ];
 
 const MyTasks = () => {
-  const { data, isLoading } = useGetMyFmsTasksQuery(undefined, { pollingInterval: 60_000 });
-  const tasks = data?.data || [];
+  // Poll so reassignments and newly-arrived items show without a refresh.
+  const { data, isLoading, isError, refetch } = useGetMyFmsTasksQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true, refetchOnMountOrArgChange: true });
+  const openTask = useOpenTask();
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('actionable');
+  const [sortBy, setSortBy] = useState('due');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
+  const tasks = useMemo(() => data?.data || [], [data]);
+  const counts = useMemo(() => Object.fromEntries(MY_FILTERS.map((f) => [f.key, tasks.filter(f.match).length])), [tasks]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const f = MY_FILTERS.find((x) => x.key === filter) || MY_FILTERS[0];
+    const list = tasks.filter((t) => f.match(t) && (!q || haystack(t).includes(q)));
+    const due = (t) => new Date(t.status === 'OPEN' ? (t.plannedAt || '9999-12-31') : t.completedAt || 0).getTime();
+    return [...list].sort((a, b) => {
+      if (sortBy === 'item') return (a.entityRef || '').localeCompare(b.entityRef || '');
+      if (sortBy === 'step') return (a.sequence || 0) - (b.sequence || 0) || (a.entityRef || '').localeCompare(b.entityRef || '');
+      return filter === 'done' ? due(b) - due(a) : due(a) - due(b) || new Date(a.openedAt) - new Date(b.openedAt);
+    });
+  }, [tasks, search, filter, sortBy]);
+
+  const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+
+  if (isLoading) return <Skeleton variant="rounded" height={360} />;
+  if (isError) {
+    return <Empty icon={<AlertTriangle size={36} />} title="Could not load your tasks" action={<Button size="small" sx={{ mt: 1 }} onClick={refetch}>Try again</Button>} />;
+  }
+
   return (
     <>
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
