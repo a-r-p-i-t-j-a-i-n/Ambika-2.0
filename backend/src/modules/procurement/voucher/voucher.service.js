@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import VendorVoucher, { VOUCHER_STATUS, VOUCHER_TYPE } from './voucher.model.js';
+import VendorVoucher, { VOUCHER_STATUS, VOUCHER_TYPE, EXPENSE_TYPE, LINKED_EXPENSE_TYPES, expenseTypeOf } from './voucher.model.js';
+import {
+  resolveExpenseLink, expenseLinkConflictAfterWrite, grossBillAmount, listExpenseLinkOptions, EMPTY_EXPENSE_LINK,
+} from './expenseLink.js';
 import VendorInvoice, { INVOICE_STATUS } from '../vendor-invoice/vendorInvoice.model.js';
 import Party from '../../clients/party.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
@@ -182,22 +185,36 @@ export const voucherService = {
     return voucher;
   },
 
-  // ── EXPENSE — direct company expense / Direct Bill Passing (no PO/GRN/invoice). ──
+  // ── EXPENSE — Direct Bill Passing: direct (no PO/GRN), against a PO (no GRN)
+  //    or against a GRN raised without a PO (see expenseLink.js). Never an invoice. ──
   async createExpense(data, user) {
     if (!data.expenseCategory) throw new AppError('Expense category is required', 400);
-    const { vendorId, vendorName } = await resolveExpenseVendor(data);
-    await assertNoDuplicateBill(vendorId, data.expenseInvoiceNo);
+    const expenseType = data.expenseType || EXPENSE_TYPE.DIRECT;
+    const linked = LINKED_EXPENSE_TYPES.includes(expenseType);
     const taxAmount = resolveExpenseTax(data);
+    let vendorId; let vendorName; let link = {}; let linkLabel = '';
+    if (linked) {
+      if (!data.expenseInvoiceNo?.trim()) throw new AppError('Vendor Bill/Invoice No is required for an expense against a PO or GRN', 400);
+      const r = await resolveExpenseLink({ ...data, expenseType }, { gross: grossBillAmount({ ...data, taxAmount }), requestedVendorId: data.vendorId });
+      ({ vendorId, vendorName } = r.vendor);
+      link = r.link; linkLabel = r.label;
+    } else {
+      ({ vendorId, vendorName } = await resolveExpenseVendor(data));
+    }
+    await assertNoDuplicateBill(vendorId, data.expenseInvoiceNo);
     const total = computeExpenseTotal({ ...data, taxAmount });
     const voucherNumber = await generateExpenseVoucherNumber(data.voucherDate || new Date());
 
     const voucher = await VendorVoucher.create({
       voucherNumber,
       voucherType: VOUCHER_TYPE.EXPENSE,
+      expenseType,
+      ...link,
       voucherDate: data.voucherDate || new Date(),
       vendorId,
       vendorName: vendorName || data.partyName || '', // mirror so list search/display works
-      partyName: data.partyName || vendorName || '',
+      // A linked bill's party IS the PO / GRN vendor.
+      partyName: linked ? vendorName : (data.partyName || vendorName || ''),
       expenseCategory: data.expenseCategory,
       expenseInvoiceNo: data.expenseInvoiceNo || '',
       expenseInvoiceDate: data.expenseInvoiceDate || null,
@@ -226,9 +243,23 @@ export const voucherService = {
       voucherStatus: VOUCHER_STATUS.DRAFT,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `Expense voucher created (${data.expenseCategory})`, actorId: user?._id }],
+      activityTimeline: [{ action: 'CREATE', description: `Expense voucher created (${data.expenseCategory})${linkLabel ? ` against ${linkLabel}` : ''}`, actorId: user?._id }],
     });
+    if (linked) {
+      // A concurrent request may have taken the same PO / GRN in between — undo
+      // this one (never shown to anyone yet) rather than keep both.
+      const conflict = await expenseLinkConflictAfterWrite(voucher);
+      if (conflict) {
+        await VendorVoucher.deleteOne({ _id: voucher._id });
+        throw new AppError(conflict, 409);
+      }
+    }
     return voucher;
+  },
+
+  /** PO / GRN picker options for an expense voucher (only what can be linked now). */
+  async getExpenseLinkOptions(query) {
+    return listExpenseLinkOptions(query);
   },
 
   async getAll(query) {
@@ -287,14 +318,44 @@ export const voucherService = {
     if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) throw new AppError('Only draft vouchers can be edited', 400);
     // Never accept payment/status mutations here — those belong to Step 1.13.
     const { paidAmount, balanceAmount, voucherStatus, ...rest } = data;
-    // Expense vouchers: re-resolve the vendor link, re-check for a duplicate
-    // bill number, and re-derive the GST amount from the (possibly edited) data.
+    let linked = false;
+    let before = null;
+    // Expense vouchers: re-resolve the vendor / PO / GRN link, re-check for a
+    // duplicate bill number, and re-derive the GST amount from the edited data.
     if (v.voucherType === VOUCHER_TYPE.EXPENSE) {
-      const { vendorId, vendorName } = await resolveExpenseVendor({ ...v.toObject(), ...rest });
+      const wasLinked = LINKED_EXPENSE_TYPES.includes(expenseTypeOf(v));
+      const expenseType = rest.expenseType || expenseTypeOf(v);
+      linked = LINKED_EXPENSE_TYPES.includes(expenseType);
+      const merged = { ...v.toObject(), ...rest, expenseType };
+      rest.taxAmount = resolveExpenseTax(merged);
+      let vendorId; let vendorName;
+      if (linked) {
+        if (!String(merged.expenseInvoiceNo || '').trim()) throw new AppError('Vendor Bill/Invoice No is required for an expense against a PO or GRN', 400);
+        // Only a vendor the client actually sent is compared — the stored one
+        // belongs to the previous link.
+        const r = await resolveExpenseLink(merged, {
+          excludeId: v._id, gross: grossBillAmount({ ...merged, taxAmount: rest.taxAmount }), requestedVendorId: rest.vendorId,
+        });
+        ({ vendorId, vendorName } = r.vendor);
+        Object.assign(rest, r.link, { partyName: vendorName });
+      } else {
+        // Leaving a PO / GRN link drops its vendor unless a new one was picked.
+        if (wasLinked && rest.vendorId === undefined) merged.vendorId = null;
+        ({ vendorId, vendorName } = await resolveExpenseVendor(merged));
+        Object.assign(rest, EMPTY_EXPENSE_LINK);
+      }
       await assertNoDuplicateBill(vendorId, rest.expenseInvoiceNo ?? v.expenseInvoiceNo, v._id);
+      rest.expenseType = expenseType;
       rest.vendorId = vendorId;
       rest.vendorName = vendorName || rest.partyName || v.partyName || '';
-      rest.taxAmount = resolveExpenseTax({ ...v.toObject(), ...rest });
+      if (linked) {
+        before = Object.fromEntries(
+          [...Object.keys(rest), 'totalAmountPayable', 'netPayableAmount', 'balanceAmount'].map((k) => [k, v.get(k)]),
+        );
+      }
+    } else {
+      // Purchase vouchers keep the vendor / PO / GRN copied from their invoice.
+      ['vendorId', 'expenseType', 'poId', 'grnId'].forEach((k) => delete rest[k]);
     }
     Object.assign(v, rest);
     // Expense vouchers: recompute the total from the (possibly edited) amounts.
@@ -306,7 +367,18 @@ export const voucherService = {
     v.balanceAmount = round2(v.netPayableAmount);
     v.updatedBy = user?._id;
     v.activityTimeline.push({ action: 'UPDATE', description: 'Voucher updated', actorId: user?._id });
-    return v.save();
+    await v.save();
+    if (linked) {
+      // Same race re-check as create; a conflicting edit is rolled back.
+      const conflict = await expenseLinkConflictAfterWrite(v);
+      if (conflict) {
+        Object.assign(v, before);
+        v.activityTimeline.push({ action: 'UPDATE_REVERTED', description: `Edit reverted — ${conflict}`, actorId: user?._id });
+        await v.save();
+        throw new AppError(conflict, 409);
+      }
+    }
+    return v;
   },
 
   async remove(id, user) {
@@ -330,6 +402,9 @@ export const voucherService = {
   async post(id, data, user) {
     const v = await findOrThrow(id);
     if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) throw new AppError('Only draft vouchers can be posted', 400);
+    // A linked expense must still be the PO's / GRN's only payment path.
+    const linkConflict = await expenseLinkConflictAfterWrite(v);
+    if (linkConflict) throw new AppError(`Cannot post: ${linkConflict}`, 400);
 
     v.paidAmount = 0;
     v.balanceAmount = round2(v.netPayableAmount);

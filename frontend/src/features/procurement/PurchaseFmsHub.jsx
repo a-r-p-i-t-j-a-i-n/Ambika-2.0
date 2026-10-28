@@ -17,6 +17,10 @@ import {
   Banknote,
   Plus,
   ChevronDown,
+  PhoneCall,
+  Wallet,
+  ReceiptText,
+  FileSpreadsheet,
 } from "lucide-react";
 import { lazyWithRetry } from "../../utils/lazyWithRetry";
 import AppLoader from "../../components/AppLoader";
@@ -43,6 +47,7 @@ import VoucherFormDialog from "./vouchers/VoucherFormDialog";
 import { useHiddenSteps, stepKey } from "../../utils/embed";
 import { isMdUser } from "./approvals/mdApprovalMeta";
 import MdApprovalButton from "./approvals/MdApprovalButton";
+import StepWithQueue from "./components/StepWithQueue";
 
 // Each step reuses the existing, fully-functional screen for that module —
 // same components, APIs, tables, forms, filters and actions as before. This
@@ -80,6 +85,102 @@ const TallyEntryList = lazyWithRetry(
 const FinalPaymentList = lazyWithRetry(
   () => import("./final-payments/FinalPaymentList"),
 );
+// Steps whose rows are their own records (follow-ups, payments, …) get an
+// "Awaiting" tab listing the upstream records waiting there with no record of
+// their own yet (StepWithQueue → GET /procurement/step-queues/:queue). Each
+// queue row can open the step's existing create dialog with that record preset.
+const FollowUpFormDrawer = lazyWithRetry(() => import("./follow-ups/FollowUpFormDrawer"));
+const AdvancePaymentFormDialog = lazyWithRetry(
+  () => import("./advance-payments/AdvancePaymentFormDialog"),
+);
+const VendorInvoiceFormDialog = lazyWithRetry(
+  () => import("./vendor-invoices/VendorInvoiceFormDialog"),
+);
+const TallyEntryFormDialog = lazyWithRetry(() => import("./tally-entry/TallyEntryFormDialog"));
+const FinalPaymentFormDialog = lazyWithRetry(
+  () => import("./final-payments/FinalPaymentFormDialog"),
+);
+const FollowUpStep = () => {
+  const { data } = useGetFollowUpStatsQuery();
+  return (
+    <StepWithQueue
+      List={FollowUpList}
+      ownTotal={data?.data?.total}
+      queue="FOLLOW_UP"
+      listLabel="Follow-ups"
+      queueLabel="Awaiting First Follow-up"
+      title="Awaiting First Follow-up — Step 1.05"
+      subtitle="Released POs with no vendor follow-up logged yet"
+      action={{ label: "Start Follow-up", icon: <PhoneCall size={14} />, Dialog: FollowUpFormDrawer, props: (r) => ({ presetPo: r.record }) }}
+      gridProps={{ numberHeader: "PO No", dateHeader: "Released", showDue: true, amountHeader: "PO Value", emptyText: "Every released PO already has a follow-up" }}
+    />
+  );
+};
+const AdvancePaymentStep = () => {
+  const { data } = useGetAdvancePaymentStatsQuery();
+  return (
+    <StepWithQueue
+      List={AdvancePaymentList}
+      ownTotal={data?.data?.totalPayments}
+      queue="ADVANCE_PAYMENT"
+      listLabel="Advance Payments"
+      queueLabel="Awaiting Advance"
+      title="Awaiting Advance Payment — Step 1.07"
+      subtitle="Approved PIs ready for their advance — a PI sent to the MD waits for the MD's approval first"
+      action={{ label: "Record Advance", icon: <Wallet size={14} />, Dialog: AdvancePaymentFormDialog, props: (r) => ({ pi: r.record }) }}
+      gridProps={{ numberHeader: "PI No", dateHeader: "PI Date", amountHeader: "Balance", emptyText: "No PI is waiting for an advance" }}
+    />
+  );
+};
+const InvoicesPaymentsStep = () => {
+  const { data } = useGetVendorInvoiceStatsQuery();
+  return (
+    <StepWithQueue
+      List={VendorInvoiceList}
+      ownTotal={data?.data?.total}
+      queue="VENDOR_INVOICE"
+      listLabel="Invoices & Vouchers"
+      queueLabel="Awaiting Invoice"
+      title="Awaiting Vendor Invoice — Step 1.10"
+      subtitle="QC-accepted GRNs not yet (fully) invoiced. Invoices awaiting a voucher are under Invoices & Vouchers → Awaiting Voucher"
+      action={{ label: "Create Invoice", icon: <ReceiptText size={14} />, Dialog: VendorInvoiceFormDialog, props: (r) => ({ presetQc: r.record }) }}
+      gridProps={{ numberHeader: "GRN No", dateHeader: "QC Date", showAmount: false, emptyText: "No accepted material is waiting for an invoice" }}
+    />
+  );
+};
+const TallyEntryStep = () => {
+  const { data } = useGetTallyEntryStatsQuery();
+  return (
+    <StepWithQueue
+      List={TallyEntryList}
+      ownTotal={data?.data?.total}
+      queue="TALLY_ENTRY"
+      listLabel="Tally Entries"
+      queueLabel="Awaiting Tally Entry"
+      title="Awaiting Tally Entry — Step 1.12"
+      subtitle="Posted vouchers with no Tally entry yet"
+      action={{ label: "Create Tally Entry", icon: <FileSpreadsheet size={14} />, Dialog: TallyEntryFormDialog, props: (r) => ({ presetVoucher: r.record }) }}
+      gridProps={{ numberHeader: "Voucher No", dateHeader: "Posted", amountHeader: "Net Payable", emptyText: "Every posted voucher has a Tally entry" }}
+    />
+  );
+};
+const FinalPaymentStep = () => {
+  const { data } = useGetFinalPaymentStatsQuery();
+  return (
+    <StepWithQueue
+      List={FinalPaymentList}
+      ownTotal={data?.data?.total}
+      queue="FINAL_PAYMENT"
+      listLabel="Final Payments"
+      queueLabel="Awaiting Payment"
+      title="Awaiting Final Payment — Step 1.13"
+      subtitle="Tally-completed vouchers with a balance to pay — payment waits for the MD's approval of the voucher"
+      action={{ label: "Record Payment", icon: <Banknote size={14} />, Dialog: FinalPaymentFormDialog, props: (r) => ({ presetVoucher: r.record }) }}
+      gridProps={{ numberHeader: "Voucher No", dateHeader: "Posted", amountHeader: "Balance", emptyText: "No voucher has a balance to pay" }}
+    />
+  );
+};
+
 // MD Approval is not a workflow step (it never holds the steps back), so it
 // lives at its own hub slug outside the step rail — MD users only.
 const MdApprovalList = lazyWithRetry(() => import("./approvals/MdApprovalList"));
@@ -133,24 +234,24 @@ export const PURCHASE_FMS_STEPS = [
     label: "Purchase Orders",
     Component: PurchaseOrderList,
   },
-  { slug: "follow-ups", label: "Follow-ups", Component: FollowUpList },
+  { slug: "follow-ups", label: "Follow-ups", Component: FollowUpStep },
   { slug: "pi-forms", label: "PI Forms", Component: ProformaInvoiceList },
   {
     slug: "advance-payments",
     label: "Advance Payments",
-    Component: AdvancePaymentList,
+    Component: AdvancePaymentStep,
   },
   { slug: "grn", label: "GRN & QC", Component: GrnQcStep },
   {
     slug: "invoices-payments",
     label: "Vendor Invoices & Payments",
-    Component: VendorInvoiceList,
+    Component: InvoicesPaymentsStep,
   },
-  { slug: "tally-entries", label: "Tally Entries", Component: TallyEntryList },
+  { slug: "tally-entries", label: "Tally Entries", Component: TallyEntryStep },
   {
     slug: "final-payments",
     label: "Final Payments",
-    Component: FinalPaymentList,
+    Component: FinalPaymentStep,
   },
 ];
 
@@ -453,7 +554,10 @@ const PurchaseFmsHub = () => {
         />
       </Box>
 
-      <Box style={{ "--pfms-chrome": `${chromeHeight}px` }}>
+      {/* --pfms-hub-chrome stays the hub's own height, so a step that adds
+          its own tab bar (StepWithQueue, GrnQcStep) can set --pfms-chrome to
+          hub + tabs for the page under it. */}
+      <Box style={{ "--pfms-chrome": `${chromeHeight}px`, "--pfms-hub-chrome": `${chromeHeight}px` }}>
         <Suspense fallback={<AppLoader />}>
           <ActiveComponent />
         </Suspense>

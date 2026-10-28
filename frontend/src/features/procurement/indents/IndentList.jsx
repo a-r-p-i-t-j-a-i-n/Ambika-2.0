@@ -3,12 +3,12 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Tooltip, Chip, Pagination,
+  Menu, ListItemIcon, ListItemText, Chip, Pagination,
   Select, Checkbox, Divider,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, Send, CheckCircle2, CheckCheck,
+  Search, Plus, Eye, Pencil, Send, CheckCircle2, CheckCheck,
   FileText, FileCheck2, ClipboardList, Hourglass, BadgeCheck, Quote, ExternalLink, ShoppingBag,
   Columns3,
 } from 'lucide-react';
@@ -37,6 +37,9 @@ import { useStartServiceQc, canStartServiceQc } from './useStartServiceQc';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
+import IndentQuickViewDialog from './IndentQuickViewDialog';
 // Map the Step-1.2 statusDone (or legacy quoteStep) to a chip state.
 const quoteStateOf = (row) => {
   const sd = row.quoteComparativeStep?.statusDone;
@@ -207,6 +210,7 @@ const IndentList = () => {
   const [activeIndent, setActiveIndent] = useState(null);
 
   // Row action menu
+  const [quickIndent, setQuickIndent] = useState(null); // row whose quick view is open
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
 
@@ -255,12 +259,11 @@ const IndentList = () => {
     }
   };
 
-  // Which actions apply to this row's state. "View Detail" is no longer here:
-  // the row now carries an explicit View button (and the row itself is still
-  // clickable), so repeating it in the menu would be a third way to do one
-  // thing.
+  // Which actions apply to this row's state. View (the full indent page, also
+  // the row click) is always first, so every row has the same ⋮; the row's
+  // eye icon opens the quick view instead.
   const actionsFor = (r) => {
-    const a = [];
+    const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (r.approvalStatus === 'DRAFT') {
       a.push({ key: 'edit', label: 'Edit Draft', icon: <Pencil size={16} />, fn: () => onEdit(r) });
       a.push({ key: 'submit', label: 'Submit', icon: <Send size={16} />, fn: () => onSubmit(r) });
@@ -380,30 +383,10 @@ const IndentList = () => {
       valueGetter: (_v, row) => row.quotationApprovalStep?.actualAt || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value ? fmtDate(p.value) : '—'}</Typography> },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: 'Action', width: 118, sortable: false, filterable: false,
-      disableColumnMenu: true, hideable: false, align: 'right', headerAlign: 'right',
-      renderCell: (p) => {
-        const actions = actionsFor(p.row);
-        return (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, justifyContent: 'flex-end', width: '100%' }}>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={(e) => { e.stopPropagation(); onView(p.row); }}
-              sx={{ minWidth: 0, px: 1, py: 0.25, fontSize: '0.72rem', fontWeight: 700 }}
-            >
-              View
-            </Button>
-            {actions.length > 0 && (
-              <Tooltip title="More actions">
-                <IconButton size="small" aria-label={`More actions for ${p.row.indentNumber}`} onClick={(e) => openMenu(e, p.row)}>
-                  <MoreVertical size={16} />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Box>
-        );
-      } },
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.indentNumber}
+        onQuickView={() => setQuickIndent(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   // The summary row doubles as a status filter — clicking a tile applies the
@@ -613,6 +596,7 @@ const IndentList = () => {
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
           {...rowNav.gridProps}
+          {...rowActionsGridProps}
           pageSizeOptions={PAGE_SIZE_OPTIONS}
           checkboxSelection
           keepNonExistentRowsSelected
@@ -642,7 +626,7 @@ const IndentList = () => {
             '& .MuiDataGrid-cell': { display: 'flex', alignItems: 'center', py: 0.5 },
             '& .MuiDataGrid-row:nth-of-type(even)': { bgcolor: ALT_ROW_BG },
             '& .MuiDataGrid-row:nth-of-type(even):hover': { bgcolor: PFMS.surfaceAlt },
-          }, rowNavigationGridSx]}
+          }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
 
@@ -664,6 +648,7 @@ const IndentList = () => {
       <BulkIndentApprovalDialog open={bulkOpen} preselectedIds={rowSelectionModel} onClose={() => setBulkOpen(false)}
         onReceiveQuote={(ind) => { setBulkOpen(false); setActiveIndent(ind); setComparativeOpen(true); }} />
       <PurchaseOrderFormDrawer open={poDrawerOpen} presetIndent={poPresetIndent} onClose={() => { setPoDrawerOpen(false); setPoPresetIndent(null); }} />
+      <IndentQuickViewDialog indent={quickIndent} onClose={() => setQuickIndent(null)} />
     </Box>
   );
 };

@@ -1,6 +1,7 @@
 import Joi from 'joi';
 import { PAGINATION } from '../../../config/constants.js';
 import { INVOICE_STATUS } from './vendorInvoice.model.js';
+import { INVOICE_WORKFLOW_KEYS } from './invoiceWorkflow.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
@@ -97,6 +98,7 @@ export const invoiceQuerySchema = Joi.object({
   vendorId:      objectId,
   qcId:          objectId,
   invoiceStatus: Joi.string().valid(...Object.values(INVOICE_STATUS)),
+  workflow:      Joi.string().valid(...INVOICE_WORKFLOW_KEYS),
   populate:      Joi.string(),
   invoiceDate:   Joi.object().unknown(true),
 }).unknown(true);

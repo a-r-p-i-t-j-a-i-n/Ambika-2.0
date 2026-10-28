@@ -227,7 +227,7 @@ const MdApprovalList = () => {
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           disableColumnMenu
-          rowHeight={52}
+          rowHeight={50}
           columnHeaderHeight={44}
           localeText={{ noRowsLabel: anyFilterActive ? 'No approvals match these filters' : 'No MD approvals yet' }}
           getRowClassName={(p) => `mda-row-${String(p.row.approvalStatus).toLowerCase()} ${rowNav.gridProps.getRowClassName(p)}`}

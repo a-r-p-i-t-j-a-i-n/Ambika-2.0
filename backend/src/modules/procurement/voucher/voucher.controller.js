@@ -20,6 +20,11 @@ export const voucherController = {
     res.json(ApiResponse.ok('Vouchers for invoice', rows));
   }),
 
+  getExpenseLinkOptions: asyncHandler(async (req, res) => {
+    const rows = await voucherService.getExpenseLinkOptions(req.query);
+    res.json(ApiResponse.ok('Expense link options', rows));
+  }),
+
   getById: asyncHandler(async (req, res) => {
     const v = await voucherService.getById(req.params.id);
     res.json(ApiResponse.ok('Voucher retrieved', v));

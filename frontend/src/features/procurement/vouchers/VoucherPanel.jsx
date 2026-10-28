@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import { useSelector } from 'react-redux';
 import {
-  Box, Typography, Paper, Grid, Button, IconButton, CircularProgress, Chip,
+  Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Link,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField,
 } from '@mui/material';
 import {
@@ -20,7 +20,7 @@ import {
   useGetTallyEntriesByVoucherQuery,
   useGetFinalPaymentsByVoucherQuery,
 } from '../../../store/api/procurementApi';
-import { VoucherStatusChip, VoucherTypeChip, fmtINR, fmtDate } from './voucherMeta';
+import { VoucherStatusChip, VoucherTypeChip, fmtINR, fmtDate, expenseTypeOf, expenseTypeMeta } from './voucherMeta';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import StatusChip from '../components/StatusChip';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
@@ -38,15 +38,38 @@ import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 const scrollToId = (elId) => document.getElementById(elId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-const Field = ({ label, value }) => (
-  <Box sx={{ minWidth: 0 }}>
-    <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
-    <Typography sx={{ fontWeight: 600, color: 'text.primary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
+// ── Same spacing/typography scale as Indent, PO, GRN and Final Payment Detail
+// (SECTION_GAP/CARD_PAD/Field/FieldGrid/SectionCard), replacing the older
+// p:3 cards and the 7/5 Grid whose cards ended at different heights. ──
+const SECTION_GAP = 2;
+const CARD_PAD = 2;
+
+const Field = ({ label, value, sx }) => (
+  <Box sx={{ minWidth: 0, ...sx }}>
+    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: PFMS.sub, mb: 0.4 }}>{label}</Typography>
+    {/* div, not p: several values are chips */}
+    <Typography component="div" sx={{ fontSize: '0.86rem', fontWeight: 600, color: PFMS.ink, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{value ?? '—'}</Typography>
   </Box>
 );
+
+// Explicit column counts per breakpoint (not auto-fill, which leaves a lone
+// field on its own row): 2 in a half-width card, more when full width.
+const FieldGrid = ({ cols, children }) => (
+  <Box sx={{
+    display: 'grid', gap: 2,
+    gridTemplateColumns: Object.fromEntries(Object.entries(cols).map(([bp, n]) => [bp, `repeat(${n}, minmax(0, 1fr))`])),
+  }}>
+    {children}
+  </Box>
+);
+const HALF_CARD_COLS = { xs: 2, md: 4, lg: 2, xl: 4 };
+const FULL_ROW = { gridColumn: '1 / -1' };
+const SPAN_2 = { gridColumn: 'span 2' };
+
+// Column flex + height 100%: cards sharing a grid row end on the same line.
 const SectionCard = ({ icon, title, children }) => (
-  <Paper sx={{ ...pfmsCardSx, p: 3 }}>
-    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main', mb: 2 }}>{icon} {title}</Typography>
+  <Paper sx={{ ...pfmsCardSx, p: CARD_PAD, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, fontWeight: 700, fontSize: '0.92rem', color: 'primary.main' }}>{icon} {title}</Typography>
     {children}
   </Paper>
 );
@@ -228,25 +251,29 @@ const VoucherPanel = ({
 
   return (
     <Box>
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+      {/* Hero — same sizes as the other detail pages; the identity block has an
+          explicit flex basis so long names wrap inside it. */}
+      <Box sx={{ mb: SECTION_GAP, display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 1.5, flexWrap: 'wrap' }}>
         {showBackButton && (
-          <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}` }}><ArrowLeft size={20} /></IconButton>
+          <IconButton onClick={goBack} sx={{ bgcolor: PFMS.surface, border: `1px solid ${PFMS.line}`, width: 38, height: 38 }}><ArrowLeft size={18} /></IconButton>
         )}
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main' }}><Banknote size={24} /></Box>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800}>{v.voucherNumber}</Typography>
+        <Box sx={{ width: 38, height: 38, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha('#2563eb', 0.1), color: 'primary.main', flexShrink: 0 }}><Banknote size={20} /></Box>
+        <Box sx={{ flex: { xs: '1 1 200px', md: '1 1 360px' }, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: PFMS.ink }}>{v.voucherNumber}</Typography>
             <VoucherTypeChip type={v.voucherType} />
             <VoucherStatusChip status={v.voucherStatus} />
           </Box>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: PFMS.sub, overflowWrap: 'anywhere' }}>
             {isExpense
               ? `${v.expenseCategory || 'Expense'} · ${v.partyName || v.vendorName || '—'} · ${fmtDate(v.voucherDate)}`
               : `${v.vendorName} · Invoice ${v.invoiceNumber || '—'} · ${fmtDate(v.voucherDate)}`}
           </Typography>
         </Box>
-        <Box sx={{ flexGrow: 1 }} />
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Box sx={{
+          display: 'flex', gap: 1, flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' },
+          '& .MuiButtonBase-root': { flex: { xs: '1 1 auto', sm: '0 0 auto' } },
+        }}>
           <Button variant="outlined" startIcon={pdfLoading ? <CircularProgress size={16} /> : <Eye size={16} />} onClick={doPreviewPdf} disabled={pdfLoading}>{isLocked ? 'View Signed PDF' : 'Preview PDF'}</Button>
           <Button variant="outlined" startIcon={pdfLoading ? <CircularProgress size={16} /> : <Download size={16} />} onClick={doDownloadPdf} disabled={pdfLoading}>Download PDF</Button>
           {showInvoiceLink && v.invoiceId && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${v.invoiceId}`)}>View Invoice</Button>}
@@ -258,98 +285,111 @@ const VoucherPanel = ({
 
       <NextStepBanner step={nextStep} />
 
-      <FmsDoerCard entityType="VOUCHER" entityId={voucherId} />
-      {showWorkflowStepper && <WorkflowStepper steps={wfSteps} sx={{ mb: 3 }} />}
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={7}>
-          <SectionCard icon={<Wallet size={18} />} title="Payment Status">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
-              {v.finalPaymentStatus && v.finalPaymentStatus !== 'PENDING'
-                ? <PaymentStatusChip status={v.finalPaymentStatus} />
-                : <StatusChip status="PENDING" label="Pending Final Payment" />}
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, p: 1.5, borderRadius: '10px', bgcolor: alpha('#1d4ed8', 0.05) }}>
-              <Info size={16} color="#1d4ed8" style={{ marginTop: 2, flexShrink: 0 }} />
-              <Typography variant="body2" color="text.secondary">
-                This step only passes / approves the voucher — no payment is recorded here.
-                The actual vendor payment will be recorded in <b>Step 1.13 — Final Payment</b>.
-              </Typography>
-            </Box>
-            {v.remarks ? <Box sx={{ mt: 1.5 }}><Field label="Remarks" value={v.remarks} /></Box> : null}
-          </SectionCard>
-        </Grid>
+      <FmsDoerCard entityType="VOUCHER" entityId={voucherId} sx={{ mb: SECTION_GAP }} />
+      {showWorkflowStepper && <WorkflowStepper steps={wfSteps} sx={{ mb: SECTION_GAP }} />}
+      {/* One grid: two equal columns from lg (pairs share top and height),
+          full-width rows for Financials / MD Approval / Timeline. */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'repeat(2, minmax(0, 1fr))' }, gap: SECTION_GAP }}>
+        <SectionCard icon={<Wallet size={18} />} title="Payment Status">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
+            {v.finalPaymentStatus && v.finalPaymentStatus !== 'PENDING'
+              ? <PaymentStatusChip status={v.finalPaymentStatus} />
+              : <StatusChip status="PENDING" label="Pending Final Payment" />}
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, p: 1.5, borderRadius: '8px', bgcolor: alpha('#1d4ed8', 0.05) }}>
+            <Info size={16} color="#1d4ed8" style={{ marginTop: 2, flexShrink: 0 }} />
+            <Typography variant="body2" color="text.secondary">
+              This step only passes / approves the voucher — no payment is recorded here.
+              The actual vendor payment will be recorded in <b>Step 1.13 — Final Payment</b>.
+            </Typography>
+          </Box>
+          {v.remarks ? <Box sx={{ mt: 1.5 }}><Field label="Remarks" value={v.remarks} /></Box> : null}
+        </SectionCard>
 
-        <Grid item xs={12} md={5}>
-          <SectionCard icon={<Building2 size={18} />} title={isExpense ? 'Expense & Party' : 'Vendor & Linkage'}>
-            <Grid container spacing={2}>
-              {isExpense ? (
-                <>
-                  <Grid item xs={12}><Chip size="small" label="Without PO / GRN" sx={{ fontWeight: 700 }} /></Grid>
-                  <Grid item xs={6}><Field label="Party" value={v.partyName || v.vendorName || '—'} /></Grid>
-                  {v.vendorId && <Grid item xs={6}><Field label="Vendor (Master)" value={v.vendorName || '—'} /></Grid>}
-                  <Grid item xs={6}><Field label="Category" value={v.expenseCategory || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="Vendor Bill/Invoice No" value={v.expenseInvoiceNo || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="Bill Date" value={fmtDate(v.expenseInvoiceDate)} /></Grid>
-                  <Grid item xs={6}><Field label="Payment Terms" value={v.paymentTerms || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="Due Date" value={fmtDate(v.dueDate)} /></Grid>
-                  {v.invoiceDocument?.fileUrl && (
-                    <Grid item xs={12}>
-                      <Button size="small" variant="outlined" startIcon={<FileText size={15} />} href={resolveFileUrl(v.invoiceDocument.fileUrl)} target="_blank" rel="noopener">View Invoice File</Button>
-                    </Grid>
-                  )}
-                </>
-              ) : (
-                <>
-                  <Grid item xs={6}><Field label="Vendor" value={v.vendorName || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="Invoice" value={v.invoiceNumber || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="PO" value={v.poNumber || '—'} /></Grid>
-                  <Grid item xs={6}><Field label="Status" value={<VoucherStatusChip status={v.voucherStatus} />} /></Grid>
-                  <Grid item xs={12}><Field label={`GRN${(v.grnNumbers || []).length > 1 ? 's' : ''}`} value={(v.grnNumbers || []).join(', ') || '—'} /></Grid>
-                </>
+        <SectionCard icon={<Building2 size={18} />} title={isExpense ? 'Expense & Party' : 'Vendor & Linkage'}>
+          {isExpense ? (
+            <FieldGrid cols={HALF_CARD_COLS}>
+              <Box sx={FULL_ROW}><Chip size="small" label={expenseTypeMeta(expenseTypeOf(v)).label} sx={{ fontWeight: 700 }} data-testid="voucher-expense-type" /></Box>
+              {expenseTypeOf(v) === 'AGAINST_PO' && (
+                <Field label="Purchase Order" value={v.poId
+                  ? <Link component="button" type="button" onClick={() => navigate(`/procurement/purchase-orders/${v.poId}`)} sx={{ fontWeight: 700 }}>{v.poNumber || '—'}</Link>
+                  : (v.poNumber || '—')} />
               )}
-            </Grid>
-          </SectionCard>
-        </Grid>
+              {expenseTypeOf(v) === 'AGAINST_GRN' && (
+                <Field label="GRN" value={v.grnId
+                  ? <Link component="button" type="button" onClick={() => navigate(`/procurement/grns/${v.grnId}`)} sx={{ fontWeight: 700 }}>{(v.grnNumbers || []).join(', ') || '—'}</Link>
+                  : ((v.grnNumbers || []).join(', ') || '—')} />
+              )}
+              <Field label="Party" value={v.partyName || v.vendorName || '—'} />
+              {v.vendorId && <Field label="Vendor (Master)" value={v.vendorName || '—'} />}
+              <Field label="Category" value={v.expenseCategory || '—'} />
+              <Field label="Vendor Bill/Invoice No" value={v.expenseInvoiceNo || '—'} />
+              <Field label="Bill Date" value={fmtDate(v.expenseInvoiceDate)} />
+              <Field label="Payment Terms" value={v.paymentTerms || '—'} />
+              <Field label="Due Date" value={fmtDate(v.dueDate)} />
+              {v.invoiceDocument?.fileUrl && (
+                <Box sx={FULL_ROW}>
+                  <Button size="small" variant="outlined" startIcon={<FileText size={15} />} href={resolveFileUrl(v.invoiceDocument.fileUrl)} target="_blank" rel="noopener">View Invoice File</Button>
+                </Box>
+              )}
+            </FieldGrid>
+          ) : (
+            // 3-up when there is room (Vendor · Invoice · PO / Status · GRNs),
+            // 2-up in a half-width card; GRNs always take two columns.
+            <FieldGrid cols={{ xs: 2, sm: 3, lg: 2, xl: 3 }}>
+              <Field label="Vendor" value={v.vendorName || '—'} />
+              <Field label="Invoice" value={v.invoiceNumber || '—'} />
+              <Field label="PO" value={v.poNumber || '—'} />
+              <Field label="Status" value={<VoucherStatusChip status={v.voucherStatus} />} />
+              <Field label={`GRN${(v.grnNumbers || []).length > 1 ? 's' : ''}`} value={(v.grnNumbers || []).join(', ') || '—'} sx={SPAN_2} />
+            </FieldGrid>
+          )}
+        </SectionCard>
 
-        <Grid item xs={12}>
+        {/* Financials — compact: the Paid/Balance totals sit beside the fields from
+            lg (fields 3-up there, one row of 6 from xl) instead of a full-width band. */}
+        <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
           <SectionCard icon={<ReceiptText size={18} />} title="Financials">
-            {isExpense ? (
-              <Grid container spacing={2}>
-                <Grid item xs={6} sm={3}><Field label="Basic Value" value={fmtINR(v.basicValue)} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Freight" value={fmtINR(v.freightCharges)} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Packing & Fwd" value={fmtINR(v.packingForwardingCharges)} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Other Charges" value={fmtINR(v.otherCharges)} /></Grid>
-                {v.gstRatePercent ? (
-                  <>
-                    <Grid item xs={6} sm={3}><Field label="Taxable Amount" value={fmtINR(v.taxableAmount)} /></Grid>
-                    <Grid item xs={6} sm={3}><Field label={`GST @ ${v.gstRatePercent}%`} value={fmtINR(v.taxAmount)} /></Grid>
-                  </>
-                ) : (
-                  <Grid item xs={6} sm={3}><Field label="Tax Amount" value={fmtINR(v.taxAmount)} /></Grid>
-                )}
-                <Grid item xs={6} sm={3}><Field label="TCS (+)" value={fmtINR(v.tcsAmount)} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="TDS (−)" value={fmtINR(v.tdsAmount)} /></Grid>
-                <Grid item xs={6} sm={3}><Field label="Advance (−)" value={fmtINR(v.advanceAmount)} /></Grid>
-              </Grid>
-            ) : (
-              <Grid container spacing={2}>
-                <Grid item xs={6} sm={2}><Field label="Invoice Amount" value={fmtINR(v.invoiceAmount)} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Advance" value={fmtINR(v.advancePaid)} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Debit Note" value={fmtINR(v.debitNoteAmount)} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Net Payable" value={fmtINR(v.netPayableAmount)} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Paid" value={fmtINR(v.paidAmount)} /></Grid>
-                <Grid item xs={6} sm={2}><Field label="Balance" value={fmtINR(v.balanceAmount)} /></Grid>
-              </Grid>
-            )}
-            <Box sx={{ mt: 2, p: 2, borderRadius: '12px', bgcolor: alpha('#16a34a', 0.05), display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
-              <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>PAID</Typography><Typography variant="h6" fontWeight={800} sx={{ color: '#16a34a' }}>{fmtINR(v.paidAmount)}</Typography></Box>
-              <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>BALANCE</Typography><Typography variant="h6" fontWeight={800} sx={{ color: v.balanceAmount > 0 ? '#b45309' : '#16a34a' }}>{fmtINR(v.balanceAmount)}</Typography></Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) auto' }, gap: 2, alignItems: 'center' }}>
+              {isExpense ? (
+                <FieldGrid cols={{ xs: 2, sm: 3, xl: 5 }}>
+                  <Field label="Basic Value" value={fmtINR(v.basicValue)} />
+                  <Field label="Freight" value={fmtINR(v.freightCharges)} />
+                  <Field label="Packing & Fwd" value={fmtINR(v.packingForwardingCharges)} />
+                  <Field label="Other Charges" value={fmtINR(v.otherCharges)} />
+                  {v.gstRatePercent ? (
+                    <>
+                      <Field label="Taxable Amount" value={fmtINR(v.taxableAmount)} />
+                      <Field label={`GST @ ${v.gstRatePercent}%`} value={fmtINR(v.taxAmount)} />
+                    </>
+                  ) : (
+                    <Field label="Tax Amount" value={fmtINR(v.taxAmount)} />
+                  )}
+                  <Field label="TCS (+)" value={fmtINR(v.tcsAmount)} />
+                  <Field label="TDS (−)" value={fmtINR(v.tdsAmount)} />
+                  <Field label="Advance (−)" value={fmtINR(v.advanceAmount)} />
+                </FieldGrid>
+              ) : (
+                <FieldGrid cols={{ xs: 2, sm: 3, xl: 6 }}>
+                  <Field label="Invoice Amount" value={fmtINR(v.invoiceAmount)} />
+                  <Field label="Advance" value={fmtINR(v.advancePaid)} />
+                  <Field label="Debit Note" value={fmtINR(v.debitNoteAmount)} />
+                  <Field label="Net Payable" value={fmtINR(v.netPayableAmount)} />
+                  <Field label="Paid" value={fmtINR(v.paidAmount)} />
+                  <Field label="Balance" value={fmtINR(v.balanceAmount)} />
+                </FieldGrid>
+              )}
+              <Box sx={{ px: 2, py: 1.25, borderRadius: '8px', bgcolor: alpha('#16a34a', 0.05), display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
+                <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>PAID</Typography><Typography variant="h6" fontWeight={800} sx={{ color: '#16a34a', lineHeight: 1.3 }}>{fmtINR(v.paidAmount)}</Typography></Box>
+                <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="text.secondary" fontWeight={700}>BALANCE</Typography><Typography variant="h6" fontWeight={800} sx={{ color: v.balanceAmount > 0 ? '#b45309' : '#16a34a', lineHeight: 1.3 }}>{fmtINR(v.balanceAmount)}</Typography></Box>
+              </Box>
             </Box>
           </SectionCard>
-        </Grid>
+        </Box>
 
-        {/* MD Digital Approval & Signature */}
-        <Grid item xs={12} id="voucher-md-approval">
+        {/* MD Digital Approval & Signature. :empty — the card renders nothing
+            until the voucher is ready for MD approval; don't leave a gap. */}
+        <Box id="voucher-md-approval" sx={{ ...FULL_ROW, minWidth: 0, '&:empty': { display: 'none' } }}>
           <MdApprovalCard
             documentType="VOUCHER"
             documentId={v._id}
@@ -357,73 +397,70 @@ const VoucherPanel = ({
             isMd={isMd}
             onPreviewPdf={doPreviewPdf}
             skip={v.approvalStatus === 'NOT_REQUIRED'}
+            dense
           />
-        </Grid>
+        </Box>
 
         {/* Step 1.12 — Purchase Entry in Tally */}
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<FileSpreadsheet size={18} />} title="Purchase Entry in Tally (1.12)">
-            {tallyEntry ? (
-              <Grid container spacing={2} alignItems="center">
-                <Grid item xs={6}><Field label="Entry No" value={tallyEntry.entryNumber} /></Grid>
-                <Grid item xs={6}><Field label="Status" value={<TallyStatusChip status={tallyEntry.tallyEntryStatus} />} /></Grid>
-                <Grid item xs={6}><Field label="Checklist" value={`${checklistProgress(tallyEntry.checklist)}/${CHECKLIST_TOTAL}`} /></Grid>
-                <Grid item xs={6}><Field label="Actual Date" value={fmtDate(tallyEntry.actualAt)} /></Grid>
-                <Grid item xs={12}>
-                  <Button size="small" variant="outlined" startIcon={<FileSpreadsheet size={15} />} onClick={() => navigate(`/procurement/tally-entries/${tallyEntry._id}`)}>View Tally Entry</Button>
-                </Grid>
-              </Grid>
-            ) : (
-              <Box>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                  {!posted ? 'Post the voucher first to enable a Tally Entry.'
-                    : 'No Tally Entry yet. Record the purchase entry to enable final payment.'}
-                </Typography>
-                <Button size="small" variant="contained" startIcon={<FileSpreadsheet size={15} />}
-                  disabled={!posted} onClick={() => setTallyFormOpen(true)}>Create Tally Entry</Button>
+        <SectionCard icon={<FileSpreadsheet size={18} />} title="Purchase Entry in Tally (1.12)">
+          {tallyEntry ? (
+            <FieldGrid cols={HALF_CARD_COLS}>
+              <Field label="Entry No" value={tallyEntry.entryNumber} />
+              <Field label="Status" value={<TallyStatusChip status={tallyEntry.tallyEntryStatus} />} />
+              <Field label="Checklist" value={`${checklistProgress(tallyEntry.checklist)}/${CHECKLIST_TOTAL}`} />
+              <Field label="Actual Date" value={fmtDate(tallyEntry.actualAt)} />
+              <Box sx={FULL_ROW}>
+                <Button size="small" variant="outlined" startIcon={<FileSpreadsheet size={15} />} onClick={() => navigate(`/procurement/tally-entries/${tallyEntry._id}`)}>View Tally Entry</Button>
               </Box>
-            )}
-          </SectionCard>
-        </Grid>
+            </FieldGrid>
+          ) : (
+            <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                {!posted ? 'Post the voucher first to enable a Tally Entry.'
+                  : 'No Tally Entry yet. Record the purchase entry to enable final payment.'}
+              </Typography>
+              <Button size="small" variant="contained" startIcon={<FileSpreadsheet size={15} />}
+                disabled={!posted} onClick={() => setTallyFormOpen(true)}>Create Tally Entry</Button>
+            </Box>
+          )}
+        </SectionCard>
 
         {/* Step 1.13 — Make Payment */}
-        <Grid item xs={12} md={6}>
-          <SectionCard icon={<Wallet size={18} />} title="Final Payment (1.13)">
-            <Grid container spacing={2} alignItems="center">
-              <Grid item xs={6}><Field label="Payment Status" value={v.finalPaymentStatus && v.finalPaymentStatus !== 'PENDING' ? <PaymentStatusChip status={v.finalPaymentStatus} /> : 'Pending'} /></Grid>
-              <Grid item xs={6}><Field label="Paid Amount" value={fmtINR(totalPaid)} /></Grid>
-              <Grid item xs={6}><Field label="Pending Amount" value={fmtINR(v.balanceAmount)} /></Grid>
-              <Grid item xs={6}><Field label="Last Payment" value={fmtDate(lastPayment?.paymentDate || v.lastPaymentDate)} /></Grid>
-              <Grid item xs={12}>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  <Button size="small" variant="contained" color="success" startIcon={<Wallet size={15} />}
-                    disabled={!tallyCompleted || !mdCleared || Number(v.balanceAmount) <= 0} onClick={() => setPaymentFormOpen(true)}>Make Payment</Button>
-                  {payments.length > 0 && <Button size="small" variant="outlined" onClick={() => navigate(`/procurement/final-payments/${lastPayment._id}`)}>View Payments</Button>}
-                </Box>
-                {!tallyCompleted && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>Complete the Tally Entry before making payment.</Typography>}
-                {tallyCompleted && !mdCleared && Number(v.balanceAmount) > 0 && <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'warning.dark' }}>Payment unlocks once the MD approves this voucher.</Typography>}
-              </Grid>
-            </Grid>
-          </SectionCard>
-        </Grid>
+        <SectionCard icon={<Wallet size={18} />} title="Final Payment (1.13)">
+          <FieldGrid cols={HALF_CARD_COLS}>
+            <Field label="Payment Status" value={v.finalPaymentStatus && v.finalPaymentStatus !== 'PENDING' ? <PaymentStatusChip status={v.finalPaymentStatus} /> : 'Pending'} />
+            <Field label="Paid Amount" value={fmtINR(totalPaid)} />
+            <Field label="Pending Amount" value={fmtINR(v.balanceAmount)} />
+            <Field label="Last Payment" value={fmtDate(lastPayment?.paymentDate || v.lastPaymentDate)} />
+            <Box sx={FULL_ROW}>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Button size="small" variant="contained" color="success" startIcon={<Wallet size={15} />}
+                  disabled={!tallyCompleted || !mdCleared || Number(v.balanceAmount) <= 0} onClick={() => setPaymentFormOpen(true)}>Make Payment</Button>
+                {payments.length > 0 && <Button size="small" variant="outlined" onClick={() => navigate(`/procurement/final-payments/${lastPayment._id}`)}>View Payments</Button>}
+              </Box>
+              {!tallyCompleted && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>Complete the Tally Entry before making payment.</Typography>}
+              {tallyCompleted && !mdCleared && Number(v.balanceAmount) > 0 && <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'warning.dark' }}>Payment unlocks once the MD approves this voucher.</Typography>}
+            </Box>
+          </FieldGrid>
+        </SectionCard>
 
         {v.activityTimeline?.length ? (
-          <Grid item xs={12}>
+          <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
             <SectionCard icon={<FileText size={18} />} title="Timeline">
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {[...v.activityTimeline].reverse().map((ev, i) => (
                   <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 90 }} />
-                    <Typography variant="body2" color="text.secondary">{ev.description}</Typography>
-                    <Box sx={{ flexGrow: 1 }} />
-                    <Typography variant="caption" color="text.disabled">{fmtDate(ev.timestamp)}</Typography>
+                    <Chip size="small" label={ev.action} sx={{ fontWeight: 700, minWidth: 90, flexShrink: 0 }} />
+                    {/* flex 1 + minWidth 0: long descriptions wrap, the date stays put */}
+                    <Typography variant="body2" color="text.secondary" sx={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' }}>{ev.description}</Typography>
+                    <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>{fmtDate(ev.timestamp)}</Typography>
                   </Box>
                 ))}
               </Box>
             </SectionCard>
-          </Grid>
+          </Box>
         ) : null}
-      </Grid>
+      </Box>
 
       <VoucherFormDialog open={formOpen} voucher={v} onClose={() => setFormOpen(false)} />
       <VoucherPdfPreview open={pdfPreviewOpen} voucher={previewVoucher || v} onClose={() => { setPdfPreviewOpen(false); setPreviewVoucher(null); }} />

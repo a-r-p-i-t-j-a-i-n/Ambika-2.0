@@ -189,11 +189,12 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const [previewUrl, setPreviewUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
 
-  // READY_FOR_GRN POs whose PI step is settled — PI approved (the advance and its
-  // MD approval never hold GRN back), paid, or marked Not Required (comma list →
-  // server $in). We drop fully-received below.
+  // READY_FOR_GRN POs whose PI step is settled — no PI (PI is optional), PI
+  // approved (the advance and its MD approval never hold GRN back), paid, or
+  // marked Not Required: the server's PI_SETTLED_FOR_GRN (comma list → server
+  // $in). We drop fully-received below.
   const { data: posRes, isLoading: posLoading } = useGetPurchaseOrdersQuery(
-    { limit: 200, sort: '-releasedAt', followUpStatus: 'READY_FOR_GRN', piStatus: 'PI_APPROVED,READY_FOR_ADVANCE_PAYMENT,PAYMENT_COMPLETED,PI_NOT_REQUIRED' },
+    { limit: 200, sort: '-releasedAt', followUpStatus: 'READY_FOR_GRN', piStatus: 'NOT_RECEIVED,PI_APPROVED,READY_FOR_ADVANCE_PAYMENT,PAYMENT_COMPLETED,PI_NOT_REQUIRED' },
     { skip: !open || isEdit },
   );
   // Material delivery must be confirmed (Final Material Date present). A PO that
