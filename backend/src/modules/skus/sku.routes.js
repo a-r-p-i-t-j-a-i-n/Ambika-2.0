@@ -5,7 +5,7 @@ import { bulkUpsertSkuSchema, createSkuSchema, updateSkuSchema } from './sku.val
 import asyncHandler from '../../middleware/asyncHandler.js';
 import { auditMiddleware } from '../../middlewares/audit.middleware.js';
 import { protect } from '../../middleware/auth.middleware.js';
-import { attachUserPermissions, requirePermission } from '../../middleware/permission.middleware.js';
+import { attachUserPermissions, requirePermission, unlessSessionDenies } from '../../middleware/permission.middleware.js';
 
 const router = express.Router();
 
@@ -33,8 +33,10 @@ router.post(
   asyncHandler(skuController.bulkUpsertSkus),
 );
 router.get('/:id', asyncHandler(skuController.getSkuById));
-router.put('/:id', attachUserPermissions, validate(updateSkuSchema), asyncHandler(skuController.updateSku));
-router.patch('/:id', attachUserPermissions, validate(updateSkuSchema), asyncHandler(skuController.updateSku));
+// Editing is also refused when the Delegation Suite switched SKU Master → Edit
+// off for this person (lock icon).
+router.put('/:id', unlessSessionDenies('masters.editSku'), attachUserPermissions, validate(updateSkuSchema), asyncHandler(skuController.updateSku));
+router.patch('/:id', unlessSessionDenies('masters.editSku'), attachUserPermissions, validate(updateSkuSchema), asyncHandler(skuController.updateSku));
 
 // Delete is gated by the v2 access-control system. MD has `*` (root) and
 // bypasses this check; other roles need `masters.deleteSku` granted explicitly.

@@ -5,11 +5,14 @@ import {
   Box, Paper, Stack, Typography, alpha, useTheme, ToggleButtonGroup, ToggleButton,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, InputAdornment, Chip,
   Button, Dialog, DialogTitle, DialogContent, DialogActions, Grid, IconButton, Divider, Tooltip,
+  DialogContentText, CircularProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Store, Table as TableIcon, Rows3, Search, Package, Plus, X, Trash2, IndianRupee } from 'lucide-react';
+import { Store, Table as TableIcon, Rows3, Search, Package, Plus, X, Trash2, IndianRupee, Pencil } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { useGetVendorsQuery, useCreateVendorMutation } from '../../../store/api/vendorApi';
+import { useGetVendorsQuery, useCreateVendorMutation, useDeleteVendorMutation } from '../../../store/api/vendorApi';
+import { usePermission } from '../../../hooks/usePermission';
+import { useMasterRights } from '../../../utils/embed';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
@@ -41,7 +44,25 @@ const VendorMaster = () => {
 
   const { data, isLoading } = useGetVendorsQuery({ limit: 1000, sort: 'name' });
   const [createVendor, { isLoading: creating }] = useCreateVendorMutation();
+  const [deleteVendor, { isLoading: deleting }] = useDeleteVendorMutation();
+  const [deleteTarget, setDeleteTarget] = useState(null); // vendor pending confirmation
   const vendors = useMemo(() => data?.data || [], [data]);
+  // Inside the Delegation Suite, its lock icon can switch Edit off and Delete
+  // on for this person (Vendor Details); delete needs masters.deleteVendor.
+  const rights = useMasterRights('vendorDetails');
+  const canEdit = rights.canEdit;
+  const canDelete = usePermission('masters.deleteVendor') && rights.canDelete;
+
+  const confirmDelete = async () => {
+    if (!deleteTarget?._id) return;
+    try {
+      await deleteVendor(deleteTarget._id).unwrap();
+      enqueueSnackbar(`"${deleteTarget.name}" deleted.`, { variant: 'success' });
+      setDeleteTarget(null);
+    } catch (e) {
+      enqueueSnackbar(e?.data?.message || 'Could not delete this vendor.', { variant: 'error' });
+    }
+  };
 
   const setField = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
   const setRow = (i, k, v) => setDraft((d) => ({ ...d, products: d.products.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)) }));
@@ -120,6 +141,27 @@ const VendorMaster = () => {
     { field: 'gstNo', headerName: 'GST No', flex: 1, minWidth: 160, valueGetter: (v, r) => r.gstNo || '—' },
     { field: 'creditPeriodDays', headerName: 'Credit', width: 100, align: 'center', headerAlign: 'center',
       valueGetter: (v, r) => `${r.creditPeriodDays || 0} d` },
+    ...(canEdit || canDelete ? [{ field: '__actions', headerName: '', width: canEdit && canDelete ? 90 : 56, sortable: false, filterable: false, align: 'center', headerAlign: 'center',
+      renderCell: (p) => (
+        <Box sx={{ display: 'inline-flex', gap: 0.25, alignSelf: 'center' }}>
+          {/* Editing happens on the vendor's page (details + products) — open it with the edit form up. */}
+          {canEdit && (
+            <Tooltip title="Edit vendor">
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); navigate(`/procurement/vendors/${p.row._id}`, { state: { edit: true } }); }}
+                sx={{ color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.1) } }}>
+                <Pencil size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
+          {canDelete && (
+            <Tooltip title="Delete vendor">
+              <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p.row); }}>
+                <Trash2 size={15} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+      ) }] : []),
   ];
 
   return (
@@ -264,6 +306,25 @@ const VendorMaster = () => {
         <DialogActions>
           <Button onClick={() => setDraft(null)}>Cancel</Button>
           <Button variant="contained" onClick={submitVendor} disabled={creating}>{creating ? 'Creating…' : 'Create Vendor'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Delete confirmation ── */}
+      <Dialog open={Boolean(deleteTarget)} onClose={() => !deleting && setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Delete vendor?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            <b>{deleteTarget?.name}</b> will be removed from the vendor list. This won&apos;t affect existing
+            indents, POs or other records that already reference it, and it can be restored by an administrator.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting} sx={{ textTransform: 'none' }}>Cancel</Button>
+          <Button onClick={confirmDelete} variant="contained" color="error" disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={14} color="inherit" /> : <Trash2 size={15} />}
+            sx={{ textTransform: 'none', fontWeight: 700 }}>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

@@ -70,36 +70,48 @@ const subscribeHidden = (listener) => {
 export const useHiddenSteps = (flow) =>
   useSyncExternalStore(subscribeHidden, () => hiddenSteps[flow] || EMPTY);
 
-// ── What this employee may change on the O2D Step Board (same lock icon) ────
-// `shell:prefs { rights: { o2d: { noEdit: [...], delete: [...], noAdd } } }`,
-// step keys as above; `rights: null` (MD / Admin) means no limits from the
-// Suite. Standalone nothing is limited — the ERP's own permissions decide.
+// ── What this employee may change (same lock icon) ─────────────────────────
+// `shell:prefs { rights: {
+//    o2d:     { noEdit: [...], delete: [...], noAdd },  — O2D Step Board, step keys as above
+//    masters: { noEdit: [...], delete: [...] },         — Master Data, by master key
+// } }`; `rights: null` (MD / Admin) means no limits from the Suite.
+// Standalone nothing is limited — the ERP's own permissions decide.
 const NO_LIMITS = Object.freeze({
   canEdit: () => true,
   canDelete: () => true,
   canAdd: true,
 });
+const NO_MASTER_LIMITS = Object.freeze({ canEdit: true, canDelete: true });
 let o2dRights = NO_LIMITS;
-let o2dRightsKey = '';
+let masterRights = null; // null = no limits; else { noEdit: Set, delete: Set }
+let rightsKey = '';
 
 export const setStepRights = (rights) => {
-  const o2d = rights?.o2d;
   const list = (value) => (Array.isArray(value) ? value.filter((s) => typeof s === 'string') : []);
-  const next = o2d ? { noEdit: list(o2d.noEdit).sort(), delete: list(o2d.delete).sort(), noAdd: o2d.noAdd === true } : null;
+  const o2d = rights?.o2d;
+  const masters = rights?.masters;
+  const next = {
+    o2d: o2d ? { noEdit: list(o2d.noEdit).sort(), delete: list(o2d.delete).sort(), noAdd: o2d.noAdd === true } : null,
+    masters: masters ? { noEdit: list(masters.noEdit).sort(), delete: list(masters.delete).sort() } : null,
+  };
   const key = JSON.stringify(next);
-  if (key === o2dRightsKey) return;
-  o2dRightsKey = key;
-  if (!next) {
+  if (key === rightsKey) return;
+  rightsKey = key;
+  if (!next.o2d) {
     o2dRights = NO_LIMITS;
   } else {
-    const noEdit = new Set(next.noEdit);
-    const canDelete = new Set(next.delete);
+    const noEdit = new Set(next.o2d.noEdit);
+    const canDelete = new Set(next.o2d.delete);
     o2dRights = {
       canEdit: (code) => !noEdit.has(stepKey(code)),
       canDelete: (code) => canDelete.has(stepKey(code)),
-      canAdd: !next.noAdd,
+      canAdd: !next.o2d.noAdd,
     };
   }
+  masterRights = next.masters
+    ? { noEdit: new Set(next.masters.noEdit), delete: new Set(next.masters.delete) }
+    : null;
+  masterCache.clear();
   hiddenListeners.forEach((listener) => listener());
 };
 
@@ -108,6 +120,28 @@ export const setStepRights = (rights) => {
  * only narrow what the ERP's own permissions already allow.
  */
 export const useO2dRights = () => useSyncExternalStore(subscribeHidden, () => o2dRights);
+
+// One stable object per master until the rights change (useSyncExternalStore
+// needs the same object back while nothing changed).
+const masterCache = new Map();
+const masterRightsOf = (key) => {
+  if (!masterRights) return NO_MASTER_LIMITS;
+  if (!masterCache.has(key)) {
+    masterCache.set(key, Object.freeze({
+      canEdit: !masterRights.noEdit.has(key),
+      canDelete: masterRights.delete.has(key),
+    }));
+  }
+  return masterCache.get(key);
+};
+
+/**
+ * `{ canEdit, canDelete }` for one Master Data screen — `key` is the Suite's
+ * module key: skuMaster, parties, machines, machineOperators, vendorDetails,
+ * transporterMaster. These only narrow what the ERP's own permissions allow;
+ * a delete still needs the master's delete permission.
+ */
+export const useMasterRights = (key) => useSyncExternalStore(subscribeHidden, () => masterRightsOf(key));
 
 // Inside a cross-site frame some browsers (e.g. Chrome incognito, or with
 // third-party cookies blocked) refuse access to localStorage and throw on the

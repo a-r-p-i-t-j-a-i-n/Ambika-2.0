@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { vendorController } from './vendor.controller.js';
 import validate from '../../middleware/validate.js';
 import { protect } from '../../middleware/auth.middleware.js';
+import { attachUserPermissions, requirePermission, unlessSessionDenies } from '../../middleware/permission.middleware.js';
 import { createVendorSchema, updateVendorSchema, vendorQuerySchema, mongoIdParamSchema, addPricingHistorySchema, addVendorProductSchema } from './vendor.validation.js';
 
 const router = Router();
@@ -22,9 +23,13 @@ router.route('/:id/pricing-history')
   .get(validate(mongoIdParamSchema, 'params'), vendorController.getPricingHistory)
   .post(validate(mongoIdParamSchema, 'params'), validate(addPricingHistorySchema), vendorController.addPricingHistory);
 
+// Editing the vendor's details is open unless the Delegation Suite switched it
+// off for this person; deleting needs masters.deleteVendor (MD, or Delete
+// switched on in the Suite's lock icon). The product / pricing routes above
+// stay open — the New PO screen adds products through them.
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), vendorController.getById)
-  .put(validate(mongoIdParamSchema, 'params'), validate(updateVendorSchema), vendorController.update)
-  .delete(validate(mongoIdParamSchema, 'params'), vendorController.remove);
+  .put(validate(mongoIdParamSchema, 'params'), unlessSessionDenies('masters.editVendor'), validate(updateVendorSchema), vendorController.update)
+  .delete(validate(mongoIdParamSchema, 'params'), attachUserPermissions, requirePermission('masters.deleteVendor'), vendorController.remove);
 
 export default router;
