@@ -2,14 +2,14 @@ import React, { useState, useMemo } from 'react';
 import {
   Box, Paper, Stack, Typography, Chip, alpha, useTheme, Button, Autocomplete,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
-  TextField, MenuItem, InputAdornment, Drawer, Divider, IconButton, Tooltip, Link,
+  TextField, MenuItem, InputAdornment, Drawer, Divider, IconButton, Tooltip, Link, Menu,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, FileSpreadsheet,
   FileText, X, ExternalLink, ScrollText, CheckCircle2, Circle, Link2, Clock, User as UserIcon,
-  Paperclip, Mail,
+  Paperclip, Mail, Download, ChevronDown,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useGetOrderIntakesQuery } from '../../store/api/orderIntakeApi';
@@ -247,6 +247,73 @@ const displayVal = (c, row) => {
   const raw = c.valueGetter ? c.valueGetter(undefined, row) : row[c.field];
   return typeof raw === 'number' ? num(raw) : (raw ?? '—');
 };
+// ── Colour coding — one meaning per colour, on every step tab and view ──────
+// Status words become pills (green done · blue received / in progress · amber
+// planning / pending · red cancelled / overdue · purple skipped / short closed);
+// record numbers are blue, quantities indigo, what has moved green, what is
+// still owed amber, dates teal, people purple. Checked in order: first match wins.
+const STATUS_TONES = [
+  { match: /(CANCEL|REJECT|FAIL|OVERDUE|NOT_RECEIVED|DELAYED)/, color: '#b91c1c', bg: '#fdecec' },
+  { match: /(DONE|COMPLETE|DELIVER|PAID|CONFIRM|CONVERT|CLOSED|SENT|INVOICED)/, color: '#047857', bg: '#e7f8f0' },
+  { match: /(SKIP|SHORT)/, color: '#6d28d9', bg: '#f1ebff' },
+  { match: /(PLAN|PENDING|PARTIAL|SCHEDUL|WAIT|HOLD|DRAFT)/, color: '#b45309', bg: '#fff4e0' },
+  { match: /(RECEIV|PROGRESS|OPEN|NEW|DISPATCH|TRANSIT|ACTIVE)/, color: '#1d4ed8', bg: '#e8f0ff' },
+];
+const statusTone = (value) => STATUS_TONES.find((t) => t.match.test(String(value || '').toUpperCase()))
+  || { color: '#475569', bg: '#eef2f6' };
+
+const StatusPill = ({ value }) => {
+  const t = statusTone(value);
+  return (
+    <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, px: 1, py: 0.25, borderRadius: 999, bgcolor: t.bg, color: t.color, fontSize: '0.7rem', fontWeight: 700, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+      <Box component="span" sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: t.color }} />
+      {String(value).replaceAll('_', ' ')}
+    </Box>
+  );
+};
+
+// What each column means, by field name (shared across the step tabs).
+const FIELD_TONES = {
+  status: 'status', intakeStatus: 'status', followUpStatus: 'status', confirmation: 'status', receiptStatus: 'status', paymentStatus: 'status',
+  soNumber: 'ref', order: 'ref', dcNumber: 'ref', invoiceNo: 'ref',
+  poNumber: 'ref2',
+  partyName: 'party',
+  totalOrderQty: 'qty', totalPlanned: 'qty', invoiceAmount: 'qty', totalQuantityPcs: 'qty',
+  totalDispatchedQty: 'good', amountReceived: 'good', receivedAmount: 'good',
+  totalBalanceQty: 'balance', balance: 'balance',
+  createdAt: 'date', orderDate: 'date', dcDate: 'date', invoiceDate: 'date', poDate: 'date', planned: 'date',
+  doneOn: 'date', followedOn: 'date', receivedDate: 'date', receiptOn: 'date', paymentOn: 'date',
+  delay: 'delay', followDelay: 'delay',
+  doneBy: 'person', createdByName: 'person', contactName: 'person',
+};
+const TONE_SX = {
+  ref: { color: '#1d4ed8', fontWeight: 700 },
+  ref2: { color: '#475569', fontWeight: 600 },
+  party: { color: '#0f172a', fontWeight: 600 },
+  qty: { color: '#4338ca', fontWeight: 700 },
+  good: { color: '#047857', fontWeight: 700 },
+  date: { color: '#0e7490', fontWeight: 500 },
+  person: { color: '#6d28d9', fontWeight: 600 },
+  owed: { color: '#b45309', fontWeight: 700 },
+  late: { color: '#b91c1c', fontWeight: 700 },
+  zero: { color: '#94a3b8', fontWeight: 500 },
+  plain: { color: '#334155' },
+};
+
+// One value, coloured by what its column means.
+const ToneCell = ({ c, row }) => {
+  const text = displayVal(c, row);
+  if (text === '—' || text === '') return <Box component="span" sx={{ color: '#94a3b8' }}>—</Box>;
+  const tone = FIELD_TONES[c.field] || 'plain';
+  if (tone === 'status') return <StatusPill value={text} />;
+  const raw = c.valueGetter ? c.valueGetter(undefined, row) : row[c.field];
+  let sx = TONE_SX[tone] || TONE_SX.plain;
+  if (tone === 'balance') sx = Number(raw) > 0 ? TONE_SX.owed : TONE_SX.good;
+  else if ((tone === 'qty' || tone === 'good') && Number(raw) === 0) sx = TONE_SX.zero;
+  else if (tone === 'delay') sx = /late/i.test(text) ? TONE_SX.late : (/on time/i.test(text) ? TONE_SX.good : TONE_SX.plain);
+  return <Box component="span" sx={{ ...sx, fontSize: 'inherit' }}>{text}</Box>;
+};
+
 // Status accessor per step — used to group records in the Board view.
 const statusOf = (tab, row) => {
   if (row.__step) return row.__step.status || 'PENDING';
@@ -578,7 +645,9 @@ const O2dMasterData = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [logRow, setLogRow] = useState(null); // row whose Links & Log drawer is open
   // ── GLOBAL filters — set once, apply to every step tab (do NOT reset on switch).
+  const [soFilter, setSoFilter] = useState('');
   const [partyFilter, setPartyFilter] = useState('');
+  const [exportAnchor, setExportAnchor] = useState(null); // Export → Excel / PDF menu
   const [dateMode, setDateMode] = useState('all'); // all | month | day | custom
   const [monthVal, setMonthVal] = useState(dayjs().format('YYYY-MM'));
   const [dayVal, setDayVal] = useState(dayjs().format('YYYY-MM-DD'));
@@ -591,7 +660,7 @@ const O2dMasterData = () => {
 
   // Switching tabs keeps the global party/date filters — only the per-tab search/status reset.
   const switchTab = (t) => { setTab(t); setSearch(''); setStatusFilter(''); };
-  const clearGlobal = () => { setPartyFilter(''); setDateMode('all'); setFromVal(''); setToVal(''); };
+  const clearGlobal = () => { setSoFilter(''); setPartyFilter(''); setDateMode('all'); setFromVal(''); setToVal(''); };
 
   const inDateRange = (d) => {
     if (dateMode === 'all') return true;
@@ -624,6 +693,8 @@ const O2dMasterData = () => {
     processes.forEach((p) => { const id = p.intakeId?._id || p.intakeId; if (id) m.set(String(id), p); });
     return m;
   }, [processes]);
+  // SO Number dropdown — every order, newest first (as loaded).
+  const soOptions = useMemo(() => [...new Set(processes.map((p) => p.soNumber).filter(Boolean))], [processes]);
 
   // Payment/transport rows carry only dcNumber → resolve to soNumber via challans.
   const needDcMap = ['paymentFollowup', 'paymentReceipt', 'transportReceipt', 'transportPayment'].includes(tab);
@@ -684,9 +755,17 @@ const O2dMasterData = () => {
   // Distinct statuses present (for the status filter dropdown).
   const statuses = useMemo(() => [...new Set(rawRows.map((r) => statusOf(tab, r)).filter(Boolean))], [rawRows, tab]);
 
-  // Apply GLOBAL party + date, then per-tab status + free-text search.
+  // Apply GLOBAL SO + party + date, then per-tab status + free-text search.
   const rows = useMemo(() => {
     let list = rawRows;
+    if (soFilter) {
+      // A row's order: its own SO, else via its challan (payment / transport
+      // rows), else via its process (order intake).
+      const soOfRow = (r) => r.soNumber
+        || (r.dcNumber && dcToSo.get(String(r.dcNumber)))
+        || (tab === 'intake' ? procByIntake.get(String(r._id))?.soNumber : undefined);
+      list = list.filter((r) => soOfRow(r) === soFilter);
+    }
     if (partyFilter) list = list.filter((r) => { const p = partyOf(tab, r); return p === undefined || p === partyFilter; });
     if (dateMode !== 'all') list = list.filter((r) => inDateRange(dateOf(tab, r)));
     if (statusFilter) list = list.filter((r) => statusOf(tab, r) === statusFilter);
@@ -694,11 +773,11 @@ const O2dMasterData = () => {
     if (q) list = list.filter((r) => columns.some((c) => String(displayVal(c, r)).toLowerCase().includes(q)));
     return [...list].sort((a, b) => new Date(dateOf(tab, b) || 0) - new Date(dateOf(tab, a) || 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawRows, statusFilter, search, tab, columns, partyFilter, dateMode, monthVal, dayVal, fromVal, toVal]);
+  }, [rawRows, statusFilter, search, tab, columns, soFilter, dcToSo, procByIntake, partyFilter, dateMode, monthVal, dayVal, fromVal, toVal]);
 
-  // Grid columns = the tab's columns + a Connected-records column + a Log button.
+  // Grid columns = the tab's columns (colour-coded) + a Connected-records column + a Log button.
   const gridColumns = useMemo(() => [
-    ...columns,
+    ...columns.map((c) => ({ ...c, renderCell: (p) => <ToneCell c={c} row={p.row} /> })),
     {
       field: '__links', headerName: 'Connected', flex: 1, minWidth: 150,
       sortable: false, filterable: false, disableColumnMenu: true,
@@ -715,13 +794,14 @@ const O2dMasterData = () => {
 
   const activeTab = TABS.find((t) => t.key === tab);
   const filterSummary = [
+    soFilter && `SO: ${soFilter}`,
     partyFilter && `Party: ${partyFilter}`,
     dateMode === 'month' && monthVal && `Month: ${dayjs(`${monthVal}-01`).format('MMM YYYY')}`,
     dateMode === 'day' && dayVal && `Day: ${dayjs(dayVal).format('DD MMM YYYY')}`,
     dateMode === 'custom' && (fromVal || toVal) && `Range: ${fromVal ? dayjs(fromVal).format('DD MMM YYYY') : '…'} → ${toVal ? dayjs(toVal).format('DD MMM YYYY') : '…'}`,
     statusFilter && `Status: ${statusFilter}`,
   ].filter(Boolean).join('  ·  ') || 'All records';
-  const exportBase = `O2D ${activeTab?.label || tab}${partyFilter ? ` - ${partyFilter}` : ''}`.replace(/[\\/:*?"<>|]/g, '-');
+  const exportBase = `O2D ${activeTab?.label || tab}${soFilter ? ` - ${soFilter}` : ''}${partyFilter ? ` - ${partyFilter}` : ''}`.replace(/[\\/:*?"<>|]/g, '-');
   const doExcel = () => exportRowsToExcel({ columns, rows, displayVal, sheetName: activeTab?.label || tab, fileName: `${exportBase}.xlsx` });
   const doPdf = () => printTablePdf({ title: activeTab?.label ? `O2D — ${activeTab.label}` : 'O2D Master Data', subtitle: filterSummary, columns, rows, displayVal });
 
@@ -751,45 +831,93 @@ const O2dMasterData = () => {
             </Typography>
           </Paper>
         ) : (<>
-        {/* ── GLOBAL filters (apply to every step tab) + export ── */}
-        <Paper elevation={0} sx={{ borderRadius: '8px', p: 1, mb: 1.25, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
-            <Chip label="FILTERS" size="small" sx={{ fontWeight: 800, letterSpacing: '0.06em', bgcolor: alpha(theme.palette.primary.main, 0.1), color: 'primary.dark' }} />
+        {/* ── ONE line: search · SO · party · date · status · count · export · view.
+            SO, party and date apply to every step tab (kept when you switch);
+            search and status are per tab. Export = the current tab, as filtered. ── */}
+        <Paper elevation={0} sx={{ borderRadius: '8px', px: 1, py: 0.85, mb: 1.25, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+          <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: { xs: 'wrap', lg: 'nowrap' }, rowGap: 1 }}>
+            <TextField
+              size="small" value={search} onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search…"
+              sx={{ width: { xs: '100%', sm: 150, xl: 190 }, minWidth: 120, flexShrink: 1, '& .MuiInputBase-root': { height: 34 } }}
+              InputProps={{ startAdornment: <InputAdornment position="start"><Search size={14} /></InputAdornment> }}
+            />
+            <Autocomplete
+              size="small" options={soOptions} value={soFilter || null}
+              onChange={(_, v) => setSoFilter(v || '')}
+              sx={{ width: { xs: '100%', sm: 160, xl: 185 }, minWidth: 125, flexShrink: 1 }}
+              renderInput={(pr) => <TextField {...pr} placeholder="All SO numbers" sx={{ '& .MuiInputBase-root': { minHeight: 34 } }} />}
+            />
             <Autocomplete
               size="small" options={partyOptions} value={partyFilter || null}
               onChange={(_, v) => setPartyFilter(v || '')}
-              sx={{ width: 230 }}
-              renderInput={(pr) => <TextField {...pr} placeholder="All parties" sx={{ '& .MuiInputBase-root': { height: 34 } }} />}
+              sx={{ width: { xs: '100%', sm: 175, xl: 215 }, minWidth: 130, flexShrink: 1 }}
+              renderInput={(pr) => <TextField {...pr} placeholder="All parties" sx={{ '& .MuiInputBase-root': { minHeight: 34 } }} />}
             />
             <TextField select size="small" value={dateMode} onChange={(e) => setDateMode(e.target.value)}
-              sx={{ width: 140, '& .MuiInputBase-root': { height: 34 } }}>
+              sx={{ width: 124, flexShrink: 0, '& .MuiInputBase-root': { height: 34 } }}>
               <MenuItem value="all">All dates</MenuItem>
               <MenuItem value="month">By month</MenuItem>
               <MenuItem value="day">By day</MenuItem>
               <MenuItem value="custom">Custom range</MenuItem>
             </TextField>
             {dateMode === 'month' && (
-              <TextField size="small" type="month" value={monthVal} onChange={(e) => setMonthVal(e.target.value)} sx={{ width: 150, '& .MuiInputBase-root': { height: 34 } }} />
+              <TextField size="small" type="month" value={monthVal} onChange={(e) => setMonthVal(e.target.value)} sx={{ width: 140, flexShrink: 0, '& .MuiInputBase-root': { height: 34 } }} />
             )}
             {dateMode === 'day' && (
-              <TextField size="small" type="date" value={dayVal} onChange={(e) => setDayVal(e.target.value)} sx={{ width: 160, '& .MuiInputBase-root': { height: 34 } }} />
+              <TextField size="small" type="date" value={dayVal} onChange={(e) => setDayVal(e.target.value)} sx={{ width: 145, flexShrink: 0, '& .MuiInputBase-root': { height: 34 } }} />
             )}
             {dateMode === 'custom' && (
               <>
-                <TextField size="small" type="date" label="From" InputLabelProps={{ shrink: true }} value={fromVal} onChange={(e) => setFromVal(e.target.value)} sx={{ width: 155, '& .MuiInputBase-root': { height: 34 } }} />
-                <TextField size="small" type="date" label="To" InputLabelProps={{ shrink: true }} value={toVal} onChange={(e) => setToVal(e.target.value)} sx={{ width: 155, '& .MuiInputBase-root': { height: 34 } }} />
+                <TextField size="small" type="date" label="From" InputLabelProps={{ shrink: true }} value={fromVal} onChange={(e) => setFromVal(e.target.value)} sx={{ width: 140, flexShrink: 0, '& .MuiInputBase-root': { height: 34 } }} />
+                <TextField size="small" type="date" label="To" InputLabelProps={{ shrink: true }} value={toVal} onChange={(e) => setToVal(e.target.value)} sx={{ width: 140, flexShrink: 0, '& .MuiInputBase-root': { height: 34 } }} />
               </>
             )}
-            {(partyFilter || dateMode !== 'all') && (
-              <Button size="small" startIcon={<X size={14} />} onClick={clearGlobal} sx={{ fontWeight: 700 }}>Clear</Button>
+            <TextField
+              select size="small" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+              sx={{ width: 136, flexShrink: 0, '& .MuiInputBase-root': { height: 34 } }}
+              SelectProps={{ displayEmpty: true, renderValue: (v) => (v ? String(v).replaceAll('_', ' ') : 'All statuses') }}
+            >
+              <MenuItem value="">All statuses</MenuItem>
+              {statuses.map((s) => <MenuItem key={s} value={s}><StatusPill value={s} /></MenuItem>)}
+            </TextField>
+            <Tooltip title={filterSummary}>
+              <Typography variant="caption" sx={{ color: O2D.brand, fontWeight: 800, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {rows.length}{rows.length !== rawRows.length ? ` / ${rawRows.length}` : ''} record{rows.length === 1 ? '' : 's'}
+              </Typography>
+            </Tooltip>
+            {(soFilter || partyFilter || dateMode !== 'all' || statusFilter || search) && (
+              <Button size="small" startIcon={<X size={14} />} onClick={() => { clearGlobal(); setStatusFilter(''); setSearch(''); }} sx={{ fontWeight: 700, flexShrink: 0, minWidth: 0 }}>
+                Clear
+              </Button>
             )}
             <Box sx={{ flex: 1 }} />
-            <Button size="small" variant="outlined" startIcon={<FileSpreadsheet size={15} />} onClick={doExcel}>Excel</Button>
-            <Button size="small" variant="contained" startIcon={<FileText size={15} />} onClick={doPdf}>PDF</Button>
+            {/* One Export button — pick Excel or PDF. */}
+            <Button
+              size="small" variant="contained" disableElevation startIcon={<Download size={15} />} endIcon={<ChevronDown size={14} />}
+              onClick={(e) => setExportAnchor(e.currentTarget)}
+              sx={{ flexShrink: 0, fontWeight: 700, textTransform: 'none', borderRadius: '6px' }}
+            >
+              Export
+            </Button>
+            <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}>
+              <MenuItem onClick={() => { setExportAnchor(null); doExcel(); }} sx={{ gap: 1.25, fontSize: '0.85rem' }}>
+                <FileSpreadsheet size={16} color="#047857" /> Excel (.xlsx)
+              </MenuItem>
+              <MenuItem onClick={() => { setExportAnchor(null); doPdf(); }} sx={{ gap: 1.25, fontSize: '0.85rem' }}>
+                <FileText size={16} color="#b91c1c" /> PDF
+              </MenuItem>
+            </Menu>
+            {/* Icon-only view switcher — compact */}
+            <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, v) => v && setView(v)} sx={{ flexShrink: 0 }}>
+              {VIEWS.map((vw) => (
+                <ToggleButton key={vw.key} value={vw.key} title={vw.label} sx={{ px: 1, py: 0.4 }}>
+                  <vw.icon size={15} />
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
           </Stack>
-          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, mt: 0.75, display: 'block' }}>
-            {filterSummary} — applies to <strong>every step tab</strong>. Export reflects the current tab &amp; filters.
-          </Typography>
         </Paper>
 
         <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
@@ -832,36 +960,6 @@ const O2dMasterData = () => {
             })}
           </Box>
 
-          {/* Compact toolbar: search · status · count · view */}
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1, flexWrap: 'wrap', borderBottom: `1px solid ${O2D.line}` }}>
-            <TextField
-              size="small" value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search…"
-              sx={{ width: { xs: '100%', sm: 240 }, '& .MuiInputBase-root': { height: 34 } }}
-              InputProps={{ startAdornment: <InputAdornment position="start"><Search size={14} /></InputAdornment> }}
-            />
-            <TextField
-              select size="small" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-              sx={{ width: 150, '& .MuiInputBase-root': { height: 34 } }} displayEmpty
-              SelectProps={{ displayEmpty: true, renderValue: (v) => (v || 'All statuses') }}
-            >
-              <MenuItem value="">All statuses</MenuItem>
-              {statuses.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-            </TextField>
-            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700 }}>
-              {rows.length}{statusFilter || search ? ` / ${rawRows.length}` : ''} record{rows.length === 1 ? '' : 's'}
-            </Typography>
-            <Box sx={{ flex: 1 }} />
-            {/* Icon-only view switcher — compact */}
-            <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, v) => v && setView(v)}>
-              {VIEWS.map((vw) => (
-                <ToggleButton key={vw.key} value={vw.key} title={vw.label} sx={{ px: 1, py: 0.4 }}>
-                  <vw.icon size={15} />
-                </ToggleButton>
-              ))}
-            </ToggleButtonGroup>
-          </Stack>
-
           {/* ── Table view (DataGrid) ── */}
           {view === 'table' && (
             <Box sx={{ px: 1.5, pb: 1.5, width: '100%', minWidth: 0, overflowX: 'hidden' }}>
@@ -893,7 +991,7 @@ const O2dMasterData = () => {
                   {rows.map((row, i) => (
                     <TableRow key={row._id} hover sx={{ cursor: 'pointer' }} onClick={() => setLogRow(row)}>
                       <TableCell sx={{ color: 'text.disabled' }}>{i + 1}</TableCell>
-                      {columns.map((c) => <TableCell key={c.field}>{displayVal(c, row)}</TableCell>)}
+                      {columns.map((c) => <TableCell key={c.field}><ToneCell c={c} row={row} /></TableCell>)}
                       <TableCell sx={{ whiteSpace: 'normal' }} onClick={(e) => e.stopPropagation()}><ConnectedCell {...stepForRow(row)} /></TableCell>
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <Button size="small" startIcon={<ScrollText size={13} />} onClick={() => setLogRow(row)}>Log</Button>
@@ -918,7 +1016,7 @@ const O2dMasterData = () => {
                     {columns.slice(1).map((c) => (
                       <Stack key={c.field} direction="row" justifyContent="space-between" spacing={1}>
                         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>{c.headerName}</Typography>
-                        <Typography variant="caption" sx={{ fontWeight: 700, textAlign: 'right' }}>{displayVal(c, row)}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 700, textAlign: 'right' }}><ToneCell c={c} row={row} /></Typography>
                       </Stack>
                     ))}
                   </Stack>
@@ -944,7 +1042,7 @@ const O2dMasterData = () => {
                 return keys.map((s) => (
                   <Box key={s} sx={{ minWidth: 260, flex: '0 0 260px' }}>
                     <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1, px: 0.5 }}>
-                      <Typography sx={{ fontWeight: 800, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s}</Typography>
+                      <StatusPill value={s} />
                       <Chip size="small" label={groups[s].length} sx={{ height: 18, fontSize: '0.62rem' }} />
                     </Stack>
                     <Stack spacing={1}>
@@ -953,7 +1051,7 @@ const O2dMasterData = () => {
                           <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', color: theme.palette.primary.dark }}>{displayVal(columns[0], row)}</Typography>
                           {columns.slice(1, 4).map((c) => (
                             <Typography key={c.field} variant="caption" display="block" color="text.secondary">
-                              {c.headerName}: <b style={{ color: theme.palette.text.primary }}>{displayVal(c, row)}</b>
+                              {c.headerName}: <b><ToneCell c={c} row={row} /></b>
                             </Typography>
                           ))}
                         </Paper>

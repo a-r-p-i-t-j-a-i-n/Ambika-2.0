@@ -558,9 +558,20 @@ const O2dStepBoard = () => {
   // "All" by default — doers landing on a step must see every order on it,
   // done and pending alike (the sheet shows everything; filters are opt-in).
   const [status, setStatus] = useState('all');
+  // Pick one order or one party from a list (empty = all).
+  const [soFilter, setSoFilter] = useState(null);
+  const [partyFilter, setPartyFilter] = useState(null);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
-  useEffect(() => { setPage(0); setSelected([]); }, [search, status, activeCode, rowsPerPage, sortBy]);
+  useEffect(() => { setPage(0); setSelected([]); }, [search, status, soFilter, partyFilter, activeCode, rowsPerPage, sortBy]);
+
+  // The dropdowns' lists: every order on the board (newest first, as loaded)
+  // and every party (A–Z).
+  const soOptions = useMemo(() => [...new Set(rows.map((p) => p.soNumber).filter(Boolean))], [rows]);
+  const partyOptions = useMemo(
+    () => [...new Set(rows.map((p) => p.partyName).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [rows],
+  );
 
   // One row per order = that order's entry for the ACTIVE step.
   const stepRows = useMemo(() => {
@@ -568,6 +579,8 @@ const O2dStepBoard = () => {
     const q = search.trim().toLowerCase();
     const list = [];
     rows.forEach((p) => {
+      if (soFilter && p.soNumber !== soFilter) return;
+      if (partyFilter && p.partyName !== partyFilter) return;
       const s = (p.steps || []).find((x) => x.stepCode === activeCode);
       if (!s) return;
       const st = stepState(s);
@@ -585,7 +598,7 @@ const O2dStepBoard = () => {
     // Latest activity first by default — the chronological FMS register — but the
     // doer can re-order it from the toolbar.
     return sortRows(list, sortBy);
-  }, [rows, activeCode, search, status, isPerDcStep, dcBySo, sortBy]);
+  }, [rows, activeCode, search, status, soFilter, partyFilter, isPerDcStep, dcBySo, sortBy]);
 
   // Dispatch step: expand each order into one row PER Delivery Challan (a split
   // order appears once per dispatch, like the sheet); orders not yet dispatched
@@ -783,10 +796,21 @@ const O2dStepBoard = () => {
             <Typography noWrap sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>O2D — Step Board</Typography>
             <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub, display: { xs: 'none', xl: 'block' } }}>Pick a step, see every order on it, click a link to do the work.</Typography>
           </Box>
+          {/* Pick one order / one party — the list below shows only that. */}
+          <Autocomplete
+            size="small" options={soOptions} value={soFilter} onChange={(_, v) => setSoFilter(v)}
+            sx={{ width: { xs: '100%', md: 150, lg: 168, xl: 190 }, minWidth: 120, flexShrink: 1 }}
+            renderInput={(params) => <TextField {...params} label="SO Number" placeholder="All orders" />}
+          />
+          <Autocomplete
+            size="small" options={partyOptions} value={partyFilter} onChange={(_, v) => setPartyFilter(v)}
+            sx={{ width: { xs: '100%', md: 150, lg: 175, xl: 210 }, minWidth: 120, flexShrink: 1 }}
+            renderInput={(params) => <TextField {...params} label="Party" placeholder="All parties" />}
+          />
           <TextField
             size="small" placeholder="Search SO / PO…" value={search}
             onChange={(e) => setSearch(e.target.value)}
-            sx={{ width: { xs: '100%', md: 150, lg: 190, xl: 220 }, minWidth: 130, flexShrink: 1 }}
+            sx={{ width: { xs: '100%', md: 130, lg: 160, xl: 200 }, minWidth: 110, flexShrink: 1 }}
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} /></InputAdornment> }}
           />
           <TextField
