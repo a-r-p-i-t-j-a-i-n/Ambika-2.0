@@ -14,6 +14,7 @@ import { usePermissions } from '../../hooks/usePermission';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from '../procurement/pfmsTheme';
 import { fmtDateTime, userName } from './fmsDoerMeta';
 import DoerPickerDialog from './DoerPickerDialog';
+import O2dFmsTasks from './O2dFmsTasks';
 
 /**
  * FMS Tasks — Purchase FMS work, laid out like O2D's My Tasks / All Tasks:
@@ -407,19 +408,35 @@ const FmsTasksPage = () => {
   const { can } = usePermissions();
   const canManage = can('fms.manageDoers');
   const [tab, setTab] = useState(0);
+  // O2D FMS (its own view) or Purchase FMS (the lists below, unchanged).
+  const [source, setSource] = useState('o2d');
   return (
     <Box sx={{ ...pfmsPageSx, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <Box>
-        <Typography sx={pfmsTitleSx}>FMS Tasks</Typography>
-        <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Purchase FMS items waiting on you — what to do, for which record, and by when</Typography>
-      </Box>
-      {canManage && (
-        <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontWeight: 700 } }}>
-          <Tab label="My FMS Tasks" />
-          <Tab label="All FMS Tasks" />
-        </Tabs>
+      <Stack direction="row" justifyContent="space-between" alignItems="flex-end" spacing={2} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+        <Box>
+          <Typography sx={pfmsTitleSx}>FMS Tasks</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
+            {source === 'o2d'
+              ? 'Your workflow steps, deadlines and next actions in one place.'
+              : 'Purchase FMS items waiting on you — what to do, for which record, and by when'}
+          </Typography>
+        </Box>
+        <ToggleButtonGroup size="small" exclusive value={source} onChange={(_e, v) => { if (v) setSource(v); }}>
+          <ToggleButton value="o2d" sx={{ px: 1.75, textTransform: 'none', fontWeight: 700 }}>O2D FMS</ToggleButton>
+          <ToggleButton value="purchase" sx={{ px: 1.75, textTransform: 'none', fontWeight: 700 }}>Purchase FMS</ToggleButton>
+        </ToggleButtonGroup>
+      </Stack>
+      {source === 'o2d' ? <O2dFmsTasks /> : (
+        <>
+          {canManage && (
+            <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontWeight: 700 } }}>
+              <Tab label="My FMS Tasks" />
+              <Tab label="All FMS Tasks" />
+            </Tabs>
+          )}
+          {tab === 0 || !canManage ? <MyTasks /> : <AllTasks />}
+        </>
       )}
-      {tab === 0 || !canManage ? <MyTasks /> : <AllTasks />}
     </Box>
   );
 };
