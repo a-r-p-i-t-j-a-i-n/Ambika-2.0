@@ -15,6 +15,7 @@ import {
   voucherQuerySchema,
   mongoIdParamSchema,
   invoiceIdParamSchema,
+  expenseLinkQuerySchema,
 } from './voucher.validation.js';
 
 const router = Router();
@@ -26,6 +27,8 @@ router.route('/')
 
 router.get('/stats', c.getStats);
 router.get('/by-invoice/:invoiceId', validate(invoiceIdParamSchema, 'params'), c.getByInvoice);
+// PO / GRN an expense voucher can be raised against right now.
+router.get('/expense-links', validate(expenseLinkQuerySchema, 'query'), c.getExpenseLinkOptions);
 
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)

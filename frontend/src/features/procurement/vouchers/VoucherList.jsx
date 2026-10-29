@@ -3,11 +3,11 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
+  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, Send, Ban,
+  Search, Plus, Eye, Pencil, Send, Ban,
   Banknote, FileStack, Coins, CheckCheck, Wallet,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -19,7 +19,7 @@ import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
-import { VoucherStatusChip, VoucherTypeChip, VOUCHER_STATUSES, VOUCHER_TYPES, EXPENSE_CATEGORIES, PAYMENT_MODES, fmtINR, fmtDate } from './voucherMeta';
+import { VoucherStatusChip, VoucherTypeChip, VOUCHER_STATUSES, VOUCHER_TYPES, EXPENSE_CATEGORIES, PAYMENT_MODES, fmtINR, fmtDate, expenseTypeOf, expenseTypeMeta } from './voucherMeta';
 import VoucherFormDialog from './VoucherFormDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import PurchaseFmsStepper from '../components/PurchaseFmsStepper';
@@ -27,6 +27,9 @@ import { PURCHASE_FMS_STEPS } from '../PurchaseFmsHub';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 // This standalone page (also reachable outside the Purchase FMS hub, e.g. for
 // Expense vouchers, which have no invoice) still belongs under the hub's
 // unified "Vendor Invoices & Payments" step — show the same step rail here
@@ -61,6 +64,7 @@ const VoucherList = () => {
   const [editVoucher, setEditVoucher] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
     page: paginationModel.page + 1, limit: paginationModel.pageSize, sort: '-createdAt',
@@ -98,7 +102,10 @@ const VoucherList = () => {
     { field: 'voucherType', headerName: 'TYPE', width: 80, sortable: false, renderCell: (p) => <VoucherTypeChip type={p.value} /> },
     { field: 'voucherDate', headerName: 'DATE', width: 95, renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'invoiceNumber', headerName: 'INVOICE / CATEGORY', width: 160, sortable: false,
-      valueGetter: (_v, row) => (row.voucherType === 'EXPENSE' ? (row.expenseCategory || '—') : (row.invoiceNumber || '—')),
+      // Expense against a PO / GRN: the category plus that document.
+      valueGetter: (_v, row) => (row.voucherType === 'EXPENSE'
+        ? [row.expenseCategory || '—', row.poNumber, ...(row.grnNumbers || [])].filter(Boolean).join(' · ')
+        : (row.invoiceNumber || '—')),
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR / PARTY', flex: 1, minWidth: 150, renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
     { field: 'netPayableAmount', headerName: 'NET PAYABLE', width: 120, align: 'right', headerAlign: 'right', renderCell: (p) => fmtINR(p.value) },
@@ -106,7 +113,12 @@ const VoucherList = () => {
     { field: 'balanceAmount', headerName: 'BALANCE', width: 110, align: 'right', headerAlign: 'right', renderCell: (p) => <Typography variant="body2" sx={{ color: p.value > 0 ? '#b45309' : '#16a34a', fontWeight: 600 }}>{fmtINR(p.value)}</Typography> },
     { field: 'voucherStatus', headerName: 'STATUS', width: 150, renderCell: (p) => <VoucherStatusChip status={p.value} /> },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center', renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.voucherNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -246,8 +258,8 @@ const VoucherList = () => {
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
+          {...rowNav.gridProps} {...rowActionsGridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
@@ -257,6 +269,20 @@ const VoucherList = () => {
       </Menu>
 
       <VoucherFormDialog open={formOpen} voucher={editVoucher} onClose={() => { setFormOpen(false); setEditVoucher(null); }} />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="Voucher Details" number={quickRow?.voucherNumber}
+        status={quickRow ? <VoucherStatusChip status={quickRow.voucherStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'Type', value: <VoucherTypeChip type={quickRow.voucherType} /> },
+          { label: 'Date', value: fmtDate(quickRow.voucherDate) },
+          { label: quickRow.voucherType === 'EXPENSE' ? 'Category' : 'Invoice', value: quickRow.voucherType === 'EXPENSE' ? quickRow.expenseCategory : quickRow.invoiceNumber },
+          ...(quickRow.voucherType === 'EXPENSE' ? [{ label: 'Expense Type', value: expenseTypeMeta(expenseTypeOf(quickRow)).label }] : []),
+          { label: 'Net Payable', value: fmtINR(quickRow.netPayableAmount) },
+          { label: 'Paid', value: fmtINR(quickRow.paidAmount) },
+          { label: 'Balance', value: fmtINR(quickRow.balanceAmount) },
+        ] : []}
+        openFullLabel="Open full voucher" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

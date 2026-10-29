@@ -295,7 +295,6 @@ const IndentDetail = () => {
   const quoteDone = ['RECEIVED', 'NOT_REQUIRED'].includes(indent.quoteStep?.status);
   const step12Done = ['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(indent.overallStatus);
   const quotationDone = !!indent.quotationApprovalStep?.statusDone;
-  const isQuotationApproved = indent.overallStatus === 'QUOTATION_APPROVED';
   // Step 1.3 was skipped because Step 1.2 was marked "Quote Not Required".
   const quoteSkipped = !!indent.quotationApprovalStep?.skipped;
   const isService = indent.requestType === 'INTERNAL_SERVICE';
@@ -334,7 +333,7 @@ const IndentDetail = () => {
     if (canStartServiceQc(indent)) {
       return { tone: 'info', title: 'Next: Service QC (Step 1.9)',
         desc: 'This is an internal-service indent — once the work is done, check it in Incoming QC (attach the service report there).',
-        primary: { label: 'Start Service QC', icon: <CheckCircle2 size={16} />, onClick: () => startServiceQc(indent) } };
+        primary: { label: 'Start Service QC', icon: <CheckCircle2 size={16} />, loading: startingServiceQc, onClick: () => startServiceQc(indent) } };
     }
     if (!isService && indent.overallStatus === 'QUOTATION_APPROVED') {
       return { tone: 'success', title: 'Quotation approved — create a Purchase Order',
@@ -390,20 +389,11 @@ const IndentDetail = () => {
           </Box>
           <Typography variant="body2" sx={{ color: PFMS.sub }}>{indent.productNameRevised}</Typography>
         </Box>
-        <Box sx={{ flexGrow: 1 }} />
-        {/* Contextual actions */}
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          {isDraft && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {isDraft && <Button variant="contained" startIcon={<Send size={16} />} onClick={onSubmit}>Submit</Button>}
-          {isPending && <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} onClick={() => setApprovalOpen(true)}>Approve / Reject</Button>}
-          {/* Receive Quote / Comparative (Step 1.2) lives only in the Next Step banner, which shows it under the same condition. */}
-          {step12Done && !quotationDone && !quoteSkipped && <Button variant="contained" color="success" startIcon={<FileCheck2 size={16} />} onClick={() => setQuotationOpen(true)}>Approved Quotation 1.03</Button>}
-          {canStartServiceQc(indent) && (
-            <Button variant="contained" color="success" startIcon={<CheckCircle2 size={16} />} disabled={startingServiceQc} onClick={() => startServiceQc(indent)}>Start Service QC</Button>
-          )}
-        </Box>
       </Box>
 
+      {/* The workflow actions (Edit / Submit, Approve / Reject, Receive Quote,
+          Approved Quotation 1.03, Service QC, Create PO) live only in the Next
+          Step banner, which explains them — the hero no longer repeats them. */}
       <NextStepBanner step={nextStep} />
 
       <FmsDoerCard entityType="INDENT" entityId={id} />
@@ -473,20 +463,9 @@ const IndentDetail = () => {
           })()}
         </SectionCard>
 
-        <SectionCard
-          icon={<FileCheck2 size={18} />}
-          title="Approved Quotation"
-          action={
-            <Tooltip title={isQuotationApproved ? 'Create a Purchase Order from this indent' : 'Available after quotation is approved'}>
-              <span>
-                <Button size="small" variant={isQuotationApproved ? 'contained' : 'outlined'} startIcon={<ShoppingBag size={14} />}
-                  disabled={!isQuotationApproved} onClick={() => setPoDrawerOpen(true)}>
-                  Create Vendor PO
-                </Button>
-              </span>
-            </Tooltip>
-          }
-        >
+        {/* Create Vendor PO is offered by the Next Step banner (QUOTATION_APPROVED /
+            PARTIAL_PO_CREATED), so this card doesn't repeat it. */}
+        <SectionCard icon={<FileCheck2 size={18} />} title="Approved Quotation">
           <FieldGrid>
             <Field label="Status" value={<QuotationChip status={indent.quotationApprovalStep?.statusDone || (quoteSkipped ? 'NOT_REQUIRED' : 'PENDING')} />} />
             <Field label="Actual Date" value={fmtDate(indent.quotationApprovalStep?.actualAt)} />

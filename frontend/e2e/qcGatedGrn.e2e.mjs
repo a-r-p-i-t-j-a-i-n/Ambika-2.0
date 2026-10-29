@@ -84,7 +84,7 @@ check('login', true);
 
 // ── 1. Create GRN: automatic destinations, no Inventory Type ─────────────────
 console.log('\n── 1. Create and save a mixed GRN (coil + brush; a service line on the PO) ──');
-await go(`${APP}/purchase-fms/grn`);
+await go(`${APP}/purchase-fms/grn?view=grn`);
 await page.getByRole('button', { name: /new grn/i }).first().waitFor({ timeout: 20000 });
 await page.getByRole('button', { name: /new grn/i }).first().click();
 const form = page.getByRole('dialog').filter({ hasText: 'Create GRN' });

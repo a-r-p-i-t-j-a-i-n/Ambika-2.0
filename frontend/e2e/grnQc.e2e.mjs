@@ -149,7 +149,7 @@ check('QC detail of a GRN draft offers "Open GRN & QC", not its own Complete QC'
 
 // ── The required journey, on the Create GRN form itself ──────────────────────
 console.log('\n── Save GRN → Complete GRN → QC → stock (same form, no MD signature needed) ──');
-await go(page, `${APP}/purchase-fms/grn`);
+await go(page, `${APP}/purchase-fms/grn?view=grn`);
 await page.waitForTimeout(1200);
 await page.getByRole('button', { name: /new grn/i }).first().click();
 const form = page.getByRole('dialog').filter({ hasText: 'Create GRN' });
@@ -238,7 +238,7 @@ check('5d. the MD signs afterwards from the GRN page — QC result and stock unc
 
 // ── Raw Material through the form: Received At asked for automatically ──────
 console.log('\n── Raw Material through the form → RM IMS (after QC) ──');
-await go(page, `${APP}/purchase-fms/grn`);
+await go(page, `${APP}/purchase-fms/grn?view=grn`);
 await page.waitForTimeout(1200);
 await page.getByRole('button', { name: /new grn/i }).first().click();
 const rmForm = page.getByRole('dialog').filter({ hasText: 'Create GRN' });

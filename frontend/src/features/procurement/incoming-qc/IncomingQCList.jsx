@@ -3,11 +3,11 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
+  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, MoreVertical, Eye, Pencil, ClipboardCheck, Ban, FileDown,
+  Search, Eye, Pencil, ClipboardCheck, Ban, FileDown,
   ShieldCheck, Hourglass, BadgeCheck, ShieldX, ShieldAlert,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -29,6 +29,9 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const sumQty = (items, key) => (items || []).reduce((s, it) => s + (Number(it[key]) || 0), 0);
 
 const IncomingQCList = () => {
@@ -60,6 +63,7 @@ const IncomingQCList = () => {
   const [activeQc, setActiveQc] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
     page: paginationModel.page + 1,
@@ -125,8 +129,12 @@ const IncomingQCList = () => {
     { field: 'overallResult', headerName: 'RESULT', width: 125, renderCell: (p) => <QcResultChip result={p.value} /> },
     { field: 'qcStatus', headerName: 'STATUS', width: 125, renderCell: (p) => <QcStatusChip status={p.value} /> },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
-      renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.qcNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -235,12 +243,12 @@ const IncomingQCList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps}
+          {...rowNav.gridProps} {...rowActionsGridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={[{ border: 0 }, rowNavigationGridSx]}
+          sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
 
@@ -255,6 +263,21 @@ const IncomingQCList = () => {
 
       <IncomingQCFormDialog open={formOpen} qc={editQc} onClose={() => { setFormOpen(false); setEditQc(null); }} />
       <IncomingQCCompleteDialog open={completeOpen} qc={activeQc} onClose={() => { setCompleteOpen(false); setActiveQc(null); }} />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="QC Details" number={quickRow?.qcNumber}
+        status={quickRow ? <QcStatusChip status={quickRow.qcStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'QC Date', value: fmtDate(quickRow.qcDate) },
+          { label: 'GRN Number', value: quickRow.grnNumber },
+          { label: 'PO Number', value: quickRow.grnId && !quickRow.poNumber ? 'Without PO' : quickRow.poNumber },
+          { label: 'Result', value: <QcResultChip result={quickRow.overallResult} /> },
+          { label: 'Items', value: (quickRow.items || []).length },
+          { label: 'Received', value: quickRow.totalReceived },
+          { label: 'Accepted', value: quickRow.totalAccepted },
+          { label: 'Rejected', value: quickRow.totalRejected },
+        ] : []}
+        openFullLabel="Open full QC" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

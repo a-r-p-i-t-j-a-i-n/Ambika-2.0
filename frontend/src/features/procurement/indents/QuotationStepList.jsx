@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Chip } from '@mui/material';
+import {
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Chip, Menu, ListItemIcon, ListItemText,
+} from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Hourglass, FileText, FileCheck2, CircleSlash, ClipboardList, ExternalLink, ShoppingBag, Pencil,
+  Search, Hourglass, FileText, FileCheck2, CircleSlash, ClipboardList, ExternalLink, ShoppingBag, Pencil, Eye,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetIndentsQuery, useGetIndentStatsQuery } from '../../../store/api/procurementApi';
@@ -16,6 +18,9 @@ import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import { DEPARTMENTS, REQUEST_TYPES, fileHref, itemRef, isItemEligibleForQuote } from './indentMeta';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsWidth, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
+import IndentQuickViewDialog from './IndentQuickViewDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
 import QuotationApprovalDialog from './QuotationApprovalDialog';
 import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer';
@@ -119,8 +124,10 @@ const QuotationStepList = ({ step }) => {
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search] = useDebouncedSearch('');
-  // The doer's queue first: the step opens on its pending indents.
-  const [stepState, setStepState] = useState('PENDING');
+  // Opens on every indent that reached the step, each with its own state chip
+  // (pending / done / not required) — opening on PENDING alone showed an empty
+  // table whenever nothing was waiting. The Pending tile narrows to the queue.
+  const [stepState, setStepState] = useState('ALL');
   const [department, setDepartment] = useState('');
   const [requestType, setRequestType] = useState('');
   const [from, setFrom] = useState('');
@@ -133,6 +140,10 @@ const QuotationStepList = ({ step }) => {
   const [dialog, setDialog] = useState(null); // 'quote' | 'approval' | 'po'
   const open = (kind, row) => { setActiveIndent(row); setDialog(kind); };
   const close = () => { setDialog(null); setActiveIndent(null); };
+  const [quickIndent, setQuickIndent] = useState(null); // row whose quick view is open
+  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [menuRow, setMenuRow] = useState(null);
+  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
 
   const { data, isLoading, isFetching } = useGetIndentsQuery({
     page: paginationModel.page + 1,
@@ -219,27 +230,25 @@ const QuotationStepList = ({ step }) => {
         renderCell: (p) => <FilesCell docs={approvedDocsOf(p.row)} /> },
     ] : []),
     ...stepTimingColumns(),
-    { field: '__actions', headerName: 'Action', width: 210, sortable: false, filterable: false,
-      disableColumnMenu: true, align: 'right', headerAlign: 'right',
-      renderCell: (p) => {
-        const a = actionFor(p.row);
-        return (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'flex-end', width: '100%' }}>
-            <Button size="small" variant="outlined" onClick={(e) => { e.stopPropagation(); navigate(`/procurement/indents/${p.row._id}`); }}
-              sx={{ minWidth: 0, px: 1, py: 0.25, fontSize: '0.72rem', fontWeight: 700 }}>
-              View
+    // The step's own action stays a visible button, left of the eye (quick
+    // view) and ⋮ (View → full indent page); those two never move.
+    rowActionsColumn((p) => {
+      const a = actionFor(p.row);
+      return (
+        <RowActionsCell rowId={p.row._id} label={p.row.indentNumber}
+          onQuickView={() => setQuickIndent(p.row)}
+          onMenu={(e) => { setMenuAnchor(e.currentTarget); setMenuRow(p.row); }}>
+          {a && (
+            <Button size="small" variant={a.variant} color={a.color || 'primary'} disableElevation startIcon={a.icon}
+              onClick={(e) => { e.stopPropagation(); a.fn(); }}
+              aria-label={`${a.label} for ${p.row.indentNumber}`}
+              sx={{ px: 1, py: 0.25, minHeight: 30, fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap' }}>
+              {a.label}
             </Button>
-            {a && (
-              <Button size="small" variant={a.variant} color={a.color || 'primary'} disableElevation startIcon={a.icon}
-                onClick={(e) => { e.stopPropagation(); a.fn(); }}
-                aria-label={`${a.label} for ${p.row.indentNumber}`}
-                sx={{ px: 1, py: 0.25, fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                {a.label}
-              </Button>
-            )}
-          </Box>
-        );
-      } },
+          )}
+        </RowActionsCell>
+      );
+    }, { width: rowActionsWidth(140) }),
   ];
 
   return (
@@ -327,17 +336,29 @@ const QuotationStepList = ({ step }) => {
           onPaginationModelChange={setPaginationModel}
           pageSizeOptions={[10, 25, 50, 100]}
           {...rowNav.gridProps}
+          {...rowActionsGridProps}
           disableRowSelectionOnClick
           getRowHeight={() => 'auto'}
           columnHeaderHeight={42}
-          localeText={{ noRowsLabel: stepState === 'PENDING' ? `Nothing pending at Step ${cfg.code}` : 'No indents' }}
+          localeText={{ noRowsLabel: stepState === 'PENDING' ? `Nothing pending at Step ${cfg.code}`
+            : stepState === 'ALL' ? `No indents have reached Step ${cfg.code} yet` : `No indents in “${cfg.tiles[stepState]}”` }}
           sx={[{
             border: 0,
             flexGrow: 1,
             '& .MuiDataGrid-cell': { display: 'flex', alignItems: 'center', py: 0.5 },
-          }, rowNavigationGridSx]}
+          }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
+
+      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
+        {menuRow && (
+          <MenuItem onClick={() => { const id = menuRow._id; closeMenu(); navigate(`/procurement/indents/${id}`); }}>
+            <ListItemIcon><Eye size={16} /></ListItemIcon>
+            <ListItemText>View</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
+      <IndentQuickViewDialog indent={quickIndent} onClose={() => setQuickIndent(null)} />
 
       <QuoteComparativeDialog open={dialog === 'quote'} indent={activeIndent} onClose={close} />
       <QuotationApprovalDialog open={dialog === 'approval'} indent={activeIndent} onClose={close} />
