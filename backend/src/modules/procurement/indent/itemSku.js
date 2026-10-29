@@ -3,9 +3,10 @@
  *
  * The SKU Master (`skus`) is the product catalogue; the Vendor Master only
  * describes vendors. Every item on a new or edited indent must therefore point
- * at an ACTIVE SKU, and its Item Name / SKU Code are taken from that SKU record
- * — never from free text the client typed. Quantity, unit and remarks stay as
- * the user entered them (the unit defaults to the SKU's unit in the form).
+ * at an ACTIVE SKU, and its Item Name / SKU Code / Unit are taken from that SKU
+ * record — never from what the client sent. The unit is copied exactly as the
+ * master stores it ("kg", "NOS", "Sheet"); only a SKU with no unit keeps the
+ * line's own. Quantity and remarks stay as the user entered them.
  *
  * Matching: by skuId when one is sent (an id that no longer resolves is refused,
  * never re-matched by code, so a line can't silently move to another SKU); by
@@ -42,7 +43,13 @@ export const bindItemsToSkus = (items = [], skus = []) => {
       problems.push(`${label(it)} is not linked to SKU Master — pick the item from the SKU list.`);
     }
     if (!sku) return it;
-    return { ...it, skuId: sku._id, skuCode: up(sku.code), itemName: String(sku.name || '').trim() || it.itemName };
+    return {
+      ...it,
+      skuId: sku._id,
+      skuCode: up(sku.code),
+      itemName: String(sku.name || '').trim() || it.itemName,
+      unit: String(sku.unit || '').trim() || it.unit,
+    };
   });
   return { items: bound, problems };
 };

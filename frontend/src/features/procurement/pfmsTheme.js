@@ -40,7 +40,17 @@ export const pfmsPageSx = {
   minHeight: 'calc(100vh - var(--pfms-chrome, 0px))',
   bgcolor: PFMS.canvas,
 };
-export const pfmsTitleSx = { fontSize: '1rem', fontWeight: 800, color: PFMS.ink, lineHeight: 1.2 };
+// A step's own tab bar under the hub (StepWithQueue, GrnQcStep): fixed height,
+// and the page under it subtracts hub + tabs (PurchaseFmsHub publishes
+// --pfms-hub-chrome) so pfmsPageSx's minHeight still fits the window.
+const STEP_TABS_HEIGHT = 40;
+export const pfmsStepTabsSx = {
+  minHeight: STEP_TABS_HEIGHT,
+  height: STEP_TABS_HEIGHT,
+  '& .MuiTab-root': { minHeight: STEP_TABS_HEIGHT, fontWeight: 700, textTransform: 'none' },
+};
+export const pfmsUnderStepTabsStyle = { '--pfms-chrome': `calc(var(--pfms-hub-chrome, 0px) + ${STEP_TABS_HEIGHT}px)` };
+export const pfmsTitleSx ={ fontSize: '1rem', fontWeight: 800, color: PFMS.ink, lineHeight: 1.2 };
 export const pfmsSubtitleSx = { fontSize: '0.72rem', color: PFMS.sub, fontWeight: 500 };
 export const pfmsCardSx = { borderRadius: '8px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surface };
 export const pfmsTableHeadSx = {

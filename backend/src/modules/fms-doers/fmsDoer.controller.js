@@ -29,6 +29,22 @@ export const fmsDoerController = {
     res.json(ApiResponse.ok(`${out.reassigned} open task(s) reassigned`, out));
   }),
 
+  plan: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Doer plan', await svc.getPlan(req.params.fmsKey)));
+  }),
+
+  planUsers: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Assignable people', await svc.planUsers(req.params.fmsKey)));
+  }),
+
+  savePlan: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Doer plan saved', await svc.savePlan(req.params.fmsKey, req.body, req.user)));
+  }),
+
+  applyPlan: asyncHandler(async (req, res) => {
+    res.json(ApiResponse.ok('Pending items updated', await svc.applyPlanToOpenTasks(req.params.fmsKey, req.body, req.user)));
+  }),
+
   myTasks: asyncHandler(async (req, res) => {
     res.json(ApiResponse.ok('My FMS tasks', await svc.myTasks(req.user)));
   }),

@@ -3,11 +3,11 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
+  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Ban, FileDown, ReceiptText,
+  Search, Plus, Eye, Ban, FileDown, ReceiptText,
   Wallet, Coins, Hourglass, SplitSquareHorizontal, CheckCheck, Scissors,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -30,6 +30,9 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const FinalPaymentList = () => {
   const navigate = useNavigate();
   const rowNav = useRowNavigation({ to: (r) => `/procurement/final-payments/${r._id}` });
@@ -51,6 +54,7 @@ const FinalPaymentList = () => {
   const [formOpen, setFormOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
   const [receipt, setReceipt] = useState({ open: false, url: '', title: '', fileName: '', loading: false });
 
   const [cancelPayment] = useCancelFinalPaymentMutation();
@@ -97,9 +101,10 @@ const FinalPaymentList = () => {
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
-    a.push({ key: 'receipt', label: r.paymentPdfUrl ? 'Receipt PDF' : 'Generate Receipt', icon: <ReceiptText size={16} />, fn: () => onReceipt(r) });
     if (r.proofDocument?.fileUrl) a.push({ key: 'proof', label: 'View Proof', icon: <FileDown size={16} />, fn: () => onProof(r) });
     if (r.paymentStatus !== 'CANCELLED') a.push({ key: 'cancel', label: 'Cancel Payment', icon: <Ban size={16} />, fn: () => onCancel(r) });
+    // The receipt PDF is always the last item.
+    a.push({ key: 'receipt', label: r.paymentPdfUrl ? 'Receipt PDF' : 'Generate Receipt', icon: <ReceiptText size={16} />, fn: () => onReceipt(r) });
     return a;
   };
 
@@ -116,7 +121,12 @@ const FinalPaymentList = () => {
     { field: 'paymentReferenceNumber', headerName: 'REF NO', width: 110, renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     { field: 'paymentStatus', headerName: 'STATUS', width: 140, renderCell: (p) => <PaymentStatusChip status={p.value} /> },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center', renderCell: (p) => <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton></Tooltip> },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.paymentNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -218,8 +228,8 @@ const FinalPaymentList = () => {
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
-          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx]} />
+          {...rowNav.gridProps} {...rowActionsGridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
+          rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />
       </Paper>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
@@ -237,6 +247,20 @@ const FinalPaymentList = () => {
         title={receipt.title}
         fileName={receipt.fileName}
       />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="Payment Details" number={quickRow?.paymentNumber}
+        status={quickRow ? <PaymentStatusChip status={quickRow.paymentStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'Voucher', value: quickRow.voucherNumber },
+          { label: 'Invoice', value: quickRow.invoiceNumber },
+          { label: 'Date', value: fmtDate(quickRow.paymentDate) },
+          { label: 'Paid', value: fmtINR(quickRow.paidAmount) },
+          { label: 'Balance', value: fmtINR(quickRow.balanceAfterPayment) },
+          { label: 'Mode', value: paymentModeLabel(quickRow.paymentMode) },
+          { label: 'Ref No', value: quickRow.paymentReferenceNumber },
+        ] : []}
+        openFullLabel="Open full payment" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

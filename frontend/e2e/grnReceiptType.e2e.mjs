@@ -137,7 +137,7 @@ check('login', true);
 
 // ── 1. Header no longer has the dropdown ─────────────────────────────────────
 console.log('\n── 1. GRN Header ──');
-await go(`${APP}/purchase-fms/grn`);
+await go(`${APP}/purchase-fms/grn?view=grn`);
 await page.getByRole('button', { name: /new grn/i }).first().waitFor({ timeout: 20000 });
 await page.getByRole('button', { name: /new grn/i }).first().click();
 const form = page.getByRole('dialog').filter({ hasText: 'Create GRN' });
@@ -279,7 +279,7 @@ await page.waitForTimeout(500);
 
 // ── 8. Without PO: add / remove rows ─────────────────────────────────────────
 console.log('\n── 8. W/O PO rows ──');
-await go(`${APP}/purchase-fms/grn`);
+await go(`${APP}/purchase-fms/grn?view=grn`);
 await page.getByRole('button', { name: /new grn/i }).first().click();
 const wo = page.getByRole('dialog').filter({ hasText: 'Create GRN' });
 await wo.waitFor();

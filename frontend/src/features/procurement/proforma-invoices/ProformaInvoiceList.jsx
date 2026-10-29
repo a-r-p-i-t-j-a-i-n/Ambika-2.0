@@ -3,11 +3,11 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete,
+  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, XCircle, Ban,
+  Search, Plus, Eye, Pencil, CheckCircle2, XCircle, Ban,
   FileDown, ReceiptText, Hourglass, BadgeCheck, Wallet, CircleSlash,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -29,6 +29,9 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const sumQty = (items, key) => (items || []).reduce((s, it) => s + (Number(it[key]) || 0), 0);
 
 const ProformaInvoiceList = () => {
@@ -62,6 +65,7 @@ const ProformaInvoiceList = () => {
   const [activePi, setActivePi] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
     page: paginationModel.page + 1,
@@ -99,11 +103,12 @@ const ProformaInvoiceList = () => {
       a.push({ key: 'edit', label: 'Edit Draft', icon: <Pencil size={16} />, fn: () => onEdit(r) });
       a.push({ key: 'approve', label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, fn: () => onApprove(r) });
     }
-    if (r.piDocument?.fileUrl) {
-      a.push({ key: 'pdf', label: 'Download PI', icon: <FileDown size={16} />, fn: () => onPdf(r) });
-    }
     if (r.piStatus !== 'CANCELLED') {
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
+    }
+    // The document preview is always the last item.
+    if (r.piDocument?.fileUrl) {
+      a.push({ key: 'pdf', label: 'Download PI', icon: <FileDown size={16} />, fn: () => onPdf(r) });
     }
     return a;
   };
@@ -140,12 +145,12 @@ const ProformaInvoiceList = () => {
     { field: 'piStatus', headerName: 'STATUS', width: 150,
       renderCell: (p) => <PiStatusChip status={p.value} /> },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
-      renderCell: (p) => (
-        <Tooltip title="Actions">
-          <IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton>
-        </Tooltip>
-      ) },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.piNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -248,12 +253,12 @@ const ProformaInvoiceList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps}
+          {...rowNav.gridProps} {...rowActionsGridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={[{ border: 0 }, rowNavigationGridSx]}
+          sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
 
@@ -271,6 +276,22 @@ const ProformaInvoiceList = () => {
       <ProformaInvoiceFormDrawer open={formOpen} pi={editPi} onClose={() => { setFormOpen(false); setEditPi(null); }} />
       <ProformaInvoiceApprovalDialog open={approvalOpen} pi={activePi} onClose={() => { setApprovalOpen(false); setActivePi(null); }} />
       <ProformaInvoicePdfPreview open={pdfOpen} pi={activePi} onClose={() => { setPdfOpen(false); setActivePi(null); }} />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="PI Details" number={quickRow?.piNumber}
+        status={quickRow ? <PiStatusChip status={quickRow.piStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'PI Date', value: fmtDate(quickRow.piDate) },
+          { label: 'PO Number', value: quickRow.poNumber },
+          { label: 'Qty', value: sumQty(quickRow.items, 'quantity') },
+          { label: 'Received', value: sumQty(quickRow.items, 'receivedQty') },
+          { label: 'Balance Qty', value: sumQty(quickRow.items, 'balanceQty') },
+          { label: 'Total Value', value: fmtINR(quickRow.totalValue) },
+          { label: 'Paid', value: fmtINR(quickRow.paidAmount) },
+          { label: 'Balance Amt', value: fmtINR(quickRow.balanceAmount) },
+          { label: 'Items', value: (quickRow.items || []).map((it) => it.itemName).filter(Boolean).join(', '), span: 2 },
+        ] : []}
+        openFullLabel="Open full PI" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

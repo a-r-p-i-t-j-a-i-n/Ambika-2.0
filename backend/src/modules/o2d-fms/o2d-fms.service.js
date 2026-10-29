@@ -41,16 +41,13 @@ import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
 import { notificationsService } from '../notifications/notification.service.js';
-import env from '../../config/env.js';
 import { authService } from '../auth/auth.service.js';
 import { delegationLinkOn, fetchSuitePeople } from './suite-client.js';
 
 // Notify every assigned doer (and every buddy) that a step is waiting on them.
 const notifyStepOwners = async (process, step) => {
-  // With the Delegation link on (o2d-delegation.js), each due step reaches its
-  // doers as a Delegation task with its own notification — no second
-  // "Your turn" here.
-  if (env.SUITE_API_URL && env.ERP_SSO_SECRET) return;
+  // O2D steps are no longer sent to Delegation as tasks (they are listed in
+  // My FMS Tasks), so the doers hear about a due step from here again.
   const link =`/o2d-fms/task/${process._id}/${encodeURIComponent(step.stepCode)}`;
   const title = `Your turn: ${step.taskTitle || step.stepCode}`;
   const body = `Order ${process.soNumber || ''} — ${process.partyName || ''}`;
@@ -907,10 +904,11 @@ export const o2dFmsService = {
         ? 'dcNumber soNumber dcDate createdAt status deliveryStatus deliveryDate newTrackDate cancelledAt cancelledByName cancelReason'
         : 'dcNumber soNumber poNumber partyName dcDate createdAt createdBy items totalQuantityPcs dispatchedThrough transporterName lrNo remark phaseRef phaseRefs isUnplanned pdfUrl status deliveryStatus deliveryDate newTrackDate cancelledAt cancelledByName cancelReason');
     if (!lite) challanQuery = challanQuery.populate('createdBy', 'name');
-    const challans = await challanQuery
-      .sort({ dcDate: 1, createdAt: 1 })
-      .limit(2000)
-      .lean();
+    challanQuery = challanQuery.sort({ dcDate: 1, createdAt: 1 });
+    // The whole board is capped; a call for named orders is bounded by them —
+    // a cap there (oldest first) would silently drop their newest challans.
+    if (!Array.isArray(onlySo)) challanQuery = challanQuery.limit(2000);
+    const challans = await challanQuery.lean();
     const dcIds = challans.map((ch) => ch._id);
     const soNumbers = [...new Set(challans.map((ch) => ch.soNumber).filter(Boolean))];
     const [invoices, payments, transportBills, procs] = await Promise.all([

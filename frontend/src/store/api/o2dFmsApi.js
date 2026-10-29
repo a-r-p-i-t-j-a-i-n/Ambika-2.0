@@ -23,6 +23,11 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       query: () => '/o2d-fms/all-tasks',
       providesTags: ['O2DMyTasks', 'O2DProcess'],
     }),
+    // FMS → My FMS Tasks (O2D rows): 'mine' or (managers) 'all'.
+    getO2dFmsTasks: builder.query({
+      query: (scope = 'mine') => ({ url: '/o2d-fms/fms-tasks', params: { scope } }),
+      providesTags: ['O2DMyTasks', 'O2DProcess'],
+    }),
     getFmsDashboard: builder.query({
       query: () => '/o2d-fms/dashboard',
       providesTags: ['O2DDashboard'],
@@ -288,6 +293,7 @@ export const {
   useLazyGetActiveTaskQuery,
   useGetFmsGateQuery,
   useGetAllTasksQuery,
+  useGetO2dFmsTasksQuery,
   useGetFmsDashboardQuery,
   useGetFmsScoresQuery,
   useGetMisScoresQuery,

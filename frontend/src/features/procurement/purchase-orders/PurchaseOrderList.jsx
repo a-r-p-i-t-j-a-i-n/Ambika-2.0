@@ -3,11 +3,11 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Tabs, Tab,
+  Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Tabs, Tab,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, CheckCircle2, Send, FileDown,
+  Search, Plus, Eye, Pencil, CheckCircle2, Send, FileText,
   Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, RotateCcw, SendHorizontal,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -30,8 +30,11 @@ import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import BulkReleasePoDialog from './BulkReleasePoDialog';
+import PoItemsQuickViewDialog from './PoItemsQuickViewDialog';
 import PendingForPoGrid from './PendingForPoGrid';
 import PfmsKpiCard from '../components/PfmsKpiCard';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
@@ -72,6 +75,7 @@ const PurchaseOrderList = () => {
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [bulkReleaseOpen, setBulkReleaseOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
+  const [itemsPo, setItemsPo] = useState(null); // row whose item quick view is open
   const [activePo, setActivePo] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
@@ -134,21 +138,22 @@ const PurchaseOrderList = () => {
     if (r.approvalStatus === 'APPROVED' && r.releaseStatus !== 'RELEASED') {
       a.push({ key: 'release', label: 'Release to Supplier', icon: <Send size={16} />, fn: () => onRelease(r) });
     }
-    a.push({ key: 'pdf', label: r.poPdfUrl ? 'Download PDF' : 'Preview PDF', icon: <FileDown size={16} />, fn: () => onPdf(r) });
     if (!['FULLY_RECEIVED', 'CLOSED', 'CANCELLED'].includes(r.poStatus)) {
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
     }
     if (r.poStatus === 'CANCELLED') {
       a.push({ key: 'revise', label: 'Revise PO', icon: <RotateCcw size={16} />, fn: () => onRevise(r) });
     }
+    // Always last: previews this row's PDF (the stored one, or generated on demand).
+    a.push({ key: 'pdf', label: 'Preview PDF', icon: <FileText size={16} />, fn: () => onPdf(r) });
     return a;
   };
 
   const columns = [
     serialColumn(),
-    { field: 'poNumber', headerName: 'PO NUMBER', width: 145,
+    { field: 'poNumber', headerName: 'PO NUMBER', width: 180,
       renderCell: (p) => (
-        <Typography variant="body2" fontWeight={700} color={p.value ? 'primary.main' : 'text.secondary'}>
+        <Typography variant="body2" fontWeight={700} color={p.value ? 'primary.main' : 'text.secondary'} noWrap>
           {poDisplayNumber(p.row)}
         </Typography>
       ) },
@@ -185,12 +190,13 @@ const PurchaseOrderList = () => {
       valueGetter: (_v, row) => row.createdBy?.name || '',
       renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
-      renderCell: (p) => (
-        <Tooltip title="Actions">
-          <IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton>
-        </Tooltip>
-      ) },
+    // Eye = item quick view (popup, the list stays put); ⋮ holds View (the full
+    // PO page, also the row click) and, last, Preview PDF. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={poDisplayNumber(p.row)}
+        onQuickView={() => setItemsPo(p.row)} quickViewLabel="View item details" quickViewTestId="po-row-view"
+        onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -307,11 +313,12 @@ const PurchaseOrderList = () => {
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
           {...rowNav.gridProps}
+          {...rowActionsGridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={[{ border: 0 }, rowNavigationGridSx]}
+          sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
       </>)}
@@ -334,6 +341,7 @@ const PurchaseOrderList = () => {
       <PurchaseOrderReleaseDialog open={releaseOpen} po={activePo} onClose={() => { setReleaseOpen(false); setActivePo(null); }} />
       <PurchaseOrderPdfPreview open={pdfOpen} po={activePo} onClose={() => { setPdfOpen(false); setActivePo(null); }} />
       <BulkReleasePoDialog open={bulkReleaseOpen} onClose={() => setBulkReleaseOpen(false)} />
+      <PoItemsQuickViewDialog po={itemsPo} onClose={() => setItemsPo(null)} />
     </Box>
   );
 };

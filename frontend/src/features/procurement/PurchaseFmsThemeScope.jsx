@@ -77,7 +77,25 @@ const pfmsTheme = createTheme(baseTheme, {
             letterSpacing: '0.04em',
             borderBottom: `1px solid ${PFMS.line}`,
           },
-          '& .MuiDataGrid-cell': { borderBottom: `1px solid ${PFMS.lineSoft}` },
+          // One cell box for every list: content centred on the row. MUI X sets
+          // the cell's line-height to the row height (49px on a 50px row), and
+          // any span/Box wrapper in a cell inherits that strut, so a chip or
+          // button inside it sits on a 49px line instead of the row's centre.
+          '& .MuiDataGrid-cell': {
+            borderBottom: `1px solid ${PFMS.lineSoft}`,
+            display: 'flex',
+            alignItems: 'center',
+            lineHeight: 1.43,
+          },
+          // A plain text value is one line, ellipsised: without minWidth 0 a flex
+          // item never shrinks, so a long value was clipped mid-glyph (or, in the
+          // auto-height grids, wrapped and grew the row).
+          '& .MuiDataGrid-cell > .MuiTypography-root': {
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          },
           '& .MuiDataGrid-row:hover': { backgroundColor: PFMS.surfaceAlt },
           '& .MuiDataGrid-footerContainer': { borderTop: `1px solid ${PFMS.line}`, backgroundColor: PFMS.surfaceAlt },
         },

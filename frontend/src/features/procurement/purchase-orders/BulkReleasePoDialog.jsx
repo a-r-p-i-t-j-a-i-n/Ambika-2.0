@@ -1,12 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
   Box, Typography, CircularProgress, Chip, Checkbox, Table, TableBody,
-  TableCell, TableHead, TableRow, InputAdornment, Popover, MenuItem,
+  TableCell, TableHead, TableRow, InputAdornment, Popover, MenuItem, IconButton, Tooltip,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
-  Send, Search, CheckCircle2, XCircle, MailWarning, AlertTriangle, Paperclip, Eye, Download,
+  Send, Search, CheckCircle2, XCircle, MailWarning, AlertTriangle, Paperclip, FileText, Download, Eye,
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
@@ -18,7 +19,19 @@ import {
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import { poDisplayNumber } from './poMeta';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
+import PoItemsQuickViewDialog from './PoItemsQuickViewDialog';
 import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
+
+// Per-row PDF preview cell: last column, pinned to the table's right edge. The
+// row's hover/selected tints are translucent, so the opaque cell repaints them.
+const rowTint = (a) => (t) => `inset 1px 0 0 ${PFMS.line}, inset 0 0 0 100vmax ${alpha(t.palette.primary.main, a)}`;
+const previewCellSx = {
+  position: 'sticky', right: 0, zIndex: 1, width: 56, bgcolor: 'background.paper',
+  boxShadow: `inset 1px 0 0 ${PFMS.line}`,
+  '.MuiTableRow-hover:hover > &': { boxShadow: rowTint(0.04) },
+  '.Mui-selected > &': { boxShadow: rowTint(0.08) },
+  '.Mui-selected.MuiTableRow-hover:hover > &': { boxShadow: rowTint(0.12) },
+};
 
 const parseEmailList = (raw) => raw.split(',').map((e) => e.trim()).filter(Boolean);
 
@@ -124,6 +137,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
   const [result, setResult] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [previewPoId, setPreviewPoId] = useState('');
+  const [itemsPo, setItemsPo] = useState(null); // row eye → item-details popup
 
   const [bulkRelease, { isLoading: releasing }] = useBulkReleasePurchaseOrdersMutation();
   const [fetchPreview, { isLoading: previewLoading }] = useGetPoReleasePreviewMutation();
@@ -134,8 +148,12 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
   // list/detail (POST /:id/pdf). Generated URLs are cached per PO while open.
   const [generatePoPdf] = useGeneratePurchaseOrderPdfMutation();
   const [pdfCache, setPdfCache] = useState(() => new Map());
-  const [pdfBusy, setPdfBusy] = useState(''); // '' | 'preview' | 'download'
+  const [pdfBusy, setPdfBusy] = useState(''); // '' | 'preview' | 'download' | `row:<poId>`
   const [pdfPreviewPo, setPdfPreviewPo] = useState(null);
+  const [pdfGenerated, setPdfGenerated] = useState(false);
+  // Synchronous twin of pdfBusy: a double-click lands before the re-render that
+  // disables the icons, so the state alone can't stop a second request.
+  const pdfBusyRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -148,9 +166,11 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     setResult(null);
     setConfirmOpen(false);
     setPreviewPoId('');
+    setItemsPo(null);
     setPreviewMap(new Map());
     setPdfCache(new Map());
     setPdfPreviewPo(null);
+    setPdfGenerated(false);
   }, [open]);
 
   // Resolve To/CC/BCC/subject for every eligible PO — refreshed (debounced) on
@@ -235,10 +255,13 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     setConfirmOpen(true);
   };
 
+  // Always renders a fresh PDF the first time a PO is previewed/downloaded while
+  // the dialog is open: on an unreleased PO a stored poPdfUrl is only an earlier
+  // preview (possibly from before draft edits), and release() regenerates it anyway.
   const ensurePdf = async (po) => {
-    const cached = pdfCache.get(po._id)
-      || (po.poPdfUrl && { poPdfUrl: po.poPdfUrl, poPdfFileName: po.poPdfFileName });
+    const cached = pdfCache.get(po._id);
     if (cached) return cached;
+    setPdfGenerated(true);
     const res = await generatePoPdf({ id: po._id }).unwrap();
     const info = { poPdfUrl: res?.data?.poPdfUrl, poPdfFileName: res?.data?.poPdfFileName };
     if (!info.poPdfUrl) throw new Error('PDF was not generated');
@@ -246,18 +269,25 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
     return info;
   };
 
-  // Preview targets the PO shown in the Email Preview panel (the first selected,
-  // or the one picked in its "Previewing" dropdown when several are selected).
-  const handlePreviewPdf = async () => {
-    const po = eligible.find((p) => p._id === previewPoId);
-    if (!po) { enqueueSnackbar('Select a PO to preview its PDF', { variant: 'warning' }); return; }
-    setPdfBusy('preview');
+  // Read-only: only renders/stores the PDF — never touches selection, email or release.
+  const openPdfPreview = async (po, busyKey) => {
+    if (pdfBusyRef.current) return;
+    pdfBusyRef.current = true;
+    setPdfBusy(busyKey);
     try {
       const info = await ensurePdf(po);
       setPdfPreviewPo({ ...po, poNumber: poDisplayNumber(po), ...info });
     } catch (err) {
-      enqueueSnackbar(err?.data?.message || err?.message || 'Failed to generate PDF', { variant: 'error' });
-    } finally { setPdfBusy(''); }
+      enqueueSnackbar(`${poDisplayNumber(po)}: ${err?.data?.message || err?.message || 'Failed to generate PDF'}`, { variant: 'error' });
+    } finally { pdfBusyRef.current = false; setPdfBusy(''); }
+  };
+
+  // Header button targets the PO shown in the Email Preview panel (the first selected,
+  // or the one picked in its "Previewing" dropdown when several are selected).
+  const handlePreviewPdf = () => {
+    const po = eligible.find((p) => p._id === previewPoId);
+    if (!po) { enqueueSnackbar('Select a PO to preview its PDF', { variant: 'warning' }); return; }
+    openPdfPreview(po, 'preview');
   };
 
   // Fetch as a blob so the filename sticks; fall back to opening the URL in a
@@ -280,6 +310,8 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
   const handleDownloadPdf = async () => {
     const pos = eligible.filter((p) => selected.has(p._id));
     if (!pos.length) { enqueueSnackbar('Select at least one PO', { variant: 'warning' }); return; }
+    if (pdfBusyRef.current) return;
+    pdfBusyRef.current = true;
     setPdfBusy('download');
     let failed = 0;
     for (const po of pos) {
@@ -288,12 +320,16 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
         await saveFile(resolveFileUrl(info.poPdfUrl), info.poPdfFileName || `${poDisplayNumber(po)}.pdf`);
       } catch { failed += 1; }
     }
+    pdfBusyRef.current = false;
     setPdfBusy('');
     if (failed) enqueueSnackbar(`${failed} of ${pos.length} PDF(s) could not be generated`, { variant: 'error' });
     else if (pos.length > 1) enqueueSnackbar(`Downloaded ${pos.length} PO PDFs`, { variant: 'success' });
   };
 
-  const loading = isLoading || isFetching;
+  // Generating a PDF invalidates the PO list, so this query refetches after
+  // each first preview — keep the table (and its scroll position) in place for
+  // that background refresh instead of swapping it for a spinner.
+  const loading = isLoading || (isFetching && !pdfGenerated);
   const previewedRow = previewMap.get(String(previewPoId));
   const previewedPo = eligible.find((po) => po._id === previewPoId);
 
@@ -310,7 +346,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
           {phase === 'select' && (
             <Box sx={{ ml: 'auto', display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <Button size="small" variant="outlined"
-                startIcon={pdfBusy === 'preview' ? <CircularProgress size={14} /> : <Eye size={15} />}
+                startIcon={pdfBusy === 'preview' ? <CircularProgress size={14} /> : <FileText size={15} />}
                 onClick={handlePreviewPdf} disabled={!selected.size || Boolean(pdfBusy) || releasing}
                 title={selected.size > 1 ? 'Previews the PO chosen in Email Preview' : undefined}>
                 Preview PDF
@@ -396,8 +432,9 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
               <Chip color="primary" variant="outlined" label={`${selected.size} selected`} sx={{ fontWeight: 700 }} />
             </Box>
 
-            {/* Table */}
-            <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+            {/* Table — the min height stops it collapsing to nothing when the
+                sections below fill a short (phone) dialog; the content scrolls instead. */}
+            <Box sx={{ flexGrow: 1, overflow: 'auto', minHeight: { xs: 260, sm: 140 } }}>
               {loading ? (
                 <Box sx={{ display: 'grid', placeItems: 'center', py: 8 }}><CircularProgress /></Box>
               ) : (
@@ -413,11 +450,12 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
                       <TableCell sx={pfmsTableHeadSx}>CC</TableCell>
                       <TableCell sx={pfmsTableHeadSx}>BCC</TableCell>
                       <TableCell sx={pfmsTableHeadSx}>Email Status</TableCell>
+                      <TableCell sx={{ ...previewCellSx, ...pfmsTableHeadSx, zIndex: 3 }} align="right">Preview</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {filtered.length === 0 && (
-                      <TableRow><TableCell colSpan={7}>
+                      <TableRow><TableCell colSpan={8}>
                         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
                           No POs are eligible for release (must be Approved and not yet released).
                         </Typography>
@@ -431,12 +469,37 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
                           <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
                             <Checkbox checked={selected.has(po._id)} onChange={() => toggleOne(po._id)} />
                           </TableCell>
-                          <TableCell><Typography variant="body2" fontWeight={700} color="primary.main">{poDisplayNumber(po)}</Typography></TableCell>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={700} color="primary.main" sx={{ whiteSpace: 'nowrap' }}>{poDisplayNumber(po)}</Typography>
+                          </TableCell>
                           <TableCell>{po.vendorName || '—'}</TableCell>
                           <TableCell><RecipientCell label="To" emails={row?.to} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>
                           <TableCell><RecipientCell label="CC" emails={row?.cc} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>
                           <TableCell><RecipientCell label="BCC" emails={row?.bcc} previewRow={row} vendorId={po.vendorId} loading={rowLoading} /></TableCell>
                           <TableCell><EmailStatusBadge status={row?.emailStatus} loading={rowLoading} /></TableCell>
+                          {/* This row's item details, no selection needed — last in the row and
+                              pinned right so it stays on screen when the table scrolls sideways. */}
+                          <TableCell align="right" sx={previewCellSx}>
+                            {/* The span takes the click when the button is disabled, so it must
+                                not bubble to the row (which toggles the checkbox). Tooltip to the
+                                left: closing the popup returns focus to this icon, and a tooltip
+                                below it would cover the next row's icon. */}
+                            <Tooltip title="View Item Details" placement="left">
+                              <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex' }}>
+                                <IconButton size="small" aria-label={`View item details for ${poDisplayNumber(po)}`}
+                                  data-testid="bulk-release-row-preview" data-po-id={po._id}
+                                  disabled={releasing}
+                                  onClick={() => setItemsPo(po)}
+                                  sx={(t) => ({
+                                    width: 30, height: 30, borderRadius: '6px', color: 'primary.main',
+                                    bgcolor: alpha(t.palette.primary.main, 0.08), border: `1px solid ${alpha(t.palette.primary.main, 0.3)}`,
+                                    '&:hover': { bgcolor: alpha(t.palette.primary.main, 0.16) },
+                                  })}>
+                                  <Eye size={16} strokeWidth={2.2} />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
                         </TableRow>
                       );
                     })}
@@ -554,6 +617,7 @@ const BulkReleasePoDialog = ({ open, onClose }) => {
       </Dialog>
 
       <PurchaseOrderPdfPreview open={Boolean(pdfPreviewPo)} po={pdfPreviewPo} onClose={() => setPdfPreviewPo(null)} />
+      <PoItemsQuickViewDialog po={itemsPo} onClose={() => setItemsPo(null)} />
 
       {/* Confirmation before anything is actually sent */}
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>

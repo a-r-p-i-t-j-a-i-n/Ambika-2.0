@@ -1,8 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
-  Button, TextField, MenuItem, Autocomplete, Switch, Chip, Tooltip, CircularProgress, Alert, alpha,
-  createFilterOptions, Checkbox,
+  Button, TextField, MenuItem, Switch, Chip, Tooltip, CircularProgress, Alert, alpha, Checkbox,
 } from '@mui/material';
 import { Save, RotateCcw, Lock, RefreshCw } from 'lucide-react';
 import { useSnackbar } from 'notistack';
@@ -10,6 +9,7 @@ import {
   useGetO2dDoerPlanQuery, useGetO2dDoerPlanUsersQuery, useSaveO2dDoerPlanMutation, useApplyO2dDoerPlanToOpenMutation,
 } from '../../store/api/o2dFmsApi';
 import { PFMS, pfmsCardSx, pfmsTableHeadSx } from '../procurement/pfmsTheme';
+import PeoplePicker from './PeoplePicker';
 
 /**
  * FMS → Doer Assignment → O2D. One row per O2D step with only what matters:
@@ -45,56 +45,6 @@ const errorsOf = (base, value) => {
   if (value.doerIds.some((id) => value.buddyIds.includes(id))) e.buddy = 'Someone is both a main doer and a buddy';
   return e;
 };
-
-// Search by name, email or role.
-const filterPeople = createFilterOptions({ stringify: (p) => `${p.name || ''} ${p.email || ''} ${p.role || ''}` });
-
-// Two accounts can share a name (one made in the ERP, one from a Delegation
-// sign-in); a chip then carries the email too, so the right one is picked.
-const chipLabel = (p) => (p.sameName && p.email ? `${p.name} · ${p.email}` : p.name);
-
-const PeoplePicker = ({ people, personById, selected, onChange, placeholder, error }) => (
-  <Autocomplete
-    multiple
-    size="small"
-    options={people}
-    value={selected.map((id) => personById.get(id)).filter(Boolean)}
-    onChange={(_e, list) => onChange(list.map((p) => p.id))}
-    getOptionLabel={(p) => p?.name || ''}
-    filterOptions={filterPeople}
-    getOptionDisabled={(p) => !!p.offLabel}
-    isOptionEqualToValue={(a, b) => a.id === b.id}
-    filterSelectedOptions
-    disableCloseOnSelect
-    renderOption={(props, p) => (
-      <li {...props} key={p.id}>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2" fontWeight={600}>{p.name}{p.offLabel ? ` (${p.offLabel})` : ''}</Typography>
-          {p.email && (
-            <Typography variant="caption" component="div" sx={{ color: p.sameName ? '#b45309' : PFMS.sub, wordBreak: 'break-all' }}>
-              {p.email}
-            </Typography>
-          )}
-          {p.role && <Typography variant="caption" component="div" sx={{ color: PFMS.sub }}>{p.role}</Typography>}
-        </Box>
-      </li>
-    )}
-    renderTags={(value, getTagProps) => value.map((p, index) => {
-      const { key, ...tagProps } = getTagProps({ index });
-      return (
-        <Tooltip key={key} title={`${p.email || ''}${p.offLabel ? ` — ${p.offLabel}, replace with a Delegation employee` : ''}`} arrow disableInteractive>
-          <Chip {...tagProps} size="small" label={p.offLabel ? `${chipLabel(p)} — ${p.offLabel}` : chipLabel(p)}
-            color={p.offLabel ? 'error' : 'default'} variant={p.offLabel ? 'outlined' : 'filled'}
-            sx={{ fontWeight: 600, height: 24, maxWidth: 280 }} />
-        </Tooltip>
-      );
-    })}
-    renderInput={(params) => (
-      <TextField {...params} placeholder={selected.length ? '' : placeholder} error={!!error} />
-    )}
-    sx={{ minWidth: 230, maxWidth: 320 }}
-  />
-);
 
 const O2dDoerPlan = () => {
   const { enqueueSnackbar } = useSnackbar();

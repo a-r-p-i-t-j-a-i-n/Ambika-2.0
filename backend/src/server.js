@@ -50,7 +50,8 @@ const startServer = async () => {
     startFmsDoerSyncJob();
   }
 
-  // O2D steps → Delegation Suite tasks (only when SUITE_API_URL is set).
+  // O2D rounds: due steps take their Doer Assignment doers; with SUITE_API_URL
+  // set, the O2D tasks already in Delegation also close as their steps finish.
   if (process.env.O2D_DELEGATION_SYNC !== 'off') {
     startO2dDelegationSync();
   }

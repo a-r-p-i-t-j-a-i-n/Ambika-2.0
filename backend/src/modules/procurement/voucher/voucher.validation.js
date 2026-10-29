@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import { PAGINATION } from '../../../config/constants.js';
-import { VOUCHER_STATUS, PAYMENT_MODE, VOUCHER_TYPE } from './voucher.model.js';
+import { VOUCHER_STATUS, PAYMENT_MODE, VOUCHER_TYPE, EXPENSE_TYPE } from './voucher.model.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
@@ -9,8 +9,15 @@ const paymentProofSchema = Joi.object({
   fileName: Joi.string().trim().allow('', null),
 }).allow(null);
 
+const LINKED = Joi.valid(EXPENSE_TYPE.AGAINST_PO, EXPENSE_TYPE.AGAINST_GRN);
+
 // Expense voucher amount + header fields (shared by create/update).
 const expenseFields = {
+  // DIRECT (no PO/GRN) · AGAINST_PO (no GRN) · AGAINST_GRN (W/O-PO GRN, no PO).
+  // The service checks the linked document; update re-checks the merged state.
+  expenseType:        Joi.string().valid(...Object.values(EXPENSE_TYPE)),
+  poId:               objectId.allow('', null),
+  grnId:              objectId.allow('', null),
   expenseCategory:    Joi.string().trim().max(120),
   partyName:          Joi.string().trim().max(200),
   // Vendor-master link (Direct Bill Passing) — optional; a payee not in the
@@ -46,10 +53,21 @@ export const createVoucherSchema = Joi.object({
   // PURCHASE — created from an approved vendor invoice.
   invoiceId: objectId.when('voucherType', { is: 'EXPENSE', then: Joi.forbidden(), otherwise: objectId.required() }),
 
-  // EXPENSE — direct; category + party required.
+  // EXPENSE — category required; party required unless the PO / GRN supplies the vendor.
   ...expenseFields,
   expenseCategory: expenseFields.expenseCategory.when('voucherType', { is: 'EXPENSE', then: Joi.required(), otherwise: Joi.optional().allow('', null) }),
-  partyName:       expenseFields.partyName.when('voucherType', { is: 'EXPENSE', then: Joi.required(), otherwise: Joi.optional().allow('', null) }),
+  partyName:       expenseFields.partyName.when('expenseType', {
+    is: LINKED.required(),
+    then: Joi.optional().allow('', null),
+    otherwise: Joi.when('voucherType', { is: 'EXPENSE', then: Joi.required(), otherwise: Joi.optional().allow('', null) }),
+  }),
+  expenseType:     expenseFields.expenseType.when('voucherType', { is: 'EXPENSE', then: Joi.any().default(EXPENSE_TYPE.DIRECT), otherwise: Joi.forbidden() }),
+  poId:            objectId.when('expenseType', { is: EXPENSE_TYPE.AGAINST_PO, then: Joi.required(), otherwise: Joi.forbidden() })
+    .messages({ 'any.required': 'Select the Purchase Order this expense is against', 'any.unknown': 'poId is only allowed for an Expense Against PO' }),
+  grnId:           objectId.when('expenseType', { is: EXPENSE_TYPE.AGAINST_GRN, then: Joi.required(), otherwise: Joi.forbidden() })
+    .messages({ 'any.required': 'Select the GRN this expense is against', 'any.unknown': 'grnId is only allowed for an Expense Against GRN' }),
+  // A PO / GRN bill is always a vendor bill — its number is required.
+  expenseInvoiceNo: expenseFields.expenseInvoiceNo.when('expenseType', { is: LINKED.required(), then: Joi.required().invalid('', null) }),
 });
 
 export const updateVoucherSchema = Joi.object({
@@ -86,6 +104,12 @@ export const voucherQuerySchema = Joi.object({
   populate:         Joi.string(),
   voucherDate:      Joi.object().unknown(true),
 }).unknown(true);
+
+export const expenseLinkQuerySchema = Joi.object({
+  type:             Joi.string().valid('PO', 'GRN').required(),
+  search:           Joi.string().trim().max(120).allow(''),
+  excludeVoucherId: objectId,
+});
 
 export const mongoIdParamSchema = Joi.object({
   id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),

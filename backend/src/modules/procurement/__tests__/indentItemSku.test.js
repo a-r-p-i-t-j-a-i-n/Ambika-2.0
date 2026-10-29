@@ -15,7 +15,7 @@ import { bindItemsToSkus } from '../indent/itemSku.js';
 const BOLT = { _id: '6ac09965f1c61c40fa206c41', code: 'RT-BOLT', name: 'Bolt M8 (SKU Master)', unit: 'PCS' };
 const NUT = { _id: '6ac09965f1c61c40fa206c42', code: 'RT-NUT', name: 'Nut M8', unit: 'PCS' };
 
-test('name and code come from the SKU record, not the request', () => {
+test('name, code and unit come from the SKU record, not the request', () => {
   const { items, problems } = bindItemsToSkus(
     [{ skuId: BOLT._id, skuCode: 'TYPED', itemName: 'whatever the user typed', quantity: 4, unit: 'Box', remarks: 'r' }],
     [BOLT],
@@ -24,8 +24,22 @@ test('name and code come from the SKU record, not the request', () => {
   assert.equal(items[0].itemName, 'Bolt M8 (SKU Master)');
   assert.equal(items[0].skuCode, 'RT-BOLT');
   assert.equal(items[0].quantity, 4, 'quantity kept');
-  assert.equal(items[0].unit, 'Box', 'unit kept as entered');
+  assert.equal(items[0].unit, 'PCS', 'unit from SKU Master');
   assert.equal(items[0].remarks, 'r');
+});
+
+test('the SKU unit is copied exactly as the master stores it', () => {
+  const { items } = bindItemsToSkus(
+    [{ skuId: BOLT._id, itemName: 'a', unit: 'Pcs' }, { skuId: NUT._id, itemName: 'b', unit: 'KGS' }],
+    [{ ...BOLT, unit: ' Sheet ' }, { ...NUT, unit: 'kg' }],
+  );
+  assert.equal(items[0].unit, 'Sheet');
+  assert.equal(items[1].unit, 'kg', 'casing kept, not normalized to KGS');
+});
+
+test('a SKU with no unit keeps the line unit', () => {
+  const { items } = bindItemsToSkus([{ skuId: BOLT._id, itemName: 'a', unit: 'Box' }], [{ ...BOLT, unit: '' }]);
+  assert.equal(items[0].unit, 'Box');
 });
 
 test('an item with only a SKU code binds by exact code (case-insensitive)', () => {

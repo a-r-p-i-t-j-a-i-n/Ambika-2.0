@@ -5,6 +5,9 @@ import IncomingQC, { QC_STATUS } from '../incoming-qc/incomingQc.model.js';
 import GoodsReceiptNote from '../grn/grn.model.js';
 import VendorPurchaseOrder from '../purchase-order/purchaseOrder.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
+import VendorVoucher from '../voucher/voucher.model.js';
+import { invoiceWorkflowFilter } from './invoiceWorkflow.js';
+import { assertNoLiveExpenseOnPos } from '../voucher/expenseLink.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
@@ -339,6 +342,8 @@ export const vendorInvoiceService = {
 
   async _createLocked(data, user, opts, qcs) {
     const first = qcs[0];
+    // One payment path per PO: a PO paid as an expense voucher takes no invoice.
+    if (first.poId) await assertNoLiveExpenseOnPos([{ _id: first.poId, poNumber: first.poNumber }], 'a vendor invoice cannot be raised on it');
     await assertUniqueInvoiceNumber(first.vendorId, data.invoiceNumber);
 
     // Recompute items + totals authoritatively from QC quantities + PO rates,
@@ -400,7 +405,20 @@ export const vendorInvoiceService = {
   },
 
   async getAll(query) {
-    const features = new ApiFeatures(VendorInvoice.find({ isDeleted: { $ne: true } }), query)
+    // ?workflow= — the list's invoice + voucher workflow chips (invoiceWorkflow.js),
+    // resolved here so pagination and totals count the same rows the page shows.
+    const { workflow, ...rest } = query;
+    const base = { isDeleted: { $ne: true } };
+    if (workflow) {
+      const liveVouchers = await VendorVoucher.aggregate([
+        { $match: { invoiceId: { $ne: null }, isDeleted: { $ne: true }, voucherStatus: { $ne: 'CANCELLED' } } },
+        { $sort: { createdAt: -1 } },
+        { $group: { _id: '$invoiceId', voucherStatus: { $first: '$voucherStatus' }, approvalStatus: { $first: '$approvalStatus' } } },
+        { $project: { _id: 0, invoiceId: '$_id', voucherStatus: 1, approvalStatus: 1 } },
+      ]);
+      base.$and = [invoiceWorkflowFilter(workflow, liveVouchers)];
+    }
+    const features = new ApiFeatures(VendorInvoice.find(base), rest)
       .filter().search(['invoiceNumber', 'poNumber', 'grnNumber', 'vendorName'])
       .sort().select().paginate();
     return features.exec();

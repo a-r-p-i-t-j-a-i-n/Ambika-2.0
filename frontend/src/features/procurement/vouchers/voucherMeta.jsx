@@ -12,6 +12,19 @@ export const VOUCHER_TYPES = [
   { value: 'EXPENSE', label: 'Expense / Direct Bill', short: 'EXP' },
 ];
 
+// What an Expense / Direct Bill voucher is raised against. Vouchers saved
+// before this choice existed have no expenseType and read as DIRECT.
+export const EXPENSE_TYPES = [
+  { value: 'DIRECT', label: 'Direct Expense (Without PO & GRN)', short: 'Without PO / GRN',
+    help: 'Office, service, repair or other bills with no Purchase Order or GRN behind them.' },
+  { value: 'AGAINST_PO', label: 'Expense Against PO (Without GRN)', short: 'Against PO',
+    help: 'Bill for an approved PO that is paid without a GRN. Only POs with no GRN and no vendor invoice are listed — once billed here, the PO cannot take a GRN.' },
+  { value: 'AGAINST_GRN', label: 'Expense Against GRN (Without PO)', short: 'Against GRN',
+    help: 'Bill for a completed GRN that was raised without a PO (Vendor Invoice does not accept these GRNs). One bill per GRN.' },
+];
+export const expenseTypeOf = (v) => (v?.voucherType === 'EXPENSE' ? (v.expenseType || 'DIRECT') : null);
+export const expenseTypeMeta = (type) => EXPENSE_TYPES.find((t) => t.value === type) || EXPENSE_TYPES[0];
+
 export const EXPENSE_CATEGORIES = [
   'Computer Repair', 'Printer Repair', 'Stationery', 'Travel', 'Electricity',
   'Internet', 'AMC', 'Office Maintenance', 'Consultancy', 'Courier', 'Fuel',

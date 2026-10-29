@@ -13,6 +13,7 @@ import SKU, {
 } from '../../skus/sku.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
+import { assertNoLiveExpenseOnPos } from '../voucher/expenseLink.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateGrnNumber, generateGrnUniqueId } from '../../../utils/docNumberGenerator.js';
@@ -714,6 +715,8 @@ export const grnService = {
         throw new AppError(`PO ${po.poNumber} is already fully received`, 400);
       }
     }
+    // One payment path per PO: a PO paid as an expense voucher takes no GRN.
+    await assertNoLiveExpenseOnPos(pos, 'a GRN cannot be raised on it');
 
     // Rule 2: auto-load lines from every PO (pending only). Ordered / already
     // received qty always come from the POs + their completed GRNs, never the client.
@@ -996,6 +999,14 @@ export const grnService = {
    * only one can ever roll the PO quantities.
    */
   async complete(id, data, user) {
+    // One payment path per PO: nothing is received on a PO an expense voucher
+    // is paying (stops a draft that raced in beside that voucher).
+    const target = await GoodsReceiptNote.findOne({ _id: id, isDeleted: { $ne: true } }).select('poId poIds').lean();
+    if (target) {
+      const targetPoIds = target.poIds?.length ? target.poIds : (target.poId ? [target.poId] : []);
+      await assertNoLiveExpenseOnPos(targetPoIds.map((_id) => ({ _id })), 'this GRN cannot be completed');
+    }
+
     // ── 0) Claim the completion, atomically ──────────────────────────────────
     // Whoever flips stockPosted false→true owns the posting and everyone else is
     // told it is already done, so a double-click, a retry, a second tab or two

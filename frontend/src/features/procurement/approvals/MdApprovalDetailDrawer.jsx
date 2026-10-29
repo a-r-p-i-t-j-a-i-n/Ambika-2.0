@@ -14,6 +14,7 @@ import PdfViewerModal from '../common/PdfViewerModal';
 import { fmtDate, fmtTime } from './approvalMeta';
 import { isMdUser, fmtINR } from './mdApprovalMeta';
 import MdViewStatusChip from './MdViewStatusChip';
+import { expenseTypeOf, expenseTypeMeta } from '../vouchers/voucherMeta';
 import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
 
 const Field = ({ label, value }) => (
@@ -86,6 +87,8 @@ const VoucherContent = ({ id }) => {
     <Grid container spacing={2}>
       {expense ? (
         <>
+          <Grid item xs={6}><Field label="Expense Type" value={expenseTypeMeta(expenseTypeOf(v)).label} /></Grid>
+          <Grid item xs={6}><Field label="Against" value={[v.poNumber, ...(v.grnNumbers || [])].filter(Boolean).join(' · ') || 'Without PO / GRN'} /></Grid>
           <Grid item xs={6}><Field label="Expense Category" value={v.expenseCategory} /></Grid>
           <Grid item xs={6}><Field label="Bill No." value={v.expenseInvoiceNo} /></Grid>
         </>

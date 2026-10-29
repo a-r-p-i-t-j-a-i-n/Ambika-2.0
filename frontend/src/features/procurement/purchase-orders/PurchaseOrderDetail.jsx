@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
   Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Tooltip,
-  Table, TableHead, TableBody, TableRow, TableCell, TableContainer, Divider,
+  Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, CheckCircle2, Send, FileDown, Ban, ShoppingBag,
@@ -23,7 +23,7 @@ import {
   useGeneratePurchaseOrderPdfMutation,
 
 } from '../../../store/api/procurementApi';
-import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtINR, fmtDate, poDisplayNumber } from './poMeta';
+import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtDate, poDisplayNumber } from './poMeta';
 import { PFMS, pfmsPageSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 import useRowNavigation, { rowNavigationTableSx } from '../common/useRowNavigation';
 import StatusChip from '../components/StatusChip';
@@ -32,6 +32,7 @@ import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
+import PoItemsTable from './PoItemsTable';
 import { PoFollowUpChip, FuStatusChip, FuTypeChip, fmtDate as fmtFuDate } from '../follow-ups/fuMeta';
 import FollowUpFormDrawer from '../follow-ups/FollowUpFormDrawer';
 import FollowUpDoneDialog from '../follow-ups/FollowUpDoneDialog';
@@ -767,62 +768,7 @@ const PurchaseOrderDetail = () => {
 
         {/* Items + financial summary */}
         <SectionCard icon={<FileText size={18} />} title={`Items (${po.items?.length || 0})`}>
-          <TableContainer sx={{ overflowX: 'auto' }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {['#', 'Item Ref', 'Item', 'SKU'].map((h) => <TableCell key={h} sx={pfmsTableHeadSx}>{h}</TableCell>)}
-                  <TableCell align="right" sx={pfmsTableHeadSx}>Qty</TableCell>
-                  <TableCell sx={pfmsTableHeadSx}>Unit</TableCell>
-                  <TableCell align="right" sx={pfmsTableHeadSx}>Rate</TableCell>
-                  <TableCell align="right" sx={pfmsTableHeadSx}>Taxable</TableCell>
-                  <TableCell align="center" sx={pfmsTableHeadSx}>GST %</TableCell>
-                  <TableCell align="right" sx={pfmsTableHeadSx}>Tax</TableCell>
-                  <TableCell align="right" sx={pfmsTableHeadSx}>Total</TableCell>
-                  <TableCell align="right" sx={pfmsTableHeadSx}>Received</TableCell>
-                  <TableCell align="right" sx={pfmsTableHeadSx}>Pending</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {(po.items || []).map((it, i) => (
-                  <TableRow key={it._id || i} hover>
-                    <TableCell>{i + 1}</TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="primary.main" fontWeight={700}>
-                        {it.indentItemDisplayNumber || it.indentNumber || '—'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>{it.itemName}</TableCell>
-                    <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
-                    <TableCell align="right">{it.quantity}</TableCell>
-                    <TableCell>{it.unit}</TableCell>
-                    <TableCell align="right">{Number(it.rate || 0).toFixed(2)}</TableCell>
-                    <TableCell align="right">{Number(it.taxableAmount || 0).toFixed(2)}</TableCell>
-                    <TableCell align="center">{it.gstRate || 0}%</TableCell>
-                    <TableCell align="right">{Number(it.taxAmount || 0).toFixed(2)}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700 }}>{Number(it.totalAmount || 0).toFixed(2)}</TableCell>
-                    <TableCell align="right" sx={{ color: '#0f766e' }}>{it.receivedQty || 0}</TableCell>
-                    <TableCell align="right" sx={{ color: it.pendingQty > 0 ? '#b45309' : '#0f766e' }}>{it.pendingQty || 0}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          <Divider sx={{ my: 2 }} />
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
-            <Box sx={{ textAlign: 'right' }}>
-              <Typography variant="caption" color="text.secondary" fontWeight={700}>TOTAL TAXABLE VALUE</Typography>
-              <Typography fontWeight={700}>{fmtINR(po.totalTaxableValue)}</Typography>
-            </Box>
-            <Box sx={{ textAlign: 'right' }}>
-              <Typography variant="caption" color="text.secondary" fontWeight={700}>GST</Typography>
-              <Typography fontWeight={700}>{fmtINR(po.totalGSTAmount)}</Typography>
-            </Box>
-            <Box sx={{ textAlign: 'right', px: 2, py: 1, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.06) }}>
-              <Typography variant="caption" color="primary.main" fontWeight={700}>GRAND TOTAL</Typography>
-              <Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(po.grandTotal)}</Typography>
-            </Box>
-          </Box>
+          <PoItemsTable po={po} />
         </SectionCard>
 
         <SectionCard icon={<CheckCircle2 size={18} />} title="Approval">

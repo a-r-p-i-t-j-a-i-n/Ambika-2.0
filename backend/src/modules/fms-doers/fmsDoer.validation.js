@@ -14,8 +14,29 @@ export const setAssignmentSchema = Joi.object({
   acknowledgeMissingPermission: Joi.boolean().default(false),
 });
 
+// One or more main doers (doerUserIds); doerUserId is the older single-doer form.
 export const reassignTaskSchema = Joi.object({
-  doerUserId: objectId.required(),
+  doerUserId: objectId,
+  doerUserIds: Joi.array().items(objectId).min(1).max(20),
+  reason: Joi.string().trim().max(500).allow('', null),
+}).xor('doerUserId', 'doerUserIds');
+
+const leadTime = Joi.object({
+  value: Joi.number().positive().max(10000).required(),
+  unit: Joi.string().valid('HOURS', 'DAYS').required(),
+});
+
+// O2D-style plan save: only the changed steps. leadTime omitted = unchanged,
+// null = no lead time (no due date).
+export const savePlanSchema = Joi.object({
+  steps: Joi.array().items(Joi.object({
+    stepKey: key.required(),
+    leadTime: leadTime.allow(null),
+    doerIds: Joi.array().items(objectId).max(20).default([]),
+    buddyIds: Joi.array().items(objectId).max(20).default([]),
+  })).min(1).max(100).required(),
+  applyToOpenTasks: Joi.boolean().default(false),
+  acknowledgeMissingPermission: Joi.boolean().default(false),
   reason: Joi.string().trim().max(500).allow('', null),
 });
 

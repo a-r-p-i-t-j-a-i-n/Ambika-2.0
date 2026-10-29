@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import env from '../../../config/env.js';
+import { EXPENSE_TYPE, expenseTypeOf } from './voucher.model.js';
 
 export const PAGE = { w: 595.28, h: 841.89, m: 40 };
 const navy = '#0b2545';
@@ -143,8 +144,13 @@ export const buildExpenseVoucherPdfBuffer = (v, company = {}, mdSig = null) => n
     ];
     if (v.vendorId) leftRows.push(['Vendor (Master)', v.vendorName]);
     const lY = infoRows(doc, PAGE.m, y, half, leftRows);
+    const expenseType = expenseTypeOf(v);
     const rY = infoRows(doc, PAGE.m + half + 16, y, half, [
-      ['Reference', 'Direct Bill — Without PO / GRN'],
+      ...(expenseType === EXPENSE_TYPE.AGAINST_PO
+        ? [['Reference', 'Expense Against PO — Without GRN'], ['PO No', v.poNumber]]
+        : expenseType === EXPENSE_TYPE.AGAINST_GRN
+          ? [['Reference', 'Expense Against GRN — Without PO'], ['GRN No', (v.grnNumbers || []).join(', ')]]
+          : [['Reference', 'Direct Bill — Without PO / GRN']]),
       ['Vendor Bill No', v.expenseInvoiceNo], ['Bill Date', fmtDate(v.expenseInvoiceDate)],
       ['Payment Terms', v.paymentTerms], ['Due Date', fmtDate(v.dueDate)],
     ]);

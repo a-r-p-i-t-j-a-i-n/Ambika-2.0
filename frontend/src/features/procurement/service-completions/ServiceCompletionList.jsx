@@ -138,7 +138,7 @@ const ServiceCompletionList = () => {
           onPaginationModelChange={setPaginationModel}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
-          rowHeight={52}
+          rowHeight={50}
           columnHeaderHeight={44}
           sx={{ border: 0 }}
         />

@@ -50,8 +50,9 @@ const DispatchScheduleEmail = () => {
   const fromStep = params.get('fromStep');
   const soFromTask = params.get('so') || '';
   const cameFromTask = !!(fromTask && fromStep);
-  // Return to the task WITHOUT marking it done (just go review it).
-  const backToTask = () => cameFromTask && navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}`);
+  // Return to the task WITHOUT marking it done (just go review it). Replaces
+  // this page, so Back from the step goes to where the doer came from.
+  const backToTask = () => cameFromTask && navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}`, { replace: true });
 
   const { data: ordersRes, isFetching: loadingOrders } = useGetOrdersQuery({ limit: 500, sort: '-orderDate' });
   const orders = useMemo(() => ordersRes?.data || [], [ordersRes]);

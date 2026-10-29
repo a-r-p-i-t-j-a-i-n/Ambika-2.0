@@ -3,11 +3,11 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  IconButton, Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Chip,
+  Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
-  Search, Plus, MoreVertical, Eye, Pencil, PackageCheck, Ban, FileDown,
+  Search, Plus, Eye, Pencil, PackageCheck, Ban, FileDown,
   FileStack, PackageOpen, Boxes, Hourglass, Trash2, Lock, ClipboardCheck,
 } from 'lucide-react';
 import { usePermissions } from '../../../hooks/usePermission';
@@ -33,6 +33,9 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+import RowQuickViewDialog from '../common/RowQuickViewDialog';
+import RowActionsCell from '../components/RowActionsCell';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const GrnList = () => {
   const navigate = useNavigate();
   const rowNav = useRowNavigation({ to: (r) => `/procurement/grns/${r._id}` });
@@ -63,6 +66,7 @@ const GrnList = () => {
   const [activeGrn, setActiveGrn] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
+  const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
   const [deleteTarget, setDeleteTarget] = useState(null);
   const canDeleteGrn = usePermissions().can('procurement.deleteGrn');
 
@@ -160,12 +164,12 @@ const GrnList = () => {
         </Box>
       ) },
     ...stepTimingColumns(),
-    { field: '__actions', headerName: '', width: 60, sortable: false, filterable: false, align: 'center',
-      renderCell: (p) => (
-        <Tooltip title="Actions">
-          <IconButton size="small" onClick={(e) => openMenu(e, p.row)}><MoreVertical size={16} /></IconButton>
-        </Tooltip>
-      ) },
+    // Eye = quick view (popup, the list stays put); ⋮ holds View (the full page,
+    // also the row click) and the row's other actions. Pinned to the right.
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.grnNumber}
+        onQuickView={() => setQuickRow(p.row)} onMenu={(e) => openMenu(e, p.row)} />
+    )),
   ];
 
   return (
@@ -292,12 +296,12 @@ const GrnList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps}
+          {...rowNav.gridProps} {...rowActionsGridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={[{ border: 0 }, rowNavigationGridSx]}
+          sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
 
@@ -319,6 +323,20 @@ const GrnList = () => {
       }} />
       <GrnCompleteDialog open={completeOpen} grn={activeGrn} onClose={() => { setCompleteOpen(false); setActiveGrn(null); }} />
       <GrnDeleteDialog open={Boolean(deleteTarget)} grn={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
+        title="GRN Details" number={quickRow?.grnNumber}
+        status={quickRow ? <GrnStatusChip status={quickRow.grnStatus} /> : null}
+        subtitle={quickRow?.vendorName}
+        fields={quickRow ? [
+          { label: 'GRN Date', value: fmtDate(quickRow.grnDate) },
+          { label: 'PO Number', value: quickRow.isWithoutPo ? 'Without PO' : (quickRow.poNumbers?.length ? quickRow.poNumbers : [quickRow.poNumber]).filter(Boolean).join(', ') },
+          { label: 'QC', value: <GrnQcStatusChip stage={resolveGrnQcStage(quickRow)} /> },
+          { label: 'Items', value: (quickRow.items || []).length },
+          { label: 'Invoice Qty', value: quickRow.totalInvoiceQty },
+          { label: 'Received Qty', value: quickRow.totalReceivedQty },
+          { label: 'Short Qty', value: quickRow.totalShortQty || 0 },
+        ] : []}
+        openFullLabel="Open full GRN" onOpenFull={quickRow ? () => onView(quickRow) : undefined} />
     </Box>
   );
 };

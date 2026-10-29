@@ -41,8 +41,8 @@ const poItemSchema = Joi.object({
 const poFormatType = Joi.string().valid('JSL', 'OTHER').default('OTHER');
 
 // Create-time save action: DRAFT (default — existing behaviour) or DIRECT
-// ("Save PO Directly" — create + approve in one go; controller enforces
-// procurement.approve).
+// ("Save PO Directly" — create + approve in one go; the controller allows it
+// for the MD only, see poDirectSave.js).
 const saveMode = Joi.string().valid('DRAFT', 'DIRECT').default('DRAFT');
 
 // ── Create (saved as DRAFT; only from an approved-quotation indent) ──
