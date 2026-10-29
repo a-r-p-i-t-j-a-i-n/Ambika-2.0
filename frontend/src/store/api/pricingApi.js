@@ -91,6 +91,19 @@ export const pricingApi = baseApi.injectEndpoints({
       query: (body) => ({ url: '/pricing/settings', method: 'PATCH', body }),
       invalidatesTags: ['CompanySettings'],
     }),
+    // PO signatory images — kind is 'signature' | 'stamp' (settings.edit only).
+    uploadCompanyPdfAsset: builder.mutation({
+      query: ({ kind, file }) => {
+        const body = new FormData();
+        body.append('file', file);
+        return { url: `/pricing/settings/pdf-assets/${kind}`, method: 'PUT', body };
+      },
+      invalidatesTags: ['CompanySettings'],
+    }),
+    removeCompanyPdfAsset: builder.mutation({
+      query: (kind) => ({ url: `/pricing/settings/pdf-assets/${kind}`, method: 'DELETE' }),
+      invalidatesTags: ['CompanySettings'],
+    }),
   }),
 });
 
@@ -106,6 +119,8 @@ export const {
   useRejectRevisionMutation,
   useGetCompanySettingsQuery,
   useUpdateCompanySettingsMutation,
+  useUploadCompanyPdfAssetMutation,
+  useRemoveCompanyPdfAssetMutation,
   usePreviewCalculatorMutation,
   useUpdateSkuRemarksMutation,
   useGetPricingReviewersQuery,

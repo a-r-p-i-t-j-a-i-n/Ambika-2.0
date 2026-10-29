@@ -3,6 +3,7 @@ import PricingHistory, { PRICING_SOURCE } from './pricingHistory.model.js';
 import { pricingHistoryService } from './pricingHistory.service.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { sameRate } from '../procurement/rate-change/rateChange.rules.js';
 
 const num = (n) => Number(n) || 0;
 const upper = (s) => String(s || '').trim().toUpperCase();
@@ -171,6 +172,15 @@ export const vendorService = {
   async addProduct(vendorId, data, user) {
     const vendor = await Vendor.findOne({ _id: vendorId, isDeleted: { $ne: true } });
     if (!vendor) throw new AppError('Vendor not found', 404);
+
+    // This route is open to the New PO screen, so it may add an item the vendor
+    // has no rate for, but never change a rate it already has: from a PO that
+    // goes through Rate Change Approvals; otherwise it is a Vendor Master edit.
+    const existing = findPrev(vendor.products, { skuCode: data.skuCode, productName: data.productName });
+    if (existing && data.rate != null && data.rate !== '' && !sameRate(existing.rate, data.rate)) {
+      throw new AppError(`${vendor.name} already has a rate of ₹${num(existing.rate)} for "${existing.productName || existing.skuCode}" — `
+        + 'change it on the PO line (it goes to Rate Change Approvals) or edit it in the Vendor Master', 409);
+    }
 
     const ctx = {
       source: PRICING_SOURCE.VENDOR_MASTER,

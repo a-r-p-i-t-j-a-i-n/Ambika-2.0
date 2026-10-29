@@ -28,6 +28,7 @@ import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
+import { frozenRule, frozenStockText } from '../../../utils/unitConversion';
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -251,7 +252,15 @@ const IncomingQCDetail = () => {
                   {(qc.items || []).map((it, i) => (
                     <TableRow key={it._id || i} hover>
                       <TableCell>{i + 1}</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>{it.itemName}{!isService && it.batchNo ? <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Batch {it.batchNo}</Typography> : null}</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>
+                        {it.itemName}{!isService && it.batchNo ? <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Batch {it.batchNo}</Typography> : null}
+                        {/* Received in the purchase unit — the frozen rule and the stock it became. */}
+                        {frozenRule(it) ? (
+                          <Typography variant="caption" data-testid="qc-line-conversion" sx={{ display: 'block', fontWeight: 700, color: '#0f766e' }}>
+                            {frozenRule(it)} · accepted {it.acceptedQty} {it.unit} {it.stockInQty != null ? `= ${it.stockInQty} ${it.stockUnit}` : frozenStockText(it, it.acceptedQty)}
+                          </Typography>
+                        ) : null}
+                      </TableCell>
                       <TableCell><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
                       <TableCell align="right">{it.receivedQty}</TableCell>
                       <TableCell align="right" sx={{ color: '#0f766e', fontWeight: 700 }}>{it.acceptedQty}</TableCell>

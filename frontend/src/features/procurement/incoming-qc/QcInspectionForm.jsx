@@ -8,6 +8,7 @@ import { useSnackbar } from 'notistack';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fileHref } from '../indents/indentMeta';
 import { lineBalanced, legacyLineDetail, round2 } from './qcForm';
+import { frozenRule, frozenStockText } from '../../../utils/unitConversion';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { pfmsCardSx } from '../pfmsTheme';
 
@@ -133,6 +134,13 @@ const QcInspectionForm = ({
                     <Box sx={{ minWidth: 0, gridColumn: { xs: '1 / -1', md: 'auto' } }}>
                       <Typography variant="body2" fontWeight={600} noWrap title={it.itemName}>{it.itemName}</Typography>
                       {it.batchNo ? <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Batch {it.batchNo}</Typography> : null}
+                      {/* Received in the purchase unit: the GRN's frozen rule and what the
+                          accepted qty will post to stock as. */}
+                      {frozenRule(it) ? (
+                        <Typography variant="caption" data-testid="qc-line-conversion" sx={{ display: 'block', fontWeight: 700, color: '#0f766e' }}>
+                          {frozenRule(it)} · accepted {round2(it.acceptedQty)} {it.unit} {frozenStockText(it, it.acceptedQty)}
+                        </Typography>
+                      ) : null}
                       {legacy ? (
                         <Typography variant="caption" data-testid="qc-line-legacy" sx={{ display: 'block', color: round2(it.reworkQty) > 0 && !readOnly ? 'warning.dark' : 'text.secondary' }}>
                           {round2(it.reworkQty) > 0 && !readOnly

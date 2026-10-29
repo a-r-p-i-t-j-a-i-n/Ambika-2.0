@@ -47,6 +47,7 @@ import VoucherFormDialog from "./vouchers/VoucherFormDialog";
 import { useHiddenSteps, stepKey } from "../../utils/embed";
 import { isMdUser } from "./approvals/mdApprovalMeta";
 import MdApprovalButton from "./approvals/MdApprovalButton";
+import RateChangeButton from "./rate-changes/RateChangeButton";
 import StepWithQueue from "./components/StepWithQueue";
 
 // Each step reuses the existing, fully-functional screen for that module —
@@ -185,6 +186,10 @@ const FinalPaymentStep = () => {
 // lives at its own hub slug outside the step rail — MD users only.
 const MdApprovalList = lazyWithRetry(() => import("./approvals/MdApprovalList"));
 const MD_APPROVAL_SLUG = "md-approvals";
+// Rate Change Approvals (PO rate ≠ vendor rate) — also outside the step rail;
+// open to every Purchase FMS user (only approvers can decide, server-checked).
+const RateChangeApprovals = lazyWithRetry(() => import("./rate-changes/RateChangeApprovals"));
+const RATE_CHANGE_SLUG = "rate-change-approvals";
 
 // The 9 steps the workflow was scoped around, plus the remaining procurement
 // screens (10-14) that already lived under the old sidebar dropdown — kept
@@ -411,6 +416,7 @@ const PurchaseFmsHub = () => {
     : QUICK_ACTIONS;
   const activeIndex = visibleSteps.findIndex((s) => s.slug === step);
   const isMdView = step === MD_APPROVAL_SLUG;
+  const isRateView = step === RATE_CHANGE_SLUG;
   const isMd = useSelector((s) => isMdUser(s.auth.user));
   // On a fresh load (refresh / bookmark) the user is restored a render after
   // the app mounts — decide MD access only once it is there.
@@ -470,7 +476,7 @@ const PurchaseFmsHub = () => {
 
   // Every step is switched off for this employee in the Delegation Suite
   // (the MD Approval view is not a step, so an MD can still open it).
-  if (visibleSteps.length === 0 && !(isMdView && isMd)) {
+  if (visibleSteps.length === 0 && !(isMdView && isMd) && !isRateView) {
     return (
       <Box sx={{ px: 3, py: 6, textAlign: "center" }}>
         <Typography sx={{ fontWeight: 800, color: PFMS.ink }}>
@@ -488,13 +494,14 @@ const PurchaseFmsHub = () => {
   // Unknown/missing step (e.g. a stale bookmark) or a hidden one — land on the
   // first visible step rather than rendering nothing. The MD Approval view is
   // for MD users only.
-  if ((activeIndex === -1 && !isMdView) || (isMdView && !isMd)) {
+  if ((activeIndex === -1 && !isMdView && !isRateView) || (isMdView && !isMd)) {
     return <Navigate to={`/purchase-fms/${visibleSteps[0].slug}`} replace />;
   }
 
-  const ActiveComponent = isMdView
-    ? MdApprovalList
-    : visibleSteps[activeIndex].Component;
+  let ActiveComponent;
+  if (isMdView) ActiveComponent = MdApprovalList;
+  else if (isRateView) ActiveComponent = RateChangeApprovals;
+  else ActiveComponent = visibleSteps[activeIndex].Component;
 
   return (
     <Box sx={{ bgcolor: PFMS.canvas }}>
@@ -538,6 +545,8 @@ const PurchaseFmsHub = () => {
               flexWrap: "wrap",
             }}
           >
+            {/* Every Purchase FMS user — pending PO rate changes. */}
+            <RateChangeButton />
             {/* MD users only (renders nothing for anyone else) — on every step. */}
             <MdApprovalButton />
             {visibleActions.length > 0 && (

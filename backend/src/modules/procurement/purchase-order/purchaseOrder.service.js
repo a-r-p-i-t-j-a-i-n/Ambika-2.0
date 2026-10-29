@@ -20,13 +20,18 @@ import Vendor from '../../vendors/vendor.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateVendorPoNumber, generateVendorPoDraftNumber } from '../../../utils/docNumberGenerator.js';
-import { assertPurchasable } from '../purchase-item-guard.js';
+import { assertPurchasable, assertPurchaseUnits } from '../purchase-item-guard.js';
 import { pricingHistoryService } from '../../vendors/pricingHistory.service.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { emailService } from '../../../services/email.service.js';
 import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
+import { loadPdfCompany, loadPoTermsDefaults } from '../../pricing/company-pdf-assets.js';
+import { resolvePoTerms, defaultPoTerms, normalizePoTerms, pdfSafePoTerms, poTermsFormat } from './poTerms.js';
+import { resolvePoDelivery } from './poLeadTime.js';
+import { rateChangeService } from '../rate-change/rateChange.service.js';
+import mongoose from 'mongoose';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 
@@ -453,6 +458,27 @@ const syncIndentPoNumber = async (po, user) => {
   );
 };
 
+/**
+ * Keep each line's _id across a draft edit (matched by indent item, else by
+ * SKU for a plain line), so an open rate change request still points at it.
+ */
+const carryLineIds = (prevItems = [], lines = []) => {
+  const used = new Set();
+  const take = (pred) => {
+    const hit = prevItems.find((l) => l._id && !used.has(String(l._id)) && pred(l));
+    if (hit) used.add(String(hit._id));
+    return hit;
+  };
+  const sku = (s) => String(s || '').trim().toUpperCase();
+  for (const line of lines) {
+    const prev = line.indentItemId
+      ? take((l) => l.indentItemId && String(l.indentItemId) === String(line.indentItemId))
+      : take((l) => !l.indentItemId && ((line.skuCode && sku(l.skuCode) === sku(line.skuCode))
+        || (line.skuId && l.skuId && String(l.skuId) === String(line.skuId))));
+    if (prev) line._id = prev._id;
+  }
+};
+
 const findOrThrow = async (id) => {
   const po = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } });
   if (!po) throw new AppError('Purchase Order not found', 404);
@@ -489,6 +515,87 @@ const stampLineDisplayNumbers = (lines = [], indents = []) => {
 const PAGE = { w: 595.28, h: 841.89, m: 40 };
 const INR = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+
+// ── Authorised signatory block (both formats) ──
+// "For <Company>", the company stamp + authorised signature (uploaded once in
+// Company Settings — see pricing/company-pdf-assets.js), then "Authorized
+// Signatory". The block is the same height with or without the images, so a
+// PO without them keeps a clean space for a wet signature and nothing shifts.
+const SIGN_W = 180;
+const SIGN_IMG_H = 64;
+const signatoryName = (company) => `For ${company.name || env.COMPANY_NAME}`;
+const signatoryHeight = (doc, company) => {
+  doc.font('Helvetica-Bold').fontSize(9);
+  return doc.heightOfString(signatoryName(company), { width: SIGN_W }) + 4 + SIGN_IMG_H + 6 + 10;
+};
+
+const drawPoSignatory = (doc, company, x, y, navy) => {
+  doc.font('Helvetica-Bold').fontSize(9).fill(navy)
+    .text(signatoryName(company), x, y, { width: SIGN_W, align: 'center' });
+  const imgTop = y + doc.heightOfString(signatoryName(company), { width: SIGN_W }) + 4;
+
+  // Stamp left + signature right when both exist; a lone image is centred.
+  const { stampImage, signatureImage } = company;
+  const both = stampImage && signatureImage;
+  const place = (img, label, bx, by, fit) => {
+    if (!img) return;
+    try { doc.image(img, bx, by, { fit, align: 'center', valign: 'center' }); }
+    catch (err) { logger.error(`[po] ${label} could not be drawn on the PDF: ${err.message}`); }
+  };
+  place(stampImage, 'company stamp', both ? x + 8 : x + (SIGN_W - SIGN_IMG_H) / 2, imgTop, [SIGN_IMG_H, SIGN_IMG_H]);
+  place(signatureImage, 'authorised signature', both ? x + 78 : x + 25, imgTop + 4, both ? [98, SIGN_IMG_H - 8] : [130, SIGN_IMG_H - 8]);
+
+  doc.font('Helvetica').fontSize(8).fill(navy)
+    .text('Authorized Signatory', x, imgTop + SIGN_IMG_H + 6, { width: SIGN_W, align: 'center' });
+};
+
+/**
+ * Terms (left) + signatory block (right). Moves to a fresh page only when the
+ * taller of the two would cross `limitY`, so the block never overlaps the
+ * totals above or the page footer below.
+ *
+ * Terms too long for one page (they are editable per PO) flow paragraph by
+ * paragraph onto further pages, each kept above `limitY`; the signatory then
+ * sits beside the terms on the last page.
+ */
+const drawTermsAndSignatory = (doc, { y, W, terms: rawTerms, company, navy, blue, limitY }) => {
+  const terms = pdfSafePoTerms(rawTerms);
+  const width = W - 200;
+  const termsFont = () => doc.font('Helvetica').fontSize(7.5).fill(navy);
+  const heading = (label, at) => doc.font('Helvetica-Bold').fontSize(8).fill(blue).text(label, PAGE.m, at);
+  termsFont();
+  const termsH = 12 + doc.heightOfString(terms, { width });
+  const sigH = 6 + signatoryHeight(doc, company);
+
+  if (Math.max(termsH, sigH) <= limitY - PAGE.m) {
+    if (y + Math.max(termsH, sigH) > limitY) { doc.addPage(); y = PAGE.m; }
+    heading('TERMS & CONDITIONS', y);
+    termsFont().text(terms, PAGE.m, y + 12, { width });
+    drawPoSignatory(doc, company, PAGE.m + W - SIGN_W, y + 6, navy);
+    return;
+  }
+
+  // A paragraph is at most PO_TERMS_MAX characters, which always fits a page.
+  const paragraphs = terms.split('\n').map((p) => p || ' ');
+  const heightOf = (p) => { termsFont(); return doc.heightOfString(p, { width }); };
+  if (y + 12 + heightOf(paragraphs[0]) > limitY) { doc.addPage(); y = PAGE.m; }
+  heading('TERMS & CONDITIONS', y);
+  let pageTop = y;
+  let cursor = y + 12;
+  for (const p of paragraphs) {
+    const h = heightOf(p);
+    if (cursor + h > limitY) {
+      doc.addPage();
+      pageTop = PAGE.m;
+      heading('TERMS & CONDITIONS (continued)', pageTop);
+      cursor = pageTop + 12;
+    }
+    termsFont().text(p, PAGE.m, cursor, { width });
+    cursor += h;
+  }
+  if (pageTop + sigH > limitY) { doc.addPage(); pageTop = PAGE.m; }
+  drawPoSignatory(doc, company, PAGE.m + W - SIGN_W, pageTop + 6, navy);
+};
 
 export const buildOtherPoPdfBuffer = (po, company = {}) => new Promise((resolve, reject) => {
   try {
@@ -660,20 +767,11 @@ export const buildOtherPoPdfBuffer = (po, company = {}) => new Promise((resolve,
     totRow('GRAND TOTAL:', INR(po.grandTotal), true);
 
     // ── Terms & signature footer ──
-    y += 12;
-    if (y > PAGE.h - 150) { doc.addPage(); y = PAGE.m; }
-    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('TERMS & CONDITIONS', PAGE.m, y); y += 12;
-    doc.font('Helvetica').fontSize(7.5).fill(navy).text(
-      po.remarks ||
-      '1. Kindly sign and fax back to mark a token of your confirmation.\n' +
-      '2. Kindly mention the purchase order number on the tax invoice. Extra qty other than PO will not be accepted.',
-      PAGE.m, y, { width: W - 200 },
-    );
-
-    doc.font('Helvetica-Bold').fontSize(9).fill(navy)
-      .text(`For ${company.name || env.COMPANY_NAME}`, PAGE.m + W - 180, y + 6, { width: 180, align: 'center' });
-    doc.font('Helvetica').fontSize(8)
-      .text('Authorized Signatory', PAGE.m + W - 180, y + 58, { width: 180, align: 'center' });
+    drawTermsAndSignatory(doc, {
+      y: y + 12, W, company, navy, blue,
+      terms: resolvePoTerms(po, company.poTerms),
+      limitY: PAGE.h - PAGE.m - 2,
+    });
 
     doc.end();
   } catch (err) { reject(err); }
@@ -826,29 +924,39 @@ export const buildJslPoPdfBuffer = (po, company = {}) => new Promise((resolve, r
     doc.moveTo(totX, y).lineTo(PAGE.m + W, y).strokeColor(navy).lineWidth(1).stroke(); y += 5;
     totRow('Total Amount:', INR(po.grandTotal), true);
 
-    // ── Terms & signature footer ──
-    y += 12;
-    if (y > PAGE.h - 150) { doc.addPage(); y = PAGE.m; }
-    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('TERMS & CONDITIONS', PAGE.m, y); y += 12;
-    doc.font('Helvetica').fontSize(7.5).fill(navy).text(
-      po.remarks || 'This order is under Price Protection Policy till 30th June 2026.',
-      PAGE.m, y, { width: W - 200 },
-    );
-
-    doc.font('Helvetica-Bold').fontSize(9).fill(navy)
-      .text(`For ${company.name || env.COMPANY_NAME}`, PAGE.m + W - 180, y + 6, { width: 180, align: 'center' });
-    doc.font('Helvetica').fontSize(8)
-      .text('Authorized Signatory', PAGE.m + W - 180, y + 58, { width: 180, align: 'center' });
+    // ── Terms & signature footer (kept clear of the jurisdiction note below) ──
+    drawTermsAndSignatory(doc, {
+      y: y + 12, W, company, navy, blue,
+      terms: resolvePoTerms(po, company.poTerms),
+      limitY: PAGE.h - 66,
+    });
 
     // ── Jurisdiction / computer-generated note ──
+    // Drawn inside the bottom margin, so zero it for these two trailing lines —
+    // otherwise PDFKit's margin-based page-break check pushed the last line onto
+    // a spurious, otherwise-empty extra page (same fix as the voucher footer).
+    doc.page.margins.bottom = 0;
     doc.font('Helvetica-Bold').fontSize(8).fill(navy)
       .text('SUBJECT TO MUMBAI JURISDICTION', PAGE.m, PAGE.h - 60, { width: W, align: 'center' });
+    // The PO now carries the authorised signature + stamp, so it no longer says
+    // "no signature required".
     doc.font('Helvetica').fontSize(7.5).fill('#475a8a')
-      .text('This is a computer Generated Purchase Order, no signature required.', PAGE.m, PAGE.h - 48, { width: W, align: 'center' });
+      .text('This is a computer generated Purchase Order.', PAGE.m, PAGE.h - 48, { width: W, align: 'center' });
 
     doc.end();
   } catch (err) { reject(err); }
 });
+
+// The Terms & Conditions a PO stores: the buyer's text, or — left blank — the
+// format's current default, copied so a later default change never moves it.
+const termsToStore = async (text, fmt) => normalizePoTerms(text) || defaultPoTerms(fmt, await loadPoTermsDefaults());
+
+// A PO saved before it had its own terms prints its Remarks (see poTerms.js).
+// Release / cancel overwrite Remarks with their own note, so pin the terms the
+// PO has been printing first.
+const pinLegacyTerms = async (po) => {
+  if (po.termsAndConditions == null) po.termsAndConditions = resolvePoTerms(po, await loadPoTermsDefaults());
+};
 
 // Dispatch to the right layout based on the PO's format.
 const buildPoPdfBuffer = (po, company = {}) => (
@@ -1017,6 +1125,10 @@ export const purchaseOrderService = {
   },
 
   async create(data, user) {
+    // Expected Delivery Date + Lead Time are re-derived from the PO Date, never
+    // taken from the form as sent (a refusal here burns no draft number).
+    const poDate = data.poDate || new Date();
+    const delivery = resolvePoDelivery({ ...data, poDate });
     // Every check runs once before a draft number is taken (so a refused request
     // never consumes one) and again inside the transaction, on the latest state.
     const plan = async (session) => {
@@ -1052,6 +1164,8 @@ export const purchaseOrderService = {
 
       const poFormatType = data.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
       const { lines, totals } = computeLines(data.items, poFormatType);
+      // A line of a SKU bought in a Purchase Unit must be in that unit or its stock unit.
+      await assertPurchaseUnits(lines);
       // Single-indent PO: every line belongs to this indent.
       lines.forEach((l) => { l.indentId = indent._id; l.indentNumber = indent.indentNumber; });
       assertLinesOnIndents([indent], lines);
@@ -1060,19 +1174,29 @@ export const purchaseOrderService = {
       await assertPoVendor([indent], lines, party._id);
       // Stamp the item-level display reference (Ind-50.1/26-27) from the indent.
       stampLineDisplayNumbers(lines, [indent]);
-      return { indent, party, poFormatType, lines, totals };
+      // A rate that differs from the vendor's Vendor Master rate needs a reason
+      // and goes to Rate Change Approvals (never straight into the Vendor Master).
+      const rates = await rateChangeService.planPoRates({
+        vendorId: party._id, poFormatType, lines, items: data.items, indents: [indent], session,
+      });
+      return { indent, party, poFormatType, lines, totals, rates };
     };
     await plan(null);
+    const termsAndConditions = await termsToStore(data.termsAndConditions, poTermsFormat(data.poFormatType));
     // Draft-only reference — the final poNumber is assigned on approval so the
     // sequence follows approval order, not draft-creation order.
-    const draftNumber = await generateVendorPoDraftNumber(data.poDate || new Date());
+    const draftNumber = await generateVendorPoDraftNumber(poDate);
 
-    return createPoAtomically(async (session) => {
-      const { indent, party, poFormatType, lines, totals } = await plan(session);
+    let rateWrites = null;
+    const created = await createPoAtomically(async (session) => {
+      const { indent, party, poFormatType, lines, totals, rates } = await plan(session);
+      const poId = new mongoose.Types.ObjectId();
+      rateWrites = await rateChangeService.preparePoRates(rates, { lines, poId, poRef: draftNumber, user });
       const po = await insertPo({
+        _id: poId,
         draftNumber,
         poFormatType,
-        poDate: data.poDate || new Date(),
+        poDate,
         indentId: indent._id,
         indentNumber: indent.indentNumber,
         indentIds: [indent._id],
@@ -1081,9 +1205,11 @@ export const purchaseOrderService = {
         ...vendorSnapshot(party, data),
         deliveryTerms: data.deliveryTerms || '',
         paymentTerms: data.paymentTerms || '',
-        leadTime: data.leadTime || '',
-        expectedDeliveryDate: data.expectedDeliveryDate || null,
+        leadTime: delivery.leadTime ?? (data.leadTime || ''),
+        leadTimeDays: delivery.leadTimeDays ?? null,
+        expectedDeliveryDate: delivery.expectedDeliveryDate ?? (data.expectedDeliveryDate || null),
         remarks: data.remarks || '',
+        termsAndConditions,
         items: lines,
         ...totals,
         approvalStatus: PO_APPROVAL_STATUS.DRAFT,
@@ -1095,8 +1221,12 @@ export const purchaseOrderService = {
       // Link the indent (approved vendor or items + status roll-up) in the same
       // unit — a failure here fails the PO.
       await linkIndentToPo(indent, party._id, po, draftNumber, user, session);
+      // Its rate change requests are part of the same unit too.
+      await rateChangeService.commitPoRates(rateWrites, { user, session });
       return po;
     });
+    await rateChangeService.afterPoSave(rateWrites, user);
+    return created;
   },
 
   /**
@@ -1109,6 +1239,9 @@ export const purchaseOrderService = {
     const indentIds = [...new Set((data.indentIds || []).map(String))];
     if (!indentIds.length) throw new AppError('Select at least one approved indent', 400);
     if (!data.items?.length) throw new AppError('At least one item is required', 400);
+    // Same delivery rule as create() — also covers createFromItems and revise.
+    const poDate = data.poDate || new Date();
+    const delivery = resolvePoDelivery({ ...data, poDate });
 
     // Every check runs once before a draft number is taken (so a refused request
     // never consumes one) and again inside the transaction, on the latest state.
@@ -1165,6 +1298,8 @@ export const purchaseOrderService = {
 
       const poFormatType = data.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
       const { lines, totals } = computeLines(data.items, poFormatType);
+      // A line of a SKU bought in a Purchase Unit must be in that unit or its stock unit.
+      await assertPurchaseUnits(lines);
       lines.forEach((l) => {
         if (!l.indentNumber && l.indentId) l.indentNumber = indentById.get(String(l.indentId))?.indentNumber || '';
       });
@@ -1175,19 +1310,29 @@ export const purchaseOrderService = {
       stampLineDisplayNumbers(lines, indents);
 
       const orderedIndents = indentIds.map((id) => indentById.get(id)).filter(Boolean);
-      return { party, poFormatType, lines, totals, orderedIndents };
+      // A rate that differs from the vendor's Vendor Master rate needs a reason
+      // and goes to Rate Change Approvals (never straight into the Vendor Master).
+      const rates = await rateChangeService.planPoRates({
+        vendorId: party._id, poFormatType, lines, items: data.items, indents, session,
+      });
+      return { party, poFormatType, lines, totals, orderedIndents, rates };
     };
     await plan(null);
+    const termsAndConditions = await termsToStore(data.termsAndConditions, poTermsFormat(data.poFormatType));
     // Draft-only reference — the final poNumber is assigned on approval so the
     // sequence follows approval order, not draft-creation order.
-    const draftNumber = await generateVendorPoDraftNumber(data.poDate || new Date());
+    const draftNumber = await generateVendorPoDraftNumber(poDate);
 
-    return createPoAtomically(async (session) => {
-      const { party, poFormatType, lines, totals, orderedIndents } = await plan(session);
+    let rateWrites = null;
+    const created = await createPoAtomically(async (session) => {
+      const { party, poFormatType, lines, totals, orderedIndents, rates } = await plan(session);
+      const poId = new mongoose.Types.ObjectId();
+      rateWrites = await rateChangeService.preparePoRates(rates, { lines, poId, poRef: draftNumber, user });
       const po = await insertPo({
+        _id: poId,
         draftNumber,
         poFormatType,
-        poDate: data.poDate || new Date(),
+        poDate,
         indentId: orderedIndents[0]._id,
         indentNumber: orderedIndents[0].indentNumber,
         indentIds: orderedIndents.map((i) => i._id),
@@ -1196,9 +1341,11 @@ export const purchaseOrderService = {
         ...vendorSnapshot(party, data),
         deliveryTerms: data.deliveryTerms || '',
         paymentTerms: data.paymentTerms || '',
-        leadTime: data.leadTime || '',
-        expectedDeliveryDate: data.expectedDeliveryDate || null,
+        leadTime: delivery.leadTime ?? (data.leadTime || ''),
+        leadTimeDays: delivery.leadTimeDays ?? null,
+        expectedDeliveryDate: delivery.expectedDeliveryDate ?? (data.expectedDeliveryDate || null),
         remarks: data.remarks || '',
+        termsAndConditions,
         items: lines,
         ...totals,
         approvalStatus: PO_APPROVAL_STATUS.DRAFT,
@@ -1212,8 +1359,12 @@ export const purchaseOrderService = {
       for (const ind of orderedIndents) {
         await linkIndentToPo(ind, party._id, po, draftNumber, user, session);
       }
+      // Its rate change requests are part of the same unit too.
+      await rateChangeService.commitPoRates(rateWrites, { user, session });
       return po;
     });
+    await rateChangeService.afterPoSave(rateWrites, user);
+    return created;
   },
 
   /**
@@ -1245,29 +1396,29 @@ export const purchaseOrderService = {
     let party = null;
     if (data.vendorId) { try { party = await resolveVendor(data.vendorId); } catch { /* preview is best-effort */ } }
 
+    // Print the dates a save would store; an unfinished pair prints as typed.
+    const poDate = data.poDate || new Date();
+    let delivery = {};
+    try { delivery = resolvePoDelivery({ ...data, poDate }); } catch { /* preview is best-effort */ }
+
     const poLike = {
       poNumber: data.poNumber || 'DRAFT — PREVIEW',
       poFormatType,
-      poDate: data.poDate || new Date(),
-      expectedDeliveryDate: data.expectedDeliveryDate || null,
+      poDate,
+      expectedDeliveryDate: delivery.expectedDeliveryDate ?? (data.expectedDeliveryDate || null),
       ...vendorSnapshot(party, data),
       deliveryTerms: data.deliveryTerms || '',
       paymentTerms: data.paymentTerms || '',
-      leadTime: data.leadTime || '',
+      leadTime: delivery.leadTime ?? (data.leadTime || ''),
       remarks: data.remarks || '',
+      // Blank prints the format's default, same as a saved PO.
+      termsAndConditions: normalizePoTerms(data.termsAndConditions),
       items: lines,
       ...totals,
     };
 
-    // Best-effort company header (same source as the saved-PO PDF).
-    let company = {};
-    try {
-      const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
-      const s = await CompanySettings.findOne().lean();
-      if (s) company = { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, phone: s.companyPhone, email: s.companyEmail };
-    } catch { /* fall back to env defaults inside the builder */ }
-
-    return buildPoPdfBuffer(poLike, company);
+    // Company header + signatory images (same source as the saved-PO PDF).
+    return buildPoPdfBuffer(poLike, await loadPdfCompany());
   },
 
   async getAll(query) {
@@ -1328,7 +1479,20 @@ export const purchaseOrderService = {
       Object.assign(po, { vendorId: party._id }, vendorSnapshot(party, data));
     }
     const { vendorId: _v, items, ...rest } = data;
+    let newLines = null;
     Object.assign(po, rest); // applies poFormatType (if sent) before recompute
+    // Any date change re-derives the delivery pair from the (possibly new) PO
+    // Date: a sent Expected Delivery Date wins, else a sent Lead Time moves the
+    // date, else the stored date stays and the Lead Time follows it.
+    if (['poDate', 'expectedDeliveryDate', 'leadTimeDays'].some((k) => k in data)) {
+      const leadOnly = !('expectedDeliveryDate' in data) && data.leadTimeDays != null;
+      const delivery = resolvePoDelivery({
+        poDate: po.poDate,
+        expectedDeliveryDate: leadOnly ? null : po.expectedDeliveryDate,
+        leadTimeDays: data.leadTimeDays,
+      });
+      if (delivery.leadTimeDays != null) Object.assign(po, delivery);
+    }
     if (items) {
       // A draft edit may change, drop or add plain lines, but never attach an
       // indent item that isn't already on this PO — that would skip the
@@ -1343,29 +1507,109 @@ export const purchaseOrderService = {
       }
       await assertPurchasable(items);
       const { lines, totals } = computeLines(items, po.poFormatType);
-      po.items = lines;
+      await assertPurchaseUnits(lines);
+      carryLineIds(po.items, lines);
+      newLines = lines;
       Object.assign(po, totals);
     }
     // A draft edit must not move the PO off the vendor fixed for its items.
+    let rateWrites = null;
     if (data.vendorId || items) {
       const indentIds = (po.indentIds?.length ? po.indentIds : [po.indentId]).filter(Boolean);
       const indents = await PurchaseIndent.find({ _id: { $in: indentIds }, isDeleted: { $ne: true } }).lean();
-      await assertPoVendor(indents, po.items, po.vendorId, { skipMissing: true });
+      const previousLines = po.items.map((l) => (l.toObject ? l.toObject() : { ...l }));
+      const rateLines = newLines || previousLines.map((l) => ({ ...l }));
+      await assertPoVendor(indents, rateLines, po.vendorId, { skipMissing: true });
+      // A rate that differs from the vendor's rate needs a reason and goes to
+      // Rate Change Approvals; an open request the edit no longer stands behind
+      // is withdrawn. A refusal here saves nothing.
+      const ratePlan = await rateChangeService.planPoRates({
+        vendorId: po.vendorId, poFormatType: po.poFormatType, lines: rateLines, items: items || [], indents, poId: po._id,
+      });
+      rateWrites = await rateChangeService.preparePoRates(ratePlan, {
+        lines: rateLines, poId: po._id, poRef: po.poNumber || po.draftNumber || '', user, previousLines,
+      });
+      po.items = rateLines;
     }
+    // Terms sent blank go back to the format's (current) default.
+    if ('termsAndConditions' in data) po.termsAndConditions = await termsToStore(data.termsAndConditions, po.poFormatType);
+    // Drop a PDF stored by an earlier preview so the next one shows this edit.
+    po.poPdfUrl = '';
+    po.poPdfFileName = '';
     po.updatedBy = user?._id;
     po.activityTimeline.push({ action: 'UPDATE', description: 'Draft PO updated', actorId: user?._id });
     // Save only while the PO is still a draft: an approval / rejection / delete
     // that landed after this edit read the PO wins, instead of the edit changing
     // an approved PO underneath it.
     po.$where = { approvalStatus: PO_APPROVAL_STATUS.DRAFT, isDeleted: { $ne: true } };
+    let saved;
     try {
-      return await po.save();
+      saved = await po.save();
     } catch (err) {
       if (['DocumentNotFoundError', 'VersionError', 'ParallelSaveError'].includes(err?.name)) {
         throw new AppError(`PO ${po.poNumber || po.draftNumber || ''} was just approved, rejected or deleted — refresh and try again`.replace('  ', ' '), 409);
       }
       throw err;
     }
+    // The PO cannot be approved with an unapproved rate whatever happens here
+    // (approve() re-checks the live rates and requests), so a failure to record
+    // the request is reported rather than leaving a half-saved edit unnoticed.
+    if (rateWrites) {
+      try {
+        await rateChangeService.commitPoRates(rateWrites, { user });
+      } catch (err) {
+        logger.error(`[po] rate change requests for ${po.draftNumber} not recorded: ${err.message}`);
+        throw new AppError('The draft was saved, but its rate change request could not be recorded — save it again', 500);
+      }
+      await rateChangeService.afterPoSave(rateWrites, user);
+    }
+    return saved;
+  },
+
+  /**
+   * Change ONLY a PO's Terms & Conditions (PO detail "Edit Terms & Conditions").
+   * Allowed until the PO is released: a draft by anyone who may edit drafts, an
+   * approved PO by the MD only (`canEditApproved`, checked by the controller) —
+   * the terms were part of what was approved. A released PO's PDF is the copy
+   * the vendor received, so its terms are final. Blank resets to the default.
+   */
+  async updateTerms(id, data, user, { canEditApproved = false } = {}) {
+    const po = await findOrThrow(id);
+    if (po.poStatus === PO_STATUS.CANCELLED) {
+      throw new AppError('This PO is cancelled — revise it to change its terms', 400);
+    }
+    if (po.releaseStatus === PO_RELEASE_STATUS.RELEASED) {
+      throw new AppError('This PO is already released — its terms are on the PDF the vendor received and cannot be changed', 400);
+    }
+    if (po.approvalStatus === PO_APPROVAL_STATUS.APPROVED && !canEditApproved) {
+      throw new AppError('Only the MD can change the terms of an approved PO', 403);
+    }
+    if (![PO_APPROVAL_STATUS.DRAFT, PO_APPROVAL_STATUS.APPROVED].includes(po.approvalStatus)) {
+      throw new AppError(`The terms of a ${String(po.approvalStatus).toLowerCase()} PO cannot be changed`, 400);
+    }
+
+    const terms = await termsToStore(data.termsAndConditions, po.poFormatType);
+    if (terms === po.termsAndConditions) return po;
+    // Only these fields change, and only while the PO is still in the state
+    // checked above (an approval / release / cancel that lands first wins).
+    const updated = await VendorPurchaseOrder.findOneAndUpdate(
+      {
+        _id: po._id,
+        isDeleted: { $ne: true },
+        approvalStatus: po.approvalStatus,
+        releaseStatus: { $ne: PO_RELEASE_STATUS.RELEASED },
+        poStatus: { $ne: PO_STATUS.CANCELLED },
+      },
+      {
+        $set: { termsAndConditions: terms, updatedBy: user?._id, poPdfUrl: '', poPdfFileName: '' },
+        $push: { activityTimeline: { action: 'UPDATE_TERMS', description: 'Terms & Conditions updated', actorId: user?._id } },
+      },
+      { new: true },
+    );
+    if (!updated) {
+      throw new AppError(`PO ${po.poNumber || po.draftNumber || ''} was just approved, released or cancelled — refresh and try again`.replace('  ', ' '), 409);
+    }
+    return updated;
   },
 
   async remove(id, user) {
@@ -1377,7 +1621,9 @@ export const purchaseOrderService = {
     po.deletedAt = new Date();
     po.deletedBy = user?._id;
     po.activityTimeline.push({ action: 'DELETE', description: 'Purchase order deleted', actorId: user?._id });
-    return po.save();
+    const saved = await po.save();
+    await rateChangeService.withdrawForPo(po._id, `PO ${po.draftNumber || ''} was deleted`.trim(), user);
+    return saved;
   },
 
   async approve(id, data, user) {
@@ -1395,8 +1641,24 @@ export const purchaseOrderService = {
     // match-and-flip; the other's filter re-evaluates against the now-updated doc,
     // finds no match, and falls through to the "not draft" error below — so only
     // one caller ever proceeds to mint a poNumber.
+    //
+    // Approving also needs every line's rate to be the vendor's rate or an
+    // approved rate change (Rate Change Approvals). The flip is conditional on
+    // the PO being exactly as checked (updatedAt), so a draft edit landing in
+    // between can't slip an unchecked rate through.
+    let checkedAt = null;
+    if (approved) {
+      const current = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
+      if (current?.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
+        await rateChangeService.assertPoRatesApproved(current);
+        checkedAt = current.updatedAt;
+      }
+    }
     const claimed = await VendorPurchaseOrder.findOneAndUpdate(
-      { _id: id, isDeleted: { $ne: true }, approvalStatus: PO_APPROVAL_STATUS.DRAFT },
+      {
+        _id: id, isDeleted: { $ne: true }, approvalStatus: PO_APPROVAL_STATUS.DRAFT,
+        ...(checkedAt ? { updatedAt: checkedAt } : {}),
+      },
       {
         $set: {
           approvalStatus: approved ? PO_APPROVAL_STATUS.APPROVED : PO_APPROVAL_STATUS.REJECTED,
@@ -1408,8 +1670,11 @@ export const purchaseOrderService = {
       { new: true },
     );
     if (!claimed) {
-      const exists = await VendorPurchaseOrder.exists({ _id: id, isDeleted: { $ne: true } });
-      if (!exists) throw new AppError('Purchase Order not found', 404);
+      const now = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).select('approvalStatus').lean();
+      if (!now) throw new AppError('Purchase Order not found', 404);
+      if (now.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
+        throw new AppError('This PO was changed while it was being approved — refresh and approve again', 409);
+      }
       throw new AppError('Only draft purchase orders can be approved/rejected', 400);
     }
 
@@ -1433,26 +1698,31 @@ export const purchaseOrderService = {
       // (never from a draft that may still be edited, rejected or deleted), so
       // every PO-sourced history row carries the final PO number.
       await pricingHistoryService.recordPoLines(saved, user);
+    } else {
+      await rateChangeService.withdrawForPo(saved._id, `PO ${saved.draftNumber || ''} was rejected`.trim(), user);
     }
 
     return saved;
   },
 
-  /** Generate the PO PDF, store to S3 (or local fallback) and persist its URL. */
-  async generatePdf(id) {
+  /**
+   * Generate the PO PDF, store to S3 (or local fallback) and persist its URL.
+   *
+   * A released PO's stored PDF is the copy the vendor received, so an on-demand
+   * request (Preview / Download PDF) hands that file back instead of re-rendering
+   * it — a later Company Settings change (e.g. a new signature or stamp) never
+   * silently rewrites an issued PO. Only release()/bulkRelease() pass
+   * `{ regenerate: true }`, to render the release copy itself.
+   */
+  async generatePdf(id, { regenerate = false } = {}) {
     const po = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
     if (!po) throw new AppError('Purchase Order not found', 404);
-
-    // Best-effort company GSTIN from the pricing CompanySettings singleton.
-    let company = {};
-    try {
-      const CompanySettings = (await import('../../pricing/company-settings.model.js')).default;
-      const s = await CompanySettings.findOne().lean();
-      if (s) company = { name: s.companyName, address: s.companyAddress, gstin: s.companyGstin, phone: s.companyPhone, email: s.companyEmail };
-    } catch { /* fall back to env */ }
-
-    const buffer = await buildPoPdfBuffer(po, company);
     const fileName = `${String(po.poNumber || 'PO').replace(/[^\w.-]/g, '_')}.pdf`;
+    if (!regenerate && po.releaseStatus === PO_RELEASE_STATUS.RELEASED && po.poPdfUrl) {
+      return { poPdfUrl: po.poPdfUrl, poPdfFileName: po.poPdfFileName || fileName };
+    }
+
+    const buffer = await buildPoPdfBuffer(po, await loadPdfCompany());
 
     let poPdfUrl;
     if (s3Enabled) {
@@ -1496,6 +1766,7 @@ export const purchaseOrderService = {
       }
     }
     if (data.supplierAcknowledgement) po.supplierAcknowledgement = data.supplierAcknowledgement;
+    await pinLegacyTerms(po);
     if (data.remarks) po.remarks = data.remarks;
     po.updatedBy = user?._id;
     po.activityTimeline.push({ action: 'RELEASE', description: 'PO released to vendor', actorId: user?._id });
@@ -1504,7 +1775,7 @@ export const purchaseOrderService = {
     // Generate + store the PDF (non-fatal — release stands even if PDF fails;
     // the email below needs this URL to attach it, so it happens first).
     try {
-      const { poPdfUrl, poPdfFileName } = await this.generatePdf(id);
+      const { poPdfUrl, poPdfFileName } = await this.generatePdf(id, { regenerate: true });
       po.poPdfUrl = poPdfUrl;
       po.poPdfFileName = poPdfFileName;
     } catch (err) { logger.error(`[po] PDF generation failed for ${po.poNumber}: ${err.message}`); }
@@ -1572,13 +1843,14 @@ export const purchaseOrderService = {
             po.expectedDeliveryDate = new Date(po.releasedAt.getTime() + leadDays * 86400000);
           }
         }
+        await pinLegacyTerms(po);
         po.updatedBy = user?._id;
         po.activityTimeline.push({ action: 'RELEASE', description: 'PO released to vendor (bulk release)', actorId: user?._id });
         await po.save();
 
         // 2) Generate + store the PDF (non-fatal — release already stands).
         try {
-          const { poPdfUrl, poPdfFileName } = await this.generatePdf(poId);
+          const { poPdfUrl, poPdfFileName } = await this.generatePdf(poId, { regenerate: true });
           po.poPdfUrl = poPdfUrl;
           po.poPdfFileName = poPdfFileName;
         } catch (err) {
@@ -1704,10 +1976,12 @@ export const purchaseOrderService = {
       throw new AppError(`Cannot cancel a PO in ${po.poStatus} state`, 400);
     }
     po.poStatus = PO_STATUS.CANCELLED;
+    await pinLegacyTerms(po);
     if (data.remarks) po.remarks = data.remarks;
     po.updatedBy = user?._id;
     po.activityTimeline.push({ action: 'CANCEL', description: 'PO cancelled', actorId: user?._id });
     await po.save();
+    await rateChangeService.withdrawForPo(po._id, `PO ${po.poNumber || po.draftNumber || ''} was cancelled`.trim(), user);
 
     // Release every indent item / approved vendor this PO had committed, so the
     // freed items become selectable again and the indent status rolls back.

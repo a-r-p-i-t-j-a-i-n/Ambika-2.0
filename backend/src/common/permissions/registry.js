@@ -76,6 +76,7 @@ export const PERMISSIONS = Object.freeze({
   // ── Procurement (Purchase FMS) ──────────────────────────────────
   'procurement.approve':           { module: 'Procurement',    label: 'Approve procurement documents (PO / PI)',   risk: 'high' },
   'procurement.markPiNotRequired': { module: 'Procurement',    label: 'Mark a PO\'s PI as Not Required',            risk: 'high' },
+  'procurement.approveRateChange': { module: 'Procurement',    label: 'Approve / reject PO rate changes (updates the vendor rate)', risk: 'high' },
   'procurement.invoiceExcess':     { module: 'Procurement',    label: 'Invoice more than the QC-accepted qty',     risk: 'high' },
   'procurement.deleteIndent':          { module: 'Procurement', label: 'Delete a purchase indent',                risk: 'high' },
   'procurement.deletePurchaseOrder':   { module: 'Procurement', label: 'Delete a purchase order',                 risk: 'high' },

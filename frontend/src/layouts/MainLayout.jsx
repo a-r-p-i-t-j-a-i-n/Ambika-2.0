@@ -13,7 +13,7 @@ import {
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
   ReceiptText, FileSpreadsheet,
   Boxes, PackagePlus, PackageMinus, History, Layers, Recycle, PackageCheck, Factory,
-  Cpu, HardHat, Disc3, ListOrdered,
+  Cpu, HardHat, Disc3, ListOrdered, Building2,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -335,6 +335,8 @@ const navSectionsSimple = [
         ],
       },
       { text: 'Employees', icon: <UserCog size={19} />, path: '/employees' },
+      // PO authorised signature + stamp. Admin-only — hidden from everyone else.
+      { text: 'Company Settings', icon: <Building2 size={19} />, path: '/company-settings', perm: 'settings.edit' },
     ],
   },
 ];
@@ -409,6 +411,7 @@ const PAGE_TITLES = {
 
   '/employees':              'Employees',
   '/access-control':         'Access Control',
+  '/company-settings':       'Company Settings',
   '/pricing':                'Pricing Hub',
   '/pricing/approvals':      'Approval Inbox',
   '/pricing/calculator':     'Turnover Calculator',
@@ -581,6 +584,9 @@ const MainLayout = () => {
     }
     if (user?.role === 'MD' || isRoot) {
       adminItems.push({ text: 'Employees', icon: <UserCog size={19} />, path: '/employees' });
+    }
+    if (can('settings.edit') || isRoot) {
+      adminItems.push({ text: 'Company Settings', icon: <Building2 size={19} />, path: '/company-settings' });
     }
     if (adminItems.length > 0) {
       out.push({ title: 'Administration', items: adminItems });

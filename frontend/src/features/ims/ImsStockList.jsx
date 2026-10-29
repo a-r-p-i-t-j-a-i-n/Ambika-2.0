@@ -423,7 +423,11 @@ const ImsStockList = () => {
                       )}
                     </TableCell>
                     <TableCell><CategoryChip itemType={r.itemType} /></TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink, whiteSpace: 'nowrap' }}>
+                      {num(r.onHand)}
+                      {/* The IMS stock unit — for a SKU bought in boxes this is still PCS. */}
+                      {r.unit ? <Box component="span" sx={{ ml: 0.5, fontWeight: 600, fontSize: '0.72rem', color: O2D.sub }}>{r.unit}</Box> : null}
+                    </TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inTransit ? O2D.body : O2D.faint }}>
                       {r.inTransit ? num(r.inTransit) : '—'}
                       <AwaitingQcNote qty={r.awaitingQc} grnNumbers={r.awaitingQcGrnNumbers} fmt={num} />

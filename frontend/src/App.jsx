@@ -42,6 +42,7 @@ const MachineDetails       = lazyWithRetry(() => import('./features/masters/Mach
 const MachineOperatorsList = lazyWithRetry(() => import('./features/masters/MachineOperatorsList'));
 const OperatorDetails      = lazyWithRetry(() => import('./features/masters/OperatorDetails'));
 const AccessControl        = lazyWithRetry(() => import('./features/access-control/AccessControl'));
+const CompanySettings      = lazyWithRetry(() => import('./features/settings/CompanySettings'));
 const PricingHub           = lazyWithRetry(() => import('./features/pricing/PricingHub'));
 const ApprovalInbox        = lazyWithRetry(() => import('./features/pricing/ApprovalInbox'));
 const TurnoverCalculator   = lazyWithRetry(() => import('./features/pricing/TurnoverCalculator'));
@@ -261,6 +262,14 @@ function App() {
               element={
                 <RequirePermission slugs={['accessControl.manageUsers', 'accessControl.manageRoles', 'accessControl.viewAuditLog']} fallback="inline">
                   <AccessControl />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/company-settings"
+              element={
+                <RequirePermission slug="settings.edit" fallback="inline">
+                  <CompanySettings />
                 </RequirePermission>
               }
             />

@@ -120,6 +120,22 @@ export async function generateVendorPoDraftNumber(date = new Date()) {
 }
 
 /**
+ * Generate next PO Rate Change Request number (Purchase FMS — Rate Change Approvals).
+ * Zero-padded sequence, reset per fiscal year.
+ * @param {Date} date — date to determine fiscal year
+ * @returns {string} e.g. "RC-001/26-27"
+ */
+export async function generateRateChangeNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `RATE_CHANGE_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `RC-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
  * Generate next Material Follow-up number (Purchase FMS — Step 1.5).
  * Zero-padded sequence, reset per fiscal year.
  * @param {Date} date — date to determine fiscal year

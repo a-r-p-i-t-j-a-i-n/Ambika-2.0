@@ -22,6 +22,9 @@ import {
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { useGetVendorsQuery } from '../../../store/api/vendorApi';
 import { useGetSkusQuery, useGetSkuLookupQuery } from '../../../store/api/skuApi';
+import {
+  conversionRule, purchaseUnitOf, reversedRuleWarning, sameUnit, skuConversion, stockEquivalent,
+} from '../../../utils/unitConversion';
 // The RM module's own classification of its SKUs (kind COIL / CIRCLE, derived
 // from SKU.itemType). Reused rather than re-deriving "is this a coil?" here, so
 // the form and the server can never disagree about what counts as RM.
@@ -337,6 +340,37 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     return m;
   }, [lineSkusRes, skusRes]);
   const itemTypeOf = (it) => itemTypeBySku.get(String(it.skuId || '')) || '';
+  // Purchase unit → stock unit (display; the server stamps and freezes it):
+  // "1 BOX = 25 PCS · stocks as 125 PCS" under a line received in BOX.
+  const skuById = useMemo(() => {
+    const m = new Map();
+    [...(lineSkusRes?.data || []), ...(skusRes?.data || [])].forEach((s) => s?._id && m.set(String(s._id), s));
+    return m;
+  }, [lineSkusRes, skusRes]);
+  const conversionHint = (it) => {
+    const sku = skuById.get(String(it.skuId || ''));
+    const rule = conversionRule(sku);
+    if (!rule) return null;
+    const eq = stockEquivalent(sku, it.unit, it.receivedQty);
+    const c = skuConversion(sku);
+    const reversed = reversedRuleWarning(sku);
+    if (reversed) {
+      return (
+        <Typography variant="caption" data-testid="grn-line-conversion" sx={{ display: 'block', fontWeight: 700, color: '#b91c1c' }}>
+          {reversed}
+        </Typography>
+      );
+    }
+    const compatible = !!eq || sameUnit(it.unit, c.stockUnit);
+    return (
+      <Typography variant="caption" data-testid="grn-line-conversion" data-line={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
+        sx={{ display: 'block', fontWeight: 700, color: compatible ? '#0f766e' : '#b91c1c' }}>
+        {compatible
+          ? `${rule}${eq ? ` · stocks as ${eq.qty} ${eq.unit}` : ''}`
+          : `${rule} — ${it.unit || 'this unit'} cannot be converted; use ${c.purchaseUnit} or ${c.stockUnit}`}
+      </Typography>
+    );
+  };
   const isRmLine = (it) => !!rmKindOf(it) || destinationOf(itemTypeOf(it)) === 'RM_IMS';
   const hasRmLine = validItems.some(isRmLine);
   /** Destination chip for one row: where it goes, or why it cannot be received. */
@@ -758,7 +792,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                         getOptionLabel={(o) => (typeof o === 'string' ? o : (o?.name || ''))}
                         isOptionEqualToValue={(o, v) => o._id === v?._id}
                         onChange={(_e, v) => {
-                          if (v && typeof v === 'object') setItem(idx, { itemName: v.name, skuCode: v.code || '', skuId: v._id, unit: v.unit || 'Pcs' });
+                          // The unit it is bought in: the SKU's Purchase Unit when it has one.
+                          if (v && typeof v === 'object') setItem(idx, { itemName: v.name, skuCode: v.code || '', skuId: v._id, unit: purchaseUnitOf(v) || 'Pcs' });
                         }}
                         onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v, skuId: '' }); }}
                         renderInput={(params) => (
@@ -766,6 +801,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                         )}
                       />
                       {destinationTag(it)}
+                      {conversionHint(it)}
                       </Box>
                       <TextField size="small" label="Unit" value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })} />
                       <TextField size="small" type="number" label="Received Qty" value={it.receivedQty}
@@ -845,6 +881,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                             <Box sx={{ minWidth: 0 }}>
                               <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
                               <Typography variant="caption" color="text.disabled">{it.unit}</Typography>
+                              {conversionHint(it)}
                               <Box>{destinationTag(it)}</Box>
                             </Box>
                             <Typography variant="body2" color="primary.main" fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>{it.skuCode || '—'}</Typography>

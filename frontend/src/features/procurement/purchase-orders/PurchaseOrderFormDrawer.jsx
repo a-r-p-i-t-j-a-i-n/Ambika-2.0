@@ -15,8 +15,11 @@ import {
   useUpdatePurchaseOrderMutation,
   useRevisePurchaseOrderMutation,
   usePreviewPurchaseOrderPdfMutation,
+  useGetPoTermsDefaultsQuery,
 } from '../../../store/api/procurementApi';
 import { useGetVendorsQuery, useGetVendorByIdQuery } from '../../../store/api/vendorApi';
+import { useGetSkuLookupQuery } from '../../../store/api/skuApi';
+import { conversionRule, reversedRuleWarning, sameUnit, skuConversion } from '../../../utils/unitConversion';
 import { fmtINR, poDisplayNumber } from './poMeta';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -26,6 +29,13 @@ import { norm, matchVendorProduct, fillOtherRates } from './vendorRateMatch';
 import { itemRef, UNITS, toKgsUnit } from '../indents/indentMeta';
 import { VENDOR_SOURCE_LABEL, fixedVendorOf, itemVendorBlock, assignedVendorsOf } from './itemVendor';
 import { isMdForDirectSave } from './poDirectSave';
+import PoTermsDialog from './PoTermsDialog';
+import { RATE_STATUS, sameRate, fmtRate, fmtDiff } from '../rate-changes/rateChangeMeta';
+import { effectivePoTerms, PO_FORMAT_LABEL } from './poTerms';
+import {
+  EMPTY_DELIVERY, setLeadTime, setDeliveryDate, setPoDate, inheritVendorLead, vendorLeadDays,
+  deliveryFromSavedPo, deliveryErrors, parseLeadDays,
+} from './poLeadTime';
 
 /**
  * Create / edit a Vendor Purchase Order (Step 1.4).
@@ -47,7 +57,11 @@ const NO_SPIN = {
   },
 };
 const GST_PRESETS = [0, 5, 12, 18, 28];
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// The user's local calendar date (toISOString would give yesterday before 05:30 IST).
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 // Origin of an OTHER line's rate — only a user edit (MANUAL) is written back to
 // the Vendor Master / Pricing History when the PO is approved.
@@ -56,6 +70,18 @@ const rateSourceOf = (it) => {
   if (it.fromQuotation) return 'APPROVED_QUOTATION';
   if (it.autoRate != null) return 'VENDOR_MASTER';
   return it.rateSource || '';
+};
+
+// Rate Change Approvals: a rate that differs from the rate fetched from the
+// vendor's Vendor Master needs a reason; saving raises the request (server-side)
+// and the vendor's rate only changes once it is approved. A line already
+// carrying a pending / approved request at its saved rate needs nothing more.
+const rateChangeOf = (it) => {
+  const fetched = it.autoRate;
+  if (fetched == null || it.rate === '' || it.rate == null) return { changed: false, needsReason: false };
+  const changed = !sameRate(it.rate, fetched);
+  const covered = changed && ['PENDING', 'APPROVED'].includes(it.rateChangeStatus) && sameRate(it.rate, it.savedRate);
+  return { changed, covered, needsReason: changed && !covered, fetched: Number(fetched) };
 };
 
 const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18, hsn: '', indentId: '', indentNumber: '', indentItemId: '', indentItemDisplayNumber: '', approvedQuantity: 0, fromApprovedItem: false, rateMatched: undefined, manual: false });
@@ -130,10 +156,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const [poFormatType, setPoFormatType] = useState('OTHER'); // 'JSL' | 'OTHER'
   const [approvedVendors, setApprovedVendors] = useState([]); // from Step 1.3 (multi-vendor)
   const [approvedVendorId, setApprovedVendorId] = useState('');
+  // expectedDeliveryDate / leadTime / leadAnchor / leadSource follow poLeadTime.js.
   const [header, setHeader] = useState({
-    poDate: todayStr(), expectedDeliveryDate: '', leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '',
+    poDate: todayStr(), ...EMPTY_DELIVERY, deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '',
   });
   const [items, setItems] = useState([emptyItem()]);
+  // Terms & Conditions printed on the PDF. Until edited they follow the
+  // format's default (Company Settings); the server stores the default then.
+  const [terms, setTerms] = useState({ text: '', edited: false });
+  const [termsOpen, setTermsOpen] = useState(false);
 
   // Draft PDF preview (no save) — holds the temporary blob URL.
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -144,6 +175,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const [updatePo, { isLoading: updating }] = useUpdatePurchaseOrderMutation();
   const [revisePo, { isLoading: revising }] = useRevisePurchaseOrderMutation();
   const [previewPdf, { isLoading: previewing }] = usePreviewPurchaseOrderPdfMutation();
+  const { data: termsDefaultsRes } = useGetPoTermsDefaultsQuery(undefined, { skip: !open });
+  const termsDefaults = termsDefaultsRes?.data;
   const saving = creating || creatingItems || updating || revising;
 
   // Edit + revise prefill from an existing PO and keep their copied rates (no
@@ -214,6 +247,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   // list payload. Falls back to the list record while the detail request loads.
   const { data: vendorByIdRes } = useGetVendorByIdQuery(vendor?._id, { skip: !open || !vendor?._id });
   const vendorFull = vendorByIdRes?.data;
+
+  // SKU Master purchase-unit conversions of the lines on the form ("1 BOX = 25
+  // PCS"), shown under the Unit so the buyer sees what the PO will stock as.
+  // Quantities, rates and totals stay in the line's own unit.
+  const lineSkuIds = useMemo(() => [...new Set(items.map((it) => it.skuId).filter(Boolean).map(String))].sort(), [items]);
+  const { data: lineSkusRes } = useGetSkuLookupQuery(
+    { ids: lineSkuIds.join(','), limit: 2000 }, { skip: !open || !lineSkuIds.length },
+  );
+  const lineSkuById = useMemo(() => new Map((lineSkusRes?.data || []).map((s) => [String(s._id), s])), [lineSkusRes]);
   const vendorProducts = useMemo(
     () => vendorFull?.products || vendor?.products || [],
     [vendorFull, vendor],
@@ -228,15 +270,19 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       setIndent({ _id: sourcePo.indentId, indentNumber: sourcePo.indentNumber });
       const v = vendorOptions.find((p) => p._id === (sourcePo.vendorId?._id || sourcePo.vendorId));
       setVendor(v || { _id: sourcePo.vendorId?._id || sourcePo.vendorId, name: sourcePo.vendorName });
+      const poDate = isRevise ? todayStr() : (sourcePo.poDate ? sourcePo.poDate.slice(0, 10) : todayStr());
       setHeader({
-        poDate: isRevise ? todayStr() : (sourcePo.poDate ? sourcePo.poDate.slice(0, 10) : todayStr()),
-        expectedDeliveryDate: sourcePo.expectedDeliveryDate ? sourcePo.expectedDeliveryDate.slice(0, 10) : '',
-        leadTime: sourcePo.leadTime || '', deliveryTerms: sourcePo.deliveryTerms || '',
+        ...deliveryFromSavedPo(sourcePo, poDate, { revise: isRevise }),
+        deliveryTerms: sourcePo.deliveryTerms || '',
         paymentTerms: sourcePo.paymentTerms || '', creditPeriod: sourcePo.creditPeriod || 0,
         remarks: sourcePo.remarks || '',
       });
       const fmt = sourcePo.poFormatType === 'JSL' ? 'JSL' : 'OTHER';
       setPoFormatType(fmt);
+      // Edit: the terms this PO prints now (an older PO prints its Remarks).
+      // Revise: the cancelled PO's own terms, else the current default.
+      const ownTerms = isRevise ? (sourcePo.termsAndConditions || '').trim() : effectivePoTerms(sourcePo, null);
+      setTerms({ text: ownTerms, edited: Boolean(ownTerms) });
       setItems(sourcePo.items?.length ? sourcePo.items.map((it) => (fmt === 'JSL' ? {
         grade: it.grade || '', width: it.width || '', finish: it.finish || '',
         skuCode: it.skuCode || '', skuId: it.skuId || '', itemName: it.itemName || '',
@@ -253,13 +299,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         indentItemId: it.indentItemId || '', indentItemDisplayNumber: it.indentItemDisplayNumber || '',
         manual: true, rateMatched: true,
         rateSource: it.rateSource || '', rateEdited: it.rateSource === 'MANUAL',
+        // The vendor rate the line was saved against, and its rate change request.
+        autoRate: it.fetchedRate ?? undefined, savedRate: it.rate,
+        rateChangeStatus: it.rateChangeStatus || '', rateChangeRequestNumber: it.rateChangeRequestNumber || '',
       })) : [emptyItemFor(fmt)]);
     } else {
       setIndent(null); setVendor(null); setApprovedVendors([]); setApprovedVendorId('');
       setAssignedVendorId('');
       setSelectedApprovedItems([]);
       setPoFormatType('OTHER');
-      setHeader({ poDate: todayStr(), expectedDeliveryDate: '', leadTime: '', deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '' });
+      setHeader({ poDate: todayStr(), ...EMPTY_DELIVERY, deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '' });
+      setTerms({ text: '', edited: false });
       setItems([emptyItem()]);
       // Preset multi-vendor (Step 1.3) indents keep the legacy approved-vendor path;
       // simple/item-level preset indents are pre-selected in the item-picker once the
@@ -270,6 +320,18 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, po, presetIndent, reviseFrom]);
+
+  // The selected vendor's default Lead Time (Vendor Master) starts the Lead Time /
+  // Expected Delivery Date pair — however the vendor got picked (Vendor field,
+  // assigned/approved vendor, JSL's Jindal). Values the user entered or the
+  // saved PO's are kept. Uses the fetched record once it is this vendor's.
+  const vendorDefaultLead = vendorLeadDays(
+    vendorFull && String(vendorFull._id) === String(vendor?._id || '') ? vendorFull : vendor,
+  );
+  useEffect(() => {
+    if (!open) return;
+    setHeader((h) => inheritVendorLead(h, vendorDefaultLead));
+  }, [open, vendor?._id, vendorDefaultLead]);
 
   // JSL auto-flow (create): force Jindal Stainless Ltd as the vendor and fill any
   // missing base rates from its catalog as the catalog (or selection) loads. Rows
@@ -379,13 +441,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     });
   };
 
-  // JSL vendor terms — snapshot Jindal's credit/lead/payment defaults.
+  // JSL vendor terms — snapshot Jindal's credit/payment defaults (its lead time
+  // comes from the vendor-default effect).
   const applyJslVendorTerms = (v) => {
     setVendor(v);
     setHeader((h) => ({
       ...h,
       creditPeriod: v.creditPeriodDays ?? h.creditPeriod,
-      leadTime: h.leadTime || (v.leadTimeDays ? `${v.leadTimeDays} days` : ''),
       paymentTerms: h.paymentTerms || (v.creditPeriodDays ? `${v.creditPeriodDays} days credit` : ''),
     }));
   };
@@ -440,7 +502,6 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       setHeader((h) => ({
         ...h,
         creditPeriod: party.creditPeriodDays ?? h.creditPeriod,
-        leadTime: h.leadTime || (party.leadTimeDays ? `${party.leadTimeDays} days` : ''),
         paymentTerms: h.paymentTerms || (party.creditPeriodDays ? `${party.creditPeriodDays} days credit` : ''),
       }));
     }
@@ -463,14 +524,14 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
   // Vendor select: snapshot terms only. Item rate/GST/HSN auto-fill is handled
   // reactively by the OTHER auto-fill effect below (re-runs on vendor / item /
-  // SKU change), so the catalog match logic lives in one place.
+  // SKU change), so the catalog match logic lives in one place; the default
+  // Lead Time by the vendor-default effect above.
   const applyVendor = (v) => {
     setVendor(v);
     if (!v) return;
     setHeader((h) => ({
       ...h,
       creditPeriod: v.creditPeriodDays ?? h.creditPeriod,
-      leadTime: h.leadTime || (v.leadTimeDays ? `${v.leadTimeDays} days` : ''),
       paymentTerms: h.paymentTerms || (v.creditPeriodDays ? `${v.creditPeriodDays} days credit` : ''),
     }));
   };
@@ -577,9 +638,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     }
     setPoFormatType(next);
     setItems(buildRowsFromApproved(selectedApprovedItems, next));
+    // Terms left at the old format's default follow the new format's default.
+    if (terms.edited && terms.text === termsDefaults?.[poFormatType]) setTerms({ text: '', edited: false });
   };
 
   const isJsl = poFormatType === 'JSL';
+  const defaultTerms = termsDefaults?.[poFormatType] || '';
+  const effectiveTerms = terms.edited ? terms.text : defaultTerms;
+  const saveTerms = (text) => {
+    setTerms({ text, edited: text !== defaultTerms });
+    setTermsOpen(false);
+  };
 
   // Vendor filter (New PO item-picker): the vendor dropdown is limited to Vendor
   // Master records whose catalog (products[]) carries EVERY selected item's SKU —
@@ -642,9 +711,19 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     return { ...t, grand: t.taxable + t.tax };
   }, [items, isJsl]);
 
+  const deliveryError = deliveryErrors(header);
+  // Says when the Lead Time is the vendor's default, or what that default is
+  // when the user's own value differs from it.
+  const leadHint = header.leadSource === 'VENDOR'
+    ? 'From vendor master'
+    : (vendorDefaultLead != null && parseLeadDays(header.leadTime) !== vendorDefaultLead
+      ? `Vendor default: ${vendorDefaultLead} day${vendorDefaultLead === 1 ? '' : 's'}` : '');
+
   const validItems = isJsl
     ? items.filter((it) => Number(it.quantity) > 0 && (it.grade?.trim() || it.finish?.trim() || it.width?.trim()))
     : items.filter((it) => it.itemName?.trim() && Number(it.quantity) > 0);
+
+  const rateChangeCount = isJsl ? 0 : validItems.filter((it) => rateChangeOf(it).needsReason).length;
 
   // Shared PO payload (vendor snapshot + terms + items) used by save AND preview.
   const buildPayload = () => ({
@@ -660,9 +739,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     vendorPhone: vendor?.phone || '',
     deliveryTerms: header.deliveryTerms.trim(),
     paymentTerms: header.paymentTerms.trim(),
-    leadTime: header.leadTime.trim(),
+    // Days only — the server checks it against the dates and stores its text.
+    leadTimeDays: parseLeadDays(header.leadTime),
     creditPeriod: Number(header.creditPeriod) || 0,
     remarks: header.remarks.trim(),
+    // Blank = the format's default (the server stores it on save).
+    termsAndConditions: terms.edited ? terms.text : '',
     items: validItems.map((it) => (isJsl ? {
       grade: it.grade?.trim() || '', width: it.width?.trim() || '', finish: it.finish?.trim() || '',
       itemName: it.itemName?.trim() || '',
@@ -683,6 +765,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       quantity: Number(it.quantity), unit: toKgsUnit(it.unit) || 'Pcs',
       rate: Number(it.rate) || 0, gstRate: Number(it.gstRate) || 0,
       rateSource: rateSourceOf(it),
+      rateChangeReason: String(it.rateChangeReason || '').trim(),
     })),
   });
 
@@ -716,6 +799,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const handleSubmit = async (saveMode = 'DRAFT') => {
     if (!vendor?._id) { enqueueSnackbar('Vendor is mandatory', { variant: 'warning' }); return; }
     if (!header.expectedDeliveryDate) { enqueueSnackbar('Expected Delivery Date is required', { variant: 'warning' }); return; }
+    if (deliveryError.edd) { enqueueSnackbar(`Expected Delivery Date: ${deliveryError.edd}`, { variant: 'warning' }); return; }
+    if (deliveryError.lead) { enqueueSnackbar(`Lead Time: ${deliveryError.lead}`, { variant: 'warning' }); return; }
     if (vendorConflict) { enqueueSnackbar(vendorConflict, { variant: 'warning' }); return; }
     if (approvedItemMode) {
       if (!selectedApprovedItems.length) { enqueueSnackbar('Select at least one approved item', { variant: 'warning' }); return; }
@@ -727,6 +812,14 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     if (validItems.length === 0) {
       enqueueSnackbar(isJsl ? 'Add at least one item with grade and quantity' : 'Add at least one item with quantity', { variant: 'warning' });
       return;
+    }
+    // A changed rate goes to Rate Change Approvals and needs a reason.
+    if (!isJsl) {
+      const noReason = validItems.find((it) => rateChangeOf(it).needsReason && !String(it.rateChangeReason || '').trim());
+      if (noReason) {
+        enqueueSnackbar(`Give a reason for changing the rate of "${noReason.itemName}" — it goes to Rate Change Approvals`, { variant: 'warning' });
+        return;
+      }
     }
     // Item-picker qty must stay within the approved quantity.
     if (approvedItemMode) {
@@ -771,6 +864,9 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         const res = await createPo({ ...payload, indentId: indent._id, saveMode: direct ? 'DIRECT' : 'DRAFT' }).unwrap();
         notifyCreated(res?.data);
         created = res?.data;
+      }
+      if (rateChangeCount > 0 && !(created?.approvalStatus === 'APPROVED')) {
+        enqueueSnackbar(`${rateChangeCount} rate change${rateChangeCount === 1 ? '' : 's'} sent to Rate Change Approvals`, { variant: 'info' });
       }
       // Second arg = the newly created/revised PO, so a caller that isn't
       // already on the PO list (e.g. a Quick Action) can open it.
@@ -995,22 +1091,37 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
         {/* Header / terms */}
         <Paper elevation={0} sx={SECTION}>
-          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: '#0f766e' }}>
-            <ShoppingBag size={18} /> PO Terms
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+            <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: '#0f766e' }}>
+              <ShoppingBag size={18} /> PO Terms
+            </Typography>
+            <Button size="small" variant="outlined" startIcon={<FileText size={15} />} onClick={() => setTermsOpen(true)}
+              data-testid="po-edit-terms">
+              Edit Terms &amp; Conditions
+            </Button>
+          </Box>
           <Grid container spacing={2}>
+            {/* Lead Time and Expected Delivery Date fill each other (poLeadTime.js). */}
             <Grid item xs={6} sm={2.4}>
               <DateInputDDMMYYYY label="PO Date" fullWidth value={header.poDate}
-                onChange={(val) => setHeader((h) => ({ ...h, poDate: val }))} />
+                onChange={(val) => setHeader((h) => setPoDate(h, val))} />
             </Grid>
             <Grid item xs={6} sm={2.4}>
               <DateInputDDMMYYYY label="Expected Delivery Date *" fullWidth required value={header.expectedDeliveryDate}
-                onChange={(val) => setHeader((h) => ({ ...h, expectedDeliveryDate: val }))}
-                error={!header.expectedDeliveryDate} helperText={!header.expectedDeliveryDate ? 'Required' : ''} />
+                onChange={(val) => setHeader((h) => setDeliveryDate(h, val))}
+                error={Boolean(deliveryError.edd)} helperText={deliveryError.edd}
+                inputProps={{ 'data-testid': 'po-expected-delivery' }} />
             </Grid>
             <Grid item xs={6} sm={2.4}>
-              <TextField label="Lead Time" fullWidth value={header.leadTime} placeholder="e.g. 7 days"
-                onChange={(e) => setHeader((h) => ({ ...h, leadTime: e.target.value }))} />
+              <TextField label="Lead Time (Days)" fullWidth value={header.leadTime} placeholder="e.g. 7"
+                inputProps={{ inputMode: 'numeric', 'data-testid': 'po-lead-time' }}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (/^\d{0,3}$/.test(raw)) setHeader((h) => setLeadTime(h, raw));
+                }}
+                error={Boolean(deliveryError.lead)}
+                helperText={deliveryError.lead || leadHint}
+                FormHelperTextProps={{ 'data-testid': 'po-lead-time-hint' }} />
             </Grid>
             <Grid item xs={6} sm={2.4}>
               <TextField label="Credit Period (Days)" type="number" fullWidth value={header.creditPeriod}
@@ -1025,8 +1136,20 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                 onChange={(e) => setHeader((h) => ({ ...h, deliveryTerms: e.target.value }))} />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField label="Remarks" fullWidth value={header.remarks}
+              <TextField label="Remarks" fullWidth value={header.remarks} helperText="Internal note — not printed on the PO PDF"
                 onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} />
+            </Grid>
+            <Grid item xs={12}>
+              {/* What the PDF will print — so a date in the terms is checked before saving. */}
+              <Box sx={{ border: '1px solid #e2e8f0', borderRadius: '8px', px: 1.5, py: 1, bgcolor: '#f8fafc' }} data-testid="po-terms-summary">
+                <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>
+                  Terms &amp; Conditions · {terms.edited ? 'edited for this PO' : `default ${PO_FORMAT_LABEL[poFormatType]} terms`}
+                </Typography>
+                <Typography variant="body2" data-testid="po-terms-text"
+                  sx={{ whiteSpace: 'pre-line', color: PFMS.ink, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {effectiveTerms || '—'}
+                </Typography>
+              </Box>
             </Grid>
           </Grid>
         </Paper>
@@ -1150,6 +1273,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   // Flag a user override of the auto-filled Vendor-Master rate/GST.
                   const rateModified = (it.autoRate != null && Number(it.rate) !== Number(it.autoRate))
                     || (it.autoGst != null && Number(it.gstRate) !== Number(it.autoGst));
+                  const rc = rateChangeOf(it);
+                  const rcStatus = !rc.needsReason && it.rateChangeRequestNumber ? RATE_STATUS[it.rateChangeStatus] : null;
                   return (
                     <Box key={idx} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                     <Box sx={{
@@ -1190,8 +1315,15 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                           {it.indentItemDisplayNumber ? (
                             <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, pl: 0.5 }}>{it.indentItemDisplayNumber}</Typography>
                           ) : null}
-                          {rateModified && (
+                          {rc.needsReason ? (
+                            <Chip size="small" label="Needs approval" data-testid="po-rate-needs-approval"
+                              sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: alpha('#dc2626', 0.12), color: '#b91c1c' }} />
+                          ) : rateModified && (
                             <Chip size="small" label="Rate Modified" sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha('#f59e0b', 0.15), color: '#b45309' }} />
+                          )}
+                          {rcStatus && (
+                            <Chip size="small" label={`Rate ${rcStatus.label.toLowerCase()} · ${it.rateChangeRequestNumber}`} data-testid="po-rate-change-status"
+                              sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: rcStatus.bg, color: rcStatus.color }} />
                           )}
                         </Box>
                       </Box>
@@ -1205,8 +1337,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                         onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
                       {/* A line filled from an indent, vendor product or saved PO may say "Kg" —
                           shown and saved as KGS, the dropdown's spelling. */}
-                      <TextField size="small" select value={toKgsUnit(it.unit)} onChange={(e) => setItem(idx, { unit: e.target.value })}>
-                        {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+                      {/* The row's own unit is always an option (an indent bound to a
+                          SKU's purchase unit says "BOX", not the list's "Box"), so the
+                          select never shows blank for a unit it was actually given. */}
+                      <TextField size="small" select value={toKgsUnit(it.unit)} onChange={(e) => setItem(idx, { unit: e.target.value })}
+                        inputProps={{ 'data-testid': 'po-line-unit' }}>
+                        {(UNITS.includes(toKgsUnit(it.unit)) || !it.unit ? UNITS : [toKgsUnit(it.unit), ...UNITS]).map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                       </TextField>
                       <TextField size="small" type="number" placeholder="0.00" value={it.rate}
                         onChange={(e) => setItem(idx, { rate: e.target.value, manual: true, rateEdited: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
@@ -1249,6 +1385,43 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                           </Typography>
                         </Box>
                       )}
+                      {rc.needsReason && (
+                        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: { md: 'center' }, gap: 1, pl: { md: 1 } }}>
+                          <Typography variant="caption" data-testid="po-rate-change-hint" sx={{ color: '#b91c1c', fontWeight: 600, flex: '1 1 50%' }}>
+                            Vendor rate {fmtRate(rc.fetched)} → {fmtRate(it.rate)} ({fmtDiff(Number(it.rate) - rc.fetched, rc.fetched > 0 ? ((Number(it.rate) - rc.fetched) / rc.fetched) * 100 : null)}).
+                            Goes to Rate Change Approvals — the PO can be approved, and the vendor's rate changes, only once it is approved.
+                          </Typography>
+                          <TextField size="small" required label="Reason for rate change" value={it.rateChangeReason || ''}
+                            onChange={(e) => setItem(idx, { rateChangeReason: e.target.value })}
+                            error={!String(it.rateChangeReason || '').trim()}
+                            inputProps={{ maxLength: 500, 'data-testid': 'po-rate-reason' }} sx={{ flex: '1 1 50%' }} />
+                        </Box>
+                      )}
+                      {(() => {
+                        // Purchase unit → stock unit for this line's SKU, when it has one.
+                        const sku = it.skuId ? lineSkuById.get(String(it.skuId)) : null;
+                        const rule = conversionRule(sku);
+                        if (!rule) return null;
+                        const c = skuConversion(sku);
+                        const reversed = reversedRuleWarning(sku);
+                        if (reversed) {
+                          return (
+                            <Typography variant="caption" data-testid="po-line-conversion" sx={{ pl: { md: 1 }, fontWeight: 600, color: '#b91c1c' }}>
+                              {reversed}
+                            </Typography>
+                          );
+                        }
+                        const ok = sameUnit(it.unit, c.purchaseUnit) || sameUnit(it.unit, c.stockUnit);
+                        const qty = Number(it.quantity) || 0;
+                        return (
+                          <Typography variant="caption" data-testid="po-line-conversion"
+                            sx={{ pl: { md: 1 }, fontWeight: 600, color: ok ? 'text.secondary' : '#b91c1c' }}>
+                            {ok
+                              ? `${rule}${sameUnit(it.unit, c.purchaseUnit) && qty > 0 ? ` · ${qty} ${it.unit} will stock as ${Math.round(qty * c.factor * 100) / 100} ${c.stockUnit}` : ''}`
+                              : `${rule} — choose ${c.purchaseUnit} or ${c.stockUnit}; ${it.unit} cannot be converted`}
+                          </Typography>
+                        );
+                      })()}
                     </Box>
                   );
                 })}
@@ -1288,6 +1461,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
               {canDirectSave
                 ? 'Draft stays editable and needs approval · Save PO Directly approves it now with the final PO number'
                 : 'Only the MD can save a PO directly — save it as a draft; it stays a draft until approved in PO Approval'}
+            </Typography>
+          )}
+          {rateChangeCount > 0 && (
+            <Typography variant="caption" color="error.main" display="block" data-testid="po-rate-change-note">
+              {rateChangeCount} rate change{rateChangeCount === 1 ? '' : 's'} will go to Rate Change Approvals
+              {isCreate && canDirectSave ? ' (Save PO Directly approves them now)' : ' — the PO waits for them before it can be approved'}
             </Typography>
           )}
         </Box>
@@ -1332,6 +1511,16 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
       {/* Draft PDF preview — temporary, never saved */}
       <PurchaseOrderPdfPreview open={previewOpen} onClose={closePreview} previewUrl={previewUrl} />
+
+      <PoTermsDialog
+        open={termsOpen}
+        onClose={() => setTermsOpen(false)}
+        onSave={saveTerms}
+        initialText={effectiveTerms}
+        defaultText={defaultTerms}
+        formatLabel={PO_FORMAT_LABEL[poFormatType]}
+        note="Printed on this PO's PDF — preview, download and release. Kept when you save the PO."
+      />
 
       {/* Add a Vendor Master record (or product) for the selected approved item(s) */}
       <AddVendorForItemModal

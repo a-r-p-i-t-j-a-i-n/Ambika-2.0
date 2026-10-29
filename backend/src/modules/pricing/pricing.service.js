@@ -25,6 +25,8 @@ import SKU from '../skus/sku.model.js';
 import Party from '../clients/party.model.js';
 import PriceRevision from './price-revision.model.js';
 import CompanySettings from './company-settings.model.js';
+import AuditLog from '../audit-logs/audit-log.model.js';
+import { PO_TERMS_SETTING_FIELDS } from '../procurement/purchase-order/poTerms.js';
 import Vendor from '../vendors/vendor.model.js';
 import PricingHistory from '../vendors/pricingHistory.model.js';
 import { AppError } from '../../utils/apiResponse.js';
@@ -916,10 +918,29 @@ export const getPendingApprovals = async () => {
 
 // ── Settings ────────────────────────────────────────────────────────
 export const getSettings = async () => CompanySettings.getSingleton();
-export const updateSettings = async (patch, actor) => {
+export const updateSettings = async (patch, actor, req = null) => {
   const s = await CompanySettings.getSingleton();
+  // The default PO terms are printed on every new PO, so a change to them is
+  // audited with the text before and after.
+  const termsFields = Object.values(PO_TERMS_SETTING_FIELDS).filter((f) => f in patch && patch[f] !== s[f]);
+  const oldValue = Object.fromEntries(termsFields.map((f) => [f, s[f]]));
   Object.assign(s, patch);
   s.updatedBy = actor._id;
   await s.save();
+  if (termsFields.length) {
+    try {
+      await AuditLog.create({
+        entityName: 'CompanySettings',
+        entityId: s._id,
+        action: 'UPDATE',
+        oldValue,
+        newValue: Object.fromEntries(termsFields.map((f) => [f, s[f]])),
+        updatedBy: actor._id,
+        ipAddress: req?.ip,
+        userAgent: req?.get?.('user-agent'),
+        module: 'settings',
+      });
+    } catch (err) { logger.error(`[settings] audit log for PO terms failed: ${err.message}`); }
+  }
   return s.toObject();
 };

@@ -112,12 +112,12 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     createPurchaseOrder: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders', method: 'POST', body }),
-      invalidatesTags: ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
+      invalidatesTags: ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
     // New PO form item-picker → one vendor, hand-picked approved items.
     createPurchaseOrderFromItems: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders/create-from-items', method: 'POST', body }),
-      invalidatesTags: ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
+      invalidatesTags: ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
     // Returns a PDF Blob (no DB write). On error the backend sends JSON, so branch
     // the responseHandler on response.ok to surface a readable error message.
@@ -131,15 +131,25 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     updatePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}`, method: 'PATCH', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+    }),
+    // Terms & Conditions only (PO detail) — nothing else on the PO changes.
+    updatePurchaseOrderTerms: builder.mutation({
+      query: ({ id, termsAndConditions }) => ({ url: `/procurement/purchase-orders/${id}/terms`, method: 'PATCH', body: { termsAndConditions } }),
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', { type: 'PurchaseOrder', id }],
+    }),
+    // Default Terms & Conditions per PO format ({ JSL, OTHER }), edited in Company Settings.
+    getPoTermsDefaults: builder.query({
+      query: () => '/procurement/purchase-orders/terms-defaults',
+      providesTags: ['CompanySettings'],
     }),
     deletePurchaseOrder: builder.mutation({
       query: (id) => ({ url: `/procurement/purchase-orders/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, id) => ['PurchaseOrder', 'RateChange', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
     approvePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/approve`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
     releasePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/release`, method: 'POST', body }),
@@ -162,12 +172,12 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     cancelPurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/cancel`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
     }),
     // Revise a cancelled PO → new draft PO (copied data, new number, linked back).
     revisePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/revise`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
     }),
     markPoPiNotRequired: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/pi-not-required`, method: 'POST', body }),
@@ -596,6 +606,30 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { documentType, documentId }) => approvalInvalidates(documentType, documentId),
     }),
 
+    // ── Rate Change Approvals (PO rate ≠ vendor rate) ────────
+    // Requests are raised by saving a PO; approving updates the vendor rate and
+    // the PO line together, so it refreshes POs, vendors and pricing too.
+    getRateChanges: builder.query({
+      query: (params = {}) => ({ url: '/procurement/rate-changes', params }),
+      providesTags: [{ type: 'RateChange', id: 'LIST' }],
+    }),
+    getRateChange: builder.query({
+      query: (id) => `/procurement/rate-changes/${id}`,
+      providesTags: (_r, _e, id) => [{ type: 'RateChange', id }],
+    }),
+    getRateChangeHistory: builder.query({
+      query: (params = {}) => ({ url: '/procurement/rate-changes/history', params }),
+      providesTags: [{ type: 'RateChange', id: 'HISTORY' }],
+    }),
+    approveRateChange: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/rate-changes/${id}/approve`, method: 'POST', body }),
+      invalidatesTags: ['RateChange', 'PurchaseOrder', 'PurchaseOrderStats', 'Vendor', 'Pricing'],
+    }),
+    rejectRateChange: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/rate-changes/${id}/reject`, method: 'POST', body }),
+      invalidatesTags: ['RateChange', 'PurchaseOrder', 'PurchaseOrderStats'],
+    }),
+
     // ── Inventory (shared foundation) ────────────────────────
     getInventoryMovementsByRef: builder.query({
       query: ({ refType, refId }) => `/inventory/movements/by-ref/${refType}/${refId}`,
@@ -607,6 +641,11 @@ export const procurementApi = baseApi.injectEndpoints({
 export const {
   useGetIndentsQuery,
   useGetMdApprovalsQuery,
+  useGetRateChangesQuery,
+  useGetRateChangeQuery,
+  useGetRateChangeHistoryQuery,
+  useApproveRateChangeMutation,
+  useRejectRateChangeMutation,
   useGetIndentStatsQuery,
   useGetIndentQuery,
   useCreateIndentMutation,
@@ -630,6 +669,8 @@ export const {
   useCreatePurchaseOrderFromItemsMutation,
   usePreviewPurchaseOrderPdfMutation,
   useUpdatePurchaseOrderMutation,
+  useUpdatePurchaseOrderTermsMutation,
+  useGetPoTermsDefaultsQuery,
   useDeletePurchaseOrderMutation,
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,

@@ -136,9 +136,22 @@ const grnItemSchema = new Schema({
   inventoryDestination: { type: String, enum: [...Object.values(INVENTORY_DESTINATION), null], default: null },
   stockWarehouse:       { type: String, trim: true, default: '' }, // where the accepted qty posts
 
+  // ── Purchase unit → stock unit (skus/unitConversion.js) ──────────────────
+  // Set only when this line's `unit` is the SKU's Purchase Unit and differs
+  // from its stock unit: 5 BOX at 1 BOX = 25 PCS → stockUnit PCS,
+  // conversionFactor 25, stockQty 125. Derived by the server from the SKU
+  // master like the routing above — re-derived on every draft save, FROZEN at
+  // completion — and the factor the QC posting multiplies by. A later edit of
+  // the SKU's factor never reaches a completed GRN. null = no conversion (1:1),
+  // which is every line saved before this existed and every same-unit SKU.
+  stockUnit:        { type: String, trim: true, default: null },
+  conversionFactor: { type: Number, default: null },
+  stockQty:         { type: Number, default: null }, // receivedQty × conversionFactor
+
   // ── QC-gated posting (see GRN_STOCK_POSTING_STAGE) — null on legacy GRNs ──
   stockStatus:   { type: String, enum: [...Object.values(GRN_LINE_STOCK_STATUS), null], default: null },
-  postedQty:     { type: Number, default: 0, min: 0 },                         // accepted qty posted
+  postedQty:     { type: Number, default: 0, min: 0 },                         // accepted qty posted (line unit)
+  postedStockQty: { type: Number, default: null },                             // the same, in the stock unit (converted lines only)
   postedQcId:    { type: Schema.Types.ObjectId, ref: 'IncomingQC', default: null },
   stockPostedAt: { type: Date, default: null },
 }, { _id: true });

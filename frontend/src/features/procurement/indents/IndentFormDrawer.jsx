@@ -16,6 +16,7 @@ import { useGetEmployeesQuery } from '../../../store/api/authApi';
 import { UNITS, DEPARTMENTS } from './indentMeta';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
 import { TYPE_META, typeDestinationHint } from '../../masters/itemTypeMeta';
+import { conversionRule, purchaseUnitOf, reversedRuleWarning } from '../../../utils/unitConversion';
 
 // Purchase FMS rule: Finished Goods are sell-side only — never purchasable.
 const FG_BLOCKED = new Set(['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT']);
@@ -34,9 +35,11 @@ const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', unit: 'Pcs', qu
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Match the typed text against name OR code; cap the rendered list.
 const filterSkuOptions = createFilterOptions({ limit: 200, stringify: (o) => `${o.name || ''} ${o.code || ''}` });
-// A SKU's unit exactly as SKU Master stores it (trimmed only); `fallback`,
-// then Pcs, when the SKU has none.
-const skuUnit = (sku, fallback) => String(sku?.unit || '').trim() || String(fallback || '').trim() || 'Pcs';
+// The unit a SKU is BOUGHT in, exactly as SKU Master stores it (trimmed only):
+// its Purchase Unit when one is configured ("BOX" for 1 BOX = 25 PCS), else its
+// stock unit; `fallback`, then Pcs, when the SKU has none. The server binds the
+// same unit (indent/itemSku.js).
+const skuUnit = (sku, fallback) => purchaseUnitOf(sku) || String(fallback || '').trim() || 'Pcs';
 const blankHeader = () => ({ raisedBy: '', department: 'Stores', requestType: 'MATERIAL_PURCHASE', remarks: '' });
 
 // Map an existing indent (new items[] or legacy single-product) → editable rows.
@@ -351,6 +354,9 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
                 <TextField size="small" type="number" placeholder="0" value={it.quantity} error={!!errors[`qty_${idx}`]}
                   onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} />
                 <TextField size="small" placeholder="Unit" value={it.skuId ? skuUnit(skuById.get(String(it.skuId)), it.unit) : ''}
+                  helperText={(it.skuId && (reversedRuleWarning(skuById.get(String(it.skuId))) || conversionRule(skuById.get(String(it.skuId))))) || undefined}
+                  error={!!(it.skuId && reversedRuleWarning(skuById.get(String(it.skuId))))}
+                  FormHelperTextProps={{ 'data-testid': 'indent-unit-rule' }}
                   InputProps={{ readOnly: true }} inputProps={{ 'data-testid': 'indent-unit', 'aria-label': 'Unit (from SKU Master)' }} />
                 <TextField size="small" placeholder="Optional" value={it.remarks}
                   onChange={(e) => setItem(idx, { remarks: e.target.value })} />

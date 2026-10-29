@@ -47,6 +47,7 @@ import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
 import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
+import { frozenRule, frozenStockText } from '../../../utils/unitConversion';
 
 // ── Same spacing/typography scale as Indent, PO and Follow-up Detail
 // (SECTION_GAP/CARD_PAD/Field/FieldGrid/SectionCard), replacing the older
@@ -405,9 +406,17 @@ const GrnDetail = () => {
                             {destinationText(it.inventoryDestination, it.stockWarehouse)}
                           </Typography>
                         )}
+                        {/* Received in the SKU's purchase unit: the rule frozen on this line
+                            and what the received qty stocks as. */}
+                        {frozenRule(it) && (
+                          <Typography variant="caption" data-testid="grn-line-conversion" sx={{ display: 'block', fontWeight: 700, color: '#0f766e', whiteSpace: 'nowrap' }}>
+                            {frozenRule(it)} · {it.receivedQty} {it.unit} {frozenStockText(it, it.receivedQty)}
+                          </Typography>
+                        )}
                         {STOCK_STATUS[it.stockStatus] && (
                           <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: STOCK_STATUS[it.stockStatus].color }}>
                             {STOCK_STATUS[it.stockStatus].label}{it.stockStatus === 'POSTED' ? ` ${it.postedQty}` : ''}
+                            {it.stockStatus === 'POSTED' && it.postedStockQty != null ? ` ${it.unit} = ${it.postedStockQty} ${it.stockUnit}` : ''}
                           </Typography>
                         )}
                         <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>{it.movementNumber || (it.inventoryDestination ? '' : '—')}</Typography>
@@ -445,7 +454,14 @@ const GrnDetail = () => {
                         <TableCell sx={{ whiteSpace: 'nowrap' }}><Typography variant="body2" fontWeight={700} color="primary.main">{m.movementNumber}</Typography></TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{m.skuCode || m.skuName || '—'}</TableCell>
                         <TableCell><Chip size="small" color="success" variant="outlined" label={m.txnType} sx={{ fontWeight: 700 }} /></TableCell>
-                        <TableCell align="right" sx={{ ...numCellSx, color: '#0f766e', fontWeight: 700 }}>+{m.quantity}</TableCell>
+                        <TableCell align="right" sx={{ ...numCellSx, color: '#0f766e', fontWeight: 700 }}>
+                          +{m.quantity}{m.conversionFactor ? ` ${m.unit}` : ''}
+                          {m.conversionFactor ? (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              {m.enteredQty} {m.enteredUom} × {m.conversionFactor}
+                            </Typography>
+                          ) : null}
+                        </TableCell>
                         <TableCell align="right" sx={{ ...numCellSx, fontWeight: 700 }}>{m.balanceAfter}</TableCell>
                         <TableCell>{m.warehouse}</TableCell>
                         <TableCell sx={{ overflowWrap: 'anywhere' }}>{m.batchNo || '—'}</TableCell>

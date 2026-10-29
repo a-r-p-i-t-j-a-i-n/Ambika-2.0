@@ -18,6 +18,8 @@ export const createVendorSchema = Joi.object({
   gstRate:          Joi.number().min(0).max(100).default(0),
   tdsRate:          Joi.number().min(0).max(100).default(0),
   creditPeriodDays: Joi.number().integer().min(0).max(365).default(0),
+  // No default: an update that leaves it out keeps the stored value; null clears it.
+  leadTimeDays:     Joi.number().integer().min(0).max(365).allow(null).label('Default Lead Time'),
 
   toEmails:         Joi.array().items(Joi.string().trim().lowercase()).default([]),
   ccEmails:         Joi.array().items(Joi.string().trim().lowercase()).default([]),

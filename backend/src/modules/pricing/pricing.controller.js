@@ -2,6 +2,7 @@ import asyncHandler from '../../middleware/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import * as svc from './pricing.service.js';
 import { previewCalculator } from './calculator.service.js';
+import { companyPdfAssetsService } from './company-pdf-assets.js';
 
 export const pricingController = {
   // ── Revisions ─────────────────────────────────────────────────
@@ -86,7 +87,25 @@ export const pricingController = {
     res.json(ApiResponse.ok('Settings', s));
   }),
   updateSettings: asyncHandler(async (req, res) => {
-    const s = await svc.updateSettings(req.body, req.user);
+    const s = await svc.updateSettings(req.body, req.user, req);
     res.json(ApiResponse.ok('Settings updated', s));
+  }),
+
+  // ── PO signatory images (authorised signature + company stamp) ──
+  uploadPdfAsset: asyncHandler(async (req, res) => {
+    const out = await companyPdfAssetsService.save(req.params.kind, req.file, req);
+    res.json(ApiResponse.ok(req.params.kind === 'stamp' ? 'Company stamp saved' : 'Authorised signature saved', out));
+  }),
+  removePdfAsset: asyncHandler(async (req, res) => {
+    const out = await companyPdfAssetsService.remove(req.params.kind, req);
+    res.json(ApiResponse.ok(req.params.kind === 'stamp' ? 'Company stamp removed' : 'Authorised signature removed', out));
+  }),
+  getPdfAssetImage: asyncHandler(async (req, res) => {
+    const { data, mimeType } = await companyPdfAssetsService.getImage(req.params.kind);
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', data.length);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(data);
   }),
 };

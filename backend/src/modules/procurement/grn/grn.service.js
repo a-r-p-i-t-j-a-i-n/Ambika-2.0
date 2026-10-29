@@ -13,6 +13,9 @@ import SKU, {
 } from '../../skus/sku.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
+import {
+  lineConversion, toStockQty, incompatibleUnitMessage, inexactQtyMessage,
+} from '../../skus/unitConversion.js';
 import { assertNoLiveExpenseOnPos } from '../voucher/expenseLink.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
@@ -169,6 +172,67 @@ const stampRouting = (lines, routes) => {
       stockWarehouse: r?.warehouse || '',
     };
   });
+};
+
+// ── Purchase unit → stock unit, per line ─────────────────────────────────────
+// A line in its SKU's Purchase Unit (5 BOX of a 1 BOX = 25 PCS item) carries
+// the conversion its stock will be posted with: stockUnit, conversionFactor,
+// stockQty. Like the routing, it is derived from the SKU master on every draft
+// save and frozen at completion; Incoming QC multiplies the ACCEPTED qty by the
+// frozen factor, so it is the only place a quantity is ever converted.
+
+const CONVERSION_CLEARED = { stockUnit: null, conversionFactor: null, stockQty: null };
+
+/**
+ * Conversion for each line. Pure.
+ *
+ * A line that is not in its SKU's purchase unit (a same-unit SKU, a line in the
+ * stock unit, a line with no SKU) gets the fields cleared — posted 1:1, as
+ * before. Only RECEIVED lines are refused: one whose unit cannot convert, or
+ * whose quantity would need rounding to fit stock's 2 decimals.
+ *
+ * @param lines  GRN lines
+ * @param skuOf  line -> SKU doc (unit, purchaseUnit, purchaseConversionFactor) or null
+ * @returns {{ lines: object[], problems: string[] }}
+ */
+export const convertGrnLines = (lines = [], skuOf = () => null) => {
+  const problems = [];
+  const out = lines.map((l) => {
+    const sku = skuOf(l);
+    const conv = lineConversion(sku, l.unit);
+    const received = round2(l.receivedQty) > 0;
+    if (conv.problem) {
+      if (received) problems.push(incompatibleUnitMessage(l.itemName, l.unit, sku));
+      return { ...l, ...CONVERSION_CLEARED };
+    }
+    if (!conv.converts) return { ...l, ...CONVERSION_CLEARED };
+    const { stockQty, exact } = toStockQty(l.receivedQty, conv.factor);
+    if (received && !exact) problems.push(inexactQtyMessage(l.itemName, l.receivedQty, l.unit, conv.factor, conv.stockUnit));
+    return { ...l, stockUnit: conv.stockUnit, conversionFactor: conv.factor, stockQty };
+  });
+  return { lines: out, problems };
+};
+
+/** SKU conversion settings for the lines, looked up by skuId else code. */
+const conversionSkus = async (lines = []) => {
+  const up = (v) => String(v || '').trim().toUpperCase();
+  const ids = [...new Set(lines.map((l) => l.skuId).filter(Boolean).map(String))];
+  const codes = [...new Set(lines.map((l) => up(l.skuCode)).filter(Boolean))];
+  if (!ids.length && !codes.length) return () => null;
+  const or = [];
+  if (ids.length) or.push({ _id: { $in: ids } });
+  if (codes.length) or.push({ code: { $in: codes } });
+  const skus = await SKU.find({ $or: or }).select('_id code unit purchaseUnit purchaseConversionFactor').lean();
+  const byId = new Map(skus.map((s) => [String(s._id), s]));
+  const byCode = new Map(skus.map((s) => [up(s.code), s]));
+  return (l) => (l.skuId && byId.get(String(l.skuId))) || byCode.get(up(l.skuCode)) || null;
+};
+
+/** Stamp each line's conversion from the SKU master; 400 for lines that cannot convert. */
+const stampConversion = async (lines = []) => {
+  const { lines: out, problems } = convertGrnLines(lines, await conversionSkus(lines));
+  if (problems.length) throw new AppError(problems.join(' '), 400);
+  return out;
 };
 
 /** '' / undefined Received At → null, so "not chosen" has exactly one spelling. */
@@ -372,7 +436,9 @@ const snapshotFromPos = (pos, received, items = []) => {
     return {
       ...it,
       poItemId: p._id, poId: po._id, poNumber: po.poNumber,
-      skuId: it.skuId || p.skuId, skuCode: it.skuCode || p.skuCode, unit: it.unit || p.unit,
+      // The PO line's unit, not the form's: a PO for 5 BOX is received as BOX,
+      // and the unit decides the stock conversion (stampConversion).
+      skuId: it.skuId || p.skuId, skuCode: it.skuCode || p.skuCode, unit: p.unit || it.unit,
       orderedQty: p.quantity || 0,
       previouslyReceivedQty: received.get(key) || 0,
     };
@@ -745,7 +811,7 @@ export const grnService = {
     const computed = computeLines(sourceItems);
     // Destination per line from the SKU master; refuses Service / Job Work,
     // unclassified SKUs and Raw Material without an explicit Received At.
-    const lines = await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN');
+    const lines = await stampConversion(await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN'));
     const { totals } = computed;
 
     const grnNumber = await generateGrnNumber(data.grnDate || new Date());
@@ -809,7 +875,7 @@ export const grnService = {
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
     const computed = computeLines(sourceItems);
-    const lines = await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN');
+    const lines = await stampConversion(await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN'));
     const { totals } = computed;
     // No PO to compare against — these columns are not applicable, never derived.
     lines.forEach((l) => { l.orderedQty = 0; l.previouslyReceivedQty = 0; l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
@@ -965,9 +1031,9 @@ export const grnService = {
     }
     // Every save re-derives each line's destination from the SKU master (lines
     // as sent, or as stored) and refuses what cannot be routed.
-    grn.items = await routeDraftLines(
+    grn.items = await stampConversion(await routeDraftLines(
       withLineReceiptTypes(grn.items.map(plain), receiptTypeFallback), grn.rmReceivedAtLocation, grn.warehouse || 'MAIN',
-    );
+    ));
     grn.howItemReceived = summarizeReceiptType(grn.items);
     grn.updatedBy = user?._id;
     grn.activityTimeline.push({ action: 'UPDATE', description: 'Draft GRN updated', actorId: user?._id });
@@ -1058,7 +1124,7 @@ export const grnService = {
 
   /** complete() body — runs with the GRN claimed and the PO posting lock(s) held. */
   async _completeLocked(grn, data, user, releaseClaim) {
-    let pos = []; let piIdForLine = () => null; let receivedLines; let routes; let rmLocation;
+    let pos = []; let piIdForLine = () => null; let receivedLines; let routes; let rmLocation; let conversionFor;
     try {
       if (grn.isWithoutPo) {
         // No PO to re-derive figures against — the lines are final as saved,
@@ -1135,6 +1201,12 @@ export const grnService = {
       });
       assertRoutable(routes, { requireSku: true });
 
+      // The conversion each line's stock will post with — read from the SKU
+      // master now and frozen on the line; a later factor edit never reaches it.
+      const converted = convertGrnLines(receivedLines.map(plain), await conversionSkus(receivedLines));
+      if (converted.problems.length) throw new AppError(converted.problems.join(' '), 400);
+      conversionFor = new Map(receivedLines.map((l, i) => [l, converted.lines[i]]));
+
       // Each touched PO's own PI (different POs on one GRN may carry different
       // PIs). Only the id is resolved here: the PI DOCUMENT is read fresh inside
       // every attempt of the unit of work below.
@@ -1184,8 +1256,13 @@ export const grnService = {
       line.itemTypeAtReceipt = route.itemType;
       line.inventoryDestination = route.destination;
       line.stockWarehouse = route.warehouse;
+      const conv = conversionFor.get(line);
+      line.stockUnit = conv.stockUnit;
+      line.conversionFactor = conv.conversionFactor;
+      line.stockQty = conv.stockQty;
       line.stockStatus = GRN_LINE_STOCK_STATUS.AWAITING_QC;
       line.postedQty = 0;
+      line.postedStockQty = null;
     }
     const finalItems = grn.items.map(plain);
     const finalTotals = {

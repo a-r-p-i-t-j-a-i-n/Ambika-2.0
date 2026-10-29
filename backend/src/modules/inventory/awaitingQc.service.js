@@ -51,7 +51,9 @@ export const awaitingQcBySku = async (skuIds = null) => {
     {
       $group: {
         _id: '$items.skuId',
-        qty: { $sum: '$items.receivedQty' },
+        // In the STOCK unit, like on-hand beside it: a line received in its
+        // purchase unit (5 BOX) carries its frozen stock figure (125 PCS).
+        qty: { $sum: { $ifNull: ['$items.stockQty', '$items.receivedQty'] } },
         lineCount: { $sum: 1 },
         grnNumbers: { $addToSet: '$grnNumber' },
       },

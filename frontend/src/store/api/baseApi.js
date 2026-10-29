@@ -42,7 +42,7 @@ export const baseApi = createApi({
     'PricingReviewers', 'PricingDocuments', 'PricingAnalytics',
     'O2DProcess', 'O2DStepDef', 'O2DMyTasks', 'O2DDashboard', 'O2DTemplate', 'Notification',
     'Indent', 'IndentStats','OrderIntake',
-    'PurchaseOrder', 'PurchaseOrderStats',
+    'PurchaseOrder', 'PurchaseOrderStats', 'RateChange',
     'FollowUp', 'FollowUpStats',
     'ProformaInvoice', 'ProformaInvoiceStats',
     'AdvancePayment', 'AdvancePaymentStats',

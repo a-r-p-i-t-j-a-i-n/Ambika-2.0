@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
-  DialogTitle, Drawer, IconButton, InputAdornment, MenuItem, Paper, Stack,
+  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
+  DialogTitle, Drawer, FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Radio, RadioGroup, Stack,
   TextField, Tooltip, Typography, alpha,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -28,6 +28,43 @@ import {
 // Item-type metadata — labels and colours now live in their own module so the
 // IMS stock list can share them without importing this screen.
 import { TYPE_META, typeDestinationHint } from './itemTypeMeta';
+import { UNITS } from '../procurement/indents/indentMeta';
+import {
+  conversionRule, directionProblem, sameUnit, skuConversion,
+} from '../../utils/unitConversion';
+
+// The purchase forms' unit list, in SKU Master's upper-case spelling. Free text
+// is still accepted — the master has always kept units as entered.
+const UNIT_OPTIONS = UNITS.map((u) => u.toUpperCase());
+
+/**
+ * Client-side mirror of the server's conversion rules (sku.service →
+ * normalizeConversionConfig), so the drawer says what is wrong before saving.
+ * Used only when "convert" is Yes. Returns one message per field ('' = fine).
+ */
+const conversionErrors = ({ unit, purchaseUnit, purchaseConversionFactor }) => {
+  const pu = String(purchaseUnit || '').trim();
+  const stock = String(unit || '').trim();
+  const raw = String(purchaseConversionFactor ?? '').trim();
+  const e = { purchaseUnit: '', unit: '', factor: '' };
+  if (!pu) e.purchaseUnit = 'Select the unit the vendor ships in (e.g. BOX).';
+  if (!stock) e.unit = 'Select the unit IMS counts and issues in (e.g. PCS).';
+  if (pu && stock && sameUnit(pu, stock)) {
+    e.unit = `${stock} is the Purchase Unit too — choose "No" above when the item is bought and stocked in the same unit.`;
+  }
+  const f = Number(raw);
+  const of = `how many ${stock || 'stock units'} are in 1 ${pu || 'purchase unit'}`;
+  if (!raw) e.factor = `Enter ${of}.`;
+  else if (!Number.isFinite(f) || f <= 0) e.factor = `Must be a number greater than zero — ${of}.`;
+  else if (f > 1000000) e.factor = 'Cannot exceed 1000000.';
+  else if ((raw.split('.')[1] || '').length > 4) e.factor = 'At most 4 decimal places.';
+  const dir = directionProblem({ unit: stock, purchaseUnit: pu, purchaseConversionFactor: raw });
+  if (dir && !e.unit && !e.purchaseUnit) {
+    if (/wrong way round/i.test(dir)) e.purchaseUnit = dir; else e.factor = e.factor || dir;
+  }
+  return e;
+};
+const firstError = (e) => e.purchaseUnit || e.factor || e.unit || '';
 
 const SKU_KINDS = [
   { key: '',              label: 'All Items',      icon: LayoutGrid },
@@ -68,6 +105,7 @@ const sheetSkuItems = [
 
 const emptyForm = {
   name: '', code: '', itemType: 'FINISHED_GOOD', category: '', unit: 'PCS',
+  purchaseUnit: '', purchaseConversionFactor: '',
   pcsPerBox: 1, weightPerPc: 0, weightPerBox: 0, leadDays: 7,
   aliasesText: '', packingDetails: '', convertedItemNameForResale: '',
 };
@@ -75,6 +113,9 @@ const emptyForm = {
 const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [form, setForm] = useState(emptyForm);
+  // "Do you want to convert the purchase unit into the IMS stock unit?" —
+  // No by default; an existing SKU opens on Yes when it already converts.
+  const [convert, setConvert] = useState(false);
   const [createSku, { isLoading: isCreating }] = useCreateSkuMutation();
   const [updateSku, { isLoading: isUpdating }] = useUpdateSkuMutation();
   const isSaving = isCreating || isUpdating;
@@ -87,6 +128,9 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
       itemType: sku.itemType || 'FINISHED_GOOD',
       category: sku.category || '',
       unit: sku.unit || 'PCS',
+      // Blank on SKUs saved before the purchase unit existed = bought in the stock unit.
+      purchaseUnit: sku.purchaseUnit || '',
+      purchaseConversionFactor: sku.purchaseConversionFactor ?? '',
       pcsPerBox: sku.pcsPerBox || 1,
       weightPerPc: sku.weightPerPc || 0,
       weightPerBox: sku.weightPerBox || 0,
@@ -96,13 +140,25 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
       // Missing on SKUs created before this field existed — reads as ''.
       convertedItemNameForResale: sku.convertedItemNameForResale || '',
     } : { ...emptyForm, itemType: defaultType || 'FINISHED_GOOD' });
+    // A saved purchase unit (even one stored the wrong way round, so it can be
+    // seen and corrected) opens the conversion section.
+    setConvert(!!String(sku?.purchaseUnit || '').trim());
   }, [open, sku, defaultType]);
 
   const updateField = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
+  const convErrors = convert ? conversionErrors(form) : { purchaseUnit: '', unit: '', factor: '' };
+  const convError = firstError(convErrors);
+  const rule = convert && !convError ? conversionRule(form) : '';
+  const stockUnitLabel = String(form.unit || '').trim();
+  const purchaseUnitLabel = String(form.purchaseUnit || '').trim();
+  const factorNum = Number(form.purchaseConversionFactor);
+  // Turning conversion off on a SKU that converts today.
+  const wasConverting = !!sku && skuConversion(sku).converts;
 
   const handleSave = async () => {
     if (!form.name.trim()) return enqueueSnackbar('SKU item name is required', { variant: 'warning' });
     if (!form.code.trim()) return enqueueSnackbar('SKU code is required', { variant: 'warning' });
+    if (convError) return enqueueSnackbar(convError, { variant: 'warning' });
 
     const payload = {
       name: form.name.trim(),
@@ -110,6 +166,9 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
       itemType: form.itemType,
       category: form.category.trim(),
       unit: form.unit.trim() || 'PCS',
+      // "No" = bought and stocked in one unit, exactly like every existing SKU.
+      purchaseUnit: convert ? purchaseUnitLabel : '',
+      purchaseConversionFactor: convert ? Number(form.purchaseConversionFactor) : null,
       pcsPerBox: Number(form.pcsPerBox) || 1,
       weightPerPc: Number(form.weightPerPc) || 0,
       weightPerBox: Number(form.weightPerBox) || 0,
@@ -145,41 +204,151 @@ const SkuDrawer = ({ open, onClose, sku, defaultType }) => {
       </Box>
 
       <Box sx={{ p: 2.5, flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {/* Item type — the first decision when registering */}
-        <TextField
-          select
-          label="Item Type"
-          value={form.itemType}
-          onChange={(e) => updateField('itemType', e.target.value)}
-          fullWidth
-          helperText={typeDestinationHint(form.itemType)}
-        >
-          {TYPE_OPTIONS.map((t) => (
-            <MenuItem key={t} value={t}>{TYPE_META[t]?.label || t}</MenuItem>
-          ))}
-        </TextField>
-
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-          <TextField label="SKU Code" value={form.code} onChange={(e) => updateField('code', e.target.value.toUpperCase())} />
-          <TextField label="Category / Sub-group" value={form.category} onChange={(e) => updateField('category', e.target.value)} />
+        {/* The first question: does this item need a purchase → IMS unit conversion? */}
+        <Box data-testid="sku-convert-question"
+          sx={{ border: `1px solid ${O2D.line}`, borderRadius: '10px', px: 1.5, py: 1, bgcolor: O2D.surfaceAlt }}>
+          <Typography variant="body2" fontWeight={800}>Do you want to convert the purchase unit into the IMS stock unit?</Typography>
+          <RadioGroup row value={convert ? 'yes' : 'no'} onChange={(e) => setConvert(e.target.value === 'yes')}>
+            <FormControlLabel value="no" control={<Radio size="small" inputProps={{ 'data-testid': 'sku-convert-no' }} />} label="No" />
+            <FormControlLabel value="yes" control={<Radio size="small" inputProps={{ 'data-testid': 'sku-convert-yes' }} />} label="Yes" />
+          </RadioGroup>
+          <Typography variant="caption" color="text.secondary">
+            {convert
+              ? 'Bought in one unit (e.g. BOX), stored and issued in IMS in another (e.g. PCS).'
+              : 'Bought and stored in the same unit.'}
+          </Typography>
+          {!convert && wasConverting && (
+            <Alert severity="warning" sx={{ mt: 1, py: 0.25 }}>
+              Saving with “No” stops converting future receipts ({conversionRule(sku)} today). Stock already received is not changed.
+            </Alert>
+          )}
         </Box>
-        <TextField label="SKU Item Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} fullWidth />
-        <TextField
-          label="Converted Item Name (For Resale)"
-          value={form.convertedItemNameForResale}
-          onChange={(e) => updateField('convertedItemNameForResale', e.target.value)}
-          placeholder={'e.g. 1.75" Brush'}
-          helperText="Optional — the name this item is sold on as, when it differs from the item name."
-          fullWidth
-        />
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-          <TextField label="Unit" value={form.unit} onChange={(e) => updateField('unit', e.target.value)} />
-          <TextField label="Lead Days" type="number" value={form.leadDays} onChange={(e) => updateField('leadDays', e.target.value)} />
-          <TextField label="Pcs Per Box" type="number" value={form.pcsPerBox} onChange={(e) => updateField('pcsPerBox', e.target.value)} />
-          <TextField label="Weight Per Pc" type="number" value={form.weightPerPc} onChange={(e) => updateField('weightPerPc', e.target.value)} />
-          <TextField label="Weight Per Box" type="number" value={form.weightPerBox} onChange={(e) => updateField('weightPerBox', e.target.value)} />
-        </Box>
+        {convert ? (
+          // Conversion: the fields in the order the question is answered —
+          // what the item is, how it is bought, how IMS keeps it, and where.
+          <>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="SKU Code" value={form.code} onChange={(e) => updateField('code', e.target.value.toUpperCase())} />
+              <TextField label="Category / Sub-group" value={form.category} onChange={(e) => updateField('category', e.target.value)} />
+            </Box>
+            <Box data-testid="sku-purchase-conversion"
+              sx={{ border: `1px solid ${O2D.line}`, borderRadius: '10px', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1.75 }}>
+              <TextField label="1. Item Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} fullWidth
+                inputProps={{ 'data-testid': 'sku-item-name' }} />
+              <TextField
+                label="2. Converted Item Name (optional)"
+                value={form.convertedItemNameForResale}
+                onChange={(e) => updateField('convertedItemNameForResale', e.target.value)}
+                helperText="Only if the item goes by a different name after conversion — otherwise leave blank."
+                fullWidth
+              />
+              <Autocomplete
+                freeSolo
+                options={UNIT_OPTIONS}
+                inputValue={form.purchaseUnit}
+                onInputChange={(_e, v) => updateField('purchaseUnit', v || '')}
+                renderInput={(params) => (
+                  <TextField {...params} label="3. Purchase Unit *" placeholder="e.g. BOX"
+                    error={!!convErrors.purchaseUnit}
+                    helperText={convErrors.purchaseUnit || 'The unit the vendor ships — used on Indent, PO and GRN.'}
+                    inputProps={{ ...params.inputProps, 'data-testid': 'sku-purchase-unit' }} />
+                )}
+              />
+              <TextField
+                label="4. Conversion Factor *"
+                type="number"
+                value={form.purchaseConversionFactor}
+                onChange={(e) => updateField('purchaseConversionFactor', e.target.value)}
+                error={!!convErrors.factor}
+                helperText={convErrors.factor || `How many ${stockUnitLabel || 'IMS units'} are in 1 ${purchaseUnitLabel || 'purchase unit'}.`}
+                inputProps={{ min: 0, step: 'any', 'data-testid': 'sku-conversion-factor' }}
+              />
+              <Autocomplete
+                freeSolo
+                options={UNIT_OPTIONS}
+                inputValue={form.unit}
+                onInputChange={(_e, v) => updateField('unit', v || '')}
+                renderInput={(params) => (
+                  <TextField {...params} label="5. IMS Stock Unit *" placeholder="e.g. PCS"
+                    error={!!convErrors.unit}
+                    helperText={convErrors.unit || 'The unit IMS stores and issues in.'}
+                    inputProps={{ ...params.inputProps, 'data-testid': 'sku-stock-unit' }} />
+                )}
+              />
+              <TextField
+                select
+                label="6. Save in IMS Model"
+                value={form.itemType}
+                onChange={(e) => updateField('itemType', e.target.value)}
+                fullWidth
+                helperText={typeDestinationHint(form.itemType)}
+                inputProps={{ 'data-testid': 'sku-ims-model' }}
+              >
+                {TYPE_OPTIONS.map((t) => (
+                  <MenuItem key={t} value={t}>{TYPE_META[t]?.label || t}</MenuItem>
+                ))}
+              </TextField>
+              {rule ? (
+                <Alert severity="info" sx={{ py: 0.25 }} data-testid="sku-conversion-rule">
+                  <strong>{rule}</strong>
+                  {' '}— {Number.isFinite(factorNum) ? `5 ${purchaseUnitLabel} received = ${Math.round(5 * factorNum * 100) / 100} ${stockUnitLabel} in IMS. ` : ''}
+                  Indent, PO and GRN use {purchaseUnitLabel}; IMS stock and issues use {stockUnitLabel}.
+                  {sku?._id ? ' A new factor applies to future receipts only; stock already received is not changed.' : ''}
+                </Alert>
+              ) : (
+                <Typography variant="caption" color="error" data-testid="sku-conversion-rule">{convError}</Typography>
+              )}
+            </Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="Lead Days" type="number" value={form.leadDays} onChange={(e) => updateField('leadDays', e.target.value)} />
+              <TextField label="Pcs Per Box" type="number" value={form.pcsPerBox} onChange={(e) => updateField('pcsPerBox', e.target.value)} />
+              <TextField label="Weight Per Pc" type="number" value={form.weightPerPc} onChange={(e) => updateField('weightPerPc', e.target.value)} />
+              <TextField label="Weight Per Box" type="number" value={form.weightPerBox} onChange={(e) => updateField('weightPerBox', e.target.value)} />
+            </Box>
+          </>
+        ) : (
+          // No conversion: the form exactly as it has always been.
+          <>
+            {/* Item type — the first decision when registering */}
+            <TextField
+              select
+              label="Item Type"
+              value={form.itemType}
+              onChange={(e) => updateField('itemType', e.target.value)}
+              fullWidth
+              helperText={typeDestinationHint(form.itemType)}
+            >
+              {TYPE_OPTIONS.map((t) => (
+                <MenuItem key={t} value={t}>{TYPE_META[t]?.label || t}</MenuItem>
+              ))}
+            </TextField>
+
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="SKU Code" value={form.code} onChange={(e) => updateField('code', e.target.value.toUpperCase())} />
+              <TextField label="Category / Sub-group" value={form.category} onChange={(e) => updateField('category', e.target.value)} />
+            </Box>
+            <TextField label="SKU Item Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} fullWidth
+              inputProps={{ 'data-testid': 'sku-item-name' }} />
+            <TextField
+              label="Converted Item Name (For Resale)"
+              value={form.convertedItemNameForResale}
+              onChange={(e) => updateField('convertedItemNameForResale', e.target.value)}
+              placeholder={'e.g. 1.75" Brush'}
+              helperText="Optional — the name this item is sold on as, when it differs from the item name."
+              fullWidth
+            />
+
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="Unit" value={form.unit} onChange={(e) => updateField('unit', e.target.value)}
+                inputProps={{ 'data-testid': 'sku-stock-unit' }} />
+              <TextField label="Lead Days" type="number" value={form.leadDays} onChange={(e) => updateField('leadDays', e.target.value)} />
+              <TextField label="Pcs Per Box" type="number" value={form.pcsPerBox} onChange={(e) => updateField('pcsPerBox', e.target.value)} />
+              <TextField label="Weight Per Pc" type="number" value={form.weightPerPc} onChange={(e) => updateField('weightPerPc', e.target.value)} />
+              <TextField label="Weight Per Box" type="number" value={form.weightPerBox} onChange={(e) => updateField('weightPerBox', e.target.value)} />
+            </Box>
+          </>
+        )}
         <TextField label="Aliases" value={form.aliasesText} onChange={(e) => updateField('aliasesText', e.target.value)} helperText="Comma separated old names or alternate codes" fullWidth />
         <TextField label="Packing Details" value={form.packingDetails} onChange={(e) => updateField('packingDetails', e.target.value)} minRows={3} multiline fullWidth />
       </Box>
@@ -288,6 +457,21 @@ const SkusList = () => {
     },
     { field: 'unit', headerName: 'Unit', width: 92, align: 'center', headerAlign: 'center',
       renderCell: (p) => <Pill color={O2D.sub}>{p.value || 'PCS'}</Pill>
+    },
+    // The purchase → stock rule, when the item is bought in another unit.
+    { field: 'purchaseUnit', headerName: 'Purchase unit', width: 140, sortable: false,
+      renderCell: (p) => {
+        const r = conversionRule(p.row);
+        if (!r) return <Empty />;
+        // Saved the wrong way round before the form was fixed — shown as such,
+        // and refused by Indent / PO / GRN until it is corrected.
+        if (directionProblem(p.row)) {
+          return <Tooltip title="Wrong way round — open the SKU and set Purchase Unit = the pack, IMS Stock Unit = the piece">
+            <Box sx={{ minWidth: 0, alignSelf: 'center' }}><CellText weight={700} color={DANGER}>{r} — fix</CellText></Box>
+          </Tooltip>;
+        }
+        return <CellText weight={700} color={NAVY}>{r}</CellText>;
+      }
     },
     ...(canEdit || canDelete ? [{ field: 'actions', headerName: '', width: canEdit && canDelete ? 104 : 68, sortable: false, align: 'center', headerAlign: 'center',
       renderCell: (p) => (

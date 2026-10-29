@@ -18,7 +18,7 @@ import VendorPoHistory from './VendorPoHistory';
 import { useMasterRights } from '../../../utils/embed';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
-const SOURCE_LABEL = { VENDOR_MASTER: 'Vendor Master', PURCHASE_ORDER: 'Purchase Order' };
+const SOURCE_LABEL = { VENDOR_MASTER: 'Vendor Master', PURCHASE_ORDER: 'Purchase Order', RATE_CHANGE_APPROVAL: 'Rate Change Approval' };
 
 // Purchase FMS rule: Finished Goods are sell-side only — a vendor never supplies
 // them. Mirrors IndentFormDrawer.jsx's isPurchasableSku so the picker here can't
@@ -29,6 +29,8 @@ const isPurchasableSku = (s) => !FG_BLOCKED.has(String(s?.itemType || '').toUppe
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
+// Default Lead Time field → payload: blank = not configured (null).
+const leadDaysPayload = (v) => (String(v ?? '').trim() === '' ? null : Number(v));
 
 // Build a COMPLETE vendor payload so the update never wipes fields via Joi defaults.
 const buildPayload = (v, overrides = {}) => ({
@@ -44,6 +46,7 @@ const buildPayload = (v, overrides = {}) => ({
   gstRate: v.gstRate || 0,
   tdsRate: v.tdsRate || 0,
   creditPeriodDays: v.creditPeriodDays || 0,
+  leadTimeDays: v.leadTimeDays ?? null,
   isActive: v.isActive !== false,
   toEmails: v.toEmails || [],
   ccEmails: v.ccEmails || [],
@@ -75,6 +78,7 @@ const detailsDraftOf = (vendor) => ({
   contactPerson: vendor.contactPerson || '', phone: vendor.phone || '', email: vendor.email || '',
   address: vendor.address || '', gstNo: vendor.gstNo || '', panNo: vendor.panNo || '',
   gstRate: vendor.gstRate || 0, tdsRate: vendor.tdsRate || 0, creditPeriodDays: vendor.creditPeriodDays || 0,
+  leadTimeDays: vendor.leadTimeDays ?? '',
   toEmails: (vendor.toEmails || []).join(', '), ccEmails: (vendor.ccEmails || []).join(', '), bccEmails: (vendor.bccEmails || []).join(', '),
 });
 
@@ -150,6 +154,7 @@ const VendorDetail = () => {
         contactPerson: v.contactPerson, phone: v.phone, email: v.email, address: v.address,
         gstNo: v.gstNo, panNo: v.panNo, gstRate: Number(v.gstRate || 0), tdsRate: Number(v.tdsRate || 0),
         creditPeriodDays: Number(v.creditPeriodDays || 0),
+        leadTimeDays: leadDaysPayload(v.leadTimeDays),
         toEmails: splitEmails(v.toEmails), ccEmails: splitEmails(v.ccEmails), bccEmails: splitEmails(v.bccEmails),
       }) }).unwrap();
       enqueueSnackbar('Vendor updated', { variant: 'success' });
@@ -202,6 +207,7 @@ const VendorDetail = () => {
           <Grid item xs={12} sm={6} md={4}><Field icon={MapPin} label="Address" value={vendor.address || vendor.location} /></Grid>
           <Grid item xs={12} sm={6} md={4}><Field icon={Percent} label="GST No / PAN" value={`${vendor.gstNo || '—'}  ·  ${vendor.panNo || '—'}`} /></Grid>
           <Grid item xs={12} sm={6} md={4}><Field icon={CalendarClock} label="Credit / TDS" value={`${vendor.creditPeriodDays || 0} days  ·  TDS ${vendor.tdsRate || 0}%`} /></Grid>
+          <Grid item xs={12} sm={6} md={4}><Field icon={CalendarClock} label="Default Lead Time" value={vendor.leadTimeDays != null ? `${vendor.leadTimeDays} day${vendor.leadTimeDays === 1 ? '' : 's'}` : 'Not set'} /></Grid>
           <Grid item xs={12} sm={6} md={4}><Field icon={Mail} label="To Emails" value={(vendor.toEmails || []).join(', ')} /></Grid>
           <Grid item xs={12} sm={6} md={4}><Field icon={Mail} label="CC Emails" value={(vendor.ccEmails || []).join(', ')} /></Grid>
           <Grid item xs={12} sm={6} md={4}><Field icon={Mail} label="BCC Emails" value={(vendor.bccEmails || []).join(', ')} /></Grid>
@@ -335,9 +341,11 @@ const VendorDetail = () => {
               <Grid item xs={12}><TextField fullWidth size="small" multiline minRows={2} label="Address" value={editVendor.address} onChange={(e) => setEditVendor((s) => ({ ...s, address: e.target.value }))} /></Grid>
               <Grid item xs={6}><TextField fullWidth size="small" label="GST No" value={editVendor.gstNo} onChange={(e) => setEditVendor((s) => ({ ...s, gstNo: e.target.value }))} /></Grid>
               <Grid item xs={6}><TextField fullWidth size="small" label="PAN No" value={editVendor.panNo} onChange={(e) => setEditVendor((s) => ({ ...s, panNo: e.target.value }))} /></Grid>
-              <Grid item xs={4}><TextField fullWidth size="small" type="number" label="GST %" value={editVendor.gstRate} onChange={(e) => setEditVendor((s) => ({ ...s, gstRate: e.target.value }))} /></Grid>
-              <Grid item xs={4}><TextField fullWidth size="small" type="number" label="TDS %" value={editVendor.tdsRate} onChange={(e) => setEditVendor((s) => ({ ...s, tdsRate: e.target.value }))} /></Grid>
-              <Grid item xs={4}><TextField fullWidth size="small" type="number" label="Credit (days)" value={editVendor.creditPeriodDays} onChange={(e) => setEditVendor((s) => ({ ...s, creditPeriodDays: e.target.value }))} /></Grid>
+              <Grid item xs={3}><TextField fullWidth size="small" type="number" label="GST %" value={editVendor.gstRate} onChange={(e) => setEditVendor((s) => ({ ...s, gstRate: e.target.value }))} /></Grid>
+              <Grid item xs={3}><TextField fullWidth size="small" type="number" label="TDS %" value={editVendor.tdsRate} onChange={(e) => setEditVendor((s) => ({ ...s, tdsRate: e.target.value }))} /></Grid>
+              <Grid item xs={3}><TextField fullWidth size="small" type="number" label="Credit (days)" value={editVendor.creditPeriodDays} onChange={(e) => setEditVendor((s) => ({ ...s, creditPeriodDays: e.target.value }))} /></Grid>
+              <Grid item xs={3}><TextField fullWidth size="small" type="number" label="Lead Time (days)" value={editVendor.leadTimeDays} onChange={(e) => setEditVendor((s) => ({ ...s, leadTimeDays: e.target.value }))}
+                inputProps={{ min: 0, max: 365, step: 1, 'data-testid': 'vendor-lead-time' }} title="Usual delivery time — the New PO form starts from it" /></Grid>
               <Grid item xs={12}><TextField fullWidth size="small" label="To Emails (comma-separated)" value={editVendor.toEmails} onChange={(e) => setEditVendor((s) => ({ ...s, toEmails: e.target.value }))} /></Grid>
               <Grid item xs={6}><TextField fullWidth size="small" label="CC Emails" value={editVendor.ccEmails} onChange={(e) => setEditVendor((s) => ({ ...s, ccEmails: e.target.value }))} /></Grid>
               <Grid item xs={6}><TextField fullWidth size="small" label="BCC Emails" value={editVendor.bccEmails} onChange={(e) => setEditVendor((s) => ({ ...s, bccEmails: e.target.value }))} /></Grid>

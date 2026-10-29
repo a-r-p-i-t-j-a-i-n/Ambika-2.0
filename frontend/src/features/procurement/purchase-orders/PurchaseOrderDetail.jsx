@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import { useSmartBack } from '../../../hooks/useSmartBack';
 import {
   Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Tooltip,
@@ -21,6 +22,8 @@ import {
 
   useGetGrnsByPoQuery,
   useGeneratePurchaseOrderPdfMutation,
+  useUpdatePurchaseOrderTermsMutation,
+  useGetPoTermsDefaultsQuery,
 
 } from '../../../store/api/procurementApi';
 import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtDate, poDisplayNumber } from './poMeta';
@@ -41,6 +44,9 @@ import { PoPiChip, fmtINR as fmtPiINR } from '../proforma-invoices/piMeta';
 import ProformaInvoiceFormDrawer from '../proforma-invoices/ProformaInvoiceFormDrawer';
 import ProformaInvoiceApprovalDialog from '../proforma-invoices/ProformaInvoiceApprovalDialog';
 import PurchaseOrderPiNotRequiredDialog from './PurchaseOrderPiNotRequiredDialog';
+import PoTermsDialog from './PoTermsDialog';
+import { effectivePoTerms, PO_FORMAT_LABEL } from './poTerms';
+import { isMdForDirectSave } from './poDirectSave';
 
 import { GrnStatusChip } from '../grn/grnMeta';
 import GrnFormDialog from '../grn/GrnFormDialog';
@@ -150,6 +156,11 @@ const PurchaseOrderDetail = () => {
   const [generatePoPdf, { isLoading: pdfGenerating }] = useGeneratePurchaseOrderPdfMutation();
   const [createFollowUp, { isLoading: startingFollowUp }] = useCreateFollowUpMutation();
 
+  const [updateTerms, { isLoading: savingTerms }] = useUpdatePurchaseOrderTermsMutation();
+  const { data: termsDefaultsRes } = useGetPoTermsDefaultsQuery();
+  const isMd = useSelector((s) => isMdForDirectSave(s.auth.user));
+  const [termsOpen, setTermsOpen] = useState(false);
+
   const [formOpen, setFormOpen] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -258,6 +269,24 @@ const PurchaseOrderDetail = () => {
   const isDraft = po.approvalStatus === 'DRAFT';
   const canRelease = po.approvalStatus === 'APPROVED' && po.releaseStatus !== 'RELEASED';
   const canCancel = !['FULLY_RECEIVED', 'CLOSED', 'CANCELLED'].includes(po.poStatus);
+
+  // Terms & Conditions — editable until release (approved: MD only, as the
+  // server enforces). After release they are what the vendor's PDF says.
+  const poTerms = effectivePoTerms(po, termsDefaultsRes?.data);
+  const termsLockedReason = po.poStatus === 'CANCELLED' ? 'Cancelled — revise the PO to change its terms'
+    : po.releaseStatus === 'RELEASED' ? 'Final — as printed on the PDF sent to the vendor'
+      : po.approvalStatus === 'APPROVED' && !isMd ? 'Approved — only the MD can change these terms'
+        : !['DRAFT', 'APPROVED'].includes(po.approvalStatus) ? 'Cannot be changed on a rejected PO' : '';
+  const canEditTerms = !termsLockedReason;
+  const saveTerms = async (text) => {
+    try {
+      await updateTerms({ id: po._id, termsAndConditions: text }).unwrap();
+      enqueueSnackbar('Terms & Conditions saved — the PO PDF now prints them', { variant: 'success' });
+      setTermsOpen(false);
+    } catch (err) {
+      enqueueSnackbar(err?.data?.message || 'Failed to save the Terms & Conditions', { variant: 'error' });
+    }
+  };
 
   // ── Delivery indicator — derived only from PO status + the currently
   // effective expected date (final commitment > revised/next > original),
@@ -768,6 +797,26 @@ const PurchaseOrderDetail = () => {
 
         {/* Items + financial summary */}
         <SectionCard icon={<FileText size={18} />} title={`Items (${po.items?.length || 0})`}>
+          {(() => {
+            // Rate changes still waiting in Rate Change Approvals hold the PO's approval.
+            const pendingRates = po.approvalStatus === 'DRAFT' ? (po.items || []).filter((it) => it.rateChangeStatus === 'PENDING') : [];
+            if (!pendingRates.length) return null;
+            return (
+              <Box data-testid="po-rate-change-banner" sx={{
+                display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1.5, px: 1.5, py: 1,
+                borderRadius: '8px', bgcolor: alpha('#f59e0b', 0.1), border: `1px solid ${alpha('#f59e0b', 0.4)}`,
+              }}>
+                <AlertTriangle size={16} color="#b45309" />
+                <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 600, flex: 1, minWidth: 220 }}>
+                  {pendingRates.length} rate change{pendingRates.length === 1 ? '' : 's'} ({pendingRates.map((it) => it.rateChangeRequestNumber).join(', ')}) await approval
+                  — this PO can be approved once {pendingRates.length === 1 ? 'it is' : 'they are'} approved.
+                </Typography>
+                <Button size="small" variant="outlined" color="warning" onClick={() => navigate('/purchase-fms/rate-change-approvals')}>
+                  Rate Change Approvals
+                </Button>
+              </Box>
+            );
+          })()}
           <PoItemsTable po={po} />
         </SectionCard>
 
@@ -778,6 +827,20 @@ const PurchaseOrderDetail = () => {
             <Field label="Decided At" value={fmtDate(po.approval?.decidedAt)} />
             {po.approval?.remarks ? <Field label="Remarks" value={po.approval.remarks} /> : null}
           </FieldGrid>
+        </SectionCard>
+
+        <SectionCard icon={<FileText size={18} />} title="Terms & Conditions"
+          action={canEditTerms ? (
+            <Button variant="outlined" size="small" startIcon={<Pencil size={15} />} onClick={() => setTermsOpen(true)}
+              data-testid="po-detail-edit-terms">
+              Edit Terms &amp; Conditions
+            </Button>
+          ) : (
+            <Typography variant="caption" color="text.secondary" data-testid="po-detail-terms-locked">{termsLockedReason}</Typography>
+          )}>
+          <Typography variant="body2" sx={{ color: PFMS.ink, whiteSpace: 'pre-line' }} data-testid="po-detail-terms">
+            {poTerms || '—'}
+          </Typography>
         </SectionCard>
 
         {po.remarks ? (
@@ -807,6 +870,17 @@ const PurchaseOrderDetail = () => {
 
       {/* Drawer + dialogs */}
       <PurchaseOrderFormDrawer open={formOpen} po={po} onClose={() => setFormOpen(false)} />
+      <PoTermsDialog
+        open={termsOpen}
+        onClose={() => setTermsOpen(false)}
+        onSave={saveTerms}
+        saving={savingTerms}
+        initialText={poTerms}
+        defaultText={termsDefaultsRes?.data?.[po.poFormatType === 'JSL' ? 'JSL' : 'OTHER'] || ''}
+        formatLabel={PO_FORMAT_LABEL[po.poFormatType === 'JSL' ? 'JSL' : 'OTHER']}
+        subtitle={poDisplayNumber(po)}
+        note="Only the Terms & Conditions change — items, rates, vendor and approval stay as they are. The next PDF preview, download or release prints the new text."
+      />
       <PurchaseOrderFormDrawer open={reviseOpen} reviseFrom={po}
         onClose={(created) => { setReviseOpen(false); if (created) navigate('/purchase-fms/purchase-orders'); }} />
       <PurchaseOrderApprovalDialog open={approvalOpen} po={po} onClose={() => setApprovalOpen(false)} />

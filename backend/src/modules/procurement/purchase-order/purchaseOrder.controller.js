@@ -2,6 +2,8 @@ import asyncHandler from '../../../middleware/asyncHandler.js';
 import { purchaseOrderService } from './purchaseOrder.service.js';
 import { isMdForDirectSave, DIRECT_SAVE_MD_ONLY } from './poDirectSave.js';
 import { attachStepTiming } from '../stepTiming.js';
+import { rateChangeService } from '../rate-change/rateChange.service.js';
+import { loadPoTermsDefaults } from '../../pricing/company-pdf-assets.js';
 import { ApiResponse, AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -20,6 +22,9 @@ const assertDirectSaveAllowed = (req) => {
 const approveIfDirect = async (req, po) => {
   if (req.body.saveMode !== 'DIRECT') return po;
   try {
+    // The MD's own rate changes on this PO are approved in the same step (the
+    // MD may approve their own; vendor rate + PO line together, as usual).
+    await rateChangeService.approveOwnForDirectSave(po._id, req.user);
     return await purchaseOrderService.approve(po._id, {
       decision: 'APPROVED',
       remarks: 'Saved directly by the MD — no separate approval step',
@@ -95,6 +100,20 @@ export const purchaseOrderController = {
   update: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.update(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Purchase order updated', po));
+  }),
+
+  // Terms & Conditions only. An approved (unreleased) PO's terms are the MD's
+  // to change — the same strict MD check as "Save PO Directly".
+  updateTerms: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.updateTerms(req.params.id, req.body, req.user, {
+      canEditApproved: isMdForDirectSave(req.user),
+    });
+    res.json(ApiResponse.ok('Terms & Conditions saved', po));
+  }),
+
+  // Default Terms & Conditions per PO format ({ JSL, OTHER }) for the PO form.
+  getTermsDefaults: asyncHandler(async (_req, res) => {
+    res.json(ApiResponse.ok('Default PO terms', await loadPoTermsDefaults()));
   }),
 
   remove: asyncHandler(async (req, res) => {
