@@ -1,11 +1,17 @@
 /**
  * O2D FMS → Delegation Suite tasks.
  *
- * Every O2D step that is waiting on someone becomes a task in the Suite's
- * Delegation system (assigned by the MD), and that task closes itself when the
- * step is done here. This file works out WHAT is due — the same way the Step
- * Board reads it — and sends it to the Suite, which creates / updates / closes
- * the tasks:
+ * NOW (Oct 2026): O2D work is listed in Ambika 2.0's own My FMS Tasks
+ * (o2d-fms-tasks.js, built on the helpers below). Delegation gets no new O2D
+ * tasks — each round asks it to close only (`closeOnly`), so the tasks it
+ * already has still finish by themselves as their steps are done here. Rounds
+ * also give due steps their Doer Assignment doers (settleDue), link or not.
+ *
+ * Before: every O2D step that is waiting on someone became a task in the
+ * Suite's Delegation system (assigned by the MD), and that task closed itself
+ * when the step was done here. This file works out WHAT is due — the same way
+ * the Step Board reads it — and sends it to the Suite, which creates / updates
+ * / closes the tasks:
  *
  *   - Order-level steps (up to and including the dispatch step): due once
  *     started and not done or skipped.
@@ -36,8 +42,8 @@ const ROUND_EVERY_MS = 60 * 1000;
 const AFTER_CHANGE_MS = 3000;
 const WARN_EVERY_MS = 10 * 60 * 1000;
 
-const DONE = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED];
-const FINISHED = [...DONE, O2D_STEP_STATUS.SKIPPED];
+export const DONE = [O2D_STEP_STATUS.DONE, O2D_STEP_STATUS.DELAYED];
+export const FINISHED = [...DONE, O2D_STEP_STATUS.SKIPPED];
 
 // ── The "do the work" buttons ──────────────────────────────────────────────
 // Same screens as the Step Board's row buttons (frontend actionLinks.js and
@@ -106,7 +112,7 @@ const fillRoute = (route, values) => {
 
 // "Order Entry" is the work only while the order is not punched in yet (1.01);
 // once it exists (2.02 and later) the task offers "Do Task" — the step page.
-const actionsFor = (p, s, def, dc) => actionKeysOf(s, def)
+export const actionsFor = (p, s, def, dc) => actionKeysOf(s, def)
   .filter((key) => !(key === 'ORDER_ENTRY' && p.salesOrderId))
   .map((key) => {
     const meta = ACTIONS[key];
@@ -120,13 +126,13 @@ const actionsFor = (p, s, def, dc) => actionKeysOf(s, def)
   })
   .filter(Boolean);
 
-const stepPathFor = (p, s, dc) => `/o2d-fms/task/${p._id}/${encodeURIComponent(s.stepCode)}${dc?.dcNumber ? `?dc=${encodeURIComponent(dc.dcNumber)}` : ''}`;
+export const stepPathFor = (p, s, dc) => `/o2d-fms/task/${p._id}/${encodeURIComponent(s.stepCode)}${dc?.dcNumber ? `?dc=${encodeURIComponent(dc.dcNumber)}` : ''}`;
 
 // ── Reading the flow the way the Step Board does ───────────────────────────
-const isDispatchStep = (s, def) => !!(def?.quantityGated || def?.triggerKey === 'ACTUAL_DISPATCH')
+export const isDispatchStep = (s, def) => !!(def?.quantityGated || def?.triggerKey === 'ACTUAL_DISPATCH')
   || actionKeysOf(s, def).includes('ACTUAL_DISPATCH');
 
-const orderedSteps = (p, defMap) => (p.steps || [])
+export const orderedSteps = (p, defMap) => (p.steps || [])
   .map((s) => ({ s, def: defMap.get(s.stepCode) }))
   .sort((a, b) => (a.def?.sequence ?? 0) - (b.def?.sequence ?? 0));
 
@@ -135,7 +141,7 @@ const orderedSteps = (p, defMap) => (p.steps || [])
  * dcStepState (O2dStepBoard.jsx): the per-challan log wins, else the real
  * documents decide. → { state: 'cancelled' | 'done' | 'open', at, byName }
  */
-const dcStepState = (dc, stepCode, def) => {
+export const dcStepState = (dc, stepCode, def) => {
   if (dc.cancelled) return { state: 'cancelled' };
   const log = dc.log?.[stepCode];
   if (log?.status === 'CANCELLED') return { state: 'cancelled' };
@@ -158,9 +164,9 @@ const dcStepState = (dc, stepCode, def) => {
   }
 };
 
-const addMinutes = (date, mins) => new Date(new Date(date).getTime() + (Number(mins) || 0) * 60000);
+export const addMinutes = (date, mins) => new Date(new Date(date).getTime() + (Number(mins) || 0) * 60000);
 const iso = (d) => (d && !Number.isNaN(new Date(d).getTime()) ? new Date(d).toISOString() : null);
-const keyOf = (processId, stepCode, dcId) => [SOURCE, String(processId), stepCode, ...(dcId ? [String(dcId)] : [])].join(':');
+export const keyOf = (processId, stepCode, dcId) => [SOURCE, String(processId), stepCode, ...(dcId ? [String(dcId)] : [])].join(':');
 
 export const parseKey = (key) => {
   const [src, processId, stepCode, dcId] = String(key || '').split(':');
@@ -168,7 +174,7 @@ export const parseKey = (key) => {
   return { processId, stepCode, dcId: dcId || null };
 };
 
-const challansBySo = async (soNumbers) => {
+export const challansBySo = async (soNumbers) => {
   const rows = soNumbers.length ? await o2dFmsService.listBoardConsignments({ soNumbers, lite: true }) : [];
   const map = new Map();
   rows.forEach((dc) => {
@@ -188,7 +194,7 @@ const emailsById = async (ids) => {
 
 // The step fields a round reads — not the checklists, comments, attachments
 // or email bodies of every open order.
-const DUE_STEP_FIELDS = ['stepCode', 'status', 'startedAt', 'planned', 'leadTimeMins', 'actionLinks', 'actionLink',
+export const DUE_STEP_FIELDS = ['stepCode', 'status', 'startedAt', 'planned', 'leadTimeMins', 'actionLinks', 'actionLink',
   'taskTitle', 'assignees', 'assignedTo', 'buddies', 'buddyUserId', 'doersSettledAt'].map((f) => `steps.${f}`).join(' ');
 
 /** Every O2D step (or challan step) waiting on someone right now → [{ p, s, def, dc, plannedAt }]. */
@@ -389,12 +395,17 @@ const runRound = async () => {
       reread = true; // some may have been saved before it stopped
     }
     if (reread) raw = await collectDue(defMap);
-    const due = await dueItemsFrom(raw);
-    const res = await postToSuite('/erp/fms/sync', { source: SOURCE, due });
-    const check = (Array.isArray(res?.data?.check) ? res.data.check : []).filter((k) => typeof k === 'string');
-    if (check.length) {
-      const items = (await computeOutcomes(check)).filter((o) => o.outcome !== 'open');
-      if (items.length) await postToSuite('/erp/fms/close', { source: SOURCE, items });
+    // O2D work now lives in Ambika 2.0's own My FMS Tasks (o2d-fms-tasks.js):
+    // Delegation gets no new tasks (closeOnly). The due list still goes over so
+    // the tasks it already has close by themselves as their steps finish.
+    if (delegationLinkOn()) {
+      const due = await dueItemsFrom(raw);
+      const res = await postToSuite('/erp/fms/sync', { source: SOURCE, due, closeOnly: true });
+      const check = (Array.isArray(res?.data?.check) ? res.data.check : []).filter((k) => typeof k === 'string');
+      if (check.length) {
+        const items = (await computeOutcomes(check)).filter((o) => o.outcome !== 'open');
+        if (items.length) await postToSuite('/erp/fms/close', { source: SOURCE, items });
+      }
     }
     lastWarnAt = 0;
   } catch (err) {
@@ -415,16 +426,16 @@ const runSoon = () => {
   soonTimer.unref?.();
 };
 
+// Rounds run with or without the Delegation link: due steps must take their
+// Doer Assignment doers either way (My FMS Tasks shows them).
 export const startO2dDelegationSync = () => {
-  if (!delegationLinkOn()) {
-    logger.info('[o2d→delegation] off — set SUITE_API_URL (and ERP_SSO_SECRET) to send O2D steps to Delegation');
-    return null;
-  }
   o2dEvents.on('changed', runSoon);
   runSoon();
   const timer = setInterval(runRound, ROUND_EVERY_MS);
   timer.unref?.();
-  logger.info('[o2d→delegation] on — O2D steps are sent to Delegation as tasks');
+  logger.info(delegationLinkOn()
+    ? '[o2d→delegation] on — due steps get their doers; Delegation only closes the O2D tasks it already has'
+    : '[o2d→delegation] due steps get their doers (no Delegation link)');
   return timer;
 };
 

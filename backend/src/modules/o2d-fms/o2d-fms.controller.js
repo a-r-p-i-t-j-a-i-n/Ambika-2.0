@@ -1,6 +1,7 @@
 import asyncHandler from '../../middleware/asyncHandler.js';
-import { ApiResponse } from '../../utils/apiResponse.js';
+import { ApiResponse, AppError } from '../../utils/apiResponse.js';
 import { o2dFmsService } from './o2d-fms.service.js';
+import { o2dFmsTasks } from './o2d-fms-tasks.js';
 
 // Privileged = root or has act/manage. Assignees/buddies can act regardless (checked in the service).
 const isPriv = (req) => !!(req.userIsRoot || req.userPermissions?.has('o2dfms.act') || req.userPermissions?.has('o2dfms.manage'));
@@ -48,6 +49,17 @@ export const o2dFmsController = {
 
   allTasks: asyncHandler(async (_req, res) => {
     res.json(ApiResponse.ok('All tasks retrieved', await o2dFmsService.getAllTasks()));
+  }),
+
+  // FMS → My FMS Tasks (O2D). Anyone signed in sees their own rows; everybody's
+  // (`scope=all`) is for those who manage O2D tasks or Doer Assignment.
+  fmsTasks: asyncHandler(async (req, res) => {
+    const scope = req.query.scope === 'all' ? 'all' : 'mine';
+    const perms = req.userPermissions;
+    if (scope === 'all' && !(req.userIsRoot || perms?.has('o2dfms.manage') || perms?.has('fms.manageDoers'))) {
+      throw new AppError('Only people who manage O2D tasks can see everybody\'s tasks', 403);
+    }
+    res.json(ApiResponse.ok('FMS tasks', await o2dFmsTasks.list(req.user, { scope })));
   }),
 
   dashboard: asyncHandler(async (req, res) => {

@@ -209,6 +209,9 @@ const navSectionsSimple = [
   {
     title: '',
     items: [
+      // Every FMS step waiting on this person — its own row, not inside FMS
+      // (client request).
+      { text: 'My FMS Tasks', icon: <ListChecks size={19} />, path: '/fms/my-tasks' },
       // Planning answers "what SHOULD we do", FMS "are we doing it", Master
       // "what do we do it with" — one question each, so nothing is ambiguous.
       // Download/Email are buttons on their own screens, never nav rows.
@@ -246,7 +249,6 @@ const navSectionsSimple = [
           },
           // Step-wise doers across FMS modules. `perm` hides the row from users
           // who cannot open it (the route is gated the same way).
-          { text: 'My FMS Tasks',    icon: <ListChecks size={19} />,        path: '/fms/my-tasks' },
           { text: 'Doer Assignment', icon: <SlidersHorizontal size={19} />, path: '/fms/doer-assignment', perm: 'fms.manageDoers' },
         ],
       },

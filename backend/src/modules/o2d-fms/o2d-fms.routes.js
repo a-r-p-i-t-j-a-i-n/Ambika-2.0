@@ -67,6 +67,10 @@ router.get('/gate',
 router.get('/all-tasks',
   requirePermission('o2dfms.manage'), c.allTasks);
 
+// FMS → My FMS Tasks (O2D rows): a doer's own steps need only a login — they
+// must always see their work; ?scope=all is checked in the controller.
+router.get('/fms-tasks', c.fmsTasks);
+
 router.get('/dashboard',
   requirePermission('o2dfms.view'), c.dashboard);
 

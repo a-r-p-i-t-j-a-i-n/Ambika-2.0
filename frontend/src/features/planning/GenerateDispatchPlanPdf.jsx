@@ -69,7 +69,9 @@ const GenerateDispatchPlanPdf = () => {
     // Carry doneAction so the task marks THIS action done → it flips to "Do again".
     const q = new URLSearchParams({ entryDone: '1' });
     if (fromAction) q.set('doneAction', fromAction);
-    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`);
+    // Replace this page: Back from the step must not land here again (it would
+    // generate the PDF once more and come straight back — a loop).
+    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`, { replace: true });
   };
 
   const soNumber = order?.soNumber || null;
