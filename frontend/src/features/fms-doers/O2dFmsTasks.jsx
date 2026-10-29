@@ -228,15 +228,17 @@ const O2dFmsTasks = ({ scope = 'mine' }) => {
     { pollingInterval: 60_000, skipPollingIfUnfocused: true, refetchOnMountOrArgChange: 30 },
   );
 
-  // Rows with their status; steps switched off for this person in the
-  // Delegation Suite (lock icon) are left out.
+  // Rows with their status. A task Doer Assignment gives to YOU always shows in
+  // My tasks — it is your work, whatever the lock icon's step switches say. In
+  // the All tasks overview, steps switched off for you in the Delegation Suite
+  // (lock icon) are left out, as on the Step Board.
   const { rows, now } = useMemo(() => {
     const t = clock();
     const list = (data?.data || [])
-      .filter((r) => !hidden.has(stepKey(r.stepCode)))
+      .filter((r) => scope === 'mine' || !hidden.has(stepKey(r.stepCode)))
       .map((r) => ({ ...r, status: statusOf(r, t) }));
     return { rows: list, now: t };
-  }, [data, hidden]);
+  }, [data, hidden, scope]);
 
   const assigners = useMemo(() => {
     const seen = new Map();
