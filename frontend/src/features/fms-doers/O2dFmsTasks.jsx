@@ -1,16 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, MenuItem, InputAdornment, Button, Skeleton,
-  Table, TableHead, TableBody, TableRow, TableCell, Pagination, ToggleButtonGroup, ToggleButton,
-  Tooltip, alpha,
+  Table, TableHead, TableBody, TableRow, TableCell, Pagination, Tooltip, alpha,
 } from '@mui/material';
 import {
-  ClipboardList, AlertCircle, CalendarClock, CheckCircle2, History, ChevronRight, ArrowUp, ArrowDown,
+  ClipboardList, AlertCircle, CalendarClock, CheckCircle2, History, ChevronRight,
   Search, ListFilter, UserRound, CalendarDays, ArrowUpDown, Truck, Play, ArrowRight, Inbox, RefreshCw,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetO2dFmsTasksQuery } from '../../store/api/o2dFmsApi';
-import { usePermissions } from '../../hooks/usePermission';
 import { useHiddenSteps, stepKey } from '../../utils/embed';
 
 /**
@@ -20,29 +18,58 @@ import { useHiddenSteps, stepKey } from '../../utils/embed';
  * same screens as the Step Board (Dispatch Plan + Generate Dispatch Plan PDF on
  * 2.04, Track Delivery on 2.09, …), or Do Task for a step done on its own page
  * (checklist → Mark Done). A row moves to Completed by itself once the work is
- * saved. Managers can switch to everybody's tasks.
+ * saved. Managers can switch to everybody's tasks (the page header's My / All).
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const WEEK_MS = 7 * DAY_MS;
-const PAGE_SIZE = 10;
+const PAGE_SIZES = [5, 10, 20, 50, 100, 200, 500];
+const DEFAULT_PAGE_SIZE = 10;
+// A filter at its default stays out of the address.
+const FILTER_DEFAULTS = { q: '', status: 'open', by: 'anyone', due: 'any', sort: 'newest', page: 1, size: DEFAULT_PAGE_SIZE };
+const oneOf = (value, options, fallback) => (options.some((o) => o.value === value) ? value : fallback);
 const BLUE = '#1d6cf2';
 const INK = '#0f172a';
 const SUB = '#64748b';
 const LINE = '#e5e9f2';
 
-// Button names on the rows. Same screens as the Step Board; the full names
-// here (there is room), e.g. "Generate Dispatch Plan PDF".
+// Button names on the rows (same screens as the Step Board): short on the
+// button, the full name on hover.
 const ACTION_LABELS = {
-  ORDER_INTAKE: 'Order Intake', ORDER_ENTRY: 'Order Entry',
-  DISPATCH_PLAN: 'Dispatch Plan', DISPATCH_PLAN_PDF: 'Generate Dispatch Plan PDF',
-  EMAIL_DISPATCH_SCHEDULE: 'Email Dispatch Schedule',
-  ACTUAL_DISPATCH: 'Dispatch Items', CHALLAN_PDF: 'Generate Challan PDF',
-  INVOICE_ENTRY: 'Create Invoice & Eway Bill', INVOICE_EMAIL: 'Email Invoice & Eway',
-  TRACK_DELIVERY: 'Track Delivery',
-  PAYMENT_FOLLOWUP: 'Payment Follow-up', PAYMENT_RECEIPT: 'Receive Payment',
-  TRANSPORT_BILL_RECEIVE: 'Receive Transport Bill', TRANSPORT_BILL_STATUS: 'Transport Bill Payment',
+  ORDER_INTAKE: ['Order Intake', 'Order Intake'],
+  ORDER_ENTRY: ['Order Entry', 'Sales Order Entry'],
+  DISPATCH_PLAN: ['Dispatch Plan', 'Dispatch Planning'],
+  DISPATCH_PLAN_PDF: ['Dispatch Plan PDF', 'Generate Dispatch Plan PDF'],
+  EMAIL_DISPATCH_SCHEDULE: ['Email Schedule', 'Email Dispatch Schedule'],
+  ACTUAL_DISPATCH: ['Dispatch Items', 'Actual Dispatch (challan)'],
+  CHALLAN_PDF: ['Challan PDF', 'Generate Challan PDF'],
+  INVOICE_ENTRY: ['Invoice & Eway', 'Create Invoice & Eway Bill'],
+  INVOICE_EMAIL: ['Email Invoice', 'Email Invoice & Eway Bill'],
+  TRACK_DELIVERY: ['Track Delivery', 'Track Delivery'],
+  PAYMENT_FOLLOWUP: ['Payment Follow-up', 'Payment Follow-up'],
+  PAYMENT_RECEIPT: ['Receive Payment', 'Receive Payment & Tally Entry'],
+  TRANSPORT_BILL_RECEIVE: ['Receive Bill', 'Receive Transport Bill'],
+  TRANSPORT_BILL_STATUS: ['Bill Payment', 'Transport Bill Payment Status'],
 };
+
+// One size for every row button — fixed width, one line.
+const ActionButton = ({ primary = false, label, title, onClick }) => (
+  <Tooltip title={title && title !== label ? title : ''} placement="left" disableInteractive>
+    <Button
+      size="small" variant={primary ? 'contained' : 'outlined'} disableElevation onClick={onClick}
+      startIcon={primary ? <Play size={12} /> : <ArrowRight size={12} />}
+      sx={{
+        width: 148, height: 28, px: 1.25, borderRadius: 1.5, justifyContent: 'flex-start',
+        textTransform: 'none', fontWeight: 700, fontSize: '0.74rem', lineHeight: 1, whiteSpace: 'nowrap',
+        '& .MuiButton-startIcon': { mr: 0.75, ml: 0 },
+        ...(primary
+          ? { bgcolor: BLUE, backgroundImage: 'none', boxShadow: 'none', '&:hover': { bgcolor: '#1557c9', backgroundImage: 'none', boxShadow: 'none' } }
+          : { color: BLUE, borderColor: alpha(BLUE, 0.4), '&:hover': { borderColor: BLUE, bgcolor: alpha(BLUE, 0.04) } }),
+      }}
+    >
+      <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Box>
+    </Button>
+  </Tooltip>
+);
 
 const STATUS = {
   pending:  { label: 'Pending',        color: '#b45309', bg: '#fff7e6', dot: '#f59e0b' },
@@ -98,49 +125,30 @@ const people = (list) => {
   return names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
 };
 
-// "↑ 5 from last week": this week's count against the week before. For the
-// cards where more is worse (overdue, late), up is red.
-const Delta = ({ now, prev, worseUp }) => {
-  const diff = now - prev;
-  const up = diff >= 0;
-  const good = worseUp ? !up || diff === 0 : up;
-  const color = diff === 0 ? SUB : good ? '#059669' : '#dc2626';
-  const Arrow = up ? ArrowUp : ArrowDown;
-  return (
-    <Stack direction="row" alignItems="center" spacing={0.6}>
-      <Arrow size={15} color={color} strokeWidth={2.6} />
-      <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color }}>{Math.abs(diff)}</Typography>
-      <Typography sx={{ fontSize: '0.72rem', color: SUB, ml: 0.5 }}>from last week</Typography>
-    </Stack>
-  );
-};
-
-const StatCard = ({ title, value, icon, tone, delta, active, onClick }) => {
+// A short card — icon, name, count — so the task rows get the room.
+const StatCard = ({ title, value, icon, tone, active, onClick }) => {
   const Icon = icon;
   return (
   <Box
     role="button" tabIndex={0} onClick={onClick}
     onKeyDown={(e) => { if (e.key === 'Enter') onClick(); }}
     sx={{
-      flex: '1 1 190px', minWidth: 190, p: 2, borderRadius: 2.5, cursor: 'pointer',
+      flex: '1 1 160px', minWidth: 160, px: 1.5, py: 1, borderRadius: 2, cursor: 'pointer',
       bgcolor: alpha(tone, 0.06), border: `1px solid ${active ? tone : alpha(tone, 0.22)}`,
       boxShadow: active ? `0 0 0 2px ${alpha(tone, 0.25)}` : 'none',
       transition: 'border-color .15s, box-shadow .15s',
       '&:hover': { borderColor: tone },
     }}
   >
-    <Stack direction="row" spacing={1.75} alignItems="flex-start">
-      <Box sx={{ width: 52, height: 52, borderRadius: '50%', display: 'grid', placeItems: 'center', bgcolor: alpha(tone, 0.14), color: tone, flexShrink: 0 }}>
-        <Icon size={26} strokeWidth={2.2} />
+    <Stack direction="row" spacing={1.25} alignItems="center">
+      <Box sx={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', bgcolor: alpha(tone, 0.14), color: tone, flexShrink: 0 }}>
+        <Icon size={18} strokeWidth={2.2} />
       </Box>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Typography sx={{ fontSize: '0.86rem', fontWeight: 700, color: INK }}>{title}</Typography>
-          <ChevronRight size={16} color={SUB} />
-        </Stack>
-        <Typography sx={{ fontSize: '1.9rem', fontWeight: 800, color: INK, lineHeight: 1.2, my: 0.25 }}>{value}</Typography>
-        {delta}
+        <Typography noWrap sx={{ fontSize: '0.76rem', fontWeight: 700, color: SUB }}>{title}</Typography>
+        <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: INK, lineHeight: 1.15 }}>{value}</Typography>
       </Box>
+      <ChevronRight size={15} color={SUB} />
     </Stack>
   </Box>
   );
@@ -179,22 +187,44 @@ const StatusChip = ({ status, row }) => {
   return <Tooltip title={`Done ${fmtDate(row.doneAt)} ${fmtTime(row.doneAt)}${row.doneByName ? ` by ${row.doneByName}` : ''}`}>{chip}</Tooltip>;
 };
 
-const O2dFmsTasks = () => {
+// `scope`: 'mine', or 'all' — the page offers All only to those allowed it,
+// and the server checks the same.
+const O2dFmsTasks = ({ scope = 'mine' }) => {
   const navigate = useNavigate();
-  const { can, isRoot } = usePermissions();
-  const canSeeAll = isRoot || can('o2dfms.manage') || can('fms.manageDoers');
   const hidden = useHiddenSteps('o2d');
 
-  const [scope, setScope] = useState('mine');
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('open');
-  const [assigner, setAssigner] = useState('anyone');
-  const [due, setDue] = useState('any');
-  const [sort, setSort] = useState('newest');
-  const [page, setPage] = useState(1);
+  // The filters live in the address (?status=overdue&by=…&page=2&size=50), so
+  // Back from a task's screen — or a refresh — returns to exactly this view.
+  // Each change replaces the entry (one event, one update), so Back still
+  // goes to the page before. Values at their default stay out of the address.
+  const [params, setParams] = useSearchParams();
+  const search = params.get('q') || '';
+  const status = oneOf(params.get('status'), STATUS_FILTERS, FILTER_DEFAULTS.status);
+  const assigner = params.get('by') || FILTER_DEFAULTS.by;
+  const due = oneOf(params.get('due'), DUE_FILTERS, FILTER_DEFAULTS.due);
+  const sort = oneOf(params.get('sort'), SORTS, FILTER_DEFAULTS.sort);
+  const page = Math.max(1, parseInt(params.get('page'), 10) || 1);
+  const pageSize = PAGE_SIZES.includes(Number(params.get('size'))) ? Number(params.get('size')) : DEFAULT_PAGE_SIZE;
+  const setFilters = (patch) => setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    Object.entries(patch).forEach(([k, v]) => {
+      const value = v == null ? '' : String(v);
+      if (!value || value === String(FILTER_DEFAULTS[k])) next.delete(k);
+      else next.set(k, value);
+    });
+    return next;
+  }, { replace: true });
+  // A new filter starts on page 1.
+  const setSearch = (v) => setFilters({ q: v, page: 1 });
+  const setStatus = (v) => setFilters({ status: v, page: 1 });
+  const setAssigner = (v) => setFilters({ by: v, page: 1 });
+  const setDue = (v) => setFilters({ due: v, page: 1 });
+  const setSort = (v) => setFilters({ sort: v, page: 1 });
+  const setPage = (p) => setFilters({ page: p });
+  const setPageSize = (n) => setFilters({ size: n, page: 1 });
 
   const { data, isLoading, isFetching, isError, refetch } = useGetO2dFmsTasksQuery(
-    canSeeAll ? scope : 'mine',
+    scope,
     { pollingInterval: 60_000, skipPollingIfUnfocused: true, refetchOnMountOrArgChange: 30 },
   );
 
@@ -215,24 +245,16 @@ const O2dFmsTasks = () => {
       ...[...seen].sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label }))];
   }, [rows]);
 
-  // Cards: now, and this week against last week.
+  // Card counts.
   const cards = useMemo(() => {
-    const inWeek = (t, weeksAgo) => t != null && t <= now - weeksAgo * WEEK_MS && t > now - (weeksAgo + 1) * WEEK_MS;
-    const count = (pick, when, weeksAgo) => rows.filter((r) => pick(r) && inWeek(when(r), weeksAgo)).length;
     const today0 = startOfDay(now);
-    const plannedOn = (r, day0) => ms(r.plannedAt) >= day0 && ms(r.plannedAt) < day0 + DAY_MS;
-    const slipped = (r) => r.status === 'overdue' || r.status === 'late';
-    const completed = (r) => r.state === 'done';
+    const plannedToday = (r) => ms(r.plannedAt) >= today0 && ms(r.plannedAt) < today0 + DAY_MS;
     return {
-      total: { value: rows.length, now: count(() => true, (r) => ms(r.openedAt), 0), prev: count(() => true, (r) => ms(r.openedAt), 1) },
-      overdue: { value: rows.filter((r) => r.status === 'overdue').length, now: count(slipped, (r) => ms(r.plannedAt), 0), prev: count(slipped, (r) => ms(r.plannedAt), 1) },
-      today: {
-        value: rows.filter((r) => r.state === 'open' && plannedOn(r, today0)).length,
-        now: rows.filter((r) => plannedOn(r, today0)).length,
-        prev: rows.filter((r) => plannedOn(r, today0 - WEEK_MS)).length,
-      },
-      done: { value: rows.filter(completed).length, now: count(completed, (r) => ms(r.doneAt), 0), prev: count(completed, (r) => ms(r.doneAt), 1) },
-      late: { value: rows.filter((r) => r.status === 'late').length, now: count((r) => r.status === 'late', (r) => ms(r.doneAt), 0), prev: count((r) => r.status === 'late', (r) => ms(r.doneAt), 1) },
+      total: rows.length,
+      overdue: rows.filter((r) => r.status === 'overdue').length,
+      today: rows.filter((r) => r.state === 'open' && plannedToday(r)).length,
+      done: rows.filter((r) => r.state === 'done').length,
+      late: rows.filter((r) => r.status === 'late').length,
     };
   }, [rows, now]);
 
@@ -268,21 +290,16 @@ const O2dFmsTasks = () => {
     return [...list].sort(by);
   }, [rows, now, search, status, assigner, due, sort]);
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const current = Math.min(page, pageCount);
-  const shown = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
-  const resetPage = (fn) => (v) => { fn(v); setPage(1); };
+  const shown = filtered.slice((current - 1) * pageSize, current * pageSize);
 
-  // A card is a shortcut to its filter.
-  const pickCard = (key) => {
-    setPage(1);
-    setDue('any');
-    if (key === 'total') setStatus('all');
-    else if (key === 'overdue') setStatus('overdue');
-    else if (key === 'today') { setStatus('open'); setDue('today'); }
-    else if (key === 'done') setStatus('completed');
-    else setStatus('late');
-  };
+  // A card is a shortcut to its filter (one update for all of it).
+  const pickCard = (key) => setFilters({
+    page: 1,
+    due: key === 'today' ? 'today' : 'any',
+    status: { total: 'all', overdue: 'overdue', today: 'open', done: 'completed', late: 'late' }[key],
+  });
   const activeCard = due === 'today' && status === 'open' ? 'today'
     : ({ all: 'total', overdue: 'overdue', completed: 'done', late: 'late' })[status] || null;
 
@@ -290,28 +307,14 @@ const O2dFmsTasks = () => {
   const td = { borderBottom: `1px solid ${LINE}`, py: 1.6 };
 
   return (
-    <Stack spacing={2}>
-      {canSeeAll && (
-        <Stack direction="row" justifyContent="flex-end">
-          <ToggleButtonGroup size="small" exclusive value={scope} onChange={(_e, v) => { if (v) { setScope(v); setPage(1); setAssigner('anyone'); } }}>
-            <ToggleButton value="mine" sx={{ px: 1.75, textTransform: 'none', fontWeight: 700 }}>My tasks</ToggleButton>
-            <ToggleButton value="all" sx={{ px: 1.75, textTransform: 'none', fontWeight: 700 }}>All tasks</ToggleButton>
-          </ToggleButtonGroup>
-        </Stack>
-      )}
-
+    <Stack spacing={1.5}>
       {/* Cards */}
-      <Stack direction="row" flexWrap="wrap" useFlexGap spacing={2}>
-        <StatCard title="Total Tasks" value={cards.total.value} icon={ClipboardList} tone="#2563eb" active={activeCard === 'total'} onClick={() => pickCard('total')}
-          delta={<Delta now={cards.total.now} prev={cards.total.prev} />} />
-        <StatCard title="Overdue" value={cards.overdue.value} icon={AlertCircle} tone="#dc2626" active={activeCard === 'overdue'} onClick={() => pickCard('overdue')}
-          delta={<Delta now={cards.overdue.now} prev={cards.overdue.prev} worseUp />} />
-        <StatCard title="Due Today" value={cards.today.value} icon={CalendarClock} tone="#f59e0b" active={activeCard === 'today'} onClick={() => pickCard('today')}
-          delta={<Delta now={cards.today.now} prev={cards.today.prev} worseUp />} />
-        <StatCard title="Completed" value={cards.done.value} icon={CheckCircle2} tone="#10b981" active={activeCard === 'done'} onClick={() => pickCard('done')}
-          delta={<Delta now={cards.done.now} prev={cards.done.prev} />} />
-        <StatCard title="Completed Late" value={cards.late.value} icon={History} tone="#7c3aed" active={activeCard === 'late'} onClick={() => pickCard('late')}
-          delta={<Delta now={cards.late.now} prev={cards.late.prev} worseUp />} />
+      <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1.25}>
+        <StatCard title="Total Tasks" value={cards.total} icon={ClipboardList} tone="#2563eb" active={activeCard === 'total'} onClick={() => pickCard('total')} />
+        <StatCard title="Overdue" value={cards.overdue} icon={AlertCircle} tone="#dc2626" active={activeCard === 'overdue'} onClick={() => pickCard('overdue')} />
+        <StatCard title="Due Today" value={cards.today} icon={CalendarClock} tone="#f59e0b" active={activeCard === 'today'} onClick={() => pickCard('today')} />
+        <StatCard title="Completed" value={cards.done} icon={CheckCircle2} tone="#10b981" active={activeCard === 'done'} onClick={() => pickCard('done')} />
+        <StatCard title="Completed Late" value={cards.late} icon={History} tone="#7c3aed" active={activeCard === 'late'} onClick={() => pickCard('late')} />
       </Stack>
 
       {/* Filters */}
@@ -319,14 +322,14 @@ const O2dFmsTasks = () => {
         <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1.25}>
           <TextField
             size="small" value={search} placeholder="Search order, challan, party or step…"
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            onChange={(e) => setSearch(e.target.value)}
             sx={{ flex: '2 1 260px', '& .MuiInputBase-root': { height: 40, borderRadius: 2 } }}
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={17} color={SUB} /></InputAdornment> }}
           />
-          <FilterSelect icon={ListFilter} label="Status" value={status} onChange={resetPage(setStatus)} options={STATUS_FILTERS} />
-          <FilterSelect icon={UserRound} label="Assigned By" value={assigner} onChange={resetPage(setAssigner)} options={assigners} minWidth={200} />
-          <FilterSelect icon={CalendarDays} label="Due Date" value={due} onChange={resetPage(setDue)} options={DUE_FILTERS} />
-          <FilterSelect icon={ArrowUpDown} label="Sort" value={sort} onChange={resetPage(setSort)} options={SORTS} />
+          <FilterSelect icon={ListFilter} label="Status" value={status} onChange={setStatus} options={STATUS_FILTERS} />
+          <FilterSelect icon={UserRound} label="Assigned By" value={assigner} onChange={setAssigner} options={assigners} minWidth={200} />
+          <FilterSelect icon={CalendarDays} label="Due Date" value={due} onChange={setDue} options={DUE_FILTERS} />
+          <FilterSelect icon={ArrowUpDown} label="Sort" value={sort} onChange={setSort} options={SORTS} />
         </Stack>
       </Paper>
 
@@ -372,7 +375,7 @@ const O2dFmsTasks = () => {
                 const actions = r.state === 'open' ? (r.actions || []) : [];
                 return (
                   <TableRow key={r.key} sx={{ bgcolor: tint, '&:hover': { bgcolor: alpha(BLUE, 0.03) } }}>
-                    <TableCell sx={{ ...td, pl: 2.5, color: SUB, fontWeight: 700 }}>{(current - 1) * PAGE_SIZE + i + 1}</TableCell>
+                    <TableCell sx={{ ...td, pl: 2.5, color: SUB, fontWeight: 700 }}>{(current - 1) * pageSize + i + 1}</TableCell>
                     <TableCell sx={td}>
                       <Stack direction="row" spacing={1.5} alignItems="center">
                         <Box sx={{ width: 38, height: 38, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(STATUS[r.status].dot, 0.12), color: STATUS[r.status].dot }}>
@@ -415,25 +418,15 @@ const O2dFmsTasks = () => {
                       </Stack>
                     </TableCell>
                     <TableCell sx={td}><StatusChip status={r.status} row={r} /></TableCell>
-                    <TableCell sx={{ ...td, pr: 2.5 }}>
-                      <Stack spacing={0.75} sx={{ minWidth: 210 }}>
+                    <TableCell sx={{ ...td, pr: 2.5, width: 172 }}>
+                      <Stack spacing={0.5} alignItems="flex-start">
                         {r.state === 'done' ? (
-                          <Button size="small" variant="outlined" startIcon={<ArrowRight size={15} />} onClick={() => navigate(r.stepPath)}
-                            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, justifyContent: 'flex-start' }}>
-                            View Step
-                          </Button>
-                        ) : actions.length ? actions.map((a, ai) => (
-                          <Button key={a.key} size="small" variant={ai === 0 ? 'contained' : 'outlined'} disableElevation
-                            startIcon={ai === 0 ? <Play size={14} /> : <ArrowRight size={14} />}
-                            onClick={() => navigate(a.path)}
-                            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, justifyContent: 'flex-start', ...(ai === 0 ? { bgcolor: BLUE, '&:hover': { bgcolor: '#1557c9' } } : {}) }}>
-                            {ACTION_LABELS[a.key] || a.label}
-                          </Button>
-                        )) : (
-                          <Button size="small" variant="contained" disableElevation startIcon={<Play size={14} />} onClick={() => navigate(r.stepPath)}
-                            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, justifyContent: 'flex-start', bgcolor: BLUE, '&:hover': { bgcolor: '#1557c9' } }}>
-                            Do Task
-                          </Button>
+                          <ActionButton label="View Step" title="Open this step" onClick={() => navigate(r.stepPath)} />
+                        ) : actions.length ? actions.map((a, ai) => {
+                          const [label, title] = ACTION_LABELS[a.key] || [a.label, a.label];
+                          return <ActionButton key={a.key} primary={ai === 0} label={label} title={title} onClick={() => navigate(a.path)} />;
+                        }) : (
+                          <ActionButton primary label="Do Task" title="Open the step — checklist, then Mark Done" onClick={() => navigate(r.stepPath)} />
                         )}
                       </Stack>
                     </TableCell>
@@ -444,12 +437,24 @@ const O2dFmsTasks = () => {
           </Table>
         </Box>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 2.5, py: 1.5, borderTop: `1px solid ${LINE}`, flexWrap: 'wrap', rowGap: 1 }}>
-          <Typography sx={{ fontSize: '0.82rem', color: SUB }}>
-            {filtered.length
-              ? `Showing ${(current - 1) * PAGE_SIZE + 1}–${Math.min(current * PAGE_SIZE, filtered.length)} of ${filtered.length} task${filtered.length === 1 ? '' : 's'}`
-              : 'No tasks'}
-            {isFetching && !isLoading ? ' · refreshing…' : ''}
-          </Typography>
+          <Stack direction="row" alignItems="center" spacing={2} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+            <Typography sx={{ fontSize: '0.82rem', color: SUB }}>
+              {filtered.length
+                ? `Showing ${(current - 1) * pageSize + 1}–${Math.min(current * pageSize, filtered.length)} of ${filtered.length} task${filtered.length === 1 ? '' : 's'}`
+                : 'No tasks'}
+              {isFetching && !isLoading ? ' · refreshing…' : ''}
+            </Typography>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Typography sx={{ fontSize: '0.82rem', color: SUB, whiteSpace: 'nowrap' }}>Rows per page</Typography>
+              <TextField
+                select size="small" value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                sx={{ width: 78, '& .MuiInputBase-root': { height: 32, borderRadius: 1.5, fontSize: '0.82rem' } }}
+              >
+                {PAGE_SIZES.map((n) => <MenuItem key={n} value={n} sx={{ fontSize: '0.82rem' }}>{n}</MenuItem>)}
+              </TextField>
+            </Stack>
+          </Stack>
           {pageCount > 1 && (
             <Pagination count={pageCount} page={current} onChange={(_e, p) => setPage(p)} shape="rounded" color="primary" size="small" />
           )}

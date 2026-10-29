@@ -1,20 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Typography, Paper, Tabs, Tab, Table, TableHead, TableBody, TableRow, TableCell,
+  Box, Typography, Paper, Table, TableHead, TableBody, TableRow, TableCell,
   TextField, MenuItem, Button, Tooltip, Chip, Skeleton, Stack, alpha, InputAdornment,
   ToggleButtonGroup, ToggleButton, TablePagination,
 } from '@mui/material';
-import { UserCog, AlertTriangle, ClipboardList, Inbox, Search, ArrowUpDown, Users } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { UserCog, AlertTriangle, ClipboardList, Inbox, Search, ArrowUpDown, Users, FilePlus2, ShoppingCart, Truck } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import {
   useGetMyFmsTasksQuery, useGetFmsTasksQuery, useGetAssignableUsersQuery, useReassignFmsTaskMutation,
 } from '../../store/api/fmsDoerApi';
 import { usePermissions } from '../../hooks/usePermission';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from '../procurement/pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsCardSx, pfmsTableHeadSx } from '../procurement/pfmsTheme';
 import { fmtDateTime, userName } from './fmsDoerMeta';
 import DoerPickerDialog from './DoerPickerDialog';
 import O2dFmsTasks from './O2dFmsTasks';
+import { useHiddenSteps, useO2dRights, stepKey } from '../../utils/embed';
 
 /**
  * FMS Tasks — Purchase FMS work, laid out like O2D's My Tasks / All Tasks:
@@ -404,39 +405,95 @@ const AllTasks = () => {
   );
 };
 
+// Quick actions — open the form right here (the same drawers their own pages
+// use), so starting a piece of work never needs a trip through the menus.
+const IndentFormDrawer = lazy(() => import('../procurement/indents/IndentFormDrawer'));
+const OrderEntryDrawer = lazy(() => import('../orders/OrderEntryDrawer'));
+const DispatchEntry = lazy(() => import('../execution/DispatchEntry'));
+
+const QUICK_ACTIONS = [
+  { key: 'indent', label: 'Indent Form', icon: FilePlus2 },
+  { key: 'order', label: 'Sales Order', icon: ShoppingCart },
+  { key: 'dispatch', label: 'Actual Dispatch', icon: Truck },
+];
+
 const FmsTasksPage = () => {
-  const { can } = usePermissions();
+  const { can, isRoot } = usePermissions();
   const canManage = can('fms.manageDoers');
-  const [tab, setTab] = useState(0);
-  // O2D FMS (its own view) or Purchase FMS (the lists below, unchanged).
-  const [source, setSource] = useState('o2d');
+  // Who may see everybody's O2D tasks (the server checks the same).
+  const canSeeAllO2d = isRoot || can('o2dfms.manage') || canManage;
+  // What you are looking at lives in the address (?source=purchase&scope=all,
+  // and O2dFmsTasks keeps its filters there too), so coming Back from a task's
+  // screen — or a refresh — lands on exactly the same view. Changes replace the
+  // entry instead of adding one, so Back still goes to the previous page.
+  const [params, setParams] = useSearchParams();
+  const source = params.get('source') === 'purchase' ? 'purchase' : 'o2d';
+  const scope = params.get('scope') === 'all' ? 'all' : 'mine';
+  const setView = (patch) => setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    Object.entries(patch).forEach(([k, v]) => (v ? next.set(k, v) : next.delete(k)));
+    return next;
+  }, { replace: true });
+  // O2D FMS (its own view) or Purchase FMS (the lists below, unchanged). A new
+  // view starts on page 1; a new scope also forgets "Assigned By" (its list differs).
+  const setSource = (v) => setView({ source: v === 'purchase' ? 'purchase' : '', page: '' });
+  const setScope = (v) => setView({ scope: v === 'all' ? 'all' : '', page: '', by: '' });
+  const [quick, setQuick] = useState(null);
+  const canSeeAll = source === 'o2d' ? canSeeAllO2d : canManage;
+
+  // A quick action leaves with its step when the MD switches that step off
+  // in the Delegation Suite (lock icon) — as the Purchase hub's Quick Actions do;
+  // Sales Order follows the Step Board's "New Sales Order" switch.
+  const hiddenPurchase = useHiddenSteps('purchase');
+  const hiddenO2d = useHiddenSteps('o2d');
+  const o2dRights = useO2dRights();
+  const quickActions = QUICK_ACTIONS.filter((a) => (
+    a.key === 'indent' ? !hiddenPurchase.has(stepKey('purchase-indents'))
+      : a.key === 'order' ? o2dRights.canAdd
+        : !hiddenO2d.has(stepKey('2.06'))
+  ));
+  const closeQuick = () => setQuick(null);
+
+  const toggleSx = { px: 1.5, py: 0.5, textTransform: 'none', fontWeight: 700 };
   return (
     <Box sx={{ ...pfmsPageSx, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-end" spacing={2} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
-        <Box>
-          <Typography sx={pfmsTitleSx}>FMS Tasks</Typography>
-          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
-            {source === 'o2d'
-              ? 'Your workflow steps, deadlines and next actions in one place.'
-              : 'Purchase FMS items waiting on you — what to do, for which record, and by when'}
-          </Typography>
-        </Box>
+      {/* One line: what you are looking at (left), quick actions (right). */}
+      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+        <Typography sx={{ ...pfmsTitleSx, whiteSpace: 'nowrap' }}>My FMS Tasks</Typography>
         <ToggleButtonGroup size="small" exclusive value={source} onChange={(_e, v) => { if (v) setSource(v); }}>
-          <ToggleButton value="o2d" sx={{ px: 1.75, textTransform: 'none', fontWeight: 700 }}>O2D FMS</ToggleButton>
-          <ToggleButton value="purchase" sx={{ px: 1.75, textTransform: 'none', fontWeight: 700 }}>Purchase FMS</ToggleButton>
+          <ToggleButton value="o2d" sx={toggleSx}>O2D FMS</ToggleButton>
+          <ToggleButton value="purchase" sx={toggleSx}>Purchase FMS</ToggleButton>
         </ToggleButtonGroup>
+        {canSeeAll && (
+          <ToggleButtonGroup size="small" exclusive value={scope} onChange={(_e, v) => { if (v) setScope(v); }}>
+            <ToggleButton value="mine" sx={toggleSx}>My tasks</ToggleButton>
+            <ToggleButton value="all" sx={toggleSx}>All tasks</ToggleButton>
+          </ToggleButtonGroup>
+        )}
+        <Box sx={{ flex: 1 }} />
+        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+          {quickActions.map((a) => {
+            const Icon = a.icon;
+            return (
+              <Button key={a.key} variant="contained" disableElevation size="small" startIcon={<Icon size={15} />}
+                onClick={() => setQuick(a.key)}
+                sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, px: 1.75, whiteSpace: 'nowrap' }}>
+                {a.label}
+              </Button>
+            );
+          })}
+        </Stack>
       </Stack>
-      {source === 'o2d' ? <O2dFmsTasks /> : (
-        <>
-          {canManage && (
-            <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontWeight: 700 } }}>
-              <Tab label="My FMS Tasks" />
-              <Tab label="All FMS Tasks" />
-            </Tabs>
-          )}
-          {tab === 0 || !canManage ? <MyTasks /> : <AllTasks />}
-        </>
-      )}
+
+      {source === 'o2d'
+        ? <O2dFmsTasks scope={canSeeAll ? scope : 'mine'} />
+        : (canSeeAll && scope === 'all' ? <AllTasks /> : <MyTasks />)}
+
+      <Suspense fallback={null}>
+        {quick === 'indent' && <IndentFormDrawer open onClose={closeQuick} />}
+        {quick === 'order' && <OrderEntryDrawer open onClose={closeQuick} />}
+        {quick === 'dispatch' && <DispatchEntry open onClose={closeQuick} />}
+      </Suspense>
     </Box>
   );
 };

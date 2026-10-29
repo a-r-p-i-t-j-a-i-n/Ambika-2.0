@@ -39,7 +39,10 @@ export function useReturnToTask() {
     const q = new URLSearchParams({ entryDone: '1' });
     if (fromAction) q.set('doneAction', fromAction);
     if (fromDc) q.set('dc', fromDc);
-    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`);
+    // The form was a one-off trip from the task: replace it, so Back from the
+    // step goes to where the doer came from (My FMS Tasks, the Step Board…),
+    // not into the finished form again.
+    navigate(`/o2d-fms/task/${fromTask}/${encodeURIComponent(fromStep)}?${q.toString()}`, { replace: true });
   };
 
   const finishToTask = async (ctx = {}) => {
