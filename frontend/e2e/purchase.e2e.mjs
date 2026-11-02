@@ -131,7 +131,7 @@ const run = async () => {
     await page.getByRole('option').filter({ hasText: /JSL204-07|Cu 0\.70/ }).first().click();
     await page.waitForTimeout(300);
     await d.locator('input[type="number"][placeholder="0"]').first().fill(String(qty));
-    await d.getByRole('button', { name: /^Create Indent$/ }).click();
+    await d.getByRole('button', { name: /^Save as Draft$/ }).click();
     check(`${key}: indent created`, await toast(/Indent created/));
     const indent = ((await apiGet('/procurement/indents?limit=20&sort=-createdAt'))?.data || [])[0];
     check(`${key}: …${indent?.indentNumber} is DRAFT for JSL204-07 × ${qty}`, indent?.approvalStatus === 'DRAFT' && indent?.items?.[0]?.skuCode === 'JSL204-07' && indent?.items?.[0]?.quantity === qty,

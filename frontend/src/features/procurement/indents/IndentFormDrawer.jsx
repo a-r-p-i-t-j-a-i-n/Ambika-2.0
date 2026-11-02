@@ -5,11 +5,12 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { X, Save, ClipboardList, Plus, Trash2 } from 'lucide-react';
+import { X, Save, Send, ClipboardList, Plus, Trash2 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useCreateIndentMutation,
   useUpdateIndentMutation,
+  useSubmitIndentMutation,
 } from '../../../store/api/procurementApi';
 import { useGetSkuLookupQuery, useCreateSkuMutation } from '../../../store/api/skuApi';
 import { useGetEmployeesQuery } from '../../../store/api/authApi';
@@ -72,7 +73,8 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
 
   const [createIndent, { isLoading: creating }] = useCreateIndentMutation();
   const [updateIndent, { isLoading: updating }] = useUpdateIndentMutation();
-  const saving = creating || updating;
+  const [submitIndent, { isLoading: submitting }] = useSubmitIndentMutation();
+  const saving = creating || updating || submitting;
 
   // Products come from the SKU Master only (the server re-reads name + code
   // from the SKU record on save). The first 2000 load up front; typing also
@@ -190,7 +192,10 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
     return !e.items;
   };
 
-  const handleSubmit = async () => {
+  // `sendForApproval`: after saving, submit it (the same submit as Indent
+  // Detail's "Submit for Approval") so it goes straight to Indent Approval
+  // (1.1A). Without it the indent stays a draft at 1.1, as before.
+  const handleSubmit = async ({ sendForApproval = false } = {}) => {
     if (!validate()) {
       const first = items.find(unlinked);
       enqueueSnackbar(first ? `"${first.itemName.trim()}" is not in SKU Master — pick the product from the SKU list` : 'Add at least one product with a quantity', { variant: 'warning' });
@@ -212,21 +217,31 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
       requestType: header.requestType || 'MATERIAL_PURCHASE',
       remarks: header.remarks.trim(),
     };
+    let saved;
     try {
-      if (isEdit) {
-        await updateIndent({ id: indent._id, ...payload }).unwrap();
-        enqueueSnackbar('Indent updated', { variant: 'success' });
-        onClose?.(true);
-      } else {
-        const res = await createIndent(payload).unwrap();
-        enqueueSnackbar('Indent created', { variant: 'success' });
-        // Second arg = the newly created indent, so a caller that isn't
-        // already on the indent list (e.g. a Quick Action) can open it.
-        onClose?.(true, res?.data);
-      }
+      saved = isEdit
+        ? (await updateIndent({ id: indent._id, ...payload }).unwrap())?.data || indent
+        : (await createIndent(payload).unwrap())?.data;
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save indent', { variant: 'error' });
+      return;
     }
+    const number = saved?.indentNumber || indent?.indentNumber || '';
+    if (!sendForApproval) {
+      enqueueSnackbar(isEdit ? 'Indent updated' : 'Indent created as a draft', { variant: 'success' });
+    } else {
+      try {
+        await submitIndent(saved?._id || indent._id).unwrap();
+        enqueueSnackbar(`Indent ${number} ${isEdit ? 'saved' : 'created'} and sent for approval`.replace('  ', ' '), { variant: 'success' });
+      } catch (err) {
+        // Saved, not submitted — it stays a draft; Submit for Approval is on its page.
+        enqueueSnackbar(`Indent ${number} saved as a draft, but sending it for approval failed: ${err?.data?.message || 'please try again'}. Submit it from the indent page.`.replace('  ', ' '), { variant: 'warning' });
+      }
+    }
+    // Second arg = the newly created indent, so a caller that isn't
+    // already on the indent list (e.g. a Quick Action) can open it.
+    if (isEdit) onClose?.(true);
+    else onClose?.(true, saved);
   };
 
   const totalQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
@@ -390,10 +405,15 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
       {/* Footer */}
       <Divider />
       <Box sx={{ p: 2, display: 'flex', justifyContent: 'flex-end', gap: 1.5, bgcolor: '#fff' }}>
-        <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving}>Cancel</Button>
-        <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-          onClick={handleSubmit} disabled={saving}>
-          {isEdit ? 'Save Changes' : 'Create Indent'}
+        <Button variant="text" onClick={() => onClose?.(false)} disabled={saving}>Cancel</Button>
+        {/* Draft = stays at 1.1 to finish later; Submit = straight to Indent Approval (1.1A). */}
+        <Button variant="outlined" startIcon={<Save size={16} />}
+          onClick={() => handleSubmit()} disabled={saving}>
+          {isEdit ? 'Save Changes' : 'Save as Draft'}
+        </Button>
+        <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
+          onClick={() => handleSubmit({ sendForApproval: true })} disabled={saving}>
+          {isEdit ? 'Save & Submit for Approval' : 'Submit for Approval'}
         </Button>
       </Box>
 

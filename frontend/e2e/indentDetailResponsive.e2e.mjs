@@ -137,7 +137,7 @@ const run = async () => {
   await page.getByRole('option').filter({ hasText: /JSL204-07|Cu 0\.70/ }).first().click();
   await page.waitForTimeout(300);
   await createDialog.locator('input[type="number"][placeholder="0"]').first().fill('12');
-  await createDialog.getByRole('button', { name: /^Create Indent$/ }).click();
+  await createDialog.getByRole('button', { name: /^Save as Draft$/ }).click();
   await page.waitForTimeout(2000);
   const draft = ((await api('/procurement/indents?limit=5&sort=-createdAt')).body?.data || [])[0];
   check('the draft indent was created', draft?.approvalStatus === 'DRAFT', `${draft?.indentNumber} ${draft?.approvalStatus}`);
