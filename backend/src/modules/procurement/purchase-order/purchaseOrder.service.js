@@ -26,6 +26,7 @@ import { inventoryService } from '../../inventory/inventory.service.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { emailService } from '../../../services/email.service.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 import env from '../../../config/env.js';
 import { loadPdfCompany, loadPoTermsDefaults } from '../../pricing/company-pdf-assets.js';
 import { resolvePoTerms, defaultPoTerms, normalizePoTerms, pdfSafePoTerms, poTermsFormat } from './poTerms.js';
@@ -268,6 +269,35 @@ const activePoedItemIds = async (indentId, { excludePoId, session } = {}) => {
     }
   }
   return { ids, skus };
+};
+
+/**
+ * activePoedItemIds for many indents in ONE query (the approved-items list ran
+ * one query per indent, which made the New PO item picker slow). Same result per
+ * indent: every line of each active PO that names the indent (indentId or
+ * indentIds). Returns Map(indentId string → { ids, skus }).
+ */
+const activePoedItemIdsByIndent = async (indentIds) => {
+  const byIndent = new Map(indentIds.map((id) => [String(id), { ids: new Map(), skus: new Map() }]));
+  if (!indentIds.length) return byIndent;
+  const pos = await VendorPurchaseOrder.find({
+    $or: [{ indentId: { $in: indentIds } }, { indentIds: { $in: indentIds } }],
+    isDeleted: { $ne: true },
+    poStatus: { $ne: PO_STATUS.CANCELLED },
+  }).select('poNumber draftNumber indentId indentIds items.indentItemId items.skuCode').lean();
+  for (const po of pos) {
+    const ref = po.poNumber || po.draftNumber || 'DRAFT';
+    const owners = new Set([po.indentId, ...(po.indentIds || [])].filter(Boolean).map(String));
+    for (const owner of owners) {
+      const maps = byIndent.get(owner);
+      if (!maps) continue;
+      for (const it of po.items || []) {
+        if (it.indentItemId) maps.ids.set(String(it.indentItemId), ref);
+        else if (it.skuCode) maps.skus.set(String(it.skuCode).toUpperCase(), ref);
+      }
+    }
+  }
+  return byIndent;
 };
 
 /** Item display reference (Ind-50.1/26-27) for an indent item. */
@@ -983,6 +1013,8 @@ export const purchaseOrderService = {
       isDeleted: { $ne: true },
       overallStatus: { $in: PO_CREATABLE_INDENT_STATES },
     }).sort({ createdAt: -1 }).lean();
+    // The items already on an active PO, for every indent at once.
+    const poedByIndent = await activePoedItemIdsByIndent(indents.map((ind) => ind._id));
 
     const items = [];
     for (const indent of indents) {
@@ -999,7 +1031,7 @@ export const purchaseOrderService = {
           .filter((q) => q.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId)
           .map((q) => String(q.itemId)),
       );
-      const { ids: poedIds, skus: poedSkus } = await activePoedItemIds(indent._id);
+      const { ids: poedIds, skus: poedSkus } = poedByIndent.get(String(indent._id));
       (indent.items || []).forEach((it, i) => {
         if (!approvedIds.has(String(it._id))) return;
         const poNumber = poedIds.get(String(it._id)) || poedSkus.get(String(it.skuCode || '').toUpperCase()) || '';
@@ -1612,17 +1644,25 @@ export const purchaseOrderService = {
     return updated;
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a PO. A draft simply goes; an approved / released / cancelled one
+   * needs a reason (procurement.deletePurchaseOrder) and goes only while no
+   * follow-up, PI, advance, GRN, invoice or voucher rests on it. Either way its
+   * rate changes are withdrawn and the indent items it held are released.
+   */
+  async remove(id, user, { reason } = {}) {
     const po = await findOrThrow(id);
-    if (po.approvalStatus !== PO_APPROVAL_STATUS.DRAFT) {
-      throw new AppError('Only draft purchase orders can be deleted', 400);
-    }
+    const draft = po.approvalStatus === PO_APPROVAL_STATUS.DRAFT;
+    const label = `Purchase Order ${po.poNumber || po.draftNumber || ''}`.trim();
+    const why = draft ? String(reason || '').trim() : deleteReason(reason, label);
+    assertNothingAfter(label, await laterStepsOf.po(po._id));
     po.isDeleted = true;
     po.deletedAt = new Date();
     po.deletedBy = user?._id;
-    po.activityTimeline.push({ action: 'DELETE', description: 'Purchase order deleted', actorId: user?._id });
+    po.activityTimeline.push({ action: 'DELETE', description: why ? `Purchase order deleted. Reason: ${why}` : 'Purchase order deleted', actorId: user?._id });
     const saved = await po.save();
-    await rateChangeService.withdrawForPo(po._id, `PO ${po.draftNumber || ''} was deleted`.trim(), user);
+    await rateChangeService.withdrawForPo(po._id, `PO ${po.poNumber || po.draftNumber || ''} was deleted`.trim(), user);
+    await purchaseOrderService._releaseIndentLinks(po, user, 'deleted');
     return saved;
   },
 
@@ -1983,9 +2023,17 @@ export const purchaseOrderService = {
     await po.save();
     await rateChangeService.withdrawForPo(po._id, `PO ${po.poNumber || po.draftNumber || ''} was cancelled`.trim(), user);
 
-    // Release every indent item / approved vendor this PO had committed, so the
-    // freed items become selectable again and the indent status rolls back.
-    // Non-fatal — the cancellation itself already stands.
+    await purchaseOrderService._releaseIndentLinks(po, user, 'cancelled');
+    return po;
+  },
+
+  /**
+   * Release every indent item / approved vendor this PO had committed, so the
+   * freed items become selectable again and the indent status rolls back.
+   * Used when a PO is cancelled or deleted. Non-fatal — the cancel / delete
+   * itself already stands.
+   */
+  async _releaseIndentLinks(po, user, verb) {
     try {
       const indentIds = (po.indentIds?.length ? po.indentIds : [po.indentId]).filter(Boolean);
       for (const indId of indentIds) {
@@ -2012,13 +2060,15 @@ export const purchaseOrderService = {
           });
           rollupIndentStatus(indent);
         }
-        indent.activityTimeline.push({ action: 'PO_CANCELLED', description: `PO ${po.poNumber || po.draftNumber} cancelled — items released`, actorId: user?._id });
+        indent.activityTimeline.push({
+          action: verb === 'deleted' ? 'PO_DELETED' : 'PO_CANCELLED',
+          description: `PO ${po.poNumber || po.draftNumber} ${verb} — items released`,
+          actorId: user?._id,
+        });
         indent.updatedBy = user?._id;
         await indent.save();
       }
-    } catch (err) { logger.error(`[po] cancel item release failed: ${err.message}`); }
-
-    return po;
+    } catch (err) { logger.error(`[po] ${verb} item release failed: ${err.message}`); }
   },
 
   /**

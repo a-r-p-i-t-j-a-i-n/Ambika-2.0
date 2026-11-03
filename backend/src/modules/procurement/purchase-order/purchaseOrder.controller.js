@@ -117,7 +117,7 @@ export const purchaseOrderController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const po = await purchaseOrderService.remove(req.params.id, req.user);
+    const po = await purchaseOrderService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('Purchase order deleted', po));
   }),
 

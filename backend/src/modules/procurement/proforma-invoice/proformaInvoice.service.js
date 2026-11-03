@@ -5,6 +5,7 @@ import { AppError } from '../../../utils/apiResponse.js';
 import { generatePiNumber, generatePiUniqueCode } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 import { registerApprovalDocument } from '../../approvals/approval.registry.js';
 import { approvalService } from '../../approvals/approval.service.js';
 import { buildPiApprovalPdfBuffer } from './proformaInvoice.pdf.js';
@@ -256,16 +257,28 @@ export const proformaInvoiceService = {
     return pi.save();
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a PI. A draft / received (unapproved) one simply goes; an approved,
+   * paid or cancelled one needs a reason (procurement.deleteProformaInvoice)
+   * and goes only while no advance payment or vendor invoice rests on it.
+   * Either way the PO is back to "no PI" when this was its PI.
+   */
+  async remove(id, user, { reason } = {}) {
     const pi = await findOrThrow(id);
-    if (![PI_STATUS.DRAFT, PI_STATUS.RECEIVED].includes(pi.piStatus) || pi.approvalStatus === PI_APPROVAL_STATUS.APPROVED) {
-      throw new AppError('Only a draft or received PI (not yet approved) can be deleted', 400);
-    }
+    const early = [PI_STATUS.DRAFT, PI_STATUS.RECEIVED].includes(pi.piStatus) && pi.approvalStatus !== PI_APPROVAL_STATUS.APPROVED;
+    const label = `PI ${pi.piNumber || ''}`.trim();
+    const why = early ? String(reason || '').trim() : deleteReason(reason, label);
+    assertNothingAfter(label, await laterStepsOf.pi(pi._id));
     pi.isDeleted = true;
     pi.deletedAt = new Date();
     pi.deletedBy = user?._id;
-    pi.activityTimeline.push({ action: 'DELETE', description: 'Proforma invoice deleted', actorId: user?._id });
-    return pi.save();
+    pi.activityTimeline.push({ action: 'DELETE', description: why ? `Proforma invoice deleted. Reason: ${why}` : 'Proforma invoice deleted', actorId: user?._id });
+    const saved = await pi.save();
+    const po = await VendorPurchaseOrder.findOne({ _id: pi.poId, piId: pi._id }).lean();
+    if (po) {
+      await setPoPiStatus(pi.poId, { piStatus: PO_PI_STATUS.NOT_RECEIVED, piId: null, piNumber: '', piReceivedAt: null });
+    }
+    return saved;
   },
 
   // Rules 5-6: approve (document mandatory) → ready for advance payment.

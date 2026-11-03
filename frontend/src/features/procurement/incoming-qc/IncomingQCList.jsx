@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -16,6 +15,7 @@ import {
   useGetIncomingQcsQuery,
   useGetIncomingQcStatsQuery,
   useCancelIncomingQcMutation,
+  useDeleteIncomingQcMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -31,6 +31,9 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLab
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const sumQty = (items, key) => (items || []).reduce((s, it) => s + (Number(it[key]) || 0), 0);
 
@@ -61,8 +64,7 @@ const IncomingQCList = () => {
   const [editQc, setEditQc] = useState(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [activeQc, setActiveQc] = useState(null);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
@@ -82,8 +84,8 @@ const IncomingQCList = () => {
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
   const [cancelQc] = useCancelIncomingQcMutation();
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
 
   const onView = (r) => { navigate(`/procurement/incoming-qc/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditQc(r); setFormOpen(true); closeMenu(); };
@@ -99,6 +101,16 @@ const IncomingQCList = () => {
   // draft is resumed there; service QCs (no GRN) keep editing from here.
   const onResumeOnGrn = (r) => { navigate(`/procurement/grns/${r.grnId}#qc`); closeMenu(); };
 
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removeQc] = useDeleteIncomingQcMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deleteIncomingQc');
+  const del = useRecordDelete({
+    what: 'QC', numberOf: (r) => r.qcNumber, remove: removeQc,
+    needsReason: () => false,
+    consequence: () => 'The QC draft is removed.',
+  });
+
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus)) {
@@ -111,6 +123,7 @@ const IncomingQCList = () => {
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
     }
     if (r.qcPdfUrl) a.push({ key: 'pdf', label: 'Download QC Report', icon: <FileDown size={16} />, fn: () => onPdf(r) });
+    if (canDeleteRecord) a.push(del.action(r, ['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus) ? {} : { disabled: true, hint: 'A completed QC has already added its stock — it cannot be deleted' }));
     return a;
   };
 
@@ -252,14 +265,8 @@ const IncomingQCList = () => {
         />
       </Paper>
 
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}>
-            <ListItemIcon>{a.icon}</ListItemIcon>
-            <ListItemText>{a.label}</ListItemText>
-          </MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       <IncomingQCFormDialog open={formOpen} qc={editQc} onClose={() => { setFormOpen(false); setEditQc(null); }} />
       <IncomingQCCompleteDialog open={completeOpen} qc={activeQc} onClose={() => { setCompleteOpen(false); setActiveQc(null); }} />

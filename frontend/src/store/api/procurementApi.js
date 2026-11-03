@@ -18,6 +18,13 @@ const approvalInvalidates = (documentType, documentId) => {
     ...(parentTag ? [parentTag, { type: parentTag, id: documentId }] : []),
   ];
 };
+// A delete takes an id, or { id, reason } — a completed record says why it goes.
+const deleteArgs = (arg) => (arg && typeof arg === 'object' ? arg : { id: arg });
+const deleteRequest = (base) => (arg) => {
+  const { id, reason } = deleteArgs(arg);
+  return { url: `${base}/${id}`, method: 'DELETE', ...(reason ? { body: { reason } } : {}) };
+};
+
 export const procurementApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     // ── Indents ──────────────────────────────────────────────
@@ -42,8 +49,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['Indent', 'IndentStats', { type: 'Indent', id }],
     }),
     deleteIndent: builder.mutation({
-      query: (id) => ({ url: `/procurement/indents/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['Indent', 'IndentStats', { type: 'Indent', id }],
+      query: deleteRequest('/procurement/indents'),
+      invalidatesTags: (_r, _e, arg) => ['Indent', 'IndentStats', 'FmsTasks', { type: 'Indent', id: deleteArgs(arg).id }],
     }),
     submitIndent: builder.mutation({
       query: (id) => ({ url: `/procurement/indents/${id}/submit`, method: 'POST' }),
@@ -144,8 +151,8 @@ export const procurementApi = baseApi.injectEndpoints({
       providesTags: ['CompanySettings'],
     }),
     deletePurchaseOrder: builder.mutation({
-      query: (id) => ({ url: `/procurement/purchase-orders/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['PurchaseOrder', 'RateChange', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      query: deleteRequest('/procurement/purchase-orders'),
+      invalidatesTags: (_r, _e, arg) => ['PurchaseOrder', 'RateChange', 'PurchaseOrderStats', 'Indent', 'IndentStats', 'FmsTasks', { type: 'PurchaseOrder', id: deleteArgs(arg).id }],
     }),
     approvePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/approve`, method: 'POST', body }),
@@ -210,8 +217,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['FollowUp', 'FollowUpStats', { type: 'FollowUp', id }],
     }),
     deleteFollowUp: builder.mutation({
-      query: (id) => ({ url: `/procurement/follow-ups/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['FollowUp', 'FollowUpStats', { type: 'FollowUp', id }],
+      query: deleteRequest('/procurement/follow-ups'),
+      invalidatesTags: (_r, _e, arg) => ['FollowUp', 'FollowUpStats', 'PurchaseOrder', 'FmsTasks', { type: 'FollowUp', id: deleteArgs(arg).id }],
     }),
     markFollowUpDone: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/follow-ups/${id}/mark-done`, method: 'POST', body }),
@@ -255,8 +262,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['ProformaInvoice', 'ProformaInvoiceStats', { type: 'ProformaInvoice', id }],
     }),
     deleteProformaInvoice: builder.mutation({
-      query: (id) => ({ url: `/procurement/proforma-invoices/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['ProformaInvoice', 'ProformaInvoiceStats', { type: 'ProformaInvoice', id }],
+      query: deleteRequest('/procurement/proforma-invoices'),
+      invalidatesTags: (_r, _e, arg) => ['ProformaInvoice', 'ProformaInvoiceStats', 'PurchaseOrder', 'FmsTasks', { type: 'ProformaInvoice', id: deleteArgs(arg).id }],
     }),
     approveProformaInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/proforma-invoices/${id}/approve`, method: 'POST', body }),
@@ -329,9 +336,25 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}`, method: 'PATCH', body }),
       invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', { type: 'Grn', id }],
     }),
+    // A draft is deleted by id; a completed GRN sends { id, reason } — its
+    // received qty comes off the PO / PI, so those reload too.
     deleteGrn: builder.mutation({
-      query: (id) => ({ url: `/procurement/grns/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['Grn', 'GrnStats', { type: 'Grn', id }],
+      query: (arg) => {
+        const { id, reason } = typeof arg === 'object' ? arg : { id: arg };
+        return { url: `/procurement/grns/${id}`, method: 'DELETE', ...(reason ? { body: { reason } } : {}) };
+      },
+      invalidatesTags: (_r, _e, arg) => ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'FmsTasks',
+        { type: 'Grn', id: typeof arg === 'object' ? arg.id : arg }],
+    }),
+    // What correcting / deleting a GRN would touch (later steps, MD signature).
+    getGrnChangeCheck: builder.query({
+      query: (id) => `/procurement/grns/${id}/change-check`,
+      providesTags: (_r, _e, id) => [{ type: 'Grn', id }],
+    }),
+    // Correct a completed GRN (procurement.editGrn).
+    correctGrn: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/correct`, method: 'PATCH', body }),
+      invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'FmsTasks', 'Approval', { type: 'Grn', id }],
     }),
     completeGrn: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/complete`, method: 'POST', body }),
@@ -445,8 +468,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }],
     }),
     deleteVendorInvoice: builder.mutation({
-      query: (id) => ({ url: `/procurement/vendor-invoices/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }],
+      query: deleteRequest('/procurement/vendor-invoices'),
+      invalidatesTags: (_r, _e, arg) => ['VendorInvoice', 'VendorInvoiceStats', 'IncomingQc', 'FmsTasks', { type: 'VendorInvoice', id: deleteArgs(arg).id }],
     }),
     approveVendorInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vendor-invoices/${id}/approve`, method: 'POST', body }),
@@ -492,8 +515,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['Voucher', 'VoucherStats', { type: 'Voucher', id }],
     }),
     deleteVoucher: builder.mutation({
-      query: (id) => ({ url: `/procurement/vouchers/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['Voucher', 'VoucherStats', { type: 'Voucher', id }],
+      query: deleteRequest('/procurement/vouchers'),
+      invalidatesTags: (_r, _e, arg) => ['Voucher', 'VoucherStats', 'VendorInvoice', 'VendorInvoiceStats', 'FmsTasks', { type: 'Voucher', id: deleteArgs(arg).id }],
     }),
     postVoucher: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vouchers/${id}/post`, method: 'POST', body }),
@@ -530,8 +553,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['TallyEntry', 'TallyEntryStats', { type: 'TallyEntry', id }],
     }),
     deleteTallyEntry: builder.mutation({
-      query: (id) => ({ url: `/procurement/tally-entries/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['TallyEntry', 'TallyEntryStats', { type: 'TallyEntry', id }],
+      query: deleteRequest('/procurement/tally-entries'),
+      invalidatesTags: (_r, _e, arg) => ['TallyEntry', 'TallyEntryStats', 'Voucher', 'VoucherStats', 'FmsTasks', { type: 'TallyEntry', id: deleteArgs(arg).id }],
     }),
     completeTallyEntry: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/tally-entries/${id}/complete`, method: 'POST', body }),
@@ -720,6 +743,8 @@ export const {
   usePreviewGrnPdfMutation,
   useUpdateGrnMutation,
   useDeleteGrnMutation,
+  useGetGrnChangeCheckQuery,
+  useCorrectGrnMutation,
   useCompleteGrnMutation,
   useCancelGrnMutation,
   useGetInventoryMovementsByRefQuery,

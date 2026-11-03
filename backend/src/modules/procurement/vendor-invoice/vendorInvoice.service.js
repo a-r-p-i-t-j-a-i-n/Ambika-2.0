@@ -11,6 +11,7 @@ import { assertNoLiveExpenseOnPos } from '../voucher/expenseLink.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 export { getAdvancePosition }; // re-exported for the controller / existing imports
 // Pure line builders — exported for the unit tests (no DB needed).
 export { buildInvoiceItems, resolveInvoicedByLine };
@@ -604,16 +605,27 @@ export const vendorInvoiceService = {
     return saveUniqueNumber(() => inv.save(), inv.vendorId, inv.invoiceNumber);
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a vendor invoice. A draft simply goes; a received / approved /
+   * rejected one needs a reason (procurement.deleteVendorInvoice) and goes only
+   * while no live voucher rests on it. Its QC lines are then pending invoice
+   * again and its share of the PI advance is free for another invoice (under
+   * the PI's advance lock, like every allocation).
+   */
+  async remove(id, user, { reason } = {}) {
     const inv = await findOrThrow(id);
-    if (inv.invoiceStatus !== INVOICE_STATUS.DRAFT) {
-      throw new AppError('Only draft vendor invoices can be deleted', 400);
-    }
-    inv.isDeleted = true;
-    inv.deletedAt = new Date();
-    inv.deletedBy = user?._id;
-    inv.activityTimeline.push({ action: 'DELETE', description: 'Vendor invoice deleted', actorId: user?._id });
-    return inv.save();
+    const draft = inv.invoiceStatus === INVOICE_STATUS.DRAFT;
+    const label = `Invoice ${inv.invoiceNumber || ''}`.trim();
+    const why = draft ? String(reason || '').trim() : deleteReason(reason, label);
+    return withPiAdvanceLock(inv.piId, async () => {
+      assertNothingAfter(label, await laterStepsOf.invoice(inv._id));
+      const fresh = await findOrThrow(id);
+      fresh.isDeleted = true;
+      fresh.deletedAt = new Date();
+      fresh.deletedBy = user?._id;
+      fresh.activityTimeline.push({ action: 'DELETE', description: why ? `Vendor invoice deleted. Reason: ${why}` : 'Vendor invoice deleted', actorId: user?._id });
+      return fresh.save();
+    });
   },
 
   // Rule 3 & 6 & 7: document mandatory; approval → PAYMENT_PENDING.

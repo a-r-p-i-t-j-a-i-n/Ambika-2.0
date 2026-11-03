@@ -20,6 +20,7 @@ import {
 import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
 import { bindIndentItemsToSkuMaster } from './itemSku.js';
 import Vendor from '../../vendors/vendor.model.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 
 // Human-readable delay between a planned and actual date.
 const computeDelay = (plannedAt, actualAt) => {
@@ -435,15 +436,21 @@ export const indentService = {
     return indent.save();
   },
 
-  async remove(id, user) {
+  /**
+   * Delete an indent. A draft simply goes; a submitted / approved one needs a
+   * reason (procurement.deleteIndent) and goes only while no live PO or
+   * service QC rests on it (laterSteps.js).
+   */
+  async remove(id, user, { reason } = {}) {
     const indent = await findOrThrow(id);
-    if (indent.approvalStatus !== INDENT_APPROVAL_STATUS.DRAFT) {
-      throw new AppError('Only draft indents can be deleted', 400);
-    }
+    const draft = indent.approvalStatus === INDENT_APPROVAL_STATUS.DRAFT;
+    const label = `Indent ${indent.indentNumber || ''}`.trim();
+    const why = draft ? String(reason || '').trim() : deleteReason(reason, label);
+    if (!draft) assertNothingAfter(label, await laterStepsOf.indent(indent._id));
     indent.isDeleted = true;
     indent.deletedAt = new Date();
     indent.deletedBy = user?._id;
-    indent.activityTimeline.push({ action: 'DELETE', description: 'Indent deleted', actorId: user?._id });
+    indent.activityTimeline.push({ action: 'DELETE', description: why ? `Indent deleted. Reason: ${why}` : 'Indent deleted', actorId: user?._id });
     return indent.save();
   },
 

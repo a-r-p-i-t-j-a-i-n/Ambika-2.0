@@ -8,6 +8,7 @@ import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateFollowUpNumber } from '../../../utils/docNumberGenerator.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 
 /** Minutes late: actualAt − plannedAt, 0 when on time or early. */
 const computeDelayMinutes = (plannedAt, actualAt) => {
@@ -36,6 +37,21 @@ const logEntry = (type, message, user, extra = {}) => ({
 const setPoFollowUpStatus = async (poId, patch) => {
   try { await VendorPurchaseOrder.updateOne({ _id: poId }, { $set: patch }); }
   catch (err) { logger.error(`[follow-up] PO sync failed for ${poId}: ${err.message}`); }
+};
+
+/**
+ * The PO's follow-up mirror from the follow-ups it still has, after one is
+ * deleted: one still ready for GRN keeps the PO ready; any other keeps it in
+ * progress; none puts it back to pending (as on release).
+ */
+const resyncPoFollowUp = async (poId) => {
+  const rest = await PurchaseFollowUp.find({ poId, isDeleted: { $ne: true } }).select('followUpStatus').lean();
+  if (rest.some((f) => f.followUpStatus === FOLLOWUP_STATUS.READY_FOR_GRN)) return;
+  await setPoFollowUpStatus(poId, {
+    followUpStatus: rest.length ? PO_FOLLOWUP_STATUS.IN_PROGRESS : PO_FOLLOWUP_STATUS.PENDING,
+    readyForGrnAt: null,
+    finalMaterialDate: null,
+  });
 };
 
 export const followUpService = {
@@ -226,19 +242,28 @@ export const followUpService = {
     return fu.save();
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a follow-up. A pending / rescheduled one simply goes; a done or
+   * ready-for-GRN one needs a reason (procurement.deleteFollowUp) and goes only
+   * while no GRN on its PO rests on it. The PO's follow-up mirror is then
+   * re-derived from the follow-ups it still has.
+   */
+  async remove(id, user, { reason } = {}) {
     const fu = await findOrThrow(id);
-    if (![FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus)) {
-      throw new AppError('Only pending or rescheduled follow-ups can be deleted', 400);
-    }
+    const open = [FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus);
+    const label = `Follow-up ${fu.followUpNumber || ''}`.trim();
+    const why = open ? String(reason || '').trim() : deleteReason(reason, label);
+    if (!open) assertNothingAfter(label, await laterStepsOf.followUp(fu.poId));
     fu.isDeleted = true;
     fu.deletedAt = new Date();
     fu.deletedBy = user?._id;
     // The partial unique index only inspects isActiveFollowUp, not isDeleted —
     // without this, a soft-deleted active record would still block a new one.
     fu.isActiveFollowUp = false;
-    fu.activityTimeline.push({ action: 'DELETE', description: 'Follow-up deleted', actorId: user?._id });
-    return fu.save();
+    fu.activityTimeline.push({ action: 'DELETE', description: why ? `Follow-up deleted. Reason: ${why}` : 'Follow-up deleted', actorId: user?._id });
+    const saved = await fu.save();
+    await resyncPoFollowUp(fu.poId);
+    return saved;
   },
 
   // Rule 4: record a follow-up cycle.

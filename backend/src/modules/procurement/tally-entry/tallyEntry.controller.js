@@ -36,7 +36,7 @@ export const tallyEntryController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const t = await tallyEntryService.remove(req.params.id, req.user);
+    const t = await tallyEntryService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('Tally entry deleted', t));
   }),
 

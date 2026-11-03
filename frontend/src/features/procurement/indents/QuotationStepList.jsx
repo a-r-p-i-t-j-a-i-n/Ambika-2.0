@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Chip, Menu, ListItemIcon, ListItemText,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Hourglass, FileText, FileCheck2, CircleSlash, ClipboardList, ExternalLink, ShoppingBag, Pencil, Eye,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useGetIndentsQuery, useGetIndentStatsQuery } from '../../../store/api/procurementApi';
+import { useGetIndentsQuery, useGetIndentStatsQuery, useDeleteIndentMutation } from '../../../store/api/procurementApi';
+import { usePermissions } from '../../../hooks/usePermission';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import StatusChip, { TONES } from '../components/StatusChip';
@@ -19,6 +20,8 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLab
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import { DEPARTMENTS, REQUEST_TYPES, fileHref, itemRef, isItemEligibleForQuote } from './indentMeta';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsWidth, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import IndentQuickViewDialog from './IndentQuickViewDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
@@ -141,9 +144,22 @@ const QuotationStepList = ({ step }) => {
   const open = (kind, row) => { setActiveIndent(row); setDialog(kind); };
   const close = () => { setDialog(null); setActiveIndent(null); };
   const [quickIndent, setQuickIndent] = useState(null); // row whose quick view is open
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
+
+  // ⋮: the full indent page, and Delete (procurement.deleteIndent — MD has it).
+  // An approved indent goes only while no PO / service QC rests on it; the
+  // server names it otherwise.
+  const [removeIndent] = useDeleteIndentMutation();
+  const canDeleteIndent = usePermissions().can('procurement.deleteIndent');
+  const del = useRecordDelete({
+    what: 'Indent', numberOf: (r) => r.indentNumber, remove: removeIndent,
+    needsReason: (r) => r.approvalStatus !== 'DRAFT',
+    consequence: () => 'The indent and its quotation work are removed. Not allowed while a PO or service QC uses it — if so, it is named here.',
+  });
+  const menuActionsFor = (r) => [
+    { key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => navigate(`/procurement/indents/${r._id}`) },
+    ...(canDeleteIndent ? [del.action(r)] : []),
+  ];
 
   const { data, isLoading, isFetching } = useGetIndentsQuery({
     page: paginationModel.page + 1,
@@ -237,7 +253,7 @@ const QuotationStepList = ({ step }) => {
       return (
         <RowActionsCell rowId={p.row._id} label={p.row.indentNumber}
           onQuickView={() => setQuickIndent(p.row)}
-          onMenu={(e) => { setMenuAnchor(e.currentTarget); setMenuRow(p.row); }}>
+          onMenu={(e) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, p.row); }}>
           {a && (
             <Button size="small" variant={a.variant} color={a.color || 'primary'} disableElevation startIcon={a.icon}
               onClick={(e) => { e.stopPropagation(); a.fn(); }}
@@ -350,14 +366,8 @@ const QuotationStepList = ({ step }) => {
         />
       </Paper>
 
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && (
-          <MenuItem onClick={() => { const id = menuRow._id; closeMenu(); navigate(`/procurement/indents/${id}`); }}>
-            <ListItemIcon><Eye size={16} /></ListItemIcon>
-            <ListItemText>View</ListItemText>
-          </MenuItem>
-        )}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={menuActionsFor} />
+      {del.dialog}
       <IndentQuickViewDialog indent={quickIndent} onClose={() => setQuickIndent(null)} />
 
       <QuoteComparativeDialog open={dialog === 'quote'} indent={activeIndent} onClose={close} />

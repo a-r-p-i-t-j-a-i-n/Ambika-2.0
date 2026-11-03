@@ -145,7 +145,8 @@ await form.waitFor();
 const headerPaper = form.locator('.MuiPaper-root').filter({ hasText: 'GRN Header' }).first();
 check('no Material Receipt Type in the GRN Header', (await headerPaper.getByText('Material Receipt Type').count()) === 0
   && (await form.getByRole('combobox', { name: /Material Receipt Type/ }).count()) === 0);
-for (const l of ['GRN Date', 'Challan No', 'Invoice No', 'Invoice Date', 'Vehicle No', 'Received By', 'Prepared By']) {
+check('GRN Date at the top of the form, with the vendor', (await form.getByTestId('grn-form-vendor-bar').getByLabel('GRN Date', { exact: true }).count()) > 0);
+for (const l of ['Challan No', 'Invoice No', 'Invoice Date', 'Vehicle No', 'Received By', 'Prepared By']) {
   check(`header still has ${l}`, (await headerPaper.getByLabel(l, { exact: true }).count()) > 0);
 }
 

@@ -7,6 +7,7 @@ import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateTallyEntryNumber } from '../../../utils/docNumberGenerator.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 
 // Voucher states from which a Tally Entry may be raised (i.e. the voucher is posted).
 const POSTED_STATES = [VOUCHER_STATUS.POSTED, VOUCHER_STATUS.PARTIALLY_PAID, VOUCHER_STATUS.FULLY_PAID, VOUCHER_STATUS.SHORT_CLOSED];
@@ -112,16 +113,33 @@ export const tallyEntryService = {
     return t.save();
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a tally entry. A pending or cancelled one simply goes; a completed
+   * one needs a reason (procurement.deleteTallyEntry) and goes only while no
+   * final payment rests on its voucher — the voucher is then back to awaiting
+   * its tally entry.
+   */
+  async remove(id, user, { reason } = {}) {
     const t = await findOrThrow(id);
-    if (t.tallyEntryStatus !== TALLY_ENTRY_STATUS.PENDING) {
-      throw new AppError('Only pending tally entries can be deleted', 400);
-    }
+    const completed = t.tallyEntryStatus === TALLY_ENTRY_STATUS.COMPLETED;
+    const label = `Tally entry ${t.entryNumber || ''}`.trim();
+    const why = completed ? deleteReason(reason, label) : String(reason || '').trim();
+    if (completed) assertNothingAfter(label, await laterStepsOf.tally(t.voucherId));
     t.isDeleted = true;
     t.deletedAt = new Date();
     t.deletedBy = user?._id;
-    t.activityTimeline.push({ action: 'DELETE', description: 'Tally entry deleted', actorId: user?._id });
-    return t.save();
+    t.activityTimeline.push({ action: 'DELETE', description: why ? `Tally entry deleted. Reason: ${why}` : 'Tally entry deleted', actorId: user?._id });
+    const saved = await t.save();
+    if (completed) {
+      await VendorVoucher.updateOne(
+        { _id: t.voucherId, tallyEntryId: t._id },
+        {
+          $set: { tallyEntryStatus: 'PENDING', tallyEntryId: null, tallyEntryNumber: '' },
+          $push: { activityTimeline: { action: 'TALLY_ENTRY_DELETED', description: `Tally entry ${t.entryNumber} deleted`, actorId: user?._id } },
+        },
+      );
+    }
+    return saved;
   },
 
   // Rules 4-7: complete requires statusDone=YES + all checklist items; if NO, stay PENDING (remarks required).

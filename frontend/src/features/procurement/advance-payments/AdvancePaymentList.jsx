@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
@@ -6,12 +7,18 @@ import {
   Grid, Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Search, Wallet, IndianRupee, Hourglass, AlertTriangle, CircleSlash } from 'lucide-react';
+import { Search, Wallet, IndianRupee, Hourglass, AlertTriangle, CircleSlash, FileText } from 'lucide-react';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import {
   useGetAdvancePaymentsQuery,
   useGetAdvancePaymentStatsQuery,
+  useDeleteAdvancePaymentMutation,
 } from '../../../store/api/procurementApi';
+import { usePermissions } from '../../../hooks/usePermission';
+import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import useRecordDelete from '../components/useRecordDelete';
+import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
@@ -24,6 +31,21 @@ const AdvancePaymentList = () => {
   // No standalone advance-payment detail page — a row opens its PI, and rows
   // without one are not clickable.
   const rowNav = useRowNavigation({ to: (r) => (r.piId ? `/procurement/proforma-invoices/${r.piId}` : null) });
+  const navigate = useNavigate();
+
+  // ⋮: its PI, and Delete (procurement.deleteAdvancePayment — MD has it). The
+  // server takes back only a PI's latest payment, and not once invoices use it.
+  const menuRef = useRef(null); // RowActionsMenu owns its open state
+  const [removeAdvance] = useDeleteAdvancePaymentMutation();
+  const canDeleteAdvance = usePermissions().can('procurement.deleteAdvancePayment');
+  const del = useRecordDelete({
+    what: 'Advance', numberOf: (r) => r.paymentNumber, remove: removeAdvance,
+    consequence: () => 'The payment is taken back off its PI (paid and balance amounts go back). Only the latest payment of a PI can be deleted, and not once vendor invoices use the advance.',
+  });
+  const actionsFor = (r) => [
+    ...(r.piId ? [{ key: 'pi', label: 'View PI', icon: <FileText size={16} />, fn: () => navigate(`/procurement/proforma-invoices/${r.piId}`) }] : []),
+    ...(canDeleteAdvance ? [del.action(r, { divider: Boolean(r.piId) })] : []),
+  ];
 
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
@@ -85,6 +107,10 @@ const AdvancePaymentList = () => {
     { field: 'paymentStatus', headerName: 'STATUS', width: 140,
       renderCell: (p) => <PaymentStatusChip status={p.value} /> },
     ...stepTimingColumns(),
+    rowActionsColumn((p) => (
+      <RowActionsCell rowId={p.row._id} label={p.row.paymentNumber}
+        onMenu={(e) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, p.row); }} />
+    )),
   ];
 
   return (
@@ -194,14 +220,16 @@ const AdvancePaymentList = () => {
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
-          {...rowNav.gridProps}
+          {...rowNav.gridProps} {...rowActionsGridProps}
           pageSizeOptions={[10, 25, 50, 100]}
           disableRowSelectionOnClick
           rowHeight={50}
           columnHeaderHeight={44}
-          sx={[{ border: 0 }, rowNavigationGridSx]}
+          sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]}
         />
       </Paper>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
     </Box>
   );
 };

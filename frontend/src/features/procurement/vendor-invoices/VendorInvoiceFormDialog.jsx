@@ -4,7 +4,7 @@ import {
   Grid, Autocomplete, CircularProgress, Paper, Chip, FormControlLabel, Switch,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { X, Save, ReceiptText, Building2, FileText, Upload, ExternalLink, ListChecks, Package } from 'lucide-react';
+import { X, Save, ReceiptText, Building2, FileText, Upload, ExternalLink, ListChecks } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useGetInvoiceableGrnsQuery,
@@ -33,7 +33,7 @@ const qcStatusLabel = (s) => (s ? String(s).charAt(0).toUpperCase() + String(s).
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const num = (n) => Number(n) || 0;
 const ACCEPT = '.pdf,image/*';
-const SECTION = { p: 2.5, ...pfmsCardSx };
+const SECTION = { p: 2, ...pfmsCardSx };
 const EDIT_SX = {
   '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: '8px' },
   '& .MuiOutlinedInput-notchedOutline': { borderColor: '#bcd0f5' },
@@ -58,8 +58,26 @@ const rowsFromQcs = (qcs = []) => qcs.flatMap((qc) => (qc.items || []).map((it) 
   invoiceQty: round2(it.pendingInvoiceQty), rate: round2(it.rate), gstRate: round2(it.gstRate), remarks: '',
 })));
 
-const COLS = '1.7fr 0.55fr 0.7fr 0.7fr 0.75fr 0.8fr 0.8fr 0.85fr 0.8fr 0.6fr 0.85fr 0.85fr 0.9fr 1.1fr';
-const HEAD = ['Item / SKU', 'Unit', 'Ordered', 'Recv', 'Accepted', 'Invoiced', 'Pending', 'Inv Qty', 'Rate', 'GST %', 'Taxable', 'GST', 'Total', 'Remarks'];
+// Fits a laptop-width dialog without sideways scrolling (the unit sits under the
+// item name); narrower screens scroll the table, never the page.
+const COLS = 'minmax(124px,1.6fr) repeat(5, minmax(60px,0.66fr)) minmax(62px,0.8fr) minmax(66px,0.8fr) minmax(50px,0.55fr) repeat(3, minmax(62px,0.8fr)) minmax(72px,1.1fr)';
+const TABLE_MIN_WIDTH = 946;
+// Column title + what it means (shown on hover).
+const HEAD = [
+  ['Item / SKU', 'Item, SKU code, unit and batch'],
+  ['Ordered', 'Quantity on the purchase order'],
+  ['Received', 'Quantity received on the GRN'],
+  ['Accepted', 'Quantity passed in Incoming QC'],
+  ['Invoiced', 'Already billed on earlier invoices'],
+  ['Pending', 'Accepted but not billed yet — the most this invoice should bill'],
+  ['Inv Qty', 'Quantity on this vendor invoice'],
+  ['Rate', 'Rate per unit on this vendor invoice'],
+  ['GST %', 'GST rate on this vendor invoice'],
+  ['Taxable', 'Inv Qty × Rate'],
+  ['GST', 'Taxable × GST %'],
+  ['Total', 'Taxable + GST'],
+  ['Remarks', 'Needed only when Inv Qty is more than Pending'],
+];
 
 const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = null }) => {
   const { enqueueSnackbar } = useSnackbar();
@@ -241,27 +259,58 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
     </Box>
   );
 
+  // Shown once, at the top: the vendor, its PO, how many GRNs and the PI advance.
+  const vendorName = anchor?.vendorName || invoice?.vendorName || '';
+  const poNumber = anchor?.poNumber || invoice?.poNumber;
+  const grnCount = isEdit ? (invoice.grnNumbers?.length || 1) : selectedQcs.length;
+  const vendorRefs = (anchor || isEdit) ? [
+    poNumber && `PO ${poNumber}`,
+    `${grnCount} GRN${grnCount === 1 ? '' : 's'}`,
+    advancePosition
+      ? `PI advance available ${fmtINR(advancePosition.advanceAvailable)} of ${fmtINR(advancePosition.advancePaid)}`
+      : `Advance ${fmtINR(advancePaid)}`,
+  ].filter(Boolean) : [];
+  // The QC each GRN is linked to — named once, next to the GRN pick.
+  const qcNumbers = [...new Set(items.map((it) => it.qcNumber).filter(Boolean))];
+
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
       PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
-      <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <ReceiptText size={22} />
-          <Box>
-            <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: '#fff' }}>{isEdit ? `Edit ${invoice.invoiceNumber}` : 'New Vendor Invoice'}</Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.8)' }}>Step 1.10 · Invoice against one or more GRNs</Typography>
+      {/* Header — white with a thin brand line on top: what this is, and the
+          vendor it is for (with its PO, GRN count and PI advance). */}
+      <Box sx={{ flexShrink: 0, px: 3, py: 1.5, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+        bgcolor: PFMS.surface, borderTop: `4px solid ${PFMS.brand}`, borderBottom: `1px solid ${PFMS.line}` }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: '8px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(PFMS.brand, 0.08), color: PFMS.brand }}>
+            <ReceiptText size={20} />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: PFMS.ink, lineHeight: 1.25 }}>{isEdit ? `Edit ${invoice.invoiceNumber}` : 'New Vendor Invoice'}</Typography>
+            <Typography sx={{ fontSize: '0.72rem', color: PFMS.sub }}>Step 1.10 · Invoice against one or more GRNs</Typography>
           </Box>
         </Box>
-        <IconButton onClick={() => onClose?.(false)} sx={{ color: '#fff' }}><X size={20} /></IconButton>
+        <Box data-testid="vi-form-vendor"
+          sx={{ flex: 1, minWidth: 240, display: 'flex', alignItems: 'center', gap: 1.25, pl: { sm: 2 }, borderLeft: { sm: `1px solid ${PFMS.line}` } }}>
+          <Building2 size={18} color={vendorName ? PFMS.brand : PFMS.faint} style={{ flexShrink: 0 }} />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography noWrap title={vendorName || undefined}
+              sx={{ fontWeight: 800, fontSize: '0.98rem', lineHeight: 1.3, color: vendorName ? PFMS.ink : PFMS.faint }}>
+              {vendorName || 'No vendor yet — pick a GRN below'}
+            </Typography>
+            {vendorRefs.length > 0 && (
+              <Typography variant="caption" sx={{ display: 'block', color: PFMS.sub, overflowWrap: 'anywhere' }}>{vendorRefs.join(' · ')}</Typography>
+            )}
+          </Box>
+        </Box>
+        <IconButton onClick={() => onClose?.(false)} sx={{ color: PFMS.sub, ml: 'auto' }}><X size={20} /></IconButton>
       </Box>
 
       <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={(e) => upload(setDoc)(e)} />
       <input ref={dnFileRef} type="file" accept={ACCEPT} hidden onChange={(e) => upload(setDnDoc)(e)} />
 
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.canvas }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', px: 3, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5, bgcolor: PFMS.surfaceAlt }}>
         <Paper elevation={0} sx={SECTION}>
-          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}><FileText size={18} /> Invoice Header</Typography>
+          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, fontWeight: 700, color: 'primary.main' }}><FileText size={18} /> Invoice Header</Typography>
           <Grid container spacing={2}>
             <Grid item xs={12} sm={5}>
               {isEdit ? (
@@ -270,6 +319,9 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
                     {(invoice.grnNumbers?.length ? invoice.grnNumbers : [invoice.grnNumber]).filter(Boolean).map((g, i) => <Chip key={i} size="small" label={g} />)}
                   </Box>
+                  {qcNumbers.length > 0 && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>QC {qcNumbers.join(', ')}</Typography>
+                  )}
                 </Box>
               ) : (
                 <Autocomplete
@@ -298,55 +350,67 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
                   ))}
                   noOptionsText="No GRN pending invoice"
                   renderInput={(params) => <TextField {...params} label="GRN No *" placeholder="GRN No — PO No — Vendor — QC Status — Pending Qty"
-                    helperText={anchor ? `Same vendor (${anchor.vendorName}) & PO (${anchor.poNumber || '—'}) only · QC auto-linked` : 'Pick one or more GRNs of the same vendor & PO — QC is linked automatically'}
+                    helperText={!anchor ? 'One or more GRNs of one vendor & PO · QC linked automatically'
+                      : qcNumbers.length ? `QC ${qcNumbers.join(', ')} linked automatically · same vendor & PO only`
+                        : 'Same vendor & PO only · QC linked automatically'}
                     InputProps={{ ...params.InputProps, endAdornment: (<>{qcLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />} />
               )}
             </Grid>
             <Grid item xs={12} sm={4}><TextField label="Vendor Invoice No *" fullWidth value={form.invoiceNumber} onChange={(e) => set('invoiceNumber', e.target.value)} /></Grid>
             <Grid item xs={6} sm={3}><DateInputDDMMYYYY label="Invoice Date" fullWidth value={form.invoiceDate} onChange={(val) => set('invoiceDate', val)} /></Grid>
           </Grid>
-          {(anchor || isEdit) && (
-            <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
-              <Building2 size={16} color="#1d4ed8" />
-              <Typography variant="caption" fontWeight={700}>{anchor?.vendorName || invoice?.vendorName || '—'}</Typography>
-              <Chip size="small" variant="outlined" label={`PO ${anchor?.poNumber || invoice?.poNumber || '—'}`} sx={{ fontWeight: 700 }} />
-              <Chip size="small" variant="outlined" label={`${isEdit ? (invoice.grnNumbers?.length || 1) : selectedQcs.length} GRN(s)`} sx={{ fontWeight: 700 }} />
-              <Chip size="small" color="info" variant="outlined" label={advancePosition ? `PI advance available ${fmtINR(advancePosition.advanceAvailable)} of ${fmtINR(advancePosition.advancePaid)}` : `Advance ${fmtINR(advancePaid)}`} sx={{ fontWeight: 700 }} />
-            </Box>
-          )}
         </Paper>
 
-        {/* Combined items grouped by GRN */}
+        {/* Combined items, in GRN order. A thin GRN label separates them only
+            when the invoice covers more than one GRN (one GRN is already
+            named in the GRN No box above). */}
         {items.length > 0 && (
           <Paper elevation={0} sx={SECTION}>
-            <Typography sx={{ fontWeight: 700, color: 'primary.main', mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-              <ListChecks size={18} /> Invoice Items <Chip size="small" label={items.length} color="primary" sx={{ fontWeight: 800, height: 20 }} />
-            </Typography>
-            <Box sx={{ overflowX: 'auto', borderRadius: '12px', border: '1px solid', borderColor: 'divider' }}>
-              <Box sx={{ minWidth: 1180 }}>
-                <Box sx={{ display: 'grid', gridTemplateColumns: COLS, gap: 1, px: 1.25, py: 1, background: 'linear-gradient(90deg,#0b2545,#1d4ed8)' }}>
-                  {HEAD.map((h, i) => (
-                    <Typography key={i} variant="caption" sx={{ fontWeight: 800, color: '#fff', textTransform: 'uppercase', fontSize: '0.55rem', textAlign: i === 0 || i === 13 ? 'left' : 'right' }}>{h}</Typography>
+            <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography component="div" sx={{ fontWeight: 700, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+                <ListChecks size={18} /> Invoice Items <Chip size="small" label={items.length} color="primary" sx={{ fontWeight: 800, height: 20 }} />
+              </Typography>
+              <Typography variant="caption" sx={{ color: PFMS.sub, ml: 'auto' }}>
+                Enter Inv Qty, Rate and GST % as on the vendor&apos;s invoice
+              </Typography>
+            </Box>
+            <Box sx={{ overflowX: 'auto', borderRadius: '8px', border: `1px solid ${PFMS.line}` }}>
+              <Box sx={{ minWidth: TABLE_MIN_WIDTH }}>
+                <Box data-testid="vi-items-head"
+                  sx={{ display: 'grid', gridTemplateColumns: COLS, gap: 0.75, alignItems: 'center', px: 1.25, py: 1, bgcolor: '#eef2f7', borderBottom: `1px solid ${PFMS.line}` }}>
+                  {HEAD.map(([h, hint], i) => (
+                    <Typography key={h} title={hint}
+                      sx={{ fontWeight: 800, fontSize: '0.74rem', color: PFMS.ink, lineHeight: 1.2, whiteSpace: 'nowrap', cursor: 'help',
+                        textAlign: i === 0 || i === HEAD.length - 1 ? 'left' : 'right',
+                        // Remarks starts where the text inside its box starts.
+                        ...(i === HEAD.length - 1 ? { pl: 1 } : {}) }}>
+                      {h}
+                    </Typography>
                   ))}
                 </Box>
                 {groups.map((g, gi) => (
                   <React.Fragment key={gi}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.25, py: 0.6, bgcolor: alpha('#0b2545', 0.06), borderTop: '1px solid', borderColor: 'divider' }}>
-                      <Package size={13} color="#0b2545" />
-                      <Typography variant="caption" sx={{ fontWeight: 800 }}>GRN {g.grnNumber}</Typography>
-                      <Typography variant="caption" color="text.secondary">· QC {g.qcNumber}</Typography>
-                    </Box>
-                    {g.rows.map(({ it, idx }) => {
+                    {groups.length > 1 && (
+                      <Box data-testid="vi-grn-label" sx={{ px: 1.25, py: 0.5, bgcolor: PFMS.surfaceAlt, borderTop: gi ? `1px solid ${PFMS.line}` : 'none' }}>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: PFMS.sub }}>GRN {g.grnNumber}</Typography>
+                      </Box>
+                    )}
+                    {g.rows.map(({ it, idx }, ri) => {
                       const c = calcRow(it);
                       const over = round2(it.invoiceQty) > round2(it.pendingInvoiceQty);
                       return (
-                        <Box key={idx} sx={{ display: 'grid', gridTemplateColumns: COLS, gap: 1, alignItems: 'center', px: 1.25, py: 0.7, borderTop: '1px solid', borderColor: 'divider', '&:hover': { bgcolor: alpha('#2563eb', 0.05) } }}>
+                        <Box key={idx} sx={{ display: 'grid', gridTemplateColumns: COLS, gap: 0.75, alignItems: 'center', px: 1.25, py: 0.75, borderTop: ri ? `1px solid ${PFMS.lineSoft}` : 'none', '&:hover': { bgcolor: alpha(PFMS.brand, 0.03) } }}>
                           <Box sx={{ minWidth: 0 }}>
-                            <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
-                            {it.skuCode ? <Typography variant="caption" color="primary.main" fontWeight={700}>{it.skuCode}</Typography> : null}
-                            {it.batchNo ? <Typography variant="caption" color="text.secondary"> · Batch {it.batchNo}</Typography> : null}
+                            {/* Up to two lines, so a long name is read, not cut at a few words. */}
+                            <Typography variant="body2" fontWeight={600} title={it.itemName}
+                              sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere', lineHeight: 1.3 }}>
+                              {it.itemName}
+                            </Typography>
+                            <Typography variant="caption" component="div" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                              {it.skuCode ? <Box component="span" sx={{ color: 'primary.main', fontWeight: 700 }}>{it.skuCode}</Box> : null}
+                              {[it.unit, it.batchNo && `Batch ${it.batchNo}`].filter(Boolean).map((t, i) => `${it.skuCode || i ? ' · ' : ''}${t}`).join('')}
+                            </Typography>
                           </Box>
-                          <Typography variant="body2" sx={{ textAlign: 'right', color: 'text.secondary' }}>{it.unit}</Typography>
                           <Typography variant="body2" sx={{ textAlign: 'right' }}>{it.orderedQty}</Typography>
                           <Typography variant="body2" sx={{ textAlign: 'right', color: 'text.secondary' }}>{it.grnReceivedQty}</Typography>
                           <Typography variant="body2" sx={{ textAlign: 'right', color: '#0f766e', fontWeight: 800 }}>{it.acceptedQty}</Typography>
@@ -370,7 +434,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
                 ))}
               </Box>
             </Box>
-            <Box sx={{ mt: 1.5, p: 1.5, borderRadius: '12px', bgcolor: alpha('#1d4ed8', 0.05), display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+            <Box sx={{ mt: 1.5, px: 1.5, py: 1, borderRadius: '8px', bgcolor: PFMS.surfaceAlt, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
               <Amt label="TAXABLE" value={itemTotals.taxable} />
               <Amt label="GST" value={itemTotals.gst} />
               <Box sx={{ textAlign: 'right' }}><Typography variant="caption" color="primary.main" fontWeight={700}>INVOICE AMOUNT</Typography><Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(itemTotals.total)}</Typography></Box>
@@ -380,11 +444,11 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
 
         {/* Financials */}
         <Paper elevation={0} sx={SECTION}>
-          <Typography sx={{ fontWeight: 700, color: '#0f766e', mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}><ReceiptText size={18} /> Financials</Typography>
-          <Grid container spacing={2}>
+          <Typography sx={{ fontWeight: 700, color: '#0f766e', mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}><ReceiptText size={18} /> Financials</Typography>
+          <Grid container spacing={2} alignItems="flex-end">
             <Grid item xs={6} sm={3}><TextField label="TDS Amount" type="number" fullWidth value={form.tdsAmount} onChange={(e) => set('tdsAmount', e.target.value)} inputProps={{ min: 0, step: 0.01 }} /></Grid>
             <Grid item xs={6} sm={3}><TextField label="Other Charges" type="number" fullWidth value={form.otherCharges} onChange={(e) => set('otherCharges', e.target.value)} inputProps={{ step: 0.01 }} /></Grid>
-            <Grid item xs={12}><DocBox value={doc} onPick={() => fileRef.current?.click()} onClear={() => setDoc(null)} label="INVOICE DOCUMENT (required to approve)" /></Grid>
+            <Grid item xs={12} sm={6}><DocBox value={doc} onPick={() => fileRef.current?.click()} onClear={() => setDoc(null)} label="INVOICE DOCUMENT (required to approve)" /></Grid>
           </Grid>
         </Paper>
 
@@ -402,7 +466,7 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
         </Paper>
 
         {/* Net payable */}
-        <Paper elevation={0} sx={{ ...SECTION, bgcolor: alpha('#1d4ed8', 0.03) }}>
+        <Paper elevation={0} sx={{ ...SECTION, py: 1.5 }}>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <Amt label="INVOICE" value={invoiceAmount} />
             <Amt label="− DEBIT NOTE" value={form.debitNoteRequired ? form.debitNoteAmount : 0} />
@@ -415,7 +479,10 @@ const VendorInvoiceFormDialog = ({ open, onClose, invoice = null, presetQc = nul
       </Box>
 
       <Divider />
-      <Box sx={{ p: 2, display: 'flex', justifyContent: 'flex-end', gap: 1.5, bgcolor: '#fff' }}>
+      <Box sx={{ px: 3, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1.5, bgcolor: '#fff' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto' }} data-testid="vi-form-summary">
+          {items.length} item(s) · Invoice {fmtINR(invoiceAmount)} · Net payable <b>{fmtINR(netPayable)}</b>
+        </Typography>
         <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || uploading}>Cancel</Button>
         <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />} onClick={handleSubmit} disabled={saving || uploading}>
           {isEdit ? 'Save Changes' : 'Create Invoice'}

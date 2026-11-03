@@ -13,6 +13,8 @@ import {
   updateGrnSchema,
   completeGrnSchema,
   cancelGrnSchema,
+  correctGrnSchema,
+  deleteGrnSchema,
   grnQuerySchema,
   mongoIdParamSchema,
   poIdParamSchema,
@@ -33,7 +35,11 @@ router.get('/by-po/:poId', validate(poIdParamSchema, 'params'), c.getByPo);
 router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), c.getById)
   .patch(validate(mongoIdParamSchema, 'params'), validate(updateGrnSchema), c.update)
-  .delete(requirePermission('procurement.deleteGrn'), validate(mongoIdParamSchema, 'params'), c.remove);
+  .delete(requirePermission('procurement.deleteGrn'), validate(mongoIdParamSchema, 'params'), validate(deleteGrnSchema), c.remove);
+
+// Correcting a COMPLETED GRN — header always, items while no later step rests on them.
+router.get('/:id/change-check', validate(mongoIdParamSchema, 'params'), c.changeCheck);
+router.patch('/:id/correct', requirePermission('procurement.editGrn'), validate(mongoIdParamSchema, 'params'), validate(correctGrnSchema), c.correct);
 
 router.post('/:id/complete', validate(mongoIdParamSchema, 'params'), validate(completeGrnSchema), c.complete);
 router.post('/:id/cancel',   validate(mongoIdParamSchema, 'params'), validate(cancelGrnSchema), c.cancel);

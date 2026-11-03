@@ -36,7 +36,7 @@ export const followUpController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const fu = await followUpService.remove(req.params.id, req.user);
+    const fu = await followUpService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('Follow-up deleted', fu));
   }),
 

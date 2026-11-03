@@ -8,7 +8,6 @@ import { X, Save, ShoppingBag, Plus, Trash2, Building2, FileText, AlertTriangle,
 import { useSnackbar } from 'notistack';
 import { useSelector } from 'react-redux';
 import {
-  useGetIndentsQuery,
   useGetAllApprovedItemsQuery,
   useCreatePurchaseOrderMutation,
   useCreatePurchaseOrderFromItemsMutation,
@@ -152,6 +151,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const [selectedApprovedItems, setSelectedApprovedItems] = useState([]); // New PO item-picker (OTHER create)
   // Assigned Vendor dropdown (New PO): '' = choose approved items manually.
   const [assignedVendorId, setAssignedVendorId] = useState('');
+  // New PO by vendor (groupMode): the vendor picked here for an item that has
+  // none ({ indentItemId: vendorId }) — kept on the form only, the PO records it —
+  // and each vendor's own delivery / payment terms once edited ({ vendorId: terms }).
+  const [itemVendorPicks, setItemVendorPicks] = useState({});
+  const [vendorTerms, setVendorTerms] = useState({});
   const [vendor, setVendor] = useState(null);
   const [poFormatType, setPoFormatType] = useState('OTHER'); // 'JSL' | 'OTHER'
   const [approvedVendors, setApprovedVendors] = useState([]); // from Step 1.3 (multi-vendor)
@@ -187,21 +191,18 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   // indents), not a whole indent — for BOTH OTHER and JSL formats. Edit/revise keep
   // the prefilled-item flow; multi-vendor (Step 1.3) preset indents keep the vendor flow.
   const approvedItemMode = !isEdit && !isRevise && approvedVendors.length === 0;
+  // New PO, Other format: the items are grouped by vendor and one Save raises one
+  // PO per vendor (each with its own delivery date and payment terms). JSL is
+  // always Jindal, so it stays a single-vendor PO.
+  const groupMode = approvedItemMode && poFormatType !== 'JSL';
 
-  // PO-eligible indents: QUOTATION_APPROVED (not yet PO'd) plus PO_READY indents
-  // that still have an approved vendor awaiting a PO (multi-vendor — one PO per vendor).
-  const { data: approvedRes, isLoading: approvedLoading } = useGetIndentsQuery(
-    { limit: 200, sort: '-createdAt', overallStatus: 'QUOTATION_APPROVED' },
-    { skip: !open || isEdit },
-  );
-  const { data: poReadyRes, isLoading: poReadyLoading } = useGetIndentsQuery(
-    { limit: 200, sort: '-createdAt', overallStatus: 'PO_READY' },
-    { skip: !open || isEdit },
-  );
-  // Global approved-item options for the New PO item-picker (OTHER create only).
-  const { data: approvedItemsRes, isLoading: approvedItemsLoading } = useGetAllApprovedItemsQuery(
+  // Global approved-item options for the New PO item-picker. Loaded fresh on every
+  // open — an earlier copy can be out of date (an item since PO'd or given a vendor).
+  const {
+    data: approvedItemsRes, isLoading: approvedItemsLoading, isFetching: approvedItemsFetching,
+  } = useGetAllApprovedItemsQuery(
     undefined,
-    { skip: !open || !approvedItemMode },
+    { skip: !open || !approvedItemMode, refetchOnMountOrArgChange: true },
   );
   const approvedItemOptions = useMemo(() => approvedItemsRes?.data?.items || [], [approvedItemsRes]);
 
@@ -221,26 +222,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       || (o.vendorState === 'SET' && String(o.vendorId) === assignedVendorId));
   }, [approvedItemOptions, assignedVendorId, selectedApprovedItems]);
 
+  // (By vendor there is no single PO vendor to fix — each group is its own PO.)
   const fixedVendor = useMemo(
-    () => (approvedItemMode ? fixedVendorOf(selectedApprovedItems) : null),
-    [approvedItemMode, selectedApprovedItems],
+    () => (approvedItemMode && !groupMode ? fixedVendorOf(selectedApprovedItems) : null),
+    [approvedItemMode, groupMode, selectedApprovedItems],
   );
-
-  const indentsLoading = approvedLoading || poReadyLoading;
-  const indentOptions = useMemo(() => {
-    const approved = approvedRes?.data || [];
-    // PO_READY only when ≥1 approved vendor has no PO yet (else it's fully done).
-    const poReady = (poReadyRes?.data || []).filter(
-      (ind) => (ind.quotationApprovalStep?.approvedVendors || []).some((v) => !v.poId),
-    );
-    return [...approved, ...poReady];
-  }, [approvedRes, poReadyRes]);
 
   const { data: vendorsRes, isLoading: vendorsLoading } = useGetVendorsQuery(
     { limit: 500, sort: 'name' },
     { skip: !open },
   );
-  const vendorOptions = vendorsRes?.data || [];
+  const vendorOptions = useMemo(() => vendorsRes?.data || [], [vendorsRes]);
 
   // Authoritative catalog: fetch the selected vendor by id (GET /api/v1/vendors/:id)
   // so rate/GST/HSN come straight from the Vendor Master, not a possibly-trimmed
@@ -307,6 +299,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       setIndent(null); setVendor(null); setApprovedVendors([]); setApprovedVendorId('');
       setAssignedVendorId('');
       setSelectedApprovedItems([]);
+      setItemVendorPicks({});
+      setVendorTerms({});
       setPoFormatType('OTHER');
       setHeader({ poDate: todayStr(), ...EMPTY_DELIVERY, deliveryTerms: '', paymentTerms: '', creditPeriod: 0, remarks: '' });
       setTerms({ text: '', edited: false });
@@ -545,7 +539,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   const applyApprovedItems = (vals, assigned) => {
     if (assigned !== undefined) setAssignedVendorId(assigned);
     setSelectedApprovedItems(vals);
-    setItems(buildRowsFromApproved(vals, poFormatType));
+    // Rows of items that stay selected keep their edits (qty, rate, reason).
+    const kept = new Map(items.filter((it) => it.indentItemId).map((it) => [String(it.indentItemId), it]));
+    const fresh = buildRowsFromApproved(vals, poFormatType);
+    setItems(vals.length ? fresh.map((row, i) => kept.get(String(vals[i].indentItemId)) || row) : fresh);
+    // By vendor: each item keeps its own vendor — there is no single PO vendor.
+    if (groupMode) return;
     // Items fixed to one vendor (approved quotation / Pending-for-PO pick) fill the
     // Vendor field with it; the field stays locked while they are selected.
     const fixed = fixedVendorOf(vals);
@@ -562,27 +561,22 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     applyApprovedItems(assignedVendors.find((g) => g.vendorId === id)?.items || [], id);
   };
 
-  // Preset indent (opened from Indent Detail / list): pre-select that indent's
-  // approved items in the picker once the global list loads. Runs once per open.
+  // Preset indent (opened from Indent Detail / list / My FMS Tasks): pre-select all
+  // of that indent's approved items once the fresh list loads — every vendor's,
+  // each grouped under its vendor below. Runs once per open.
   // `presetItemIds` (PO list's Pending for PO row) narrows it to those items.
   const presetAppliedRef = useRef(false);
   useEffect(() => {
     if (!open) { presetAppliedRef.current = false; return; }
     if (!approvedItemMode || !presetIndent?._id || presetAppliedRef.current) return;
-    if (!approvedItemOptions.length) return;
+    if (!approvedItemOptions.length || approvedItemsFetching) return;
     const wanted = presetItemIds?.length ? new Set(presetItemIds.map(String)) : null;
     const mine = approvedItemOptions.filter((o) => String(o.indentId) === String(presetIndent._id)
       && (!wanted || wanted.has(String(o.indentItemId))) && !itemVendorBlock(o));
-    const vendorsOfMine = assignedVendorsOf(mine);
-    // A whole indent whose items are fixed to several vendors can't go on one PO:
-    // open on the Assigned Vendor dropdown instead of preselecting a conflict.
-    if (!wanted && vendorsOfMine.length > 1) { presetAppliedRef.current = true; return; }
-    if (mine.length) {
-      applyApprovedItems(mine, vendorsOfMine.length === 1 ? vendorsOfMine[0].vendorId : '');
-      presetAppliedRef.current = true;
-    }
+    presetAppliedRef.current = true;
+    if (mine.length) applyApprovedItems(mine, '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, approvedItemMode, presetIndent, presetItemIds, approvedItemOptions]);
+  }, [open, approvedItemMode, presetIndent, presetItemIds, approvedItemOptions, approvedItemsFetching]);
 
   // Log exactly why a rate couldn't be auto-fetched — pinpoints whether it's a
   // wrong vendor, a missing SKU, a SKU/case mismatch, or a product absent from
@@ -609,11 +603,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   // catalog, the indent, the items, or a SKU changes. Skipped in edit/revise mode
   // so copied PO rates are never clobbered. No page refresh — pure state update.
   useEffect(() => {
-    if (!open || lockRates || poFormatType === 'JSL') return;
+    if (!open || lockRates || poFormatType === 'JSL' || groupMode) return;
     if (!vendorProducts.length) return;
     setItems((cur) => fillOtherRates(cur, vendorProducts, logNoRate));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, lockRates, poFormatType, vendorProducts, otherMatchKey]);
+  }, [open, lockRates, poFormatType, vendorProducts, otherMatchKey, groupMode]);
 
   const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
   const addItem = () => setItems((cur) => [...cur, emptyItemFor(poFormatType)]);
@@ -624,6 +618,89 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     setSelectedApprovedItems((cur) => cur.filter((o) => String(o.indentItemId) !== String(target?.indentItemId)));
     setItems((cur) => cur.filter((_, i) => i !== idx));
   };
+  // ── New PO by vendor (groupMode) ───────────────────────────────────────────
+  // Every item goes on its vendor's PO: the vendor fixed for it (approved
+  // quotation / Pending for PO — locked here), or the one picked here for an item
+  // that has none. A pick stays on the form; the PO records it, nothing else is saved.
+  const vendorById = useMemo(() => new Map(vendorOptions.map((v) => [String(v._id), v])), [vendorOptions]);
+  const approvedById = useMemo(
+    () => new Map(selectedApprovedItems.map((o) => [String(o.indentItemId), o])),
+    [selectedApprovedItems],
+  );
+  const isFixedItem = (row) => {
+    const o = approvedById.get(String(row.indentItemId));
+    return o?.vendorState === 'SET' && Boolean(o.vendorId);
+  };
+  const vendorKeyOf = (row) => {
+    const o = approvedById.get(String(row.indentItemId));
+    if (o?.vendorState === 'SET' && o.vendorId) return String(o.vendorId);
+    return itemVendorPicks[String(row.indentItemId)] || '';
+  };
+  // One group (= one PO) per vendor, by name; items with no vendor yet come last.
+  const vendorGroups = (() => {
+    if (!groupMode) return [];
+    const byKey = new Map();
+    items.forEach((it, idx) => {
+      if (!it.indentItemId) return;
+      const key = vendorKeyOf(it);
+      if (!byKey.has(key)) {
+        const o = approvedById.get(String(it.indentItemId));
+        const v = key ? (vendorById.get(key) || { _id: key, name: o?.vendorName || '' }) : null;
+        byKey.set(key, { key, vendor: v, rows: [] });
+      }
+      byKey.get(key).rows.push({ it, idx });
+    });
+    return [...byKey.values()].sort((a, b) => (a.key ? 0 : 1) - (b.key ? 0 : 1)
+      || String(a.vendor?.name || '').localeCompare(String(b.vendor?.name || '')));
+  })();
+  const poGroups = vendorGroups.filter((g) => g.key);
+  const unassignedGroup = vendorGroups.find((g) => !g.key) || null;
+
+  // A vendor's delivery / payment terms: its own once edited, else from the
+  // Vendor Master (default lead time → delivery date, credit period → payment terms).
+  const vendorTermsDefault = (v) => ({
+    ...inheritVendorLead({ poDate: header.poDate, ...EMPTY_DELIVERY }, vendorLeadDays(v)),
+    creditPeriod: v?.creditPeriodDays ?? 0,
+    paymentTerms: v?.creditPeriodDays ? `${v.creditPeriodDays} days credit` : '',
+  });
+  const termsOfGroup = (g) => ({ ...(vendorTerms[g.key] || vendorTermsDefault(g.vendor)), poDate: header.poDate });
+  const setGroupTerms = (g, change) => setVendorTerms((m) => ({
+    ...m, [g.key]: change({ ...(m[g.key] || vendorTermsDefault(g.vendor)), poDate: header.poDate }),
+  }));
+  // The PO Date is shared: each vendor's own dates follow it.
+  const changePoDate = (val) => {
+    setHeader((h) => setPoDate(h, val));
+    if (groupMode) setVendorTerms((m) => Object.fromEntries(Object.entries(m).map(([k, t]) => [k, setPoDate(t, val)])));
+  };
+
+  // Pick (or clear) the vendor of an item that has none; its rate then comes from
+  // that vendor's catalog.
+  const pickItemVendor = (row, vendorId) => {
+    const id = String(row.indentItemId);
+    setItemVendorPicks((m) => ({ ...m, [id]: vendorId || '' }));
+    setItems((cur) => cur.map((it) => (String(it.indentItemId) === id
+      ? { ...it, rate: '', autoRate: undefined, autoGst: undefined, rateMatched: undefined, manual: false, rateEdited: false, rateChangeReason: '' }
+      : it)));
+  };
+  // "Add vendor" for an item no vendor carries yet: the new vendor is picked for it.
+  const [addVendorFor, setAddVendorFor] = useState(null);
+
+  // By vendor: rate / GST / HSN from each item's own vendor's catalog — filled
+  // while rendering whenever the items, their vendors or the catalogs change
+  // (rows already matched or edited by hand are left as they are).
+  const fillKey = open && groupMode
+    ? `${items.map((it) => `${it.indentItemId}|${vendorKeyOf(it)}`).join('§')}#${otherMatchKey}`
+    : '';
+  const [filledFor, setFilledFor] = useState({ key: '', vendors: null });
+  if (fillKey !== filledFor.key || vendorOptions !== filledFor.vendors) {
+    setFilledFor({ key: fillKey, vendors: vendorOptions });
+    const next = items.map((it) => {
+      const products = vendorById.get(vendorKeyOf(it))?.products || [];
+      if (!fillKey || !it.indentItemId || !products.length) return it;
+      return fillOtherRates([it], products)[0];
+    });
+    if (next.some((row, i) => row !== items[i])) setItems(next);
+  }
 
   // Switching format keeps the selected approved items and just remaps the rows to
   // the new shape (OTHER ⇄ JSL) — no reset, no page reload. JSL also drops any
@@ -673,7 +750,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
   // Auto-select when exactly one vendor matches; drop a vendor that no longer
   // covers the selected SKUs once the item selection changes.
   useEffect(() => {
-    if (isJsl || !skuFilteredVendors || fixedVendor) return;
+    if (isJsl || groupMode || !skuFilteredVendors || fixedVendor) return;
     if (skuFilteredVendors.length === 1) {
       if (vendor?._id !== skuFilteredVendors[0]._id) applyVendor(skuFilteredVendors[0]);
     } else if (vendor?._id && !skuFilteredVendors.some((v) => v._id === vendor._id)) {
@@ -725,6 +802,19 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
 
   const rateChangeCount = isJsl ? 0 : validItems.filter((it) => rateChangeOf(it).needsReason).length;
 
+  // One OTHER line as the server takes it.
+  const otherLinePayload = (it) => ({
+    itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
+    skuId: it.skuId || undefined, hsn: it.hsn?.trim() || '',
+    indentId: it.indentId || undefined, indentNumber: it.indentNumber || '',
+    indentItemId: it.indentItemId || undefined,
+    indentItemDisplayNumber: it.indentItemDisplayNumber || '',
+    quantity: Number(it.quantity), unit: toKgsUnit(it.unit) || 'Pcs',
+    rate: Number(it.rate) || 0, gstRate: Number(it.gstRate) || 0,
+    rateSource: rateSourceOf(it),
+    rateChangeReason: String(it.rateChangeReason || '').trim(),
+  });
+
   // Shared PO payload (vendor snapshot + terms + items) used by save AND preview.
   const buildPayload = () => ({
     vendorId: vendor?._id,
@@ -756,27 +846,61 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       baseRate: Number(it.baseRate) || 0,
       upfrontDiscount: Number(it.upfrontDiscount) || 0,
       bonanzaDiscount: Number(it.bonanzaDiscount) || 0,
-    } : {
-      itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
-      skuId: it.skuId || undefined, hsn: it.hsn?.trim() || '',
-      indentId: it.indentId || undefined, indentNumber: it.indentNumber || '',
-      indentItemId: it.indentItemId || undefined,
-      indentItemDisplayNumber: it.indentItemDisplayNumber || '',
-      quantity: Number(it.quantity), unit: toKgsUnit(it.unit) || 'Pcs',
-      rate: Number(it.rate) || 0, gstRate: Number(it.gstRate) || 0,
-      rateSource: rateSourceOf(it),
-      rateChangeReason: String(it.rateChangeReason || '').trim(),
-    })),
+    } : otherLinePayload(it))),
   });
 
-  // Preview PDF — render a temporary PDF from the current form, no DB save.
-  const handlePreview = async () => {
-    if (validItems.length === 0) {
+  // By vendor: one vendor's PO — its own vendor, delivery and payment terms and
+  // items; PO Date, Delivery Terms, Remarks and Terms & Conditions are shared.
+  const groupPayload = (g) => {
+    const t = termsOfGroup(g);
+    const v = g.vendor || {};
+    return {
+      vendorId: v._id,
+      poFormatType: 'OTHER',
+      poDate: header.poDate,
+      expectedDeliveryDate: t.expectedDeliveryDate,
+      vendorName: v.name || '',
+      vendorGST: v.gstNo || '',
+      vendorPAN: v.panNo || '',
+      vendorAddress: v.location || v.address || '',
+      vendorEmail: v.email || '',
+      vendorPhone: v.phone || '',
+      deliveryTerms: header.deliveryTerms.trim(),
+      paymentTerms: String(t.paymentTerms || '').trim(),
+      leadTimeDays: parseLeadDays(t.leadTime),
+      creditPeriod: Number(t.creditPeriod) || 0,
+      remarks: header.remarks.trim(),
+      termsAndConditions: terms.edited ? terms.text : '',
+      items: g.rows.map(({ it }) => it).filter((it) => it.itemName?.trim() && Number(it.quantity) > 0).map(otherLinePayload),
+    };
+  };
+
+  // Why a vendor's PO can't be saved yet ('' = it can).
+  const groupProblem = (g) => {
+    const t = termsOfGroup(g);
+    const name = g.vendor?.name || 'Vendor';
+    const rows = g.rows.map(({ it }) => it);
+    const de = deliveryErrors(t);
+    if (de.edd) return `${name}: Expected Delivery Date — ${de.edd}`;
+    if (de.lead) return `${name}: Lead Time — ${de.lead}`;
+    if (!rows.some((it) => it.itemName?.trim() && Number(it.quantity) > 0)) return `${name}: add a quantity`;
+    const noReason = rows.find((it) => Number(it.quantity) > 0 && rateChangeOf(it).needsReason && !String(it.rateChangeReason || '').trim());
+    if (noReason) return `Give a reason for changing the rate of "${noReason.itemName}" — it goes to Rate Change Approvals`;
+    const badQty = rows.find((it) => Number(it.quantity) > Number(it.approvedQuantity || 0));
+    if (badQty) return `Qty for "${badQty.itemName}" cannot exceed approved ${badQty.approvedQuantity}`;
+    return '';
+  };
+
+  // Preview PDF — render a temporary PDF from the current form (or, by vendor, one
+  // vendor's PO), no DB save.
+  const handlePreview = async (group = null) => {
+    const body = group ? groupPayload(group) : buildPayload();
+    if (body.items.length === 0) {
       enqueueSnackbar(isJsl ? 'Add at least one item with grade and quantity to preview' : 'Add at least one item to preview', { variant: 'warning' });
       return;
     }
     try {
-      const blob = await previewPdf(buildPayload()).unwrap();
+      const blob = await previewPdf(body).unwrap();
       // Guard against an error body that slipped through as JSON instead of a PDF.
       if (!(blob instanceof Blob) || blob.type === 'application/json') {
         throw new Error('Preview did not return a PDF');
@@ -795,8 +919,55 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl(''); }
   };
 
+  // By vendor: one PO per vendor, created one after another. A vendor whose PO is
+  // refused keeps its items on the form (with the reason); created ones leave it.
+  const submitByVendor = async (saveMode) => {
+    const warn = (msg) => enqueueSnackbar(msg, { variant: 'warning' });
+    if (!selectedApprovedItems.length || !vendorGroups.length) { warn('Select at least one approved item'); return; }
+    const blocked = selectedApprovedItems.find((o) => itemVendorBlock(o));
+    if (blocked) { warn(`${blocked.indentItemDisplayNumber}: ${itemVendorBlock(blocked)}`); return; }
+    if (unassignedGroup) { warn(`Pick a vendor for "${unassignedGroup.rows[0].it.itemName}" — or remove it`); return; }
+    const problem = poGroups.map(groupProblem).find(Boolean);
+    if (problem) { warn(problem); return; }
+
+    const direct = saveMode === 'DIRECT' && canDirectSave;
+    const created = [];
+    const failed = [];
+    setPendingMode(saveMode);
+    for (const g of poGroups) {
+      try {
+        const res = await createFromItems({ ...groupPayload(g), saveMode: direct ? 'DIRECT' : 'DRAFT' }).unwrap();
+        created.push({ g, po: res?.data });
+      } catch (err) {
+        failed.push({ g, message: err?.data?.message || 'Failed to save purchase order' });
+      }
+    }
+    setPendingMode('');
+
+    if (created.length) {
+      const list = created.map(({ g, po: saved }) => `${poDisplayNumber(saved)} (${g.vendor?.name})`).join(', ');
+      const approved = created.every(({ po: saved }) => saved?.approvalStatus === 'APPROVED');
+      enqueueSnackbar(approved
+        ? `${created.length === 1 ? 'PO' : `${created.length} POs`} created — approved and ready to release: ${list}`
+        : `${created.length === 1 ? 'PO' : `${created.length} POs`} saved as draft — waiting for PO Approval: ${list}`,
+      { variant: direct && !approved ? 'warning' : 'success' });
+      const rateChanges = created.flatMap(({ g }) => g.rows).filter(({ it }) => rateChangeOf(it).needsReason).length;
+      if (rateChanges && !approved) {
+        enqueueSnackbar(`${rateChanges} rate change${rateChanges === 1 ? '' : 's'} sent to Rate Change Approvals`, { variant: 'info' });
+      }
+    }
+    failed.forEach(({ g, message }) => enqueueSnackbar(`${g.vendor?.name}: ${message}`, { variant: 'error' }));
+    if (!failed.length) { onClose?.(true, created.length === 1 ? created[0].po : undefined); return; }
+    if (created.length) {
+      const done = new Set(created.flatMap(({ g }) => g.rows.map(({ it }) => String(it.indentItemId))));
+      setSelectedApprovedItems((cur) => cur.filter((o) => !done.has(String(o.indentItemId))));
+      setItems((cur) => cur.filter((it) => !done.has(String(it.indentItemId))));
+    }
+  };
+
   // saveMode: 'DRAFT' (default) | 'DIRECT' — only meaningful for a new PO.
   const handleSubmit = async (saveMode = 'DRAFT') => {
+    if (groupMode) { await submitByVendor(saveMode); return; }
     if (!vendor?._id) { enqueueSnackbar('Vendor is mandatory', { variant: 'warning' }); return; }
     if (!header.expectedDeliveryDate) { enqueueSnackbar('Expected Delivery Date is required', { variant: 'warning' }); return; }
     if (deliveryError.edd) { enqueueSnackbar(`Expected Delivery Date: ${deliveryError.edd}`, { variant: 'warning' }); return; }
@@ -878,6 +1049,326 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     }
   };
 
+  // One OTHER item row (Items table; by vendor, inside its vendor's group).
+  // `extra` shows next to the item reference.
+  const renderOtherRow = (it, idx, extra = null) => {
+    const { taxable, tax, total } = lineCalc(it);
+    // Came from an indent / has an item, but no Vendor-Master rate matched and none entered yet.
+    const rateMissing = it.rateMatched === false && Boolean(it.itemName) && !(Number(it.rate) > 0);
+    // Item Name & SKU are read-only for any known item (approved-item / indent / edit / revise);
+    // only a brand-new blank "Add Item" row lets you type a name.
+    const nameLocked = Boolean(it.fromApprovedItem || it.itemName);
+    // Flag a user override of the auto-filled Vendor-Master rate/GST.
+    const rateModified = (it.autoRate != null && Number(it.rate) !== Number(it.autoRate))
+      || (it.autoGst != null && Number(it.gstRate) !== Number(it.autoGst));
+    const rc = rateChangeOf(it);
+    const rcStatus = !rc.needsReason && it.rateChangeRequestNumber ? RATE_STATUS[it.rateChangeStatus] : null;
+    return (
+      <Box key={idx} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+      <Box sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', md: OTHER_GRID },
+        gap: 1, alignItems: 'center', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
+        borderRadius: '10px',
+        border: rateMissing ? '1px solid' : { xs: '1px solid', md: 'none' },
+        borderColor: rateMissing ? 'warning.main' : 'divider',
+        bgcolor: rateMissing ? alpha('#f59e0b', 0.06) : 'transparent',
+        '&:hover': { bgcolor: rateMissing ? alpha('#f59e0b', 0.1) : alpha('#2563eb', 0.03) },
+      }}>
+        <Box sx={{ minWidth: 0 }}>
+          {nameLocked ? (
+            // Known item — name is read-only (no dropdown).
+            <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>{it.itemName || '—'}</Typography>
+          ) : (
+            <Autocomplete
+              freeSolo
+              options={vendorProducts}
+              getOptionLabel={(o) => (typeof o === 'string' ? o : o.productName || '')}
+              value={it.itemName}
+              onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
+              onChange={(_e, val) => {
+                if (val && typeof val === 'object') {
+                  setItem(idx, {
+                    itemName: val.productName, skuCode: val.skuCode || '',
+                    skuId: val.skuId || '', rate: val.rate ?? it.rate, unit: val.unit || it.unit,
+                    gstRate: val.gstRate ?? it.gstRate, hsn: val.hsn || '',
+                    rateMatched: true, manual: false, rateEdited: false, autoRate: val.rate ?? undefined, autoGst: val.gstRate ?? undefined,
+                  });
+                }
+              }}
+              renderInput={(params) => <TextField {...params} size="small" placeholder="Item / vendor product" />}
+            />
+          )}
+          <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }}>
+            {it.indentItemDisplayNumber ? (
+              <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, pl: 0.5 }}>{it.indentItemDisplayNumber}</Typography>
+            ) : null}
+            {extra}
+            {rc.needsReason ? (
+              <Chip size="small" label="Needs approval" data-testid="po-rate-needs-approval"
+                sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: alpha('#dc2626', 0.12), color: '#b91c1c' }} />
+            ) : rateModified && (
+              <Chip size="small" label="Rate Modified" sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha('#f59e0b', 0.15), color: '#b45309' }} />
+            )}
+            {rcStatus && (
+              <Chip size="small" label={`Rate ${rcStatus.label.toLowerCase()} · ${it.rateChangeRequestNumber}`} data-testid="po-rate-change-status"
+                sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: rcStatus.bg, color: rcStatus.color }} />
+            )}
+          </Box>
+        </Box>
+        {nameLocked ? (
+          <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
+        ) : (
+          <TextField size="small" placeholder="SKU" value={it.skuCode}
+            onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
+        )}
+        <TextField size="small" type="number" placeholder="0" value={it.quantity}
+          onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
+        {/* A line filled from an indent, vendor product or saved PO may say "Kg" —
+            shown and saved as KGS, the dropdown's spelling. */}
+        {/* The row's own unit is always an option (an indent bound to a
+            SKU's purchase unit says "BOX", not the list's "Box"), so the
+            select never shows blank for a unit it was actually given. */}
+        <TextField size="small" select value={toKgsUnit(it.unit)} onChange={(e) => setItem(idx, { unit: e.target.value })}
+          inputProps={{ 'data-testid': 'po-line-unit' }}>
+          {(UNITS.includes(toKgsUnit(it.unit)) || !it.unit ? UNITS : [toKgsUnit(it.unit), ...UNITS]).map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+        </TextField>
+        <TextField size="small" type="number" placeholder="0.00" value={it.rate}
+          onChange={(e) => setItem(idx, { rate: e.target.value, manual: true, rateEdited: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
+        <Autocomplete
+          freeSolo disableClearable size="small"
+          options={GST_PRESETS.map(String)}
+          value={it.gstRate === '' || it.gstRate == null ? '' : String(it.gstRate)}
+          onInputChange={(_e, v, reason) => {
+            const cleaned = v.replace(/[^\d.]/g, '');
+            // Only a genuine keystroke marks the row manual. MUI also fires
+            // 'reset'/'clear' on mount and on programmatic value changes (e.g.
+            // when the vendor-master auto-fill sets the GST); those must NOT
+            // flag the row, or auto-fill would be permanently blocked.
+            const patch = { gstRate: cleaned === '' ? '' : Number(cleaned) };
+            if (reason === 'input') { patch.manual = true; patch.rateEdited = true; }
+            setItem(idx, patch);
+          }}
+          renderInput={(params) => (
+            <TextField {...params} size="small" placeholder="GST %" inputProps={{ ...params.inputProps, inputMode: 'decimal', style: { textAlign: 'right' } }}
+              InputProps={{ ...params.InputProps, endAdornment: <Typography variant="caption" sx={{ pr: 0.5, color: 'text.secondary' }}>%</Typography> }} />
+          )}
+        />
+        <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{taxable.toFixed(2)}</Typography>
+        <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{tax.toFixed(2)}</Typography>
+        <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{total.toFixed(2)}</Typography>
+        <Tooltip title="Remove">
+          <span>
+            <IconButton size="small" color="error" onClick={() => (it.fromApprovedItem ? removeApprovedRow(idx) : removeItem(idx))}
+              disabled={!it.fromApprovedItem && items.length === 1 && !it.itemName}>
+              <Trash2 size={15} />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+        {rateMissing && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: { md: 1 } }}>
+            <AlertTriangle size={13} color="#b45309" />
+            <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 600 }}>
+              Rate not found in Vendor Master for SKU: {it.skuCode || it.itemName || '—'} — enter rate manually
+            </Typography>
+          </Box>
+        )}
+        {rc.needsReason && (
+          <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: { md: 'center' }, gap: 1, pl: { md: 1 } }}>
+            <Typography variant="caption" data-testid="po-rate-change-hint" sx={{ color: '#b91c1c', fontWeight: 600, flex: '1 1 50%' }}>
+              Vendor rate {fmtRate(rc.fetched)} → {fmtRate(it.rate)} ({fmtDiff(Number(it.rate) - rc.fetched, rc.fetched > 0 ? ((Number(it.rate) - rc.fetched) / rc.fetched) * 100 : null)}).
+              Goes to Rate Change Approvals — the PO can be approved, and the vendor's rate changes, only once it is approved.
+            </Typography>
+            <TextField size="small" required label="Reason for rate change" value={it.rateChangeReason || ''}
+              onChange={(e) => setItem(idx, { rateChangeReason: e.target.value })}
+              error={!String(it.rateChangeReason || '').trim()}
+              inputProps={{ maxLength: 500, 'data-testid': 'po-rate-reason' }} sx={{ flex: '1 1 50%' }} />
+          </Box>
+        )}
+        {(() => {
+          // Purchase unit → stock unit for this line's SKU, when it has one.
+          const sku = it.skuId ? lineSkuById.get(String(it.skuId)) : null;
+          const rule = conversionRule(sku);
+          if (!rule) return null;
+          const c = skuConversion(sku);
+          const reversed = reversedRuleWarning(sku);
+          if (reversed) {
+            return (
+              <Typography variant="caption" data-testid="po-line-conversion" sx={{ pl: { md: 1 }, fontWeight: 600, color: '#b91c1c' }}>
+                {reversed}
+              </Typography>
+            );
+          }
+          const ok = sameUnit(it.unit, c.purchaseUnit) || sameUnit(it.unit, c.stockUnit);
+          const qty = Number(it.quantity) || 0;
+          return (
+            <Typography variant="caption" data-testid="po-line-conversion"
+              sx={{ pl: { md: 1 }, fontWeight: 600, color: ok ? 'text.secondary' : '#b91c1c' }}>
+              {ok
+                ? `${rule}${sameUnit(it.unit, c.purchaseUnit) && qty > 0 ? ` · ${qty} ${it.unit} will stock as ${Math.round(qty * c.factor * 100) / 100} ${c.stockUnit}` : ''}`
+                : `${rule} — choose ${c.purchaseUnit} or ${c.stockUnit}; ${it.unit} cannot be converted`}
+            </Typography>
+          );
+        })()}
+      </Box>
+    );
+  };
+
+  // Column titles of the OTHER item rows.
+  const otherHeaderRow = (
+    <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: OTHER_GRID, gap: 1, px: 1, mb: 0.5 }}>
+      {['Item Name', 'SKU', 'Qty', 'Unit', 'Rate', 'GST %', 'Taxable', 'Tax', 'Total', ''].map((h, i) => (
+        <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
+      ))}
+    </Box>
+  );
+
+  // By vendor: one card per vendor (= one PO) — the vendor, its delivery and
+  // payment terms, its items and total — then the items that still need a vendor.
+  const activeVendors = vendorOptions.filter((v) => v.isActive !== false);
+  // Saving several POs runs one request after another — stay busy until all are done.
+  const busy = saving || previewing || Boolean(pendingMode);
+  const manyPos = groupMode && poGroups.length > 1;
+  const renderVendorGroups = () => (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {poGroups.map((g, gi) => {
+        const t = termsOfGroup(g);
+        const de = deliveryErrors(t);
+        const v = g.vendor || {};
+        const poTotal = g.rows.reduce((sum, { it }) => sum + lineCalc(it).total, 0);
+        const defaultLead = vendorLeadDays(v);
+        const leadNote = t.leadSource === 'VENDOR'
+          ? 'From vendor master'
+          : (defaultLead != null && parseLeadDays(t.leadTime) !== defaultLead ? `Vendor default: ${defaultLead} day${defaultLead === 1 ? '' : 's'}` : '');
+        return (
+          <Box key={g.key} data-testid="po-vendor-group" sx={{ border: `1px solid ${alpha('#2563eb', 0.25)}`, borderRadius: '10px', overflow: 'hidden' }}>
+            <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+              bgcolor: alpha('#2563eb', 0.05), borderBottom: `1px solid ${alpha('#2563eb', 0.15)}` }}>
+              <Building2 size={18} color="#1d4ed8" />
+              <Box sx={{ flex: 1, minWidth: 220 }}>
+                <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', color: PFMS.ink }}>
+                  {v.name}
+                  {poGroups.length > 1 && (
+                    <Typography component="span" sx={{ ml: 1, fontSize: '0.72rem', fontWeight: 700, color: 'text.secondary' }}>PO {gi + 1} of {poGroups.length}</Typography>
+                  )}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {[v.gstNo && `GST ${v.gstNo}`, v.location || v.address, v.phone, v.email].filter(Boolean).join(' · ') || '—'}
+                </Typography>
+              </Box>
+              <Box sx={{ textAlign: 'right' }}>
+                <Typography variant="caption" color="text.secondary" fontWeight={700}>PO TOTAL</Typography>
+                <Typography sx={{ fontWeight: 800, color: 'primary.dark', lineHeight: 1.2 }}>{fmtINR(poTotal)}</Typography>
+              </Box>
+              <Button size="small" variant="outlined" startIcon={<Eye size={15} />}
+                onClick={() => handlePreview(g)} disabled={busy}>
+                Preview PDF
+              </Button>
+            </Box>
+
+            {/* This vendor's delivery and payment terms */}
+            <Grid container spacing={1.5} sx={{ px: 2, pt: 2 }}>
+              <Grid item xs={6} sm={3}>
+                <DateInputDDMMYYYY label="Expected Delivery Date" fullWidth required value={t.expectedDeliveryDate}
+                  onChange={(val) => setGroupTerms(g, (h) => setDeliveryDate(h, val))}
+                  error={Boolean(de.edd)} helperText={de.edd}
+                  inputProps={{ 'data-testid': 'po-expected-delivery' }} />
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <TextField label="Lead Time (Days)" fullWidth size="small" value={t.leadTime} placeholder="e.g. 7"
+                  inputProps={{ inputMode: 'numeric', 'data-testid': 'po-lead-time' }}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    if (/^\d{0,3}$/.test(raw)) setGroupTerms(g, (h) => setLeadTime(h, raw));
+                  }}
+                  error={Boolean(de.lead)} helperText={de.lead || leadNote}
+                  FormHelperTextProps={{ 'data-testid': 'po-lead-time-hint' }} />
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <TextField label="Credit Period (Days)" type="number" fullWidth size="small" value={t.creditPeriod}
+                  onChange={(e) => setGroupTerms(g, (h) => ({ ...h, creditPeriod: e.target.value }))} inputProps={{ min: 0 }} />
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <TextField label="Payment Terms" fullWidth size="small" value={t.paymentTerms}
+                  onChange={(e) => setGroupTerms(g, (h) => ({ ...h, paymentTerms: e.target.value }))} />
+              </Grid>
+            </Grid>
+
+            <Box sx={{ px: 1, pt: 1.5, pb: 1.5 }}>
+              {otherHeaderRow}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {g.rows.map(({ it, idx }) => renderOtherRow(it, idx, isFixedItem(it) ? (
+                  <Typography variant="caption" sx={{ color: '#0f766e', fontWeight: 600 }}>
+                    {VENDOR_SOURCE_LABEL[approvedById.get(String(it.indentItemId))?.vendorSource] || 'Vendor fixed'}
+                  </Typography>
+                ) : (
+                  <Button size="small" onClick={() => pickItemVendor(it, '')}
+                    sx={{ minWidth: 0, py: 0, px: 0.5, fontSize: '0.68rem', fontWeight: 700, textTransform: 'none' }}>
+                    Change vendor
+                  </Button>
+                )))}
+              </Box>
+            </Box>
+          </Box>
+        );
+      })}
+
+      {unassignedGroup && (
+        <Box data-testid="po-no-vendor-group" sx={{ border: `1px dashed ${alpha('#f59e0b', 0.8)}`, borderRadius: '10px', overflow: 'hidden' }}>
+          <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', bgcolor: alpha('#f59e0b', 0.07) }}>
+            <AlertTriangle size={17} color="#b45309" />
+            <Typography sx={{ fontWeight: 800, fontSize: '0.92rem', color: '#92400e', flex: 1 }}>
+              No vendor yet ({unassignedGroup.rows.length})
+            </Typography>
+            <Typography variant="caption" color="text.secondary">Pick a vendor — the item joins that vendor&apos;s PO</Typography>
+          </Box>
+          {unassignedGroup.rows.map(({ it, idx }) => {
+            const sku = String(it.skuCode || '').toUpperCase();
+            const carries = (o) => Boolean(sku) && (o.products || []).some((p) => String(p.skuCode || '').toUpperCase() === sku);
+            const options = [...activeVendors].sort((a, b) => Number(carries(b)) - Number(carries(a)));
+            return (
+              <Box key={it.indentItemId} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) 340px auto 36px' },
+                gap: 1.5, alignItems: 'center', px: 2, py: 1.25, borderTop: `1px solid ${alpha('#f59e0b', 0.25)}` }}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" fontWeight={700}>{it.itemName}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {[it.indentItemDisplayNumber, it.skuCode && `SKU ${it.skuCode}`, `Qty ${it.quantity} ${it.unit || ''}`.trim()].filter(Boolean).join(' · ')}
+                  </Typography>
+                </Box>
+                <Autocomplete size="small" options={options} value={null} loading={vendorsLoading}
+                  onChange={(_e, o) => { if (o) pickItemVendor(it, String(o._id)); }}
+                  getOptionLabel={(o) => o?.name || ''}
+                  isOptionEqualToValue={(o, val) => String(o._id) === String(val._id)}
+                  noOptionsText={vendorsLoading ? 'Loading vendors…' : 'No active vendor found'}
+                  renderOption={(props, o) => (
+                    <Box component="li" {...props} key={o._id} sx={{ display: 'block !important', py: 0.75 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="body2" fontWeight={700}>{o.name}</Typography>
+                        {carries(o) && <Typography variant="caption" sx={{ color: '#0f766e', fontWeight: 700, whiteSpace: 'nowrap' }}>Has this item</Typography>}
+                      </Box>
+                      <Typography variant="caption" color="text.secondary">
+                        {[o.gstNo && `GST: ${o.gstNo}`, o.phone, o.email].filter(Boolean).join(' · ') || '—'}
+                      </Typography>
+                    </Box>
+                  )}
+                  renderInput={(params) => <TextField {...params} placeholder="Select vendor from Vendor Master" />}
+                />
+                <Button size="small" startIcon={<Plus size={14} />} sx={{ textTransform: 'none', whiteSpace: 'nowrap' }}
+                  onClick={() => setAddVendorFor(approvedById.get(String(it.indentItemId)) || it)}>
+                  Add vendor
+                </Button>
+                <Tooltip title="Remove from this PO">
+                  <IconButton size="small" color="error" onClick={() => removeApprovedRow(idx)}><Trash2 size={15} /></IconButton>
+                </Tooltip>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
+    </Box>
+  );
+
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
       PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
@@ -903,10 +1394,10 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         {/* Source + vendor */}
         <Paper elevation={0} sx={SECTION}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
-            <FileText size={18} /> {approvedItemMode ? 'Approved Item(s) & Vendor' : isRevise ? 'Revised Items & Vendor' : 'Source Indent & Vendor'}
+            <FileText size={18} /> {groupMode ? 'Items & Vendors' : approvedItemMode ? 'Approved Item(s) & Vendor' : isRevise ? 'Revised Items & Vendor' : 'Source Indent & Vendor'}
           </Typography>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={4}>
+            <Grid item xs={12} sm={groupMode ? 3 : 4}>
               <TextField select fullWidth required label="PO Format Type" value={poFormatType}
                 onChange={(e) => handleFormatChange(e.target.value)} disabled={isEdit || isRevise}
                 helperText={isJsl ? 'JSL — grade/width/finish + discount pricing' : 'Other — standard item / rate'}>
@@ -914,14 +1405,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                 <MenuItem value="JSL">JSL</MenuItem>
               </TextField>
             </Grid>
-            <Grid item xs={12} sm={8}>
+            {/* By vendor every item is listed under its vendor — no single vendor to pick. */}
+            {!groupMode && <Grid item xs={12} sm={8}>
               {approvedItemMode && assignedVendors.length > 0 ? (
                 <TextField select fullWidth label="Assigned Vendor" value={assignedVendorId}
                   onChange={(e) => chooseAssignedVendor(e.target.value)}
                   inputProps={{ 'data-testid': 'assigned-vendor' }}
-                  helperText={!assignedVendorId && assignedVendors.length > 1 && presetIndent?._id && !selectedApprovedItems.length
-                    ? `This indent's items are assigned to ${assignedVendors.length} vendors — pick one (one PO per vendor)`
-                    : 'Vendors already fixed for approved items — picking one adds its items'}>
+                  helperText="Vendors already fixed for approved items — picking one adds its items">
                   <MenuItem value=""><em>All approved items — choose manually</em></MenuItem>
                   {assignedVendors.map((g) => (
                     <MenuItem key={g.vendorId} value={g.vendorId}>
@@ -930,8 +1420,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   ))}
                 </TextField>
               ) : null}
-            </Grid>
-            <Grid item xs={12} sm={6}>
+            </Grid>}
+            <Grid item xs={12} sm={groupMode ? 9 : 6}>
               {isEdit ? (
                 <TextField label="Indent Number" fullWidth value={indent?.indentNumber || ''} disabled />
               ) : isRevise ? (
@@ -948,10 +1438,16 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   isOptionEqualToValue={(o, v) => String(o.indentItemId) === String(v.indentItemId)}
                   getOptionDisabled={(o) => !!itemVendorBlock(o)}
                   onChange={(_e, vals) => applyApprovedItems(vals)}
+                  // The picked items are listed below, each with its vendor.
+                  renderTags={(vals) => (
+                    <Typography sx={{ pl: 0.75, fontSize: '0.86rem', fontWeight: 700, color: 'primary.main', whiteSpace: 'nowrap' }}>
+                      {vals.length} item{vals.length === 1 ? '' : 's'} selected
+                    </Typography>
+                  )}
                   filterOptions={(opts, { inputValue }) => {
                     const q = inputValue.trim().toLowerCase();
                     if (!q) return opts;
-                    return opts.filter((o) => [o.indentItemDisplayNumber, o.itemDisplayNumber, o.itemName, o.skuCode, o.indentNumber]
+                    return opts.filter((o) => [o.indentItemDisplayNumber, o.itemDisplayNumber, o.itemName, o.skuCode, o.indentNumber, o.vendorName]
                       .some((f) => String(f || '').toLowerCase().includes(q)));
                   }}
                   renderOption={(props, o) => (
@@ -977,7 +1473,9 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   )}
                   renderInput={(params) => (
                     <TextField {...params} label="Approved Item(s) *" placeholder="Select one or more approved items"
-                      helperText={assignedVendorId
+                      helperText={groupMode
+                        ? 'Items of different vendors can go together — one PO is made for each vendor'
+                        : assignedVendorId
                         ? `Showing the items assigned to ${assignedVendors.find((g) => g.vendorId === assignedVendorId)?.vendorName || 'this vendor'}`
                         : "Item-wise PO — only approved, not-yet-PO'd items are listed"}
                       InputProps={{ ...params.InputProps, endAdornment: (<>{approvedItemsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
@@ -988,7 +1486,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   helperText="Multi-vendor approved indent (Step 1.3)" />
               )}
             </Grid>
-            <Grid item xs={12} sm={6}>
+            {!groupMode && <Grid item xs={12} sm={6}>
               {!isEdit && approvedVendors.length > 0 ? (
                 <TextField select fullWidth label="Approved Vendor *" value={approvedVendorId}
                   onChange={(e) => applyApprovedVendor(approvedVendors.find((v) => (v.vendorId?._id || v.vendorId) === e.target.value))}
@@ -1069,11 +1567,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   Add Vendor for this Item
                 </Button>
               )}
-            </Grid>
+            </Grid>}
           </Grid>
 
-          {/* Vendor snapshot preview */}
-          {vendor ? (
+          {/* Vendor snapshot preview (by vendor, each vendor's card shows it) */}
+          {vendor && !groupMode ? (
             <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'center' }}>
               <Building2 size={16} color="#1d4ed8" />
               <Typography variant="caption" fontWeight={700}>{vendor.name}</Typography>
@@ -1089,11 +1587,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           ) : null}
         </Paper>
 
-        {/* Header / terms */}
-        <Paper elevation={0} sx={SECTION}>
+        {/* Header / terms — by vendor it follows the items and holds only what all
+            the POs share; each vendor's dates and payment terms sit in its card. */}
+        <Paper elevation={0} sx={{ ...SECTION, order: groupMode ? 2 : 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 2, flexWrap: 'wrap' }}>
             <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: '#0f766e' }}>
-              <ShoppingBag size={18} /> PO Terms
+              <ShoppingBag size={18} /> {groupMode && poGroups.length > 1 ? 'PO Terms — for all POs' : 'PO Terms'}
             </Typography>
             <Button size="small" variant="outlined" startIcon={<FileText size={15} />} onClick={() => setTermsOpen(true)}
               data-testid="po-edit-terms">
@@ -1102,10 +1601,10 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           </Box>
           <Grid container spacing={2}>
             {/* Lead Time and Expected Delivery Date fill each other (poLeadTime.js). */}
-            <Grid item xs={6} sm={2.4}>
-              <DateInputDDMMYYYY label="PO Date" fullWidth value={header.poDate}
-                onChange={(val) => setHeader((h) => setPoDate(h, val))} />
+            <Grid item xs={groupMode ? 12 : 6} sm={groupMode ? 3 : 2.4}>
+              <DateInputDDMMYYYY label="PO Date" fullWidth value={header.poDate} onChange={changePoDate} />
             </Grid>
+            {!groupMode && <>
             <Grid item xs={6} sm={2.4}>
               <DateInputDDMMYYYY label="Expected Delivery Date *" fullWidth required value={header.expectedDeliveryDate}
                 onChange={(val) => setHeader((h) => setDeliveryDate(h, val))}
@@ -1131,11 +1630,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
               <TextField label="Payment Terms" fullWidth value={header.paymentTerms}
                 onChange={(e) => setHeader((h) => ({ ...h, paymentTerms: e.target.value }))} />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            </>}
+            <Grid item xs={12} sm={groupMode ? 4.5 : 6}>
               <TextField label="Delivery Terms" fullWidth value={header.deliveryTerms}
                 onChange={(e) => setHeader((h) => ({ ...h, deliveryTerms: e.target.value }))} />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid item xs={12} sm={groupMode ? 4.5 : 6}>
               <TextField label="Remarks" fullWidth value={header.remarks} helperText="Internal note — not printed on the PO PDF"
                 onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} />
             </Grid>
@@ -1154,11 +1654,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           </Grid>
         </Paper>
 
-        {/* Items */}
-        <Paper elevation={0} sx={SECTION}>
+        {/* Items — by vendor, one card per vendor (one PO each) */}
+        <Paper elevation={0} sx={{ ...SECTION, order: groupMode ? 1 : 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Typography sx={{ fontWeight: 700, color: '#b45309', display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Plus size={18} /> Items{approvedItemMode ? ' (from selected approved items)' : ''}
+              <Plus size={18} /> {groupMode
+                ? `Items by Vendor${poGroups.length > 1 ? ` — ${poGroups.length} POs` : ''}`
+                : `Items${approvedItemMode ? ' (from selected approved items)' : ''}`}
             </Typography>
             {/* In approved-item mode the rows are driven by the picker, so no manual add. */}
             {!approvedItemMode && (
@@ -1170,6 +1672,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
             <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
               Select approved item(s) above to load them here.
             </Typography>
+          ) : groupMode ? (
+            renderVendorGroups()
           ) : isJsl ? (
             <>
               {/* JSL header row */}
@@ -1263,168 +1767,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
               </Box>
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {items.map((it, idx) => {
-                  const { taxable, tax, total } = lineCalc(it);
-                  // Came from an indent / has an item, but no Vendor-Master rate matched and none entered yet.
-                  const rateMissing = it.rateMatched === false && Boolean(it.itemName) && !(Number(it.rate) > 0);
-                  // Item Name & SKU are read-only for any known item (approved-item / indent / edit / revise);
-                  // only a brand-new blank "Add Item" row lets you type a name.
-                  const nameLocked = Boolean(it.fromApprovedItem || it.itemName);
-                  // Flag a user override of the auto-filled Vendor-Master rate/GST.
-                  const rateModified = (it.autoRate != null && Number(it.rate) !== Number(it.autoRate))
-                    || (it.autoGst != null && Number(it.gstRate) !== Number(it.autoGst));
-                  const rc = rateChangeOf(it);
-                  const rcStatus = !rc.needsReason && it.rateChangeRequestNumber ? RATE_STATUS[it.rateChangeStatus] : null;
-                  return (
-                    <Box key={idx} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                    <Box sx={{
-                      display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', md: OTHER_GRID },
-                      gap: 1, alignItems: 'center', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
-                      borderRadius: '10px',
-                      border: rateMissing ? '1px solid' : { xs: '1px solid', md: 'none' },
-                      borderColor: rateMissing ? 'warning.main' : 'divider',
-                      bgcolor: rateMissing ? alpha('#f59e0b', 0.06) : 'transparent',
-                      '&:hover': { bgcolor: rateMissing ? alpha('#f59e0b', 0.1) : alpha('#2563eb', 0.03) },
-                    }}>
-                      <Box sx={{ minWidth: 0 }}>
-                        {nameLocked ? (
-                          // Known item — name is read-only (no dropdown).
-                          <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>{it.itemName || '—'}</Typography>
-                        ) : (
-                          <Autocomplete
-                            freeSolo
-                            options={vendorProducts}
-                            getOptionLabel={(o) => (typeof o === 'string' ? o : o.productName || '')}
-                            value={it.itemName}
-                            onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
-                            onChange={(_e, val) => {
-                              if (val && typeof val === 'object') {
-                                setItem(idx, {
-                                  itemName: val.productName, skuCode: val.skuCode || '',
-                                  skuId: val.skuId || '', rate: val.rate ?? it.rate, unit: val.unit || it.unit,
-                                  gstRate: val.gstRate ?? it.gstRate, hsn: val.hsn || '',
-                                  rateMatched: true, manual: false, rateEdited: false, autoRate: val.rate ?? undefined, autoGst: val.gstRate ?? undefined,
-                                });
-                              }
-                            }}
-                            renderInput={(params) => <TextField {...params} size="small" placeholder="Item / vendor product" />}
-                          />
-                        )}
-                        <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }}>
-                          {it.indentItemDisplayNumber ? (
-                            <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, pl: 0.5 }}>{it.indentItemDisplayNumber}</Typography>
-                          ) : null}
-                          {rc.needsReason ? (
-                            <Chip size="small" label="Needs approval" data-testid="po-rate-needs-approval"
-                              sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: alpha('#dc2626', 0.12), color: '#b91c1c' }} />
-                          ) : rateModified && (
-                            <Chip size="small" label="Rate Modified" sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha('#f59e0b', 0.15), color: '#b45309' }} />
-                          )}
-                          {rcStatus && (
-                            <Chip size="small" label={`Rate ${rcStatus.label.toLowerCase()} · ${it.rateChangeRequestNumber}`} data-testid="po-rate-change-status"
-                              sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: rcStatus.bg, color: rcStatus.color }} />
-                          )}
-                        </Box>
-                      </Box>
-                      {nameLocked ? (
-                        <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
-                      ) : (
-                        <TextField size="small" placeholder="SKU" value={it.skuCode}
-                          onChange={(e) => setItem(idx, { skuCode: e.target.value.toUpperCase() })} />
-                      )}
-                      <TextField size="small" type="number" placeholder="0" value={it.quantity}
-                        onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} sx={NO_SPIN} />
-                      {/* A line filled from an indent, vendor product or saved PO may say "Kg" —
-                          shown and saved as KGS, the dropdown's spelling. */}
-                      {/* The row's own unit is always an option (an indent bound to a
-                          SKU's purchase unit says "BOX", not the list's "Box"), so the
-                          select never shows blank for a unit it was actually given. */}
-                      <TextField size="small" select value={toKgsUnit(it.unit)} onChange={(e) => setItem(idx, { unit: e.target.value })}
-                        inputProps={{ 'data-testid': 'po-line-unit' }}>
-                        {(UNITS.includes(toKgsUnit(it.unit)) || !it.unit ? UNITS : [toKgsUnit(it.unit), ...UNITS]).map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
-                      </TextField>
-                      <TextField size="small" type="number" placeholder="0.00" value={it.rate}
-                        onChange={(e) => setItem(idx, { rate: e.target.value, manual: true, rateEdited: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
-                      <Autocomplete
-                        freeSolo disableClearable size="small"
-                        options={GST_PRESETS.map(String)}
-                        value={it.gstRate === '' || it.gstRate == null ? '' : String(it.gstRate)}
-                        onInputChange={(_e, v, reason) => {
-                          const cleaned = v.replace(/[^\d.]/g, '');
-                          // Only a genuine keystroke marks the row manual. MUI also fires
-                          // 'reset'/'clear' on mount and on programmatic value changes (e.g.
-                          // when the vendor-master auto-fill sets the GST); those must NOT
-                          // flag the row, or auto-fill would be permanently blocked.
-                          const patch = { gstRate: cleaned === '' ? '' : Number(cleaned) };
-                          if (reason === 'input') { patch.manual = true; patch.rateEdited = true; }
-                          setItem(idx, patch);
-                        }}
-                        renderInput={(params) => (
-                          <TextField {...params} size="small" placeholder="GST %" inputProps={{ ...params.inputProps, inputMode: 'decimal', style: { textAlign: 'right' } }}
-                            InputProps={{ ...params.InputProps, endAdornment: <Typography variant="caption" sx={{ pr: 0.5, color: 'text.secondary' }}>%</Typography> }} />
-                        )}
-                      />
-                      <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{taxable.toFixed(2)}</Typography>
-                      <Typography variant="body2" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'text.secondary' }}>{tax.toFixed(2)}</Typography>
-                      <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{total.toFixed(2)}</Typography>
-                      <Tooltip title="Remove">
-                        <span>
-                          <IconButton size="small" color="error" onClick={() => (it.fromApprovedItem ? removeApprovedRow(idx) : removeItem(idx))}
-                            disabled={!it.fromApprovedItem && items.length === 1 && !it.itemName}>
-                            <Trash2 size={15} />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    </Box>
-                      {rateMissing && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: { md: 1 } }}>
-                          <AlertTriangle size={13} color="#b45309" />
-                          <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 600 }}>
-                            Rate not found in Vendor Master for SKU: {it.skuCode || it.itemName || '—'} — enter rate manually
-                          </Typography>
-                        </Box>
-                      )}
-                      {rc.needsReason && (
-                        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: { md: 'center' }, gap: 1, pl: { md: 1 } }}>
-                          <Typography variant="caption" data-testid="po-rate-change-hint" sx={{ color: '#b91c1c', fontWeight: 600, flex: '1 1 50%' }}>
-                            Vendor rate {fmtRate(rc.fetched)} → {fmtRate(it.rate)} ({fmtDiff(Number(it.rate) - rc.fetched, rc.fetched > 0 ? ((Number(it.rate) - rc.fetched) / rc.fetched) * 100 : null)}).
-                            Goes to Rate Change Approvals — the PO can be approved, and the vendor's rate changes, only once it is approved.
-                          </Typography>
-                          <TextField size="small" required label="Reason for rate change" value={it.rateChangeReason || ''}
-                            onChange={(e) => setItem(idx, { rateChangeReason: e.target.value })}
-                            error={!String(it.rateChangeReason || '').trim()}
-                            inputProps={{ maxLength: 500, 'data-testid': 'po-rate-reason' }} sx={{ flex: '1 1 50%' }} />
-                        </Box>
-                      )}
-                      {(() => {
-                        // Purchase unit → stock unit for this line's SKU, when it has one.
-                        const sku = it.skuId ? lineSkuById.get(String(it.skuId)) : null;
-                        const rule = conversionRule(sku);
-                        if (!rule) return null;
-                        const c = skuConversion(sku);
-                        const reversed = reversedRuleWarning(sku);
-                        if (reversed) {
-                          return (
-                            <Typography variant="caption" data-testid="po-line-conversion" sx={{ pl: { md: 1 }, fontWeight: 600, color: '#b91c1c' }}>
-                              {reversed}
-                            </Typography>
-                          );
-                        }
-                        const ok = sameUnit(it.unit, c.purchaseUnit) || sameUnit(it.unit, c.stockUnit);
-                        const qty = Number(it.quantity) || 0;
-                        return (
-                          <Typography variant="caption" data-testid="po-line-conversion"
-                            sx={{ pl: { md: 1 }, fontWeight: 600, color: ok ? 'text.secondary' : '#b91c1c' }}>
-                            {ok
-                              ? `${rule}${sameUnit(it.unit, c.purchaseUnit) && qty > 0 ? ` · ${qty} ${it.unit} will stock as ${Math.round(qty * c.factor * 100) / 100} ${c.stockUnit}` : ''}`
-                              : `${rule} — choose ${c.purchaseUnit} or ${c.stockUnit}; ${it.unit} cannot be converted`}
-                          </Typography>
-                        );
-                      })()}
-                    </Box>
-                  );
-                })}
+                {items.map((it, idx) => renderOtherRow(it, idx))}
               </Box>
             </>
           )}
@@ -1441,7 +1784,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
               <Typography fontWeight={700}>{fmtINR(totals.tax)}</Typography>
             </Box>
             <Box sx={{ textAlign: 'right' }}>
-              <Typography variant="caption" color="primary.main" fontWeight={700}>GRAND TOTAL</Typography>
+              <Typography variant="caption" color="primary.main" fontWeight={700}>{groupMode && poGroups.length > 1 ? 'GRAND TOTAL · ALL POs' : 'GRAND TOTAL'}</Typography>
               <Typography variant="h6" fontWeight={800} color="primary.dark">{fmtINR(totals.grand)}</Typography>
             </Box>
           </Box>
@@ -1453,7 +1796,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#fff' }}>
         <Box>
           <Typography variant="caption" color="text.secondary" display="block">
-            {validItems.length} item(s) · {fmtINR(totals.grand)}
+            {groupMode && poGroups.length > 1 ? `${poGroups.length} POs · ` : ''}{validItems.length} item(s) · {fmtINR(totals.grand)}
           </Typography>
           {isCreate && (
             <Typography variant="caption" color={canDirectSave ? 'text.secondary' : 'warning.dark'} display="block"
@@ -1471,20 +1814,23 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
           )}
         </Box>
         <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || previewing}>Cancel</Button>
-          <Button variant="outlined" color="secondary"
-            startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
-            onClick={handlePreview} disabled={saving || previewing}>
-            Preview PDF
-          </Button>
+          <Button variant="outlined" onClick={() => onClose?.(false)} disabled={busy}>Cancel</Button>
+          {/* By vendor, each vendor's card has its own Preview PDF. */}
+          {!groupMode && (
+            <Button variant="outlined" color="secondary"
+              startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
+              onClick={() => handlePreview()} disabled={busy}>
+              Preview PDF
+            </Button>
+          )}
           {isCreate ? (
             <>
               <Tooltip title="Creates an editable draft PO with a temporary DRAFT number. It must be approved before release.">
                 <span>
                   <Button variant={canDirectSave ? 'outlined' : 'contained'}
                     startIcon={pendingMode === 'DRAFT' ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-                    onClick={() => handleSubmit('DRAFT')} disabled={saving || previewing}>
-                    Save as Draft
+                    onClick={() => handleSubmit('DRAFT')} disabled={busy}>
+                    {manyPos ? `Save ${poGroups.length} POs as Draft` : 'Save as Draft'}
                   </Button>
                 </span>
               </Tooltip>
@@ -1493,8 +1839,8 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   <span>
                     <Button variant="contained" color="success"
                       startIcon={pendingMode === 'DIRECT' ? <CircularProgress size={16} color="inherit" /> : <CheckCircle2 size={16} />}
-                      onClick={() => handleSubmit('DIRECT')} disabled={saving || previewing}>
-                      Save PO Directly
+                      onClick={() => handleSubmit('DIRECT')} disabled={busy}>
+                      {manyPos ? `Save ${poGroups.length} POs Directly` : 'Save PO Directly'}
                     </Button>
                   </span>
                 </Tooltip>
@@ -1523,13 +1869,18 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       />
 
       {/* Add a Vendor Master record (or product) for the selected approved item(s) */}
+      {/* …or, by vendor, for the one item it was opened for (the new vendor is picked for it). */}
       <AddVendorForItemModal
-        open={addVendorOpen}
-        onClose={() => setAddVendorOpen(false)}
-        items={selectedApprovedItems}
+        open={addVendorOpen || Boolean(addVendorFor)}
+        onClose={() => { setAddVendorOpen(false); setAddVendorFor(null); }}
+        items={addVendorFor ? [addVendorFor] : selectedApprovedItems}
         vendorOptions={vendorOptions}
-        onAdded={handleVendorAdded}
+        onAdded={(added) => {
+          if (addVendorFor && added?._id) pickItemVendor(addVendorFor, String(added._id));
+          else handleVendorAdded(added);
+        }}
       />
+
     </Dialog>
   );
 };

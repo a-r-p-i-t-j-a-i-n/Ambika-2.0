@@ -121,7 +121,9 @@ const GrnDetail = () => {
   const wfSteps = resolveWorkflowSteps({ grn });
   const [cancelGrn] = useCancelGrnMutation();
   const isMd = useSelector((s) => s.auth.isRoot);
-  const canDeleteGrn = usePermissions().can('procurement.deleteGrn');
+  const { can } = usePermissions();
+  const canDeleteGrn = can('procurement.deleteGrn');
+  const canEditGrn = can('procurement.editGrn');
 
   const isCompleted = grn && isGrnCompleted(grn);
   const { data: movRes } = useGetInventoryMovementsByRefQuery({ refType: 'GRN', refId: id }, { skip: !isCompleted });
@@ -275,6 +277,9 @@ const GrnDetail = () => {
           {grn.grnPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>{isLocked ? 'View Signed PDF' : 'GRN PDF'}</Button>}
           {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
           {isDraft && !isLocked && canDeleteGrn && <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} onClick={() => setDeleteOpen(true)}>Delete</Button>}
+          {/* A completed GRN: corrected / deleted with procurement.editGrn / deleteGrn (MD has both). */}
+          {isCompleted && canEditGrn && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit GRN</Button>}
+          {(isCompleted || grn.grnStatus === 'CANCELLED') && canDeleteGrn && <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} onClick={() => setDeleteOpen(true)}>Delete GRN</Button>}
         </Box>
       </Box>
 
@@ -518,7 +523,7 @@ const GrnDetail = () => {
       </Box>
 
       {/* Dialogs */}
-      <GrnFormDialog open={formOpen} grn={grn} onClose={() => setFormOpen(false)} />
+      <GrnFormDialog open={formOpen} grn={grn} correct={isCompleted} onClose={() => setFormOpen(false)} />
       <GrnCompleteDialog open={completeOpen} grn={grn} onClose={() => setCompleteOpen(false)} />
       <GrnDeleteDialog open={deleteOpen} grn={grn}
         onClose={(deleted) => { setDeleteOpen(false); if (deleted) navigate('/purchase-fms/grn'); }} />
