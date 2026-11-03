@@ -41,7 +41,7 @@ export const voucherController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const v = await voucherService.remove(req.params.id, req.user);
+    const v = await voucherService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('Voucher deleted', v));
   }),
 

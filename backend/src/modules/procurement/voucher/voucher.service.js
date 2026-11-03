@@ -12,6 +12,7 @@ import { generatePurchaseVoucherNumber, generateExpenseVoucherNumber } from '../
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { buildVoucherPdfBuffer } from './voucher.pdf.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 import { registerApprovalDocument } from '../../approvals/approval.registry.js';
 import { approvalService } from '../../approvals/approval.service.js';
 
@@ -381,16 +382,33 @@ export const voucherService = {
     return v;
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a voucher. A draft simply goes; a posted / signed / cancelled one
+   * needs a reason (procurement.deleteVoucher) and goes only while no tally
+   * entry or final payment rests on it. Its invoice is unlinked, so a new
+   * voucher can be raised for it.
+   */
+  async remove(id, user, { reason } = {}) {
     const v = await findOrThrow(id);
-    if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) {
-      throw new AppError('Only draft vouchers can be deleted', 400);
-    }
+    const draft = v.voucherStatus === VOUCHER_STATUS.DRAFT;
+    const label = `Voucher ${v.voucherNumber || ''}`.trim();
+    const why = draft ? String(reason || '').trim() : deleteReason(reason, label);
+    assertNothingAfter(label, await laterStepsOf.voucher(v._id));
     v.isDeleted = true;
     v.deletedAt = new Date();
     v.deletedBy = user?._id;
-    v.activityTimeline.push({ action: 'DELETE', description: 'Voucher deleted', actorId: user?._id });
-    return v.save();
+    v.activityTimeline.push({ action: 'DELETE', description: why ? `Voucher deleted. Reason: ${why}` : 'Voucher deleted', actorId: user?._id });
+    const saved = await v.save();
+    if (v.invoiceId) {
+      await VendorInvoice.updateOne(
+        { _id: v.invoiceId, voucherId: v._id },
+        {
+          $set: { voucherId: null, voucherNumber: '' },
+          $push: { activityTimeline: { action: 'VOUCHER_DELETED', description: `Voucher ${v.voucherNumber} deleted — invoice unlinked`, actorId: user?._id } },
+        },
+      );
+    }
+    return saved;
   },
 
   /**

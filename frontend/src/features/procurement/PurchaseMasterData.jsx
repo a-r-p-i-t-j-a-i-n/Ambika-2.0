@@ -3,7 +3,7 @@ import {
   Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, MenuItem, InputAdornment, IconButton, Tooltip, Button,
-  Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, Popover, Badge,
+  Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, Popover, Badge, Alert,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, Pencil, Trash2, SlidersHorizontal, X } from 'lucide-react';
@@ -28,6 +28,8 @@ import { FU_STATUS_LABEL } from './follow-ups/fuMeta';
 import { stepTimingText } from './components/stepTimingColumns';
 import ProformaInvoiceFormDrawer from './proforma-invoices/ProformaInvoiceFormDrawer';
 import GrnFormDialog from './grn/GrnFormDialog';
+import GrnDeleteDialog from './grn/GrnDeleteDialog';
+import { isGrnCompleted } from './grn/grnMeta';
 import IncomingQCFormDialog from './incoming-qc/IncomingQCFormDialog';
 import VendorInvoiceFormDialog from './vendor-invoices/VendorInvoiceFormDialog';
 import VoucherFormDialog from './vouchers/VoucherFormDialog';
@@ -214,7 +216,9 @@ const EDIT_CONFIG = {
   po:            { Component: PurchaseOrderFormDrawer,  prop: 'po',      canEdit: (r) => r.approvalStatus === 'DRAFT' },
   followup:      { Component: FollowUpFormDrawer,       prop: 'followUp',canEdit: (r) => ['PENDING', 'RESCHEDULED'].includes(r.followUpStatus) },
   pi:            { Component: ProformaInvoiceFormDrawer,prop: 'pi',      canEdit: (r) => ['DRAFT', 'RECEIVED'].includes(r.piStatus) && r.approvalStatus !== 'APPROVED' },
-  grn:           { Component: GrnFormDialog,            prop: 'grn',     canEdit: (r) => r.grnStatus === 'DRAFT' },
+  // A completed GRN opens in correction mode (procurement.editGrn).
+  grn:           { Component: GrnFormDialog,            prop: 'grn',     canEdit: (r, can) => r.grnStatus === 'DRAFT' || (isGrnCompleted(r) && can('procurement.editGrn')),
+    extraProps: (r) => ({ correct: isGrnCompleted(r) }) },
   qc:            { Component: IncomingQCFormDialog,     prop: 'qc',      canEdit: (r) => ['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus) },
   vendorInvoice: { Component: VendorInvoiceFormDialog,  prop: 'invoice', canEdit: (r) => ['DRAFT', 'RECEIVED', 'APPROVED', 'PAYMENT_PENDING'].includes(r.invoiceStatus) },
   voucher:       { Component: VoucherFormDialog,        prop: 'voucher', canEdit: (r) => r.voucherStatus === 'DRAFT' },
@@ -226,16 +230,20 @@ const EDIT_CONFIG = {
 // payment against its PI (computed from the fetched rows, matching the
 // backend's LIFO guard); FinalPayment's delete reverses via the existing
 // cancel() flow server-side, so any row is offerable here.
+// Indent, PO, follow-up, PI, invoice, voucher and tally entry can be deleted at
+// any status: the server refuses while a later step rests on the record and
+// names it (shown in the dialog). A completed QC has posted stock, so it stays
+// draft-only.
 const CAN_DELETE = {
-  indent:        (r) => r.approvalStatus === 'DRAFT',
-  po:            (r) => r.approvalStatus === 'DRAFT',
-  followup:      (r) => ['PENDING', 'RESCHEDULED'].includes(r.followUpStatus),
-  pi:            (r) => ['DRAFT', 'RECEIVED'].includes(r.piStatus) && r.approvalStatus !== 'APPROVED',
-  grn:           (r) => r.grnStatus === 'DRAFT',
+  indent:        () => true,
+  po:            () => true,
+  followup:      () => true,
+  pi:            () => true,
+  grn:           (r) => r.grnStatus === 'DRAFT' || r.grnStatus === 'CANCELLED' || isGrnCompleted(r),
   qc:            (r) => ['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus),
-  vendorInvoice: (r) => r.invoiceStatus === 'DRAFT',
-  voucher:       (r) => r.voucherStatus === 'DRAFT',
-  tally:         (r) => r.tallyEntryStatus === 'PENDING',
+  vendorInvoice: () => true,
+  voucher:       () => true,
+  tally:         () => true,
   advance:       (r, ctx) => !!ctx?.latestAdvanceIds?.has(r._id),
   final:         () => true,
 };
@@ -246,6 +254,8 @@ const DELETE_PERMISSION = {
   qc: 'procurement.deleteIncomingQc', vendorInvoice: 'procurement.deleteVendorInvoice', voucher: 'procurement.deleteVoucher',
   tally: 'procurement.deleteTallyEntry', final: 'procurement.deleteFinalPayment',
 };
+
+const DELETE_WITH_REASON = new Set(['indent', 'po', 'followup', 'pi', 'vendorInvoice', 'voucher', 'tally']);
 
 const RECORD_NUMBER_FIELD = {
   indent: 'indentNumber', po: 'poNumber', followup: 'followUpNumber', pi: 'piNumber',
@@ -352,6 +362,8 @@ const PurchaseMasterData = () => {
   const [editRow, setEditRow] = useState(null);   // { tab, row } | null
   const [deleteRow, setDeleteRow] = useState(null); // { tab, row } | null
   const [deleting, setDeleting] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteError, setDeleteError] = useState('');
 
   const clearFilters = () => { setSearch(''); setStatusFilter(''); setVendorFilter(null); setDateFrom(''); setDateTo(''); setExtra({}); };
   const switchTab = (t) => { setTab(t); clearFilters(); };
@@ -464,7 +476,7 @@ const PurchaseMasterData = () => {
       renderCell: (params) => {
         const row = params.row;
         const editCfg = EDIT_CONFIG[tab];
-        const showEdit = !!editCfg?.canEdit(row);
+        const showEdit = !!editCfg?.canEdit(row, can);
         const showDelete = can(DELETE_PERMISSION[tab]) && !!CAN_DELETE[tab]?.(row, { latestAdvanceIds });
         if (!showEdit && !showDelete) return null;
         return (
@@ -488,15 +500,19 @@ const PurchaseMasterData = () => {
 
   const closeEdit = () => setEditRow(null);
 
+  const closeDelete = () => { setDeleteRow(null); setDeleteReason(''); setDeleteError(''); };
   const handleConfirmDelete = async () => {
     if (!deleteRow) return;
     setDeleting(true);
+    setDeleteError('');
     try {
-      await deleteFns[deleteRow.tab](deleteRow.row._id).unwrap();
-      enqueueSnackbar(`${TAB_LABEL_SINGULAR[deleteRow.tab]} deleted`, { variant: 'success' });
-      setDeleteRow(null);
+      const { tab, row } = deleteRow;
+      await deleteFns[tab](DELETE_WITH_REASON.has(tab) ? { id: row._id, reason: deleteReason.trim() } : row._id).unwrap();
+      enqueueSnackbar(`${TAB_LABEL_SINGULAR[tab]} deleted`, { variant: 'success' });
+      closeDelete();
     } catch (err) {
-      enqueueSnackbar(err?.data?.message || 'Failed to delete', { variant: 'error' });
+      // Shown in the dialog — e.g. which later record must be deleted first.
+      setDeleteError(err?.data?.message || 'Failed to delete');
     } finally {
       setDeleting(false);
     }
@@ -710,23 +726,33 @@ const PurchaseMasterData = () => {
 
       {/* Edit — reuses whichever module's own drawer/dialog this tab already uses */}
       {editRow && EDIT_CONFIG[editRow.tab] && (() => {
-        const { Component, prop } = EDIT_CONFIG[editRow.tab];
-        return <Component open onClose={closeEdit} {...{ [prop]: editRow.row }} />;
+        const { Component, prop, extraProps } = EDIT_CONFIG[editRow.tab];
+        return <Component open onClose={closeEdit} {...{ [prop]: editRow.row }} {...(extraProps?.(editRow.row) || {})} />;
       })()}
 
+      {/* A GRN has its own delete (a completed one asks why and names what rests on it). */}
+      <GrnDeleteDialog open={deleteRow?.tab === 'grn'} grn={deleteRow?.tab === 'grn' ? deleteRow.row : null}
+        onClose={() => setDeleteRow(null)} />
+
       {/* Delete confirmation */}
-      <Dialog open={!!deleteRow} onClose={() => (deleting ? null : setDeleteRow(null))} maxWidth="xs" fullWidth>
+      <Dialog open={!!deleteRow && deleteRow.tab !== 'grn'} onClose={() => (deleting ? null : closeDelete())} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800 }}>Delete {deleteRow ? TAB_LABEL_SINGULAR[deleteRow.tab] : ''}?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
             This will delete{' '}
-            <b>{deleteRow ? (deleteRow.row[RECORD_NUMBER_FIELD[deleteRow.tab]] || 'this record') : ''}</b>.
-            This action cannot be undone from here.
+            <b>{deleteRow ? (deleteRow.row[RECORD_NUMBER_FIELD[deleteRow.tab]] || 'this record') : ''}</b> and undo what it
+            changed on earlier steps. It is refused while a later step still uses it — that record is named.
           </Typography>
+          {deleteRow && DELETE_WITH_REASON.has(deleteRow.tab) && (
+            <TextField label="Reason for deleting *" fullWidth size="small" sx={{ mt: 2 }} value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)} inputProps={{ maxLength: 500 }} />
+          )}
+          {deleteError && <Alert severity="warning" sx={{ mt: 2 }}>{deleteError}</Alert>}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setDeleteRow(null)} disabled={deleting}>Cancel</Button>
-          <Button onClick={handleConfirmDelete} color="error" variant="contained" disabled={deleting}>
+          <Button onClick={closeDelete} disabled={deleting}>{deleteError ? 'Close' : 'Cancel'}</Button>
+          <Button onClick={handleConfirmDelete} color="error" variant="contained"
+            disabled={deleting || (deleteRow && DELETE_WITH_REASON.has(deleteRow.tab) && deleteReason.trim().length < 3)}>
             {deleting ? 'Deleting…' : 'Delete'}
           </Button>
         </DialogActions>

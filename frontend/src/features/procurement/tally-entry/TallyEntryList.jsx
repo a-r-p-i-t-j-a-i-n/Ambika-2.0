@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Grid, Autocomplete, LinearProgress,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
+  LinearProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   useGetTallyEntriesQuery,
   useGetTallyEntryStatsQuery,
+  useDeleteTallyEntryMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -28,6 +29,9 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLab
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const TallyEntryList = () => {
   const navigate = useNavigate();
@@ -49,8 +53,7 @@ const TallyEntryList = () => {
   const [editEntry, setEditEntry] = useState(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [activeEntry, setActiveEntry] = useState(null);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
@@ -63,11 +66,21 @@ const TallyEntryList = () => {
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
   const onView = (r) => { navigate(`/procurement/tally-entries/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditEntry(r); setFormOpen(true); closeMenu(); };
   const onComplete = (r) => { setActiveEntry(r); setCompleteOpen(true); closeMenu(); };
+
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removeTallyEntry] = useDeleteTallyEntryMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deleteTallyEntry');
+  const del = useRecordDelete({
+    what: 'Tally entry', numberOf: (r) => r.entryNumber, remove: removeTallyEntry,
+    needsReason: (r) => r.tallyEntryStatus === 'COMPLETED',
+    consequence: (r) => (r.tallyEntryStatus === 'COMPLETED' ? 'The tally entry is removed and its voucher goes back to awaiting its tally entry. Not allowed while a final payment uses it.' : 'The tally entry is removed.'),
+  });
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
@@ -75,6 +88,7 @@ const TallyEntryList = () => {
       a.push({ key: 'edit', label: 'Edit', icon: <Pencil size={16} />, fn: () => onEdit(r) });
       a.push({ key: 'complete', label: 'Complete', icon: <CheckCircle2 size={16} />, fn: () => onComplete(r) });
     }
+    if (canDeleteRecord) a.push(del.action(r));
     return a;
   };
 
@@ -194,11 +208,8 @@ const TallyEntryList = () => {
           rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />
       </Paper>
 
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}><ListItemIcon>{a.icon}</ListItemIcon><ListItemText>{a.label}</ListItemText></MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       <TallyEntryFormDialog open={formOpen} entry={editEntry} onClose={() => { setFormOpen(false); setEditEntry(null); }} />
       <TallyEntryCompleteDialog open={completeOpen} entry={activeEntry} onClose={() => { setCompleteOpen(false); setActiveEntry(null); }} />

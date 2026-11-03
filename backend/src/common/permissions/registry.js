@@ -84,6 +84,7 @@ export const PERMISSIONS = Object.freeze({
   'procurement.deleteProformaInvoice': { module: 'Procurement', label: 'Delete a proforma invoice',               risk: 'high' },
   'procurement.deleteAdvancePayment':  { module: 'Procurement', label: 'Delete an advance payment',               risk: 'high' },
   'procurement.deleteGrn':             { module: 'Procurement', label: 'Delete a goods receipt note',             risk: 'high' },
+  'procurement.editGrn':               { module: 'Procurement', label: 'Edit a completed goods receipt note',     risk: 'high' },
   'procurement.deleteIncomingQc':      { module: 'Procurement', label: 'Delete an incoming QC record',            risk: 'high' },
   'procurement.deleteVendorInvoice':   { module: 'Procurement', label: 'Delete a vendor invoice',                 risk: 'high' },
   'procurement.deleteVoucher':         { module: 'Procurement', label: 'Delete a payment voucher',                risk: 'high' },

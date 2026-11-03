@@ -46,11 +46,12 @@ export const applyConfigSchema = Joi.object({
 
 export const taskQuerySchema = Joi.object({
   fmsKey: key, stepKey: key,
-  status: Joi.string().valid('OPEN', 'DONE', 'CLOSED', 'ALL'),
+  // RECENT = open, plus completed in the last 30 days (as My Tasks shows).
+  status: Joi.string().valid('OPEN', 'DONE', 'CLOSED', 'ALL', 'RECENT'),
   doerId: Joi.alternatives().try(objectId, Joi.string().valid('none')),
   search: Joi.string().trim().max(100).allow(''),
   page: Joi.number().integer().min(1),
-  limit: Joi.number().integer().min(1).max(500),
+  limit: Joi.number().integer().min(1).max(1000),
 });
 
 export const entityQuerySchema = Joi.object({

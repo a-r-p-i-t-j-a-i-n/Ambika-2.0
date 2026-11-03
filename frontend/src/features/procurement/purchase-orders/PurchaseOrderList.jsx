@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Tabs, Tab,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Tooltip,
+  Autocomplete, Tabs, Tab,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -18,6 +18,7 @@ import {
   useCancelPurchaseOrderMutation,
   useGeneratePurchaseOrderPdfMutation,
   useGetAllApprovedItemsQuery,
+  useDeletePurchaseOrderMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -34,6 +35,9 @@ import PoItemsQuickViewDialog from './PoItemsQuickViewDialog';
 import PendingForPoGrid from './PendingForPoGrid';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
@@ -77,8 +81,7 @@ const PurchaseOrderList = () => {
   const [pdfOpen, setPdfOpen] = useState(false);
   const [itemsPo, setItemsPo] = useState(null); // row whose item quick view is open
   const [activePo, setActivePo] = useState(null);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
 
   const queryArgs = {
     page: paginationModel.page + 1,
@@ -97,8 +100,8 @@ const PurchaseOrderList = () => {
   const [cancelPo] = useCancelPurchaseOrderMutation();
   const [generatePoPdf] = useGeneratePurchaseOrderPdfMutation();
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
 
   const onView = (r) => { navigate(`/procurement/purchase-orders/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setReviseFromPo(null); setEditPo(r); setFormOpen(true); closeMenu(); };
@@ -129,6 +132,16 @@ const PurchaseOrderList = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removePo] = useDeletePurchaseOrderMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deletePurchaseOrder');
+  const del = useRecordDelete({
+    what: 'PO', numberOf: (r) => r.poNumber || r.draftNumber, remove: removePo,
+    needsReason: (r) => r.approvalStatus !== 'DRAFT',
+    consequence: () => 'The PO is removed and the indent items it held are free again. Not allowed while a follow-up, PI, advance, GRN, invoice or voucher uses it — if so, it is named here.',
+  });
+
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (r.approvalStatus === 'DRAFT') {
@@ -146,6 +159,7 @@ const PurchaseOrderList = () => {
     }
     // Always last: previews this row's PDF (the stored one, or generated on demand).
     a.push({ key: 'pdf', label: 'Preview PDF', icon: <FileText size={16} />, fn: () => onPdf(r) });
+    if (canDeleteRecord) a.push(del.action(r));
     return a;
   };
 
@@ -324,14 +338,8 @@ const PurchaseOrderList = () => {
       </>)}
 
       {/* Row actions */}
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}>
-            <ListItemIcon>{a.icon}</ListItemIcon>
-            <ListItemText>{a.label}</ListItemText>
-          </MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       {/* Drawer + dialogs */}
       <PurchaseOrderFormDrawer open={formOpen} po={editPo} reviseFrom={reviseFromPo}

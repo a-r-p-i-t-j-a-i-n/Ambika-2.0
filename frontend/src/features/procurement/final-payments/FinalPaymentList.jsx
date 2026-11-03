@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -17,6 +16,7 @@ import {
   useGetFinalPaymentStatsQuery,
   useCancelFinalPaymentMutation,
   useGenerateFinalPaymentPdfMutation,
+  useDeleteFinalPaymentMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -32,6 +32,9 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLab
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const FinalPaymentList = () => {
   const navigate = useNavigate();
@@ -52,8 +55,7 @@ const FinalPaymentList = () => {
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
   const [receipt, setReceipt] = useState({ open: false, url: '', title: '', fileName: '', loading: false });
 
@@ -74,8 +76,8 @@ const FinalPaymentList = () => {
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
   const onView = (r) => { navigate(`/procurement/final-payments/${r._id}`); closeMenu(); };
   const onProof = (r) => { window.open(fileHref(r.proofDocument?.fileUrl), '_blank'); closeMenu(); };
   const onReceipt = async (r) => {
@@ -99,12 +101,23 @@ const FinalPaymentList = () => {
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
 
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removePayment] = useDeleteFinalPaymentMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deleteFinalPayment');
+  const del = useRecordDelete({
+    what: 'Payment', numberOf: (r) => r.paymentNumber, remove: removePayment,
+    needsReason: () => false,
+    consequence: () => 'The payment is reversed on its voucher and invoice (they show it as unpaid again), then removed.',
+  });
+
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (r.proofDocument?.fileUrl) a.push({ key: 'proof', label: 'View Proof', icon: <FileDown size={16} />, fn: () => onProof(r) });
     if (r.paymentStatus !== 'CANCELLED') a.push({ key: 'cancel', label: 'Cancel Payment', icon: <Ban size={16} />, fn: () => onCancel(r) });
     // The receipt PDF is always the last item.
     a.push({ key: 'receipt', label: r.paymentPdfUrl ? 'Receipt PDF' : 'Generate Receipt', icon: <ReceiptText size={16} />, fn: () => onReceipt(r) });
+    if (canDeleteRecord) a.push(del.action(r));
     return a;
   };
 
@@ -232,11 +245,8 @@ const FinalPaymentList = () => {
           rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />
       </Paper>
 
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}><ListItemIcon>{a.icon}</ListItemIcon><ListItemText>{a.label}</ListItemText></MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       <FinalPaymentFormDialog open={formOpen} onClose={() => setFormOpen(false)} />
       <PdfViewerModal

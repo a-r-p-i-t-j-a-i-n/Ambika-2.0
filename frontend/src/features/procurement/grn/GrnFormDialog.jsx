@@ -17,6 +17,8 @@ import {
   useCreateGrnMutation,
   useUpdateGrnMutation,
   useCompleteGrnMutation,
+  useCorrectGrnMutation,
+  useGetGrnChangeCheckQuery,
   usePreviewGrnPdfMutation,
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
@@ -35,7 +37,7 @@ import { DEFAULT_HOW_ITEM_RECEIVED, lineReceiptType } from './grnReceiptType';
 import { resolveGrnQcStage } from './grnQcStage';
 import GrnQcStatusChip from './GrnQcStatusChip';
 import { GrnQcSections } from './GrnQcSection';
-import StatusChip from '../components/StatusChip';
+import StatusChip, { TONES } from '../components/StatusChip';
 import { pickGrnQc } from '../incoming-qc/qcForm';
 import { destinationOf, routingProblemOf, destinationText, DESTINATION_META } from './inventoryDestination';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
@@ -54,7 +56,10 @@ const ACCEPT = '.pdf,image/*';
  */
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-const SECTION = { p: 2.5, ...pfmsCardSx };
+const SECTION = { p: 2, ...pfmsCardSx };
+// The read-only GRN No. / Incoming QC boxes in the dialog header.
+const META_PILL_SX = { px: 1.25, py: 0.5, borderRadius: '8px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surfaceAlt, display: 'flex', flexDirection: 'column', minWidth: 0 };
+const META_LABEL_SX = { fontSize: '0.62rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: PFMS.sub, lineHeight: 1.2 };
 
 // A W/O PO line has no PO to source ordered/pending qty from — always 0/N-A,
 // never fabricated. Only itemName + receivedQty are required (mirrors the
@@ -83,6 +88,12 @@ const ReceiptTypeSelect = ({ value, onChange, error, lineKey }) => (
   </TextField>
 );
 
+// A later step resting on a completed GRN, as the correction panel names it.
+const LATER_STEP_LABEL = { QC: 'Incoming QC', INVOICE: 'Vendor Invoice' };
+const laterStepText = (s) => (s.type === 'STOCK'
+  ? `stock already posted (${s.count} entr${s.count === 1 ? 'y' : 'ies'})`
+  : `${LATER_STEP_LABEL[s.type] || s.type} ${s.number || ''}`.trim());
+
 // Read-only qty display — the mobile-only caption keeps each stacked row legible
 // once the column headers (desktop-only) are hidden.
 const QtyCell = ({ label, value, color }) => (
@@ -92,7 +103,8 @@ const QtyCell = ({ label, value, color }) => (
   </Box>
 );
 
-const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) => {
+// `correct`: opened to correct a COMPLETED GRN (procurement.editGrn) rather than view it.
+const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, correct = false }) => {
   const { enqueueSnackbar } = useSnackbar();
   // Editing: load the draft fresh — the server re-derives its "already received /
   // pending" figures against the PO's current state (a list row may be stale).
@@ -113,7 +125,15 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const qcStage = resolveGrnQcStage(liveGrn, pickGrnQc(qcRes?.data || []));
   // Once completed or MD-signed, the GRN is read-only for good —
   // the server refuses edits; here the fields stop accepting them and Save goes.
-  const grnLocked = Boolean(liveGrn?._id) && (isGrnCompleted(liveGrn) || liveGrn.approvalStatus === 'MD_APPROVED' || liveGrn.grnStatus === 'CANCELLED');
+  // Correcting a completed GRN: its header always; its items only while no
+  // later step (QC / invoice / stock) rests on them — the server decides, the
+  // change check says which.
+  const correcting = Boolean(correct) && isGrnCompleted(liveGrn);
+  const { data: checkRes } = useGetGrnChangeCheckQuery(liveGrn?._id, { skip: !open || !correcting, refetchOnMountOrArgChange: true });
+  const changeCheck = checkRes?.data || null;
+  const itemsLocked = correcting && (!changeCheck || changeCheck.itemsLocked);
+  const [reason, setReason] = useState('');
+  const grnLocked = !correcting && Boolean(liveGrn?._id) && (isGrnCompleted(liveGrn) || liveGrn.approvalStatus === 'MD_APPROVED' || liveGrn.grnStatus === 'CANCELLED');
 
   // One or more compatible (same-vendor) POs — a GRN can now cover several at once.
   const [pos, setPos] = useState([]);
@@ -173,8 +193,10 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   const [previewGrnPdf, { isLoading: previewing }] = usePreviewGrnPdfMutation();
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
   const saving = creating || updating;
-  const busy = saving || previewing || uploading || finalizing;
-  const [overReceiptConfirmOpen, setOverReceiptConfirmOpen] = useState(false);
+  const [correctGrn, { isLoading: correctSaving }] = useCorrectGrnMutation();
+  const busy = saving || previewing || uploading || finalizing || correctSaving;
+  // 'finalize' | 'correct' — which save the over-receipt consent is for.
+  const [overReceiptFor, setOverReceiptFor] = useState(null);
 
   const handleUpload = async (e) => {
     const f = e.target.files?.[0]; e.target.value = '';
@@ -230,6 +252,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
   useEffect(() => {
     if (!open) return;
     setSavedGrn(null);
+    setReason('');
     if (grn) {
       // A multi-PO GRN carries poIds/poNumbers; a legacy single-PO GRN only has
       // the primary poId/poNumber — both resolve to the same shape here.
@@ -252,7 +275,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       });
       setDoc(grn.challanDocument?.fileUrl ? { ...grn.challanDocument } : null);
       setItems((grn.items || []).map((it) => ({
-        poItemId: it.poItemId, poId: it.poId || grn.poId, poNumber: it.poNumber || grn.poNumber,
+        _id: it._id, poItemId: it.poItemId, poId: it.poId || grn.poId, poNumber: it.poNumber || grn.poNumber,
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.orderedQty, previouslyReceivedQty: it.previouslyReceivedQty,
         pendingBefore: round2((it.orderedQty || 0) - (it.previouslyReceivedQty || 0)),
@@ -457,7 +480,10 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     rmReceivedAtLocation: hasRmLine ? header.rmReceivedAtLocation : null,
     invoiceDate: header.invoiceDate || undefined,
     challanDocument: doc ? { fileName: doc.fileName, fileUrl: doc.fileUrl, fileType: doc.fileType } : undefined,
-    items: validItems.map((it) => (isWithoutPo ? {
+    // A correction sends every stored line (a 0-qty line too) so unchanged
+    // items read as unchanged; each line keeps its own id.
+    items: (correcting ? items : validItems).map((it) => (isWithoutPo ? {
+      _id: it._id || undefined,
       itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '', skuId: it.skuId || undefined,
       unit: it.unit || 'Pcs', invoiceQty: round2(it.invoiceQty || it.receivedQty), receivedQty: round2(it.receivedQty),
       rate: round2(it.rate), batchNo: it.batchNo?.trim() || '', remarks: it.remarks?.trim() || '',
@@ -466,6 +492,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       // poId isn't required by the server (it resolves each line's PO itself
       // from poItemId/skuCode), but passing it through keeps the preview PDF
       // and any client-side grouping accurate.
+      _id: it._id || undefined,
       poItemId: it.poItemId, poId: it.poId || undefined, poNumber: it.poNumber || undefined,
       itemName: it.itemName.trim(), skuCode: it.skuCode?.trim() || '',
       skuId: it.skuId || undefined, unit: it.unit || 'Pcs',
@@ -548,8 +575,39 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
     if (!validateForm({ forFinalize: true })) return;
     // No "pending qty" exists on a W/O PO line, so over-receipt never applies.
     const hasExtra = !isWithoutPo && validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore));
-    if (hasExtra) { setOverReceiptConfirmOpen(true); return; }
+    if (hasExtra) { setOverReceiptFor('finalize'); return; }
     runSaveAndFinalize(false);
+  };
+
+  // ── Save the correction of a completed GRN (procurement.editGrn). With the
+  // items locked only the header goes, so nothing a later step uses can move.
+  const runCorrect = async (allowOverReceipt) => {
+    const payload = buildPayload();
+    const body = itemsLocked
+      ? {
+        grnDate: header.grnDate, challanNumber: header.challanNumber, invoiceNumber: header.invoiceNumber,
+        invoiceDate: header.invoiceDate || '', vehicleNumber: header.vehicleNumber, receivedBy: header.receivedBy,
+        preparedBy: header.preparedBy, remarks: header.remarks, challanDocument: payload.challanDocument,
+      }
+      : { ...payload, invoiceDate: header.invoiceDate || '' };
+    try {
+      await correctGrn({ id: current._id, reason: reason.trim(), allowOverReceipt, ...body }).unwrap();
+      enqueueSnackbar(`GRN ${current.grnNumber} corrected`, { variant: 'success' });
+      onClose?.(true);
+    } catch (err) {
+      const msg = err?.data?.message || 'Failed to save the changes';
+      // The server measures "pending" against today's PO; it asks for the same consent.
+      if (err?.status === 409 && /over-receipt/i.test(msg) && !allowOverReceipt) { setOverReceiptFor('correct'); return; }
+      enqueueSnackbar(msg, { variant: 'error' });
+    }
+  };
+
+  const handleCorrect = () => {
+    if (reason.trim().length < 3) { enqueueSnackbar('Give the reason for the change', { variant: 'warning' }); return; }
+    if (!itemsLocked && !validateForm()) return;
+    const hasExtra = !itemsLocked && !isWithoutPo && validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore));
+    if (hasExtra) { setOverReceiptFor('correct'); return; }
+    runCorrect(false);
   };
 
   // ── Preview PDF (no save): render the GRN from current form data on the server. ──
@@ -581,73 +639,107 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
 
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
 
+  // Shown once, at the top: the vendor, and what this GRN receives against.
+  const vendorName = isWithoutPo ? header.vendorName : (pos[0]?.vendorName || grn?.vendorName || '');
+  const indentNumber = pos[0]?.indentNumber || grn?.indentNumber;
+  const piNumber = pos[0]?.piNumber || grn?.piNumber;
+  const vendorRefs = (isWithoutPo
+    ? [header.vendorGST && `GST ${header.vendorGST}`, header.vendorAddress, header.vendorPhone && `📞 ${header.vendorPhone}`]
+    : [pos.length > 0 && `PO ${pos.map((p) => p.poNumber).join(', ')}`, indentNumber && `Indent ${indentNumber}`, piNumber && `PI ${piNumber}`]
+  ).filter(Boolean);
+
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
       PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
-      {/* Header */}
-      <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <PackageCheck size={22} />
-          <Box>
-            <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: '#fff' }}>
+      {/* Header — white with a thin brand line on top: what this is, its GRN No.
+          and QC state, then the vendor it is for and the GRN Date. */}
+      <Box sx={{ flexShrink: 0, bgcolor: PFMS.surface, borderTop: `4px solid ${PFMS.brand}`, borderBottom: `1px solid ${PFMS.line}` }}>
+        <Box sx={{ px: 3, pt: 1.5, pb: 1.25, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: '8px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(PFMS.brand, 0.08), color: PFMS.brand }}>
+            <PackageCheck size={20} />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 200 }}>
+            <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: PFMS.ink, lineHeight: 1.25 }}>
               {grn ? 'Edit GRN' : 'Create GRN'}
             </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.8)' }}>
-              Step 1.8 · Receive material — stock posts on Complete
+            <Typography sx={{ fontSize: '0.72rem', color: PFMS.sub }}>
+              {correcting ? 'Step 1.8 · Correcting a completed GRN' : 'Step 1.8 · Receive material — stock posts on Complete'}
             </Typography>
           </Box>
           {/* System-generated identifier — read-only, styled apart from form fields. */}
           <Box
             title={current?.grnNumber ? 'System-generated GRN No. — stays the same through draft edits and completion' : 'The GRN No. is generated by the system when this GRN is first saved'}
-            sx={{
-              ml: { xs: 0.5, sm: 1.5 }, px: 1.25, py: 0.5, borderRadius: '8px',
-              border: '1px solid rgba(255,255,255,0.35)', bgcolor: 'rgba(255,255,255,0.12)',
-              display: 'flex', flexDirection: 'column', minWidth: 0,
-            }}>
-            <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: 'rgba(255,255,255,0.75)', lineHeight: 1.2 }}>
-              GRN No.
-            </Typography>
+            sx={META_PILL_SX}>
+            <Typography sx={META_LABEL_SX}>GRN No.</Typography>
             {current?.grnNumber ? (
-              <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', color: '#fff', lineHeight: 1.3, overflowWrap: 'anywhere' }}>
+              <Typography sx={{ fontWeight: 800, fontSize: '0.9rem', color: PFMS.ink, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
                 {current.grnNumber}
               </Typography>
             ) : (
-              <Typography sx={{ fontWeight: 600, fontSize: '0.8rem', fontStyle: 'italic', color: 'rgba(255,255,255,0.8)', lineHeight: 1.3 }}>
+              <Typography sx={{ fontWeight: 600, fontSize: '0.8rem', fontStyle: 'italic', color: PFMS.sub, lineHeight: 1.3 }}>
                 Assigned on save
               </Typography>
             )}
           </Box>
           {/* Incoming QC status — always in view; details in the Incoming QC panel below. */}
-          <Box data-testid="grn-form-qc-badge" title={qcStage.desc}
-            sx={{
-              ml: 1, px: 1.25, py: 0.5, borderRadius: '8px',
-              border: '1px solid rgba(255,255,255,0.35)', bgcolor: 'rgba(255,255,255,0.12)',
-              display: { xs: 'none', sm: 'flex' }, flexDirection: 'column',
-            }}>
-            <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: 'rgba(255,255,255,0.75)', lineHeight: 1.2 }}>
-              Incoming QC
-            </Typography>
-            <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: '#fff', lineHeight: 1.3 }}>{qcStage.label}</Typography>
+          <Box data-testid="grn-form-qc-badge" title={qcStage.desc} sx={{ ...META_PILL_SX, display: { xs: 'none', sm: 'flex' } }}>
+            <Typography sx={META_LABEL_SX}>Incoming QC</Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: (TONES[qcStage.tone] || TONES.neutral).fg, lineHeight: 1.3 }}>{qcStage.label}</Typography>
           </Box>
+          <IconButton onClick={() => onClose?.(Boolean(savedGrn), savedGrn)} sx={{ color: PFMS.sub }}><X size={20} /></IconButton>
         </Box>
-        <IconButton onClick={() => onClose?.(Boolean(savedGrn), savedGrn)} sx={{ color: '#fff' }}><X size={20} /></IconButton>
+
+        {/* The vendor (with the PO / indent / PI it receives against) and the GRN Date. */}
+        <Box data-testid="grn-form-vendor-bar"
+          sx={{ px: 3, py: 1.25, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', borderTop: `1px solid ${PFMS.lineSoft}` }}>
+          <Building2 size={18} color={vendorName ? PFMS.brand : PFMS.faint} style={{ flexShrink: 0 }} />
+          <Box sx={{ flex: 1, minWidth: 220 }}>
+            <Typography noWrap title={vendorName || undefined}
+              sx={{ fontWeight: 800, fontSize: '0.98rem', lineHeight: 1.3, color: vendorName ? PFMS.ink : PFMS.faint }}>
+              {vendorName || (isWithoutPo ? 'No vendor yet — select one below' : 'No vendor yet — pick a PO below')}
+            </Typography>
+            {vendorRefs.length > 0 && (
+              <Typography variant="caption" sx={{ display: 'block', color: PFMS.sub, overflowWrap: 'anywhere' }}>
+                {vendorRefs.join(' · ')}
+              </Typography>
+            )}
+          </Box>
+          {isWithoutPo && <Chip size="small" color="warning" variant="outlined" label="Without PO" sx={{ fontWeight: 700 }} />}
+          <DateInputDDMMYYYY label="GRN Date" value={header.grnDate} disabled={grnLocked} sx={{ width: 200 }}
+            onChange={(val) => setHeader((h) => ({ ...h, grnDate: val }))} />
+        </Box>
       </Box>
 
       {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2.5, bgcolor: PFMS.surfaceAlt }}>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', px: 3, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5, bgcolor: PFMS.surfaceAlt }}>
         {/* The GRN part. Read-only once completed / signed (the server refuses edits). */}
+        {correcting && (
+          <Paper elevation={0} data-testid="grn-correction-panel"
+            sx={{ ...SECTION, borderColor: alpha('#d97706', 0.45), bgcolor: alpha('#f59e0b', 0.05) }}>
+            <Typography sx={{ fontWeight: 800, color: '#92400e', mb: 0.5 }}>Editing a completed GRN</Typography>
+            <Typography variant="body2" sx={{ color: '#475569' }}>
+              {!changeCheck ? 'Checking what this GRN is linked to…'
+                : itemsLocked
+                  ? <>Items are locked — <b>{changeCheck.laterSteps.map(laterStepText).join(', ')}</b> already {changeCheck.laterSteps.length === 1 ? 'uses' : 'use'} them. Remove that first to change quantities. Dates, challan, invoice, vehicle, people and remarks can be corrected now.</>
+                  : "Nothing after this GRN uses its items yet, so quantities can be corrected too — the PO's received and pending quantity follow."}
+              {changeCheck?.mdSigned ? " The MD's signature is removed when you save — the MD signs the corrected GRN again." : ''}
+            </Typography>
+            <TextField label="Reason for the change *" size="small" fullWidth value={reason} sx={{ mt: 1.5, bgcolor: '#fff' }}
+              onChange={(e) => setReason(e.target.value)} placeholder="e.g. Wrong challan number entered"
+              inputProps={{ maxLength: 500, 'data-testid': 'grn-correction-reason' }} />
+          </Paper>
+        )}
         <Box data-testid="grn-form-grn-part" aria-disabled={grnLocked || undefined}
-          sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, ...(grnLocked ? { pointerEvents: 'none', opacity: 0.8 } : {}) }}>
+          sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...(grnLocked ? { pointerEvents: 'none', opacity: 0.8 } : {}) }}>
         <Paper elevation={0} sx={SECTION}>
-          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
+          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, fontWeight: 700, color: 'primary.main' }}>
             <FileText size={18} /> GRN Header
           </Typography>
           {/* Receipt type — fixed once a GRN exists; chosen only when creating one. */}
           {!isEdit && !presetPo && (
             <ToggleButtonGroup
               exclusive size="small" value={mode} onChange={handleModeChange}
-              sx={{ mb: 2.5 }} data-testid="grn-mode-toggle"
+              sx={{ mb: 2 }} data-testid="grn-mode-toggle"
             >
               <ToggleButton value="PO" sx={{ textTransform: 'none', gap: 0.75, px: 1.5 }}>
                 <ShoppingBag size={15} /> Against Purchase Order
@@ -658,11 +750,11 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
             </ToggleButtonGroup>
           )}
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}>
-              {isWithoutPo ? (
-                isEdit ? (
-                  <TextField label="Vendor" fullWidth value={header.vendorName || ''} disabled />
-                ) : (
+            {/* Picking what to receive — only while creating. The chosen vendor,
+                PO(s) and indent then show at the top of the form. */}
+            {!isEdit && !presetPo && (
+              <Grid item xs={12}>
+                {isWithoutPo ? (
                   <Autocomplete
                     options={vendorOptions}
                     loading={vendorsLoading}
@@ -676,41 +768,41 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
                         InputProps={{ ...params.InputProps, endAdornment: (<>{vendorsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
                     )}
                   />
-                )
-              ) : isEdit || presetPo ? (
-                <TextField label="PO Number(s)" fullWidth value={pos.map((p) => p.poNumber).join(', ')} disabled />
-              ) : (
-                <Autocomplete
-                  multiple
-                  options={poOptions}
-                  loading={posLoading}
-                  value={pos}
-                  getOptionLabel={(o) => (o ? `${o.poNumber} — ${o.vendorName}` : '')}
-                  isOptionEqualToValue={(o, v) => o._id === v._id}
-                  // Once one PO is picked, only the same vendor's other POs stay
-                  // selectable (server re-enforces this regardless).
-                  getOptionDisabled={(o) => pos.length > 0 && pos[0].vendorId && o.vendorId
-                    && String(o.vendorId) !== String(pos[0].vendorId)}
-                  onChange={(_e, v) => applyPos(v)}
-                  noOptionsText="No PO is ready for GRN (needs READY_FOR_GRN + payment completed)"
-                  renderInput={(params) => (
-                    <TextField {...params} label="Purchase Order(s) *" placeholder="Same vendor — READY_FOR_GRN + Payment Completed only"
-                      helperText="Pick one or more compatible POs of the same vendor"
-                      InputProps={{ ...params.InputProps, endAdornment: (<>{posLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
-                  )}
-                />
-              )}
+                ) : (
+                  <Autocomplete
+                    multiple
+                    options={poOptions}
+                    loading={posLoading}
+                    value={pos}
+                    getOptionLabel={(o) => (o ? `${o.poNumber} — ${o.vendorName}` : '')}
+                    isOptionEqualToValue={(o, v) => o._id === v._id}
+                    // Once one PO is picked, only the same vendor's other POs stay
+                    // selectable (server re-enforces this regardless).
+                    getOptionDisabled={(o) => pos.length > 0 && pos[0].vendorId && o.vendorId
+                      && String(o.vendorId) !== String(pos[0].vendorId)}
+                    onChange={(_e, v) => applyPos(v)}
+                    noOptionsText="No PO is ready for GRN (needs READY_FOR_GRN + payment completed)"
+                    renderInput={(params) => (
+                      <TextField {...params} label="Purchase Order(s) *" placeholder="Same vendor — READY_FOR_GRN + Payment Completed only"
+                        helperText="Pick one or more compatible POs of the same vendor"
+                        InputProps={{ ...params.InputProps, endAdornment: (<>{posLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
+                    )}
+                  />
+                )}
+              </Grid>
+            )}
+            {/* One row on a laptop screen (the date column a little wider so a
+                full date fits); GRN Date sits at the top with the vendor. */}
+            <Grid item xs={12}>
+              <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, minmax(0, 1fr))', lg: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)' } }}>
+                <TextField label="Challan No" fullWidth value={header.challanNumber} onChange={(e) => setHeader((h) => ({ ...h, challanNumber: e.target.value }))} />
+                <TextField label="Invoice No" fullWidth value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} />
+                <DateInputDDMMYYYY label="Invoice Date" fullWidth value={header.invoiceDate} onChange={(val) => setHeader((h) => ({ ...h, invoiceDate: val }))} />
+                <TextField label="Vehicle No" fullWidth value={header.vehicleNumber} onChange={(e) => setHeader((h) => ({ ...h, vehicleNumber: e.target.value }))} />
+                <TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} />
+                <TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} />
+              </Box>
             </Grid>
-            <Grid item xs={6} sm={3}>
-              <DateInputDDMMYYYY label="GRN Date" fullWidth value={header.grnDate}
-                onChange={(val) => setHeader((h) => ({ ...h, grnDate: val }))} />
-            </Grid>
-            <Grid item xs={6} sm={3}><TextField label="Challan No" fullWidth value={header.challanNumber} onChange={(e) => setHeader((h) => ({ ...h, challanNumber: e.target.value }))} /></Grid>
-            <Grid item xs={6} sm={3}><TextField label="Invoice No" fullWidth value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} /></Grid>
-            <Grid item xs={6} sm={3}><DateInputDDMMYYYY label="Invoice Date" fullWidth value={header.invoiceDate} onChange={(val) => setHeader((h) => ({ ...h, invoiceDate: val }))} /></Grid>
-            <Grid item xs={6} sm={3}><TextField label="Vehicle No" fullWidth value={header.vehicleNumber} onChange={(e) => setHeader((h) => ({ ...h, vehicleNumber: e.target.value }))} /></Grid>
-            <Grid item xs={6} sm={3}><TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} /></Grid>
-            <Grid item xs={6} sm={3}><TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} /></Grid>
             {/* Material Receipt Type is chosen per SKU, on each Material Receipt row. */}
 
             {/* Inventory destination is automatic: each line goes where its SKU
@@ -731,31 +823,16 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
               </Grid>
             )}
           </Grid>
-
-          {isWithoutPo && wopoVendor ? (
-            <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'center' }}>
-              <Building2 size={16} color="#1d4ed8" />
-              <Typography variant="caption" fontWeight={700}>{header.vendorName || '—'}</Typography>
-              <Typography variant="caption" color="text.secondary">GST: {header.vendorGST || '—'}</Typography>
-              <Typography variant="caption" color="text.secondary">{header.vendorAddress || '—'}</Typography>
-              <Typography variant="caption" color="text.secondary">📞 {header.vendorPhone || '—'}</Typography>
-              <Chip size="small" color="warning" variant="outlined" label="Without PO" sx={{ fontWeight: 700 }} />
-            </Box>
-          ) : pos.length > 0 ? (
-            <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'center' }}>
-              <Building2 size={16} color="#1d4ed8" />
-              <Typography variant="caption" fontWeight={700}>{pos[0].vendorName || grn?.vendorName || '—'}</Typography>
-              {(pos[0].piNumber || grn?.piNumber) && <Chip size="small" variant="outlined" label={`PI ${pos[0].piNumber || grn?.piNumber}`} sx={{ fontWeight: 700 }} />}
-              {(pos[0].indentNumber || grn?.indentNumber) && <Chip size="small" variant="outlined" label={`Indent ${pos[0].indentNumber || grn?.indentNumber}`} sx={{ fontWeight: 700 }} />}
-              {pos.length > 1 && <Chip size="small" color="info" variant="outlined" label={`${pos.length} POs`} sx={{ fontWeight: 700 }} />}
-            </Box>
-          ) : null}
         </Paper>
 
         {/* Items */}
-        <Paper elevation={0} sx={SECTION}>
+        <Paper elevation={0} data-testid="grn-form-items" aria-disabled={itemsLocked || undefined}
+          sx={{ ...SECTION, ...(itemsLocked ? { pointerEvents: 'none', opacity: 0.7 } : {}) }}>
           <Typography component="div" sx={{ fontWeight: 700, color: '#b45309', mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><PackageCheck size={18} /> Material Receipt</Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <PackageCheck size={18} /> Material Receipt
+              {itemsLocked && <Chip size="small" icon={<Lock size={12} />} label="Locked" variant="outlined" sx={{ fontWeight: 700, height: 22 }} />}
+            </Box>
             {isWithoutPo && !grnLocked && (
               <Button size="small" startIcon={<Plus size={14} />} onClick={addWopoItem} sx={{ textTransform: 'none' }}>
                 Add Item
@@ -984,7 +1061,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
 
         {/* Incoming QC — directly under the GRN, on this same form. Before the GRN
             exists there is nothing to inspect; once saved, the real QC form. */}
-        {!liveGrn?._id ? (
+        {correcting ? null : !liveGrn?._id ? (
           <Paper elevation={0} sx={SECTION} data-testid="grn-form-qc-placeholder">
             <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main', mb: 1 }}>
               <ClipboardCheck size={18} /> Incoming QC
@@ -1006,31 +1083,41 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
 
       {/* Footer */}
       <Divider />
-      <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#fff' }}>
-        <Typography variant="caption" color="text.secondary">
-          {grnLocked
-            ? 'GRN completed — read-only'
-            : `${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)} · stock posts on Complete`}
+      {/* One line on a laptop (the summary text wraps first); stacks only on a phone. */}
+      <Box sx={{ px: 3, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: { xs: 'wrap', md: 'nowrap' }, gap: 1.5, bgcolor: '#fff' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
+          {correcting
+            ? `Editing ${current?.grnNumber || 'GRN'} · ${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)}`
+            : grnLocked
+              ? 'GRN completed — read-only'
+              : `${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)} · stock posts on Complete`}
           {' · '}Incoming QC: <b>{qcStage.label}</b>
         </Typography>
-        <Box sx={{ display: 'flex', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', gap: 1.5, flexShrink: { xs: 1, md: 0 }, flexWrap: { xs: 'wrap', md: 'nowrap' }, justifyContent: 'flex-end' }}>
           {/* Second arg = the draft created in this session, so the caller can open it. */}
           <Button variant="outlined" onClick={() => onClose?.(Boolean(savedGrn), savedGrn)} disabled={busy}>
             {savedGrn ? 'Close' : 'Cancel'}
           </Button>
-          {!grnLocked && (
+          {correcting && (
+            <Button variant="contained" data-testid="grn-correction-save"
+              startIcon={correctSaving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+              onClick={handleCorrect} disabled={busy || !changeCheck}>
+              Save Changes
+            </Button>
+          )}
+          {!grnLocked && !correcting && (
             <Button variant="outlined" startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
               onClick={handlePreview} disabled={busy}>
               Preview PDF
             </Button>
           )}
-          {!grnLocked && (
+          {!grnLocked && !correcting && (
             <Button variant="outlined" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
               onClick={() => handleSubmit()} disabled={busy}>
               Save as Draft
             </Button>
           )}
-          {!grnLocked && (
+          {!grnLocked && !correcting && (
             <Button variant="contained" color="success" startIcon={finalizing ? <CircularProgress size={16} color="inherit" /> : <PackageCheck size={16} />}
               onClick={handleSaveAndFinalize} disabled={busy}>
               Save &amp; Finalize GRN
@@ -1042,18 +1129,24 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null }) 
       {/* Over-receipt consent — mirrors the same checkbox/confirmation the
           separate "Complete GRN" dialog already asks for; the server
           re-validates this against the PO's live pending quantity regardless. */}
-      <Dialog open={overReceiptConfirmOpen} onClose={() => setOverReceiptConfirmOpen(false)} maxWidth="xs" fullWidth>
+      <Dialog open={Boolean(overReceiptFor)} onClose={() => setOverReceiptFor(null)} maxWidth="xs" fullWidth>
         <Box sx={{ p: 3 }}>
           <Typography sx={{ fontWeight: 800, mb: 1 }}>Allow Over-Receipt?</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-            One or more items receive more than their pending quantity. Finalizing will post the extra quantity to inventory — confirm this is intentional before continuing.
+            {overReceiptFor === 'correct'
+              ? 'One or more items now receive more than their pending quantity. Saving counts the extra quantity as received on the PO — confirm this is intentional before continuing.'
+              : 'One or more items receive more than their pending quantity. Finalizing will post the extra quantity to inventory — confirm this is intentional before continuing.'}
           </Typography>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-            <Button onClick={() => setOverReceiptConfirmOpen(false)} disabled={busy}>Cancel</Button>
+            <Button onClick={() => setOverReceiptFor(null)} disabled={busy}>Cancel</Button>
             <Button variant="contained" color="success" disabled={busy}
-              startIcon={finalizing ? <CircularProgress size={16} color="inherit" /> : <PackageCheck size={16} />}
-              onClick={() => { setOverReceiptConfirmOpen(false); runSaveAndFinalize(true); }}>
-              Allow &amp; Finalize
+              startIcon={finalizing || correctSaving ? <CircularProgress size={16} color="inherit" /> : <PackageCheck size={16} />}
+              onClick={() => {
+                const what = overReceiptFor;
+                setOverReceiptFor(null);
+                if (what === 'correct') runCorrect(true); else runSaveAndFinalize(true);
+              }}>
+              {overReceiptFor === 'correct' ? 'Allow & Save' : 'Allow & Finalize'}
             </Button>
           </Box>
         </Box>

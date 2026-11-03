@@ -265,6 +265,32 @@ export const approvalService = {
     return row;
   },
 
+  /**
+   * A document was corrected after it reached the approval engine. A signature
+   * on the old content no longer stands, so it is removed (kept in history with
+   * the reason) and the unsigned PDF is rebuilt from the document as it is now —
+   * the MD signs what is actually there. Returns null when the document never
+   * reached the engine (nothing to refresh).
+   */
+  async documentChanged({ documentType, documentId, reason }, user) {
+    const adapter = getApprovalDocument(documentType);
+    const existing = await DocumentApproval.findOne({ documentType, documentId });
+    if (!existing) return null;
+    if (existing.status === APPROVAL_STATUS.APPROVED) {
+      await approvalService.removeSignature({ documentType, documentId, reason: reason || 'Document corrected' }, user);
+    }
+    const row = await DocumentApproval.findOne({ documentType, documentId });
+    row.unsignedPdfUrl = '';
+    row.unsignedPdfFileName = '';
+    await row.save();
+    const ready = await approvalService.ensureReady({ documentType, documentId }, user);
+    await updateMirror(adapter, documentId, {
+      [adapter.pdfUrlField]: ready.unsignedPdfUrl,
+      [adapter.pdfFileNameField]: ready.unsignedPdfFileName,
+    });
+    return ready;
+  },
+
   /** MD removes a signature — requires a reason, reopens the document for signing. */
   async removeSignature({ documentType, documentId, reason }, user) {
     if (!reason?.trim()) throw new AppError('A reason is required to remove a signature', 400);

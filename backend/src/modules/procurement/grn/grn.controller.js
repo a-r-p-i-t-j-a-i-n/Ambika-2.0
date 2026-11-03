@@ -45,8 +45,20 @@ export const grnController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const grn = await grnService.remove(req.params.id, req.user);
+    const grn = await grnService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('GRN deleted', grn));
+  }),
+
+  // What correcting / deleting this GRN would touch (later steps, signature).
+  changeCheck: asyncHandler(async (req, res) => {
+    const check = await grnService.changeCheck(req.params.id);
+    res.json(ApiResponse.ok('GRN change check', check));
+  }),
+
+  // Correct a completed GRN (procurement.editGrn).
+  correct: asyncHandler(async (req, res) => {
+    const grn = await grnService.correct(req.params.id, req.body, req.user);
+    res.json(ApiResponse.ok('GRN corrected', grn));
   }),
 
   complete: asyncHandler(async (req, res) => {

@@ -33,7 +33,7 @@ export const indentController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const indent = await indentService.remove(req.params.id, req.user);
+    const indent = await indentService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('Indent deleted', indent));
   }),
 

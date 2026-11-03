@@ -56,7 +56,7 @@ export const vendorInvoiceController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const inv = await vendorInvoiceService.remove(req.params.id, req.user);
+    const inv = await vendorInvoiceService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('Vendor invoice deleted', inv));
   }),
 

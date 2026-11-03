@@ -162,7 +162,7 @@ const run = async () => {
   await page.waitForTimeout(300);
   await page.getByRole('menuitem').filter({ hasText: /^Create Indent$/ }).click();
   await page.waitForTimeout(1200);
-  check('…"Create Indent" opens the real indent form', (await page.getByRole('button', { name: /^Create Indent$/ }).count()) > 0);
+  check('…"Create Indent" opens the real indent form', (await page.getByRole('button', { name: /^Save as Draft$/ }).count()) > 0);
   await page.getByRole('button', { name: /^Cancel$/ }).first().click().catch(() => {});
   await page.waitForTimeout(600);
 

@@ -36,7 +36,7 @@ export const proformaInvoiceController = {
   }),
 
   remove: asyncHandler(async (req, res) => {
-    const pi = await proformaInvoiceService.remove(req.params.id, req.user);
+    const pi = await proformaInvoiceService.remove(req.params.id, req.user, { reason: req.body?.reason });
     res.json(ApiResponse.ok('Proforma invoice deleted', pi));
   }),
 
