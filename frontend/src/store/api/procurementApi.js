@@ -617,6 +617,12 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (id) => `/procurement/rate-changes/${id}`,
       providesTags: (_r, _e, id) => [{ type: 'RateChange', id }],
     }),
+    // The authoritative vendor rate for vendor + item + unit — what a PO line fetches
+    // (the server's own matcher; the form never matches the catalog itself).
+    getVendorRate: builder.query({
+      query: (params) => ({ url: '/procurement/rate-changes/vendor-rate', params }),
+      keepUnusedDataFor: 0,
+    }),
     getRateChangeHistory: builder.query({
       query: (params = {}) => ({ url: '/procurement/rate-changes/history', params }),
       providesTags: [{ type: 'RateChange', id: 'HISTORY' }],

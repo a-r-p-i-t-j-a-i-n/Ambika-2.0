@@ -1,7 +1,7 @@
 /**
  * PO Rate Change Approvals, driven through the real UI in Chromium: the New PO
- * form (fetched vendor rate, "Needs approval", mandatory reason), the Purchase
- * FMS header button, the Requests / History tabs, the request drawer (approve,
+ * form (fetched vendor rate, "Needs approval", mandatory reason), the sidebar
+ * Purchase Approval entry, the Requests / History tabs, the request drawer (approve,
  * stale-rate confirmation, reject with a reason) and the PO detail line status.
  *
  *   node e2e/rateChange.e2e.mjs
@@ -125,12 +125,14 @@ let buyerRequest = null;
   const vr = (await api('GET', `/procurement/rate-changes/vendor-rate?vendorId=${m.vendor._id}&skuCode=${m.sku.code}&unit=PCS`)).data;
   check('B11 the vendor rate is still 100', vr.rate === 100);
 
-  // Header button + list as a doer.
+  // Sidebar FMS → Purchase → Purchase Approval + list as a doer (the header
+  // "Rate Changes" button was removed).
   await go('/purchase-fms/purchase-orders');
-  const btn = page.locator('[data-testid="pfms-rate-changes"]');
-  await page.locator('[data-testid="pfms-rate-changes-count"]').waitFor({ timeout: 10000 }).catch(() => {});
-  check('B12 Purchase FMS header shows "Rate Changes" with the pending count', await btn.isVisible() && Number(await page.locator('[data-testid="pfms-rate-changes-count"]').innerText()) >= 2);
-  await btn.click();
+  const navItem = page.locator('.MuiDrawer-paper:visible').getByRole('button', { name: 'Purchase Approval', exact: true });
+  await navItem.waitFor({ timeout: 10000 }).catch(() => {});
+  check('B12 sidebar shows Purchase Approval under Purchase; no "Rate Changes" header button', await navItem.isVisible()
+    && await page.locator('[data-testid="pfms-rate-changes"]').count() === 0);
+  await navItem.click();
   await page.waitForURL(/rate-change-approvals/);
   await page.locator('.MuiDataGrid-row', { hasText: buyerRequest.requestNumber }).waitFor({ timeout: 15000 });
   check('B13 the doer sees their request in the list', true);
@@ -192,12 +194,20 @@ console.log('\n[APPROVER] Decide');
   await page.waitForURL(/tab=history/);
   await page.locator('[data-testid="rc-history-preset"]').waitFor({ timeout: 10000 });
   await page.waitForTimeout(1200);
+  // Chronological (oldest first) and only rendered rows are in the DOM — after
+  // earlier --api runs this run's rows are out of view, so read newest first.
+  // History now opens newest first by default.
+  check('A14a History opens "Newest first" by default', (await page.locator('#rch-order').innerText()).trim() === 'Newest first');
   const rowsText = await page.locator('.MuiDataGrid-main').innerText();
+  // Status is past the sideways scroll (MUI X renders only the visible columns).
+  await page.locator('.MuiDataGrid-virtualScroller').evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await page.waitForTimeout(600);
+  const statusText = await page.locator('.MuiDataGrid-main').innerText();
   const presetText = await page.locator('[data-testid="rc-history-preset"]').innerText();
   const hist = (await api('GET', `/procurement/rate-changes/history?vendorId=${m.vendor._id}&skuCode=${m.sku.code}&limit=1`)).data;
   check('A14 "View history" opens the history for that vendor + SKU', presetText.includes(m.sku.code) && presetText.includes(m.vendor.name)
     && (await page.locator('.MuiDataGrid-row').count()) > 0 && hist.pagination.total > 0, presetText);
-  check('A15 history rows: requested, approved and rejected events with both request numbers', /Requested/.test(rowsText) && /Approved/.test(rowsText) && /Rejected/.test(rowsText)
+  check('A15 history rows: pending (requested), approved and rejected events with both request numbers', /Pending/.test(statusText) && /Approved/.test(statusText) && /Rejected/.test(statusText)
     && rowsText.includes(m.pendingRequest.requestNumber) && rowsText.includes(buyerRequest.requestNumber));
   await shot(page, 'history');
 

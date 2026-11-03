@@ -13,7 +13,7 @@ import {
   Workflow, ListChecks, Gauge, SlidersHorizontal, ClipboardList, Trophy, PhoneCall, LayoutGrid,
   ReceiptText, FileSpreadsheet,
   Boxes, PackagePlus, PackageMinus, History, Layers, Recycle, PackageCheck, Factory,
-  Cpu, HardHat, Disc3, ListOrdered, Building2,
+  Cpu, HardHat, Disc3, ListOrdered, Building2, Scale,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -244,6 +244,10 @@ const navSectionsSimple = [
             icon: <ShoppingCart size={19} />,
             children: [
               { text: 'Purchase FMS',   icon: <Workflow size={19} />, path: '/purchase-fms' },
+              // PO rate change requests (Requests / History). Open to every
+              // Purchase FMS user like the lists; only approvers get Approve /
+              // Reject, and the API enforces that.
+              { text: 'Purchase Approval', icon: <Scale size={19} />, path: '/purchase-fms/rate-change-approvals' },
               { text: 'Master Data',    icon: <FileText size={19} />, path: '/procurement/master-data' },
             ],
           },
@@ -405,7 +409,8 @@ const PAGE_TITLES = {
   '/purchase-fms/payment-vouchers':    'Purchase FMS — Vendor Invoices & Payments',
   '/purchase-fms/tally-entries':       'Purchase FMS — Tally Entries',
   '/purchase-fms/final-payments':      'Purchase FMS — Final Payments',
-  '/purchase-fms':                     'Purchase FMS',
+  '/purchase-fms/rate-change-approvals': 'Purchase Approval',
+  '/purchase-fms':                   'Purchase FMS',
   '/fms/my-tasks':                     'FMS Tasks',
   '/fms/doer-assignment':              'FMS Doer Assignment',
 

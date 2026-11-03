@@ -19,7 +19,7 @@ import mongoose from 'mongoose';
 import RateChangeRequest, { RATE_CHANGE_STATUS } from './rateChange.model.js';
 import RateChangeHistory, { RATE_CHANGE_EVENT } from './rateChangeHistory.model.js';
 import {
-  LINE_RATE, evaluateLineRate, unsendableReason, matchVendorRate, sameRate, rateDiff,
+  LINE_RATE, evaluateLineRate, unsendableReason, matchVendorRate, lookupVendorRate, lookupMessage, sameRate, rateDiff,
   selfApprovalBlock, isSelfApproval, otherLineAmounts, poTotals, inr,
 } from './rateChange.rules.js';
 import VendorPurchaseOrder, { PO_APPROVAL_STATUS, PO_STATUS } from '../purchase-order/purchaseOrder.model.js';
@@ -394,7 +394,10 @@ export const rateChangeService = {
       if (mine.some((r) => r.status === S.APPROVED)) continue;
       const item = line.itemName || line.skuCode;
       const pending = mine.find((r) => r.status === S.PENDING);
-      if (pending) {
+      const unsendable = unsendableReason(ev, line, vendor.name);
+      if (unsendable) {
+        problems.push(`"${item}": ${unsendable}`);
+      } else if (pending) {
         problems.push(`"${item}": rate change ${pending.requestNumber} (${inr(pending.existingVendorRate)} → ${inr(pending.requestedRate)}) is awaiting approval in Rate Change Approvals`);
       } else if (ev.vendorRate != null && line.fetchedRate != null && sameRate(line.fetchedRate, line.rate)) {
         problems.push(`"${item}": ${vendor.name}'s rate changed from ${inr(line.fetchedRate)} to ${inr(ev.vendorRate)} after this draft was saved — edit the PO to use ${inr(ev.vendorRate)}, or keep ${inr(line.rate)} with a reason to send it for approval`);
@@ -438,7 +441,14 @@ export const rateChangeService = {
         await this.recordConflict(r0, err.message, err.data.currentVendorRate, user);
       } else if (err instanceof PoIneligibleError) {
         await this.recordConflict(r0, err.message, null, user);
-        await this.withdrawOne(r0, `${err.message} — the rate was not applied to the PO or the vendor`, user);
+        if (await this.withdrawOne(r0, `${err.message} — the rate was not applied to the PO or the vendor`, user)) {
+          // Label only (rate untouched), as withdrawForPo does, so the PO line does not keep saying Pending.
+          await VendorPurchaseOrder.updateOne(
+            { _id: r0.poId },
+            { $set: { 'items.$[l].rateChangeStatus': S.WITHDRAWN } },
+            { arrayFilters: [{ 'l.rateChangeRequestId': r0._id, 'l.rateChangeStatus': S.PENDING }] },
+          ).catch((e) => logger.error(`[rate-change] ${r0.requestNumber} line label not updated: ${e.message}`));
+        }
       }
       throw err;
     }
@@ -540,7 +550,10 @@ export const rateChangeService = {
       const poSnapshot = { items: po.items, totals: { totalTaxableValue: po.totalTaxableValue, totalGSTAmount: po.totalGSTAmount, grandTotal: po.grandTotal } };
       undo.push(() => VendorPurchaseOrder.updateOne(
         { _id: po._id },
-        { $set: { items: poSnapshot.items, ...poSnapshot.totals } },
+        {
+          $set: { items: poSnapshot.items, ...poSnapshot.totals },
+          $pull: { activityTimeline: { action: 'RATE_CHANGE_APPROVED', timestamp: now } },
+        },
       ));
 
       // 4) Audit — the vendor's pricing history and the rate change history.
@@ -791,17 +804,18 @@ export const rateChangeService = {
   async vendorRate({ vendorId, skuId, skuCode, itemName, unit }) {
     const vendor = await loadVendor(vendorId);
     if (!vendor) throw new AppError('Vendor not found in the Vendor Master', 404);
-    const m = matchVendorRate(vendor.products, { skuId, skuCode, itemName, unit: unit || '' });
-    const unitAgnostic = !unit ? matchVendorRate(vendor.products, { skuId, skuCode, itemName, unit: '' }) : null;
-    const product = m.product || (unitAgnostic?.candidates?.length === 1 ? unitAgnostic.candidates[0] : null);
+    const line = { skuId, skuCode, itemName, unit: unit || '' };
+    const lk = lookupVendorRate(vendor.products, line);
+    const product = lk.found ? lk.product : null;
     return {
       vendorId: vendor._id, vendorName: vendor.name,
-      found: !!product, problem: product ? null : m.problem,
+      found: lk.found, problem: lk.problem,
+      message: lookupMessage(lk, line, vendor.name),
       vendorProductId: product?._id || null,
       rate: product ? Number(product.rate) : null,
       unit: product?.unit || '', gstRate: product?.gstRate ?? null, hsn: product?.hsn || '',
       lastUpdatedAt: product?.lastUpdatedAt || null,
-      candidates: (m.candidates || []).map((p) => ({ vendorProductId: p._id, rate: p.rate, unit: p.unit })),
+      candidates: (lk.candidates || []).map((p) => ({ vendorProductId: p._id, rate: p.rate, unit: p.unit })),
     };
   },
 };

@@ -6,7 +6,7 @@ import {
 import { alpha } from '@mui/material/styles';
 import { X, Save, ShoppingBag, Plus, Trash2, Building2, FileText, AlertTriangle, Eye, CheckCircle2 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import {
   useGetIndentsQuery,
   useGetAllApprovedItemsQuery,
@@ -25,12 +25,17 @@ import { PFMS, pfmsCardSx } from '../pfmsTheme';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import AddVendorForItemModal from './AddVendorForItemModal';
-import { norm, matchVendorProduct, fillOtherRates } from './vendorRateMatch';
+import { norm, matchVendorProduct } from './vendorRateMatch';
+import {
+  LOOKUP, newRowId, lookupKeyOf, lookupParams, answerOf, startLookup, applyAnswer, awaitsRate, lookupBlock,
+  rateChangeOf, isFirstRate, resetLookup,
+} from './poRateLookup';
+import { procurementApi } from '../../../store/api/procurementApi';
 import { itemRef, UNITS, toKgsUnit } from '../indents/indentMeta';
 import { VENDOR_SOURCE_LABEL, fixedVendorOf, itemVendorBlock, assignedVendorsOf } from './itemVendor';
 import { isMdForDirectSave } from './poDirectSave';
 import PoTermsDialog from './PoTermsDialog';
-import { RATE_STATUS, sameRate, fmtRate, fmtDiff } from '../rate-changes/rateChangeMeta';
+import { RATE_STATUS, RATE_LINE_LABEL, fmtRate, fmtDiff } from '../rate-changes/rateChangeMeta';
 import { effectivePoTerms, PO_FORMAT_LABEL } from './poTerms';
 import {
   EMPTY_DELIVERY, setLeadTime, setDeliveryDate, setPoDate, inheritVendorLead, vendorLeadDays,
@@ -73,18 +78,12 @@ const rateSourceOf = (it) => {
 };
 
 // Rate Change Approvals: a rate that differs from the rate fetched from the
-// vendor's Vendor Master needs a reason; saving raises the request (server-side)
-// and the vendor's rate only changes once it is approved. A line already
-// carrying a pending / approved request at its saved rate needs nothing more.
-const rateChangeOf = (it) => {
-  const fetched = it.autoRate;
-  if (fetched == null || it.rate === '' || it.rate == null) return { changed: false, needsReason: false };
-  const changed = !sameRate(it.rate, fetched);
-  const covered = changed && ['PENDING', 'APPROVED'].includes(it.rateChangeStatus) && sameRate(it.rate, it.savedRate);
-  return { changed, covered, needsReason: changed && !covered, fetched: Number(fetched) };
-};
+// vendor's Vendor Master (poRateLookup.js — rateChangeOf) needs a reason; saving
+// raises the request (server-side) and the vendor's rate only changes once it is
+// approved.
 
-const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18, hsn: '', indentId: '', indentNumber: '', indentItemId: '', indentItemDisplayNumber: '', approvedQuantity: 0, fromApprovedItem: false, rateMatched: undefined, manual: false });
+// `rid` identifies the row while its vendor-rate lookup is out (poRateLookup.js).
+const emptyItem = () => ({ rid: newRowId(), itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18, hsn: '', indentId: '', indentNumber: '', indentItemId: '', indentItemDisplayNumber: '', approvedQuantity: 0, fromApprovedItem: false, rateMatched: undefined, manual: false });
 const emptyJslItem = () => ({ grade: '', width: '1250', finish: '2B/ME', quantity: '', unit: 'Kgs', baseRate: '', upfrontDiscount: '', bonanzaDiscount: '' });
 const emptyItemFor = (fmt) => (fmt === 'JSL' ? emptyJslItem() : emptyItem());
 
@@ -292,6 +291,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
         indentItemId: it.indentItemId || '', indentItemDisplayNumber: it.indentItemDisplayNumber || '',
         manual: true, rateMatched: true,
       } : {
+        rid: newRowId(),
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         quantity: it.quantity, unit: it.unit || 'Pcs', rate: it.rate, gstRate: it.gstRate,
         hsn: it.hsn || '',
@@ -515,9 +515,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
       rate: it.approvedRate ?? '',
       gstRate: it.gstRate ?? 18,
       // Approved-quotation rates are negotiated — keep them; don't overwrite from
-      // the Vendor Master catalog (and don't treat them as a user rate edit).
+      // the Vendor Master catalog (and don't treat them as a user rate edit). The
+      // lookup still shows the vendor's catalog rate; a rate other than the
+      // quotation's AND the vendor's is the doer's change.
       manual: true,
       fromQuotation: true,
+      quotationRate: it.approvedRate ?? undefined,
     }));
     setItems(lines.length ? lines : [emptyItem()]);
   };
@@ -584,36 +587,69 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, approvedItemMode, presetIndent, presetItemIds, approvedItemOptions]);
 
-  // Log exactly why a rate couldn't be auto-fetched — pinpoints whether it's a
-  // wrong vendor, a missing SKU, a SKU/case mismatch, or a product absent from
-  // the Vendor Master.
-  const logNoRate = (line, reason) => {
-    // eslint-disable-next-line no-console
-    console.warn('[PO rate auto-fill] Rate not fetched from Vendor Master', {
-      vendorId: vendor?._id || '(none)',
-      vendorName: vendor?.name || '(none)',
-      itemSku: line.skuCode || '(none)',
-      itemName: line.itemName || '(none)',
-      matchedVendorProduct: null,
-      reason,
-    });
-  };
-
-  // Signature of the matchable fields — drives re-matching when items / SKUs change.
-  const otherMatchKey = useMemo(
-    () => (poFormatType === 'JSL' ? '' : items.map((it) => `${it.skuCode || ''}|${it.skuId || ''}|${norm(it.itemName)}`).join('§')),
-    [items, poFormatType],
+  // OTHER format: the vendor rate of every line, from the server's own lookup
+  // (vendor + SKU + name + unit — never another vendor's, unit's or item's rate).
+  // Re-asked whenever the vendor, the item or its unit changes; no page refresh.
+  // Answers are applied by row id and only while the row still asks that question.
+  // One independent request per line (not one lazy-query trigger: calling that again
+  // supersedes the call before it, which would drop all but the last line's answer).
+  const dispatch = useDispatch();
+  const lookupRate = (params) => dispatch(
+    procurementApi.endpoints.getVendorRate.initiate(params, { subscribe: false, forceRefetch: true }),
   );
-
-  // OTHER auto-fill: re-run vendor-catalog matching whenever the vendor, its
-  // catalog, the indent, the items, or a SKU changes. Skipped in edit/revise mode
-  // so copied PO rates are never clobbered. No page refresh — pure state update.
+  const [rateRetry, setRateRetry] = useState(0);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const lookupSig = useMemo(
+    () => (poFormatType === 'JSL' ? '' : items.map((it) => `${it.rid || ''}:${lookupKeyOf(vendor?._id, it)}`).join('§')),
+    [items, vendor?._id, poFormatType],
+  );
+  const sentRates = useRef(new Set()); // rid:key of the requests already out
   useEffect(() => {
-    if (!open || lockRates || poFormatType === 'JSL') return;
-    if (!vendorProducts.length) return;
-    setItems((cur) => fillOtherRates(cur, vendorProducts, logNoRate));
+    if (!open || poFormatType === 'JSL') return undefined;
+    const vendorId = vendor?._id ? String(vendor._id) : '';
+    // 1) At once: a row whose vendor / item / unit changed gives up the old answer
+    //    (never show or keep the previous vendor's rate while the new one loads).
+    const ask = new Set();
+    const reset = new Set();
+    itemsRef.current.forEach((it) => {
+      if (!it.rid) return;
+      const key = lookupKeyOf(vendorId, it);
+      if (!key) { if (it.rateLookup) reset.add(it.rid); return; }
+      if (it.rateLookup?.key !== key) ask.add(it.rid);
+    });
+    if (ask.size || reset.size) {
+      setItems((cur) => cur.map((it) => {
+        if (ask.has(it.rid)) return startLookup(it, lookupKeyOf(vendorId, it), { lockRates });
+        if (reset.has(it.rid)) return resetLookup(it, { lockRates });
+        return it;
+      }));
+    }
+    // 2) After a short pause (a SKU typed by hand is asked once, not per keystroke):
+    //    send the request of every row still waiting for its answer.
+    const timer = setTimeout(() => {
+      itemsRef.current.forEach((it) => {
+        const key = lookupKeyOf(vendorId, it);
+        if (!it.rid || !key || it.rateLookup?.key !== key || it.rateLookup.status !== LOOKUP.LOADING) return;
+        const tag = `${it.rid}:${key}`;
+        if (sentRates.current.has(tag)) return;
+        sentRates.current.add(tag);
+        (async () => {
+          let res = null;
+          let err = null;
+          try { res = await lookupRate(lookupParams(vendorId, it)).unwrap(); } catch (e) { err = e; }
+          sentRates.current.delete(tag);
+          setItems((cur) => cur.map((row) => (row.rid === it.rid ? applyAnswer(row, key, answerOf(res?.data, err), res?.data) : row)));
+        })();
+      });
+    }, 200);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, lockRates, poFormatType, vendorProducts, otherMatchKey]);
+  }, [open, poFormatType, lockRates, lookupSig, rateRetry]);
+  const retryRates = () => {
+    setItems((cur) => cur.map((it) => (it.rateLookup?.status === LOOKUP.ERROR ? { ...it, rateLookup: undefined } : it)));
+    setRateRetry((n) => n + 1);
+  };
 
   const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
   const addItem = () => setItems((cur) => [...cur, emptyItemFor(poFormatType)]);
@@ -812,6 +848,17 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
     if (validItems.length === 0) {
       enqueueSnackbar(isJsl ? 'Add at least one item with grade and quantity' : 'Add at least one item with quantity', { variant: 'warning' });
       return;
+    }
+    // The vendor rates must be in before saving: a rate fetched late would be
+    // compared against nothing, and a line the vendor prices in another unit /
+    // twice cannot be saved at all (the server refuses it with the same words).
+    if (!isJsl) {
+      if (validItems.some((it) => awaitsRate(it, vendor?._id))) {
+        enqueueSnackbar('Still fetching the vendor rates — try again in a moment', { variant: 'info' });
+        return;
+      }
+      const blockedLine = validItems.find((it) => lookupBlock(it));
+      if (blockedLine) { enqueueSnackbar(lookupBlock(blockedLine), { variant: 'warning' }); return; }
     }
     // A changed rate goes to Rate Change Approvals and needs a reason.
     if (!isJsl) {
@@ -1266,7 +1313,11 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                 {items.map((it, idx) => {
                   const { taxable, tax, total } = lineCalc(it);
                   // Came from an indent / has an item, but no Vendor-Master rate matched and none entered yet.
-                  const rateMissing = it.rateMatched === false && Boolean(it.itemName) && !(Number(it.rate) > 0);
+                  const lk = it.rateLookup;
+                  const lkStatus = lk?.status;
+                  // The vendor has no usable rate for this item (none / no rate / other unit / duplicates).
+                  const rateMissing = [LOOKUP.NONE, LOOKUP.NO_RATE, LOOKUP.UNIT_MISMATCH, LOOKUP.AMBIGUOUS].includes(lkStatus)
+                    && Boolean(it.itemName) && !(Number(it.rate) > 0);
                   // Item Name & SKU are read-only for any known item (approved-item / indent / edit / revise);
                   // only a brand-new blank "Add Item" row lets you type a name.
                   const nameLocked = Boolean(it.fromApprovedItem || it.itemName);
@@ -1276,7 +1327,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                   const rc = rateChangeOf(it);
                   const rcStatus = !rc.needsReason && it.rateChangeRequestNumber ? RATE_STATUS[it.rateChangeStatus] : null;
                   return (
-                    <Box key={idx} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                    <Box key={it.rid || idx} data-testid="po-line" data-sku={it.skuCode || ''} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                     <Box sx={{
                       display: 'grid',
                       gridTemplateColumns: { xs: '1fr', md: OTHER_GRID },
@@ -1300,11 +1351,13 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                             onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v }); }}
                             onChange={(_e, val) => {
                               if (val && typeof val === 'object') {
+                                // The rate itself is fetched by the vendor-rate lookup (this row's
+                                // new SKU + unit is a new question) — never copied from the list.
                                 setItem(idx, {
                                   itemName: val.productName, skuCode: val.skuCode || '',
-                                  skuId: val.skuId || '', rate: val.rate ?? it.rate, unit: val.unit || it.unit,
+                                  skuId: val.skuId || '', unit: val.unit || it.unit,
                                   gstRate: val.gstRate ?? it.gstRate, hsn: val.hsn || '',
-                                  rateMatched: true, manual: false, rateEdited: false, autoRate: val.rate ?? undefined, autoGst: val.gstRate ?? undefined,
+                                  manual: false, rateEdited: false, rateTyped: false, gstTyped: false,
                                 });
                               }
                             }}
@@ -1321,8 +1374,12 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                           ) : rateModified && (
                             <Chip size="small" label="Rate Modified" sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700, bgcolor: alpha('#f59e0b', 0.15), color: '#b45309' }} />
                           )}
+                          {isFirstRate(it) && (
+                            <Chip size="small" label="New vendor rate" data-testid="po-rate-new"
+                              sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: alpha('#2563eb', 0.1), color: '#1d4ed8' }} />
+                          )}
                           {rcStatus && (
-                            <Chip size="small" label={`Rate ${rcStatus.label.toLowerCase()} · ${it.rateChangeRequestNumber}`} data-testid="po-rate-change-status"
+                            <Chip size="small" label={`${RATE_LINE_LABEL[it.rateChangeStatus] || rcStatus.label} · ${it.rateChangeRequestNumber}`} data-testid="po-rate-change-status"
                               sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: rcStatus.bg, color: rcStatus.color }} />
                           )}
                         </Box>
@@ -1345,7 +1402,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                         {(UNITS.includes(toKgsUnit(it.unit)) || !it.unit ? UNITS : [toKgsUnit(it.unit), ...UNITS]).map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                       </TextField>
                       <TextField size="small" type="number" placeholder="0.00" value={it.rate}
-                        onChange={(e) => setItem(idx, { rate: e.target.value, manual: true, rateEdited: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} sx={NO_SPIN} />
+                        onChange={(e) => setItem(idx, { rate: e.target.value, manual: true, rateEdited: true, rateTyped: true })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' }, 'data-testid': 'po-line-rate' }} sx={NO_SPIN} />
                       <Autocomplete
                         freeSolo disableClearable size="small"
                         options={GST_PRESETS.map(String)}
@@ -1357,7 +1414,7 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                           // when the vendor-master auto-fill sets the GST); those must NOT
                           // flag the row, or auto-fill would be permanently blocked.
                           const patch = { gstRate: cleaned === '' ? '' : Number(cleaned) };
-                          if (reason === 'input') { patch.manual = true; patch.rateEdited = true; }
+                          if (reason === 'input') { patch.manual = true; patch.rateEdited = true; patch.gstTyped = true; }
                           setItem(idx, patch);
                         }}
                         renderInput={(params) => (
@@ -1377,12 +1434,35 @@ const PurchaseOrderFormDrawer = ({ open, onClose, po = null, presetIndent = null
                         </span>
                       </Tooltip>
                     </Box>
-                      {rateMissing && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: { md: 1 } }}>
-                          <AlertTriangle size={13} color="#b45309" />
-                          <Typography variant="caption" sx={{ color: '#b45309', fontWeight: 600 }}>
-                            Rate not found in Vendor Master for SKU: {it.skuCode || it.itemName || '—'} — enter rate manually
+                      {lkStatus === LOOKUP.LOADING && (
+                        <Typography variant="caption" data-testid="po-vendor-rate-loading" sx={{ pl: { md: 1 }, color: 'text.secondary', fontWeight: 600 }}>
+                          Fetching {vendor?.name || 'the vendor'}'s rate…
+                        </Typography>
+                      )}
+                      {lkStatus === LOOKUP.FOUND && (
+                        <Typography variant="caption" data-testid="po-vendor-rate" data-rate={lk.vendorRate} sx={{ pl: { md: 1 }, color: '#0f766e', fontWeight: 700 }}>
+                          Vendor rate {fmtRate(lk.vendorRate)} / {lk.unit || it.unit} — fetched from {vendor?.name || 'the Vendor Master'}
+                        </Typography>
+                      )}
+                      {(lkStatus === LOOKUP.NONE || lkStatus === LOOKUP.NO_RATE) && (
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, pl: { md: 1 } }}>
+                          <AlertTriangle size={13} color="#b45309" style={{ marginTop: 2, flexShrink: 0 }} />
+                          <Typography variant="caption" data-testid="po-rate-missing" sx={{ color: '#b45309', fontWeight: 600 }}>
+                            No vendor rate configured for this item.
+                            {' '}Enter the rate — it becomes {vendor?.name || 'the vendor'}'s first rate for it when the PO is approved.
                           </Typography>
+                        </Box>
+                      )}
+                      {(lkStatus === LOOKUP.UNIT_MISMATCH || lkStatus === LOOKUP.AMBIGUOUS) && (
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, pl: { md: 1 } }}>
+                          <AlertTriangle size={13} color="#b91c1c" style={{ marginTop: 2, flexShrink: 0 }} />
+                          <Typography variant="caption" data-testid="po-rate-blocked" sx={{ color: '#b91c1c', fontWeight: 600 }}>{lk.message}</Typography>
+                        </Box>
+                      )}
+                      {lkStatus === LOOKUP.ERROR && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: { md: 1 } }}>
+                          <Typography variant="caption" data-testid="po-rate-error" sx={{ color: '#b91c1c', fontWeight: 600 }}>{lk.message}</Typography>
+                          <Button size="small" onClick={retryRates} sx={{ textTransform: 'none', py: 0 }}>Retry</Button>
                         </Box>
                       )}
                       {rc.needsReason && (

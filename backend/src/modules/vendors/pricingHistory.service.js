@@ -1,7 +1,7 @@
 import PricingHistory, { PRICING_SOURCE } from './pricingHistory.model.js';
 import Vendor from './vendor.model.js';
 import { logger } from '../../utils/logger.js';
-import { matchVendorRate } from '../procurement/rate-change/rateChange.rules.js';
+import { lookupVendorRate } from '../procurement/rate-change/rateChange.rules.js';
 
 const num = (n) => Number(n) || 0;
 const upper = (s) => String(s || '').trim().toUpperCase();
@@ -167,20 +167,30 @@ export const pricingHistoryService = {
         remarks: 'Rate updated through PO creation',
         effectiveDate: po.poDate || new Date(),
       };
+      const firstRateRemark = `First vendor rate for this item — entered on PO ${po.poNumber || po.draftNumber || ''} and recorded when the PO was approved by ${user?.name || 'an approver'}`.slice(0, 300);
       const entries = [];
       for (const line of manualLines) {
         if (!line.skuCode && !line.skuId) continue;
         // An existing vendor rate is never changed from a PO — that goes through
         // Rate Change Approvals (procurement/rate-change). Only an item the vendor
         // had no rate for is added, and a GST edit is still written back.
-        const { product, problem } = matchVendorRate(vendor.products, line);
+        const { found, product, problem } = lookupVendorRate(vendor.products, line);
         let entry = null;
         if (problem === 'NONE') {
+          // First rate for this vendor + item: recorded here, by the PO's approval
+          // (the approver is named on the entry), and labelled as such.
           entry = this.recordChange(vendor, {
             skuId: line.skuId, skuCode: line.skuCode, itemName: line.itemName,
             newRate: line.rate, newGstRate: line.gstRate, hsn: line.hsn, unit: line.unit,
-          }, ctx);
-        } else if (product) {
+          }, { ...ctx, remarks: firstRateRemark });
+        } else if (problem === 'NO_RATE') {
+          // The vendor's row exists but was never priced: it takes the first rate
+          // (the row is filled in — never duplicated, never another unit's row).
+          entry = this.recordChange(vendor, {
+            product, skuId: line.skuId, skuCode: line.skuCode, itemName: line.itemName,
+            newRate: line.rate, newGstRate: line.gstRate, hsn: line.hsn, unit: line.unit,
+          }, { ...ctx, remarks: firstRateRemark });
+        } else if (found) {
           entry = this.recordChange(vendor, {
             product, skuId: line.skuId, skuCode: line.skuCode, itemName: line.itemName, newGstRate: line.gstRate,
           }, { ...ctx, remarks: 'GST updated through PO creation' });

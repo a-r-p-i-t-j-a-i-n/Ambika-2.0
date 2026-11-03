@@ -8,6 +8,10 @@
  *     PORT=5096 MONGO_URI=mongodb://127.0.0.1:27017/ambika_e2e_ratechange node src/scripts/e2eServer.js
  *   API=http://127.0.0.1:5096/api/v1 node src/scripts/e2eRateChangeFixture.js --api
  *   API=... node src/scripts/e2eRateChangeFixture.js --prep-ui   data for the browser probe
+ *   API=... node src/scripts/e2eRateChangeFixture.js --prep-test-only   TEST ONLY vendor/SKU (100) + 4 indents
+ *            for frontend/e2e/purchaseApproval.e2e.mjs (Purchase Approval sidebar walkthrough)
+ *   API=... node src/scripts/e2eRateChangeFixture.js --atomic   approvals with a write made to fail part-way
+ *            (in-process); run on :27017 and on a replica set (E2E_RC_URI) for both rollback paths
  *
  * --seed RESETS the seeded vendors' catalog rates (V1 SKU-A 100, V2 SKU-A 120,
  * V1 BOX 250/BOX) so --api can run again; requests/POs/history from earlier runs
@@ -56,6 +60,14 @@ export const SKUS = {
 export const VENDORS = {
   V1: { code: 'RC-V1', name: 'RC Alpha Fasteners' },
   V2: { code: 'RC-V2', name: 'RC Beta Industrial' },
+};
+// The Purchase Approval walkthrough's own vendor + SKU, kept apart from the
+// RC-* data so it can never move a rate --api depends on.
+export const TEST_ONLY = {
+  vendor: { code: 'TEST-RC-VENDOR', name: 'TEST ONLY Rate Approval Vendor' },
+  sku: { code: 'TEST-RC-SKU', name: 'TEST ONLY Rate Approval Item', unit: 'PCS' },
+  rate: 100,
+  reason: 'TEST ONLY — rate change approval verification',
 };
 const RUN = Date.now().toString(36);
 const PO = '/procurement/purchase-orders';
@@ -140,7 +152,7 @@ const DATES = { poDate: localToday(), expectedDeliveryDate: plusDays(localToday(
 // A PO-ready indent (quotation not required) whose items are fixed to `vendorId`.
 let seq = 0;
 const readyIndent = async (label, skuKeys, vendorId) => {
-  const skus = await Promise.all(skuKeys.map((k) => SKU.findOne({ code: SKUS[k].code }).lean()));
+  const skus = await Promise.all(skuKeys.map((k) => SKU.findOne({ code: (k === 'TEST' ? TEST_ONLY.sku : SKUS[k]).code }).lean()));
   const ind = await ok('BUYER', 'POST', '/procurement/indents', {
     department: 'Stores', remarks: `rate-change e2e ${RUN} ${label}`,
     items: skus.map((s) => { seq += 1; return { skuId: String(s._id), skuCode: s.code, itemName: s.name, quantity: 4 + (seq % 3), unit: s.purchaseUnit || s.unit }; }),
@@ -477,7 +489,8 @@ const api = async () => {
   r = await createPo('BUYER', ind, V1, () => ({ unit: 'PCS', rate: 11, rateChangeReason: 'per piece' }));
   check('V8 a changed rate in a unit the vendor does not price (PCS vs BOX) is refused (400)', r.status === 400 && /per BOX/.test(r.message), `${r.status} ${r.message}`);
   r = await createPo('BUYER', ind, V1, () => ({ unit: 'PCS', rate: 260 }));
-  check('V9 …but keeping the fetched rate in the other unit is not a change (201)', r.status === 201 && (await reqsOf(r.data._id)).length === 0, `${r.status} ${r.message}`);
+  check('V9 …and so is the BOX rate carried onto a PCS line unchanged: no vendor rate exists in PCS, nothing is matched across units (400, no request)',
+    r.status === 400 && /per BOX/.test(r.message), `${r.status} ${r.message}`);
 
   // ── Q: security / validation ──
   console.log('\nQ  Validation and security');
@@ -584,11 +597,120 @@ const prepUi = async () => {
   console.log(`[prep-ui] wrote ${out}`);
 };
 
+// ── TEST ONLY walkthrough (frontend/e2e/purchaseApproval.e2e.mjs) ──────────
+// Resets ONLY the TEST ONLY vendor's rate to 100 and makes four PO-ready
+// indents fixed to it; every request is then raised by the spec itself,
+// through the PO form or the PO API, never inserted here.
+const upsertTestOnly = async () => {
+  const sku = await upsertSku(TEST_ONLY.sku);
+  await Vendor.updateOne({ code: TEST_ONLY.vendor.code }, { $set: {
+    name: TEST_ONLY.vendor.name, isActive: true, isDeleted: false, creditPeriodDays: 30,
+    products: [{ skuId: sku._id, skuCode: sku.code, productName: sku.name, unit: 'Pcs', rate: TEST_ONLY.rate, gstRate: 18 }],
+  } }, { upsert: true });
+  return { sku, vendor: await Vendor.findOne({ code: TEST_ONLY.vendor.code }).lean() };
+};
+
+const prepTestOnly = async () => {
+  await connect();
+  await login();
+  const { vendor } = await upsertTestOnly();
+  const indents = {};
+  for (const k of ['approve', 'reject', 'unauthorised', 'stale']) {
+    const ind = await readyIndent(`TEST ONLY ${k}`, ['TEST'], vendor._id);
+    const it = ind.items[0];
+    indents[k] = {
+      _id: String(ind._id), indentNumber: ind.indentNumber, itemId: String(it._id), skuId: String(it.skuId), quantity: it.approvedQuantity || it.quantity, unit: it.unit, itemName: it.itemName,
+    };
+  }
+  const manifest = {
+    api: API, password: PASSWORD, users: Object.fromEntries(Object.entries(USERS).map(([k, u]) => [k, u.email])),
+    vendor: { _id: String(vendor._id), name: vendor.name, code: vendor.code },
+    sku: TEST_ONLY.sku, rate: TEST_ONLY.rate, reason: TEST_ONLY.reason, indents,
+  };
+  const out = path.resolve(process.cwd(), '..', 'frontend', 'e2e', 'shots', 'test-only-rate-manifest.json');
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, JSON.stringify(manifest, null, 2));
+  console.log(`[prep-test-only] ${vendor.name} · ${TEST_ONLY.sku.code} reset to ${TEST_ONLY.rate}; 4 indents; wrote ${out}`);
+};
+
+// ── Atomicity under injected failures ──────────────────────────────────────
+// Raises real requests on the TEST ONLY vendor through the PO API, then
+// approves them IN THIS PROCESS with one write made to fail part-way, and
+// checks that neither the vendor rate nor the PO line moved. Run it on the
+// standalone mongod (undo path) and on a replica set (transaction path).
+const atomic = async () => {
+  await connect();
+  await login();
+  const { rateChangeService } = await import('../modules/procurement/rate-change/rateChange.service.js');
+  const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+  console.log(`run ${RUN} · ${hello.setName ? `replica set ${hello.setName} (transaction)` : 'standalone (undo list)'}`);
+  if (!await Vendor.exists({ code: TEST_ONLY.vendor.code })) await upsertTestOnly();
+  const vendor = await Vendor.findOne({ code: TEST_ONLY.vendor.code }).lean();
+  const approver = await User.findOne({ email: USERS.APPROVER.email }).lean();
+  const rateNow = async () => (await vendorRow(vendor._id, TEST_ONLY.sku.code)).rate;
+
+  const cases = [
+    // [label, model, static to break, how it fails, PO request expected after]
+    ['the last write (rate change history) fails', RateChangeHistory, 'insertMany', 'throw', 'PENDING'],
+    ['the pricing history write fails', PricingHistory, 'create', 'throw', 'PENDING'],
+    ['the PO write matches nothing (PO changed mid-approval)', VendorPurchaseOrder, 'updateOne', 'nomatch', 'WITHDRAWN'],
+  ];
+  let n = 0;
+  for (const [label, Model, fn, how, expectStatus] of cases) {
+    n += 1;
+    const base = await rateNow();
+    const proposed = base + 10 + n;
+    const ind = await readyIndent(`TEST ONLY atomic ${n}`, ['TEST'], vendor._id);
+    const r = await createPo('BUYER', ind, vendor._id, () => ({ rate: proposed, rateChangeReason: `${TEST_ONLY.reason} (atomicity ${n})` }));
+    if (r.status !== 201) throw new Error(`PO create → ${r.status} ${r.message}`);
+    const [req] = await reqsOf(r.data._id);
+    const poBefore = await poNow(r.data._id);
+
+    const orig = Model[fn];
+    let calls = 0;
+    Model[fn] = function patched(...args) {
+      calls += 1;
+      if (calls > 1) return orig.apply(this, args); // only the approval's own write
+      if (how === 'nomatch') return Promise.resolve({ acknowledged: true, matchedCount: 0, modifiedCount: 0 });
+      return Promise.reject(new Error(`INJECTED failure: ${label}`));
+    };
+    let err = null;
+    try { await rateChangeService.approve(req._id, {}, approver); } catch (e) { err = e; } finally { Model[fn] = orig; }
+
+    const reqAfter = await RateChangeRequest.findById(req._id).lean();
+    const poAfter = await poNow(r.data._id);
+    const lineAfter = poAfter.items[0];
+    const ev = await eventsOf(req._id);
+    const pricing = await PricingHistory.countDocuments({ source: 'RATE_CHANGE_APPROVAL', referenceId: poAfter._id });
+    check(`T${n}a ${label} → approval refused (${err?.statusCode || ''} ${String(err?.message || 'no error').slice(0, 70)})`, err && calls >= 1);
+    check(`T${n}b …vendor rate NOT updated (still ${base})`, (await rateNow()) === base, `vendor ${await rateNow()}`);
+    check(`T${n}c …PO line NOT updated (rate ${proposed}, label ${expectStatus}, totals unchanged)`, lineAfter.rate === proposed && lineAfter.rateChangeStatus === expectStatus
+      && poAfter.grandTotal === poBefore.grandTotal && poAfter.totalTaxableValue === poBefore.totalTaxableValue && !poAfter.activityTimeline.some((a) => a.action === 'RATE_CHANGE_APPROVED'),
+    JSON.stringify({ rate: lineAfter.rate, st: lineAfter.rateChangeStatus, gt: [poBefore.grandTotal, poAfter.grandTotal] }));
+    check(`T${n}d …request ${expectStatus}, no APPROVED event, no pricing row`, reqAfter.status === expectStatus && (expectStatus !== 'PENDING' || !reqAfter.decidedAt)
+      && !ev.some((e) => e.event === 'APPROVED') && pricing === 0, JSON.stringify({ s: reqAfter.status, ev: ev.map((e) => e.event), pricing }));
+
+    if (expectStatus === 'PENDING') {
+      const ok2 = await call('APPROVER', 'POST', `${RC}/${req._id}/approve`, {});
+      const po2 = await poNow(r.data._id);
+      check(`T${n}e …approving again with nothing broken applies both: vendor ${proposed}, PO line ${proposed}, one APPROVED event`, ok2.status === 200
+        && (await rateNow()) === proposed && po2.items[0].rate === proposed && po2.items[0].rateChangeStatus === 'APPROVED'
+        && (await eventsOf(req._id)).filter((e) => e.event === 'APPROVED').length === 1
+        && await PricingHistory.countDocuments({ source: 'RATE_CHANGE_APPROVAL', referenceId: po2._id }) === 1, `${ok2.status} ${ok2.message}`);
+    } else {
+      check(`T${n}e …the conflict is in the history and the request cannot be approved later (409)`, ev.some((e) => e.event === 'APPROVAL_CONFLICT')
+        && (await call('APPROVER', 'POST', `${RC}/${req._id}/approve`, {})).status === 409);
+    }
+  }
+  console.log(`\n${passes} passed, ${failures} failed`);
+  if (failures) process.exitCode = 1;
+};
+
 if (isEntry(import.meta.url)) {
   const mode = process.argv[2];
-  const run = mode === '--seed' ? seed : mode === '--api' ? api : mode === '--prep-ui' ? prepUi : null;
+  const run = { '--seed': seed, '--api': api, '--prep-ui': prepUi, '--prep-test-only': prepTestOnly, '--atomic': atomic }[mode];
   if (!run) {
-    console.log('usage: --seed | --api | --prep-ui');
+    console.log('usage: --seed | --api | --prep-ui | --prep-test-only | --atomic');
     process.exit(2);
   }
   run()

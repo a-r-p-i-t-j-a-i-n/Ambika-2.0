@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
-  Box, Typography, CircularProgress,
+  Box, Typography, CircularProgress, Alert,
 } from '@mui/material';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { useSnackbar } from 'notistack';
@@ -15,6 +15,10 @@ const PurchaseOrderApprovalDialog = ({ open, onClose, po }) => {
   const [approvePo, { isLoading }] = useApprovePurchaseOrderMutation();
 
   useEffect(() => { if (open) setRemarks(''); }, [open]);
+
+  // Rate changes still waiting in Purchase Approval hold the PO (the server refuses
+  // the approval as well — this just says so before the click).
+  const pendingRates = (po?.items || []).filter((it) => it.rateChangeStatus === 'PENDING');
 
   const decide = async (decision) => {
     try {
@@ -40,6 +44,12 @@ const PurchaseOrderApprovalDialog = ({ open, onClose, po }) => {
             {po?.items?.length || 0} item(s) · {fmtINR(po?.grandTotal)} · Indent {po?.indentNumber || '—'}
           </Typography>
         </Box>
+        {pendingRates.length > 0 && (
+          <Alert severity="warning" data-testid="po-approval-rate-hold" sx={{ mb: 2 }}>
+            {pendingRates.length} rate change{pendingRates.length === 1 ? '' : 's'} ({pendingRates.map((it) => it.rateChangeRequestNumber).join(', ')}) await
+            approval in Purchase Approval — this PO can be approved once {pendingRates.length === 1 ? 'it is' : 'they are'} decided.
+          </Alert>
+        )}
         <TextField label="Remarks" fullWidth multiline minRows={2} value={remarks}
           onChange={(e) => setRemarks(e.target.value)} placeholder="Optional approval / rejection note" />
       </DialogContent>
@@ -50,7 +60,8 @@ const PurchaseOrderApprovalDialog = ({ open, onClose, po }) => {
         </Button>
         <Button color="success" variant="contained"
           startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <CheckCircle2 size={16} />}
-          onClick={() => decide('APPROVED')} disabled={isLoading}>
+          onClick={() => decide('APPROVED')} disabled={isLoading || pendingRates.length > 0}
+          data-testid="po-approve-confirm">
           Approve
         </Button>
       </DialogActions>

@@ -138,6 +138,7 @@ const FinalPaymentList     = lazyWithRetry(() => import('./features/procurement/
 const FinalPaymentDetail   = lazyWithRetry(() => import('./features/procurement/final-payments/FinalPaymentDetail'));
 const PurchaseMasterData   = lazyWithRetry(() => import('./features/procurement/PurchaseMasterData'));
 const PurchaseFmsHub       = lazyWithRetry(() => import('./features/procurement/PurchaseFmsHub'));
+const RateChangeApprovals  = lazyWithRetry(() => import('./features/procurement/rate-changes/RateChangeApprovals'));
 const FmsDoerAssignment    = lazyWithRetry(() => import('./features/fms-doers/DoerAssignmentPage'));
 const FmsTasksPage         = lazyWithRetry(() => import('./features/fms-doers/FmsTasksPage'));
 const VendorMaster         = lazyWithRetry(() => import('./features/procurement/vendors/VendorMaster'));
@@ -360,6 +361,9 @@ function App() {
             <Route element={<PurchaseFmsThemeScope />}>
               {/* Purchase FMS — unified workflow page with step navigation */}
               <Route path="/purchase-fms" element={<Navigate to="/purchase-fms/purchase-indents" replace />} />
+              {/* Purchase Approval — its own page (no hub header / step rail / Quick Actions);
+                  the static path outranks the hub's /:step route. */}
+              <Route path="/purchase-fms/rate-change-approvals" element={<RateChangeApprovals />} />
               <Route path="/purchase-fms/:step" element={<PurchaseFmsHub />} />
               {/* FMS step-wise doers — config (fms.manageDoers) + doer task lists */}
               <Route path="/fms/doer-assignment" element={<RequirePermission slug="fms.manageDoers" fallback="inline"><FmsDoerAssignment /></RequirePermission>} />

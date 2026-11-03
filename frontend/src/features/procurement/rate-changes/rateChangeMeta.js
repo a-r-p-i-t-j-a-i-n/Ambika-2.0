@@ -14,6 +14,14 @@ export const RATE_STATUS = {
 };
 export const RATE_STATUSES = Object.keys(RATE_STATUS);
 
+/** What a PO line says about its rate change (the PO form, the PO detail). */
+export const RATE_LINE_LABEL = {
+  PENDING:   'Rate Approval Pending',
+  APPROVED:  'Rate Approved',
+  REJECTED:  'Rate Rejected',
+  WITHDRAWN: 'Rate Request Withdrawn',
+};
+
 export const RATE_EVENT = {
   REQUESTED:         { label: 'Requested',          color: '#1d4ed8' },
   APPROVED:          { label: 'Approved',           color: '#15803d' },

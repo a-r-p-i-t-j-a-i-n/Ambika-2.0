@@ -51,6 +51,28 @@ export const matchVendorRate = (products = [], line = {}) => {
   return { product: inUnit[0], problem: null, candidates: inUnit };
 };
 
+/**
+ * The vendor rate a PO line fetches — the one decision the New PO form, the
+ * `vendor-rate` endpoint, the save-time plan and the approval gate all share.
+ *   { found: true, product }                        exactly one row prices this line, at a rate > 0
+ *   { found: false, problem: 'NONE' }               the vendor has no row for this item
+ *   { found: false, problem: 'NO_RATE', product }   a row exists but carries no rate (0 / blank) — not configured
+ *   { found: false, problem: 'UNIT_MISMATCH', candidates }  rows exist, but in another unit
+ *   { found: false, problem: 'AMBIGUOUS', candidates }      several rows, different rates, same unit
+ * No other vendor, unit or product is ever substituted: nothing is fetched
+ * unless the row is this vendor's, for this SKU, in this unit.
+ * A line with no unit at all accepts the vendor's only row for the item.
+ */
+export const lookupVendorRate = (products = [], line = {}) => {
+  let m = matchVendorRate(products, line);
+  if (m.problem === 'UNIT_MISMATCH' && !String(line.unit || '').trim() && m.candidates.length === 1) {
+    m = { product: m.candidates[0], problem: null, candidates: m.candidates };
+  }
+  if (m.problem) return { found: false, problem: m.problem, product: null, candidates: m.candidates || [] };
+  if (!(Number(m.product.rate) > 0)) return { found: false, problem: 'NO_RATE', product: m.product, candidates: m.candidates };
+  return { found: true, problem: null, product: m.product, candidates: m.candidates };
+};
+
 export const LINE_RATE = {
   NO_SOURCE:     'NO_SOURCE',     // vendor has no rate for this item yet — nothing was fetched
   MATCHES:       'MATCHES',       // the line uses the vendor's rate
@@ -70,15 +92,16 @@ export const evaluateLineRate = ({ line = {}, products = [], quotationRate = nul
   if (quotationRate != null && sameRate(rate, quotationRate)) {
     return { state: LINE_RATE.QUOTATION, product: null, vendorRate: null };
   }
-  const { product, problem, candidates } = matchVendorRate(products, line);
+  const { found, problem, product, candidates } = lookupVendorRate(products, line);
+  // Nothing configured for this vendor + item: the rate entered is the FIRST rate
+  // for it, not a change of one (it is recorded when the PO is approved).
+  // `product` is the empty (rate 0) row, when there is one.
   if (problem === 'NONE') return { state: LINE_RATE.NO_SOURCE, product: null, vendorRate: null };
-  if (problem) {
-    // The rate the form fetched (from one of these rows) and the doer kept is
-    // not a change, whatever the unit.
-    const kept = candidates.find((p) => sameRate(p.rate, rate));
-    if (kept) return { state: LINE_RATE.MATCHES, product: kept, vendorRate: Number(kept.rate) };
-    return { state: LINE_RATE[problem], product: null, vendorRate: null, candidates };
-  }
+  if (problem === 'NO_RATE') return { state: LINE_RATE.NO_SOURCE, product, vendorRate: null, unconfigured: true };
+  // Another unit / several different rates: never matched to the line, even when
+  // the line happens to carry one of those rates — the doer fixes the unit or the
+  // Vendor Master first (unsendableReason says how).
+  if (!found) return { state: LINE_RATE[problem], product: null, vendorRate: null, candidates };
   const vendorRate = Number(product.rate) || 0;
   return {
     state: sameRate(rate, vendorRate) ? LINE_RATE.MATCHES : LINE_RATE.CHANGED,
@@ -101,6 +124,17 @@ export const unsendableReason = (evaluation, line = {}, vendorName = 'the vendor
       + 'remove the duplicate in the Vendor Master before changing the rate';
   }
   return '';
+};
+
+/** What the doer reads when a lookup fetched nothing ('' = it found a rate). */
+export const lookupMessage = (lk, line = {}, vendorName = 'This vendor') => {
+  if (!lk || lk.found) return '';
+  const item = line.itemName || line.skuCode || 'this item';
+  if (lk.problem === 'UNIT_MISMATCH' || lk.problem === 'AMBIGUOUS') {
+    return unsendableReason({ state: LINE_RATE[lk.problem], candidates: lk.candidates }, line, vendorName);
+  }
+  if (lk.problem === 'NO_RATE') return `No vendor rate configured for this item — ${vendorName} has "${item}" in the Vendor Master without a rate.`;
+  return `No vendor rate configured for this item — ${vendorName} has no rate for "${item}" in the Vendor Master.`;
 };
 
 /** Difference from one rate to another: amount per unit and percent (null when the base is 0 / missing). */

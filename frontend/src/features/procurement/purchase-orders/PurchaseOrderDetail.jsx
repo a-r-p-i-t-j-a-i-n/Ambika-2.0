@@ -36,6 +36,7 @@ import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
 import PurchaseOrderPdfPreview from './PurchaseOrderPdfPreview';
 import PoItemsTable from './PoItemsTable';
+import PoRateChangesPanel from './PoRateChangesPanel';
 import { PoFollowUpChip, FuStatusChip, FuTypeChip, fmtDate as fmtFuDate } from '../follow-ups/fuMeta';
 import FollowUpFormDrawer from '../follow-ups/FollowUpFormDrawer';
 import FollowUpDoneDialog from '../follow-ups/FollowUpDoneDialog';
@@ -817,6 +818,7 @@ const PurchaseOrderDetail = () => {
               </Box>
             );
           })()}
+          <PoRateChangesPanel poId={po._id} />
           <PoItemsTable po={po} />
         </SectionCard>
 
