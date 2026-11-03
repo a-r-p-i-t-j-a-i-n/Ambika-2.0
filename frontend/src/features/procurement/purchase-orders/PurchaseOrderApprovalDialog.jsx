@@ -276,17 +276,22 @@ const usePoPdf = (po, ready) => {
 const ApprovalForm = ({ po: given, approvePo, deciding, onClose }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [remarks, setRemarks] = useState("");
-  const [approvePo, { isLoading }] = useApprovePurchaseOrderMutation();
-
-  useEffect(() => {
-    if (open) setRemarks("");
-  }, [open]);
+  // The full PO (a list row may carry less).
+  const { data, isLoading } = useGetPurchaseOrderQuery(given._id);
+  const po = data?.data || given;
+  const pdf = usePoPdf(po, !isLoading);
+  const jsl = po.poFormatType === "JSL";
+  const items = po.items || [];
+  const indents = (
+    po.indentNumbers?.length ? po.indentNumbers : [po.indentNumber]
+  )
+    .filter(Boolean)
+    .join(", ");
+  const pdfName = `${String(poDisplayNumber(po)).replace(/[^\w.-]/g, "_")}.pdf`;
 
   // Rate changes still waiting in Purchase Approval hold the PO (the server refuses
   // the approval as well — this just says so before the click).
-  const pendingRates = (po?.items || []).filter(
-    (it) => it.rateChangeStatus === "PENDING",
-  );
+  const pendingRates = items.filter((it) => it.rateChangeStatus === "PENDING");
 
   const decide = async (decision) => {
     try {
