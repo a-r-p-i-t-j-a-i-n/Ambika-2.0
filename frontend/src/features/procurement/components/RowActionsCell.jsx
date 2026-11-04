@@ -36,7 +36,7 @@ const RowActionsCell = ({
     sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: `${GAP}px`, width: '100%', height: '100%', minWidth: 0 }}>
     {children}
     {onQuickView ? (
-      <Tooltip title={quickViewLabel}>
+      <Tooltip title={quickViewLabel} disableFocusListener>
         <IconButton size="small" aria-label={`${quickViewLabel} for ${label}`} data-testid={quickViewTestId}
           onClick={(e) => { e.stopPropagation(); onQuickView(); }} sx={quickViewSx}>
           <Eye size={16} strokeWidth={2.2} />
@@ -45,12 +45,12 @@ const RowActionsCell = ({
     ) : (
       <Box aria-hidden sx={{ width: BUTTON, flexShrink: 0 }} />
     )}
-    <Tooltip title="More actions">
-      <IconButton size="small" aria-label={`More actions for ${label}`} aria-haspopup="menu" data-testid="row-more-actions"
-        onClick={(e) => { e.stopPropagation(); onMenu(e); }} sx={menuSx}>
-        <MoreVertical size={16} />
-      </IconButton>
-    </Tooltip>
+    {/* No tooltip on ⋮: one would pop back up over the row whenever the menu
+        closes with the pointer still on the button. The label is for screen readers. */}
+    <IconButton size="small" aria-label={`More actions for ${label}`} aria-haspopup="menu" data-testid="row-more-actions"
+      onClick={(e) => { e.stopPropagation(); onMenu(e); }} sx={menuSx}>
+      <MoreVertical size={16} />
+    </IconButton>
   </Box>
 );
 

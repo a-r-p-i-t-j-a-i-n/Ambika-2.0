@@ -59,12 +59,16 @@ import voucherRoutes from './modules/procurement/voucher/voucher.routes.js';
 import tallyEntryRoutes from './modules/procurement/tally-entry/tallyEntry.routes.js';
 import finalPaymentRoutes from './modules/procurement/final-payment/finalPayment.routes.js';
 import stepQueueRoutes from './modules/procurement/stepQueue.routes.js';
+import rateChangeRoutes from './modules/procurement/rate-change/rateChange.routes.js';
+import cascadeDeleteRoutes from './modules/procurement/cascade-delete/cascadeDelete.routes.js';
 import vendorRoutes from './modules/vendors/vendor.routes.js';
 import transporterRoutes from './modules/transporters/transporter.routes.js';
 import approvalRoutes from './modules/approvals/approval.routes.js';
 import fmsDoerRoutes from './modules/fms-doers/fmsDoer.routes.js';
 import { fmsWorkflowSync } from './modules/fms-doers/fmsDoerSync.middleware.js';
 import { getInvoiceNumberIndexStatus } from './modules/procurement/vendor-invoice/invoiceNumberIndexGuard.js';
+import recycleBinRoutes from './modules/recycle-bin/recycleBin.routes.js';
+import { requestContext } from './middleware/requestContext.js';
 
 
 
@@ -97,6 +101,7 @@ app.use(hpp());
 // ── Body Parsing & Compression ──────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(requestContext); // lets the Recycle Bin see who deleted, from which screen
 app.use(compression());
 
 // ── Logging ─────────────────────────────────────────────────
@@ -164,6 +169,7 @@ app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (pr
 app.use('/api/v1/suite-link',       suiteLinkRoutes); // Delegation Suite server → ERP (signed, no login)
 app.use('/api/v1/notifications',    notificationRoutes);
 app.use('/api/v1/order-intake',     orderIntakeRoutes);
+app.use('/api/v1/recycle-bin',      recycleBinRoutes); // Deleted items → restore / delete forever (Suite's Recycle Bin page)
 // FMS doer tasks follow Purchase FMS progress: after any successful write under
 // these paths, re-sync step tasks (post-response; never alters the request).
 app.use('/api/v1/procurement', fmsWorkflowSync);
@@ -188,6 +194,8 @@ app.use('/api/v1/procurement/vouchers', voucherRoutes); // Purchase FMS — Vouc
 app.use('/api/v1/procurement/tally-entries', tallyEntryRoutes); // Purchase FMS — Purchase Entry in Tally (Step 1.12)
 app.use('/api/v1/procurement/final-payments', finalPaymentRoutes); // Purchase FMS — Make Payment (Step 1.13)
 app.use('/api/v1/procurement/step-queues', stepQueueRoutes); // Purchase FMS — records awaiting each step (read-only)
+app.use('/api/v1/procurement/rate-changes', rateChangeRoutes); // Purchase FMS — PO Rate Change Approvals + history
+app.use('/api/v1/procurement/cascade-delete', cascadeDeleteRoutes); // Purchase FMS — delete a step with everything resting on it (preview + confirm)
 app.use('/api/v1/approvals', approvalRoutes); // Purchase FMS — Generic Digital Approval & Signature engine
 
 

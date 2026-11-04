@@ -12,6 +12,7 @@
  */
 import SKU, { FG_BLOCKED_ITEM_TYPES } from '../skus/sku.model.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { lineConversion, incompatibleUnitMessage } from '../skus/unitConversion.js';
 
 const FG_ERROR = 'Finished Goods cannot be processed through Purchase FMS.';
 const BLOCKED = new Set(FG_BLOCKED_ITEM_TYPES.map((t) => String(t).toUpperCase()));
@@ -70,4 +71,37 @@ export const assertPurchasable = async (items = []) => {
   if (scrap) {
     throw new AppError(SCRAP_ERROR, 400);
   }
+};
+
+/**
+ * Refuse lines whose unit cannot be converted into their SKU's stock.
+ *
+ * For a SKU bought in a Purchase Unit (1 BOX = 25 PCS) a PO / GRN line must be
+ * in that unit or in the stock unit — anything else (5 KGS of a BOX/PCS item)
+ * has no conversion, and would post the typed number to stock as if it were
+ * pieces. SKUs without a purchase unit are never checked: their documents have
+ * always carried any unit label, converted 1:1 (unitConversion.lineConversion).
+ * Lines with no SKU match are left to the other guards.
+ *
+ * @param items  [{ skuId?, skuCode?, itemName, unit }]
+ */
+export const assertPurchaseUnits = async (items = []) => {
+  const list = (Array.isArray(items) ? items : [items]).filter(Boolean);
+  const ids = [...new Set(list.map((it) => it.skuId).filter(Boolean).map(String))].filter((id) => /^[0-9a-fA-F]{24}$/.test(id));
+  const codes = [...new Set(list.map((it) => (it.skuCode || '').trim().toUpperCase()).filter(Boolean))];
+  if (!ids.length && !codes.length) return;
+  const or = [];
+  if (ids.length) or.push({ _id: { $in: ids } });
+  if (codes.length) or.push({ code: { $in: codes } });
+  const skus = await SKU.find({ $or: or, purchaseUnit: { $nin: [null, ''] } })
+    .select('_id code unit purchaseUnit purchaseConversionFactor').lean();
+  if (!skus.length) return;
+  const byId = new Map(skus.map((s) => [String(s._id), s]));
+  const byCode = new Map(skus.map((s) => [String(s.code).toUpperCase(), s]));
+  const problems = [];
+  for (const it of list) {
+    const sku = (it.skuId && byId.get(String(it.skuId))) || byCode.get(String(it.skuCode || '').trim().toUpperCase());
+    if (sku && lineConversion(sku, it.unit).problem) problems.push(incompatibleUnitMessage(it.itemName || sku.code, it.unit, sku));
+  }
+  if (problems.length) throw new AppError(problems.join(' '), 400);
 };

@@ -90,6 +90,7 @@ const FinalPaymentList = lazyWithRetry(
 // their own yet (StepWithQueue → GET /procurement/step-queues/:queue). Each
 // queue row can open the step's existing create dialog with that record preset.
 const FollowUpFormDrawer = lazyWithRetry(() => import("./follow-ups/FollowUpFormDrawer"));
+import { awaitingAdvanceColumns } from "./advance-payments/awaitingAdvanceColumns";
 const AdvancePaymentFormDialog = lazyWithRetry(
   () => import("./advance-payments/AdvancePaymentFormDialog"),
 );
@@ -126,9 +127,10 @@ const AdvancePaymentStep = () => {
       listLabel="Advance Payments"
       queueLabel="Awaiting Advance"
       title="Awaiting Advance Payment — Step 1.07"
-      subtitle="Approved PIs ready for their advance — a PI sent to the MD waits for the MD's approval first"
-      action={{ label: "Record Advance", icon: <Wallet size={14} />, Dialog: AdvancePaymentFormDialog, props: (r) => ({ pi: r.record }) }}
-      gridProps={{ numberHeader: "PI No", dateHeader: "PI Date", amountHeader: "Balance", emptyText: "No PI is waiting for an advance" }}
+      subtitle="Approved PIs whose advance is not fully paid — use Record Payment on a row. A PI sent to the MD waits for the MD's approval first"
+      preferQueue
+      action={{ label: "Record Payment", icon: <Wallet size={14} />, Dialog: AdvancePaymentFormDialog, props: (r) => ({ pi: r.record }) }}
+      gridProps={{ numberHeader: "PI Number", dateHeader: "PI Date", showAmount: false, extraColumns: awaitingAdvanceColumns, emptyText: "No approved PI is waiting for an advance payment" }}
     />
   );
 };
@@ -185,6 +187,8 @@ const FinalPaymentStep = () => {
 // lives at its own hub slug outside the step rail — MD users only.
 const MdApprovalList = lazyWithRetry(() => import("./approvals/MdApprovalList"));
 const MD_APPROVAL_SLUG = "md-approvals";
+// Purchase Approval (rate changes) is NOT rendered by the hub: it has its own
+// route and page (/purchase-fms/rate-change-approvals → RateChangeApprovals).
 
 // The 9 steps the workflow was scoped around, plus the remaining procurement
 // screens (10-14) that already lived under the old sidebar dropdown — kept
@@ -492,9 +496,9 @@ const PurchaseFmsHub = () => {
     return <Navigate to={`/purchase-fms/${visibleSteps[0].slug}`} replace />;
   }
 
-  const ActiveComponent = isMdView
-    ? MdApprovalList
-    : visibleSteps[activeIndex].Component;
+  let ActiveComponent;
+  if (isMdView) ActiveComponent = MdApprovalList;
+  else ActiveComponent = visibleSteps[activeIndex].Component;
 
   return (
     <Box sx={{ bgcolor: PFMS.canvas }}>

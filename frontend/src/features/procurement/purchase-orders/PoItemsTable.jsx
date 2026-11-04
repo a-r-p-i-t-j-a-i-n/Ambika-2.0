@@ -4,7 +4,9 @@ import {
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { fmtINR } from './poMeta';
+import { Link as RouterLink } from 'react-router-dom';
 import { pfmsTableHeadSx } from '../pfmsTheme';
+import { RATE_STATUS, RATE_LINE_LABEL, RATE_CHANGE_PATH, fmtRate, fmtDiff } from '../rate-changes/rateChangeMeta';
 
 /**
  * PO line items + financial summary. Shared by the PO Detail page's Items card
@@ -46,7 +48,28 @@ const PoItemsTable = ({ po }) => (
               <TableCell sx={{ whiteSpace: 'nowrap' }}><Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography></TableCell>
               <TableCell align="right">{it.quantity}</TableCell>
               <TableCell>{it.unit}</TableCell>
-              <TableCell align="right">{Number(it.rate || 0).toFixed(2)}</TableCell>
+              <TableCell align="right">
+                {Number(it.rate || 0).toFixed(2)}
+                {it.rateChangeStatus && it.rateChangeRequestNumber && (
+                  <Typography component={RouterLink} to={`${RATE_CHANGE_PATH}?request=${it.rateChangeRequestId}`}
+                    data-testid="po-line-rate-change" title={`Rate change ${it.rateChangeRequestNumber}`}
+                    sx={{ display: 'block', fontSize: '0.66rem', fontWeight: 700, whiteSpace: 'nowrap', textDecoration: 'none', color: RATE_STATUS[it.rateChangeStatus]?.color }}>
+                    {RATE_LINE_LABEL[it.rateChangeStatus] || RATE_STATUS[it.rateChangeStatus]?.label || it.rateChangeStatus} · {it.rateChangeRequestNumber}
+                  </Typography>
+                )}
+                {it.rateChangeStatus === 'PENDING' && it.fetchedRate != null && (
+                  // The line is saved at the PROPOSED rate; the vendor's rate is what it is compared with.
+                  <Typography data-testid="po-line-rate-diff" sx={{ display: 'block', fontSize: '0.64rem', color: 'text.secondary', whiteSpace: 'nowrap' }}>
+                    Vendor {fmtRate(it.fetchedRate)} → {fmtRate(it.rate)} ({fmtDiff(Number(it.rate) - Number(it.fetchedRate), Number(it.fetchedRate) > 0 ? ((Number(it.rate) - Number(it.fetchedRate)) / Number(it.fetchedRate)) * 100 : null)})
+                  </Typography>
+                )}
+                {po.approvalStatus === 'DRAFT' && po.poFormatType !== 'JSL' && !it.rateChangeStatus && it.fetchedRate == null && it.rateSource === 'MANUAL' && Number(it.rate) > 0 && (
+                  <Typography data-testid="po-line-new-rate" title="The vendor had no rate for this item — the rate on this line is recorded as its first rate when the PO is approved"
+                    sx={{ display: 'block', fontSize: '0.64rem', fontWeight: 700, color: '#1d4ed8', whiteSpace: 'nowrap' }}>
+                    New vendor rate
+                  </Typography>
+                )}
+              </TableCell>
               <TableCell align="right">{Number(it.taxableAmount || 0).toFixed(2)}</TableCell>
               <TableCell align="center">{it.gstRate || 0}%</TableCell>
               <TableCell align="right">{Number(it.taxAmount || 0).toFixed(2)}</TableCell>

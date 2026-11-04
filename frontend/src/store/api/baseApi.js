@@ -3,11 +3,14 @@ import { logout } from '../slices/authSlice';
 
 const rawBaseQuery = fetchBaseQuery({
   baseUrl: import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1',
-  prepareHeaders: (headers) => {
+  prepareHeaders: (headers, { type }) => {
     const token = localStorage.getItem('token');
     if (token) {
       headers.set('authorization', `Bearer ${token}`);
     }
+    // Changes say which screen they came from, so the Recycle Bin can show
+    // where something was deleted.
+    if (type === 'mutation') headers.set('x-client-page', window.location.pathname);
     return headers;
   },
 });
@@ -42,7 +45,7 @@ export const baseApi = createApi({
     'PricingReviewers', 'PricingDocuments', 'PricingAnalytics',
     'O2DProcess', 'O2DStepDef', 'O2DMyTasks', 'O2DDashboard', 'O2DTemplate', 'Notification',
     'Indent', 'IndentStats','OrderIntake',
-    'PurchaseOrder', 'PurchaseOrderStats',
+    'PurchaseOrder', 'PurchaseOrderStats', 'RateChange',
     'FollowUp', 'FollowUpStats',
     'ProformaInvoice', 'ProformaInvoiceStats',
     'AdvancePayment', 'AdvancePaymentStats',

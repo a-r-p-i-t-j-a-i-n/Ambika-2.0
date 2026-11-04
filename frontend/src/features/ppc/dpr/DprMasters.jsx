@@ -165,7 +165,10 @@ const DprMasters = () => {
 
       <Dialog open={!!toDelete} onClose={() => setToDelete(null)}>
         <DialogTitle>Delete record?</DialogTitle>
-        <DialogContent><Typography sx={{ fontSize: '0.9rem' }}>{toDelete && (toDelete[cfg.columns[0].field] || 'This record')}</Typography></DialogContent>
+        <DialogContent>
+          <Typography sx={{ fontSize: '0.9rem' }}>{toDelete && (toDelete[cfg.columns[0].field] || 'This record')}</Typography>
+          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', mt: 1 }}>It moves to the Recycle Bin, where it can be restored.</Typography>
+        </DialogContent>
         <DialogActions>
           <Button onClick={() => setToDelete(null)}>Cancel</Button>
           <Button color="error" variant="contained" onClick={doDelete}>Delete</Button>

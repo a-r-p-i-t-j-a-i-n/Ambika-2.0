@@ -9,6 +9,9 @@ import { generateMovementNumber } from '../../utils/docNumberGenerator.js';
 import { logger } from '../../utils/logger.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+// Costs: up to 6 decimals; a whole number of paise stays exactly as it was.
+const roundCost = (n) => Math.round((Number(n) || 0) * 1e6) / 1e6;
+const isPaise = (n) => Math.abs(round2(n) - (Number(n) || 0)) < 1e-9;
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /**
@@ -241,10 +244,14 @@ const applyStockDelta = async (p) => {
     }
     // Weighted-average cost on IN (only when a unit cost is given) — unchanged
     // arithmetic, now computed from the row this update is guarded against.
+    // Kept to paise while every cost involved is in paise (identical to before);
+    // once a finer cost arrives (a converted receipt's cost per PCS) the average
+    // keeps that precision, so on-hand × avgCost still equals the value received.
     if (p.movementType === MOVEMENT_TYPE.IN && p.unitCost > 0) {
       const newQty = onHand + p.quantity;
-      const avgCost = round2(current?.avgCost || 0);
-      set.avgCost = newQty > 0 ? round2((onHand * avgCost + p.quantity * p.unitCost) / newQty) : p.unitCost;
+      const avgCost = roundCost(current?.avgCost || 0);
+      const roundAvg = isPaise(avgCost) && isPaise(p.unitCost) ? round2 : roundCost;
+      set.avgCost = newQty > 0 ? roundAvg((onHand * avgCost + p.quantity * p.unitCost) / newQty) : p.unitCost;
       set.lastCost = p.unitCost;
     }
     if (p.skuCode && !current?.skuCode) set.skuCode = p.skuCode;
@@ -418,7 +425,10 @@ const createStockMovement = async (input = {}, opts = {}) => {
   }
   const txnType = input.txnType || (movementType === MOVEMENT_TYPE.IN ? TXN_TYPE.ADJUST_IN : TXN_TYPE.ADJUST_OUT);
   const warehouse = (input.warehouse || DEFAULT_WAREHOUSE).trim();
-  const unitCost = round2(input.unitCost);
+  // Paise, as always — except a cost per stock unit derived from a purchase
+  // unit (₹100 per BOX of 24 → ₹4.166667 per PCS), which keeps the decimals
+  // that make quantity × cost reproduce the value received.
+  const unitCost = input.conversionFactor ? roundCost(input.unitCost) : round2(input.unitCost);
   const sign = movementType === MOVEMENT_TYPE.IN ? 1 : -1;
   const qtyDelta = round2(sign * quantity);
   // Optional secondary weight (RM circles). Absent stays absent all the way to
@@ -460,7 +470,9 @@ const createStockMovement = async (input = {}, opts = {}) => {
     // Null unless this movement stated a weight — see the model's note.
     quantityKg, qtyKgDelta,
     balanceKgAfter: hasKg ? round2(stock.qtyOnHandKg || 0) : null,
-    unitCost, lineValue: round2(quantity * unitCost),
+    // A caller that knows the exact value (a converted GRN receipt: accepted
+    // BOX × BOX rate) states it, so the ledger never drifts by a paisa.
+    unitCost, lineValue: input.lineValue != null ? round2(input.lineValue) : round2(quantity * unitCost),
     batchNo: ledgerText(input.batchNo),
     sourceModule: ledgerText(input.sourceModule),
     refType: ledgerText(input.refType),
@@ -485,6 +497,8 @@ const createStockMovement = async (input = {}, opts = {}) => {
     buyer: input.buyer || undefined,
     enteredQty: input.enteredQty ?? undefined,
     enteredUom: input.enteredUom || undefined,
+    // Converted GRN receipts / their QC reject-outs only.
+    conversionFactor: input.conversionFactor ?? undefined,
     remarks: ledgerText(input.remarks),
     // Set only by the entry screens, so a replayed submission can be recognised.
     clientRequestId: ledgerText(input.clientRequestId),

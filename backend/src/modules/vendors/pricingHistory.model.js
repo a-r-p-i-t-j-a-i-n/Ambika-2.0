@@ -6,6 +6,8 @@ const { Schema, model } = mongoose;
 export const PRICING_SOURCE = {
   VENDOR_MASTER:  'VENDOR_MASTER',
   PURCHASE_ORDER: 'PURCHASE_ORDER',
+  // A PO rate change approved in Rate Change Approvals (procurement/rate-change).
+  RATE_CHANGE_APPROVAL: 'RATE_CHANGE_APPROVAL',
 };
 
 /**

@@ -76,6 +76,7 @@ export const PERMISSIONS = Object.freeze({
   // ── Procurement (Purchase FMS) ──────────────────────────────────
   'procurement.approve':           { module: 'Procurement',    label: 'Approve procurement documents (PO / PI)',   risk: 'high' },
   'procurement.markPiNotRequired': { module: 'Procurement',    label: 'Mark a PO\'s PI as Not Required',            risk: 'high' },
+  'procurement.approveRateChange': { module: 'Procurement',    label: 'Approve / reject PO rate changes (updates the vendor rate)', risk: 'high' },
   'procurement.invoiceExcess':     { module: 'Procurement',    label: 'Invoice more than the QC-accepted qty',     risk: 'high' },
   'procurement.deleteIndent':          { module: 'Procurement', label: 'Delete a purchase indent',                risk: 'high' },
   'procurement.deletePurchaseOrder':   { module: 'Procurement', label: 'Delete a purchase order',                 risk: 'high' },
@@ -83,6 +84,7 @@ export const PERMISSIONS = Object.freeze({
   'procurement.deleteProformaInvoice': { module: 'Procurement', label: 'Delete a proforma invoice',               risk: 'high' },
   'procurement.deleteAdvancePayment':  { module: 'Procurement', label: 'Delete an advance payment',               risk: 'high' },
   'procurement.deleteGrn':             { module: 'Procurement', label: 'Delete a goods receipt note',             risk: 'high' },
+  'procurement.editGrn':               { module: 'Procurement', label: 'Edit a completed goods receipt note',     risk: 'high' },
   'procurement.deleteIncomingQc':      { module: 'Procurement', label: 'Delete an incoming QC record',            risk: 'high' },
   'procurement.deleteVendorInvoice':   { module: 'Procurement', label: 'Delete a vendor invoice',                 risk: 'high' },
   'procurement.deleteVoucher':         { module: 'Procurement', label: 'Delete a payment voucher',                risk: 'high' },
@@ -106,6 +108,13 @@ export const PERMISSIONS = Object.freeze({
   'o2dfms.act':                  { module: 'O2D FMS',        label: 'Complete a step (do the operation)',        risk: 'medium' },
   'o2dfms.manage':               { module: 'O2D FMS',        label: 'Reassign a step owner',                     risk: 'medium' },
   'o2dfms.config':               { module: 'O2D FMS',        label: 'Configure the step catalog (Who/What/When)',risk: 'high' },
+
+  // ── Recycle Bin (the Suite's Recycle Bin page; switched on per person in the Suite) ──
+  'recycleBin.view':             { module: 'Recycle Bin',    label: 'Open the Recycle Bin (own deleted items)',  risk: 'medium' },
+  'recycleBin.viewAll':          { module: 'Recycle Bin',    label: "See everyone's deleted items",             risk: 'high' },
+  'recycleBin.restore':          { module: 'Recycle Bin',    label: 'Restore deleted items',                     risk: 'high' },
+  'recycleBin.purge':            { module: 'Recycle Bin',    label: 'Delete items forever',                      risk: 'critical' },
+  'recycleBin.settings':         { module: 'Recycle Bin',    label: 'Change how long items stay in the bin',     risk: 'high' },
 });
 
 /** Sentinel granted to root users (MD). Bypasses every permission check. */

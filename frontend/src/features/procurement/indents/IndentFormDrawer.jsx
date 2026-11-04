@@ -5,17 +5,19 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { X, Save, ClipboardList, Plus, Trash2 } from 'lucide-react';
+import { X, Save, Send, ClipboardList, Plus, Trash2 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useCreateIndentMutation,
   useUpdateIndentMutation,
+  useSubmitIndentMutation,
 } from '../../../store/api/procurementApi';
 import { useGetSkuLookupQuery, useCreateSkuMutation } from '../../../store/api/skuApi';
 import { useGetEmployeesQuery } from '../../../store/api/authApi';
 import { UNITS, DEPARTMENTS } from './indentMeta';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
 import { TYPE_META, typeDestinationHint } from '../../masters/itemTypeMeta';
+import { conversionRule, purchaseUnitOf, reversedRuleWarning } from '../../../utils/unitConversion';
 
 // Purchase FMS rule: Finished Goods are sell-side only — never purchasable.
 const FG_BLOCKED = new Set(['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT']);
@@ -34,9 +36,11 @@ const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', unit: 'Pcs', qu
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Match the typed text against name OR code; cap the rendered list.
 const filterSkuOptions = createFilterOptions({ limit: 200, stringify: (o) => `${o.name || ''} ${o.code || ''}` });
-// A SKU's unit exactly as SKU Master stores it (trimmed only); `fallback`,
-// then Pcs, when the SKU has none.
-const skuUnit = (sku, fallback) => String(sku?.unit || '').trim() || String(fallback || '').trim() || 'Pcs';
+// The unit a SKU is BOUGHT in, exactly as SKU Master stores it (trimmed only):
+// its Purchase Unit when one is configured ("BOX" for 1 BOX = 25 PCS), else its
+// stock unit; `fallback`, then Pcs, when the SKU has none. The server binds the
+// same unit (indent/itemSku.js).
+const skuUnit = (sku, fallback) => purchaseUnitOf(sku) || String(fallback || '').trim() || 'Pcs';
 const blankHeader = () => ({ raisedBy: '', department: 'Stores', requestType: 'MATERIAL_PURCHASE', remarks: '' });
 
 // Map an existing indent (new items[] or legacy single-product) → editable rows.
@@ -69,7 +73,8 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
 
   const [createIndent, { isLoading: creating }] = useCreateIndentMutation();
   const [updateIndent, { isLoading: updating }] = useUpdateIndentMutation();
-  const saving = creating || updating;
+  const [submitIndent, { isLoading: submitting }] = useSubmitIndentMutation();
+  const saving = creating || updating || submitting;
 
   // Products come from the SKU Master only (the server re-reads name + code
   // from the SKU record on save). The first 2000 load up front; typing also
@@ -187,7 +192,10 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
     return !e.items;
   };
 
-  const handleSubmit = async () => {
+  // `sendForApproval`: after saving, submit it (the same submit as Indent
+  // Detail's "Submit for Approval") so it goes straight to Indent Approval
+  // (1.1A). Without it the indent stays a draft at 1.1, as before.
+  const handleSubmit = async ({ sendForApproval = false } = {}) => {
     if (!validate()) {
       const first = items.find(unlinked);
       enqueueSnackbar(first ? `"${first.itemName.trim()}" is not in SKU Master — pick the product from the SKU list` : 'Add at least one product with a quantity', { variant: 'warning' });
@@ -209,21 +217,31 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
       requestType: header.requestType || 'MATERIAL_PURCHASE',
       remarks: header.remarks.trim(),
     };
+    let saved;
     try {
-      if (isEdit) {
-        await updateIndent({ id: indent._id, ...payload }).unwrap();
-        enqueueSnackbar('Indent updated', { variant: 'success' });
-        onClose?.(true);
-      } else {
-        const res = await createIndent(payload).unwrap();
-        enqueueSnackbar('Indent created', { variant: 'success' });
-        // Second arg = the newly created indent, so a caller that isn't
-        // already on the indent list (e.g. a Quick Action) can open it.
-        onClose?.(true, res?.data);
-      }
+      saved = isEdit
+        ? (await updateIndent({ id: indent._id, ...payload }).unwrap())?.data || indent
+        : (await createIndent(payload).unwrap())?.data;
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save indent', { variant: 'error' });
+      return;
     }
+    const number = saved?.indentNumber || indent?.indentNumber || '';
+    if (!sendForApproval) {
+      enqueueSnackbar(isEdit ? 'Indent updated' : 'Indent created as a draft', { variant: 'success' });
+    } else {
+      try {
+        await submitIndent(saved?._id || indent._id).unwrap();
+        enqueueSnackbar(`Indent ${number} ${isEdit ? 'saved' : 'created'} and sent for approval`.replace('  ', ' '), { variant: 'success' });
+      } catch (err) {
+        // Saved, not submitted — it stays a draft; Submit for Approval is on its page.
+        enqueueSnackbar(`Indent ${number} saved as a draft, but sending it for approval failed: ${err?.data?.message || 'please try again'}. Submit it from the indent page.`.replace('  ', ' '), { variant: 'warning' });
+      }
+    }
+    // Second arg = the newly created indent, so a caller that isn't
+    // already on the indent list (e.g. a Quick Action) can open it.
+    if (isEdit) onClose?.(true);
+    else onClose?.(true, saved);
   };
 
   const totalQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
@@ -351,6 +369,9 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
                 <TextField size="small" type="number" placeholder="0" value={it.quantity} error={!!errors[`qty_${idx}`]}
                   onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} />
                 <TextField size="small" placeholder="Unit" value={it.skuId ? skuUnit(skuById.get(String(it.skuId)), it.unit) : ''}
+                  helperText={(it.skuId && (reversedRuleWarning(skuById.get(String(it.skuId))) || conversionRule(skuById.get(String(it.skuId))))) || undefined}
+                  error={!!(it.skuId && reversedRuleWarning(skuById.get(String(it.skuId))))}
+                  FormHelperTextProps={{ 'data-testid': 'indent-unit-rule' }}
                   InputProps={{ readOnly: true }} inputProps={{ 'data-testid': 'indent-unit', 'aria-label': 'Unit (from SKU Master)' }} />
                 <TextField size="small" placeholder="Optional" value={it.remarks}
                   onChange={(e) => setItem(idx, { remarks: e.target.value })} />
@@ -384,10 +405,15 @@ const IndentFormDrawer = ({ open, onClose, indent = null }) => {
       {/* Footer */}
       <Divider />
       <Box sx={{ p: 2, display: 'flex', justifyContent: 'flex-end', gap: 1.5, bgcolor: '#fff' }}>
-        <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving}>Cancel</Button>
-        <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-          onClick={handleSubmit} disabled={saving}>
-          {isEdit ? 'Save Changes' : 'Create Indent'}
+        <Button variant="text" onClick={() => onClose?.(false)} disabled={saving}>Cancel</Button>
+        {/* Draft = stays at 1.1 to finish later; Submit = straight to Indent Approval (1.1A). */}
+        <Button variant="outlined" startIcon={<Save size={16} />}
+          onClick={() => handleSubmit()} disabled={saving}>
+          {isEdit ? 'Save Changes' : 'Save as Draft'}
+        </Button>
+        <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
+          onClick={() => handleSubmit({ sendForApproval: true })} disabled={saving}>
+          {isEdit ? 'Save & Submit for Approval' : 'Submit for Approval'}
         </Button>
       </Box>
 

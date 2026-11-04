@@ -153,6 +153,11 @@ const inventoryMovementSchema = new Schema({
    */
   enteredQty:      { type: Number, default: undefined },
   enteredUom:      { type: String, trim: true, default: undefined },
+  // Purchase unit → stock unit (skus/unitConversion.js): on a GRN receipt in
+  // the SKU's purchase unit, enteredQty/enteredUom hold the received figure
+  // (5 BOX) and this the factor frozen on the GRN line (25), so
+  // quantity = enteredQty × conversionFactor (125 PCS). Absent everywhere else.
+  conversionFactor: { type: Number, default: undefined },
 
   // KNOWN LIMITATION — traceability.
   //

@@ -12,8 +12,11 @@ import { generatePurchaseVoucherNumber, generateExpenseVoucherNumber } from '../
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { buildVoucherPdfBuffer } from './voucher.pdf.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 import { registerApprovalDocument } from '../../approvals/approval.registry.js';
 import { approvalService } from '../../approvals/approval.service.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, asUser, refuse, inr } from '../recycleBin.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 
@@ -381,16 +384,46 @@ export const voucherService = {
     return v;
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a voucher. A draft simply goes; a posted / signed / cancelled one
+   * needs a reason (procurement.deleteVoucher) and goes only while no tally
+   * entry or final payment rests on it. Its invoice is unlinked, so a new
+   * voucher can be raised for it.
+   */
+  async remove(id, user, { reason } = {}) {
     const v = await findOrThrow(id);
-    if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) {
-      throw new AppError('Only draft vouchers can be deleted', 400);
-    }
+    const draft = v.voucherStatus === VOUCHER_STATUS.DRAFT;
+    const label = `Voucher ${v.voucherNumber || ''}`.trim();
+    const why = draft ? String(reason || '').trim() : deleteReason(reason, label);
+    assertNothingAfter(label, await laterStepsOf.voucher(v._id));
+    const linked = v.invoiceId
+      ? Boolean(await VendorInvoice.exists({ _id: v.invoiceId, voucherId: v._id }))
+      : false;
     v.isDeleted = true;
     v.deletedAt = new Date();
     v.deletedBy = user?._id;
-    v.activityTimeline.push({ action: 'DELETE', description: 'Voucher deleted', actorId: user?._id });
-    return v.save();
+    v.activityTimeline.push({ action: 'DELETE', description: why ? `Voucher deleted. Reason: ${why}` : 'Voucher deleted', actorId: user?._id });
+    const saved = await v.save();
+    const args = { voucherId: v._id, linked };
+    await binDeleted('voucher', VendorVoucher, v, {
+      title: v.voucherNumber || 'Voucher',
+      subtitle: [v.vendorName, v.invoiceNumber && `Invoice ${v.invoiceNumber}`, v.netPayableAmount ? inr(v.netPayableAmount) : ''].filter(Boolean).join(' · '),
+      keywords: [v.expenseInvoiceNo, v.expenseCategory, v.poNumber, v.grnNumbers],
+      reason: why,
+      user,
+      before: [binPlan.hook('procurement.voucher.check', args)],
+      after: [binPlan.hook('procurement.voucher.relink', args)],
+    });
+    if (v.invoiceId) {
+      await VendorInvoice.updateOne(
+        { _id: v.invoiceId, voucherId: v._id },
+        {
+          $set: { voucherId: null, voucherNumber: '' },
+          $push: { activityTimeline: { action: 'VOUCHER_DELETED', description: `Voucher ${v.voucherNumber} deleted — invoice unlinked`, actorId: user?._id } },
+        },
+      );
+    }
+    return saved;
   },
 
   /**
@@ -490,3 +523,46 @@ export const voucherService = {
     return v.save();
   },
 };
+
+// ── Recycle Bin: a restored voucher ─────────────────────────────────────────
+// A purchase voucher comes back only while its invoice has no other voucher
+// (and is linked to it again); an expense voucher only while its bill number
+// and its PO / GRN link are still free. A cancelled voucher just comes back.
+registerRestoreHook('procurement.voucher.check', async ({ voucherId }, { session }) => {
+  const v = await VendorVoucher.findById(voucherId).session(session || null).lean();
+  if (!v) refuse('The voucher no longer exists.');
+  if (v.voucherStatus === VOUCHER_STATUS.CANCELLED) return;
+  if (v.invoiceId) {
+    const inv = await VendorInvoice.findById(v.invoiceId).session(session || null).select('invoiceNumber invoiceStatus isDeleted voucherId').lean();
+    if (!inv || inv.isDeleted) refuse(`Invoice ${v.invoiceNumber || ''} is deleted — restore it first.`.replace('  ', ' '));
+    if (inv.invoiceStatus === INVOICE_STATUS.REJECTED) refuse(`Invoice ${inv.invoiceNumber} is rejected now.`);
+    const other = await VendorVoucher.findOne({
+      invoiceId: v.invoiceId, _id: { $ne: v._id }, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED },
+    }).session(session || null).select('voucherNumber').lean();
+    if (other) refuse(`Invoice ${inv.invoiceNumber} has another voucher now (${other.voucherNumber}).`);
+    return;
+  }
+  if (v.voucherType === VOUCHER_TYPE.EXPENSE) {
+    try {
+      await assertNoDuplicateBill(v.vendorId, v.expenseInvoiceNo, v._id);
+    } catch (err) {
+      refuse(`Can't restore — ${err.message}`);
+    }
+    const conflict = await expenseLinkConflictAfterWrite({ ...v, isDeleted: false });
+    if (conflict) refuse(`Can't restore — ${conflict}`);
+  }
+});
+
+registerRestoreHook('procurement.voucher.relink', async ({ voucherId, linked }, { session, actor }) => {
+  if (!linked) return;
+  const v = await VendorVoucher.findById(voucherId).session(session || null).select('invoiceId voucherNumber').lean();
+  if (!v?.invoiceId) return;
+  await VendorInvoice.updateOne(
+    { _id: v.invoiceId, voucherId: null },
+    {
+      $set: { voucherId: v._id, voucherNumber: v.voucherNumber },
+      $push: { activityTimeline: { action: 'VOUCHER_RESTORED', description: `Voucher ${v.voucherNumber} restored from the Recycle Bin — invoice linked again`, actorId: asUser(actor)._id } },
+    },
+    session ? { session } : undefined,
+  );
+});

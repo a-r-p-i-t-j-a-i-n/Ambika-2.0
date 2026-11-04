@@ -7,6 +7,9 @@ import { createOrderSchema, updateOrderSchema, orderQuerySchema, mongoIdParamSch
 
 const router = Router();
 
+// Signed-in users only (mounted at /orders and /sales-orders).
+router.use(protect);
+
 router.route('/')
   .get(validate(orderQuerySchema, 'query'), orderController.getAll)
   .post(validate(createOrderSchema), orderController.create);
@@ -18,7 +21,7 @@ router.route('/:id')
   .get(validate(mongoIdParamSchema, 'params'), orderController.getById)
   .put(validate(mongoIdParamSchema, 'params'), validate(updateOrderSchema), orderController.update)
   // Delete is restricted: only users with `orders.delete` (MD/root) may remove an order.
-  .delete(protect, attachUserPermissions, requirePermission('orders.delete'),
+  .delete(attachUserPermissions, requirePermission('orders.delete'),
     validate(mongoIdParamSchema, 'params'), orderController.remove);
 
 router.patch('/:id/workflow/:step', validate(mongoIdParamSchema, 'params'), orderController.updateWorkflowStep);

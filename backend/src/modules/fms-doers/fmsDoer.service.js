@@ -105,11 +105,15 @@ const decorateTasks = async (tasks, { now = Date.now(), userId = null } = {}) =>
     const link = gone ? null : purchaseTaskLink(t, { serviceCompletionIndentId: rec.indentId });
     const doers = t.assignedDoerIds?.length ? t.assignedDoerIds : [t.assignedDoerId].filter(Boolean);
     const isDoer = uid ? taskDoerIds(t).includes(uid) : false;
+    // Who handed this item to its doer — the last reassign; none = the step's Doer Assignment.
+    const handover = [...(t.history || [])].reverse().find((h) => h.action === 'REASSIGNED' && h.byUserId);
     return {
       ...t,
       doers,
       buddies: t.buddyIds || [],
       fmsLabel: getFms(t.fmsKey)?.label || t.fmsKey,
+      stepTotal: getFms(t.fmsKey)?.steps.length || 0,
+      assignedBy: handover ? { id: String(handover.byUserId), name: handover.byName || '' } : null,
       isOverdue: isTaskOverdue(t, now),
       link: link?.to || null,
       linkLabel: link?.label || '',
@@ -716,7 +720,16 @@ export const fmsDoerService = {
     const and = [];
     if (query.fmsKey) and.push({ fmsKey: String(query.fmsKey).toUpperCase() });
     if (query.stepKey) and.push({ stepKey: String(query.stepKey).toUpperCase() });
-    if (query.status !== 'ALL') and.push({ status: query.status || FMS_TASK_STATUS.OPEN });
+    if (query.status === 'RECENT') {
+      and.push({
+        $or: [
+          { status: FMS_TASK_STATUS.OPEN },
+          { status: FMS_TASK_STATUS.DONE, completedAt: { $gte: new Date(Date.now() - COMPLETED_WINDOW_MS) } },
+        ],
+      });
+    } else if (query.status !== 'ALL') {
+      and.push({ status: query.status || FMS_TASK_STATUS.OPEN });
+    }
     if (query.doerId === 'none') {
       and.push({ assignedDoerId: null }, { $or: [{ assignedDoerIds: { $exists: false } }, { assignedDoerIds: { $size: 0 } }] });
     } else if (query.doerId) {
@@ -727,7 +740,7 @@ export const fmsDoerService = {
       and.push({ $or: [{ entityRef: rx }, { summary: rx }, { stepLabel: rx }, { stepCode: rx }] });
     }
     const filter = and.length ? { $and: and } : {};
-    const limit = Math.min(Number(query.limit) || 100, 500);
+    const limit = Math.min(Number(query.limit) || 100, 1000);
     const page = Math.max(Number(query.page) || 1, 1);
     const [docs, total] = await Promise.all([
       this._populate(FmsTask.find(filter)).sort({ fmsKey: 1, sequence: 1, openedAt: 1 }).skip((page - 1) * limit).limit(limit).lean(),

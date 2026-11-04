@@ -1,6 +1,8 @@
 import VendorPurchaseOrder, {
   PO_STATUS, PO_APPROVAL_STATUS,
 } from '../procurement/purchase-order/purchaseOrder.model.js';
+import SKU from '../skus/sku.model.js';
+import { lineConversion, toStockQty } from '../skus/unitConversion.js';
 
 /**
  * Material In Transit for Raw Material, derived from the procurement module.
@@ -92,6 +94,11 @@ export const rmInTransitService = {
 
     const byId = new Map(skus.map((s) => [String(s._id), s]));
     const byCode = new Map(skus.filter((s) => s.code).map((s) => [String(s.code).trim().toUpperCase(), s]));
+    // PO quantities are in the PO line's unit; in-transit sits beside on-hand,
+    // so a line in the SKU's purchase unit is counted in its stock unit (current
+    // SKU conversion — a PO line freezes none; the GRN does, at receipt).
+    const convCfg = new Map((await SKU.find({ _id: { $in: skus.map((s) => s._id) }, purchaseUnit: { $nin: [null, ''] } })
+      .select('_id unit purchaseUnit purchaseConversionFactor').lean()).map((s) => [String(s._id), s]));
 
     const acc = new Map();
     const unmatched = [];
@@ -106,17 +113,18 @@ export const rmInTransitService = {
       const overdue = !!expectedAt && new Date(expectedAt) < today;
 
       for (const it of po.items || []) {
-        const ordered = round2(it.quantity);
-        const received = round2(it.receivedQty);
-        const pending = Math.max(0, round2(ordered - received));
-        lineCount += 1;
-
         // 1) skuId, 2) skuCode. Nothing is inferred from the item name.
         const sku = (it.skuId && byId.get(String(it.skuId)))
           || (it.skuCode && byCode.get(String(it.skuCode).trim().toUpperCase()))
           || null;
+        const conv = sku ? lineConversion(convCfg.get(String(sku._id)), it.unit) : { factor: 1 };
+        const inStock = (q) => (conv.factor !== 1 ? toStockQty(q, conv.factor).stockQty : round2(q));
+        const ordered = inStock(it.quantity);
+        const received = inStock(it.receivedQty);
+        const pending = Math.max(0, round2(ordered - received));
+        lineCount += 1;
 
-        if (!sku) {
+        if (!sku || conv.problem) {
           // Only report lines that would have mattered — a fully received line
           // contributes nothing to in-transit whether it matched or not.
           if (pending > 0) {
@@ -129,7 +137,9 @@ export const rmInTransitService = {
               grade: it.grade || '', width: it.width || '', finish: it.finish || '',
               orderedQty: ordered, receivedQty: received, pendingQty: pending,
               unit: it.unit || '',
-              reason: it.skuCode ? 'SKU code is not a raw-material item' : 'PO line carries no SKU',
+              reason: conv.problem
+                ? `PO line unit ${it.unit || '—'} is neither the purchase unit nor the stock unit (${conv.rule})`
+                : (it.skuCode ? 'SKU code is not a raw-material item' : 'PO line carries no SKU'),
             });
           }
           continue;

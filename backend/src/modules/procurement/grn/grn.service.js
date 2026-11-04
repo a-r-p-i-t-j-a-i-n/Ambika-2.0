@@ -8,11 +8,16 @@ import GoodsReceiptNote, {
 import VendorPurchaseOrder, { PO_STATUS, PO_FOLLOWUP_STATUS, PO_PI_STATUS } from '../purchase-order/purchaseOrder.model.js';
 import PurchaseFollowUp from '../follow-up/followUp.model.js';
 import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
+import IncomingQC, { QC_STATUS } from '../incoming-qc/incomingQc.model.js';
+import VendorInvoice, { INVOICE_STATUS } from '../vendor-invoice/vendorInvoice.model.js';
 import SKU, {
   RM_ITEM_TYPES, INVENTORY_DESTINATION, NON_MATERIAL_ITEM_TYPES, FG_BLOCKED_ITEM_TYPES, inventoryDestinationOf,
 } from '../../skus/sku.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
+import {
+  lineConversion, toStockQty, incompatibleUnitMessage, inexactQtyMessage,
+} from '../../skus/unitConversion.js';
 import { assertNoLiveExpenseOnPos } from '../voucher/expenseLink.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
@@ -22,6 +27,8 @@ import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
 import { registerApprovalDocument } from '../../approvals/approval.registry.js';
 import { approvalService } from '../../approvals/approval.service.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, asUser, refuse } from '../recycleBin.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -171,6 +178,67 @@ const stampRouting = (lines, routes) => {
   });
 };
 
+// ── Purchase unit → stock unit, per line ─────────────────────────────────────
+// A line in its SKU's Purchase Unit (5 BOX of a 1 BOX = 25 PCS item) carries
+// the conversion its stock will be posted with: stockUnit, conversionFactor,
+// stockQty. Like the routing, it is derived from the SKU master on every draft
+// save and frozen at completion; Incoming QC multiplies the ACCEPTED qty by the
+// frozen factor, so it is the only place a quantity is ever converted.
+
+const CONVERSION_CLEARED = { stockUnit: null, conversionFactor: null, stockQty: null };
+
+/**
+ * Conversion for each line. Pure.
+ *
+ * A line that is not in its SKU's purchase unit (a same-unit SKU, a line in the
+ * stock unit, a line with no SKU) gets the fields cleared — posted 1:1, as
+ * before. Only RECEIVED lines are refused: one whose unit cannot convert, or
+ * whose quantity would need rounding to fit stock's 2 decimals.
+ *
+ * @param lines  GRN lines
+ * @param skuOf  line -> SKU doc (unit, purchaseUnit, purchaseConversionFactor) or null
+ * @returns {{ lines: object[], problems: string[] }}
+ */
+export const convertGrnLines = (lines = [], skuOf = () => null) => {
+  const problems = [];
+  const out = lines.map((l) => {
+    const sku = skuOf(l);
+    const conv = lineConversion(sku, l.unit);
+    const received = round2(l.receivedQty) > 0;
+    if (conv.problem) {
+      if (received) problems.push(incompatibleUnitMessage(l.itemName, l.unit, sku));
+      return { ...l, ...CONVERSION_CLEARED };
+    }
+    if (!conv.converts) return { ...l, ...CONVERSION_CLEARED };
+    const { stockQty, exact } = toStockQty(l.receivedQty, conv.factor);
+    if (received && !exact) problems.push(inexactQtyMessage(l.itemName, l.receivedQty, l.unit, conv.factor, conv.stockUnit));
+    return { ...l, stockUnit: conv.stockUnit, conversionFactor: conv.factor, stockQty };
+  });
+  return { lines: out, problems };
+};
+
+/** SKU conversion settings for the lines, looked up by skuId else code. */
+const conversionSkus = async (lines = []) => {
+  const up = (v) => String(v || '').trim().toUpperCase();
+  const ids = [...new Set(lines.map((l) => l.skuId).filter(Boolean).map(String))];
+  const codes = [...new Set(lines.map((l) => up(l.skuCode)).filter(Boolean))];
+  if (!ids.length && !codes.length) return () => null;
+  const or = [];
+  if (ids.length) or.push({ _id: { $in: ids } });
+  if (codes.length) or.push({ code: { $in: codes } });
+  const skus = await SKU.find({ $or: or }).select('_id code unit purchaseUnit purchaseConversionFactor').lean();
+  const byId = new Map(skus.map((s) => [String(s._id), s]));
+  const byCode = new Map(skus.map((s) => [up(s.code), s]));
+  return (l) => (l.skuId && byId.get(String(l.skuId))) || byCode.get(up(l.skuCode)) || null;
+};
+
+/** Stamp each line's conversion from the SKU master; 400 for lines that cannot convert. */
+const stampConversion = async (lines = []) => {
+  const { lines: out, problems } = convertGrnLines(lines, await conversionSkus(lines));
+  if (problems.length) throw new AppError(problems.join(' '), 400);
+  return out;
+};
+
 /** '' / undefined Received At → null, so "not chosen" has exactly one spelling. */
 const locationOrNull = (v) => (String(v || '').trim() ? String(v).trim().toUpperCase() : null);
 
@@ -298,6 +366,32 @@ export const summarizeReceiptType = (lines = []) => {
   return types.size === 1 ? [...types][0] : null;
 };
 
+/**
+ * Over-receipt consent, per line. `extraQty` must already be server-derived.
+ * A line over the PO's pending qty keeps/needs allowOverReceipt (or the legacy
+ * GRN-wide consent `legacyConsent`, for drafts saved before consent moved onto
+ * lines); a line that is not over has the flag cleared, so an approval never
+ * outlives the excess it was given for. Returns { lines, missing } where
+ * `missing` is the first received line over pending without consent.
+ */
+export const applyOverReceiptConsent = (lines = [], { legacyConsent = false } = {}) => {
+  let missing = null;
+  const out = lines.map((l) => {
+    const over = round2(l.receivedQty) > 0 && round2(l.extraQty) > 0;
+    if (!over) return { ...l, allowOverReceipt: false };
+    const ok = l.allowOverReceipt === true || legacyConsent === true;
+    if (!ok && !missing) missing = l;
+    return { ...l, allowOverReceipt: ok };
+  });
+  return { lines: out, missing };
+};
+
+const overReceiptError = (l) => new AppError(
+  `"${l.itemName}": receiving ${l.receivedQty} but only ${l.pendingBeforeGrn} is pending on the PO (extra ${round2(l.receivedQty - l.pendingBeforeGrn)}). `
+  + 'Tick "Allow Over-Receipt" on that line to receive the extra quantity.',
+  409,
+);
+
 const receiptTypeLabel = (v) => String(v || '').replace(/_/g, ' ');
 
 // GRN states whose received qty counts toward the PO (stock already posted).
@@ -333,11 +427,14 @@ const matchAcrossPos = (pos = [], line) => {
  * never count). Keyed by `${poId}|${poItemId}` so identical SKUs on different
  * POs never collide.
  */
-const receivedByPoLines = async (pos = []) => {
+const receivedByPoLines = async (pos = [], { excludeGrnId = null } = {}) => {
   const poIds = pos.map((p) => p._id);
   const grns = await GoodsReceiptNote.find({
     $or: [{ poId: { $in: poIds } }, { poIds: { $in: poIds } }],
     isDeleted: { $ne: true }, grnStatus: { $in: POSTED_GRN_STATUSES },
+    // A completed GRN being corrected / deleted: "already received" is every
+    // OTHER completed GRN.
+    ...(excludeGrnId ? { _id: { $ne: excludeGrnId } } : {}),
   }).select('items.poItemId items.skuCode items.receivedQty').lean();
   const received = new Map();
   for (const po of pos) for (const p of (po.items || [])) received.set(`${po._id}|${p._id}`, 0);
@@ -372,7 +469,9 @@ const snapshotFromPos = (pos, received, items = []) => {
     return {
       ...it,
       poItemId: p._id, poId: po._id, poNumber: po.poNumber,
-      skuId: it.skuId || p.skuId, skuCode: it.skuCode || p.skuCode, unit: it.unit || p.unit,
+      // The PO line's unit, not the form's: a PO for 5 BOX is received as BOX,
+      // and the unit decides the stock conversion (stampConversion).
+      skuId: it.skuId || p.skuId, skuCode: it.skuCode || p.skuCode, unit: p.unit || it.unit,
       orderedQty: p.quantity || 0,
       previouslyReceivedQty: received.get(key) || 0,
     };
@@ -676,6 +775,187 @@ export const isPiSettledForGrn = (piStatus) => PI_SETTLED_FOR_GRN.includes(piSta
 
 const uniq = (arr) => [...new Set(arr.filter(Boolean).map(String))];
 
+// ── Correcting / deleting a COMPLETED GRN ─────────────────────────────────────
+
+/**
+ * The later-step records resting on a completed GRN's item lines: its Incoming
+ * QC (made from the lines; a completed one has posted stock), the vendor
+ * invoices billing it, and any stock posted for it. While one exists the lines
+ * stay as they are and the GRN cannot be deleted — header details can still be
+ * corrected.
+ */
+const laterStepsOf = async (grn) => {
+  const [qcs, invoices, movements] = await Promise.all([
+    IncomingQC.find({ grnId: grn._id, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } })
+      .select('qcNumber qcStatus').lean(),
+    VendorInvoice.find({
+      $or: [{ grnId: grn._id }, { grnIds: grn._id }],
+      isDeleted: { $ne: true }, invoiceStatus: { $ne: INVOICE_STATUS.REJECTED },
+    }).select('invoiceNumber invoiceStatus').lean(),
+    inventoryService.getMovementsByRef('GRN', grn._id),
+  ]);
+  return [
+    ...qcs.map((q) => ({ type: 'QC', id: q._id, number: q.qcNumber || '', status: q.qcStatus })),
+    ...invoices.map((i) => ({ type: 'INVOICE', id: i._id, number: i.invoiceNumber || '', status: i.invoiceStatus })),
+    ...(movements.length ? [{ type: 'STOCK', id: null, number: '', status: 'POSTED', count: movements.length }] : []),
+  ];
+};
+
+const LATER_STEP_LABEL = { QC: 'Incoming QC', INVOICE: 'Vendor Invoice' };
+export const describeLaterSteps = (steps) => steps
+  .map((s) => (s.type === 'STOCK' ? `stock already posted (${s.count} entr${s.count === 1 ? 'y' : 'ies'})` : `${LATER_STEP_LABEL[s.type]} ${s.number}`.trim()))
+  .join(', ');
+
+const qcExistsFor = (grnId, session) => IncomingQC.countDocuments({
+  grnId, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED },
+}).session(session || null);
+
+// Header details a completed GRN can always have corrected, with their labels
+// for the GRN's history.
+const HEADER_TEXT_FIELDS = ['challanNumber', 'invoiceNumber', 'vehicleNumber', 'receivedBy', 'preparedBy', 'remarks'];
+const HEADER_LABEL = {
+  grnDate: 'GRN Date', challanNumber: 'Challan No', invoiceNumber: 'Invoice No', invoiceDate: 'Invoice Date',
+  vehicleNumber: 'Vehicle No', receivedBy: 'Received By', preparedBy: 'Prepared By', remarks: 'Remarks',
+  challanDocument: 'Attachment', invoiceDocument: 'Invoice document',
+};
+const VENDOR_FIELDS = ['vendorId', 'vendorName', 'vendorGST', 'vendorAddress', 'vendorPhone'];
+const dayOf = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+
+/** The header values the request changes, as they will be stored. */
+export const headerPatchOf = (data, grn) => {
+  const patch = {};
+  for (const k of HEADER_TEXT_FIELDS) {
+    if (data[k] !== undefined && String(data[k] || '') !== String(grn[k] || '')) patch[k] = data[k] || '';
+  }
+  if (data.grnDate && dayOf(data.grnDate) !== dayOf(grn.grnDate)) patch.grnDate = data.grnDate;
+  if (data.invoiceDate !== undefined && dayOf(data.invoiceDate) !== dayOf(grn.invoiceDate)) patch.invoiceDate = data.invoiceDate || null;
+  for (const k of ['challanDocument', 'invoiceDocument']) {
+    const doc = data[k];
+    if (doc && (doc.fileUrl || '') !== (grn[k]?.fileUrl || '')) patch[k] = doc.fileUrl ? { ...doc, uploadedAt: new Date() } : {};
+  }
+  return patch;
+};
+
+/** Did the request change the item lines (qty, rate, batch, type, note, SKU or the set of lines)? */
+export const linesDiffer = (stored = [], wanted = []) => {
+  if (stored.length !== wanted.length) return true;
+  const byId = new Map(stored.map((l) => [String(l._id), l]));
+  return wanted.some((w) => {
+    const s = byId.get(String(w._id || ''));
+    if (!s) return true;
+    return ['receivedQty', 'invoiceQty', 'rate'].some((k) => round2(s[k]) !== round2(w[k]))
+      || ['batchNo', 'remarks', 'howItemReceived', 'itemName'].some((k) => String(s[k] || '') !== String(w[k] || ''))
+      || String(s.skuId || '') !== String(w.skuId || '');
+  });
+};
+
+/** This GRN's received qty per PO line, keyed like receivedByPoLines. */
+const ownReceivedByPoLines = (pos, lines) => {
+  const own = new Map();
+  for (const l of lines) {
+    const m = matchAcrossPos(pos, l);
+    if (!m) continue;
+    const key = `${m.po._id}|${m.item._id}`;
+    own.set(key, round2((own.get(key) || 0) + (Number(l.receivedQty) || 0)));
+  }
+  return own;
+};
+
+const PO_RECEIPT_STATUSES = [PO_STATUS.RELEASED_TO_VENDOR, PO_STATUS.PARTIAL_RECEIVED, PO_STATUS.FULLY_RECEIVED];
+
+/**
+ * Put one PO's lines back in line with its completed GRNs: received = `base`
+ * (every other completed GRN) + `own` (this GRN as it now stands; empty when it
+ * is deleted). Absolute values, so a retry on a fresh copy is safe. The receipt
+ * status follows — back to Released when nothing is received any more; a
+ * closed or cancelled PO keeps its status. Returns whether it is fully received.
+ */
+export const applyReceiptsToPo = (po, base, own, note, user) => {
+  for (const p of po.items) {
+    const key = `${po._id}|${p._id}`;
+    p.receivedQty = round2((base.get(key) || 0) + (own.get(key) || 0));
+    p.pendingQty = Math.max(0, round2((p.quantity || 0) - p.receivedQty));
+  }
+  const fully = po.items.every((p) => round2((p.quantity || 0) - (p.receivedQty || 0)) <= 0);
+  const none = po.items.every((p) => round2(p.receivedQty || 0) <= 0);
+  if (PO_RECEIPT_STATUSES.includes(po.poStatus)) {
+    po.poStatus = fully ? PO_STATUS.FULLY_RECEIVED : (none ? PO_STATUS.RELEASED_TO_VENDOR : PO_STATUS.PARTIAL_RECEIVED);
+  }
+  po.updatedBy = user?._id;
+  po.activityTimeline.push({ action: 'GRN_CHANGED', description: note, actorId: user?._id });
+  return fully;
+};
+
+/**
+ * Move each PI line's received / balance qty by the change in a GRN line's
+ * received qty — the PI line matched by SKU, else name, as complete() does.
+ */
+const shiftPiReceipts = async ({ pos, deltas, session, user }) => {
+  const read = (q) => q.session(session || null);
+  const piOfPo = new Map(pos.map((p) => [String(p._id), p.piId ? String(p.piId) : null]));
+  const pis = new Map();
+  const touched = new Set();
+  for (const { line, delta } of deltas) {
+    if (!delta) continue;
+    const piId = piOfPo.get(String(line.poId));
+    if (!piId) continue;
+    if (!pis.has(piId)) pis.set(piId, await read(ProformaInvoice.findOne({ _id: piId, isDeleted: { $ne: true } })));
+    const pi = pis.get(piId);
+    if (!pi) continue;
+    const piItem = pi.items.find((p) => p.skuCode && line.skuCode && p.skuCode === line.skuCode)
+      || pi.items.find((p) => p.itemName === line.itemName);
+    if (!piItem) continue;
+    piItem.receivedQty = Math.max(0, round2((piItem.receivedQty || 0) + delta));
+    piItem.balanceQty = Math.max(0, round2((piItem.quantity || 0) - piItem.receivedQty));
+    touched.add(piId);
+  }
+  for (const piId of touched) {
+    const pi = pis.get(piId);
+    pi.updatedBy = user?._id;
+    await pi.save(session ? { session } : undefined);
+  }
+};
+
+/**
+ * Where each received line's stock will land and the conversion it posts with
+ * — the same reads and rules complete() applies — for corrected lines of a
+ * completed GRN that no QC has taken yet. Lines with nothing received carry no
+ * stock state.
+ */
+const stampReceivedLines = async (lines, rmLocation, grnWarehouse) => {
+  const received = lines.filter((l) => round2(l.receivedQty) > 0);
+  if (!received.length) throw new AppError('Enter a received quantity on at least one item', 400);
+  await assertPurchasable(received);
+  await assertRmBatchNumbers(received);
+  for (const line of received) {
+    if (!line.skuId && line.skuCode) {
+      const sku = await SKU.findOne({ code: String(line.skuCode).trim().toUpperCase() }).select('_id').lean();
+      if (sku) line.skuId = sku._id;
+    }
+    if (!line.skuId) throw new AppError(`"${line.itemName}" is not linked to a SKU — add it to the SKU master first`, 400);
+  }
+  const skuDocs = await SKU.find({ _id: { $in: received.map((l) => l.skuId) } }).select('_id itemType').lean();
+  const itemTypeBySku = new Map(skuDocs.map((s) => [String(s._id), s.itemType]));
+  const routes = routeGrnLines({ lines: received, typeOf: (l) => itemTypeBySku.get(String(l.skuId)) || '', rmLocation, grnWarehouse });
+  assertRoutable(routes, { requireSku: true });
+  const converted = convertGrnLines(received.map(plain), await conversionSkus(received));
+  if (converted.problems.length) throw new AppError(converted.problems.join(' '), 400);
+  const routeFor = new Map(routes.map((r) => [r.line, r]));
+  received.forEach((line, i) => {
+    const route = routeFor.get(line);
+    const conv = converted.lines[i];
+    Object.assign(line, {
+      itemTypeAtReceipt: route.itemType, inventoryDestination: route.destination, stockWarehouse: route.warehouse,
+      stockUnit: conv.stockUnit, conversionFactor: conv.conversionFactor, stockQty: conv.stockQty,
+      stockStatus: GRN_LINE_STOCK_STATUS.AWAITING_QC, postedQty: 0, postedStockQty: null,
+    });
+  });
+  for (const line of lines) {
+    if (round2(line.receivedQty) <= 0) Object.assign(line, { stockStatus: null, postedQty: 0, postedStockQty: null });
+  }
+  return { lines, rmLineCount: routes.filter((r) => r.isRm).length };
+};
+
 export const grnService = {
   async create(data, user) {
     if (data.isWithoutPo) return this.createWithoutPo(data, user);
@@ -743,9 +1023,11 @@ export const grnService = {
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
     const computed = computeLines(sourceItems);
+    const consent = applyOverReceiptConsent(computed.lines);
+    if (consent.missing) throw overReceiptError(consent.missing);
     // Destination per line from the SKU master; refuses Service / Job Work,
     // unclassified SKUs and Raw Material without an explicit Received At.
-    const lines = await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN');
+    const lines = await stampConversion(await routeDraftLines(consent.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN'));
     const { totals } = computed;
 
     const grnNumber = await generateGrnNumber(data.grnDate || new Date());
@@ -809,7 +1091,7 @@ export const grnService = {
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
     const computed = computeLines(sourceItems);
-    const lines = await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN');
+    const lines = await stampConversion(await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN'));
     const { totals } = computed;
     // No PO to compare against — these columns are not applicable, never derived.
     lines.forEach((l) => { l.orderedQty = 0; l.previouslyReceivedQty = 0; l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
@@ -959,31 +1241,274 @@ export const grnService = {
         const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean();
         if (!pos.length) throw new AppError('Linked Purchase Order not found', 404);
         const { lines, totals } = await refreshLines(pos, items);
-        grn.items = lines;
+        const consent = applyOverReceiptConsent(lines);
+        if (consent.missing) throw overReceiptError(consent.missing);
+        grn.items = consent.lines;
         Object.assign(grn, totals);
       }
     }
     // Every save re-derives each line's destination from the SKU master (lines
     // as sent, or as stored) and refuses what cannot be routed.
-    grn.items = await routeDraftLines(
+    grn.items = await stampConversion(await routeDraftLines(
       withLineReceiptTypes(grn.items.map(plain), receiptTypeFallback), grn.rmReceivedAtLocation, grn.warehouse || 'MAIN',
-    );
+    ));
     grn.howItemReceived = summarizeReceiptType(grn.items);
     grn.updatedBy = user?._id;
     grn.activityTimeline.push({ action: 'UPDATE', description: 'Draft GRN updated', actorId: user?._id });
     return saveOpenDraft(grn);
   },
 
-  async remove(id, user) {
+  /**
+   * What correcting / deleting this GRN may touch: whether it is completed, the
+   * later steps resting on its items (they lock the items and block a delete),
+   * and whether the MD's signature would have to be given again.
+   */
+  async changeCheck(id) {
     const grn = await findOrThrow(id);
-    if (!isOpenDraft(grn)) {
-      throw new AppError('Only draft GRNs can be deleted', 400);
+    const completed = POSTED_GRN_STATUSES.includes(grn.grnStatus);
+    const laterSteps = completed ? await laterStepsOf(grn) : [];
+    return {
+      grnNumber: grn.grnNumber,
+      completed,
+      laterSteps,
+      itemsLocked: laterSteps.length > 0,
+      canDelete: completed ? laterSteps.length === 0 : (isOpenDraft(grn) || grn.grnStatus === GRN_STATUS.CANCELLED),
+      mdSigned: grn.approvalStatus === 'MD_APPROVED',
+    };
+  },
+
+  /**
+   * Correct a COMPLETED GRN (procurement.editGrn). Header details always; the
+   * items, a W/O PO vendor and Received At only while no later step rests on
+   * them (laterStepsOf). An item change re-derives the lines against the PO(s)
+   * — every other completed GRN counting as already received — and puts the PO
+   * and PI received qty back in line, in one unit of work under the PO posting
+   * lock. Any change to an MD-signed GRN removes the signature (kept in its
+   * history): the MD signs the corrected GRN again.
+   */
+  async correct(id, data, user) {
+    const reason = String(data.reason || '').trim();
+    if (!reason) throw new AppError('Give the reason for the change', 400);
+    const grn = await findOrThrow(id);
+    if (!POSTED_GRN_STATUSES.includes(grn.grnStatus)) {
+      throw new AppError(isOpenDraft(grn) ? 'This GRN is still a draft — edit it as a draft' : 'Only a completed GRN can be corrected', 400);
     }
-    grn.isDeleted = true;
-    grn.deletedAt = new Date();
-    grn.deletedBy = user?._id;
-    grn.activityTimeline.push({ action: 'DELETE', description: 'GRN deleted', actorId: user?._id });
-    return saveOpenDraft(grn);
+    const before = grn.toObject();
+    const header = headerPatchOf(data, grn);
+    const itemsChanged = Array.isArray(data.items) && linesDiffer(before.items, data.items);
+    const vendorChanged = grn.isWithoutPo
+      && VENDOR_FIELDS.some((k) => data[k] !== undefined && String(data[k] || '') !== String(grn[k] || ''));
+    const locationChanged = data.rmReceivedAtLocation !== undefined
+      && locationOrNull(data.rmReceivedAtLocation) !== locationOrNull(grn.rmReceivedAtLocation);
+    const deep = itemsChanged || vendorChanged || locationChanged;
+    if (!deep && !Object.keys(header).length) throw new AppError('Nothing was changed', 400);
+
+    if (deep) {
+      const laterSteps = await laterStepsOf(grn);
+      if (laterSteps.length) {
+        throw new AppError(
+          `The items of ${grn.grnNumber} cannot change: ${describeLaterSteps(laterSteps)} already rest on them. `
+          + 'Remove that first, then correct the items. Dates, challan, invoice, vehicle, people and remarks can still be corrected.',
+          409,
+        );
+      }
+    }
+
+    const changed = [
+      ...Object.keys(header).map((k) => HEADER_LABEL[k]),
+      ...(itemsChanged ? ['items'] : []), ...(vendorChanged ? ['vendor'] : []), ...(locationChanged ? ['Received At'] : []),
+    ];
+    const note = `Corrected after completion — ${changed.join(', ')}. Reason: ${reason}`;
+
+    if (deep) {
+      await this._correctItems(grn, { data, header, before, note }, user);
+    } else {
+      Object.assign(grn, header);
+      grn.updatedBy = user?._id;
+      grn.activityTimeline.push({ action: 'CORRECTED', description: note, actorId: user?._id });
+      await grn.save();
+    }
+
+    // The PDF and the MD's signature follow the corrected GRN (non-fatal).
+    try {
+      const row = await approvalService.documentChanged({ documentType: 'GRN', documentId: grn._id, reason: `GRN corrected — ${reason}` }, user);
+      if (!row) await this.generatePdf(grn._id);
+    } catch (err) { logger.error(`[grn] ${grn.grnNumber}: PDF / approval refresh after correction failed: ${err.message}`); }
+
+    return findOrThrow(id);
+  },
+
+  /** correct() for the items — runs under the PO posting lock(s). */
+  async _correctItems(grn, { data, header, before, note }, user) {
+    const poIds = grn.isWithoutPo ? [] : (grn.poIds?.length ? grn.poIds : [grn.poId]).filter(Boolean);
+    let lockedAt = null;
+    if (poIds.length) {
+      lockedAt = await acquirePoLocks(poIds);
+      if (!lockedAt) throw new AppError('A GRN for one of these PO(s) is being completed right now. Please try again in a moment.', 409);
+    }
+    try {
+      const vendor = {};
+      if (grn.isWithoutPo) for (const k of VENDOR_FIELDS) if (data[k] !== undefined) vendor[k] = data[k] || (k === 'vendorId' ? undefined : '');
+      const rmLocation = data.rmReceivedAtLocation !== undefined ? locationOrNull(data.rmReceivedAtLocation) : locationOrNull(grn.rmReceivedAtLocation);
+      const items = (Array.isArray(data.items) ? data.items : before.items).map(plain);
+
+      let pos = [];
+      let base = new Map();
+      let built;
+      if (grn.isWithoutPo) {
+        built = computeLines(items.map((it) => ({ ...it, orderedQty: 0, previouslyReceivedQty: 0 })));
+        built.lines.forEach((l) => { l.pendingBeforeGrn = 0; l.extraQty = 0; l.pendingQty = 0; });
+      } else {
+        pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean();
+        if (!pos.length) throw new AppError('Linked Purchase Order not found', 404);
+        base = await receivedByPoLines(pos, { excludeGrnId: grn._id });
+        built = computeLines(snapshotFromPos(pos, base, items));
+      }
+      // Receiving beyond the PO's pending qty needs the same consent and remarks as completion.
+      const consent = applyOverReceiptConsent(built.lines, { legacyConsent: data.allowOverReceipt === true });
+      if (consent.missing) throw overReceiptError(consent.missing);
+      const lines = withLineReceiptTypes(consent.lines, grn.howItemReceived);
+      const extra = lines.filter((l) => round2(l.receivedQty) > 0 && round2(l.extraQty) > 0);
+      const extraNoRemarks = extra.find((l) => !(l.remarks || header.remarks || data.remarks || grn.remarks));
+      if (extraNoRemarks) throw new AppError(`"${extraNoRemarks.itemName}" is over the ordered qty — remarks are required for extra receipt`, 400);
+
+      const { rmLineCount } = await stampReceivedLines(lines, rmLocation, grn.warehouse || 'MAIN');
+      const finalItems = lines.map(plain);
+      const own = ownReceivedByPoLines(pos, finalItems);
+      const oldById = new Map(before.items.map((l) => [String(l._id), l]));
+      const keptIds = new Set(finalItems.map((l) => String(l._id || '')));
+      const deltas = [
+        ...finalItems.map((l) => ({ line: l, delta: round2((Number(l.receivedQty) || 0) - (Number(oldById.get(String(l._id || ''))?.receivedQty) || 0)) })),
+        ...before.items.filter((l) => !keptIds.has(String(l._id))).map((l) => ({ line: l, delta: -round2(l.receivedQty) })),
+      ];
+
+      await inventoryService.runAtomically(async (session) => {
+        const read = (q) => q.session(session || null);
+        // A QC raised since the check would have been made from the old lines.
+        if (await qcExistsFor(grn._id, session)) throw new AppError('An Incoming QC was just recorded for this GRN — its items can no longer change', 409);
+        const fullyById = new Map();
+        for (const { _id: poId } of pos) {
+          let po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
+          if (!po) throw new AppError('Linked Purchase Order not found', 404);
+          for (let attempt = 1; ; attempt += 1) {
+            fullyById.set(String(po._id), applyReceiptsToPo(po, base, own, `${grn.grnNumber} corrected`, user));
+            try {
+              await po.save(session ? { session } : undefined);
+              break;
+            } catch (err) {
+              if (!isVersionConflict(err) || attempt >= 4) throw err;
+              po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
+            }
+          }
+        }
+        await shiftPiReceipts({ pos, deltas, session, user });
+
+        const g = await read(GoodsReceiptNote.findById(grn._id));
+        Object.assign(g, header, vendor, built.totals);
+        g.items = finalItems;
+        g.howItemReceived = summarizeReceiptType(finalItems);
+        g.rmReceivedAtLocation = rmLocation;
+        g.addToRmStock = rmLineCount > 0;
+        g.grnStatus = g.isWithoutPo ? GRN_STATUS.RECEIVED
+          : (pos.every((po) => fullyById.get(String(po._id))) ? GRN_STATUS.FULLY_RECEIVED : GRN_STATUS.PARTIAL_RECEIVED);
+        g.updatedBy = user?._id;
+        g.activityTimeline.push({ action: 'CORRECTED', description: note, actorId: user?._id });
+        await g.save(session ? { session } : undefined);
+      });
+    } finally {
+      if (poIds.length) await releasePoLocks(poIds, lockedAt);
+    }
+  },
+
+  /**
+   * Delete a GRN. A draft or cancelled GRN posted nothing, so it simply goes.
+   * A completed GRN (procurement.deleteGrn + a reason) goes only while no later
+   * step rests on it; its received qty comes off the PO(s) and PI(s) in the
+   * same unit of work, so the PO is back to awaiting that quantity.
+   */
+  async remove(id, user, { reason } = {}) {
+    const grn = await findOrThrow(id);
+    const why = String(reason || '').trim();
+    const stamp = (doc, description) => {
+      doc.isDeleted = true;
+      doc.deletedAt = new Date();
+      doc.deletedBy = user?._id;
+      doc.activityTimeline.push({ action: 'DELETE', description, actorId: user?._id });
+    };
+    // Into the Recycle Bin after the delete. A completed GRN's restore puts
+    // its received qty back on the PO(s) and PI(s) (procurement.grn.reapply).
+    const toBin = (posted) => binDeleted('grn', GoodsReceiptNote, grn, {
+      title: grn.grnNumber || 'GRN',
+      subtitle: [
+        (grn.poNumbers?.length ? grn.poNumbers.join(', ') : grn.poNumber) && `PO ${grn.poNumbers?.length ? grn.poNumbers.join(', ') : grn.poNumber}`,
+        grn.vendorName,
+        posted ? `${round2(grn.totalReceivedQty)} received` : String(grn.grnStatus || '').toLowerCase(),
+      ].filter(Boolean).join(' · '),
+      keywords: [grn.uniqueId, grn.challanNumber, grn.invoiceNumber, (grn.items || []).map((l) => [l.itemName, l.skuCode])],
+      reason: why,
+      user,
+      before: [binPlan.hook('procurement.grn.check', { grnId: grn._id, posted })],
+      ...(posted ? { after: [binPlan.hook('procurement.grn.reapply', { grnId: grn._id })] } : {}),
+    });
+    if (isOpenDraft(grn)) {
+      stamp(grn, why ? `GRN deleted. Reason: ${why}` : 'GRN deleted');
+      const saved = await saveOpenDraft(grn);
+      await toBin(false);
+      return saved;
+    }
+    if (grn.grnStatus === GRN_STATUS.CANCELLED) {
+      stamp(grn, why ? `Cancelled GRN deleted. Reason: ${why}` : 'Cancelled GRN deleted');
+      const saved = await grn.save();
+      await toBin(false);
+      return saved;
+    }
+    if (!POSTED_GRN_STATUSES.includes(grn.grnStatus)) {
+      throw new AppError('This GRN is being completed right now — try again in a moment', 409);
+    }
+    if (!why) throw new AppError('Give the reason for deleting a completed GRN', 400);
+    const laterSteps = await laterStepsOf(grn);
+    if (laterSteps.length) {
+      throw new AppError(`${grn.grnNumber} cannot be deleted: ${describeLaterSteps(laterSteps)} rest on it. Remove that first, then delete the GRN.`, 409);
+    }
+
+    const poIds = grn.isWithoutPo ? [] : (grn.poIds?.length ? grn.poIds : [grn.poId]).filter(Boolean);
+    let lockedAt = null;
+    if (poIds.length) {
+      lockedAt = await acquirePoLocks(poIds);
+      if (!lockedAt) throw new AppError('A GRN for one of these PO(s) is being completed right now. Please try again in a moment.', 409);
+    }
+    try {
+      const pos = poIds.length ? await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean() : [];
+      const base = pos.length ? await receivedByPoLines(pos, { excludeGrnId: grn._id }) : new Map();
+      const deltas = grn.items.map((l) => ({ line: plain(l), delta: -round2(l.receivedQty) }));
+      await inventoryService.runAtomically(async (session) => {
+        const read = (q) => q.session(session || null);
+        if (await qcExistsFor(grn._id, session)) throw new AppError('An Incoming QC was just recorded for this GRN — it can no longer be deleted', 409);
+        for (const { _id: poId } of pos) {
+          let po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
+          if (!po) continue;
+          for (let attempt = 1; ; attempt += 1) {
+            applyReceiptsToPo(po, base, new Map(), `${grn.grnNumber} deleted`, user);
+            try {
+              await po.save(session ? { session } : undefined);
+              break;
+            } catch (err) {
+              if (!isVersionConflict(err) || attempt >= 4) throw err;
+              po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
+            }
+          }
+        }
+        await shiftPiReceipts({ pos, deltas, session, user });
+        const g = await read(GoodsReceiptNote.findById(grn._id));
+        stamp(g, `Completed GRN deleted — its received qty is off the PO. Reason: ${why}`);
+        g.updatedBy = user?._id;
+        await g.save(session ? { session } : undefined);
+      });
+    } finally {
+      if (poIds.length) await releasePoLocks(poIds, lockedAt);
+    }
+    await toBin(true);
+    return grn;
   },
 
   /**
@@ -1058,7 +1583,7 @@ export const grnService = {
 
   /** complete() body — runs with the GRN claimed and the PO posting lock(s) held. */
   async _completeLocked(grn, data, user, releaseClaim) {
-    let pos = []; let piIdForLine = () => null; let receivedLines; let routes; let rmLocation;
+    let pos = []; let piIdForLine = () => null; let receivedLines; let routes; let rmLocation; let conversionFor;
     try {
       if (grn.isWithoutPo) {
         // No PO to re-derive figures against — the lines are final as saved,
@@ -1079,7 +1604,11 @@ export const grnService = {
         // Re-derive ordered / already-received / pending from the current DB state
         // — the draft's snapshot may predate other GRNs completed on these PO(s).
         const { lines, totals } = await refreshLines(pos, grn.items);
-        grn.items = withLineReceiptTypes(lines, grn.howItemReceived);
+        // Consent is re-checked against the PO's CURRENT pending qty: a line the
+        // draft saved within pending may be over now and needs consent now.
+        const consent = applyOverReceiptConsent(lines, { legacyConsent: data.allowOverReceipt === true });
+        if (consent.missing) throw overReceiptError(consent.missing);
+        grn.items = withLineReceiptTypes(consent.lines, grn.howItemReceived);
         Object.assign(grn, totals);
       }
 
@@ -1094,14 +1623,6 @@ export const grnService = {
       // Rule 6: extra receipt (beyond the CURRENT pending qty) must be explicitly
       // allowed by the user and carry remarks.
       const extraLines = receivedLines.filter((l) => round2(l.extraQty) > 0);
-      if (extraLines.length && !data.allowOverReceipt) {
-        const l = extraLines[0];
-        throw new AppError(
-          `"${l.itemName}": receiving ${l.receivedQty} but only ${l.pendingBeforeGrn} is pending on the PO. `
-          + 'Tick "Allow over-receipt" to receive the extra quantity.',
-          409,
-        );
-      }
       const extraNoRemarks = extraLines.find((l) => !(l.remarks || data.remarks || grn.remarks));
       if (extraNoRemarks) {
         throw new AppError(`"${extraNoRemarks.itemName}" was received over the ordered qty — remarks are required for extra receipt`, 400);
@@ -1134,6 +1655,12 @@ export const grnService = {
         grnWarehouse: grn.warehouse || 'MAIN',
       });
       assertRoutable(routes, { requireSku: true });
+
+      // The conversion each line's stock will post with — read from the SKU
+      // master now and frozen on the line; a later factor edit never reaches it.
+      const converted = convertGrnLines(receivedLines.map(plain), await conversionSkus(receivedLines));
+      if (converted.problems.length) throw new AppError(converted.problems.join(' '), 400);
+      conversionFor = new Map(receivedLines.map((l, i) => [l, converted.lines[i]]));
 
       // Each touched PO's own PI (different POs on one GRN may carry different
       // PIs). Only the id is resolved here: the PI DOCUMENT is read fresh inside
@@ -1184,8 +1711,13 @@ export const grnService = {
       line.itemTypeAtReceipt = route.itemType;
       line.inventoryDestination = route.destination;
       line.stockWarehouse = route.warehouse;
+      const conv = conversionFor.get(line);
+      line.stockUnit = conv.stockUnit;
+      line.conversionFactor = conv.conversionFactor;
+      line.stockQty = conv.stockQty;
       line.stockStatus = GRN_LINE_STOCK_STATUS.AWAITING_QC;
       line.postedQty = 0;
+      line.postedStockQty = null;
     }
     const finalItems = grn.items.map(plain);
     const finalTotals = {
@@ -1432,3 +1964,48 @@ export const grnService = {
     return saveOpenDraft(grn);
   },
 };
+
+// ── Recycle Bin: a restored GRN ─────────────────────────────────────────────
+// Refused when one of its POs is deleted, and — for a completed GRN — when a
+// PO is cancelled / closed now, is mid-GRN, or is being paid as an expense.
+// A completed GRN's received qty then goes back on the PO lines (absolute, from
+// every completed GRN — as a correction does) and on the PI lines (+ its qty).
+// Stock was never posted by the GRN (QC posts it), so nothing else moves.
+const grnPoIds = (grn) => (grn.isWithoutPo ? [] : (grn.poIds?.length ? grn.poIds : [grn.poId]).filter(Boolean));
+
+registerRestoreHook('procurement.grn.check', async ({ grnId, posted }, { session }) => {
+  const grn = await GoodsReceiptNote.findById(grnId).session(session || null).lean();
+  if (!grn) refuse('The GRN no longer exists.');
+  const poIds = grnPoIds(grn);
+  if (!poIds.length) return;
+  const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds } })
+    .session(session || null).select('poNumber poStatus isDeleted grnPostingLockAt').lean();
+  const gone = pos.filter((p) => p.isDeleted).map((p) => p.poNumber);
+  if (gone.length || pos.length !== poIds.length) refuse(`Its purchase order${gone.length > 1 ? 's' : ''} ${gone.join(', ')} ${gone.length > 1 ? 'are' : 'is'} deleted — restore ${gone.length > 1 ? 'them' : 'it'} first.`.replace('  ', ' '));
+  if (!posted) return;
+  const closed = pos.find((p) => !PO_RECEIPT_STATUSES.includes(p.poStatus));
+  if (closed) refuse(`PO ${closed.poNumber} is ${String(closed.poStatus).replace(/_/g, ' ').toLowerCase()} now, so ${grn.grnNumber}'s receipt can't go back on it.`);
+  const busy = pos.find((p) => p.grnPostingLockAt && Date.now() - new Date(p.grnPostingLockAt).getTime() < PO_LOCK_TTL_MS);
+  if (busy) refuse(`A GRN for PO ${busy.poNumber} is being completed right now. Try again in a moment.`);
+  await assertNoLiveExpenseOnPos(pos, `${grn.grnNumber} cannot be restored`);
+});
+
+registerRestoreHook('procurement.grn.reapply', async ({ grnId }, { session, actor }) => {
+  const read = (q) => q.session(session || null);
+  const grn = await read(GoodsReceiptNote.findById(grnId));
+  if (!grn || !POSTED_GRN_STATUSES.includes(grn.grnStatus)) return;
+  const poIds = grnPoIds(grn);
+  if (!poIds.length) return;
+  const user = asUser(actor);
+  const lines = grn.items.map(plain);
+  const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean();
+  // Every OTHER completed GRN (committed) + this one as it stands.
+  const base = await receivedByPoLines(pos, { excludeGrnId: grn._id });
+  const own = ownReceivedByPoLines(pos, lines);
+  for (const { _id: poId } of pos) {
+    const po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
+    applyReceiptsToPo(po, base, own, `${grn.grnNumber} restored from the Recycle Bin`, user);
+    await po.save(session ? { session } : undefined);
+  }
+  await shiftPiReceipts({ pos, deltas: lines.map((l) => ({ line: l, delta: round2(l.receivedQty) })), session, user });
+});

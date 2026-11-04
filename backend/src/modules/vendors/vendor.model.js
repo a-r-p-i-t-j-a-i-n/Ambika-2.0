@@ -39,6 +39,9 @@ const vendorSchema = new Schema({
   gstRate: { type: Number, min: 0, max: 100, default: 0 },
   tdsRate: { type: Number, min: 0, max: 100, default: 0 },
   creditPeriodDays: { type: Number, default: 0 },
+  // Usual delivery lead time in days — the New PO form's starting Lead Time
+  // (Expected Delivery Date = PO Date + this). null = not configured.
+  leadTimeDays: { type: Number, min: 0, max: 365, default: null },
 
   // Email routing (To / CC / BCC) used by PO / RFQ communication.
   toEmails:  [{ type: String, trim: true, lowercase: true }],

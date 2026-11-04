@@ -8,6 +8,11 @@ import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateFollowUpNumber } from '../../../utils/docNumberGenerator.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, followUpMirrorAfterRestore, pick, refuse } from '../recycleBin.js';
+
+const PO_MIRROR_FIELDS = ['followUpStatus', 'readyForGrnAt', 'finalMaterialDate'];
 
 /** Minutes late: actualAt − plannedAt, 0 when on time or early. */
 const computeDelayMinutes = (plannedAt, actualAt) => {
@@ -36,6 +41,21 @@ const logEntry = (type, message, user, extra = {}) => ({
 const setPoFollowUpStatus = async (poId, patch) => {
   try { await VendorPurchaseOrder.updateOne({ _id: poId }, { $set: patch }); }
   catch (err) { logger.error(`[follow-up] PO sync failed for ${poId}: ${err.message}`); }
+};
+
+/**
+ * The PO's follow-up mirror from the follow-ups it still has, after one is
+ * deleted: one still ready for GRN keeps the PO ready; any other keeps it in
+ * progress; none puts it back to pending (as on release).
+ */
+const resyncPoFollowUp = async (poId) => {
+  const rest = await PurchaseFollowUp.find({ poId, isDeleted: { $ne: true } }).select('followUpStatus').lean();
+  if (rest.some((f) => f.followUpStatus === FOLLOWUP_STATUS.READY_FOR_GRN)) return;
+  await setPoFollowUpStatus(poId, {
+    followUpStatus: rest.length ? PO_FOLLOWUP_STATUS.IN_PROGRESS : PO_FOLLOWUP_STATUS.PENDING,
+    readyForGrnAt: null,
+    finalMaterialDate: null,
+  });
 };
 
 export const followUpService = {
@@ -226,19 +246,41 @@ export const followUpService = {
     return fu.save();
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a follow-up. A pending / rescheduled one simply goes; a done or
+   * ready-for-GRN one needs a reason (procurement.deleteFollowUp) and goes only
+   * while no GRN on its PO rests on it. The PO's follow-up mirror is then
+   * re-derived from the follow-ups it still has.
+   */
+  async remove(id, user, { reason } = {}) {
     const fu = await findOrThrow(id);
-    if (![FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus)) {
-      throw new AppError('Only pending or rescheduled follow-ups can be deleted', 400);
-    }
+    const open = [FOLLOWUP_STATUS.PENDING, FOLLOWUP_STATUS.RESCHEDULED].includes(fu.followUpStatus);
+    const label = `Follow-up ${fu.followUpNumber || ''}`.trim();
+    const why = open ? String(reason || '').trim() : deleteReason(reason, label);
+    if (!open) assertNothingAfter(label, await laterStepsOf.followUp(fu.poId));
+    const wasActive = fu.isActiveFollowUp !== false;
+    const savedMirror = pick(await VendorPurchaseOrder.findById(fu.poId).select(PO_MIRROR_FIELDS.join(' ')).lean(), PO_MIRROR_FIELDS);
     fu.isDeleted = true;
     fu.deletedAt = new Date();
     fu.deletedBy = user?._id;
     // The partial unique index only inspects isActiveFollowUp, not isDeleted —
     // without this, a soft-deleted active record would still block a new one.
     fu.isActiveFollowUp = false;
-    fu.activityTimeline.push({ action: 'DELETE', description: 'Follow-up deleted', actorId: user?._id });
-    return fu.save();
+    fu.activityTimeline.push({ action: 'DELETE', description: why ? `Follow-up deleted. Reason: ${why}` : 'Follow-up deleted', actorId: user?._id });
+    const saved = await fu.save();
+    await resyncPoFollowUp(fu.poId);
+    const args = { poId: fu.poId, followUpId: fu._id, wasActive, savedMirror };
+    await binDeleted('followUp', PurchaseFollowUp, fu, {
+      title: fu.followUpNumber || 'Follow-up',
+      subtitle: [fu.poNumber && `PO ${fu.poNumber}`, fu.vendorName, String(fu.followUpStatus || '').replace(/_/g, ' ').toLowerCase()].filter(Boolean).join(' · '),
+      keywords: [fu.poNumber, fu.indentNumber],
+      reason: why,
+      user,
+      set: { isActiveFollowUp: wasActive },
+      before: [binPlan.hook('procurement.followUp.check', args)],
+      after: [binPlan.hook('procurement.followUp.mirror', args)],
+    });
+    return saved;
   },
 
   // Rule 4: record a follow-up cycle.
@@ -379,3 +421,29 @@ export const followUpService = {
     return fu;
   },
 };
+
+// ── Recycle Bin: a restored follow-up ───────────────────────────────────────
+// Refused when its PO is gone / cancelled / closed, or (for a running cycle)
+// the PO has another running follow-up now. Afterwards the PO's mirror shows
+// it again (ready for GRN, or in progress) — see followUpMirrorAfterRestore.
+registerRestoreHook('procurement.followUp.check', async ({ poId, followUpId, wasActive }, { session }) => {
+  const po = await VendorPurchaseOrder.findById(poId).session(session || null).select('poNumber poStatus isDeleted').lean();
+  if (!po || po.isDeleted) refuse('Its purchase order is deleted — restore the PO first.');
+  if ([PO_STATUS.CANCELLED, PO_STATUS.CLOSED].includes(po.poStatus)) refuse(`PO ${po.poNumber} is ${po.poStatus.toLowerCase()} now, so its follow-up can't come back.`);
+  if (wasActive) {
+    const other = await PurchaseFollowUp.findOne({
+      poId, _id: { $ne: followUpId }, isDeleted: { $ne: true }, isActiveFollowUp: true,
+    }).session(session || null).select('followUpNumber').lean();
+    if (other) refuse(`PO ${po.poNumber} has a running follow-up now (${other.followUpNumber}) — only one can run at a time.`);
+  }
+});
+
+registerRestoreHook('procurement.followUp.mirror', async ({ poId, followUpId, savedMirror }, { session }) => {
+  const [po, fu] = await Promise.all([
+    VendorPurchaseOrder.findById(poId).session(session || null).select(PO_MIRROR_FIELDS.join(' ')).lean(),
+    PurchaseFollowUp.findById(followUpId).session(session || null).select('followUpStatus finalMaterialDate').lean(),
+  ]);
+  if (!po || !fu) return;
+  const patch = followUpMirrorAfterRestore(po, fu, savedMirror, FOLLOWUP_STATUS, PO_FOLLOWUP_STATUS);
+  if (patch) await VendorPurchaseOrder.updateOne({ _id: poId }, { $set: patch }, session ? { session } : undefined);
+});

@@ -12,7 +12,7 @@ import {
   useUpdateProformaInvoiceMutation,
 } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
-import { fileHref, UNITS, toKgsUnit } from '../indents/indentMeta';
+import { fileHref, UNITS, toKgsUnit, normalizeUnit } from '../indents/indentMeta';
 import { fmtINR } from './piMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { PFMS, pfmsCardSx } from '../pfmsTheme';
@@ -29,6 +29,16 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 
 const lineCalc = (it) =>
   (Number(it.quantity) || 0) * (Number(it.rate) || 0) * (1 + (Number(it.gstRate) || 0) / 100);
+
+// Map the PO's unit onto the dropdown label ("BOX" → "Box", "Ltr" → "Litre",
+// "Kg" → "KGS"). "Nos" stays "Nos" (not folded into Pcs) and the select lists it
+// as an extra option; only a missing unit falls back to "Pcs".
+const pickUnit = (u) => {
+  const raw = String(u ?? '').trim();
+  if (!raw) return 'Pcs';
+  if (/^nos?$/i.test(raw)) return raw;
+  return normalizeUnit(raw) || toKgsUnit(raw);
+};
 
 const emptyItem = () => ({ itemName: '', skuCode: '', skuId: '', quantity: '', unit: 'Pcs', rate: '', gstRate: 18 });
 
@@ -64,7 +74,7 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
       setPiDate(pi.piDate ? pi.piDate.slice(0, 10) : todayStr());
       setItems(pi.items?.length ? pi.items.map((it) => ({
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
-        quantity: it.quantity, unit: toKgsUnit(it.unit) || 'Pcs', rate: it.rate, gstRate: it.gstRate,
+        quantity: it.quantity, unit: pickUnit(it.unit), rate: it.rate, gstRate: it.gstRate,
       })) : [emptyItem()]);
       setDoc(pi.piDocument?.fileUrl ? { ...pi.piDocument } : null);
       setRemarks(pi.remarks || '');
@@ -84,7 +94,7 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
     if (p?.items?.length) {
       setItems(p.items.map((it) => ({
         itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
-        quantity: it.quantity, unit: toKgsUnit(it.unit) || 'Pcs', rate: it.rate, gstRate: it.gstRate,
+        quantity: it.quantity, unit: pickUnit(it.unit), rate: it.rate, gstRate: it.gstRate,
       })));
     }
   };
@@ -264,7 +274,8 @@ const ProformaInvoiceFormDrawer = ({ open, onClose, pi = null, presetPo = null }
                 <TextField size="small" type="number" placeholder="0" value={it.quantity}
                   onChange={(e) => setItem(idx, { quantity: e.target.value })} inputProps={{ min: 0, style: { textAlign: 'right' } }} />
                 <TextField size="small" select value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })}>
-                  {UNITS.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+                  {(it.unit && !UNITS.includes(it.unit) ? [it.unit, ...UNITS] : UNITS)
+                    .map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
                 </TextField>
                 <TextField size="small" type="number" placeholder="0.00" value={it.rate}
                   onChange={(e) => setItem(idx, { rate: e.target.value })} inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />

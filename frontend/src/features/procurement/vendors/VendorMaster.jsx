@@ -19,13 +19,15 @@ import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigatio
 const emptyRow = () => ({ productName: '', skuCode: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' });
 const emptyVendor = () => ({
   name: '', contactPerson: '', phone: '', email: '', address: '', gstNo: '', panNo: '',
-  gstRate: '', tdsRate: '', creditPeriodDays: '', toEmails: '', ccEmails: '', bccEmails: '',
+  gstRate: '', tdsRate: '', creditPeriodDays: '', leadTimeDays: '', toEmails: '', ccEmails: '', bccEmails: '',
   products: [emptyRow()],
 });
 
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
+// Default Lead Time field → payload: blank = not configured (null).
+const leadDaysPayload = (v) => (String(v ?? '').trim() === '' ? null : Number(v));
 
 // Flatten vendor × product into spreadsheet rows for the Excel view.
 const EXCEL_COLS = [
@@ -78,6 +80,7 @@ const VendorMaster = () => {
       gstNo: draft.gstNo, panNo: draft.panNo,
       gstRate: Number(draft.gstRate || 0), tdsRate: Number(draft.tdsRate || 0),
       creditPeriodDays: Number(draft.creditPeriodDays || 0),
+      leadTimeDays: leadDaysPayload(draft.leadTimeDays),
       toEmails: splitEmails(draft.toEmails), ccEmails: splitEmails(draft.ccEmails), bccEmails: splitEmails(draft.bccEmails),
       products: draft.products
         .filter((r) => r.productName.trim())
@@ -273,7 +276,9 @@ const VendorMaster = () => {
                 <Grid item xs={4} sm={2}><TextField fullWidth size="small" type="number" label="GST %" value={draft.gstRate} onChange={(e) => setField('gstRate', e.target.value)} /></Grid>
                 <Grid item xs={4} sm={2}><TextField fullWidth size="small" type="number" label="TDS %" value={draft.tdsRate} onChange={(e) => setField('tdsRate', e.target.value)} /></Grid>
                 <Grid item xs={4} sm={2}><TextField fullWidth size="small" type="number" label="Credit (days)" value={draft.creditPeriodDays} onChange={(e) => setField('creditPeriodDays', e.target.value)} /></Grid>
-                <Grid item xs={12} sm={6}><TextField fullWidth size="small" label="To Emails (comma-separated)" value={draft.toEmails} onChange={(e) => setField('toEmails', e.target.value)} /></Grid>
+                <Grid item xs={4} sm={2}><TextField fullWidth size="small" type="number" label="Lead Time (days)" value={draft.leadTimeDays} onChange={(e) => setField('leadTimeDays', e.target.value)}
+                  inputProps={{ min: 0, max: 365, step: 1, 'data-testid': 'vendor-lead-time' }} title="Usual delivery time — the New PO form starts from it" /></Grid>
+                <Grid item xs={8} sm={4}><TextField fullWidth size="small" label="To Emails (comma-separated)" value={draft.toEmails} onChange={(e) => setField('toEmails', e.target.value)} /></Grid>
                 <Grid item xs={6} sm={3}><TextField fullWidth size="small" label="CC Emails" value={draft.ccEmails} onChange={(e) => setField('ccEmails', e.target.value)} /></Grid>
                 <Grid item xs={6} sm={3}><TextField fullWidth size="small" label="BCC Emails" value={draft.bccEmails} onChange={(e) => setField('bccEmails', e.target.value)} /></Grid>
               </Grid>
@@ -315,7 +320,7 @@ const VendorMaster = () => {
         <DialogContent>
           <DialogContentText>
             <b>{deleteTarget?.name}</b> will be removed from the vendor list. This won&apos;t affect existing
-            indents, POs or other records that already reference it, and it can be restored by an administrator.
+            indents, POs or other records that already reference it. It moves to the Recycle Bin, where it can be restored.
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

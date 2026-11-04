@@ -1,44 +1,19 @@
-import React from 'react';
-import {
-  Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography,
-} from '@mui/material';
-import { useSnackbar } from 'notistack';
-import { useDeleteGrnMutation } from '../../../store/api/procurementApi';
+import React, { useRef } from 'react';
+import CascadeDeleteDialog from '../components/CascadeDeleteDialog';
 
 /**
- * Confirm + delete a DRAFT GRN. A draft has posted no stock, so deleting it
- * leaves nothing behind in inventory; completed GRNs are refused by the server.
+ * Delete a GRN — the shared cascading-deletion confirmation (CascadeDeleteDialog):
+ * the GRN goes with any draft QC / invoice / voucher resting on it, while a
+ * completed QC, posted stock or a signature blocks it and is named. A
+ * completed GRN's received qty comes off its PO (the GRN's own delete).
+ * onClose(deleted) — deleted is true only after a successful deletion.
  */
 const GrnDeleteDialog = ({ open, grn, onClose }) => {
-  const { enqueueSnackbar } = useSnackbar();
-  const [deleteGrn, { isLoading }] = useDeleteGrnMutation();
-
-  const handleDelete = async () => {
-    try {
-      await deleteGrn(grn._id).unwrap();
-      enqueueSnackbar(`Draft GRN ${grn.grnNumber} deleted`, { variant: 'success' });
-      onClose?.(true);
-    } catch (err) {
-      enqueueSnackbar(err?.data?.message || 'Failed to delete GRN', { variant: 'error' });
-    }
-  };
-
+  const deleted = useRef(false);
   return (
-    <Dialog open={open} onClose={() => (isLoading ? null : onClose?.(false))} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ fontWeight: 800 }}>Delete draft GRN?</DialogTitle>
-      <DialogContent>
-        <Typography variant="body2" color="text.secondary">
-          This will delete <b>{grn?.grnNumber || 'this GRN'}</b>. No stock has been posted for a draft,
-          so inventory is not affected. This action cannot be undone from here.
-        </Typography>
-      </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={() => onClose?.(false)} disabled={isLoading}>Cancel</Button>
-        <Button onClick={handleDelete} color="error" variant="contained" disabled={isLoading}>
-          {isLoading ? 'Deleting…' : 'Delete'}
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <CascadeDeleteDialog open={open} type="GRN" id={grn?._id} what="GRN" number={grn?.grnNumber || ''}
+      onDone={() => { deleted.current = true; }}
+      onClose={() => { const done = deleted.current; deleted.current = false; onClose?.(done); }} />
   );
 };
 

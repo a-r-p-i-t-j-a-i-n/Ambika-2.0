@@ -4,9 +4,12 @@
  * The SKU Master (`skus`) is the product catalogue; the Vendor Master only
  * describes vendors. Every item on a new or edited indent must therefore point
  * at an ACTIVE SKU, and its Item Name / SKU Code / Unit are taken from that SKU
- * record — never from what the client sent. The unit is copied exactly as the
- * master stores it ("kg", "NOS", "Sheet"); only a SKU with no unit keeps the
- * line's own. Quantity and remarks stay as the user entered them.
+ * record — never from what the client sent. The unit is the unit the item is
+ * BOUGHT in: the SKU's Purchase Unit when one is configured ("BOX" for
+ * 1 BOX = 25 PCS, see skus/unitConversion.js), else its stock unit — copied
+ * exactly as the master stores it ("kg", "NOS", "Sheet"); only a SKU with no
+ * unit keeps the line's own. Quantity and remarks stay as the user entered them
+ * (in that unit).
  *
  * Matching: by skuId when one is sent (an id that no longer resolves is refused,
  * never re-matched by code, so a line can't silently move to another SKU); by
@@ -16,6 +19,7 @@
  * their items exactly as they were saved.
  */
 import SKU from '../../skus/sku.model.js';
+import { skuConversion } from '../../skus/unitConversion.js';
 import { AppError } from '../../../utils/apiResponse.js';
 
 const up = (v) => String(v || '').trim().toUpperCase();
@@ -48,7 +52,7 @@ export const bindItemsToSkus = (items = [], skus = []) => {
       skuId: sku._id,
       skuCode: up(sku.code),
       itemName: String(sku.name || '').trim() || it.itemName,
-      unit: String(sku.unit || '').trim() || it.unit,
+      unit: (skuConversion(sku).converts ? skuConversion(sku).purchaseUnit : String(sku.unit || '').trim()) || it.unit,
     };
   });
   return { items: bound, problems };
@@ -63,7 +67,7 @@ export const bindIndentItemsToSkuMaster = async (items = []) => {
   if (ids.length) or.push({ _id: { $in: ids } });
   if (codes.length) or.push({ code: { $in: codes } });
   const skus = or.length
-    ? await SKU.find({ $or: or, isDeleted: { $ne: true }, isActive: { $ne: false } }).select('_id code name unit').lean()
+    ? await SKU.find({ $or: or, isDeleted: { $ne: true }, isActive: { $ne: false } }).select('_id code name unit purchaseUnit purchaseConversionFactor').lean()
     : [];
   const { items: bound, problems } = bindItemsToSkus(items, skus);
   if (problems.length) throw new AppError(problems.join(' '), 400);

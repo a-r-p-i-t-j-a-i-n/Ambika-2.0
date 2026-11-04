@@ -129,6 +129,26 @@ const SkuSchema = new Schema({
   convertedItemNameForResale: { type: String, trim: true, default: '', set: (v) => (v == null ? '' : v) },
 
   unit: { type: String, default: 'PCS', set: trimSkuUnit }, // e.g., PCS, KGS, kg, Piece — casing kept as entered
+
+  // ── Purchase unit (see unitConversion.js) ─────────────────────────────────
+  // `unit` above is the STOCK unit — what IMS, every stock row and every ledger
+  // movement count in. These two say the item is BOUGHT in another unit:
+  // purchaseUnit "BOX" + purchaseConversionFactor 25 = "1 BOX = 25 PCS".
+  // Indents, POs and GRNs carry the purchase unit; Incoming QC posts
+  // accepted BOX × 25 PCS. '' / null = bought in the stock unit, no conversion —
+  // which is what every SKU saved before these existed reads as, so no
+  // migration. Validated by normalizeConversionConfig (sku.service).
+  // Not `pcsPerBox` below: that is finished-goods dispatch packing (O2D).
+  purchaseUnit: { type: String, default: '', set: trimSkuUnit },
+  purchaseConversionFactor: {
+    type: Number,
+    default: null,
+    validate: {
+      validator: (v) => v === null || v === undefined || (Number.isFinite(v) && v > 0),
+      message: 'Conversion factor must be a number greater than zero',
+    },
+  },
+
   pcsPerBox: { type: Number, default: 1, min: 1 },
   weightPerBox: { type: Number, default: 0, min: 0 }, // Weight in KGs
   weightPerPc: { type: Number, default: 0, min: 0 },

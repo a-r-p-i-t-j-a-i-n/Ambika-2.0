@@ -51,6 +51,9 @@ const grnItemSchema = Joi.object({
   // service gives the line the request's header howItemReceived instead.
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)).allow('', null)
     .messages({ 'any.only': `Material Receipt Type must be one of: ${Object.values(HOW_ITEM_RECEIVED).join(', ')}` }),
+  // Per-line consent to receive more than the PO's pending qty. The server
+  // recomputes pending and clears this when the line is not over.
+  allowOverReceipt: Joi.boolean().default(false),
 });
 
 export const createGrnSchema = Joi.object({
@@ -181,6 +184,37 @@ export const completeGrnSchema = Joi.object({
 
 export const cancelGrnSchema = Joi.object({
   remarks: Joi.string().trim().max(1000).allow('', null),
+});
+
+// Correcting a COMPLETED GRN (procurement.editGrn). Header details are always
+// correctable; item lines only while no later step rests on them (the service
+// decides). The reason is kept on the GRN's history.
+export const correctGrnSchema = Joi.object({
+  reason:          Joi.string().trim().min(3).max(500).required()
+    .messages({ 'any.required': 'Give the reason for the change', 'string.empty': 'Give the reason for the change' }),
+  allowOverReceipt: Joi.boolean().default(false),
+  vendorId:        objectId.allow('', null),
+  vendorName:      Joi.string().trim().max(300).allow('', null),
+  vendorGST:       Joi.string().trim().max(60).allow('', null),
+  vendorAddress:   Joi.string().trim().max(500).allow('', null),
+  vendorPhone:     Joi.string().trim().max(30).allow('', null),
+  grnDate:         Joi.date(),
+  challanNumber:   Joi.string().trim().max(120).allow('', null),
+  invoiceNumber:   Joi.string().trim().max(120).allow('', null),
+  invoiceDate:     Joi.date().allow('', null),
+  vehicleNumber:   Joi.string().trim().max(60).allow('', null),
+  receivedBy:      Joi.string().trim().max(120).allow('', null),
+  preparedBy:      Joi.string().trim().max(120).allow('', null),
+  rmReceivedAtLocation: rmReceivedAtField,
+  challanDocument: grnDocumentSchema,
+  invoiceDocument: grnDocumentSchema,
+  remarks:         Joi.string().trim().max(1000).allow('', null),
+  items:           Joi.array().items(grnItemSchema).min(1),
+});
+
+// Deleting a completed GRN asks why (kept on its history); a draft needs none.
+export const deleteGrnSchema = Joi.object({
+  reason: Joi.string().trim().max(500).allow('', null),
 });
 
 export const grnQuerySchema = Joi.object({

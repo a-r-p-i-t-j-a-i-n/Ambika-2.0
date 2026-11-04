@@ -18,6 +18,9 @@ import { pdfService } from '../../services/pdf.service.js';
 import env from '../../config/env.js';
 import { DC_STATUS } from '../../config/constants.js';
 import { productionPlanInheritService } from '../ppc/productionPlanInherit.service.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { registerRestoreHook } from '../recycle-bin/recycleBin.restore.js';
+import { phaseDeleteSnapshot, putPhaseBack } from './phaseRestore.js';
 
 const PLAN_LABEL_PREFIX = 'Dispatch Plan';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -91,6 +94,13 @@ const projectPhaseForAudit = (item, phase) => ({
 });
 
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Client's naming: "Dispatch Plan - <PO number>.pdf" (SO number when there is no PO).
+// Same rule as the step 2.04 PDF tab title (frontend utils/printDispatchPlan.js).
+export const dispatchPlanFileName = (order = {}) => {
+  const ref = String(order.poNumber || order.soNumber || 'order').trim().replace(/[\\/:*?"<>|]+/g, '-');
+  return `Dispatch Plan - ${ref}.pdf`;
+};
 
 const normalizeKey = (value) => String(value || '').trim().toLowerCase();
 
@@ -1402,7 +1412,7 @@ export const dispatchControlService = {
     try {
       const schedule = await this.getSchedule(soNumber);
       const pdfBuffer = await pdfService.generateDispatchPlanBuffer(schedule);
-      const fileName = `Dispatch-Plan-${String(soNumber || 'order').replace(/[^\w.-]+/g, '_')}.pdf`;
+      const fileName = dispatchPlanFileName(schedule.order);
       atts.push({ filename: fileName, content: pdfBuffer });
       attachedNames.push('Dispatch Plan (PDF)');
     } catch (err) {
@@ -1528,7 +1538,7 @@ export const dispatchControlService = {
       // server attaches this same file at send time in emailSchedule().
       attachments: schedule
         ? [{
-          fileName: `Dispatch-Plan-${String(order.soNumber || 'order').replace(/[^\w.-]+/g, '_')}.pdf`,
+          fileName: dispatchPlanFileName(order),
           label: 'Dispatch Plan (PDF)',
           auto: true,
         }]
@@ -1863,7 +1873,33 @@ export const dispatchControlService = {
    * Cancel-or-delete a phase. If any actuals are attached we soft-cancel
    * (status=CANCELLED) — we never silently destroy data with history.
    */
+  /**
+   * Delete a phase. What it drops / cancels — and any production-plan capacity
+   * it hands back — is saved in the Recycle Bin first (see putPhaseBack).
+   */
   async deletePhase(soNumber, phaseId, actor = null) {
+    const current = await DispatchSchedule.findOne({ soNumber }).sort({ createdAt: -1 }).lean();
+    const snap = current ? phaseDeleteSnapshot(current, phaseId) : null;
+    if (!snap) return this.deletePhaseNow(soNumber, phaseId, actor); // its own 404s
+    const consumptions = snap.removed.length
+      ? await productionPlanInheritService.consumptionsFor({ soNumber, phaseNo: snap.phaseNo })
+      : [];
+    const skus = [...snap.removed, ...snap.cancelled].map((x) => x.skuName).filter(Boolean);
+    return recycleBinService.capture('dispatchPhase', {
+      recordId: phaseId,
+      title: `${snap.phaseNo} · ${soNumber}`,
+      subtitle: [current.partyName, `${skus.length} SKU${skus.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '),
+      keywords: [soNumber, current.poNumber, skus],
+      openPath: `/dispatch-planning?so=${encodeURIComponent(soNumber)}`,
+      actor: actor?._id ? { _id: actor._id, name: actor.name } : undefined,
+      plan: {
+        steps: [{ kind: 'set', model: DispatchSchedule.modelName, ids: [current._id], set: {}, optional: true }],
+        after: [{ hook: 'dispatch.restorePhase', args: { scheduleId: current._id, soNumber, ...snap, consumptions } }],
+      },
+    }, () => this.deletePhaseNow(soNumber, phaseId, actor));
+  },
+
+  async deletePhaseNow(soNumber, phaseId, actor = null) {
     return withMaybeTransaction(async (session) => {
       const schedQ = DispatchSchedule.findOne({ soNumber }).sort({ createdAt: -1 });
       if (session) schedQ.session(session);
@@ -2267,3 +2303,16 @@ export const dispatchControlService = {
     }));
   },
 };
+
+// Recycle Bin → put a deleted phase back (and the plan capacity it had drawn).
+registerRestoreHook('dispatch.restorePhase', async (args, { session }) => {
+  const q = DispatchSchedule.findById(args.scheduleId);
+  if (session) q.session(session);
+  const schedule = await q;
+  if (!schedule) throw new AppError(`Can't restore — the dispatch plan for ${args.soNumber} no longer exists.`, 409);
+  const changed = putPhaseBack(schedule.items, args);
+  if (!changed) throw new AppError('It is already back — nothing to restore.', 409);
+  schedule.markModified('items');
+  await (session ? schedule.save({ session }) : schedule.save());
+  if (args.consumptions?.length) await productionPlanInheritService.reconsumePlan(args.consumptions, session);
+});

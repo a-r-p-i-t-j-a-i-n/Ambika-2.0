@@ -145,6 +145,9 @@ const poBody = (indent, vendorId) => ({
   items: indent.items.map((it) => ({
     indentId: indent._id, indentItemId: it._id, itemName: it.itemName, skuCode: it.skuCode, skuId: String(it.skuId),
     quantity: it.approvedQuantity || it.quantity, unit: it.unit, rate: 10, gstRate: 18,
+    // Vendor A's catalogue has the bolt at 7 — a PO at 10 is a rate change
+    // (Rate Change Approvals) and needs a reason; ignored where nothing changed.
+    rateChangeReason: 'e2e PO history fixture rate',
   })),
 });
 const vendorPos = async (vendorId) => (await call('GET', `/procurement/purchase-orders?vendorId=${vendorId}&limit=200&sort=-poDate,-createdAt`)).data || [];
@@ -228,6 +231,10 @@ const api = async () => {
   check('history row carries number/date/items/amount/status', row && (row.poNumber || row.draftNumber) && row.poDate && row.items.length === 2 && row.grandTotal > 0 && row.poStatus,
     row && `${row.poNumber || row.draftNumber} ${row.poStatus} ₹${row.grandTotal}`);
 
+  // Its 7 → 10 rate change is approved first (Rate Change Approvals — the MD may
+  // approve their own); --seed puts Vendor A's catalogue back at 7.
+  const rcs = (await call('GET', `/procurement/rate-changes?poId=${po1.data._id}&status=PENDING`)).data?.rows || [];
+  for (const rc of rcs) await ok('POST', `/procurement/rate-changes/${rc._id}/approve`, {});
   const appr = await call('POST', `/procurement/purchase-orders/${po1.data._id}/approve`, { decision: 'APPROVED' });
   listA = await vendorPos(vA._id);
   check('approve → history shows APPROVED + final PO number', appr.status === 200

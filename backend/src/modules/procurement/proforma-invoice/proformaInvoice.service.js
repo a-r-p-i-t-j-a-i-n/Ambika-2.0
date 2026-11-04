@@ -5,9 +5,14 @@ import { AppError } from '../../../utils/apiResponse.js';
 import { generatePiNumber, generatePiUniqueCode } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import { logger } from '../../../utils/logger.js';
+import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 import { registerApprovalDocument } from '../../approvals/approval.registry.js';
 import { approvalService } from '../../approvals/approval.service.js';
 import { buildPiApprovalPdfBuffer } from './proformaInvoice.pdf.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, pick, refuse, inr } from '../recycleBin.js';
+
+const PO_PI_FIELDS = ['piStatus', 'piId', 'piNumber', 'piReceivedAt'];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -256,16 +261,39 @@ export const proformaInvoiceService = {
     return pi.save();
   },
 
-  async remove(id, user) {
+  /**
+   * Delete a PI. A draft / received (unapproved) one simply goes; an approved,
+   * paid or cancelled one needs a reason (procurement.deleteProformaInvoice)
+   * and goes only while no advance payment or vendor invoice rests on it.
+   * Either way the PO is back to "no PI" when this was its PI.
+   */
+  async remove(id, user, { reason } = {}) {
     const pi = await findOrThrow(id);
-    if (![PI_STATUS.DRAFT, PI_STATUS.RECEIVED].includes(pi.piStatus) || pi.approvalStatus === PI_APPROVAL_STATUS.APPROVED) {
-      throw new AppError('Only a draft or received PI (not yet approved) can be deleted', 400);
-    }
+    const early = [PI_STATUS.DRAFT, PI_STATUS.RECEIVED].includes(pi.piStatus) && pi.approvalStatus !== PI_APPROVAL_STATUS.APPROVED;
+    const label = `PI ${pi.piNumber || ''}`.trim();
+    const why = early ? String(reason || '').trim() : deleteReason(reason, label);
+    assertNothingAfter(label, await laterStepsOf.pi(pi._id));
     pi.isDeleted = true;
     pi.deletedAt = new Date();
     pi.deletedBy = user?._id;
-    pi.activityTimeline.push({ action: 'DELETE', description: 'Proforma invoice deleted', actorId: user?._id });
-    return pi.save();
+    pi.activityTimeline.push({ action: 'DELETE', description: why ? `Proforma invoice deleted. Reason: ${why}` : 'Proforma invoice deleted', actorId: user?._id });
+    const saved = await pi.save();
+    const po = await VendorPurchaseOrder.findOne({ _id: pi.poId, piId: pi._id }).lean();
+    if (po) {
+      await setPoPiStatus(pi.poId, { piStatus: PO_PI_STATUS.NOT_RECEIVED, piId: null, piNumber: '', piReceivedAt: null });
+    }
+    // Restore: the PO shows this PI again (only if it was the PO's PI).
+    const args = { poId: pi.poId, piId: pi._id, savedMirror: po ? pick(po, PO_PI_FIELDS) : null };
+    await binDeleted('proformaInvoice', ProformaInvoice, pi, {
+      title: pi.piNumber || 'Proforma Invoice',
+      subtitle: [pi.poNumber && `PO ${pi.poNumber}`, pi.vendorName, pi.totalValue ? inr(pi.totalValue) : ''].filter(Boolean).join(' · '),
+      keywords: [pi.uniqueCode, pi.indentNumber],
+      reason: why,
+      user,
+      before: [binPlan.hook('procurement.pi.check', args)],
+      after: [binPlan.hook('procurement.pi.relinkPo', args)],
+    });
+    return saved;
   },
 
   // Rules 5-6: approve (document mandatory) → ready for advance payment.
@@ -329,3 +357,25 @@ export const proformaInvoiceService = {
     return pi;
   },
 };
+
+// ── Recycle Bin: a restored PI ──────────────────────────────────────────────
+// A PO has one live PI. Refused when its PO is gone / cancelled, has another
+// PI now, or was marked "PI not required" since. Afterwards the PO's PI mirror
+// is put back exactly as it was (when this was the PO's PI).
+registerRestoreHook('procurement.pi.check', async ({ poId, piId, savedMirror }, { session }) => {
+  const po = await VendorPurchaseOrder.findById(poId).session(session || null).select(`poNumber poStatus isDeleted ${PO_PI_FIELDS.join(' ')}`).lean();
+  if (!po || po.isDeleted) refuse('Its purchase order is deleted — restore the PO first.');
+  if (po.poStatus === PO_STATUS.CANCELLED) refuse(`PO ${po.poNumber} is cancelled now, so its PI can't come back.`);
+  const other = await ProformaInvoice.findOne({
+    poId, _id: { $ne: piId }, isDeleted: { $ne: true }, piStatus: { $ne: PI_STATUS.CANCELLED },
+  }).session(session || null).select('piNumber').lean();
+  if (other) refuse(`PO ${po.poNumber} has another PI now (${other.piNumber}) — a PO takes one PI.`);
+  if (savedMirror && (po.piId || po.piStatus !== PO_PI_STATUS.NOT_RECEIVED)) {
+    refuse(`PO ${po.poNumber}'s PI status has changed since (${String(po.piStatus).replace(/_/g, ' ').toLowerCase()}) — this PI can't be put back on it.`);
+  }
+});
+
+registerRestoreHook('procurement.pi.relinkPo', async ({ poId, savedMirror }, { session }) => {
+  if (!savedMirror) return;
+  await VendorPurchaseOrder.updateOne({ _id: poId, piId: null }, { $set: savedMirror }, session ? { session } : undefined);
+});

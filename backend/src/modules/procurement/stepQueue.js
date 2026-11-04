@@ -6,12 +6,14 @@
  * the step's own table. Read-only.
  */
 import { getStep } from '../fms-doers/fmsCatalog.js';
-import ProformaInvoice from './proforma-invoice/proformaInvoice.model.js';
+import { FmsTask } from '../fms-doers/fmsDoer.model.js';
+import { logger } from '../../utils/logger.js';
 import PurchaseFollowUp from './follow-up/followUp.model.js';
 import PurchaseTallyEntry from './tally-entry/tallyEntry.model.js';
 import VendorVoucher from './voucher/voucher.model.js';
 import { vendorInvoiceService } from './vendor-invoice/vendorInvoice.service.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { findPayablePis } from './advance-payment/advancePayment.service.js';
 import { STEP_QUEUES, toQueueRow, filterQueueRows } from './stepQueue.rules.js';
 
 const live = { isDeleted: { $ne: true } };
@@ -34,9 +36,38 @@ const SOURCES = {
   },
 
   async ADVANCE_PAYMENT() {
-    // Same status the Advance Payment module accepts a payment for.
-    const pis = await ProformaInvoice.find({ ...live, piStatus: 'READY_FOR_ADVANCE_PAYMENT' }).lean();
-    return pis.map((doc) => ({ entityType: 'PI', doc }));
+    // Same status the Advance Payment module accepts a payment for (only PI
+    // approval sets it; cancel / reject / completion change it), and only while
+    // an advance is still owed — a settled / zero-value PI has nothing to pay.
+    // The advance IS the PI value: there is no separate advance field.
+    // …and only on a live PO (approved, not cancelled / closed) — the same rule
+    // the create check and the Record Advance Payment selector use.
+    const pis = (await findPayablePis()).map((r) => r.pi);
+    // Planned date + assigned doer come from the PI's open Step 1.7 doer task
+    // (due = opened + the step's lead time). Display-only: a lookup failure
+    // leaves them blank instead of failing the queue.
+    let tasks = [];
+    try {
+      tasks = pis.length ? await FmsTask.find({
+        fmsKey: 'PURCHASE', stepKey: 'ADVANCE_PAYMENT', entityType: 'PI', status: 'OPEN',
+        entityId: { $in: pis.map((p) => p._id) },
+      }).select('entityId plannedAt assignedDoerId assignedDoerIds').populate('assignedDoerId', 'name').populate('assignedDoerIds', 'name').lean() : [];
+    } catch (err) { logger.error(`[step-queue] ADVANCE_PAYMENT doer lookup: ${err.message}`); }
+    const taskOf = new Map(tasks.map((t) => [String(t.entityId), t]));
+    return pis.map((doc) => {
+      const t = taskOf.get(String(doc._id));
+      const names = t?.assignedDoerIds?.length ? t.assignedDoerIds.map((u) => u?.name) : [t?.assignedDoerId?.name];
+      return {
+        entityType: 'PI',
+        doc: {
+          ...doc,
+          // `done: false` — a queue row has not been performed yet, so the
+          // Actual column stays empty (same shape stepTimingColumns reads).
+          stepTiming: { stepKey: 'ADVANCE_PAYMENT', plannedAt: t?.plannedAt || null, actualAt: null, doneByName: null, done: false,
+            assignedDoerName: names.filter(Boolean).join(', ') || null },
+        },
+      };
+    });
   },
 
   async GRN() {

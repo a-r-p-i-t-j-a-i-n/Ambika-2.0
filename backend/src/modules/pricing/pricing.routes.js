@@ -19,7 +19,9 @@ import {
   exportQuerySchema,
   documentsQuerySchema,
   analyticsQuerySchema,
+  pdfAssetParamsSchema,
 } from './pricing.validation.js';
+import { pdfAssetUpload } from './company-pdf-assets.js';
 
 const router = Router();
 router.use(protect, attachUserPermissions);
@@ -99,5 +101,20 @@ router.get('/settings',
 router.patch('/settings',
   requirePermission('settings.edit'),
   validate(settingsPatchSchema), c.updateSettings);
+
+// PO signatory images (authorised signature / company stamp). Admin-only end to
+// end — even the image preview, since it is the company's signature. Everyone
+// with settings.view just sees the metadata on GET /settings.
+router.get('/settings/pdf-assets/:kind/image',
+  requirePermission('settings.edit'),
+  validate(pdfAssetParamsSchema, 'params'), c.getPdfAssetImage);
+
+router.put('/settings/pdf-assets/:kind',
+  requirePermission('settings.edit'),
+  validate(pdfAssetParamsSchema, 'params'), pdfAssetUpload, c.uploadPdfAsset);
+
+router.delete('/settings/pdf-assets/:kind',
+  requirePermission('settings.edit'),
+  validate(pdfAssetParamsSchema, 'params'), c.removePdfAsset);
 
 export default router;

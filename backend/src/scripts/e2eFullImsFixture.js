@@ -429,14 +429,17 @@ const api = async () => {
 
   // Failure after the completion claim: over-receipt with no remarks.
   const a7 = await po('A7');
-  const g7 = await grnService.create({ poId: pos.A7.poId, rmReceivedAtLocation: 'PLG01', items: grnItems(a7, skus, () => 150, 'E2E-FULL-COIL-007') }, user)
-    .catch((e) => ({ error: e }));
+  // An over-receipt must be explicitly allowed ("Allow Over-Receipt", per line) AND carry remarks.
+  await refused('[G7] saving an over-receipt GRN WITHOUT "Allow Over-Receipt"',
+    () => grnService.create({ poId: pos.A7.poId, rmReceivedAtLocation: 'PLG01', items: grnItems(a7, skus, () => 150, 'E2E-FULL-COIL-007') }, user), /Allow Over-Receipt/i);
+  const g7 = await grnService.create({
+    poId: pos.A7.poId, rmReceivedAtLocation: 'PLG01',
+    items: grnItems(a7, skus, () => 150, 'E2E-FULL-COIL-007').map((l) => ({ ...l, allowOverReceipt: true })),
+  }, user).catch((e) => ({ error: e }));
   if (g7.error) {
     check('[G7] over-receipt GRN', false, `create refused: ${g7.error.message}`);
   } else {
     const g7id = idOf(g7);
-    // An over-receipt must be explicitly allowed ("Allow over-receipt") AND carry remarks.
-    await refused('[G7] completing an over-receipt WITHOUT "Allow over-receipt"', () => grnService.complete(g7id, {}, user), /Allow over-receipt/i);
     await refused('[G7] completing an allowed over-receipt with NO remarks (fails after the completion claim)',
       () => grnService.complete(g7id, { allowOverReceipt: true }, user), /remarks/i);
     const g7doc = await GoodsReceiptNote.findById(g7id).lean();

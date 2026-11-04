@@ -305,7 +305,7 @@ const MachinesList = () => {
           <Box>
             <Typography sx={{ fontWeight: 800, fontSize: '1.05rem' }}>Delete this machine?</Typography>
             <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary' }}>
-              It will be soft-deleted and hidden from all lists.
+              It will be hidden from all lists. It moves to the Recycle Bin, where it can be restored.
             </Typography>
           </Box>
         </DialogTitle>

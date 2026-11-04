@@ -1,9 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
-  Menu, ListItemIcon, ListItemText, Grid, Tooltip,
+  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button, Grid, Tooltip,
   Autocomplete, FormControlLabel, Switch, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -15,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   useGetFollowUpsQuery,
   useGetFollowUpStatsQuery,
+  useDeleteFollowUpMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -28,6 +28,9 @@ import PfmsKpiCard from '../components/PfmsKpiCard';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
@@ -59,8 +62,7 @@ const FollowUpList = () => {
   const [readyOpen, setReadyOpen] = useState(false);
   const [activeFu, setActiveFu] = useState(null);
   const rowNav = useRowNavigation({ to: (r) => `/procurement/follow-ups/${r._id}` });
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = useMemo(() => ({
@@ -81,13 +83,23 @@ const FollowUpList = () => {
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
 
   const onView = (r) => { navigate(`/procurement/follow-ups/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditFu(r); setFormOpen(true); closeMenu(); };
   const onDone = (r) => { setActiveFu(r); setDoneOpen(true); closeMenu(); };
   const onReady = (r) => { setActiveFu(r); setReadyOpen(true); closeMenu(); };
+
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removeFollowUp] = useDeleteFollowUpMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deleteFollowUp');
+  const del = useRecordDelete({
+    type: 'FOLLOW_UP', what: 'Follow-up', numberOf: (r) => r.followUpNumber, remove: removeFollowUp,
+    needsReason: (r) => !['PENDING', 'RESCHEDULED'].includes(r.followUpStatus),
+    consequence: (r) => (['PENDING', 'RESCHEDULED'].includes(r.followUpStatus) ? 'The follow-up is removed.' : 'The follow-up is removed and its PO goes back to awaiting follow-up. Not allowed while a GRN on that PO uses it.'),
+  });
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
@@ -101,6 +113,7 @@ const FollowUpList = () => {
     if (r.followUpStatus === 'DONE' && r.finalMaterialDate) {
       a.push({ key: 'ready', label: 'Mark Ready For GRN', icon: <PackageCheck size={16} />, fn: () => onReady(r) });
     }
+    if (canDeleteRecord) a.push(del.action(r));
     return a;
   };
 
@@ -299,14 +312,8 @@ const FollowUpList = () => {
       </Paper>
 
       {/* Row actions */}
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}>
-            <ListItemIcon>{a.icon}</ListItemIcon>
-            <ListItemText>{a.label}</ListItemText>
-          </MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       {/* Form + dialogs */}
       <FollowUpFormDrawer open={formOpen} followUp={editFu} onClose={() => { setFormOpen(false); setEditFu(null); }} />

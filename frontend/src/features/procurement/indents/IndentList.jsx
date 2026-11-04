@@ -2,9 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Chip, Pagination,
-  Select, Checkbox, Divider,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Menu, ListItemText,
+  Chip, Pagination, Select, Checkbox, Divider,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -18,6 +17,7 @@ import {
   useGetIndentsQuery,
   useGetIndentStatsQuery,
   useSubmitIndentMutation,
+  useDeleteIndentMutation,
 } from '../../../store/api/procurementApi';
 import {
   ApprovalChip, QuoteChip, QuotationChip, APPROVAL_STATUSES, DEPARTMENTS, REQUEST_TYPES,
@@ -38,6 +38,9 @@ import PurchaseOrderFormDrawer from '../purchase-orders/PurchaseOrderFormDrawer'
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import IndentQuickViewDialog from './IndentQuickViewDialog';
 // Map the Step-1.2 statusDone (or legacy quoteStep) to a chip state.
@@ -211,8 +214,7 @@ const IndentList = () => {
 
   // Row action menu
   const [quickIndent, setQuickIndent] = useState(null); // row whose quick view is open
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
 
   const queryArgs = {
     page: paginationModel.page + 1,
@@ -239,8 +241,8 @@ const IndentList = () => {
 
   const [submitIndent] = useSubmitIndentMutation();
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
 
   const onCreate = () => { setEditIndent(null); setFormOpen(true); };
   const onEdit = (row) => { setEditIndent(row); setFormOpen(true); closeMenu(); };
@@ -262,6 +264,16 @@ const IndentList = () => {
   // Which actions apply to this row's state. View (the full indent page, also
   // the row click) is always first, so every row has the same ⋮; the row's
   // eye icon opens the quick view instead.
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removeIndent] = useDeleteIndentMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deleteIndent');
+  const del = useRecordDelete({
+    type: 'INDENT', what: 'Indent', numberOf: (r) => r.indentNumber, remove: removeIndent,
+    needsReason: (r) => r.approvalStatus !== 'DRAFT',
+    consequence: (r) => (r.approvalStatus === 'DRAFT' ? 'The draft indent is removed.' : 'The indent and its quotation work are removed. Not allowed while a PO or service QC uses it — if so, it is named here.'),
+  });
+
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (r.approvalStatus === 'DRAFT') {
@@ -288,6 +300,7 @@ const IndentList = () => {
     if (canStartServiceQc(r)) {
       a.push({ key: 'serviceQc', label: 'Start Service QC', icon: <CheckCircle2 size={16} />, fn: () => { closeMenu(); startServiceQc(r); } });
     }
+    if (canDeleteRecord) a.push(del.action(r));
     return a;
   };
 
@@ -631,14 +644,8 @@ const IndentList = () => {
       </Paper>
 
       {/* Row actions menu */}
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}>
-            <ListItemIcon>{a.icon}</ListItemIcon>
-            <ListItemText>{a.label}</ListItemText>
-          </MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       {/* Drawer + dialogs */}
       <IndentFormDrawer open={formOpen} indent={editIndent} onClose={() => { setFormOpen(false); setEditIndent(null); }} />

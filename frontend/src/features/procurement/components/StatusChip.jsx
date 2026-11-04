@@ -107,6 +107,7 @@ const STATUS = {
   PARTIAL:               ['Partial', 'orange'],
   PARTIAL_RECEIVED:      ['Partial Received', 'orange'],
   PARTIALLY_PAID:        ['Partially Paid', 'orange'],
+  FULLY_PAID:            ['Fully Paid', 'green'],
   PART_PAYMENT:          ['Part Payment', 'orange'],
   PARTIAL_PASS:          ['Partial Pass', 'orange'],
   SHORT:                 ['Short', 'orange'],

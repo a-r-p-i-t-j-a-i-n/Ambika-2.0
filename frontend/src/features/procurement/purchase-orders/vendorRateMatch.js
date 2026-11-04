@@ -1,9 +1,11 @@
 /**
  * Vendor-Master rate matching for Purchase Orders (Step 1.4).
  *
- * Pure helpers (no React) so the auto-fill behaviour is unit-testable: given a
- * vendor's `products[]` catalog and a PO line, decide which catalog product the
- * line maps to and fill rate / GST / HSN / unit from it.
+ * Pure helpers (no React): given a vendor's `products[]` catalog and a line, decide
+ * which catalog product the line maps to. Used by the JSL format only (its base rate
+ * and grade / width / finish come from the Jindal catalog). The OTHER format does not
+ * match the catalog here: its rate comes from the server's vendor-rate lookup
+ * (poRateLookup.js), which also respects the line's unit.
  */
 
 // Normalize a string for tolerant comparison: trim, lowercase, collapse spaces.
@@ -54,39 +56,3 @@ export const matchVendorProductDetailed = (products = [], line = {}) => {
 
 // Back-compat wrapper — returns just the product (or null).
 export const matchVendorProduct = (products = [], line = {}) => matchVendorProductDetailed(products, line).product;
-
-/**
- * Fill rate / GST / HSN / unit on OTHER rows from the vendor catalog. Manually
- * edited rows (`it.manual`) and already-in-sync rows are left untouched, and the
- * returned array keeps its identity when nothing changed (prevents render loops).
- * `onNoMatch(line, reason)` is invoked the first time a matchable row fails to
- * match — used for debug logging.
- */
-export const fillOtherRates = (rows, products, onNoMatch) => {
-  let changed = false;
-  const next = rows.map((it) => {
-    if (it.manual) return it;
-    const { product: m, reason } = matchVendorProductDetailed(products, it);
-    if (!m) {
-      if ((it.itemName || it.skuCode) && it.rateMatched !== false) {
-        changed = true;
-        if (onNoMatch) onNoMatch(it, reason);
-        return { ...it, rateMatched: false };
-      }
-      return it;
-    }
-    const rate = m.rate ?? 0;
-    const gstRate = m.gstRate ?? it.gstRate;
-    const hsn = m.hsn || it.hsn || '';
-    const unit = it.unit || m.unit || 'Pcs';
-    if (it.rateMatched === true && Number(it.rate) === Number(rate)
-      && Number(it.gstRate) === Number(gstRate) && it.hsn === hsn && it.unit === unit) {
-      return it; // already synced — skip to avoid a redundant state update
-    }
-    changed = true;
-    // autoRate / autoGst capture the Vendor-Master value so the UI can flag a
-    // "Rate Modified" once the user edits away from it.
-    return { ...it, rate, gstRate, hsn, unit, rateMatched: true, autoRate: rate, autoGst: gstRate };
-  });
-  return changed ? next : rows;
-};

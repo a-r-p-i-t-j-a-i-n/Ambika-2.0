@@ -8,8 +8,30 @@ import { machineTypeFromCode } from './machineType.js';
 import assignmentService from '../machine-operators/assignment.service.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
+import MachineOperatorAssignment from '../machine-operators/machineOperatorAssignment.model.js';
+import { recycleBinService } from '../../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../../recycle-bin/recycleBin.restore.js';
 
 const live = { isDeleted: { $ne: true } };
+
+/**
+ * Recycle Bin entry for a deleted machine (Master Data or PPC → DPR Masters).
+ * Restore refuses when a live machine now has the same code (codes are unique
+ * among live machines); `links` are operator links the delete detached.
+ */
+export const recordMachineDelete = (machine, { wasActive = true, links = [], actor } = {}) => recycleBinService.record('machine', {
+  recordId: machine._id,
+  title: `${machine.code}${machine.name ? ` · ${machine.name}` : ''}`,
+  subtitle: [machine.department, machine.machineType].filter(Boolean).join(' · '),
+  keywords: [machine.uid],
+  actor,
+  plan: {
+    checks: [binPlan.absent(Machine.modelName, { code: machine.code, isDeleted: false }, `Can't restore — machine code ${machine.code} is now used by another machine.`, machine._id)],
+    steps: [binPlan.unhide(Machine.modelName, machine._id, { isActive: wasActive }, { timeline: Array.isArray(machine.activityTimeline) })],
+    after: links.length ? [binPlan.hook('masters.reattach', { assignmentIds: links.map((l) => l._id) })] : [],
+    afterCommit: links.length ? [binPlan.hook('masters.syncOperatorCodes', { operatorIds: links.map((l) => l.operatorId) })] : [],
+  },
+});
 
 const normalizeCode = (code) => String(code || '').trim().toUpperCase();
 
@@ -116,6 +138,10 @@ export const machineService = {
   async remove(id, userId) {
     const machine = await Machine.findOne({ _id: id, ...live });
     if (!machine) throw new AppError('Machine not found', 404);
+    const wasActive = machine.isActive !== false;
+    // Its live operator links are detached too — noted so a restore re-links them.
+    const links = await MachineOperatorAssignment.find({ machineId: machine._id, isDeleted: { $ne: true } })
+      .select('_id operatorId').lean();
 
     machine.isDeleted = true;
     machine.isActive = false;
@@ -125,6 +151,7 @@ export const machineService = {
     await machine.save({ validateBeforeSave: false });
 
     await assignmentService.detachMachine(machine._id, userId);
+    await recordMachineDelete(machine, { wasActive, links, actor: userId });
     return { ok: true, code: machine.code, name: machine.name };
   },
 
@@ -154,7 +181,7 @@ export const machineService = {
   },
 
   unassignOperator(id, operatorId, userId) {
-    return assignmentService.unassign(id, operatorId, userId);
+    return assignmentService.unassignToBin(id, operatorId, userId, `/machines/${id}`);
   },
 };
 

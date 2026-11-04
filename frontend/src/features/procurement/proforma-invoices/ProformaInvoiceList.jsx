@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -16,6 +15,7 @@ import {
   useGetProformaInvoicesQuery,
   useGetProformaInvoiceStatsQuery,
   useCancelProformaInvoiceMutation,
+  useDeleteProformaInvoiceMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -31,6 +31,9 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLab
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const sumQty = (items, key) => (items || []).reduce((s, it) => s + (Number(it[key]) || 0), 0);
 
@@ -63,8 +66,7 @@ const ProformaInvoiceList = () => {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const [activePi, setActivePi] = useState(null);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
@@ -83,8 +85,8 @@ const ProformaInvoiceList = () => {
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
   const [cancelPi] = useCancelProformaInvoiceMutation();
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
 
   const onView = (r) => { navigate(`/procurement/proforma-invoices/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditPi(r); setFormOpen(true); closeMenu(); };
@@ -95,6 +97,16 @@ const ProformaInvoiceList = () => {
     try { await cancelPi({ id: r._id }).unwrap(); enqueueSnackbar('PI cancelled', { variant: 'info' }); }
     catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to cancel', { variant: 'error' }); }
   };
+
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removePi] = useDeleteProformaInvoiceMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deleteProformaInvoice');
+  const del = useRecordDelete({
+    type: 'PI', what: 'PI', numberOf: (r) => r.piNumber, remove: removePi,
+    needsReason: (r) => !(['DRAFT', 'RECEIVED'].includes(r.piStatus) && r.approvalStatus !== 'APPROVED'),
+    consequence: () => 'The PI is removed and its PO goes back to "no PI". Not allowed while an advance payment or vendor invoice uses it.',
+  });
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
@@ -110,6 +122,7 @@ const ProformaInvoiceList = () => {
     if (r.piDocument?.fileUrl) {
       a.push({ key: 'pdf', label: 'Download PI', icon: <FileDown size={16} />, fn: () => onPdf(r) });
     }
+    if (canDeleteRecord) a.push(del.action(r));
     return a;
   };
 
@@ -263,14 +276,8 @@ const ProformaInvoiceList = () => {
       </Paper>
 
       {/* Row actions */}
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}>
-            <ListItemIcon>{a.icon}</ListItemIcon>
-            <ListItemText>{a.label}</ListItemText>
-          </MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       {/* Form + dialogs */}
       <ProformaInvoiceFormDrawer open={formOpen} pi={editPi} onClose={() => { setFormOpen(false); setEditPi(null); }} />

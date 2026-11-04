@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -14,6 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   useGetVouchersQuery,
   useGetVoucherStatsQuery,
+  useDeleteVoucherMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -29,6 +29,9 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLab
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
+import { usePermissions } from '../../../hooks/usePermission';
+import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 // This standalone page (also reachable outside the Purchase FMS hub, e.g. for
 // Expense vouchers, which have no invoice) still belongs under the hub's
@@ -62,8 +65,7 @@ const VoucherList = () => {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editVoucher, setEditVoucher] = useState(null);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
 
   const queryArgs = {
@@ -81,10 +83,20 @@ const VoucherList = () => {
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
   const onView = (r) => { navigate(`/procurement/vouchers/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditVoucher(r); setFormOpen(true); closeMenu(); };
+
+  // Delete — any status, with the step's delete permission (MD has all). The
+  // server refuses while a later step rests on the record, and names it.
+  const [removeVoucher] = useDeleteVoucherMutation();
+  const canDeleteRecord = usePermissions().can('procurement.deleteVoucher');
+  const del = useRecordDelete({
+    type: 'VOUCHER', what: 'Voucher', numberOf: (r) => r.voucherNumber, remove: removeVoucher,
+    needsReason: (r) => r.voucherStatus !== 'DRAFT',
+    consequence: () => 'The voucher is removed and its invoice can get a new voucher. Not allowed while a tally entry or final payment uses it.',
+  });
 
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
@@ -93,6 +105,7 @@ const VoucherList = () => {
       a.push({ key: 'post', label: 'Post Voucher', icon: <Send size={16} />, fn: () => onView(r) });
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onView(r) });
     }
+    if (canDeleteRecord) a.push(del.action(r));
     return a;
   };
 
@@ -262,11 +275,8 @@ const VoucherList = () => {
           rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />
       </Paper>
 
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn}><ListItemIcon>{a.icon}</ListItemIcon><ListItemText>{a.label}</ListItemText></MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {del.dialog}
 
       <VoucherFormDialog open={formOpen} voucher={editVoucher} onClose={() => { setFormOpen(false); setEditVoucher(null); }} />
       <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}

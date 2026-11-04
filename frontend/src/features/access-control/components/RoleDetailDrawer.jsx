@@ -55,7 +55,7 @@ const RoleDetailDrawer = ({ roleId, open, onClose }) => {
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(`Delete role "${role.name}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete role "${role.name}"? It moves to the Recycle Bin, where it can be restored.`)) return;
     try {
       await deleteRole(roleId).unwrap();
       enqueueSnackbar('Role deleted', { variant: 'success' });

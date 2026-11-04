@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { PO_TERMS_MAX, normalizePoTerms } from '../procurement/purchase-order/poTerms.js';
 
 const priceType = Joi.string().valid('SELLING', 'RM_COST');
 
@@ -101,4 +102,13 @@ export const settingsPatchSchema = Joi.object({
   companyPhone:             Joi.string().allow('').max(40),
   companyEmail:             Joi.string().email().allow(''),
   quoteTerms:               Joi.string().allow('').max(2000),
+  // Default PO Terms & Conditions per format — a PO always prints some terms,
+  // so a default can be reworded but not blanked.
+  poTermsJsl:               Joi.string().trim().min(1).max(PO_TERMS_MAX).custom(normalizePoTerms).label('JSL PO terms'),
+  poTermsOther:             Joi.string().trim().min(1).max(PO_TERMS_MAX).custom(normalizePoTerms).label('Other PO terms'),
 }).min(1);
+
+// PO signatory images — authorised signature / company stamp.
+export const pdfAssetParamsSchema = Joi.object({
+  kind: Joi.string().valid('signature', 'stamp').required(),
+});

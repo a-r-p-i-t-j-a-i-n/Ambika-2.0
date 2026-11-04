@@ -4,6 +4,12 @@ import { PAYMENT_STATUS, PAYMENT_MODE } from './advancePayment.model.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
+const proofSchema = Joi.object({
+  fileName: Joi.string().trim().allow('', null),
+  fileUrl:  Joi.string().trim().allow('', null),
+  fileType: Joi.string().trim().allow('', null),
+}).allow(null);
+
 /**
  * Record-payment schema — mirrors the Google form:
  *   paidAmount  > 0 required for posting statuses, optional for CANCELLED.
@@ -21,6 +27,8 @@ export const createPaymentSchema = Joi.object({
   }),
   paymentMode:            Joi.string().valid(...Object.values(PAYMENT_MODE)).default(PAYMENT_MODE.E_FUND_TRANSFER),
   paymentReferenceNumber: Joi.string().trim().max(120).allow('', null),
+  bankReference:          Joi.string().trim().max(120).allow('', null),
+  proofDocument:          proofSchema,
   remarks: Joi.alternatives().conditional('paymentStatus', {
     is: PAYMENT_STATUS.SHORT_PAYMENT_COMPLETED,
     then: Joi.string().trim().min(3).max(1000).required()
@@ -42,6 +50,7 @@ export const paymentQuerySchema = Joi.object({
   poId:          objectId,
   paymentStatus: Joi.string().valid(...Object.values(PAYMENT_STATUS)),
   paymentMode:   Joi.string().valid(...Object.values(PAYMENT_MODE)),
+  piPaymentState: Joi.string().valid('PENDING', 'PARTIALLY_PAID', 'FULLY_PAID', 'SHORT_CLOSED'),
   populate:      Joi.string(),
   paymentDate:   Joi.object().unknown(true), // paymentDate[gte]/[lte] range
 }).unknown(true);
@@ -52,4 +61,16 @@ export const mongoIdParamSchema = Joi.object({
 
 export const piIdParamSchema = Joi.object({
   piId: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
+});
+
+// ── Advance candidates (Record Advance Payment selector) ──
+export const eligiblePosQuerySchema = Joi.object({
+  search:      Joi.string().max(120).allow(''),
+  limit:       Joi.number().integer().min(1).max(200),
+  onlyPayable: Joi.boolean(),
+  piId:        objectId,
+});
+
+export const pdfQuerySchema = Joi.object({
+  download: Joi.boolean(),
 });

@@ -23,6 +23,12 @@ export const createSkuSchema = Joi.object({
   // omits it leaves the stored value alone rather than blanking it.
   convertedItemNameForResale: Joi.string().trim().max(200).allow('', null),
   unit: Joi.string().default('PCS'),
+  // Purchase unit + "how many `unit` in one of it". No defaults, so a PATCH
+  // that omits them leaves the stored conversion alone. Only the shape is
+  // checked here; the rules (factor required, positive, finite, same-unit = no
+  // conversion) need the stock unit too — normalizeConversionConfig, in the service.
+  purchaseUnit: Joi.string().trim().max(30).allow('', null),
+  purchaseConversionFactor: Joi.alternatives().try(Joi.number(), Joi.string().allow('')).allow(null),
   pcsPerBox: Joi.number().min(1).default(1),
   weightPerBox: Joi.number().min(0).default(0),
   weightPerPc: Joi.number().min(0).default(0),
@@ -37,10 +43,17 @@ export const createSkuSchema = Joi.object({
   packingDetails: Joi.string().allow('', null)
 }).unknown(true);
 
+// The stock unit has NO default on an edit or an import row: a PATCH that omits
+// it must leave the stored unit alone. Defaulting it to PCS relabelled a KGS
+// item's stock as pieces, and is now refused while stock is held
+// (sku.service assertStockUnitChangeAllowed). A NEW SKU still gets PCS from the
+// model default.
+const UNIT_NO_DEFAULT = { unit: Joi.string() };
+
 export const updateSkuSchema = createSkuSchema.fork(
   ['name', 'code', 'itemType'],
   (schema) => schema.optional()
-);
+).keys(UNIT_NO_DEFAULT);
 
 /**
  * One row of a bulk import. Item Type is OPTIONAL here, unlike on create: an
@@ -52,7 +65,7 @@ export const updateSkuSchema = createSkuSchema.fork(
 export const bulkUpsertSkuRowSchema = createSkuSchema.fork(
   ['itemType'],
   (schema) => schema.optional()
-);
+).keys(UNIT_NO_DEFAULT);
 
 export const bulkUpsertSkuSchema = Joi.object({
   items: Joi.array().items(bulkUpsertSkuRowSchema).min(1).required(),

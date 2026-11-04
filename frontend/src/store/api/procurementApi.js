@@ -18,6 +18,13 @@ const approvalInvalidates = (documentType, documentId) => {
     ...(parentTag ? [parentTag, { type: parentTag, id: documentId }] : []),
   ];
 };
+// A delete takes an id, or { id, reason } — a completed record says why it goes.
+const deleteArgs = (arg) => (arg && typeof arg === 'object' ? arg : { id: arg });
+const deleteRequest = (base) => (arg) => {
+  const { id, reason } = deleteArgs(arg);
+  return { url: `${base}/${id}`, method: 'DELETE', ...(reason ? { body: { reason } } : {}) };
+};
+
 export const procurementApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     // ── Indents ──────────────────────────────────────────────
@@ -42,8 +49,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['Indent', 'IndentStats', { type: 'Indent', id }],
     }),
     deleteIndent: builder.mutation({
-      query: (id) => ({ url: `/procurement/indents/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['Indent', 'IndentStats', { type: 'Indent', id }],
+      query: deleteRequest('/procurement/indents'),
+      invalidatesTags: (_r, _e, arg) => ['Indent', 'IndentStats', 'FmsTasks', { type: 'Indent', id: deleteArgs(arg).id }],
     }),
     submitIndent: builder.mutation({
       query: (id) => ({ url: `/procurement/indents/${id}/submit`, method: 'POST' }),
@@ -112,12 +119,12 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     createPurchaseOrder: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders', method: 'POST', body }),
-      invalidatesTags: ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
+      invalidatesTags: ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
     // New PO form item-picker → one vendor, hand-picked approved items.
     createPurchaseOrderFromItems: builder.mutation({
       query: (body) => ({ url: '/procurement/purchase-orders/create-from-items', method: 'POST', body }),
-      invalidatesTags: ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
+      invalidatesTags: ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats'],
     }),
     // Returns a PDF Blob (no DB write). On error the backend sends JSON, so branch
     // the responseHandler on response.ok to surface a readable error message.
@@ -131,15 +138,25 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     updatePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}`, method: 'PATCH', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+    }),
+    // Terms & Conditions only (PO detail) — nothing else on the PO changes.
+    updatePurchaseOrderTerms: builder.mutation({
+      query: ({ id, termsAndConditions }) => ({ url: `/procurement/purchase-orders/${id}/terms`, method: 'PATCH', body: { termsAndConditions } }),
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', { type: 'PurchaseOrder', id }],
+    }),
+    // Default Terms & Conditions per PO format ({ JSL, OTHER }), edited in Company Settings.
+    getPoTermsDefaults: builder.query({
+      query: () => '/procurement/purchase-orders/terms-defaults',
+      providesTags: ['CompanySettings'],
     }),
     deletePurchaseOrder: builder.mutation({
-      query: (id) => ({ url: `/procurement/purchase-orders/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['PurchaseOrder', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      query: deleteRequest('/procurement/purchase-orders'),
+      invalidatesTags: (_r, _e, arg) => ['PurchaseOrder', 'RateChange', 'PurchaseOrderStats', 'Indent', 'IndentStats', 'FmsTasks', { type: 'PurchaseOrder', id: deleteArgs(arg).id }],
     }),
     approvePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/approve`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
     }),
     releasePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/release`, method: 'POST', body }),
@@ -162,12 +179,12 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     cancelPurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/cancel`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
     }),
     // Revise a cancelled PO → new draft PO (copied data, new number, linked back).
     revisePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/revise`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', 'Indent', 'IndentStats', { type: 'PurchaseOrder', id }],
     }),
     markPoPiNotRequired: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/pi-not-required`, method: 'POST', body }),
@@ -200,8 +217,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['FollowUp', 'FollowUpStats', { type: 'FollowUp', id }],
     }),
     deleteFollowUp: builder.mutation({
-      query: (id) => ({ url: `/procurement/follow-ups/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['FollowUp', 'FollowUpStats', { type: 'FollowUp', id }],
+      query: deleteRequest('/procurement/follow-ups'),
+      invalidatesTags: (_r, _e, arg) => ['FollowUp', 'FollowUpStats', 'PurchaseOrder', 'FmsTasks', { type: 'FollowUp', id: deleteArgs(arg).id }],
     }),
     markFollowUpDone: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/follow-ups/${id}/mark-done`, method: 'POST', body }),
@@ -245,8 +262,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['ProformaInvoice', 'ProformaInvoiceStats', { type: 'ProformaInvoice', id }],
     }),
     deleteProformaInvoice: builder.mutation({
-      query: (id) => ({ url: `/procurement/proforma-invoices/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['ProformaInvoice', 'ProformaInvoiceStats', { type: 'ProformaInvoice', id }],
+      query: deleteRequest('/procurement/proforma-invoices'),
+      invalidatesTags: (_r, _e, arg) => ['ProformaInvoice', 'ProformaInvoiceStats', 'PurchaseOrder', 'FmsTasks', { type: 'ProformaInvoice', id: deleteArgs(arg).id }],
     }),
     approveProformaInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/proforma-invoices/${id}/approve`, method: 'POST', body }),
@@ -273,6 +290,28 @@ export const procurementApi = baseApi.injectEndpoints({
     getAdvancePaymentsByPi: builder.query({
       query: (piId) => `/procurement/advance-payments/by-pi/${piId}`,
       providesTags: (_r, _e, piId) => [{ type: 'AdvancePayment', id: `pi-${piId}` }, 'AdvancePayment'],
+    }),
+    // Record Advance Payment selector — POs with a payable PI (backend advancePayment.service getEligiblePos).
+    getEligibleAdvancePos: builder.query({
+      query: (params = {}) => ({ url: '/procurement/advance-payments/eligible-pos', params }),
+      providesTags: ['AdvancePayment', 'ProformaInvoice', 'PurchaseOrder'],
+    }),
+    // Every approved, live PO with where its advance stands (payable or why not) — search by PO / vendor / indent / PI.
+    getAdvanceCandidates: builder.query({
+      query: (params = {}) => ({ url: '/procurement/advance-payments/candidates', params }),
+      providesTags: ['AdvancePayment', 'ProformaInvoice', 'PurchaseOrder'],
+    }),
+    // One payment with its PI / PO, MD approval and the full payment history.
+    getAdvancePaymentDetail: builder.query({
+      query: (id) => `/procurement/advance-payments/${id}/detail`,
+      providesTags: (_r, _e, id) => ['AdvancePayment', { type: 'AdvancePayment', id }],
+    }),
+    // The payment's PDF as a Blob (rendered fresh by the server). On error the backend sends JSON.
+    getAdvancePaymentPdf: builder.mutation({
+      query: ({ id }) => ({
+        url: `/procurement/advance-payments/${id}/pdf`,
+        responseHandler: async (response) => (response.ok ? response.blob() : response.json()),
+      }),
     }),
     createAdvancePayment: builder.mutation({
       query: (body) => ({ url: '/procurement/advance-payments', method: 'POST', body }),
@@ -319,9 +358,25 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}`, method: 'PATCH', body }),
       invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', { type: 'Grn', id }],
     }),
+    // A draft is deleted by id; a completed GRN sends { id, reason } — its
+    // received qty comes off the PO / PI, so those reload too.
     deleteGrn: builder.mutation({
-      query: (id) => ({ url: `/procurement/grns/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['Grn', 'GrnStats', { type: 'Grn', id }],
+      query: (arg) => {
+        const { id, reason } = typeof arg === 'object' ? arg : { id: arg };
+        return { url: `/procurement/grns/${id}`, method: 'DELETE', ...(reason ? { body: { reason } } : {}) };
+      },
+      invalidatesTags: (_r, _e, arg) => ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'FmsTasks',
+        { type: 'Grn', id: typeof arg === 'object' ? arg.id : arg }],
+    }),
+    // What correcting / deleting a GRN would touch (later steps, MD signature).
+    getGrnChangeCheck: builder.query({
+      query: (id) => `/procurement/grns/${id}/change-check`,
+      providesTags: (_r, _e, id) => [{ type: 'Grn', id }],
+    }),
+    // Correct a completed GRN (procurement.editGrn).
+    correctGrn: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/correct`, method: 'PATCH', body }),
+      invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'FmsTasks', 'Approval', { type: 'Grn', id }],
     }),
     completeGrn: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/complete`, method: 'POST', body }),
@@ -435,8 +490,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }],
     }),
     deleteVendorInvoice: builder.mutation({
-      query: (id) => ({ url: `/procurement/vendor-invoices/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }],
+      query: deleteRequest('/procurement/vendor-invoices'),
+      invalidatesTags: (_r, _e, arg) => ['VendorInvoice', 'VendorInvoiceStats', 'IncomingQc', 'FmsTasks', { type: 'VendorInvoice', id: deleteArgs(arg).id }],
     }),
     approveVendorInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vendor-invoices/${id}/approve`, method: 'POST', body }),
@@ -482,8 +537,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['Voucher', 'VoucherStats', { type: 'Voucher', id }],
     }),
     deleteVoucher: builder.mutation({
-      query: (id) => ({ url: `/procurement/vouchers/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['Voucher', 'VoucherStats', { type: 'Voucher', id }],
+      query: deleteRequest('/procurement/vouchers'),
+      invalidatesTags: (_r, _e, arg) => ['Voucher', 'VoucherStats', 'VendorInvoice', 'VendorInvoiceStats', 'FmsTasks', { type: 'Voucher', id: deleteArgs(arg).id }],
     }),
     postVoucher: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vouchers/${id}/post`, method: 'POST', body }),
@@ -520,8 +575,8 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { id }) => ['TallyEntry', 'TallyEntryStats', { type: 'TallyEntry', id }],
     }),
     deleteTallyEntry: builder.mutation({
-      query: (id) => ({ url: `/procurement/tally-entries/${id}`, method: 'DELETE' }),
-      invalidatesTags: (_r, _e, id) => ['TallyEntry', 'TallyEntryStats', { type: 'TallyEntry', id }],
+      query: deleteRequest('/procurement/tally-entries'),
+      invalidatesTags: (_r, _e, arg) => ['TallyEntry', 'TallyEntryStats', 'Voucher', 'VoucherStats', 'FmsTasks', { type: 'TallyEntry', id: deleteArgs(arg).id }],
     }),
     completeTallyEntry: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/tally-entries/${id}/complete`, method: 'POST', body }),
@@ -561,6 +616,23 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (id) => ({ url: `/procurement/final-payments/${id}`, method: 'DELETE' }),
       invalidatesTags: (_r, _e, id) => ['FinalPayment', 'FinalPaymentStats', 'Voucher', 'VoucherStats', 'VendorInvoice', 'VendorInvoiceStats', { type: 'FinalPayment', id }],
     }),
+    // ── Cascade delete — a step with everything resting on it (any Purchase FMS step) ──
+    // The preview is always fetched fresh: it is the list the user confirms.
+    getCascadeDeletePreview: builder.query({
+      query: ({ type, id }) => `/procurement/cascade-delete/${type}/${id}/preview`,
+      keepUnusedDataFor: 0,
+    }),
+    cascadeDelete: builder.mutation({
+      query: ({ type, id, ...body }) => ({ url: `/procurement/cascade-delete/${type}/${id}`, method: 'POST', body }),
+      // Any step can go, so every Purchase list, KPI, task and approval refreshes.
+      invalidatesTags: [
+        'Indent', 'IndentStats', 'PurchaseOrder', 'PurchaseOrderStats', 'RateChange', 'FollowUp', 'FollowUpStats',
+        'ProformaInvoice', 'ProformaInvoiceStats', 'AdvancePayment', 'AdvancePaymentStats', 'Grn', 'GrnStats',
+        'ServiceCompletion', 'ServiceCompletionStats', 'IncomingQc', 'IncomingQcStats', 'VendorInvoice', 'VendorInvoiceStats',
+        'Voucher', 'VoucherStats', 'TallyEntry', 'TallyEntryStats', 'FinalPayment', 'FinalPaymentStats',
+        'FmsTasks', 'Approval', 'Notification',
+      ],
+    }),
     generateFinalPaymentPdf: builder.mutation({
       query: ({ id }) => ({ url: `/procurement/final-payments/${id}/pdf`, method: 'POST' }),
       invalidatesTags: (_r, _e, { id }) => ['FinalPayment', { type: 'FinalPayment', id }],
@@ -596,6 +668,36 @@ export const procurementApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { documentType, documentId }) => approvalInvalidates(documentType, documentId),
     }),
 
+    // ── Rate Change Approvals (PO rate ≠ vendor rate) ────────
+    // Requests are raised by saving a PO; approving updates the vendor rate and
+    // the PO line together, so it refreshes POs, vendors and pricing too.
+    getRateChanges: builder.query({
+      query: (params = {}) => ({ url: '/procurement/rate-changes', params }),
+      providesTags: [{ type: 'RateChange', id: 'LIST' }],
+    }),
+    getRateChange: builder.query({
+      query: (id) => `/procurement/rate-changes/${id}`,
+      providesTags: (_r, _e, id) => [{ type: 'RateChange', id }],
+    }),
+    // The authoritative vendor rate for vendor + item + unit — what a PO line fetches
+    // (the server's own matcher; the form never matches the catalog itself).
+    getVendorRate: builder.query({
+      query: (params) => ({ url: '/procurement/rate-changes/vendor-rate', params }),
+      keepUnusedDataFor: 0,
+    }),
+    getRateChangeHistory: builder.query({
+      query: (params = {}) => ({ url: '/procurement/rate-changes/history', params }),
+      providesTags: [{ type: 'RateChange', id: 'HISTORY' }],
+    }),
+    approveRateChange: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/rate-changes/${id}/approve`, method: 'POST', body }),
+      invalidatesTags: ['RateChange', 'PurchaseOrder', 'PurchaseOrderStats', 'Vendor', 'Pricing'],
+    }),
+    rejectRateChange: builder.mutation({
+      query: ({ id, ...body }) => ({ url: `/procurement/rate-changes/${id}/reject`, method: 'POST', body }),
+      invalidatesTags: ['RateChange', 'PurchaseOrder', 'PurchaseOrderStats'],
+    }),
+
     // ── Inventory (shared foundation) ────────────────────────
     getInventoryMovementsByRef: builder.query({
       query: ({ refType, refId }) => `/inventory/movements/by-ref/${refType}/${refId}`,
@@ -607,6 +709,11 @@ export const procurementApi = baseApi.injectEndpoints({
 export const {
   useGetIndentsQuery,
   useGetMdApprovalsQuery,
+  useGetRateChangesQuery,
+  useGetRateChangeQuery,
+  useGetRateChangeHistoryQuery,
+  useApproveRateChangeMutation,
+  useRejectRateChangeMutation,
   useGetIndentStatsQuery,
   useGetIndentQuery,
   useCreateIndentMutation,
@@ -630,6 +737,8 @@ export const {
   useCreatePurchaseOrderFromItemsMutation,
   usePreviewPurchaseOrderPdfMutation,
   useUpdatePurchaseOrderMutation,
+  useUpdatePurchaseOrderTermsMutation,
+  useGetPoTermsDefaultsQuery,
   useDeletePurchaseOrderMutation,
   useApprovePurchaseOrderMutation,
   useReleasePurchaseOrderMutation,
@@ -662,6 +771,10 @@ export const {
   useGetAdvancePaymentsQuery,
   useGetAdvancePaymentStatsQuery,
   useGetAdvancePaymentsByPiQuery,
+  useGetEligibleAdvancePosQuery,
+  useGetAdvanceCandidatesQuery,
+  useGetAdvancePaymentDetailQuery,
+  useGetAdvancePaymentPdfMutation,
   useCreateAdvancePaymentMutation,
   useDeleteAdvancePaymentMutation,
 
@@ -679,6 +792,8 @@ export const {
   usePreviewGrnPdfMutation,
   useUpdateGrnMutation,
   useDeleteGrnMutation,
+  useGetGrnChangeCheckQuery,
+  useCorrectGrnMutation,
   useCompleteGrnMutation,
   useCancelGrnMutation,
   useGetInventoryMovementsByRefQuery,
@@ -730,6 +845,8 @@ export const {
   useCreateFinalPaymentMutation,
   useUpdateFinalPaymentMutation,
   useDeleteFinalPaymentMutation,
+  useGetCascadeDeletePreviewQuery,
+  useCascadeDeleteMutation,
   useGenerateFinalPaymentPdfMutation,
   useCancelFinalPaymentMutation,
 

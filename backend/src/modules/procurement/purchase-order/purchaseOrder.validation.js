@@ -1,8 +1,21 @@
 import Joi from 'joi';
 import { PAGINATION } from '../../../config/constants.js';
 import { PO_APPROVAL_STATUS, PO_STATUS } from './purchaseOrder.model.js';
+import { PO_TERMS_MAX, normalizePoTerms } from './poTerms.js';
+import { MAX_LEAD_DAYS } from './poLeadTime.js';
+import { RATE_REASON_MAX } from '../rate-change/rateChange.rules.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
+
+// The PO's own Terms & Conditions (printed on its PDF). Blank = the format's
+// default from Company Settings.
+const termsAndConditions = Joi.string().max(PO_TERMS_MAX).allow('', null).custom(normalizePoTerms)
+  .label('Terms & Conditions');
+
+// Whole calendar days from PO Date to Expected Delivery Date. Optional: the
+// service derives it from the date and refuses a value that disagrees with it.
+// The free-text `leadTime` is still accepted from older clients but ignored.
+const leadTimeDays = Joi.number().integer().min(0).max(MAX_LEAD_DAYS).allow(null).label('Lead Time');
 
 const poItemSchema = Joi.object({
   _id:      Joi.string().optional(),
@@ -23,6 +36,14 @@ const poItemSchema = Joi.object({
   rate:     Joi.number().min(0).default(0),
   gstRate:  Joi.number().min(0).max(100).default(0),
   rateSource: Joi.string().valid('VENDOR_MASTER', 'APPROVED_QUOTATION', 'MANUAL', '').allow(null),
+  // Why the rate differs from the vendor's Vendor Master rate — required by the
+  // service when it does (the change goes to Rate Change Approvals).
+  rateChangeReason: Joi.string().trim().max(RATE_REASON_MAX).allow('', null).label('Reason for the rate change'),
+  // Server-stamped rate change fields — accepted from older clients, never trusted.
+  fetchedRate:             Joi.number().allow(null).optional(),
+  rateChangeRequestId:     objectId.allow('', null).optional(),
+  rateChangeRequestNumber: Joi.string().trim().max(40).allow('', null).optional(),
+  rateChangeStatus:        Joi.string().trim().max(20).allow('', null).optional(),
   // Client-side computed amounts are accepted but recomputed server-side.
   taxableAmount: Joi.number().min(0).optional(),
   taxAmount:     Joi.number().min(0).optional(),
@@ -65,8 +86,10 @@ export const createPoSchema = Joi.object({
   deliveryTerms: Joi.string().trim().max(300).allow('', null),
   paymentTerms:  Joi.string().trim().max(300).allow('', null),
   leadTime:      Joi.string().trim().max(60).allow('', null),
+  leadTimeDays:  leadTimeDays,
   creditPeriod:  Joi.number().integer().min(0).max(365).default(0),
   remarks:       Joi.string().trim().max(1000).allow('', null),
+  termsAndConditions: termsAndConditions,
   items:         Joi.array().items(poItemSchema).min(1).required(),
 });
 
@@ -86,8 +109,10 @@ export const createMultiPoSchema = Joi.object({
   deliveryTerms: Joi.string().trim().max(300).allow('', null),
   paymentTerms:  Joi.string().trim().max(300).allow('', null),
   leadTime:      Joi.string().trim().max(60).allow('', null),
+  leadTimeDays:  leadTimeDays,
   creditPeriod:  Joi.number().integer().min(0).max(365).default(0),
   remarks:       Joi.string().trim().max(1000).allow('', null),
+  termsAndConditions: termsAndConditions,
   // Each item must carry its source indentId so the server can link it back.
   items:         Joi.array().items(poItemSchema.keys({ indentId: objectId.required() })).min(1).required(),
 });
@@ -125,8 +150,10 @@ export const previewPoSchema = Joi.object({
   deliveryTerms: Joi.string().trim().max(300).allow('', null),
   paymentTerms:  Joi.string().trim().max(300).allow('', null),
   leadTime:      Joi.string().trim().max(60).allow('', null),
+  leadTimeDays:  leadTimeDays,
   creditPeriod:  Joi.number().integer().min(0).max(365).default(0),
   remarks:       Joi.string().trim().max(1000).allow('', null),
+  termsAndConditions: termsAndConditions,
   items:         Joi.array().items(poItemSchema).min(1).required(),
 }).unknown(true);
 
@@ -145,10 +172,18 @@ export const updatePoSchema = Joi.object({
   deliveryTerms: Joi.string().trim().max(300).allow('', null),
   paymentTerms:  Joi.string().trim().max(300).allow('', null),
   leadTime:      Joi.string().trim().max(60).allow('', null),
+  leadTimeDays:  leadTimeDays,
   creditPeriod:  Joi.number().integer().min(0).max(365),
   remarks:       Joi.string().trim().max(1000).allow('', null),
+  termsAndConditions: termsAndConditions,
   items:         Joi.array().items(poItemSchema).min(1),
 }).min(1);
+
+// ── Terms & Conditions only (PO form / detail "Edit Terms & Conditions") ──
+// Touches nothing else on the PO. Blank resets it to the format's default.
+export const updatePoTermsSchema = Joi.object({
+  termsAndConditions: termsAndConditions.required(),
+});
 
 // ── Approve / reject ──
 export const approvePoSchema = Joi.object({

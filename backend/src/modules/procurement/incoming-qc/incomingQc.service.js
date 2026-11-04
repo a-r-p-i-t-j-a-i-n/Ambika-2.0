@@ -9,12 +9,15 @@ import VendorPurchaseOrder from '../purchase-order/purchaseOrder.model.js';
 import ServiceCompletion, { SERVICE_COMPLETION_STATUS, SERVICE_QC_STATUS } from '../service-completion/serviceCompletion.model.js';
 import PurchaseIndent, { INDENT_OVERALL_STATUS, INDENT_REQUEST_TYPE } from '../indent/indent.model.js';
 import { inventoryService } from '../../inventory/inventory.service.js';
+import { toStockQty, inexactQtyMessage, stockUnitCost } from '../../skus/unitConversion.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { generateQcNumber } from '../../../utils/docNumberGenerator.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, refuse } from '../recycleBin.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -162,6 +165,10 @@ export const planRejectStockOut = ({ qcItems = [], grnItems = [], receipts = [] 
     // The receipt is the stock being reversed, so its SKU / store / batch are used as-is.
     steps.push({
       item, post: true, skuId: receipt.skuId, warehouse: receipt.warehouse, batchNo: receipt.batchNo || '', receiptId: receipt._id,
+      // A line received in its purchase unit leaves stock in the stock unit,
+      // by the factor frozen on its GRN line. Legacy GRNs carry none (1:1).
+      factor: Number(grnItem.conversionFactor) > 0 ? Number(grnItem.conversionFactor) : null,
+      stockUnit: grnItem.stockUnit || null,
     });
   }
   return { steps, errors };
@@ -227,6 +234,8 @@ export const qcItemsFromGrn = ({ items = null, scopeLines = [] }) => {
       grnItemId: g._id, skuId: g.skuId, skuCode: g.skuCode || '', itemName: g.itemName, unit: g.unit || 'Pcs',
       batchNo: g.batchNo || '', receivedQty: round2(g.receivedQty), shortQty: g.shortQty || 0,
       acceptedQty: round2(g.receivedQty), rejectedQty: 0, reworkQty: 0,
+      // The GRN line's frozen purchase→stock conversion, for display (null = 1:1).
+      stockUnit: g.stockUnit || null, conversionFactor: g.conversionFactor || null,
     };
     if (!items) return base;
     const it = sent.get(String(g._id));
@@ -244,7 +253,14 @@ export const qcItemsFromGrn = ({ items = null, scopeLines = [] }) => {
  * (errors) rather than guesses whenever a line cannot be matched with certainty
  * or has already been posted.
  *
- * @returns {{ steps: { item, grnLine, post, quantity }[], errors: string[] }}
+ * Purchase unit → stock unit: THE one place a received quantity is converted.
+ * `quantity` stays in the GRN line's unit (5 BOX); `stockQty` is what posts,
+ * accepted × the factor frozen on the GRN line at completion (125 PCS). A line
+ * with no frozen factor (same-unit SKU, or a GRN completed before conversion
+ * existed) posts 1:1, exactly as before. A result needing more than stock's
+ * 2 decimals is refused, never rounded.
+ *
+ * @returns {{ steps: { item, grnLine, post, quantity, stockQty, factor }[], errors: string[] }}
  */
 export const planAcceptedStockIn = ({ qcItems = [], scopeLines = [] }) => {
   const steps = [];
@@ -265,7 +281,12 @@ export const planAcceptedStockIn = ({ qcItems = [], scopeLines = [] }) => {
     if (!grnLine.skuId || !grnLine.inventoryDestination || !grnLine.stockWarehouse) {
       errors.push(`"${name}": the GRN line has no inventory destination recorded`); continue;
     }
-    steps.push({ item, grnLine, post: accepted > 0, quantity: accepted });
+    const factor = Number(grnLine.conversionFactor) > 0 ? Number(grnLine.conversionFactor) : null;
+    const { stockQty, exact } = toStockQty(accepted, factor || 1);
+    if (factor && !exact) {
+      errors.push(inexactQtyMessage(name, accepted, grnLine.unit, factor, grnLine.stockUnit)); continue;
+    }
+    steps.push({ item, grnLine, post: accepted > 0, quantity: accepted, stockQty, factor });
   }
   return { steps, errors };
 };
@@ -641,7 +662,16 @@ export const incomingQcService = {
     qc.deletedAt = new Date();
     qc.deletedBy = user?._id;
     qc.activityTimeline.push({ action: 'DELETE', description: 'Incoming QC deleted', actorId: user?._id });
-    return qc.save();
+    const saved = await qc.save();
+    // Only drafts / in-progress QCs are deleted — nothing was posted.
+    await binDeleted('incomingQc', IncomingQC, qc, {
+      title: qc.qcNumber || 'Incoming QC',
+      subtitle: [qc.grnNumber ? `GRN ${qc.grnNumber}` : qc.indentNumber && `Indent ${qc.indentNumber}`, qc.vendorName, String(qc.qcStatus || '').replace(/_/g, ' ').toLowerCase()].filter(Boolean).join(' · '),
+      keywords: [qc.poNumber, (qc.items || []).map((it) => [it.itemName, it.skuCode])],
+      user,
+      before: [binPlan.hook('procurement.qc.check', { qcId: qc._id })],
+    });
+    return saved;
   },
 
   /**
@@ -784,9 +814,12 @@ export const incomingQcService = {
           continue;
         }
         const { movement } = await inventoryService.decreaseStock({
-          skuId: step.skuId, skuCode: it.skuCode, skuName: it.itemName, unit: it.unit,
+          skuId: step.skuId, skuCode: it.skuCode, skuName: it.itemName,
+          ...(step.factor
+            ? { unit: step.stockUnit, enteredQty: rejected, enteredUom: it.unit, conversionFactor: step.factor }
+            : { unit: it.unit }),
           warehouse: step.warehouse,
-          quantity: rejected,
+          quantity: step.factor ? toStockQty(rejected, step.factor).stockQty : rejected,
           txnType: 'QC_REJECT_OUT', sourceModule: 'PURCHASE_FMS',
           refType: 'INCOMING_QC', refId: qc._id, refNumber: qc.qcNumber,
           batchNo: step.batchNo,
@@ -885,6 +918,7 @@ export const incomingQcService = {
               $set: {
                 'items.$.stockStatus': step.post ? GRN_LINE_STOCK_STATUS.POSTED : GRN_LINE_STOCK_STATUS.NOT_POSTED,
                 'items.$.postedQty': step.quantity,
+                'items.$.postedStockQty': step.factor ? step.stockQty : null,
                 'items.$.postedQcId': qc._id,
                 'items.$.stockPostedAt': completedAt,
               },
@@ -904,11 +938,21 @@ export const incomingQcService = {
             continue;
           }
 
+          // Converted line: stock moves in the stock unit (125 PCS) at a cost per
+          // PCS that spreads the BOX value over the pieces, so the movement's
+          // value is still exactly accepted BOX × BOX rate. The BOX figure and
+          // the factor ride along on the movement for traceability.
+          const conversion = step.factor ? {
+            unit: grnLine.stockUnit,
+            unitCost: stockUnitCost(round2(step.quantity * round2(grnLine.rate)), step.stockQty),
+            lineValue: round2(step.quantity * round2(grnLine.rate)),
+            enteredQty: step.quantity, enteredUom: grnLine.unit, conversionFactor: step.factor,
+          } : { unit: grnLine.unit, unitCost: round2(grnLine.rate) };
           const { movement } = await inventoryService.increaseStock({
-            skuId: grnLine.skuId, skuCode: grnLine.skuCode, skuName: grnLine.itemName, unit: grnLine.unit,
+            skuId: grnLine.skuId, skuCode: grnLine.skuCode, skuName: grnLine.itemName,
+            ...conversion,
             warehouse: grnLine.stockWarehouse,
-            quantity: step.quantity,
-            unitCost: round2(grnLine.rate),
+            quantity: step.stockQty,
             txnType: 'GRN_IN', sourceModule: 'PURCHASE_FMS',
             refType: 'GRN', refId: grn._id, refNumber: grn.grnNumber,
             batchNo: grnLine.batchNo || '',
@@ -927,7 +971,9 @@ export const incomingQcService = {
           const qi = q.items.id(item._id);
           qi.stockInMovementId = movement._id;
           qi.stockInMovementNumber = movement.movementNumber;
-          notes.push(`${grnLine.itemName}: ${step.quantity} accepted → stock at ${grnLine.stockWarehouse} (${movement.movementNumber})`
+          if (step.factor) qi.stockInQty = step.stockQty;
+          const asStock = step.factor ? ` ${grnLine.unit} = ${step.stockQty} ${grnLine.stockUnit}` : '';
+          notes.push(`${grnLine.itemName}: ${step.quantity}${asStock} accepted → stock at ${grnLine.stockWarehouse} (${movement.movementNumber})`
             + (held ? `; ${held} kept out of stock` : ''));
         }
 
@@ -1009,3 +1055,24 @@ export const incomingQcService = {
     return qc.save();
   },
 };
+
+// ── Recycle Bin: a restored QC ──────────────────────────────────────────────
+// One live QC per GRN / PO (per service indent). Refused when its GRN or
+// indent is gone / cancelled, or another QC was raised for it since.
+registerRestoreHook('procurement.qc.check', async ({ qcId }, { session }) => {
+  const qc = await IncomingQC.findById(qcId).session(session || null).lean();
+  if (!qc) refuse('The QC no longer exists.');
+  const live = { _id: { $ne: qc._id }, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } };
+  if (qc.sourceType === QC_SOURCE_TYPE.SERVICE) {
+    const indent = await PurchaseIndent.findById(qc.indentId).session(session || null).select('indentNumber isDeleted').lean();
+    if (!indent || indent.isDeleted) refuse(`Indent ${qc.indentNumber || ''} is deleted — restore it first.`.replace('  ', ' '));
+    const other = await IncomingQC.findOne({ ...live, indentId: qc.indentId, sourceType: QC_SOURCE_TYPE.SERVICE }).session(session || null).select('qcNumber').lean();
+    if (other) refuse(`This service has another QC now (${other.qcNumber}).`);
+    return;
+  }
+  const grn = await GoodsReceiptNote.findById(qc.grnId).session(session || null).select('grnNumber grnStatus isDeleted').lean();
+  if (!grn || grn.isDeleted) refuse(`GRN ${qc.grnNumber || ''} is deleted — restore it first.`.replace('  ', ' '));
+  if (!GRN_QC_ELIGIBLE.includes(grn.grnStatus)) refuse(`GRN ${grn.grnNumber} is ${String(grn.grnStatus).replace(/_/g, ' ').toLowerCase()} now, so it takes no QC.`);
+  const other = await IncomingQC.findOne({ ...live, grnId: qc.grnId, poId: qc.poId || null }).session(session || null).select('qcNumber').lean();
+  if (other) refuse(`GRN ${grn.grnNumber} has another QC now (${other.qcNumber}).`);
+});

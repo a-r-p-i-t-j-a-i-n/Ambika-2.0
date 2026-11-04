@@ -101,9 +101,17 @@ const poItemSchema = new Schema({
   unit:          { type: String, trim: true, default: 'Pcs' },
   rate:          { type: Number, default: 0, min: 0 },
   gstRate:       { type: Number, default: 0, min: 0, max: 100 },
-  // Where this line's rate came from. Only a MANUAL (user-edited) rate is
-  // written back to the Vendor Master / Pricing History when the PO is approved.
+  // Where this line's rate came from (as the form reports it). A rate that
+  // differs from the vendor's Vendor Master rate never reaches the Vendor Master
+  // from the PO: it goes to Rate Change Approvals (procurement/rate-change).
   rateSource:    { type: String, enum: [...Object.values(PO_RATE_SOURCE), ''], default: '' },
+  // Rate change approval (server-stamped on save). fetchedRate = the vendor's
+  // Vendor Master rate when the line was saved (null = the vendor has none).
+  // rateChangeStatus '' = the line uses the vendor rate (or older PO).
+  fetchedRate:             { type: Number, default: null },
+  rateChangeRequestId:     { type: Schema.Types.ObjectId, ref: 'RateChangeRequest', default: null },
+  rateChangeRequestNumber: { type: String, trim: true, default: '' },
+  rateChangeStatus:        { type: String, enum: ['', 'PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN'], default: '' },
   taxableAmount: { type: Number, default: 0, min: 0 }, // qty × rate (server-computed)
   taxAmount:     { type: Number, default: 0, min: 0 }, // taxable × gst% (server-computed)
   totalAmount:   { type: Number, default: 0, min: 0 },
@@ -169,7 +177,14 @@ const vendorPurchaseOrderSchema = new Schema({
   deliveryTerms: { type: String, trim: true, default: '' },
   paymentTerms:  { type: String, trim: true, default: '' },
   leadTime:      { type: String, trim: true, default: '' },   // e.g. "7 days"
+  // Calendar days from poDate to expectedDeliveryDate (poLeadTime.js); leadTime
+  // is its printed text. null on POs saved before this field existed.
+  leadTimeDays:  { type: Number, min: 0, default: null },
   creditPeriod:  { type: Number, default: 0, min: 0 },        // days
+  // Terms & Conditions printed on this PO's PDF (see poTerms.js). No default on
+  // purpose: a PO saved before this field existed has none and keeps printing
+  // its Remarks, as it always did.
+  termsAndConditions: { type: String, trim: true },
 
   // ── Lines & totals ──
   items: { type: [poItemSchema], default: [] },
@@ -207,7 +222,7 @@ const vendorPurchaseOrderSchema = new Schema({
   // Short-lived lock held while a GRN against this PO is being completed, so two
   // GRNs can never both receive the same remaining quantity (see grn.service).
   grnPostingLockAt:     { type: Date, default: null },
-  expectedDeliveryDate: { type: Date, default: null }, // releasedAt + leadTime days
+  expectedDeliveryDate: { type: Date, default: null }, // poDate + leadTimeDays (legacy fallback: releasedAt + leadTime)
 
   // ── Step 1.6 — proforma invoice linkage (additive) ──
   piStatus:     { type: String, enum: Object.values(PO_PI_STATUS), default: PO_PI_STATUS.NOT_RECEIVED, index: true },

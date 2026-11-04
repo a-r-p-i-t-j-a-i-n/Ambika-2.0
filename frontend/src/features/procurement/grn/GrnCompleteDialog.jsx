@@ -49,7 +49,10 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
 
   // Lines received beyond the pending qty (figures are server-derived; the
   // server re-validates against the PO's current state on completion).
-  const extraLines = (grn?.items || []).filter((l) => Number(l.extraQty) > 0);
+  const overLines = (grn?.items || []).filter((l) => Number(l.extraQty) > 0);
+  // Lines already confirmed with "Allow Over-Receipt" on the GRN form need no
+  // further tick here; only unconfirmed ones (e.g. an older draft) do.
+  const extraLines = overLines.filter((l) => !l.allowOverReceipt);
 
   const handleComplete = async () => {
     if (hasRm && !rmReceivedAtLocation) {
@@ -101,14 +104,24 @@ const GrnCompleteDialog = ({ open, onClose, grn }) => {
             Tick &quot;Allow over-receipt&quot; and add remarks to receive the extra.
           </Alert>
         )}
-        <FormControlLabel
-          control={<Checkbox checked={allowOverReceipt} onChange={(e) => setAllowOverReceipt(e.target.checked)} />}
-          label="Allow over-receipt (received qty may exceed pending PO qty)"
-        />
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-          Pending qty is re-checked against the PO when you complete. Without this, any
-          excess over the current pending qty is rejected.
-        </Typography>
+        {overLines.length > extraLines.length && (
+          <Alert severity="warning" sx={{ mb: 1.5 }} data-testid="grn-complete-over-confirmed">
+            Over-receipt allowed on the GRN for:{' '}
+            {overLines.filter((l) => l.allowOverReceipt).map((l) => `${l.itemName} (+${l.extraQty})`).join(', ')}.
+          </Alert>
+        )}
+        {(extraLines.length > 0 || overLines.length === 0) && (
+          <>
+            <FormControlLabel
+              control={<Checkbox checked={allowOverReceipt} onChange={(e) => setAllowOverReceipt(e.target.checked)} />}
+              label="Allow over-receipt (received qty may exceed pending PO qty)"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              Pending qty is re-checked against the PO when you complete. Without this, any
+              excess over the current pending qty is rejected.
+            </Typography>
+          </>
+        )}
 
         {hasRm && (
           <TextField

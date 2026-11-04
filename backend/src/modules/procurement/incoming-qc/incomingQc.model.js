@@ -81,6 +81,14 @@ const qcItemSchema = new Schema({
   // ACCEPTED qty is posted to stock (back-reference to the GRN_IN ledger row).
   stockInMovementId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement' },
   stockInMovementNumber: { type: String, trim: true, default: '' },
+
+  // Purchase unit → stock unit, copied from the GRN line's frozen conversion
+  // (skus/unitConversion.js) so the inspector sees "5 BOX = 125 PCS". null on
+  // lines that post 1:1. stockInQty is what the accepted qty posted as, in
+  // stockUnit (set with stockInMovementId on converted lines).
+  stockUnit:        { type: String, trim: true, default: null },
+  conversionFactor: { type: Number, default: null },
+  stockInQty:       { type: Number, default: null },
 }, { _id: true });
 
 const incomingQcSchema = new Schema({

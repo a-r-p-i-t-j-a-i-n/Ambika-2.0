@@ -14,6 +14,7 @@ import {
   revisePoSchema,
   previewPoSchema,
   updatePoSchema,
+  updatePoTermsSchema,
   approvePoSchema,
   releasePoSchema,
   bulkReleasePoSchema,
@@ -41,6 +42,9 @@ router.post('/preview-pdf', validate(previewPoSchema), c.previewPdf);
 
 router.get('/stats', c.getStats);
 
+// Default Terms & Conditions per PO format, for the PO form (edited in Company Settings).
+router.get('/terms-defaults', c.getTermsDefaults);
+
 // Global approved-item picker (all PO-creatable indents) for the New PO form's
 // Approved Item(s) dropdown. Declared before '/:id' so it isn't shadowed.
 router.get('/approved-items', c.getAllApprovedItems);
@@ -62,6 +66,8 @@ router.route('/:id')
   .delete(requirePermission('procurement.deletePurchaseOrder'), validate(mongoIdParamSchema, 'params'), c.remove);
 
 router.post('/:id/pdf', validate(mongoIdParamSchema, 'params'), c.generatePdf);
+// Terms & Conditions only — nothing else on the PO changes (MD-only once approved).
+router.patch('/:id/terms', validate(mongoIdParamSchema, 'params'), validate(updatePoTermsSchema), c.updateTerms);
 router.post('/:id/approve', validate(mongoIdParamSchema, 'params'), validate(approvePoSchema), c.approve);
 router.post('/:id/release', validate(mongoIdParamSchema, 'params'), validate(releasePoSchema), c.release);
 router.post('/:id/cancel',  validate(mongoIdParamSchema, 'params'), validate(cancelPoSchema), c.cancel);

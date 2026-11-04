@@ -116,7 +116,7 @@ const QuoteDetail = () => {
   };
 
   const handleDelete = async () => {
-    if (!window.confirm('Delete this quote? This cannot be undone.')) return;
+    if (!window.confirm('Delete this quote? It moves to the Recycle Bin, where it can be restored.')) return;
     try {
       await deleteQuote(id).unwrap();
       enqueueSnackbar('Quote deleted', { variant: 'success' });

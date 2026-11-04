@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem,
-  Menu, ListItemIcon, ListItemText, Grid, Tooltip, Autocomplete, Chip,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Tooltip,
+  Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -35,6 +35,7 @@ import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLab
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
+import RowActionsMenu from '../components/RowActionsMenu';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 const GrnList = () => {
   const navigate = useNavigate();
@@ -64,11 +65,12 @@ const GrnList = () => {
   const [editGrn, setEditGrn] = useState(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [activeGrn, setActiveGrn] = useState(null);
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
+  const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const canDeleteGrn = usePermissions().can('procurement.deleteGrn');
+  const { can } = usePermissions();
+  const canDeleteGrn = can('procurement.deleteGrn');
+  const canEditGrn = can('procurement.editGrn');
 
   const queryArgs = {
     page: paginationModel.page + 1,
@@ -88,8 +90,8 @@ const GrnList = () => {
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
   const [cancelGrn] = useCancelGrnMutation();
 
-  const openMenu = (e, row) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuRow(row); };
-  const closeMenu = () => { setMenuAnchor(null); setMenuRow(null); };
+  const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
+  const closeMenu = () => menuRef.current?.close();
 
   const onView = (r) => { navigate(`/procurement/grns/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditGrn(r); setFormOpen(true); closeMenu(); };
@@ -103,19 +105,23 @@ const GrnList = () => {
 
   const onDelete = (r) => { setDeleteTarget(r); closeMenu(); };
 
-  // DRAFT → Edit | Complete | Cancel | Delete. Completed GRNs are view-only.
+  // DRAFT → Edit | Complete | Cancel | Delete. A completed GRN is edited /
+  // deleted only with procurement.editGrn / procurement.deleteGrn (MD has both).
   const actionsFor = (r) => {
-    const a = [{ key: 'view', label: isGrnCompleted(r) ? 'View (read-only)' : 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
+    const a = [{ key: 'view', label: isGrnCompleted(r) && !canEditGrn ? 'View (read-only)' : 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (isGrnDraft(r)) {
       a.push({ key: 'edit', label: 'Edit Draft', icon: <Pencil size={16} />, fn: () => onEdit(r) });
       a.push({ key: 'complete', label: 'Complete GRN', icon: <PackageCheck size={16} />, fn: () => onComplete(r) });
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
-      if (canDeleteGrn) a.push({ key: 'delete', label: 'Delete Draft', icon: <Trash2 size={16} />, fn: () => onDelete(r), danger: true });
     }
     if (isGrnCompleted(r)) {
+      if (canEditGrn) a.push({ key: 'edit', label: 'Edit GRN', icon: <Pencil size={16} />, fn: () => onEdit(r) });
       a.push({ key: 'qc', label: 'Incoming QC', icon: <ClipboardCheck size={16} />, fn: () => { navigate(`/procurement/grns/${r._id}#qc`); closeMenu(); } });
     }
     if (r.grnPdfUrl) a.push({ key: 'pdf', label: 'Download GRN PDF', icon: <FileDown size={16} />, fn: () => onPdf(r) });
+    if (canDeleteGrn && (isGrnDraft(r) || isGrnCompleted(r) || r.grnStatus === 'CANCELLED')) {
+      a.push({ key: 'delete', label: isGrnDraft(r) ? 'Delete Draft' : 'Delete GRN', icon: <Trash2 size={16} />, fn: () => onDelete(r), danger: true });
+    }
     return a;
   };
 
@@ -306,17 +312,10 @@ const GrnList = () => {
       </Paper>
 
       {/* Row actions */}
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
-        {menuRow && actionsFor(menuRow).map((a) => (
-          <MenuItem key={a.key} onClick={a.fn} sx={a.danger ? { color: 'error.main' } : undefined}>
-            <ListItemIcon sx={a.danger ? { color: 'error.main' } : undefined}>{a.icon}</ListItemIcon>
-            <ListItemText>{a.label}</ListItemText>
-          </MenuItem>
-        ))}
-      </Menu>
+      <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
 
       {/* Form + dialogs */}
-      <GrnFormDialog open={formOpen} grn={editGrn} onClose={(_saved, created) => {
+      <GrnFormDialog open={formOpen} grn={editGrn} correct={isGrnCompleted(editGrn)} onClose={(_saved, created) => {
         setFormOpen(false); setEditGrn(null);
         // A new GRN opens on its page, where Complete, MD approval and the QC section sit together.
         if (created?._id && !editGrn) navigate(`/procurement/grns/${created._id}`);

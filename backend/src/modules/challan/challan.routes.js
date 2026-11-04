@@ -11,6 +11,9 @@ import { Router } from 'express';
 import { pdfService } from '../../services/pdf.service.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../common/uploads/s3.service.js';
 import { logger } from '../../utils/logger.js';
+import { protect } from '../../middleware/auth.middleware.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 // Absolute base for this API (so PDF links work from the different-origin frontend
 // and from email/WhatsApp). Override with SERVER_URL in production.
@@ -107,9 +110,24 @@ export const challanService = {
     return doc.toObject();
   },
 
+  /**
+   * Erase a challan. Nothing else is changed by this delete (order quantities,
+   * phase actuals and the O2D log stay as they are), so the full copy kept in
+   * the Recycle Bin puts it back exactly.
+   */
   async remove(id) {
-    const doc = await DeliveryChallan.findByIdAndDelete(id);
+    const doc = await DeliveryChallan.findById(id).lean();
     if (!doc) throw new AppError('Delivery Challan not found', 404);
+    await recycleBinService.capture('challan', {
+      recordId: doc._id,
+      title: doc.dcNumber,
+      subtitle: [doc.partyName, doc.soNumber].filter(Boolean).join(' · '),
+      keywords: [doc.poNumber, doc.invoiceNo, (doc.items || []).map((i) => [i.skuName, i.skuCode])],
+      plan: {
+        checks: [binPlan.absent(DeliveryChallan.modelName, { dcNumber: doc.dcNumber }, `Can't restore — ${doc.dcNumber} is now used by another challan.`)],
+        steps: [binPlan.reinsert(DeliveryChallan.modelName, doc)],
+      },
+    }, () => DeliveryChallan.deleteOne({ _id: doc._id }));
     return doc;
   },
 };
@@ -138,7 +156,9 @@ export const challanController = {
 };
 
 // ── Routes ──────────────────────────────────────────────────
+// Signed-in users only (every caller sends the ERP token, PDF previews included).
 const router = Router();
+router.use(protect);
 router.route('/').get(challanController.getAll).post(challanController.create);
 router.get('/next-number', challanController.nextNumber); // must precede '/:id'
 router.post('/:id/pdf', challanController.generatePdf);

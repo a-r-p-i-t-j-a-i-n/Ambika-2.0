@@ -110,7 +110,7 @@ check('unit outside the old dropdown shown as stored (Nos, not Pcs)', (await uni
 await d.getByPlaceholder('0').nth(0).fill('7');
 await d.getByPlaceholder('0').nth(1).fill('3');
 await shot('01-new-indent');
-await d.getByRole('button', { name: /^Create Indent$/ }).click();
+await d.getByRole('button', { name: /^Save as Draft$/ }).click();
 check('indent created', await snack(/Indent created/));
 const latest = ((await api('/procurement/indents?limit=5&sort=-createdAt')).data || [])[0];
 check('saved items = SKU Master name + code', latest?.items?.length === 2
