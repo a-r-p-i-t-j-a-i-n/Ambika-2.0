@@ -10,6 +10,32 @@ export const advancePaymentController = {
     res.json(ApiResponse.ok('Payments retrieved', docs, pagination));
   }),
 
+  // Record Advance Payment selector: every approved, live PO with where its advance stands.
+  getCandidates: asyncHandler(async (req, res) => {
+    const rows = await advancePaymentService.getAdvanceCandidates(req.query);
+    res.json(ApiResponse.ok('Purchase Orders and their advance status', rows));
+  }),
+
+  // Old endpoint: only the POs an advance can be recorded against right now.
+  getEligiblePos: asyncHandler(async (req, res) => {
+    const rows = await advancePaymentService.getEligiblePos(req.query);
+    res.json(ApiResponse.ok('Purchase Orders eligible for an advance payment', rows));
+  }),
+
+  getDetail: asyncHandler(async (req, res) => {
+    const detail = await advancePaymentService.getDetail(req.params.id);
+    res.json(ApiResponse.ok('Payment details retrieved', detail));
+  }),
+
+  // Streams the payment's PDF (inline for the preview, attachment with ?download=true).
+  getPdf: asyncHandler(async (req, res) => {
+    const { buffer, fileName } = await advancePaymentService.buildPdf(req.params.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${fileName}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  }),
+
   getStats: asyncHandler(async (_req, res) => {
     const stats = await advancePaymentService.getStats();
     res.json(ApiResponse.ok('Payment stats', stats));

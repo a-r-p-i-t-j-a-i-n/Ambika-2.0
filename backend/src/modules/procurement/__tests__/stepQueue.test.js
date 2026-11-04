@@ -36,7 +36,8 @@ test('every queue maps a document to a row with a known state and a link', () =>
 test('advance payment: a PI sent to the MD waits, any other ready PI can be paid', () => {
   const waiting = toQueueRow('ADVANCE_PAYMENT', { _id: ID(1), mdApprovalStatus: 'READY_FOR_MD_APPROVAL', balanceAmount: 100 });
   assert.equal(waiting.state, 'WAITING');
-  assert.equal(waiting.action, null);
+  // The action is still offered: the form explains the MD wait and disables submit.
+  assert.equal(waiting.action, 'RECORD_ADVANCE');
   assert.equal(waiting.statusLabel, 'Waiting for MD approval');
 
   const approved = toQueueRow('ADVANCE_PAYMENT', { _id: ID(2), mdApprovalStatus: 'MD_APPROVED', balanceAmount: 100 });
@@ -48,6 +49,22 @@ test('advance payment: a PI sent to the MD waits, any other ready PI can be paid
   const notSent = toQueueRow('ADVANCE_PAYMENT', { _id: ID(3), mdApprovalStatus: 'NOT_REQUIRED', paidAmount: 40, balanceAmount: 60 });
   assert.equal(notSent.action, 'RECORD_ADVANCE');
   assert.equal(notSent.statusLabel, 'Part paid — balance due');
+});
+
+test('advance payment row: advance figures, payment status, indent link and doer timing', () => {
+  const stepTiming = { plannedAt: '2026-11-05T00:00:00Z', assignedDoerName: 'Rahul Doer', done: false };
+  const pending = toQueueRow('ADVANCE_PAYMENT', {
+    _id: ID(1), piNumber: 'PI-1', poNumber: 'PO-1', indentNumber: 'Ind-1', totalValue: 1000, paidAmount: 0, balanceAmount: 1000, stepTiming,
+  });
+  assert.deepEqual(
+    [pending.piAmount, pending.advanceRequired, pending.paidAmount, pending.remainingAmount, pending.paymentStatus],
+    [1000, 1000, 0, 1000, 'PENDING'],
+  );
+  assert.deepEqual(pending.refs, ['PO PO-1', 'Indent Ind-1']);
+  assert.equal(pending.stepTiming, stepTiming);
+
+  const part = toQueueRow('ADVANCE_PAYMENT', { _id: ID(2), totalValue: 1000, paidAmount: 400, balanceAmount: 600 });
+  assert.deepEqual([part.paidAmount, part.remainingAmount, part.paymentStatus], [400, 600, 'PART_PAYMENT']);
 });
 
 test('final payment: only an MD-approved voucher offers the payment', () => {

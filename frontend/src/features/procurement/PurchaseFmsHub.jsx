@@ -90,6 +90,7 @@ const FinalPaymentList = lazyWithRetry(
 // their own yet (StepWithQueue → GET /procurement/step-queues/:queue). Each
 // queue row can open the step's existing create dialog with that record preset.
 const FollowUpFormDrawer = lazyWithRetry(() => import("./follow-ups/FollowUpFormDrawer"));
+import { awaitingAdvanceColumns } from "./advance-payments/awaitingAdvanceColumns";
 const AdvancePaymentFormDialog = lazyWithRetry(
   () => import("./advance-payments/AdvancePaymentFormDialog"),
 );
@@ -126,9 +127,10 @@ const AdvancePaymentStep = () => {
       listLabel="Advance Payments"
       queueLabel="Awaiting Advance"
       title="Awaiting Advance Payment — Step 1.07"
-      subtitle="Approved PIs ready for their advance — a PI sent to the MD waits for the MD's approval first"
-      action={{ label: "Record Advance", icon: <Wallet size={14} />, Dialog: AdvancePaymentFormDialog, props: (r) => ({ pi: r.record }) }}
-      gridProps={{ numberHeader: "PI No", dateHeader: "PI Date", amountHeader: "Balance", emptyText: "No PI is waiting for an advance" }}
+      subtitle="Approved PIs whose advance is not fully paid — use Record Payment on a row. A PI sent to the MD waits for the MD's approval first"
+      preferQueue
+      action={{ label: "Record Payment", icon: <Wallet size={14} />, Dialog: AdvancePaymentFormDialog, props: (r) => ({ pi: r.record }) }}
+      gridProps={{ numberHeader: "PI Number", dateHeader: "PI Date", showAmount: false, extraColumns: awaitingAdvanceColumns, emptyText: "No approved PI is waiting for an advance payment" }}
     />
   );
 };

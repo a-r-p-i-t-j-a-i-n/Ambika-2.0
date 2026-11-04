@@ -291,6 +291,28 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (piId) => `/procurement/advance-payments/by-pi/${piId}`,
       providesTags: (_r, _e, piId) => [{ type: 'AdvancePayment', id: `pi-${piId}` }, 'AdvancePayment'],
     }),
+    // Record Advance Payment selector — POs with a payable PI (backend advancePayment.service getEligiblePos).
+    getEligibleAdvancePos: builder.query({
+      query: (params = {}) => ({ url: '/procurement/advance-payments/eligible-pos', params }),
+      providesTags: ['AdvancePayment', 'ProformaInvoice', 'PurchaseOrder'],
+    }),
+    // Every approved, live PO with where its advance stands (payable or why not) — search by PO / vendor / indent / PI.
+    getAdvanceCandidates: builder.query({
+      query: (params = {}) => ({ url: '/procurement/advance-payments/candidates', params }),
+      providesTags: ['AdvancePayment', 'ProformaInvoice', 'PurchaseOrder'],
+    }),
+    // One payment with its PI / PO, MD approval and the full payment history.
+    getAdvancePaymentDetail: builder.query({
+      query: (id) => `/procurement/advance-payments/${id}/detail`,
+      providesTags: (_r, _e, id) => ['AdvancePayment', { type: 'AdvancePayment', id }],
+    }),
+    // The payment's PDF as a Blob (rendered fresh by the server). On error the backend sends JSON.
+    getAdvancePaymentPdf: builder.mutation({
+      query: ({ id }) => ({
+        url: `/procurement/advance-payments/${id}/pdf`,
+        responseHandler: async (response) => (response.ok ? response.blob() : response.json()),
+      }),
+    }),
     createAdvancePayment: builder.mutation({
       query: (body) => ({ url: '/procurement/advance-payments', method: 'POST', body }),
       invalidatesTags: ['AdvancePayment', 'AdvancePaymentStats', 'ProformaInvoice', 'ProformaInvoiceStats', 'PurchaseOrder'],
@@ -594,6 +616,23 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (id) => ({ url: `/procurement/final-payments/${id}`, method: 'DELETE' }),
       invalidatesTags: (_r, _e, id) => ['FinalPayment', 'FinalPaymentStats', 'Voucher', 'VoucherStats', 'VendorInvoice', 'VendorInvoiceStats', { type: 'FinalPayment', id }],
     }),
+    // ── Cascade delete — a step with everything resting on it (any Purchase FMS step) ──
+    // The preview is always fetched fresh: it is the list the user confirms.
+    getCascadeDeletePreview: builder.query({
+      query: ({ type, id }) => `/procurement/cascade-delete/${type}/${id}/preview`,
+      keepUnusedDataFor: 0,
+    }),
+    cascadeDelete: builder.mutation({
+      query: ({ type, id, ...body }) => ({ url: `/procurement/cascade-delete/${type}/${id}`, method: 'POST', body }),
+      // Any step can go, so every Purchase list, KPI, task and approval refreshes.
+      invalidatesTags: [
+        'Indent', 'IndentStats', 'PurchaseOrder', 'PurchaseOrderStats', 'RateChange', 'FollowUp', 'FollowUpStats',
+        'ProformaInvoice', 'ProformaInvoiceStats', 'AdvancePayment', 'AdvancePaymentStats', 'Grn', 'GrnStats',
+        'ServiceCompletion', 'ServiceCompletionStats', 'IncomingQc', 'IncomingQcStats', 'VendorInvoice', 'VendorInvoiceStats',
+        'Voucher', 'VoucherStats', 'TallyEntry', 'TallyEntryStats', 'FinalPayment', 'FinalPaymentStats',
+        'FmsTasks', 'Approval', 'Notification',
+      ],
+    }),
     generateFinalPaymentPdf: builder.mutation({
       query: ({ id }) => ({ url: `/procurement/final-payments/${id}/pdf`, method: 'POST' }),
       invalidatesTags: (_r, _e, { id }) => ['FinalPayment', { type: 'FinalPayment', id }],
@@ -732,6 +771,10 @@ export const {
   useGetAdvancePaymentsQuery,
   useGetAdvancePaymentStatsQuery,
   useGetAdvancePaymentsByPiQuery,
+  useGetEligibleAdvancePosQuery,
+  useGetAdvanceCandidatesQuery,
+  useGetAdvancePaymentDetailQuery,
+  useGetAdvancePaymentPdfMutation,
   useCreateAdvancePaymentMutation,
   useDeleteAdvancePaymentMutation,
 
@@ -802,6 +845,8 @@ export const {
   useCreateFinalPaymentMutation,
   useUpdateFinalPaymentMutation,
   useDeleteFinalPaymentMutation,
+  useGetCascadeDeletePreviewQuery,
+  useCascadeDeleteMutation,
   useGenerateFinalPaymentPdfMutation,
   useCancelFinalPaymentMutation,
 

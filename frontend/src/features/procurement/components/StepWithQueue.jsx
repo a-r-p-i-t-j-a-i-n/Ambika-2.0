@@ -17,13 +17,15 @@ import { pfmsStepTabsSx, pfmsUnderStepTabsStyle } from '../pfmsTheme';
 const AWAITING_VIEW = 'awaiting';
 
 const StepWithQueue = (props) => {
-  const { List, queue, listLabel, queueLabel, ownTotal, ...panel } = props;
+  const { List, queue, listLabel, queueLabel, ownTotal, preferQueue = false, ...panel } = props;
   const [params, setParams] = useSearchParams();
   const { data: summary } = useGetStepQueueQuery({ queue, limit: 1 });
   const waiting = summary?.data?.unfilteredTotal;
 
   const explicit = params.get('view');
-  const view = explicit === AWAITING_VIEW || (!explicit && ownTotal === 0 && waiting > 0) ? AWAITING_VIEW : 'records';
+  // `preferQueue` (actionable work, e.g. payments to make): open on the queue
+  // whenever something is waiting, even when the step already has records.
+  const view = explicit === AWAITING_VIEW || (!explicit && waiting > 0 && (preferQueue || ownTotal === 0)) ? AWAITING_VIEW : 'records';
   const setView = (_e, v) => setParams({ view: v }, { replace: true });
 
   return (

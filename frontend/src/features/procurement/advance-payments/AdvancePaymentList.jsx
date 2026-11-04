@@ -2,12 +2,15 @@ import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
+import AdvancePaymentDetailDialog from './AdvancePaymentDetailDialog';
+import useAdvancePaymentPdf from './useAdvancePaymentPdf';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
   Grid, Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Search, Wallet, IndianRupee, Hourglass, AlertTriangle, CircleSlash, FileText } from 'lucide-react';
+import { Search, Wallet, IndianRupee, Hourglass, AlertTriangle, CircleSlash, FileText, Plus, FileDown, Paperclip, CircleDollarSign, CircleCheck, CircleDashed } from 'lucide-react';
+import AdvancePaymentFormDialog from './AdvancePaymentFormDialog';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import {
   useGetAdvancePaymentsQuery,
@@ -23,7 +26,9 @@ import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
-import { PaymentStatusChip, PAYMENT_STATUSES, PAYMENT_MODES, modeLabel, fmtINR, fmtDate } from './apMeta';
+import { PaymentStatusChip, PAYMENT_STATUSES, PAYMENT_MODES, PI_PAYMENT_STATES, modeLabel, fmtINR, fmtDate } from './apMeta';
+import StatusChip from '../components/StatusChip';
+import { fileHref } from '../indents/indentMeta';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
@@ -39,19 +44,27 @@ const AdvancePaymentList = () => {
   const [removeAdvance] = useDeleteAdvancePaymentMutation();
   const canDeleteAdvance = usePermissions().can('procurement.deleteAdvancePayment');
   const del = useRecordDelete({
-    what: 'Advance', numberOf: (r) => r.paymentNumber, remove: removeAdvance,
+    type: 'ADVANCE_PAYMENT', what: 'Advance', numberOf: (r) => r.paymentNumber, remove: removeAdvance,
     consequence: () => 'The payment is taken back off its PI (paid and balance amounts go back). Only the latest payment of a PI can be deleted, and not once vendor invoices use the advance.',
   });
+  const pdf = useAdvancePaymentPdf();
   const actionsFor = (r) => [
     ...(r.piId ? [{ key: 'pi', label: 'View PI', icon: <FileText size={16} />, fn: () => navigate(`/procurement/proforma-invoices/${r.piId}`) }] : []),
-    ...(canDeleteAdvance ? [del.action(r, { divider: Boolean(r.piId) })] : []),
+    ...(r.proofDocument?.fileUrl ? [{ key: 'proof', label: 'View Proof', icon: <Paperclip size={16} />, fn: () => window.open(fileHref(r.proofDocument.fileUrl), '_blank') }] : []),
+    ...(canDeleteAdvance ? [del.action(r, { divider: true })] : []),
+    { key: 'pdf', label: 'Preview PDF', icon: <FileDown size={16} />, fn: () => pdf.preview(r), divider: !canDeleteAdvance },
+    { key: 'pdf-dl', label: 'Download PDF', icon: <FileDown size={16} />, fn: () => pdf.download(r) },
   ];
 
+  const [quickRow, setQuickRow] = useState(null); // row whose Eye detail is open
+  const [recordOpen, setRecordOpen] = useState(false); // "+ Record Advance Payment" (pick a PO, then pay)
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [modeFilter, setModeFilter] = useState('');
+  const [stateFilter, setStateFilter] = useState('');
+  const [sortModel, setSortModel] = useState([]);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
 
@@ -60,16 +73,18 @@ const AdvancePaymentList = () => {
 
   // "Filters" covers Vendor, Payment Mode and the date range — Status stays
   // always visible.
-  const secondaryCount = [vendorFilter, modeFilter, from, to].filter(Boolean).length;
-  const clearSecondary = () => { setVendorFilter(null); setModeFilter(''); setFrom(''); setTo(''); resetPage(); };
+  const secondaryCount = [vendorFilter, modeFilter, stateFilter, from, to].filter(Boolean).length;
+  const clearSecondary = () => { setVendorFilter(null); setModeFilter(''); setStateFilter(''); setFrom(''); setTo(''); resetPage(); };
   const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
   const queryArgs = {
     page: paginationModel.page + 1,
     limit: paginationModel.pageSize,
-    sort: '-createdAt',
+    // Server-side sort on the payment's own fields; newest first by default.
+    sort: sortModel[0] ? `${sortModel[0].sort === 'desc' ? '-' : ''}${sortModel[0].field}` : '-createdAt',
     search: search || undefined,
+    piPaymentState: stateFilter || undefined,
     vendorId: vendorFilter?._id || undefined,
     paymentStatus: statusFilter || undefined,
     // paymentMode has no dedicated Joi rule in the list schema, but the schema
@@ -90,25 +105,37 @@ const AdvancePaymentList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'paymentNumber', headerName: 'PAYMENT NO', width: 130,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} color="primary.main">{p.value}</Typography> },
-    { field: 'piNumber', headerName: 'PI NUMBER', width: 115,
-      renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
     { field: 'poNumber', headerName: 'PO NUMBER', width: 140,
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{p.value || '—'}</Typography> },
+    { field: 'piNumber', headerName: 'PI NUMBER', width: 115,
+      renderCell: (p) => <Typography variant="body2" fontWeight={600}>{p.value || '—'}</Typography> },
+    { field: 'indentNumber', headerName: 'INDENT NO', width: 125,
+      renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR', flex: 1, minWidth: 150,
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
-    { field: 'paidAmount', headerName: 'PAID', width: 115, align: 'right', headerAlign: 'right',
+    // The PI's whole-advance figures (current), not just this payment — same on every row of one PI.
+    { field: 'advanceRequired', headerName: 'ADVANCE REQUIRED', width: 140, align: 'right', headerAlign: 'right', sortable: false,
+      renderCell: (p) => <Typography variant="body2" fontWeight={600} sx={{ fontVariantNumeric: 'tabular-nums' }}>{fmtINR(p.value)}</Typography> },
+    { field: 'totalPaid', headerName: 'TOTAL PAID', width: 120, align: 'right', headerAlign: 'right', sortable: false,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} sx={{ color: '#0f766e', fontVariantNumeric: 'tabular-nums' }}>{fmtINR(p.value)}</Typography> },
-    { field: 'balanceAmount', headerName: 'BALANCE AFTER', width: 125, align: 'right', headerAlign: 'right',
+    { field: 'remainingBalance', headerName: 'REMAINING', width: 120, align: 'right', headerAlign: 'right', sortable: false,
       renderCell: (p) => <Typography variant="body2" sx={{ color: p.value > 0 ? '#b45309' : '#0f766e', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtINR(p.value)}</Typography> },
+    { field: 'paidAmount', headerName: 'THIS PAYMENT', width: 125, align: 'right', headerAlign: 'right',
+      renderCell: (p) => <Typography variant="body2" fontWeight={700} sx={{ color: '#1d4ed8', fontVariantNumeric: 'tabular-nums' }}>{fmtINR(p.value)}</Typography> },
     { field: 'paymentMode', headerName: 'MODE', width: 130,
       renderCell: (p) => <Chip size="small" variant="outlined" label={modeLabel(p.value)} sx={{ fontWeight: 700 }} /> },
-    { field: 'paymentReferenceNumber', headerName: 'REFERENCE', width: 160,
+    { field: 'paymentReferenceNumber', headerName: 'REFERENCE', width: 160, sortable: false,
       renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
-    { field: 'paymentStatus', headerName: 'STATUS', width: 140,
+    { field: 'paymentStatus', headerName: 'PAYMENT STATUS', width: 150,
       renderCell: (p) => <PaymentStatusChip status={p.value} /> },
+    { field: 'piPaymentState', headerName: 'ADVANCE STATUS', width: 150, sortable: false,
+      renderCell: (p) => (p.value ? <StatusChip status={p.value} /> : null) },
+    { field: 'performedByName', headerName: 'RECORDED BY', width: 140,
+      renderCell: (p) => <Typography variant="body2" color="text.secondary" noWrap>{p.value || '—'}</Typography> },
     ...stepTimingColumns(),
     rowActionsColumn((p) => (
       <RowActionsCell rowId={p.row._id} label={p.row.paymentNumber}
+        onQuickView={() => setQuickRow(p.row)} quickViewLabel="View payment" quickViewTestId="ap-row-view"
         onMenu={(e) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, p.row); }} />
     )),
   ];
@@ -116,20 +143,30 @@ const AdvancePaymentList = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, ...pfmsPageSx }}>
       {/* Header */}
-      <Box>
-        <Typography sx={pfmsTitleSx}>Advance Payments ({stats.totalPayments || 0})</Typography>
-        <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
-          Step 1.7 · Payments recorded against approved PIs — record from the PI detail page
-        </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+        <Box sx={{ minWidth: 0, flex: '1 1 320px' }}>
+          <Typography sx={pfmsTitleSx}>Advance Payments ({stats.totalPayments || 0})</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>
+            Step 1.7 · An advance is paid against a PO&apos;s approved Proforma Invoice (after MD approval) — in parts if needed. Use + Record Advance Payment or Record Payment on the Awaiting Advance tab
+          </Typography>
+        </Box>
+        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => setRecordOpen(true)}
+          data-testid="ap-record-advance" sx={{ flexShrink: 0, fontWeight: 700, whiteSpace: 'nowrap', ml: 'auto' }}>
+          Record Advance Payment
+        </Button>
       </Box>
 
       {/* KPIs */}
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Wallet size={20} />}        label="Total Payments"      value={stats.totalPayments}             color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<IndianRupee size={20} />}   label="Paid Amount"         value={fmtINR(stats.paidAmount)}        color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}     label="Pending Amount"      value={fmtINR(stats.pendingAmount)}     color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<AlertTriangle size={20} />} label="Outstanding (Short)" value={fmtINR(stats.outstandingAmount)} color="#be123c" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<CircleSlash size={20} />}   label="Cancelled Entries"   value={stats.cancelled}                 color="#64748b" /></Grid>
+        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<Wallet size={20} />}           label="Total Advance Required" value={fmtINR(stats.totalAdvanceRequired)} color="#2563eb" /></Grid>
+        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<IndianRupee size={20} />}      label="Total Paid"             value={fmtINR(stats.totalPaid)}            color="#0f766e" /></Grid>
+        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<Hourglass size={20} />}        label="Remaining Advance"      value={fmtINR(stats.remainingAdvance)}     color="#b45309" /></Grid>
+        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<CircleDashed size={20} />}     label="Partially Paid POs/PIs" value={stats.partiallyPaidCount}           color="#c2410c"
+          onClick={() => onFilterChange(setStateFilter)(stateFilter === 'PARTIALLY_PAID' ? '' : 'PARTIALLY_PAID')} active={stateFilter === 'PARTIALLY_PAID'} /></Grid>
+        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<CircleCheck size={20} />}      label="Fully Paid POs/PIs"     value={stats.fullyPaidCount}               color="#15803d"
+          onClick={() => onFilterChange(setStateFilter)(stateFilter === 'FULLY_PAID' ? '' : 'FULLY_PAID')} active={stateFilter === 'FULLY_PAID'} /></Grid>
+        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<AlertTriangle size={20} />}    label="Outstanding (Short)"    value={fmtINR(stats.outstandingAmount)}    color="#be123c" /></Grid>
+        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<CircleSlash size={20} />}      label="Cancelled Entries"      value={stats.cancelled}                    color="#64748b" /></Grid>
       </Grid>
 
       {/* Filters — Search + Status stay visible; Vendor, Payment Mode and the
@@ -187,6 +224,19 @@ const AdvancePaymentList = () => {
               ),
             },
             {
+              key: 'state', width: 190, active: Boolean(stateFilter),
+              node: (
+                <Box sx={{ flex: '0 1 190px', minWidth: 160 }}>
+                  <TextField size="small" select fullWidth label="Advance Status" value={stateFilter}
+                    InputLabelProps={{ shrink: true }} inputProps={{ 'data-testid': 'ap-state-filter' }}
+                    SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStateFilter)(e.target.value)}>
+                    <MenuItem value="">All</MenuItem>
+                    {PI_PAYMENT_STATES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                  </TextField>
+                </Box>
+              ),
+            },
+            {
               key: 'from', width: 150, active: Boolean(from),
               node: (
                 <Box sx={{ flex: '0 1 150px', minWidth: 132 }}>
@@ -217,6 +267,9 @@ const AdvancePaymentList = () => {
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
           paginationMode="server"
+          sortingMode="server"
+          sortModel={sortModel}
+          onSortModelChange={(m) => { setSortModel(m); resetPage(); }}
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
           onPaginationModelChange={setPaginationModel}
@@ -229,7 +282,12 @@ const AdvancePaymentList = () => {
         />
       </Paper>
       <RowActionsMenu ref={menuRef} actionsFor={actionsFor} />
+      {/* Same form as the Awaiting Advance "Record Payment" action; with no PI it opens on the PO picker. */}
+      {recordOpen && <AdvancePaymentFormDialog open onClose={() => setRecordOpen(false)} />}
       {del.dialog}
+      {/* Full payment details: PO / PI / vendor, advance position, every payment on the PI, approvals, PDF. */}
+      {quickRow && <AdvancePaymentDetailDialog row={quickRow} onClose={() => setQuickRow(null)} pdf={pdf} />}
+      {pdf.modal}
     </Box>
   );
 };

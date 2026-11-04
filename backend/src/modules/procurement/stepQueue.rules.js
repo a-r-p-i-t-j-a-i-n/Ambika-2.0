@@ -55,14 +55,23 @@ export const STEP_QUEUES = {
       const paid = Number(pi.paidAmount) || 0;
       return {
         number: pi.piNumber || '',
-        refs: [pi.poNumber && `PO ${pi.poNumber}`].filter(Boolean),
+        refs: [pi.poNumber && `PO ${pi.poNumber}`, pi.indentNumber && `Indent ${pi.indentNumber}`].filter(Boolean),
         vendorName: pi.vendorName || '',
         date: pi.piDate || pi.createdAt || null,
         amount: num(pi.balanceAmount),
+        // The advance is the whole PI value; what is left is its balance.
+        piAmount: num(pi.totalValue),
+        advanceRequired: num(pi.totalValue),
+        paidAmount: paid,
+        remainingAmount: num(pi.balanceAmount),
+        paymentStatus: paid > 0 ? 'PART_PAYMENT' : 'PENDING',
+        stepTiming: pi.stepTiming,
         state: waitingMd ? 'WAITING' : 'READY',
         statusLabel: waitingMd ? 'Waiting for MD approval' : (paid > 0 ? 'Part paid — balance due' : 'Advance pending'),
         link: `/procurement/proforma-invoices/${pi._id}`,
-        action: waitingMd ? null : 'RECORD_ADVANCE',
+        // Always offered: a PI still with the MD opens the same form, which
+        // explains the wait and keeps submit disabled (the server refuses too).
+        action: 'RECORD_ADVANCE',
       };
     },
   },

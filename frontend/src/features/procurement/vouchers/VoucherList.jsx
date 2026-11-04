@@ -93,7 +93,7 @@ const VoucherList = () => {
   const [removeVoucher] = useDeleteVoucherMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteVoucher');
   const del = useRecordDelete({
-    what: 'Voucher', numberOf: (r) => r.voucherNumber, remove: removeVoucher,
+    type: 'VOUCHER', what: 'Voucher', numberOf: (r) => r.voucherNumber, remove: removeVoucher,
     needsReason: (r) => r.voucherStatus !== 'DRAFT',
     consequence: () => 'The voucher is removed and its invoice can get a new voucher. Not allowed while a tally entry or final payment uses it.',
   });

@@ -96,7 +96,7 @@ const FollowUpList = () => {
   const [removeFollowUp] = useDeleteFollowUpMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteFollowUp');
   const del = useRecordDelete({
-    what: 'Follow-up', numberOf: (r) => r.followUpNumber, remove: removeFollowUp,
+    type: 'FOLLOW_UP', what: 'Follow-up', numberOf: (r) => r.followUpNumber, remove: removeFollowUp,
     needsReason: (r) => !['PENDING', 'RESCHEDULED'].includes(r.followUpStatus),
     consequence: (r) => (['PENDING', 'RESCHEDULED'].includes(r.followUpStatus) ? 'The follow-up is removed.' : 'The follow-up is removed and its PO goes back to awaiting follow-up. Not allowed while a GRN on that PO uses it.'),
   });

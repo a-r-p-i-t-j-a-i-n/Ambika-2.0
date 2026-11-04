@@ -137,7 +137,7 @@ const PurchaseOrderList = () => {
   const [removePo] = useDeletePurchaseOrderMutation();
   const canDeleteRecord = usePermissions().can('procurement.deletePurchaseOrder');
   const del = useRecordDelete({
-    what: 'PO', numberOf: (r) => r.poNumber || r.draftNumber, remove: removePo,
+    type: 'PO', what: 'PO', numberOf: (r) => r.poNumber || r.draftNumber, remove: removePo,
     needsReason: (r) => r.approvalStatus !== 'DRAFT',
     consequence: () => 'The PO is removed and the indent items it held are free again. Not allowed while a follow-up, PI, advance, GRN, invoice or voucher uses it — if so, it is named here.',
   });

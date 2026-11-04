@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Dialog } from '@mui/material';
 import { Trash2 } from 'lucide-react';
 import RecordDeleteDialog from './RecordDeleteDialog';
+import CascadeDeleteDialog from './CascadeDeleteDialog';
 
 /**
  * Delete for any Purchase FMS list — one confirm dialog, the same everywhere.
@@ -17,8 +18,14 @@ import RecordDeleteDialog from './RecordDeleteDialog';
  *
  * The server decides: a completed record goes only while no later step rests
  * on it, and its refusal (naming those records) is shown in the dialog.
+ *
+ * With `type` (a cascade-delete step: 'PO', 'PI', 'QUOTATION_APPROVAL', …) the
+ * Delete shows the cascading-deletion confirmation instead: the step goes with
+ * every downstream record resting on it, after the user has seen the list and
+ * ticked the acknowledgement (CascadeDeleteDialog). remove / needsReason /
+ * consequence are then not used — the server's preview says all of that.
  */
-export const useRecordDelete = ({ what, numberOf, remove, needsReason = () => false, consequence = () => '' }) => {
+export const useRecordDelete = ({ type, what, numberOf, remove, needsReason = () => false, consequence = () => '' }) => {
   // The row stays while the dialog fades out, so its content never jumps.
   const [{ row, open }, setState] = useState({ row: null, open: false });
   const close = () => setState((s) => ({ ...s, open: false }));
@@ -28,7 +35,10 @@ export const useRecordDelete = ({ what, numberOf, remove, needsReason = () => fa
       key: 'delete', label: `Delete ${what}`, icon: <Trash2 size={16} />, danger: true, divider: true,
       fn: () => setState({ row: r, open: true }), ...extra,
     }),
-    dialog: (
+    dialog: type ? (
+      <CascadeDeleteDialog open={open} type={type} id={row?._id} what={what} number={row ? numberOf(row) || '' : ''}
+        onClose={close} onExited={() => setState({ row: null, open: false })} />
+    ) : (
       <Dialog open={open} onClose={close} maxWidth="xs" fullWidth
         TransitionProps={{ onExited: () => setState({ row: null, open: false }) }}>
         {row && (

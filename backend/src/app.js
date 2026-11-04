@@ -60,6 +60,7 @@ import tallyEntryRoutes from './modules/procurement/tally-entry/tallyEntry.route
 import finalPaymentRoutes from './modules/procurement/final-payment/finalPayment.routes.js';
 import stepQueueRoutes from './modules/procurement/stepQueue.routes.js';
 import rateChangeRoutes from './modules/procurement/rate-change/rateChange.routes.js';
+import cascadeDeleteRoutes from './modules/procurement/cascade-delete/cascadeDelete.routes.js';
 import vendorRoutes from './modules/vendors/vendor.routes.js';
 import transporterRoutes from './modules/transporters/transporter.routes.js';
 import approvalRoutes from './modules/approvals/approval.routes.js';
@@ -190,6 +191,7 @@ app.use('/api/v1/procurement/tally-entries', tallyEntryRoutes); // Purchase FMS 
 app.use('/api/v1/procurement/final-payments', finalPaymentRoutes); // Purchase FMS — Make Payment (Step 1.13)
 app.use('/api/v1/procurement/step-queues', stepQueueRoutes); // Purchase FMS — records awaiting each step (read-only)
 app.use('/api/v1/procurement/rate-changes', rateChangeRoutes); // Purchase FMS — PO Rate Change Approvals + history
+app.use('/api/v1/procurement/cascade-delete', cascadeDeleteRoutes); // Purchase FMS — delete a step with everything resting on it (preview + confirm)
 app.use('/api/v1/approvals', approvalRoutes); // Purchase FMS — Generic Digital Approval & Signature engine
 
 

@@ -6,6 +6,7 @@ import PurchaseIndent, {
   QUOTATION_APPROVAL_STATUS,
   VENDOR_QUOTE_STATUS,
   ITEM_APPROVAL_STATUS,
+  ITEM_PROCUREMENT_STATUS,
   buildItemDisplayNumber,
   isItemApprovalEffective,
 } from './indent.model.js';
@@ -15,7 +16,7 @@ import { generateIndentNumber } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import {
   QUOTATION_FMS_STEPS, QUOTATION_STEP_STATES, DOWNSTREAM_OF_QUOTATION, quotationStepFilter, isDownstreamOfQuotation,
-  quoteComparativePlannedAt,
+  quoteComparativePlannedAt, quotationStepDone,
 } from './quotationSteps.js';
 import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
 import { bindIndentItemsToSkuMaster } from './itemSku.js';
@@ -1129,5 +1130,67 @@ export const indentService = {
     );
     if (!updated) throw new AppError(`Indent ${indent.indentNumber || ''} was just updated by someone else — refresh and try again`.replace('  ', ' '), 409);
     return updated;
+  },
+
+  /**
+   * Take back Step 1.2 or Step 1.3 — the last step of a cascade delete
+   * (cascade-delete/), which has already removed every PO / service QC that
+   * rested on it. 1.3: the approval, its approved vendors and the vendor it set
+   * on each item go; the indent waits at Step 1.3 again with its 1.2 quotes
+   * kept. 1.2: both quotation steps and every item vendor pick go; the indent
+   * waits at Step 1.2 (its stamped planned date is kept). Item PO links are
+   * cleared either way. Refused while a live PO / service QC still uses it.
+   */
+  async resetQuotationStep(id, fmsStep, user, { reason } = {}) {
+    const indent = await findOrThrow(id);
+    const isStep12 = fmsStep === 'QUOTE_COMPARATIVE';
+    const label = `${isStep12 ? 'Receive Quote & Make Comparative (Step 1.2)' : 'Quotation Approval (Step 1.3)'} of indent ${indent.indentNumber || ''}`.trim();
+    if (!quotationStepDone(indent, fmsStep)) throw new AppError(`${label} has not been done — there is nothing to delete`, 400);
+    const why = deleteReason(reason, label);
+    assertNothingAfter(label, await laterStepsOf.indent(indent._id));
+
+    const statusWhenRead = indent.overallStatus;
+    const clearVendor = isStep12
+      ? [ITEM_VENDOR_SOURCE.APPROVED_QUOTATION, ITEM_VENDOR_SOURCE.PO_PREPARATION]
+      : [ITEM_VENDOR_SOURCE.APPROVED_QUOTATION];
+    (indent.items || []).forEach((it) => {
+      if (it.poId || it.procurementStatus !== ITEM_PROCUREMENT_STATUS.PENDING) {
+        it.procurementStatus = ITEM_PROCUREMENT_STATUS.PENDING;
+        it.poId = null;
+        it.poNumber = '';
+      }
+      if (clearVendor.includes(it.vendorSource)) {
+        it.vendorId = null;
+        it.vendorName = '';
+        it.vendorSource = '';
+        it.vendorSelectedAt = null;
+        it.vendorSelectedById = null;
+      }
+    });
+    indent.quotationApprovalStep = {
+      stepNo: 'Step 1.3', stepName: 'Approved Quotation 1.03', statusDone: null, skipped: false, skippedReason: '', updatedBy: user?._id,
+    };
+    if (isStep12) {
+      indent.quoteComparativeStep = { stepNo: 'Step 1.2', stepName: 'Receive Quote & Make Comparative 1.02', statusDone: null, updatedBy: user?._id };
+      indent.quoteStep = {
+        plannedAt: indent.quoteStep?.plannedAt || null, actualAt: null, status: QUOTE_STEP_STATUS.PENDING, quotationUploaded: false, formLink: '', timeDelay: '',
+      };
+    }
+    indent.overallStatus = isStep12 ? INDENT_OVERALL_STATUS.QUOTE_PENDING : INDENT_OVERALL_STATUS.QUOTE_RECEIVED;
+    indent.updatedBy = user?._id;
+    indent.activityTimeline.push({
+      action: isStep12 ? 'DELETE_QUOTE_COMPARATIVE' : 'DELETE_QUOTATION_APPROVAL',
+      description: `${isStep12 ? 'Step 1.2 Receive Quote & Make Comparative' : 'Step 1.3 Quotation Approval'} deleted — indent back at ${isStep12 ? 'Step 1.2' : 'Step 1.3'}. Reason: ${why}`,
+      actorId: user?._id,
+    });
+    indent.$where = { overallStatus: statusWhenRead };
+    try {
+      return await indent.save();
+    } catch (err) {
+      if (['DocumentNotFoundError', 'VersionError', 'ParallelSaveError'].includes(err?.name)) {
+        throw new AppError(`Indent ${indent.indentNumber || ''} was just updated by someone else — refresh and try again`.replace('  ', ' '), 409);
+      }
+      throw err;
+    }
   },
 };

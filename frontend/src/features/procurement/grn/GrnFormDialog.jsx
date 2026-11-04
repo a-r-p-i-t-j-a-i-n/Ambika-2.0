@@ -16,7 +16,6 @@ import {
   useGetIncomingQcsByGrnQuery,
   useCreateGrnMutation,
   useUpdateGrnMutation,
-  useCompleteGrnMutation,
   useCorrectGrnMutation,
   useGetGrnChangeCheckQuery,
   usePreviewGrnPdfMutation,
@@ -128,7 +127,15 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   // Correcting a completed GRN: its header always; its items only while no
   // later step (QC / invoice / stock) rests on them — the server decides, the
   // change check says which.
-  const correcting = Boolean(correct) && isGrnCompleted(liveGrn);
+  // Correction mode is decided when the form OPENS. A draft completed from this very
+  // form (Complete GRN + QC) stays in QC mode so the QC can be finished there, instead
+  // of flipping into "Editing a completed GRN" because the parent's `correct` followed
+  // the live record.
+  const openKey = open ? (grnProp?._id || 'new') : null;
+  const [opened, setOpened] = useState({ key: null, completed: false });
+  if (opened.key !== openKey) setOpened({ key: openKey, completed: Boolean(grnProp && isGrnCompleted(grnProp)) });
+  const startedCompleted = opened.key === openKey ? opened.completed : Boolean(grnProp && isGrnCompleted(grnProp));
+  const correcting = Boolean(correct) && startedCompleted && isGrnCompleted(liveGrn);
   const { data: checkRes } = useGetGrnChangeCheckQuery(liveGrn?._id, { skip: !open || !correcting, refetchOnMountOrArgChange: true });
   const changeCheck = checkRes?.data || null;
   const itemsLocked = correcting && (!changeCheck || changeCheck.itemsLocked);
@@ -189,14 +196,15 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
 
   const [createGrn, { isLoading: creating }] = useCreateGrnMutation();
   const [updateGrn, { isLoading: updating }] = useUpdateGrnMutation();
-  const [completeGrn, { isLoading: finalizing }] = useCompleteGrnMutation();
   const [previewGrnPdf, { isLoading: previewing }] = usePreviewGrnPdfMutation();
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
   const saving = creating || updating;
   const [correctGrn, { isLoading: correctSaving }] = useCorrectGrnMutation();
-  const busy = saving || previewing || uploading || finalizing || correctSaving;
-  // 'finalize' | 'correct' — which save the over-receipt consent is for.
+  const busy = saving || previewing || uploading || correctSaving;
+  // 'correct' — the save the over-receipt consent is for.
   const [overReceiptFor, setOverReceiptFor] = useState(null);
+  // The footer node the Incoming QC panel renders its buttons into.
+  const [footerSlot, setFooterSlot] = useState(null);
 
   const handleUpload = async (e) => {
     const f = e.target.files?.[0]; e.target.value = '';
@@ -242,6 +250,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
         unit: it.unit || 'Pcs', orderedQty: it.quantity || 0, previouslyReceivedQty: it.receivedQty || 0,
         pendingBefore: pending, invoiceQty: pending, receivedQty: pending, rate: it.rate || 0, batchNo: '', remarks: '',
         howItemReceived: DEFAULT_HOW_ITEM_RECEIVED,
+        allowOverReceipt: false,
       };
     })
     .filter((l) => l.pendingBefore > 0);
@@ -283,6 +292,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
         // The line's own type; a draft saved before the type moved onto lines
         // shows its header value on every row (and saves it per line).
         howItemReceived: lineReceiptType(it, grn) || DEFAULT_HOW_ITEM_RECEIVED,
+        // Saved consent; setItem/buildPayload drop it while the line is not over pending.
+        allowOverReceipt: it.allowOverReceipt === true,
       })));
     } else {
       setMode('PO');
@@ -312,7 +323,15 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
       });
     });
   };
-  const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+  // Over-receipt consent only lives while the line exceeds its pending qty: the
+  // moment Received Qty drops back within it the tick is cleared, so a later
+  // increase must be confirmed afresh.
+  const isOver = (it) => round2(it.receivedQty) > round2(it.pendingBefore);
+  const setItem = (idx, patch) => setItems((cur) => cur.map((it, i) => {
+    if (i !== idx) return it;
+    const next = { ...it, ...patch };
+    return isOver(next) ? next : { ...next, allowOverReceipt: false };
+  }));
 
   const totals = useMemo(() => items.reduce((acc, it) => {
     const recv = round2(it.receivedQty);
@@ -419,7 +438,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   const extraNeedsRemark = !isWithoutPo && validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore) && !it.remarks?.trim());
   const remarksRequired = extraNeedsRemark && !header.remarks.trim();
 
-  const validateForm = ({ forFinalize = false } = {}) => {
+  const validateForm = () => {
     if (isWithoutPo) {
       if (!header.vendorName?.trim()) { enqueueSnackbar('Select a vendor first', { variant: 'warning' }); return false; }
     } else if (!isEdit && pos.length === 0) { enqueueSnackbar('Select at least one eligible PO', { variant: 'warning' }); return false; }
@@ -427,23 +446,18 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
     if (isWithoutPo) {
       const noName = validItems.find((it) => !it.itemName?.trim());
       if (noName) { enqueueSnackbar('Every item needs a description', { variant: 'warning' }); return false; }
-      // A free-typed (not picked from the SKU list) item is allowed on a draft,
-      // but complete() requires every line to resolve to a real SKU (its Item
-      // Type decides where it is stocked) — so finalizing one here would save the draft fine and
-      // then fail on the very next call. Catch it before either call fires.
-      if (forFinalize) {
-        const noSku = validItems.find((it) => !it.skuId);
-        if (noSku) {
-          enqueueSnackbar(`"${noSku.itemName}" must be picked from the SKU list (not just typed) before it can be finalized`, { variant: 'warning' });
-          return false;
-        }
-      }
+      // A free-typed (not picked from the SKU list) item is allowed on a draft;
+      // complete() (server-side) requires every line to resolve to a real SKU.
     } else {
       // Extra-receive needs remarks (mirror backend rule). No "pending qty" exists
       // for a W/O PO line, so this never applies there.
       const extra = validItems.find((it) => round2(it.receivedQty) > round2(it.pendingBefore));
       if (extra && !(extra.remarks?.trim() || header.remarks.trim())) {
         enqueueSnackbar(`"${extra.itemName}" exceeds pending qty — add remarks for the extra receipt`, { variant: 'warning' }); return false;
+      }
+      const unconfirmed = validItems.find((it) => isOver(it) && !it.allowOverReceipt);
+      if (unconfirmed) {
+        enqueueSnackbar(`"${unconfirmed.itemName}" exceeds pending qty by ${round2(unconfirmed.receivedQty - unconfirmed.pendingBefore)} — tick Allow Over-Receipt on that line or reduce Received Qty`, { variant: 'warning' }); return false;
       }
     }
     // Coil / Circle must be identifiable by batch. Checked against the received
@@ -500,6 +514,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
       invoiceQty: round2(it.invoiceQty), receivedQty: round2(it.receivedQty),
       rate: round2(it.rate), batchNo: it.batchNo?.trim() || '', remarks: it.remarks?.trim() || '',
       howItemReceived: it.howItemReceived,
+      allowOverReceipt: isOver(it) && it.allowOverReceipt === true,
     })),
   });
 
@@ -532,52 +547,9 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
     }
   };
 
-  // ── Save & Finalize GRN — chains the SAME create/update + complete() calls
-  // the two-step flow already uses (this form, then the separate "Complete
-  // GRN" dialog on the GRN detail page); it does not duplicate or shortcut any
-  // of that logic. complete() still independently re-validates everything
-  // server-side (over-receipt, batch numbers, SKU routing, Received At, the
-  // completion lock) against the PO's live state. Nothing is stocked here —
-  // accepted quantities are posted when the MD has signed and QC completes.
-  const runSaveAndFinalize = async (allowOverReceipt) => {
-    if (!validateForm({ forFinalize: true })) return;
-    const payload = buildPayload();
-    let savedId;
-    try {
-      if (isEdit) {
-        const res = await updateGrn({ id: current._id, ...payload }).unwrap();
-        savedId = (res?.data || current)._id;
-      } else {
-        const res = await createGrn(isWithoutPo ? payload : { ...payload, poIds: pos.map((p) => p._id) }).unwrap();
-        savedId = res?.data?._id;
-        setSavedGrn(res?.data || null);
-      }
-    } catch (err) {
-      enqueueSnackbar(err?.data?.message || 'Failed to save GRN', { variant: 'error' });
-      return;
-    }
-    try {
-      await completeGrn({ id: savedId, allowOverReceipt, remarks: header.remarks?.trim() || undefined }).unwrap();
-      enqueueSnackbar('GRN saved and completed — stock posts after QC', { variant: 'success' });
-      onClose?.(true);
-    } catch (err) {
-      // The GRN is already saved as a draft at this point — only finalization
-      // failed (e.g. the PO's live pending quantity shifted between opening
-      // this form and completing it, because another GRN against the same PO
-      // completed in between). Never silently drop the user's entry: leave
-      // the saved draft in place so they can retry here or finish it from the
-      // GRN detail page's own Complete GRN dialog.
-      enqueueSnackbar(err?.data?.message || 'Saved as a draft, but finalizing failed — complete it from the GRN detail page', { variant: 'error' });
-    }
-  };
-
-  const handleSaveAndFinalize = () => {
-    if (!validateForm({ forFinalize: true })) return;
-    // No "pending qty" exists on a W/O PO line, so over-receipt never applies.
-    const hasExtra = !isWithoutPo && validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore));
-    if (hasExtra) { setOverReceiptFor('finalize'); return; }
-    runSaveAndFinalize(false);
-  };
+  // Finalizing is NOT done from this footer: the GRN is completed from the Incoming
+  // QC panel's "Complete GRN + QC" (which saves pending GRN edits first, then asks
+  // for over-receipt consent / Received At in the Complete GRN dialog).
 
   // ── Save the correction of a completed GRN (procurement.editGrn). With the
   // items locked only the header goes, so nothing a later step uses can move.
@@ -605,7 +577,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   const handleCorrect = () => {
     if (reason.trim().length < 3) { enqueueSnackbar('Give the reason for the change', { variant: 'warning' }); return; }
     if (!itemsLocked && !validateForm()) return;
-    const hasExtra = !itemsLocked && !isWithoutPo && validItems.some((it) => round2(it.receivedQty) > round2(it.pendingBefore));
+    const hasExtra = !itemsLocked && !isWithoutPo && validItems.some((it) => isOver(it) && !it.allowOverReceipt);
     if (hasExtra) { setOverReceiptFor('correct'); return; }
     runCorrect(false);
   };
@@ -663,7 +635,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
               {grn ? 'Edit GRN' : 'Create GRN'}
             </Typography>
             <Typography sx={{ fontSize: '0.72rem', color: PFMS.sub }}>
-              {correcting ? 'Step 1.8 · Correcting a completed GRN' : 'Step 1.8 · Receive material — stock posts on Complete'}
+              {correcting ? 'Step 1.8 · Correcting a completed GRN' : 'Step 1.8 · Receive material — stock posts when Incoming QC is completed'}
             </Typography>
           </Box>
           {/* System-generated identifier — read-only, styled apart from form fields. */}
@@ -986,6 +958,22 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
                               onChange={(e) => setItem(idx, { batchNo: e.target.value })} />
                             <TextField size="small" label="Remarks" placeholder={extra ? 'required (extra)' : 'optional'} value={it.remarks}
                               onChange={(e) => setItem(idx, { remarks: e.target.value })} error={extra && !it.remarks?.trim() && !header.remarks.trim()} />
+                            {/* Only a line that really exceeds its pending qty can be
+                                over-received; the tick is per line and is dropped as soon
+                                as Received Qty comes back within pending. */}
+                            {extra && (
+                              <Box data-testid="grn-over-receipt" data-line={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
+                                sx={{ gridColumn: { md: '1 / -1' }, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 1, py: 0.25, borderRadius: '8px', bgcolor: alpha('#b45309', 0.08), border: '1px solid', borderColor: alpha('#b45309', 0.35) }}>
+                                <FormControlLabel sx={{ m: 0 }}
+                                  control={<Checkbox size="small" checked={Boolean(it.allowOverReceipt)} inputProps={{ 'data-testid': 'grn-allow-over-receipt' }}
+                                    onChange={(e) => setItem(idx, { allowOverReceipt: e.target.checked })} />}
+                                  label={<Typography variant="body2" fontWeight={700}>Allow Over-Receipt</Typography>} />
+                                <Typography variant="caption" data-testid="grn-over-receipt-warning" sx={{ color: '#b45309', fontWeight: 700 }}>
+                                  Warning: receiving {it.receivedQty} against {pendingBefore} pending — {extraQty} {it.unit || ''} over the PO.
+                                  {it.allowOverReceipt ? '' : ' Tick to confirm, or reduce Received Qty.'}
+                                </Typography>
+                              </Box>
+                            )}
                           </Box>
                         );
                       })}
@@ -1076,7 +1064,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
               <GrnQcStatusChip stage={qcStage} />
               {grnLocked && <Chip size="small" variant="outlined" icon={<Lock size={12} />} label="GRN read-only" sx={{ fontWeight: 700 }} />}
             </Box>
-            <GrnQcSections grn={liveGrn} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
+            <GrnQcSections grn={liveGrn} footerSlot={footerSlot} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
           </Box>
         )}
       </Box>
@@ -1090,7 +1078,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
             ? `Editing ${current?.grnNumber || 'GRN'} · ${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)}`
             : grnLocked
               ? 'GRN completed — read-only'
-              : `${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)} · stock posts on Complete`}
+              : `${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)} · stock posts when QC completes`}
           {' · '}Incoming QC: <b>{qcStage.label}</b>
         </Typography>
         <Box sx={{ display: 'flex', gap: 1.5, flexShrink: { xs: 1, md: 0 }, flexWrap: { xs: 'wrap', md: 'nowrap' }, justifyContent: 'flex-end' }}>
@@ -1117,10 +1105,12 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
               Save as Draft
             </Button>
           )}
-          {!grnLocked && !correcting && (
-            <Button variant="contained" color="success" startIcon={finalizing ? <CircularProgress size={16} color="inherit" /> : <PackageCheck size={16} />}
-              onClick={handleSaveAndFinalize} disabled={busy}>
-              Save &amp; Finalize GRN
+          {/* Incoming QC actions (Save QC Draft, Complete GRN + QC) render here. */}
+          <Box ref={setFooterSlot} sx={{ display: 'contents' }} />
+          {!correcting && !liveGrn?._id && (
+            <Button variant="contained" color="success" disabled startIcon={<ClipboardCheck size={16} />}
+              title="Save as Draft first — the QC is entered on the saved GRN">
+              Complete GRN + QC
             </Button>
           )}
         </Box>
@@ -1133,20 +1123,14 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
         <Box sx={{ p: 3 }}>
           <Typography sx={{ fontWeight: 800, mb: 1 }}>Allow Over-Receipt?</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-            {overReceiptFor === 'correct'
-              ? 'One or more items now receive more than their pending quantity. Saving counts the extra quantity as received on the PO — confirm this is intentional before continuing.'
-              : 'One or more items receive more than their pending quantity. Finalizing will post the extra quantity to inventory — confirm this is intentional before continuing.'}
+            One or more items now receive more than their pending quantity. Saving counts the extra quantity as received on the PO — confirm this is intentional before continuing.
           </Typography>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
             <Button onClick={() => setOverReceiptFor(null)} disabled={busy}>Cancel</Button>
             <Button variant="contained" color="success" disabled={busy}
-              startIcon={finalizing || correctSaving ? <CircularProgress size={16} color="inherit" /> : <PackageCheck size={16} />}
-              onClick={() => {
-                const what = overReceiptFor;
-                setOverReceiptFor(null);
-                if (what === 'correct') runCorrect(true); else runSaveAndFinalize(true);
-              }}>
-              {overReceiptFor === 'correct' ? 'Allow & Save' : 'Allow & Finalize'}
+              startIcon={correctSaving ? <CircularProgress size={16} color="inherit" /> : <PackageCheck size={16} />}
+              onClick={() => { setOverReceiptFor(null); runCorrect(true); }}>
+              Allow &amp; Save
             </Button>
           </Box>
         </Box>
@@ -1163,6 +1147,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
         onClose={closePreview}
         onSaveDraft={confirmFromPreview}
         onApproveSubmit={confirmFromPreview}
+        showSaveDraft={false}
         approveLabel="Save as Draft"
       />
     </Dialog>

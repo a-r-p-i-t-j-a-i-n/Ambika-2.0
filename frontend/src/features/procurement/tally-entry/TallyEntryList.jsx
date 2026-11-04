@@ -77,7 +77,7 @@ const TallyEntryList = () => {
   const [removeTallyEntry] = useDeleteTallyEntryMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteTallyEntry');
   const del = useRecordDelete({
-    what: 'Tally entry', numberOf: (r) => r.entryNumber, remove: removeTallyEntry,
+    type: 'TALLY_ENTRY', what: 'Tally entry', numberOf: (r) => r.entryNumber, remove: removeTallyEntry,
     needsReason: (r) => r.tallyEntryStatus === 'COMPLETED',
     consequence: (r) => (r.tallyEntryStatus === 'COMPLETED' ? 'The tally entry is removed and its voucher goes back to awaiting its tally entry. Not allowed while a final payment uses it.' : 'The tally entry is removed.'),
   });

@@ -390,7 +390,8 @@ const api = async () => {
     fuQ.rows[0].action === 'START_FOLLOW_UP' && fuQ.rows[0].record.poNumber === 'SV-PO-NOFU' && fuQ.rows[0].link.startsWith('/procurement/purchase-orders/'));
   const apQ = await expectQueue('ADVANCE_PAYMENT', { 'SV-PI-READY': 'READY', 'SV-PI-ATMD': 'WAITING' });
   const atMd = apQ.rows.find((r) => r.number === 'SV-PI-ATMD');
-  check('a PI at the MD is WAITING with no action, labelled', atMd.action === null && atMd.statusLabel === 'Waiting for MD approval');
+  // Record Payment is always offered; its form explains the MD wait and keeps submit disabled.
+  check('a PI at the MD is WAITING, labelled, and still opens Record Payment', atMd.action === 'RECORD_ADVANCE' && atMd.statusLabel === 'Waiting for MD approval');
   const grnQ = await expectQueue('GRN', { 'SV-PO-RDY': 'READY', 'SV-PO-FUDATE': 'READY', 'SV-PO-PART': 'READY', 'SV-PO-NODATE': 'WAITING' });
   check('GRN: no-PI PO is ready (PI optional); PI still pending is not; date from the follow-up counts',
     !grnQ.rows.some((r) => r.number === 'SV-PO-PIP') && grnQ.rows.find((r) => r.number === 'SV-PO-FUDATE').action === 'CREATE_GRN');

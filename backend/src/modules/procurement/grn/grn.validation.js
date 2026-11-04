@@ -51,6 +51,9 @@ const grnItemSchema = Joi.object({
   // service gives the line the request's header howItemReceived instead.
   howItemReceived: Joi.string().valid(...Object.values(HOW_ITEM_RECEIVED)).allow('', null)
     .messages({ 'any.only': `Material Receipt Type must be one of: ${Object.values(HOW_ITEM_RECEIVED).join(', ')}` }),
+  // Per-line consent to receive more than the PO's pending qty. The server
+  // recomputes pending and clears this when the line is not over.
+  allowOverReceipt: Joi.boolean().default(false),
 });
 
 export const createGrnSchema = Joi.object({
