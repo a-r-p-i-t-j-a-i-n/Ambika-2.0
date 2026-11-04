@@ -310,8 +310,8 @@ const OrdersList = () => {
         <DialogTitle sx={{ fontWeight: 700 }}>Delete this order?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This permanently deletes <b>{deleteTarget?.soNumber}</b> ({deleteTarget?.partyName}) and its O2D FMS process.
-            This cannot be undone.
+            This deletes <b>{deleteTarget?.soNumber}</b> ({deleteTarget?.partyName}) and its O2D FMS process.
+            Both move to the Recycle Bin, where they can be restored.
           </DialogContentText>
         </DialogContent>
         <DialogActions>

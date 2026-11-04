@@ -36,6 +36,16 @@ export const partyApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (result, error, id) => ['Party', { type: 'Party', id }],
     }),
+    // Party → Ordered SKUs: add SKUs from the SKU master (several at once).
+    addPartyOrderedSkus: builder.mutation({
+      query: ({ id, skuIds }) => ({ url: `/parties/${id}/ordered-skus`, method: 'POST', body: { skuIds } }),
+      invalidatesTags: (result, error, { id }) => ['Party', { type: 'Party', id }],
+    }),
+    // Party → Ordered SKUs: remove one item.
+    removePartyOrderedSku: builder.mutation({
+      query: ({ id, itemId }) => ({ url: `/parties/${id}/ordered-skus/${itemId}`, method: 'DELETE' }),
+      invalidatesTags: (result, error, { id }) => ['Party', { type: 'Party', id }],
+    }),
   }),
 });
 
@@ -45,4 +55,6 @@ export const {
   useCreatePartyMutation,
   useUpdatePartyMutation,
   useDeletePartyMutation,
+  useAddPartyOrderedSkusMutation,
+  useRemovePartyOrderedSkuMutation,
 } = partyApi;

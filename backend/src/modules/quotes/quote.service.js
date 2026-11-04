@@ -3,6 +3,8 @@ import Quote from './quote.model.js';
 import CompanySettings from '../pricing/company-settings.model.js';
 import { previewCalculator } from '../pricing/calculator.service.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 // The calculator preview returns lines keyed by `code`/`name`, but the Quote
 // schema persists them as `skuCode`/`skuName`. Map between the two so saving a
@@ -166,7 +168,19 @@ export const deleteQuote = async (id) => {
   if (q.status === 'CONVERTED_TO_SO') {
     throw new AppError('Cannot delete a quote that was converted to a Sales Order.', 400);
   }
-  await q.deleteOne();
+  // Quote numbers are "last + 1", so deleting the newest one frees its number —
+  // the restore refuses if a new quote has taken it since.
+  const copy = await Quote.findById(q._id).lean();
+  await recycleBinService.capture('quote', {
+    recordId: q._id,
+    title: q.quoteNumber,
+    subtitle: [q.partyName, q.status].filter(Boolean).join(' · '),
+    keywords: [(q.lines || []).map((l) => [l.skuName, l.skuCode])],
+    plan: {
+      checks: [binPlan.absent(Quote.modelName, { quoteNumber: q.quoteNumber }, `Can't restore — ${q.quoteNumber} is now used by another quote.`)],
+      steps: [binPlan.reinsert(Quote.modelName, copy)],
+    },
+  }, () => q.deleteOne());
   return { ok: true };
 };
 

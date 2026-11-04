@@ -656,7 +656,7 @@ const TaskTemplates = () => {
             <Box sx={{ p: 1, borderRadius: 2, bgcolor: alpha('#be123c', 0.1), color: '#be123c', display: 'flex' }}><Trash2 size={20} /></Box>
             <Box>
               <Typography variant="body2">
-                You're about to delete <b>{deleteTarget?.name}</b>. This can't be undone.
+                You're about to delete <b>{deleteTarget?.name}</b>. It moves to the Recycle Bin, where it can be restored.
               </Typography>
               {deleteTarget?.isDefault && (
                 <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>

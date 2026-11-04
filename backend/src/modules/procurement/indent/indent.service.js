@@ -22,6 +22,9 @@ import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
 import { bindIndentItemsToSkuMaster } from './itemSku.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
+import { binDeleted } from '../recycleBin.js';
+import { recycleBinService } from '../../recycle-bin/recycleBin.service.js';
+import { registerRestoreHook } from '../../recycle-bin/recycleBin.restore.js';
 
 // Human-readable delay between a planned and actual date.
 const computeDelay = (plannedAt, actualAt) => {
@@ -452,7 +455,16 @@ export const indentService = {
     indent.deletedAt = new Date();
     indent.deletedBy = user?._id;
     indent.activityTimeline.push({ action: 'DELETE', description: why ? `Indent deleted. Reason: ${why}` : 'Indent deleted', actorId: user?._id });
-    return indent.save();
+    const saved = await indent.save();
+    // Nothing else changed — the restore just brings it back.
+    await binDeleted('indent', PurchaseIndent, indent, {
+      title: indent.indentNumber || 'Draft indent',
+      subtitle: [indent.department, indent.raisedBy, `${(indent.items || []).length} item(s)`].filter(Boolean).join(' · '),
+      keywords: [(indent.items || []).map((it) => [it.itemName, it.skuCode])],
+      reason: why,
+      user,
+    });
+    return saved;
   },
 
   async submit(id, user) {
@@ -1150,6 +1162,12 @@ export const indentService = {
     assertNothingAfter(label, await laterStepsOf.indent(indent._id));
 
     const statusWhenRead = indent.overallStatus;
+    // Recycle Bin: what this reset clears, to put back on Restore.
+    const before = indent.toObject();
+    const saved = {
+      overallStatus: before.overallStatus, items: before.items,
+      quoteStep: before.quoteStep, quoteComparativeStep: before.quoteComparativeStep, quotationApprovalStep: before.quotationApprovalStep,
+    };
     const clearVendor = isStep12
       ? [ITEM_VENDOR_SOURCE.APPROVED_QUOTATION, ITEM_VENDOR_SOURCE.PO_PREPARATION]
       : [ITEM_VENDOR_SOURCE.APPROVED_QUOTATION];
@@ -1185,7 +1203,21 @@ export const indentService = {
     });
     indent.$where = { overallStatus: statusWhenRead };
     try {
-      return await indent.save();
+      const done = await indent.save();
+      await recycleBinService.record('quotationStep', {
+        recordId: indent._id,
+        title: `${isStep12 ? 'Step 1.2 Quote & Comparative' : 'Step 1.3 Quotation Approval'} · ${indent.indentNumber || 'indent'}`,
+        subtitle: [indent.department, `${(indent.items || []).length} item(s)`].filter(Boolean).join(' · '),
+        keywords: [indent.indentNumber, (indent.items || []).map((it) => [it.itemName, it.skuCode])],
+        reason: why,
+        actor: user,
+        plan: {
+          steps: [{ kind: 'set', model: PurchaseIndent.modelName, ids: [indent._id], set: {}, optional: true }],
+          after: [{ hook: 'indent.restoreQuotationStep', args: { indentId: indent._id, statusAfter: indent.overallStatus, saved } }],
+          afterCommit: [{ hook: 'procurement.fmsResync', args: {} }],
+        },
+      });
+      return done;
     } catch (err) {
       if (['DocumentNotFoundError', 'VersionError', 'ParallelSaveError'].includes(err?.name)) {
         throw new AppError(`Indent ${indent.indentNumber || ''} was just updated by someone else — refresh and try again`.replace('  ', ' '), 409);
@@ -1194,3 +1226,17 @@ export const indentService = {
     }
   },
 };
+
+// Recycle Bin → put a deleted Step 1.2 / 1.3 back on its indent, if the indent has not moved on since.
+registerRestoreHook('indent.restoreQuotationStep', async ({ indentId, statusAfter, saved }, { session, actor }) => {
+  const q = PurchaseIndent.findOne({ _id: indentId, isDeleted: { $ne: true } });
+  if (session) q.session(session);
+  const indent = await q;
+  if (!indent) throw new AppError("Can't restore — the indent no longer exists.", 409);
+  if (indent.overallStatus !== statusAfter) {
+    throw new AppError(`Can't restore — indent ${indent.indentNumber || ''} has moved on since (it is now ${indent.overallStatus}).`.replace('  ', ' '), 409);
+  }
+  indent.set(saved);
+  indent.activityTimeline.push({ action: 'RESTORE', description: 'Quotation step restored from the Recycle Bin', actorId: actor?.id || null });
+  await (session ? indent.save({ session }) : indent.save());
+});

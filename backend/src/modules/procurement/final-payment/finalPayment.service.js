@@ -11,6 +11,8 @@ import { generateFinalPaymentNumber } from '../../../utils/docNumberGenerator.js
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, sameFields, pick, asUser, refuse, inr, VOUCHER_MONEY_FIELDS } from '../recycleBin.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -375,15 +377,91 @@ export const finalPaymentService = {
   // Delete reuses cancel()'s reversal (voucher balance + invoice re-open) so a
   // payment that already posted money never leaves the books out of sync —
   // then hides the record like every other soft-delete in this codebase.
+  //
+  // Recycle Bin: a payment that had posted money is restored as that payment
+  // again — the cancel undone exactly (voucher + invoice back to what they were
+  // before it) — but only while the voucher and invoice still stand exactly as
+  // the cancel left them; anything paid or cancelled on them since refuses it.
+  // Without a live voucher the reversal never happened, so it comes back as
+  // the Cancelled payment it was left as.
   async remove(id, user) {
     let p = await findOrThrow(id);
+    const wasStatus = p.paymentStatus;
+    let money = null;
     if (p.paymentStatus !== FINAL_PAYMENT_STATUS.CANCELLED) {
+      const vBefore = await VendorVoucher.findOne({ _id: p.voucherId, isDeleted: { $ne: true } }).lean();
+      const invBefore = vBefore?.invoiceId ? await VendorInvoice.findById(vBefore.invoiceId).select('invoiceStatus').lean() : null;
       p = await this.cancel(id, {}, user);
+      if (vBefore && round2(p.paidAmount) > 0) {
+        const vAfter = await VendorVoucher.findById(vBefore._id).lean();
+        const invAfter = invBefore ? await VendorInvoice.findById(vBefore.invoiceId).select('invoiceStatus').lean() : null;
+        money = {
+          paymentId: p._id,
+          voucherId: vBefore._id,
+          invoiceId: vBefore.invoiceId || null,
+          voucherBefore: pick(vBefore, VOUCHER_MONEY_FIELDS),
+          voucherAfter: pick(vAfter, VOUCHER_MONEY_FIELDS),
+          invoiceBefore: invBefore?.invoiceStatus || null,
+          invoiceAfter: invAfter?.invoiceStatus || null,
+        };
+      }
     }
     p.isDeleted = true;
     p.deletedAt = new Date();
     p.deletedBy = user?._id;
     p.activityTimeline.push({ action: 'DELETE', description: 'Final payment deleted', actorId: user?._id });
-    return p.save();
+    const saved = await p.save();
+    await binDeleted('finalPayment', VendorFinalPayment, p, {
+      title: p.paymentNumber || 'Final payment',
+      subtitle: [p.voucherNumber && `Voucher ${p.voucherNumber}`, p.vendorName, money ? inr(p.paidAmount) : 'cancelled'].filter(Boolean).join(' · '),
+      keywords: [p.invoiceNumber, p.poNumber, p.paymentReferenceNumber],
+      user,
+      ...(money ? {
+        set: { paymentStatus: wasStatus, cancelledAt: null },
+        before: [binPlan.hook('procurement.finalPayment.check', money)],
+        after: [binPlan.hook('procurement.finalPayment.repost', money)],
+      } : {}),
+    });
+    return saved;
   },
 };
+
+// ── Recycle Bin: a restored final payment (see remove) ──────────────────────
+registerRestoreHook('procurement.finalPayment.check', async (m, { session }) => {
+  const v = await VendorVoucher.findById(m.voucherId).session(session || null).lean();
+  if (!v || v.isDeleted) refuse('Its voucher is deleted — restore the voucher first.');
+  if (!sameFields(v, m.voucherAfter, VOUCHER_MONEY_FIELDS)) {
+    refuse(`Voucher ${v.voucherNumber}'s payments have changed since this payment was deleted (paid ${inr(v.paidAmount)}, balance ${inr(v.balanceAmount)} now) — it can't be put back exactly.`);
+  }
+  if (v.tallyEntryStatus !== VOUCHER_TALLY_COMPLETED) refuse(`Voucher ${v.voucherNumber}'s Tally Entry is no longer completed, so it can't be paid.`);
+  const blocked = paymentApprovalBlock(v.approvalStatus, 'voucher');
+  if (blocked) refuse(`${blocked} — the payment can't be put back.`);
+  if (m.invoiceId && m.invoiceBefore !== m.invoiceAfter) {
+    const inv = await VendorInvoice.findById(m.invoiceId).session(session || null).select('invoiceNumber invoiceStatus isDeleted').lean();
+    if (!inv || inv.isDeleted || inv.invoiceStatus !== m.invoiceAfter) refuse(`Invoice ${inv?.invoiceNumber || ''} has changed since — the payment can't be put back exactly.`.replace('  ', ' '));
+  }
+});
+
+registerRestoreHook('procurement.finalPayment.repost', async (m, { session, actor }) => {
+  const opts = session ? { session } : undefined;
+  const user = asUser(actor);
+  const p = await VendorFinalPayment.findById(m.paymentId).session(session || null).select('paymentNumber paymentStatus paidAmount').lean();
+  await VendorVoucher.updateOne(
+    { _id: m.voucherId },
+    {
+      $set: m.voucherBefore,
+      $push: { activityTimeline: { action: 'FINAL_PAYMENT', description: `${p.paymentNumber} restored from the Recycle Bin — ${p.paymentStatus} (paid ${inr(p.paidAmount)})`, actorId: user._id } },
+    },
+    opts,
+  );
+  if (m.invoiceId && m.invoiceBefore && m.invoiceBefore !== m.invoiceAfter) {
+    await VendorInvoice.updateOne(
+      { _id: m.invoiceId },
+      {
+        $set: { invoiceStatus: m.invoiceBefore },
+        $push: { activityTimeline: { action: 'PAYMENT', description: `Settled again — ${p.paymentNumber} restored from the Recycle Bin`, actorId: user._id } },
+      },
+      opts,
+    );
+  }
+});

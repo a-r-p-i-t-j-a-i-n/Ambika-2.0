@@ -320,7 +320,7 @@ const VendorMaster = () => {
         <DialogContent>
           <DialogContentText>
             <b>{deleteTarget?.name}</b> will be removed from the vendor list. This won&apos;t affect existing
-            indents, POs or other records that already reference it, and it can be restored by an administrator.
+            indents, POs or other records that already reference it. It moves to the Recycle Bin, where it can be restored.
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

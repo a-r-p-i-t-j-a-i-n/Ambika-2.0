@@ -16,6 +16,8 @@ import { generateQcNumber } from '../../../utils/docNumberGenerator.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, refuse } from '../recycleBin.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -660,7 +662,16 @@ export const incomingQcService = {
     qc.deletedAt = new Date();
     qc.deletedBy = user?._id;
     qc.activityTimeline.push({ action: 'DELETE', description: 'Incoming QC deleted', actorId: user?._id });
-    return qc.save();
+    const saved = await qc.save();
+    // Only drafts / in-progress QCs are deleted — nothing was posted.
+    await binDeleted('incomingQc', IncomingQC, qc, {
+      title: qc.qcNumber || 'Incoming QC',
+      subtitle: [qc.grnNumber ? `GRN ${qc.grnNumber}` : qc.indentNumber && `Indent ${qc.indentNumber}`, qc.vendorName, String(qc.qcStatus || '').replace(/_/g, ' ').toLowerCase()].filter(Boolean).join(' · '),
+      keywords: [qc.poNumber, (qc.items || []).map((it) => [it.itemName, it.skuCode])],
+      user,
+      before: [binPlan.hook('procurement.qc.check', { qcId: qc._id })],
+    });
+    return saved;
   },
 
   /**
@@ -1044,3 +1055,24 @@ export const incomingQcService = {
     return qc.save();
   },
 };
+
+// ── Recycle Bin: a restored QC ──────────────────────────────────────────────
+// One live QC per GRN / PO (per service indent). Refused when its GRN or
+// indent is gone / cancelled, or another QC was raised for it since.
+registerRestoreHook('procurement.qc.check', async ({ qcId }, { session }) => {
+  const qc = await IncomingQC.findById(qcId).session(session || null).lean();
+  if (!qc) refuse('The QC no longer exists.');
+  const live = { _id: { $ne: qc._id }, isDeleted: { $ne: true }, qcStatus: { $ne: QC_STATUS.CANCELLED } };
+  if (qc.sourceType === QC_SOURCE_TYPE.SERVICE) {
+    const indent = await PurchaseIndent.findById(qc.indentId).session(session || null).select('indentNumber isDeleted').lean();
+    if (!indent || indent.isDeleted) refuse(`Indent ${qc.indentNumber || ''} is deleted — restore it first.`.replace('  ', ' '));
+    const other = await IncomingQC.findOne({ ...live, indentId: qc.indentId, sourceType: QC_SOURCE_TYPE.SERVICE }).session(session || null).select('qcNumber').lean();
+    if (other) refuse(`This service has another QC now (${other.qcNumber}).`);
+    return;
+  }
+  const grn = await GoodsReceiptNote.findById(qc.grnId).session(session || null).select('grnNumber grnStatus isDeleted').lean();
+  if (!grn || grn.isDeleted) refuse(`GRN ${qc.grnNumber || ''} is deleted — restore it first.`.replace('  ', ' '));
+  if (!GRN_QC_ELIGIBLE.includes(grn.grnStatus)) refuse(`GRN ${grn.grnNumber} is ${String(grn.grnStatus).replace(/_/g, ' ').toLowerCase()} now, so it takes no QC.`);
+  const other = await IncomingQC.findOne({ ...live, grnId: qc.grnId, poId: qc.poId || null }).session(session || null).select('qcNumber').lean();
+  if (other) refuse(`GRN ${grn.grnNumber} has another QC now (${other.qcNumber}).`);
+});

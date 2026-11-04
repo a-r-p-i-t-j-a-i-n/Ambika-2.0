@@ -27,6 +27,8 @@ import { logger } from '../../../utils/logger.js';
 import env from '../../../config/env.js';
 import { registerApprovalDocument } from '../../approvals/approval.registry.js';
 import { approvalService } from '../../approvals/approval.service.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, asUser, refuse } from '../recycleBin.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -1433,13 +1435,32 @@ export const grnService = {
       doc.deletedBy = user?._id;
       doc.activityTimeline.push({ action: 'DELETE', description, actorId: user?._id });
     };
+    // Into the Recycle Bin after the delete. A completed GRN's restore puts
+    // its received qty back on the PO(s) and PI(s) (procurement.grn.reapply).
+    const toBin = (posted) => binDeleted('grn', GoodsReceiptNote, grn, {
+      title: grn.grnNumber || 'GRN',
+      subtitle: [
+        (grn.poNumbers?.length ? grn.poNumbers.join(', ') : grn.poNumber) && `PO ${grn.poNumbers?.length ? grn.poNumbers.join(', ') : grn.poNumber}`,
+        grn.vendorName,
+        posted ? `${round2(grn.totalReceivedQty)} received` : String(grn.grnStatus || '').toLowerCase(),
+      ].filter(Boolean).join(' · '),
+      keywords: [grn.uniqueId, grn.challanNumber, grn.invoiceNumber, (grn.items || []).map((l) => [l.itemName, l.skuCode])],
+      reason: why,
+      user,
+      before: [binPlan.hook('procurement.grn.check', { grnId: grn._id, posted })],
+      ...(posted ? { after: [binPlan.hook('procurement.grn.reapply', { grnId: grn._id })] } : {}),
+    });
     if (isOpenDraft(grn)) {
       stamp(grn, why ? `GRN deleted. Reason: ${why}` : 'GRN deleted');
-      return saveOpenDraft(grn);
+      const saved = await saveOpenDraft(grn);
+      await toBin(false);
+      return saved;
     }
     if (grn.grnStatus === GRN_STATUS.CANCELLED) {
       stamp(grn, why ? `Cancelled GRN deleted. Reason: ${why}` : 'Cancelled GRN deleted');
-      return grn.save();
+      const saved = await grn.save();
+      await toBin(false);
+      return saved;
     }
     if (!POSTED_GRN_STATUSES.includes(grn.grnStatus)) {
       throw new AppError('This GRN is being completed right now — try again in a moment', 409);
@@ -1486,6 +1507,7 @@ export const grnService = {
     } finally {
       if (poIds.length) await releasePoLocks(poIds, lockedAt);
     }
+    await toBin(true);
     return grn;
   },
 
@@ -1942,3 +1964,48 @@ export const grnService = {
     return saveOpenDraft(grn);
   },
 };
+
+// ── Recycle Bin: a restored GRN ─────────────────────────────────────────────
+// Refused when one of its POs is deleted, and — for a completed GRN — when a
+// PO is cancelled / closed now, is mid-GRN, or is being paid as an expense.
+// A completed GRN's received qty then goes back on the PO lines (absolute, from
+// every completed GRN — as a correction does) and on the PI lines (+ its qty).
+// Stock was never posted by the GRN (QC posts it), so nothing else moves.
+const grnPoIds = (grn) => (grn.isWithoutPo ? [] : (grn.poIds?.length ? grn.poIds : [grn.poId]).filter(Boolean));
+
+registerRestoreHook('procurement.grn.check', async ({ grnId, posted }, { session }) => {
+  const grn = await GoodsReceiptNote.findById(grnId).session(session || null).lean();
+  if (!grn) refuse('The GRN no longer exists.');
+  const poIds = grnPoIds(grn);
+  if (!poIds.length) return;
+  const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds } })
+    .session(session || null).select('poNumber poStatus isDeleted grnPostingLockAt').lean();
+  const gone = pos.filter((p) => p.isDeleted).map((p) => p.poNumber);
+  if (gone.length || pos.length !== poIds.length) refuse(`Its purchase order${gone.length > 1 ? 's' : ''} ${gone.join(', ')} ${gone.length > 1 ? 'are' : 'is'} deleted — restore ${gone.length > 1 ? 'them' : 'it'} first.`.replace('  ', ' '));
+  if (!posted) return;
+  const closed = pos.find((p) => !PO_RECEIPT_STATUSES.includes(p.poStatus));
+  if (closed) refuse(`PO ${closed.poNumber} is ${String(closed.poStatus).replace(/_/g, ' ').toLowerCase()} now, so ${grn.grnNumber}'s receipt can't go back on it.`);
+  const busy = pos.find((p) => p.grnPostingLockAt && Date.now() - new Date(p.grnPostingLockAt).getTime() < PO_LOCK_TTL_MS);
+  if (busy) refuse(`A GRN for PO ${busy.poNumber} is being completed right now. Try again in a moment.`);
+  await assertNoLiveExpenseOnPos(pos, `${grn.grnNumber} cannot be restored`);
+});
+
+registerRestoreHook('procurement.grn.reapply', async ({ grnId }, { session, actor }) => {
+  const read = (q) => q.session(session || null);
+  const grn = await read(GoodsReceiptNote.findById(grnId));
+  if (!grn || !POSTED_GRN_STATUSES.includes(grn.grnStatus)) return;
+  const poIds = grnPoIds(grn);
+  if (!poIds.length) return;
+  const user = asUser(actor);
+  const lines = grn.items.map(plain);
+  const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean();
+  // Every OTHER completed GRN (committed) + this one as it stands.
+  const base = await receivedByPoLines(pos, { excludeGrnId: grn._id });
+  const own = ownReceivedByPoLines(pos, lines);
+  for (const { _id: poId } of pos) {
+    const po = await read(VendorPurchaseOrder.findOne({ _id: poId, isDeleted: { $ne: true } }));
+    applyReceiptsToPo(po, base, own, `${grn.grnNumber} restored from the Recycle Bin`, user);
+    await po.save(session ? { session } : undefined);
+  }
+  await shiftPiReceipts({ pos, deltas: lines.map((l) => ({ line: l, delta: round2(l.receivedQty) })), session, user });
+});

@@ -1596,13 +1596,13 @@ const O2dStepBoard = () => {
               <>
                 Delivery challan <b>{confirmRow.dc.dcNumber}</b> will be deleted. The sales
                 order <b>{confirmRow?.p?.soNumber}</b> and its other dispatches are not affected.
-                This cannot be undone.
+                It moves to the Recycle Bin, where it can be restored.
               </>
             ) : (
               <>
                 <b>{confirmRow?.p?.soNumber || 'This order'}</b>
                 {confirmRow?.p?.partyName ? ` — ${confirmRow.p.partyName}` : ''} will be deleted along with its
-                complete O2D tracker (all steps, entries and history). This cannot be undone.
+                complete O2D tracker (all steps, entries and history). It moves to the Recycle Bin, where it can be restored.
               </>
             )}
           </Typography>

@@ -12,6 +12,8 @@ import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
 import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, billingPairs, billedMoreSince, refuse, inr } from '../recycleBin.js';
 export { getAdvancePosition }; // re-exported for the controller / existing imports
 // Pure line builders — exported for the unit tests (no DB needed).
 export { buildInvoiceItems, resolveInvoicedByLine };
@@ -620,11 +622,26 @@ export const vendorInvoiceService = {
     return withPiAdvanceLock(inv.piId, async () => {
       assertNothingAfter(label, await laterStepsOf.invoice(inv._id));
       const fresh = await findOrThrow(id);
+      const key = fresh.invoiceNumberKey || null; // the save below frees it
       fresh.isDeleted = true;
       fresh.deletedAt = new Date();
       fresh.deletedBy = user?._id;
       fresh.activityTimeline.push({ action: 'DELETE', description: why ? `Vendor invoice deleted. Reason: ${why}` : 'Vendor invoice deleted', actorId: user?._id });
-      return fresh.save();
+      const saved = await fresh.save();
+      // Restore: the number, the QC qty it billed and its advance share must all
+      // still be free (procurement.invoice.check).
+      const qcIds = invoiceQcIds(fresh);
+      const billedByOthers = qcIds.length ? billingPairs(await invoicedQtyMap(qcIds)) : [];
+      await binDeleted('vendorInvoice', VendorInvoice, fresh, {
+        title: fresh.invoiceNumber || 'Vendor invoice',
+        subtitle: [fresh.vendorName, fresh.poNumber && `PO ${fresh.poNumber}`, fresh.invoiceAmount ? inr(fresh.invoiceAmount) : ''].filter(Boolean).join(' · '),
+        keywords: [fresh.grnNumbers, fresh.grnNumber, fresh.qcNumbers, fresh.piNumber],
+        reason: why,
+        user,
+        ...(key ? { set: { invoiceNumberKey: key } } : {}),
+        before: [binPlan.hook('procurement.invoice.check', { invoiceId: fresh._id, billedByOthers })],
+      });
+      return saved;
     });
   },
 
@@ -661,3 +678,42 @@ export const vendorInvoiceService = {
     return inv.save();
   },
 };
+
+// ── Recycle Bin: a restored vendor invoice ──────────────────────────────────
+// Its QC quantities, its number and its PI advance share were freed by the
+// delete. Refused when any of them has been taken since (another invoice
+// billed those QC lines, used that number, or took the advance), when a QC /
+// the PO can't be invoiced any more, or the PO is paid as an expense now.
+const PI_LOCK_TTL_MS = 2 * 60 * 1000;
+
+registerRestoreHook('procurement.invoice.check', async ({ invoiceId, billedByOthers }, { session }) => {
+  const inv = await VendorInvoice.findById(invoiceId).session(session || null).lean();
+  if (!inv) refuse('The invoice no longer exists.');
+  if (inv.invoiceStatus === INVOICE_STATUS.REJECTED) return; // holds no qty, number or advance
+  const label = `Invoice ${inv.invoiceNumber || ''}`.trim();
+  const qcIds = invoiceQcIds(inv);
+  if (qcIds.length) {
+    const qcs = await IncomingQC.find({ _id: { $in: qcIds } }).session(session || null).select('qcNumber qcStatus isDeleted').lean();
+    const bad = qcs.find((q) => q.isDeleted || !QC_INVOICEABLE.includes(q.qcStatus));
+    if (bad || qcs.length !== qcIds.length) refuse(`Can't restore ${label} — QC ${bad?.qcNumber || ''} can't be invoiced any more.`.replace('  ', ' '));
+    if (billedMoreSince(billingPairs(await invoicedQtyMap(qcIds)), billedByOthers)) {
+      refuse(`Can't restore ${label} — since it was deleted, its QC quantities were billed on another invoice.`);
+    }
+  }
+  if (inv.poId) await assertNoLiveExpenseOnPos([{ _id: inv.poId, poNumber: inv.poNumber }], `${label} cannot be restored`);
+  try {
+    await assertUniqueInvoiceNumber(inv.vendorId, inv.invoiceNumber, inv._id);
+  } catch (err) {
+    refuse(`Can't restore — ${err.message}`);
+  }
+  if (round2(inv.advancePaid) > 0 && inv.piId) {
+    const pi = await ProformaInvoice.findById(inv.piId).session(session || null).select('piNumber advanceAllocationLockAt').lean();
+    if (pi?.advanceAllocationLockAt && Date.now() - new Date(pi.advanceAllocationLockAt).getTime() < PI_LOCK_TTL_MS) {
+      refuse("This PI's advance is being updated right now. Try again in a moment.");
+    }
+    const { advanceAvailable } = await getAdvancePosition(inv.piId);
+    if (advanceAvailable + 0.005 < round2(inv.advancePaid)) {
+      refuse(`Can't restore ${label} — it used ${inr(inv.advancePaid)} of PI ${inv.piNumber || ''}'s advance, and only ${inr(advanceAvailable)} is free now.`.replace('  ', ' '));
+    }
+  }
+});

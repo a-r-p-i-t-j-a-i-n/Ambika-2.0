@@ -8,6 +8,8 @@ import { AppError } from '../../../utils/apiResponse.js';
 import { generateTallyEntryNumber } from '../../../utils/docNumberGenerator.js';
 import { logger } from '../../../utils/logger.js';
 import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, asUser, refuse } from '../recycleBin.js';
 
 // Voucher states from which a Tally Entry may be raised (i.e. the voucher is posted).
 const POSTED_STATES = [VOUCHER_STATUS.POSTED, VOUCHER_STATUS.PARTIALLY_PAID, VOUCHER_STATUS.FULLY_PAID, VOUCHER_STATUS.SHORT_CLOSED];
@@ -125,6 +127,7 @@ export const tallyEntryService = {
     const label = `Tally entry ${t.entryNumber || ''}`.trim();
     const why = completed ? deleteReason(reason, label) : String(reason || '').trim();
     if (completed) assertNothingAfter(label, await laterStepsOf.tally(t.voucherId));
+    const linked = completed && Boolean(await VendorVoucher.exists({ _id: t.voucherId, tallyEntryId: t._id }));
     t.isDeleted = true;
     t.deletedAt = new Date();
     t.deletedBy = user?._id;
@@ -139,6 +142,16 @@ export const tallyEntryService = {
         },
       );
     }
+    const args = { entryId: t._id, linked };
+    await binDeleted('tallyEntry', PurchaseTallyEntry, t, {
+      title: t.entryNumber || 'Tally entry',
+      subtitle: [t.voucherNumber && `Voucher ${t.voucherNumber}`, t.vendorName, String(t.tallyEntryStatus || '').toLowerCase()].filter(Boolean).join(' · '),
+      keywords: [t.invoiceNumber, t.poNumber, t.tallyVoucherNumber, t.tallyLedgerName],
+      reason: why,
+      user,
+      before: [binPlan.hook('procurement.tally.check', args)],
+      after: [binPlan.hook('procurement.tally.relink', args)],
+    });
     return saved;
   },
 
@@ -206,3 +219,33 @@ export const tallyEntryService = {
     return t.save();
   },
 };
+
+// ── Recycle Bin: a restored tally entry ─────────────────────────────────────
+// One live entry per voucher. Refused when its voucher is gone / not posted,
+// or has another entry now; a completed entry is marked on the voucher again.
+registerRestoreHook('procurement.tally.check', async ({ entryId, linked }, { session }) => {
+  const t = await PurchaseTallyEntry.findById(entryId).session(session || null).lean();
+  if (!t) refuse('The tally entry no longer exists.');
+  if (t.tallyEntryStatus === TALLY_ENTRY_STATUS.CANCELLED) return;
+  const v = await VendorVoucher.findById(t.voucherId).session(session || null).select('voucherNumber voucherStatus isDeleted tallyEntryId').lean();
+  if (!v || v.isDeleted) refuse(`Voucher ${t.voucherNumber || ''} is deleted — restore it first.`.replace('  ', ' '));
+  if (!POSTED_STATES.includes(v.voucherStatus)) refuse(`Voucher ${v.voucherNumber} is ${String(v.voucherStatus).replace(/_/g, ' ').toLowerCase()} now.`);
+  const other = await PurchaseTallyEntry.findOne({
+    voucherId: t.voucherId, _id: { $ne: t._id }, isDeleted: { $ne: true }, tallyEntryStatus: { $ne: TALLY_ENTRY_STATUS.CANCELLED },
+  }).session(session || null).select('entryNumber').lean();
+  if (other) refuse(`Voucher ${v.voucherNumber} has another tally entry now (${other.entryNumber}).`);
+  if (linked && v.tallyEntryId) refuse(`Voucher ${v.voucherNumber} is linked to another tally entry now.`);
+});
+
+registerRestoreHook('procurement.tally.relink', async ({ entryId, linked }, { session, actor }) => {
+  if (!linked) return;
+  const t = await PurchaseTallyEntry.findById(entryId).session(session || null).select('voucherId entryNumber').lean();
+  await VendorVoucher.updateOne(
+    { _id: t.voucherId, tallyEntryId: null },
+    {
+      $set: { tallyEntryStatus: VOUCHER_TALLY_COMPLETED, tallyEntryId: t._id, tallyEntryNumber: t.entryNumber },
+      $push: { activityTimeline: { action: 'TALLY_ENTRY', description: `Tally entry ${t.entryNumber} restored from the Recycle Bin`, actorId: asUser(actor)._id } },
+    },
+    session ? { session } : undefined,
+  );
+});

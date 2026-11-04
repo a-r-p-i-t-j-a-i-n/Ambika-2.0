@@ -4,6 +4,9 @@ import { AppError } from '../../utils/apiResponse.js';
 import asyncHandler from '../../middleware/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { Router } from 'express';
+import { protect } from '../../middleware/auth.middleware.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 // ── Service ─────────────────────────────────────────────────
 export const scheduleService = {
@@ -34,9 +37,18 @@ export const scheduleService = {
     return doc;
   },
 
+  /** Erase a schedule — a full copy goes to the Recycle Bin first. */
   async remove(id) {
-    const doc = await DispatchSchedule.findByIdAndDelete(id);
+    const doc = await DispatchSchedule.findById(id).lean();
     if (!doc) throw new AppError('Dispatch Schedule not found', 404);
+    await recycleBinService.capture('dispatchSchedule', {
+      recordId: doc._id,
+      title: `Dispatch schedule · ${doc.soNumber}`,
+      subtitle: [doc.partyName, doc.poNumber && `PO ${doc.poNumber}`].filter(Boolean).join(' · '),
+      keywords: [doc.soNumber, (doc.items || []).map((i) => [i.skuName, i.skuCode])],
+      openPath: `/dispatch-planning?so=${encodeURIComponent(doc.soNumber || '')}`,
+      plan: { steps: [binPlan.reinsert(DispatchSchedule.modelName, doc)] },
+    }, () => DispatchSchedule.deleteOne({ _id: doc._id }));
     return doc;
   },
 };
@@ -55,7 +67,9 @@ export const scheduleController = {
 };
 
 // ── Routes ──────────────────────────────────────────────────
+// Signed-in users only.
 const router = Router();
+router.use(protect);
 router.route('/').get(scheduleController.getAll).post(scheduleController.create);
 router.get('/by-so/:soNumber', scheduleController.getBySoNumber);
 router.route('/:id').get(scheduleController.getById).put(scheduleController.update).delete(scheduleController.remove);

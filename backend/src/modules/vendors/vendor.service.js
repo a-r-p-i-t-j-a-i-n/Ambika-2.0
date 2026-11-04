@@ -3,6 +3,8 @@ import PricingHistory, { PRICING_SOURCE } from './pricingHistory.model.js';
 import { pricingHistoryService } from './pricingHistory.service.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 import { sameRate } from '../procurement/rate-change/rateChange.rules.js';
 
 const num = (n) => Number(n) || 0;
@@ -236,6 +238,14 @@ export const vendorService = {
       { new: true },
     );
     if (!vendor) throw new AppError('Vendor not found', 404);
+    await recycleBinService.record('vendor', {
+      recordId: vendor._id,
+      title: vendor.name,
+      subtitle: [vendor.code, vendor.gstNo].filter(Boolean).join(' · '),
+      keywords: [vendor.contactPerson, vendor.email, vendor.phone],
+      actor: userId,
+      plan: { steps: [binPlan.unhide(Vendor.modelName, vendor._id)] },
+    });
     return vendor;
   },
 };
