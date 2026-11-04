@@ -366,6 +366,32 @@ export const summarizeReceiptType = (lines = []) => {
   return types.size === 1 ? [...types][0] : null;
 };
 
+/**
+ * Over-receipt consent, per line. `extraQty` must already be server-derived.
+ * A line over the PO's pending qty keeps/needs allowOverReceipt (or the legacy
+ * GRN-wide consent `legacyConsent`, for drafts saved before consent moved onto
+ * lines); a line that is not over has the flag cleared, so an approval never
+ * outlives the excess it was given for. Returns { lines, missing } where
+ * `missing` is the first received line over pending without consent.
+ */
+export const applyOverReceiptConsent = (lines = [], { legacyConsent = false } = {}) => {
+  let missing = null;
+  const out = lines.map((l) => {
+    const over = round2(l.receivedQty) > 0 && round2(l.extraQty) > 0;
+    if (!over) return { ...l, allowOverReceipt: false };
+    const ok = l.allowOverReceipt === true || legacyConsent === true;
+    if (!ok && !missing) missing = l;
+    return { ...l, allowOverReceipt: ok };
+  });
+  return { lines: out, missing };
+};
+
+const overReceiptError = (l) => new AppError(
+  `"${l.itemName}": receiving ${l.receivedQty} but only ${l.pendingBeforeGrn} is pending on the PO (extra ${round2(l.receivedQty - l.pendingBeforeGrn)}). `
+  + 'Tick "Allow Over-Receipt" on that line to receive the extra quantity.',
+  409,
+);
+
 const receiptTypeLabel = (v) => String(v || '').replace(/_/g, ' ');
 
 // GRN states whose received qty counts toward the PO (stock already posted).
@@ -997,9 +1023,11 @@ export const grnService = {
     await assertPurchasable(sourceItems);
     await assertRmBatchNumbers(sourceItems);
     const computed = computeLines(sourceItems);
+    const consent = applyOverReceiptConsent(computed.lines);
+    if (consent.missing) throw overReceiptError(consent.missing);
     // Destination per line from the SKU master; refuses Service / Job Work,
     // unclassified SKUs and Raw Material without an explicit Received At.
-    const lines = await stampConversion(await routeDraftLines(computed.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN'));
+    const lines = await stampConversion(await routeDraftLines(consent.lines, data.rmReceivedAtLocation, data.warehouse || 'MAIN'));
     const { totals } = computed;
 
     const grnNumber = await generateGrnNumber(data.grnDate || new Date());
@@ -1213,7 +1241,9 @@ export const grnService = {
         const pos = await VendorPurchaseOrder.find({ _id: { $in: poIds }, isDeleted: { $ne: true } }).lean();
         if (!pos.length) throw new AppError('Linked Purchase Order not found', 404);
         const { lines, totals } = await refreshLines(pos, items);
-        grn.items = lines;
+        const consent = applyOverReceiptConsent(lines);
+        if (consent.missing) throw overReceiptError(consent.missing);
+        grn.items = consent.lines;
         Object.assign(grn, totals);
       }
     }
@@ -1334,14 +1364,11 @@ export const grnService = {
         base = await receivedByPoLines(pos, { excludeGrnId: grn._id });
         built = computeLines(snapshotFromPos(pos, base, items));
       }
-      const lines = withLineReceiptTypes(built.lines, grn.howItemReceived);
-
       // Receiving beyond the PO's pending qty needs the same consent and remarks as completion.
+      const consent = applyOverReceiptConsent(built.lines, { legacyConsent: data.allowOverReceipt === true });
+      if (consent.missing) throw overReceiptError(consent.missing);
+      const lines = withLineReceiptTypes(consent.lines, grn.howItemReceived);
       const extra = lines.filter((l) => round2(l.receivedQty) > 0 && round2(l.extraQty) > 0);
-      if (extra.length && !data.allowOverReceipt) {
-        const l = extra[0];
-        throw new AppError(`"${l.itemName}": receiving ${l.receivedQty} but only ${l.pendingBeforeGrn} is pending on the PO. Tick "Allow over-receipt" to keep the extra quantity.`, 409);
-      }
       const extraNoRemarks = extra.find((l) => !(l.remarks || header.remarks || data.remarks || grn.remarks));
       if (extraNoRemarks) throw new AppError(`"${extraNoRemarks.itemName}" is over the ordered qty — remarks are required for extra receipt`, 400);
 
@@ -1577,7 +1604,11 @@ export const grnService = {
         // Re-derive ordered / already-received / pending from the current DB state
         // — the draft's snapshot may predate other GRNs completed on these PO(s).
         const { lines, totals } = await refreshLines(pos, grn.items);
-        grn.items = withLineReceiptTypes(lines, grn.howItemReceived);
+        // Consent is re-checked against the PO's CURRENT pending qty: a line the
+        // draft saved within pending may be over now and needs consent now.
+        const consent = applyOverReceiptConsent(lines, { legacyConsent: data.allowOverReceipt === true });
+        if (consent.missing) throw overReceiptError(consent.missing);
+        grn.items = withLineReceiptTypes(consent.lines, grn.howItemReceived);
         Object.assign(grn, totals);
       }
 
@@ -1592,14 +1623,6 @@ export const grnService = {
       // Rule 6: extra receipt (beyond the CURRENT pending qty) must be explicitly
       // allowed by the user and carry remarks.
       const extraLines = receivedLines.filter((l) => round2(l.extraQty) > 0);
-      if (extraLines.length && !data.allowOverReceipt) {
-        const l = extraLines[0];
-        throw new AppError(
-          `"${l.itemName}": receiving ${l.receivedQty} but only ${l.pendingBeforeGrn} is pending on the PO. `
-          + 'Tick "Allow over-receipt" to receive the extra quantity.',
-          409,
-        );
-      }
       const extraNoRemarks = extraLines.find((l) => !(l.remarks || data.remarks || grn.remarks));
       if (extraNoRemarks) {
         throw new AppError(`"${extraNoRemarks.itemName}" was received over the ordered qty — remarks are required for extra receipt`, 400);

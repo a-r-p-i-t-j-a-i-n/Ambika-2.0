@@ -123,6 +123,9 @@ const grnItemSchema = new Schema({
   // only on lines saved before it moved off the header — readers fall back to
   // the GRN's header howItemReceived for those (see lineReceiptType).
   howItemReceived: { type: String, enum: [...Object.values(HOW_ITEM_RECEIVED), null], default: null },
+  // The user's explicit consent to receive this line beyond the PO's pending qty.
+  // Server-normalised: only ever true while extraQty > 0 (see applyOverReceiptConsent).
+  allowOverReceipt: { type: Boolean, default: false },
 
   // Set after stock posting (back-reference to the ledger row).
   movementId:     { type: Schema.Types.ObjectId, ref: 'InventoryMovement' },

@@ -903,6 +903,30 @@ const PurchaseOrderFormDrawer = ({
   // Answers are applied by row id and only while the row still asks that question.
   // One independent request per line (not one lazy-query trigger: calling that again
   // supersedes the call before it, which would drop all but the last line's answer).
+  // By vendor (groupMode): each item asks ITS OWN vendor — the one fixed for it
+  // (approved quotation / Pending for PO) or the one picked here for an item that
+  // has none. Every item goes on its vendor's PO; a pick stays on the form only.
+  const vendorById = useMemo(
+    () => new Map(vendorOptions.map((v) => [String(v._id), v])),
+    [vendorOptions],
+  );
+  const approvedById = useMemo(
+    () =>
+      new Map(selectedApprovedItems.map((o) => [String(o.indentItemId), o])),
+    [selectedApprovedItems],
+  );
+  const isFixedItem = (row) => {
+    const o = approvedById.get(String(row.indentItemId));
+    return o?.vendorState === "SET" && Boolean(o.vendorId);
+  };
+  const vendorKeyOf = (row) => {
+    const o = approvedById.get(String(row.indentItemId));
+    if (o?.vendorState === "SET" && o.vendorId) return String(o.vendorId);
+    return itemVendorPicks[String(row.indentItemId)] || "";
+  };
+  // The vendor whose rate a row fetches: its own by vendor, else the PO's vendor.
+  const rateVendorOf = (row) =>
+    groupMode ? vendorKeyOf(row) : vendor?._id ? String(vendor._id) : "";
   const dispatch = useDispatch();
   const lookupRate = (params) =>
     dispatch(
@@ -919,21 +943,21 @@ const PurchaseOrderFormDrawer = ({
       poFormatType === "JSL"
         ? ""
         : items
-            .map((it) => `${it.rid || ""}:${lookupKeyOf(vendor?._id, it)}`)
+            .map((it) => `${it.rid || ""}:${lookupKeyOf(rateVendorOf(it), it)}`)
             .join("§"),
-    [items, vendor?._id, poFormatType],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, vendor?._id, poFormatType, groupMode, approvedById, itemVendorPicks],
   );
   const sentRates = useRef(new Set()); // rid:key of the requests already out
   useEffect(() => {
     if (!open || poFormatType === "JSL") return undefined;
-    const vendorId = vendor?._id ? String(vendor._id) : "";
     // 1) At once: a row whose vendor / item / unit changed gives up the old answer
     //    (never show or keep the previous vendor's rate while the new one loads).
     const ask = new Set();
     const reset = new Set();
     itemsRef.current.forEach((it) => {
       if (!it.rid) return;
-      const key = lookupKeyOf(vendorId, it);
+      const key = lookupKeyOf(rateVendorOf(it), it);
       if (!key) {
         if (it.rateLookup) reset.add(it.rid);
         return;
@@ -944,7 +968,9 @@ const PurchaseOrderFormDrawer = ({
       setItems((cur) =>
         cur.map((it) => {
           if (ask.has(it.rid))
-            return startLookup(it, lookupKeyOf(vendorId, it), { lockRates });
+            return startLookup(it, lookupKeyOf(rateVendorOf(it), it), {
+              lockRates,
+            });
           if (reset.has(it.rid)) return resetLookup(it, { lockRates });
           return it;
         }),
@@ -954,6 +980,7 @@ const PurchaseOrderFormDrawer = ({
     //    send the request of every row still waiting for its answer.
     const timer = setTimeout(() => {
       itemsRef.current.forEach((it) => {
+        const vendorId = rateVendorOf(it);
         const key = lookupKeyOf(vendorId, it);
         if (
           !it.rid ||
@@ -1020,27 +1047,7 @@ const PurchaseOrderFormDrawer = ({
     setItems((cur) => cur.filter((_, i) => i !== idx));
   };
   // ── New PO by vendor (groupMode) ───────────────────────────────────────────
-  // Every item goes on its vendor's PO: the vendor fixed for it (approved
-  // quotation / Pending for PO — locked here), or the one picked here for an item
-  // that has none. A pick stays on the form; the PO records it, nothing else is saved.
-  const vendorById = useMemo(
-    () => new Map(vendorOptions.map((v) => [String(v._id), v])),
-    [vendorOptions],
-  );
-  const approvedById = useMemo(
-    () =>
-      new Map(selectedApprovedItems.map((o) => [String(o.indentItemId), o])),
-    [selectedApprovedItems],
-  );
-  const isFixedItem = (row) => {
-    const o = approvedById.get(String(row.indentItemId));
-    return o?.vendorState === "SET" && Boolean(o.vendorId);
-  };
-  const vendorKeyOf = (row) => {
-    const o = approvedById.get(String(row.indentItemId));
-    if (o?.vendorState === "SET" && o.vendorId) return String(o.vendorId);
-    return itemVendorPicks[String(row.indentItemId)] || "";
-  };
+  // (vendorById / approvedById / vendorKeyOf are declared above the rate lookup.)
   // One group (= one PO) per vendor, by name; items with no vendor yet come last.
   const vendorGroups = (() => {
     if (!groupMode) return [];
@@ -1127,24 +1134,6 @@ const PurchaseOrderFormDrawer = ({
   };
   // "Add vendor" for an item no vendor carries yet: the new vendor is picked for it.
   const [addVendorFor, setAddVendorFor] = useState(null);
-
-  // By vendor: rate / GST / HSN from each item's own vendor's catalog — filled
-  // while rendering whenever the items, their vendors or the catalogs change
-  // (rows already matched or edited by hand are left as they are).
-  const fillKey =
-    open && groupMode
-      ? `${items.map((it) => `${it.indentItemId}|${vendorKeyOf(it)}`).join("§")}#${otherMatchKey}`
-      : "";
-  const [filledFor, setFilledFor] = useState({ key: "", vendors: null });
-  if (fillKey !== filledFor.key || vendorOptions !== filledFor.vendors) {
-    setFilledFor({ key: fillKey, vendors: vendorOptions });
-    const next = items.map((it) => {
-      const products = vendorById.get(vendorKeyOf(it))?.products || [];
-      if (!fillKey || !it.indentItemId || !products.length) return it;
-      return fillOtherRates([it], products)[0];
-    });
-    if (next.some((row, i) => row !== items[i])) setItems(next);
-  }
 
   // Switching format keeps the selected approved items and just remaps the rows to
   // the new shape (OTHER ⇄ JSL) — no reset, no page reload. JSL also drops any
@@ -1454,6 +1443,21 @@ const PurchaseOrderFormDrawer = ({
     const problem = poGroups.map(groupProblem).find(Boolean);
     if (problem) {
       warn(problem);
+      return;
+    }
+    // Vendor rates must be in before saving, and a line a vendor prices in another
+    // unit / twice cannot be saved (same rules as the single-vendor form).
+    const lines = poGroups.flatMap((g) => g.rows.map(({ it }) => it));
+    if (lines.some((it) => awaitsRate(it, vendorKeyOf(it)))) {
+      enqueueSnackbar(
+        "Still fetching the vendor rates — try again in a moment",
+        { variant: "info" },
+      );
+      return;
+    }
+    const blockedLine = lines.find((it) => lookupBlock(it));
+    if (blockedLine) {
+      warn(lookupBlock(blockedLine));
       return;
     }
 

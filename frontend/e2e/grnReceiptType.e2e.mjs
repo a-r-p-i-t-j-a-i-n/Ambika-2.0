@@ -242,10 +242,15 @@ await sel(edit, 'PO-RT-UI-A|RT-BOLT').waitFor({ timeout: 15000 });
 check('editing the draft restores every row\'s own type', same(await allTypes(edit), WANT), JSON.stringify(await allTypes(edit)));
 check('edit form has no header dropdown either', (await edit.locator('.MuiPaper-root').filter({ hasText: 'GRN Header' }).first().getByText('Material Receipt Type').count()) === 0);
 
-// ── 6. Save & Finalize → detail page ─────────────────────────────────────────
-console.log('\n── 6. Save & Finalize ──');
-await edit.getByRole('button', { name: /Save & Finalize GRN/ }).click();
-check('finalized', await snack(/saved and completed/));
+// ── 6. Complete GRN + QC (QC panel) → Complete GRN dialog → detail page ──────
+console.log('\n── 6. Complete GRN ──');
+check('footer has no Save & Finalize GRN', (await edit.getByRole('button', { name: /Save & Finalize GRN/ }).count()) === 0);
+// A two-PO GRN has one QC panel per PO, each with its own button — either completes the GRN.
+await edit.getByRole('button', { name: 'Complete GRN + QC' }).first().click();
+const completeDlg = page.getByRole('dialog').filter({ hasText: 'This finalises the receipt' });
+await completeDlg.waitFor({ timeout: 15000 });
+await completeDlg.getByRole('button', { name: 'Complete GRN', exact: true }).click();
+check('finalized', await snack(/GRN completed/));
 await page.waitForTimeout(800);
 await go(`${APP}/procurement/grns/${draft._id}`);
 await page.getByTestId('grn-line-receipt-type-value').first().waitFor({ timeout: 15000 });

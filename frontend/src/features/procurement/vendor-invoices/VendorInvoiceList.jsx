@@ -141,7 +141,7 @@ const VendorInvoiceList = () => {
   const [removeInvoice] = useDeleteVendorInvoiceMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteVendorInvoice');
   const del = useRecordDelete({
-    what: 'Invoice', numberOf: (r) => r.invoiceNumber, remove: removeInvoice,
+    type: 'VENDOR_INVOICE', what: 'Invoice', numberOf: (r) => r.invoiceNumber, remove: removeInvoice,
     needsReason: (r) => r.invoiceStatus !== 'DRAFT',
     consequence: () => 'The invoice is removed — its quantities can be invoiced again and its share of the PI advance is freed. Not allowed while a voucher pays it.',
   });

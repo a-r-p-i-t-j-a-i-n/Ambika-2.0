@@ -269,7 +269,7 @@ const IndentList = () => {
   const [removeIndent] = useDeleteIndentMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteIndent');
   const del = useRecordDelete({
-    what: 'Indent', numberOf: (r) => r.indentNumber, remove: removeIndent,
+    type: 'INDENT', what: 'Indent', numberOf: (r) => r.indentNumber, remove: removeIndent,
     needsReason: (r) => r.approvalStatus !== 'DRAFT',
     consequence: (r) => (r.approvalStatus === 'DRAFT' ? 'The draft indent is removed.' : 'The indent and its quotation work are removed. Not allowed while a PO or service QC uses it — if so, it is named here.'),
   });

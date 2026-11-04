@@ -41,7 +41,7 @@ const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-di
 const fmtINR = (n) => (n === null || n === undefined ? '—'
   : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
 
-const StepQueueGrid = ({ queue, numberHeader = 'Ref No', dateHeader = 'Date', amountHeader = 'Amount', showDue = false, showAmount = true, actionFor, emptyText }) => {
+const StepQueueGrid = ({ queue, numberHeader = 'Ref No', dateHeader = 'Date', amountHeader = 'Amount', showDue = false, showAmount = true, extraColumns = [], actionFor, emptyText }) => {
   const navigate = useNavigate();
   const rowNav = useRowNavigation({ to: (r) => r.link });
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
@@ -91,6 +91,7 @@ const StepQueueGrid = ({ queue, numberHeader = 'Ref No', dateHeader = 'Date', am
       renderCell: (p) => <Typography variant="body2" sx={{ color: PFMS.sub }}>{fmtDate(p.value)}</Typography> }] : []),
     ...(showAmount ? [{ field: 'amount', headerName: amountHeader, width: 130, align: 'right', headerAlign: 'right', sortable: false,
       renderCell: (p) => <Typography variant="body2" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>{fmtINR(p.value)}</Typography> }] : []),
+    ...extraColumns,
     // Pinned right like every Purchase list's action column, so the step's
     // action never scrolls out of view on a narrower screen.
     rowActionsColumn((p) => {

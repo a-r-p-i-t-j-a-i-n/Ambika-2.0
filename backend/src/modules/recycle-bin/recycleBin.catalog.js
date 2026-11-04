@@ -45,6 +45,7 @@ export const TYPES = Object.freeze({
 
   // ── Purchase FMS ──────────────────────────────────────────────
   indent:          { module: 'purchase', label: 'Purchase Indent',    from: at('Purchase FMS › Purchase Indents', '/purchase-fms/purchase-indents'), open: (id) => `/procurement/indents/${id}` },
+  quotationStep:   { module: 'purchase', label: 'Quotation Step',     from: at('Purchase FMS › Purchase Indents', '/purchase-fms/purchase-indents'), open: (id) => `/procurement/indents/${id}` },
   purchaseOrder:   { module: 'purchase', label: 'Purchase Order',     from: at('Purchase FMS › Purchase Orders', '/purchase-fms/purchase-orders'),   open: (id) => `/procurement/purchase-orders/${id}` },
   followUp:        { module: 'purchase', label: 'Material Follow-up', from: at('Purchase FMS › Follow-ups', '/purchase-fms/follow-ups'),             open: (id) => `/procurement/follow-ups/${id}` },
   proformaInvoice: { module: 'purchase', label: 'Proforma Invoice',   from: at('Purchase FMS › PI Forms', '/purchase-fms/pi-forms'),                 open: (id) => `/procurement/proforma-invoices/${id}` },

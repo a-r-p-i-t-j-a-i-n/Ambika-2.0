@@ -106,7 +106,7 @@ const FinalPaymentList = () => {
   const [removePayment] = useDeleteFinalPaymentMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteFinalPayment');
   const del = useRecordDelete({
-    what: 'Payment', numberOf: (r) => r.paymentNumber, remove: removePayment,
+    type: 'FINAL_PAYMENT', what: 'Payment', numberOf: (r) => r.paymentNumber, remove: removePayment,
     needsReason: () => false,
     consequence: () => 'The payment is reversed on its voucher and invoice (they show it as unpaid again), then removed.',
   });

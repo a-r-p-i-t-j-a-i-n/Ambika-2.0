@@ -75,6 +75,23 @@ export const DOWNSTREAM_OF_QUOTATION = [
 
 export const isDownstreamOfQuotation = (indent) => DOWNSTREAM_OF_QUOTATION.includes(indent?.overallStatus);
 
+/**
+ * Whether Step 1.2 / 1.3 was actually done on the indent — what deleting that
+ * step (cascade delete) takes back. 1.2 counts in either outcome (Yes or
+ * "Quote Not Required"); 1.3 only when approved, never when it was skipped.
+ */
+export const quotationStepDone = (indent, fmsStep) => {
+  if (indent?.approvalStatus !== 'APPROVED' || indent?.overallStatus === 'QUOTE_PENDING') return false;
+  if (fmsStep === 'QUOTE_COMPARATIVE') {
+    return ['YES', 'QUOTE_NOT_REQUIRED'].includes(indent.quoteComparativeStep?.statusDone)
+      || ['RECEIVED', 'NOT_REQUIRED'].includes(indent.quoteStep?.status);
+  }
+  if (fmsStep === 'QUOTATION_APPROVAL') {
+    return !indent.quotationApprovalStep?.skipped && indent.quotationApprovalStep?.statusDone === 'YES';
+  }
+  return false;
+};
+
 // ── Planned dates (Purchase FMS 1.0 sheet) ─────────────────────────────────
 // The sheet counts WORKING days with Friday as the weekly off (every 1.02 /
 // 1.03 planned date in it matches; plain calendar days do not), keeps the time

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Box, Typography, Paper, Button, Chip, Alert, CircularProgress, Grid } from '@mui/material';
 import { ClipboardCheck, Save, FileDown, ExternalLink } from 'lucide-react';
@@ -56,7 +57,7 @@ const pick = (it) => Object.fromEntries(ENTERED.map((f) => [f, it[f]]));
  * is completed; before that the entries are kept on this device. Keyed by the QC id, so it re-seeds only when
  * the QC record itself appears — never on a refetch.
  */
-const GrnQcEditor = ({ grn, qc, poId, stage, prepareGrn, onCompleteGrn, onRequestComplete, onConflict }) => {
+const GrnQcEditor = ({ grn, qc, poId, stage, prepareGrn, onCompleteGrn, onRequestComplete, onConflict, footerSlot }) => {
   const { enqueueSnackbar } = useSnackbar();
   const [local] = useState(() => (qc ? {} : readLocal(grn._id)));
   const [header, setHeader] = useState(() => (qc ? headerFromQc(qc) : { ...emptyHeader(), ...(local.header || {}) }));
@@ -145,6 +146,23 @@ const GrnQcEditor = ({ grn, qc, poId, stage, prepareGrn, onCompleteGrn, onReques
       : 'Next action: Complete QC — accepted quantities are then posted to stock; rejected quantities never enter it.';
   })();
 
+  const actionButtons = (
+    <>
+      {/* The server creates a QC only for a completed GRN, so before that there
+          is nothing to save — entries are kept on this device meanwhile. */}
+      {canSaveDraft && (
+        <Button variant="outlined" onClick={onSaveDraft} disabled={working} data-testid="grn-qc-save-draft"
+          startIcon={creating || updating ? <CircularProgress size={14} color="inherit" /> : <Save size={16} />}>
+          Save QC Draft
+        </Button>
+      )}
+      <Button variant="contained" color="success" onClick={onCompleteAll} disabled={working || !items.length} data-testid="grn-qc-complete"
+        startIcon={busy ? <CircularProgress size={14} color="inherit" /> : <ClipboardCheck size={16} />}>
+        Complete GRN + QC
+      </Button>
+    </>
+  );
+
   return (
     <>
       {stage.key === 'QC_DRAFT' && (
@@ -173,18 +191,11 @@ const GrnQcEditor = ({ grn, qc, poId, stage, prepareGrn, onCompleteGrn, onReques
           </Box>
           <Typography variant="body2" data-testid="grn-qc-next" sx={{ mt: 0.5, color: 'text.secondary' }}>{nextText}</Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button variant="outlined" onClick={onSaveDraft} disabled={working || !canSaveDraft}
-            title={canSaveDraft ? '' : 'A QC draft can be saved once the GRN is completed'}
-            startIcon={creating || updating ? <CircularProgress size={14} color="inherit" /> : <Save size={16} />}>
-            Save QC Draft
-          </Button>
-          <Button variant="contained" color="success" onClick={onCompleteAll} disabled={working || !items.length}
-            startIcon={busy ? <CircularProgress size={14} color="inherit" /> : <ClipboardCheck size={16} />}>
-            Complete GRN + QC
-          </Button>
-        </Box>
+        {/* In the Create / Edit GRN form these buttons live in its sticky footer
+            (footerSlot); elsewhere they stay here. */}
+        {!footerSlot && <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>{actionButtons}</Box>}
       </Box>
+      {footerSlot && createPortal(actionButtons, footerSlot)}
     </>
   );
 };
@@ -204,7 +215,7 @@ const GrnQcEditor = ({ grn, qc, poId, stage, prepareGrn, onCompleteGrn, onReques
  *   poId        scope to one PO's QC on a multi-PO GRN (omit for single-PO/W-O-PO)
  *   poNumber    that PO's number, for the section title
  */
-const GrnQcSection = ({ grn, prepareGrn, poId, poNumber }) => {
+const GrnQcSection = ({ grn, prepareGrn, poId, poNumber, footerSlot }) => {
   const navigate = useNavigate();
   const completedGrn = isGrnCompleted(grn);
   const { data: qcRes, isLoading: qcLoading, refetch } = useGetIncomingQcsByGrnQuery(grn._id, { skip: !completedGrn });
@@ -251,7 +262,7 @@ const GrnQcSection = ({ grn, prepareGrn, poId, poNumber }) => {
 
           {editing && (
             <GrnQcEditor key={qc?._id || 'new'} grn={grn} qc={stage.key === 'QC_DRAFT' ? qc : null} poId={poId} stage={stage}
-              prepareGrn={prepareGrn}
+              prepareGrn={prepareGrn} footerSlot={footerSlot}
               onCompleteGrn={() => setGrnCompleteOpen(true)}
               onRequestComplete={setCompleteTarget}
               onConflict={refetch} />
@@ -295,9 +306,11 @@ const GrnQcSection = ({ grn, prepareGrn, poId, poNumber }) => {
  * W/O PO GRN (identical to always rendering `<GrnQcSection grn={grn} />`,
  * the only thing every pre-existing GRN ever does).
  */
-export const GrnQcSections = ({ grn, ...rest }) => {
+export const GrnQcSections = ({ grn, footerSlot, ...rest }) => {
   const poIds = grn?.poIds || [];
-  if (poIds.length <= 1) return <GrnQcSection grn={grn} {...rest} />;
+  // `footerSlot` (the GRN form's sticky footer) hosts the buttons of a single QC;
+  // a multi-PO GRN has several, so each keeps its own buttons in its panel.
+  if (poIds.length <= 1) return <GrnQcSection grn={grn} footerSlot={footerSlot} {...rest} />;
   const poNumbers = grn?.poNumbers || [];
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>

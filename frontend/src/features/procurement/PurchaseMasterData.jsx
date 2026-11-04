@@ -3,22 +3,17 @@ import {
   Box, Paper, Stack, Typography, Tabs, Tab, Chip, alpha, useTheme,
   ToggleButtonGroup, ToggleButton, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, MenuItem, InputAdornment, IconButton, Tooltip, Button,
-  Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, Popover, Badge, Alert,
+  Autocomplete, Popover, Badge,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Database, Table as TableIcon, Rows3, LayoutGrid, Columns3, Search, Pencil, Trash2, SlidersHorizontal, X } from 'lucide-react';
 import dayjs from 'dayjs';
-import { useSnackbar } from 'notistack';
 import { usePermissions } from '../../hooks/usePermission';
 import {
   useGetIndentsQuery, useGetPurchaseOrdersQuery, useGetFollowUpsQuery,
   useGetProformaInvoicesQuery, useGetAdvancePaymentsQuery, useGetGrnsQuery,
   useGetIncomingQcsQuery, useGetVendorInvoicesQuery, useGetVouchersQuery,
   useGetTallyEntriesQuery, useGetFinalPaymentsQuery,
-  useDeleteIndentMutation, useDeletePurchaseOrderMutation, useDeleteFollowUpMutation,
-  useDeleteProformaInvoiceMutation, useDeleteAdvancePaymentMutation, useDeleteGrnMutation,
-  useDeleteIncomingQcMutation, useDeleteVendorInvoiceMutation, useDeleteVoucherMutation,
-  useDeleteTallyEntryMutation, useDeleteFinalPaymentMutation,
 } from '../../store/api/procurementApi';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from './pfmsTheme';
 import IndentFormDrawer from './indents/IndentFormDrawer';
@@ -28,7 +23,7 @@ import { FU_STATUS_LABEL } from './follow-ups/fuMeta';
 import { stepTimingText } from './components/stepTimingColumns';
 import ProformaInvoiceFormDrawer from './proforma-invoices/ProformaInvoiceFormDrawer';
 import GrnFormDialog from './grn/GrnFormDialog';
-import GrnDeleteDialog from './grn/GrnDeleteDialog';
+import CascadeDeleteDialog from './components/CascadeDeleteDialog';
 import { isGrnCompleted } from './grn/grnMeta';
 import IncomingQCFormDialog from './incoming-qc/IncomingQCFormDialog';
 import VendorInvoiceFormDialog from './vendor-invoices/VendorInvoiceFormDialog';
@@ -255,7 +250,11 @@ const DELETE_PERMISSION = {
   tally: 'procurement.deleteTallyEntry', final: 'procurement.deleteFinalPayment',
 };
 
-const DELETE_WITH_REASON = new Set(['indent', 'po', 'followup', 'pi', 'vendorInvoice', 'voucher', 'tally']);
+// Delete = the cascade-delete step of each tab (CascadeDeleteDialog).
+const TAB_CASCADE_TYPE = {
+  indent: 'INDENT', po: 'PO', followup: 'FOLLOW_UP', pi: 'PI', advance: 'ADVANCE_PAYMENT', grn: 'GRN', qc: 'INCOMING_QC',
+  vendorInvoice: 'VENDOR_INVOICE', voucher: 'VOUCHER', tally: 'TALLY_ENTRY', final: 'FINAL_PAYMENT',
+};
 
 const RECORD_NUMBER_FIELD = {
   indent: 'indentNumber', po: 'poNumber', followup: 'followUpNumber', pi: 'piNumber',
@@ -343,7 +342,6 @@ const VIEWS = [
  */
 const PurchaseMasterData = () => {
   const theme = useTheme();
-  const { enqueueSnackbar } = useSnackbar();
   const { can } = usePermissions();
   const [tab, setTab] = useState('indent');
   const [view, setView] = useState('table');
@@ -361,9 +359,7 @@ const PurchaseMasterData = () => {
   const [moreAnchor, setMoreAnchor] = useState(null);
   const [editRow, setEditRow] = useState(null);   // { tab, row } | null
   const [deleteRow, setDeleteRow] = useState(null); // { tab, row } | null
-  const [deleting, setDeleting] = useState(false);
-  const [deleteReason, setDeleteReason] = useState('');
-  const [deleteError, setDeleteError] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false); // the row stays while the dialog fades out
 
   const clearFilters = () => { setSearch(''); setStatusFilter(''); setVendorFilter(null); setDateFrom(''); setDateTo(''); setExtra({}); };
   const switchTab = (t) => { setTab(t); clearFilters(); };
@@ -381,23 +377,6 @@ const PurchaseMasterData = () => {
   const vouQ = useGetVouchersQuery(P, { skip: tab !== 'voucher' });
   const tallyQ = useGetTallyEntriesQuery(P, { skip: tab !== 'tally' });
   const finalQ = useGetFinalPaymentsQuery(P, { skip: tab !== 'final' });
-
-  const [deleteIndent] = useDeleteIndentMutation();
-  const [deletePo] = useDeletePurchaseOrderMutation();
-  const [deleteFollowup] = useDeleteFollowUpMutation();
-  const [deletePi] = useDeleteProformaInvoiceMutation();
-  const [deleteAdvance] = useDeleteAdvancePaymentMutation();
-  const [deleteGrn] = useDeleteGrnMutation();
-  const [deleteQc] = useDeleteIncomingQcMutation();
-  const [deleteVendorInvoice] = useDeleteVendorInvoiceMutation();
-  const [deleteVoucher] = useDeleteVoucherMutation();
-  const [deleteTally] = useDeleteTallyEntryMutation();
-  const [deleteFinal] = useDeleteFinalPaymentMutation();
-  const deleteFns = {
-    indent: deleteIndent, po: deletePo, followup: deleteFollowup, pi: deletePi, advance: deleteAdvance,
-    grn: deleteGrn, qc: deleteQc, vendorInvoice: deleteVendorInvoice, voucher: deleteVoucher,
-    tally: deleteTally, final: deleteFinal,
-  };
 
   const current = {
     indent: indentQ, po: poQ, followup: followQ, pi: piQ, advance: advQ, grn: grnQ,
@@ -488,7 +467,7 @@ const PurchaseMasterData = () => {
             )}
             {showDelete && (
               <Tooltip title="Delete">
-                <IconButton size="small" color="error" onClick={() => setDeleteRow({ tab, row })}><Trash2 size={14} /></IconButton>
+                <IconButton size="small" color="error" onClick={() => { setDeleteRow({ tab, row }); setDeleteOpen(true); }}><Trash2 size={14} /></IconButton>
               </Tooltip>
             )}
           </Stack>
@@ -499,24 +478,6 @@ const PurchaseMasterData = () => {
   }, [columns, tab, can, latestAdvanceIds]);
 
   const closeEdit = () => setEditRow(null);
-
-  const closeDelete = () => { setDeleteRow(null); setDeleteReason(''); setDeleteError(''); };
-  const handleConfirmDelete = async () => {
-    if (!deleteRow) return;
-    setDeleting(true);
-    setDeleteError('');
-    try {
-      const { tab, row } = deleteRow;
-      await deleteFns[tab](DELETE_WITH_REASON.has(tab) ? { id: row._id, reason: deleteReason.trim() } : row._id).unwrap();
-      enqueueSnackbar(`${TAB_LABEL_SINGULAR[tab]} moved to the Recycle Bin`, { variant: 'success' });
-      closeDelete();
-    } catch (err) {
-      // Shown in the dialog — e.g. which later record must be deleted first.
-      setDeleteError(err?.data?.message || 'Failed to delete');
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   return (
     <Box sx={{ ...pfmsPageSx }}>
@@ -730,34 +691,10 @@ const PurchaseMasterData = () => {
         return <Component open onClose={closeEdit} {...{ [prop]: editRow.row }} {...(extraProps?.(editRow.row) || {})} />;
       })()}
 
-      {/* A GRN has its own delete (a completed one asks why and names what rests on it). */}
-      <GrnDeleteDialog open={deleteRow?.tab === 'grn'} grn={deleteRow?.tab === 'grn' ? deleteRow.row : null}
-        onClose={() => setDeleteRow(null)} />
-
-      {/* Delete confirmation */}
-      <Dialog open={!!deleteRow && deleteRow.tab !== 'grn'} onClose={() => (deleting ? null : closeDelete())} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800 }}>Delete {deleteRow ? TAB_LABEL_SINGULAR[deleteRow.tab] : ''}?</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="text.secondary">
-            This will delete{' '}
-            <b>{deleteRow ? (deleteRow.row[RECORD_NUMBER_FIELD[deleteRow.tab]] || 'this record') : ''}</b> and undo what it
-            changed on earlier steps. It is refused while a later step still uses it — that record is named.
-            It moves to the Recycle Bin, where it can be restored.
-          </Typography>
-          {deleteRow && DELETE_WITH_REASON.has(deleteRow.tab) && (
-            <TextField label="Reason for deleting *" fullWidth size="small" sx={{ mt: 2 }} value={deleteReason}
-              onChange={(e) => setDeleteReason(e.target.value)} inputProps={{ maxLength: 500 }} />
-          )}
-          {deleteError && <Alert severity="warning" sx={{ mt: 2 }}>{deleteError}</Alert>}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={closeDelete} disabled={deleting}>{deleteError ? 'Close' : 'Cancel'}</Button>
-          <Button onClick={handleConfirmDelete} color="error" variant="contained"
-            disabled={deleting || (deleteRow && DELETE_WITH_REASON.has(deleteRow.tab) && deleteReason.trim().length < 3)}>
-            {deleting ? 'Deleting…' : 'Delete'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      {/* Delete = cascade delete: the record with everything resting on it, after the confirmation. */}
+      <CascadeDeleteDialog open={deleteOpen} type={deleteRow ? TAB_CASCADE_TYPE[deleteRow.tab] : ''} id={deleteRow?.row._id}
+        what={deleteRow ? TAB_LABEL_SINGULAR[deleteRow.tab] : ''} number={deleteRow ? deleteRow.row[RECORD_NUMBER_FIELD[deleteRow.tab]] || '' : ''}
+        onClose={() => setDeleteOpen(false)} onExited={() => setDeleteRow(null)} />
     </Box>
   );
 };

@@ -120,6 +120,16 @@ const FilesCell = ({ docs, emptyText = '—' }) => {
   );
 };
 
+// Mirrors backend indent/quotationSteps.js quotationStepDone (the server re-checks).
+const quotationStepDone = (r, step) => {
+  if (r.approvalStatus !== 'APPROVED' || r.overallStatus === 'QUOTE_PENDING') return false;
+  if (step === 'QUOTE_COMPARATIVE') {
+    return ['YES', 'QUOTE_NOT_REQUIRED'].includes(r.quoteComparativeStep?.statusDone)
+      || ['RECEIVED', 'NOT_REQUIRED'].includes(r.quoteStep?.status);
+  }
+  return !r.quotationApprovalStep?.skipped && r.quotationApprovalStep?.statusDone === 'YES';
+};
+
 const QuotationStepList = ({ step }) => {
   const cfg = STEPS[step];
   const navigate = useNavigate();
@@ -152,13 +162,19 @@ const QuotationStepList = ({ step }) => {
   const [removeIndent] = useDeleteIndentMutation();
   const canDeleteIndent = usePermissions().can('procurement.deleteIndent');
   const del = useRecordDelete({
-    what: 'Indent', numberOf: (r) => r.indentNumber, remove: removeIndent,
+    type: 'INDENT', what: 'Indent', numberOf: (r) => r.indentNumber, remove: removeIndent,
     needsReason: (r) => r.approvalStatus !== 'DRAFT',
     consequence: () => 'The indent and its quotation work are removed. Not allowed while a PO or service QC uses it — if so, it is named here.',
   });
+  // Delete this step only (cascade): the indent and its earlier steps stay; the
+  // POs / service QC resting on the step go with it, after the confirmation.
+  const stepDel = useRecordDelete({
+    type: step, what: step === 'QUOTE_COMPARATIVE' ? 'Quote & Comparative' : 'Quotation Approval', numberOf: (r) => r.indentNumber,
+  });
   const menuActionsFor = (r) => [
     { key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => navigate(`/procurement/indents/${r._id}`) },
-    ...(canDeleteIndent ? [del.action(r)] : []),
+    ...(canDeleteIndent && quotationStepDone(r, step) ? [stepDel.action(r, { key: 'delete-step' })] : []),
+    ...(canDeleteIndent ? [del.action(r, { divider: !quotationStepDone(r, step) })] : []),
   ];
 
   const { data, isLoading, isFetching } = useGetIndentsQuery({
@@ -368,6 +384,7 @@ const QuotationStepList = ({ step }) => {
 
       <RowActionsMenu ref={menuRef} actionsFor={menuActionsFor} />
       {del.dialog}
+      {stepDel.dialog}
       <IndentQuickViewDialog indent={quickIndent} onClose={() => setQuickIndent(null)} />
 
       <QuoteComparativeDialog open={dialog === 'quote'} indent={activeIndent} onClose={close} />

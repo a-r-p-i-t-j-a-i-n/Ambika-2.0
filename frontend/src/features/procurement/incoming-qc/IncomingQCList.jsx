@@ -106,7 +106,7 @@ const IncomingQCList = () => {
   const [removeQc] = useDeleteIncomingQcMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteIncomingQc');
   const del = useRecordDelete({
-    what: 'QC', numberOf: (r) => r.qcNumber, remove: removeQc,
+    type: 'INCOMING_QC', what: 'QC', numberOf: (r) => r.qcNumber, remove: removeQc,
     needsReason: () => false,
     consequence: () => 'The QC draft is removed.',
   });

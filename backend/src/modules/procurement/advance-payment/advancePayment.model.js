@@ -56,6 +56,15 @@ const advancePaymentSchema = new Schema({
   paidAmount:             { type: Number, default: 0, min: 0 },
   paymentMode:            { type: String, enum: Object.values(PAYMENT_MODE), default: PAYMENT_MODE.E_FUND_TRANSFER },
   paymentReferenceNumber: { type: String, trim: true, default: '' }, // GBM-00345061714 / UTR / CHQ…
+  bankReference:          { type: String, trim: true, default: '' }, // paying bank / account (optional)
+
+  // Optional payment proof (same shape as a Final Payment's proofDocument).
+  proofDocument: {
+    fileName:   { type: String, trim: true, default: '' },
+    fileUrl:    { type: String, trim: true, default: '' },
+    fileType:   { type: String, trim: true, default: '' },
+    uploadedAt: { type: Date, default: null },
+  },
 
   // Snapshots at posting time (for the ledger view).
   previousBalance: { type: Number, default: 0, min: 0 },

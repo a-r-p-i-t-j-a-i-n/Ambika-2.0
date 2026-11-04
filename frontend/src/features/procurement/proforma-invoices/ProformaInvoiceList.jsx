@@ -103,7 +103,7 @@ const ProformaInvoiceList = () => {
   const [removePi] = useDeleteProformaInvoiceMutation();
   const canDeleteRecord = usePermissions().can('procurement.deleteProformaInvoice');
   const del = useRecordDelete({
-    what: 'PI', numberOf: (r) => r.piNumber, remove: removePi,
+    type: 'PI', what: 'PI', numberOf: (r) => r.piNumber, remove: removePi,
     needsReason: (r) => !(['DRAFT', 'RECEIVED'].includes(r.piStatus) && r.approvalStatus !== 'APPROVED'),
     consequence: () => 'The PI is removed and its PO goes back to "no PI". Not allowed while an advance payment or vendor invoice uses it.',
   });
