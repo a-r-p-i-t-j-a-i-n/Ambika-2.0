@@ -2,6 +2,8 @@ import Sku from './sku.model.js';
 import InventoryStock from '../inventory/inventoryStock.model.js';
 import GoodsReceiptNote, { GRN_LINE_STOCK_STATUS } from '../procurement/grn/grn.model.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 import { normalizeConversionConfig, sameUnit } from './unitConversion.js';
 
 const CONVERSION_FIELDS = ['purchaseUnit', 'purchaseConversionFactor'];
@@ -124,11 +126,20 @@ export const getSkuById = async (id) => {
 export const deleteSku = async (id, userId) => {
   const sku = await Sku.findOne({ _id: id, isDeleted: false });
   if (!sku) throw new AppError('SKU not found', 404);
+  const wasActive = sku.isActive !== false;
   sku.isDeleted = true;
   sku.isActive = false;
   sku.deletedAt = new Date();
   sku.deletedBy = userId;
   await sku.save();
+  await recycleBinService.record('sku', {
+    recordId: sku._id,
+    title: sku.name,
+    subtitle: [sku.code, sku.itemType].filter(Boolean).join(' · '),
+    keywords: [sku.category, sku.unit],
+    actor: userId,
+    plan: { steps: [binPlan.unhide(Sku.modelName, sku._id, { isActive: wasActive })] },
+  });
   return { ok: true, code: sku.code, name: sku.name };
 };
 

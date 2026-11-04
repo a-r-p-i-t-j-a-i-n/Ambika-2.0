@@ -178,6 +178,7 @@ const DprRegister = () => {
           <Typography sx={{ fontSize: '0.9rem' }}>
             {toDelete && `${fmtDate(toDelete.date)} · ${toDelete.machineCode} · ${toDelete.skuCode} · ${toDelete.operationLabel}`}
           </Typography>
+          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', mt: 1 }}>It moves to the Recycle Bin, where it can be restored.</Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setToDelete(null)}>Cancel</Button>

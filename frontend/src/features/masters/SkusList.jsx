@@ -608,7 +608,7 @@ const SkusList = () => {
           <Box>
             <Typography sx={{ fontWeight: 800, fontSize: '1.05rem' }}>Delete this SKU?</Typography>
             <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary' }}>
-              The SKU will be soft-deleted and hidden from all lists.
+              The SKU will be hidden from all lists. It moves to the Recycle Bin, where it can be restored.
             </Typography>
           </Box>
         </DialogTitle>

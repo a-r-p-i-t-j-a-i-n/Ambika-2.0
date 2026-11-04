@@ -1,6 +1,8 @@
 import Transporter from './transporter.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 export const transporterService = {
   async getAll(query) {
@@ -40,6 +42,14 @@ export const transporterService = {
       { new: true },
     );
     if (!t) throw new AppError('Transporter not found', 404);
+    await recycleBinService.record('transporter', {
+      recordId: t._id,
+      title: t.name,
+      subtitle: [t.code, t.phone].filter(Boolean).join(' · '),
+      keywords: [t.contactPerson, t.gstNo, t.vehicleTypes],
+      actor: userId,
+      plan: { steps: [binPlan.unhide(Transporter.modelName, t._id)] },
+    });
     return t;
   },
 };

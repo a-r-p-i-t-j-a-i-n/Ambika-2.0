@@ -8,6 +8,8 @@ import { logger } from '../../../utils/logger.js';
 import { invoicesHoldingAdvance, withPiAdvanceLock } from '../vendor-invoice/piAdvance.js';
 import { paymentApprovalBlock } from '../../approvals/approval.policy.js';
 import { raisePiMdApproval } from '../proforma-invoice/proformaInvoice.service.js';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, advanceRestoreBlock, advanceRestorePatch, asUser, refuse, inr } from '../recycleBin.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -209,7 +211,18 @@ export const advancePaymentService = {
     payment.deletedAt = new Date();
     payment.deletedBy = user?._id;
     payment.activityTimeline.push({ action: 'DELETE', description: 'Advance payment deleted', actorId: user?._id });
-    return payment.save();
+    const saved = await payment.save();
+    // Restore posts the amount back onto the PI — only while that is exact.
+    const posted = payment.paymentStatus !== PAYMENT_STATUS.CANCELLED;
+    await binDeleted('advancePayment', AdvancePayment, payment, {
+      title: payment.paymentNumber || 'Advance payment',
+      subtitle: [payment.piNumber && `PI ${payment.piNumber}`, payment.vendorName, posted ? inr(payment.paidAmount) : 'cancelled entry'].filter(Boolean).join(' · '),
+      keywords: [payment.poNumber, payment.paymentReferenceNumber, payment.indentNumber],
+      user,
+      before: [binPlan.hook('procurement.advance.check', { paymentId: payment._id })],
+      ...(posted ? { after: [binPlan.hook('procurement.advance.repost', { paymentId: payment._id })] } : {}),
+    });
+    return saved;
   },
 
   async getById(id) {
@@ -260,3 +273,53 @@ export const advancePaymentService = {
     return { ...p, ...q };
   },
 };
+
+// ── Recycle Bin: a restored advance payment ─────────────────────────────────
+// Posted back onto its PI with the same rules as recording it — refused unless
+// it would again be the PI's newest payment and the PI stands exactly where the
+// delete left it (advanceRestoreBlock), with the MD approval still in place and
+// the PI's advance not being allocated right now.
+const PI_LOCK_TTL_MS = 2 * 60 * 1000;
+
+registerRestoreHook('procurement.advance.check', async ({ paymentId }, { session }) => {
+  const payment = await AdvancePayment.findById(paymentId).session(session || null).lean();
+  if (!payment) refuse('The payment no longer exists.');
+  const pi = await ProformaInvoice.findOne({ _id: payment.piId, isDeleted: { $ne: true } }).session(session || null).lean();
+  if (payment.paymentStatus === PAYMENT_STATUS.CANCELLED) {
+    if (!pi) refuse(`PI ${payment.piNumber || ''} is deleted — restore the PI first.`.replace('  ', ' '));
+    return;
+  }
+  const newer = await AdvancePayment.find({
+    piId: payment.piId, _id: { $ne: payment._id }, isDeleted: { $ne: true },
+    paymentStatus: { $ne: PAYMENT_STATUS.CANCELLED }, createdAt: { $gt: payment.createdAt },
+  }).session(session || null).select('paymentNumber').lean();
+  const block = advanceRestoreBlock(pi, payment, { newer, piStatus: PI_STATUS });
+  if (block) refuse(block);
+  const approval = paymentApprovalBlock(pi.mdApprovalStatus, 'Proforma Invoice');
+  if (approval) refuse(`${approval} — the payment can't be posted back.`);
+  if (pi.advanceAllocationLockAt && Date.now() - new Date(pi.advanceAllocationLockAt).getTime() < PI_LOCK_TTL_MS) {
+    refuse("This PI's advance is being updated right now. Try again in a moment.");
+  }
+});
+
+registerRestoreHook('procurement.advance.repost', async ({ paymentId }, { session, actor }) => {
+  const opts = session ? { session } : undefined;
+  const payment = await AdvancePayment.findById(paymentId).session(session || null).lean();
+  const pi = await ProformaInvoice.findOne({ _id: payment.piId, isDeleted: { $ne: true } }).session(session || null);
+  const { paidAmount, balanceAmount, closes, piStatus } = advanceRestorePatch(pi, payment, { piStatus: PI_STATUS, paymentStatus: PAYMENT_STATUS });
+  const user = asUser(actor);
+  pi.paidAmount = paidAmount;
+  pi.balanceAmount = balanceAmount;
+  pi.piStatus = piStatus;
+  pi.updatedBy = user._id;
+  pi.activityTimeline.push({
+    action: 'ADVANCE_PAYMENT',
+    description: `${payment.paymentNumber} restored from the Recycle Bin — ${inr(payment.paidAmount)} posted again`,
+    actorId: user._id,
+  });
+  await pi.save(opts);
+  if (closes && pi.poId) {
+    // Same PO mirror as recording the payment.
+    await VendorPurchaseOrder.updateOne({ _id: pi.poId }, { $set: { piStatus: PO_PI_STATUS.PAYMENT_COMPLETED } }, opts);
+  }
+});

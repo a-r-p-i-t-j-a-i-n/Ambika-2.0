@@ -208,7 +208,7 @@ const PlanWorkspace = () => {
   };
 
   const handleDeletePhase = async (phaseId) => {
-    if (!window.confirm('Cancel/delete this phase across all SKUs?')) return;
+    if (!window.confirm('Cancel/delete this phase across all SKUs? It moves to the Recycle Bin, where it can be restored.')) return;
     try {
       const res = await deletePhase({ soNumber, phaseId }).unwrap();
       const out = res?.data?.outcome;

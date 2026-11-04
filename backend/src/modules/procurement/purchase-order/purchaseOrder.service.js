@@ -33,6 +33,8 @@ import { resolvePoTerms, defaultPoTerms, normalizePoTerms, pdfSafePoTerms, poTer
 import { resolvePoDelivery } from './poLeadTime.js';
 import { rateChangeService } from '../rate-change/rateChange.service.js';
 import mongoose from 'mongoose';
+import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
+import { binDeleted, indentLinksOf, relinkIndentToPo, asUser, refuse, inr } from '../recycleBin.js';
 
 const SERVER_BASE = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/+$/, '');
 
@@ -1656,6 +1658,11 @@ export const purchaseOrderService = {
     const label = `Purchase Order ${po.poNumber || po.draftNumber || ''}`.trim();
     const why = draft ? String(reason || '').trim() : deleteReason(reason, label);
     assertNothingAfter(label, await laterStepsOf.po(po._id));
+    // The indent slots this PO holds — released below, given back on restore.
+    const indentIds = (po.indentIds?.length ? po.indentIds : [po.indentId]).filter(Boolean);
+    const links = (await PurchaseIndent.find({ _id: { $in: indentIds }, isDeleted: { $ne: true } }).lean())
+      .map((ind) => ({ ...indentLinksOf(ind, po._id), indentNumber: ind.indentNumber || '' }))
+      .filter((l) => l.vendors.length || l.items.length);
     po.isDeleted = true;
     po.deletedAt = new Date();
     po.deletedBy = user?._id;
@@ -1663,6 +1670,18 @@ export const purchaseOrderService = {
     const saved = await po.save();
     await rateChangeService.withdrawForPo(po._id, `PO ${po.poNumber || po.draftNumber || ''} was deleted`.trim(), user);
     await purchaseOrderService._releaseIndentLinks(po, user, 'deleted');
+    // Pending rate changes stay withdrawn on restore (send them again if needed).
+    await binDeleted('purchaseOrder', VendorPurchaseOrder, po, {
+      title: po.poNumber || po.draftNumber || 'Purchase Order',
+      subtitle: [po.vendorName, po.grandTotal ? inr(po.grandTotal) : '', po.indentNumber].filter(Boolean).join(' · '),
+      keywords: [po.draftNumber, po.poNumber, (po.items || []).map((it) => [it.itemName, it.skuCode])],
+      reason: why,
+      user,
+      ...(links.length ? {
+        before: [binPlan.hook('procurement.po.checkIndents', { poId: po._id, links })],
+        after: [binPlan.hook('procurement.po.relinkIndents', { poId: po._id, links })],
+      } : {}),
+    });
     return saved;
   },
 
@@ -2119,3 +2138,44 @@ export const purchaseOrderService = {
     return po;
   },
 };
+
+// ── Recycle Bin: a restored PO takes its indent slots back ───────────────────
+// Refused when the indent is gone / no longer takes POs, or another PO has the
+// vendor or item now. The indent status rolls up as on PO creation.
+const indentsForRelink = async ({ poId, links }, session) => {
+  const po = await VendorPurchaseOrder.findById(poId).session(session || null).lean();
+  if (!po) refuse('The purchase order no longer exists.');
+  const ref = po.poNumber || po.draftNumber || '';
+  const indents = [];
+  for (const l of links || []) {
+    const indent = await PurchaseIndent.findOne({ _id: l.indentId }).session(session || null);
+    if (!indent || indent.isDeleted) refuse(`Can't restore PO ${ref} — indent ${l.indentNumber || ''} is deleted. Restore the indent first.`.replace('  ', ' '));
+    if (!PO_CREATABLE_INDENT_STATES.includes(indent.overallStatus)) {
+      refuse(`Can't restore PO ${ref} — indent ${indent.indentNumber} no longer takes POs (${String(indent.overallStatus).replace(/_/g, ' ').toLowerCase()}).`);
+    }
+    const problem = relinkIndentToPo(indent, po, l, ITEM_PROCUREMENT_STATUS);
+    if (problem) refuse(`Can't restore PO ${ref} — ${problem}`);
+    indents.push(indent);
+  }
+  return { ref, indents };
+};
+
+registerRestoreHook('procurement.po.checkIndents', async (args, { session }) => {
+  await indentsForRelink(args, session);
+});
+
+registerRestoreHook('procurement.po.relinkIndents', async (args, { session, actor }) => {
+  const { ref, indents } = await indentsForRelink(args, session);
+  const user = asUser(actor);
+  for (const indent of indents) {
+    const avs = indent.quotationApprovalStep?.approvedVendors || [];
+    if (avs.length) {
+      indent.overallStatus = avs.every((av) => !!av.poId) ? INDENT_OVERALL_STATUS.PO_READY : INDENT_OVERALL_STATUS.PARTIAL_PO_CREATED;
+    } else {
+      rollupIndentStatus(indent);
+    }
+    indent.activityTimeline.push({ action: 'PO_RESTORED', description: `PO ${ref} restored from the Recycle Bin — items linked again`, actorId: user._id });
+    indent.updatedBy = user._id;
+    await indent.save(session ? { session } : undefined);
+  }
+});

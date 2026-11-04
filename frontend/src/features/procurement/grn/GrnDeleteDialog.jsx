@@ -33,7 +33,7 @@ const GrnDeleteDialog = ({ open, grn, onClose }) => {
   const handleDelete = async () => {
     try {
       await deleteGrn(completed ? { id: grn._id, reason: reason.trim() } : grn._id).unwrap();
-      enqueueSnackbar(`GRN ${grn.grnNumber} deleted`, { variant: 'success' });
+      enqueueSnackbar(`GRN ${grn.grnNumber} moved to the Recycle Bin`, { variant: 'success' });
       close(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to delete GRN', { variant: 'error' });
@@ -46,7 +46,7 @@ const GrnDeleteDialog = ({ open, grn, onClose }) => {
       <DialogContent>
         {!completed ? (
           <Typography variant="body2" color="text.secondary">
-            Nothing was received on this GRN, so no PO or stock is affected. This cannot be undone from here.
+            Nothing was received on this GRN, so no PO or stock is affected. It moves to the Recycle Bin, where it can be restored.
           </Typography>
         ) : checking && !checkRes ? (
           <Box sx={{ py: 2, display: 'grid', placeItems: 'center' }}><CircularProgress size={22} /></Box>
@@ -60,7 +60,7 @@ const GrnDeleteDialog = ({ open, grn, onClose }) => {
           <>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               The quantity received on this GRN comes off its PO, so the PO goes back to awaiting it.
-              No QC, invoice or stock rests on it. This cannot be undone from here.
+              No QC, invoice or stock rests on it. It moves to the Recycle Bin, where it can be restored.
             </Typography>
             <TextField label="Reason for deleting *" fullWidth size="small" value={reason} autoFocus
               onChange={(e) => setReason(e.target.value)} inputProps={{ maxLength: 500 }}

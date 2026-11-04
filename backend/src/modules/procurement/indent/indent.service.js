@@ -21,6 +21,7 @@ import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
 import { bindIndentItemsToSkuMaster } from './itemSku.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
+import { binDeleted } from '../recycleBin.js';
 
 // Human-readable delay between a planned and actual date.
 const computeDelay = (plannedAt, actualAt) => {
@@ -451,7 +452,16 @@ export const indentService = {
     indent.deletedAt = new Date();
     indent.deletedBy = user?._id;
     indent.activityTimeline.push({ action: 'DELETE', description: why ? `Indent deleted. Reason: ${why}` : 'Indent deleted', actorId: user?._id });
-    return indent.save();
+    const saved = await indent.save();
+    // Nothing else changed — the restore just brings it back.
+    await binDeleted('indent', PurchaseIndent, indent, {
+      title: indent.indentNumber || 'Draft indent',
+      subtitle: [indent.department, indent.raisedBy, `${(indent.items || []).length} item(s)`].filter(Boolean).join(' · '),
+      keywords: [(indent.items || []).map((it) => [it.itemName, it.skuCode])],
+      reason: why,
+      user,
+    });
+    return saved;
   },
 
   async submit(id, user) {

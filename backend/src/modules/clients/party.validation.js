@@ -70,3 +70,16 @@ export const partyQuerySchema = Joi.object({
 export const mongoIdParamSchema = Joi.object({
   id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
 });
+
+const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
+
+// Party → Ordered SKUs: add SKUs from the SKU master (several at once).
+export const addOrderedSkusSchema = Joi.object({
+  skuIds: Joi.array().items(objectId.required()).min(1).max(100).unique().required(),
+});
+
+// Party → Ordered SKUs: remove one item.
+export const orderedSkuParamSchema = Joi.object({
+  id: objectId.required(),
+  itemId: objectId.required(),
+});

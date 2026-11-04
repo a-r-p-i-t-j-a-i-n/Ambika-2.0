@@ -27,4 +27,18 @@ export const partyController = {
     await partyService.remove(req.params.id, req.user?._id);
     res.json(ApiResponse.ok('Party deleted'));
   }),
+
+  addOrderedSkus: asyncHandler(async (req, res) => {
+    const { party, added, linked, already } = await partyService.addOrderedSkus(req.params.id, req.body.skuIds, req.user?._id);
+    const done = added.length + linked.length;
+    const message = done
+      ? `${done} SKU${done === 1 ? '' : 's'} added${already.length ? ` · ${already.length} already on the list` : ''}`
+      : 'Those SKUs are already on the list';
+    res.json(ApiResponse.ok(message, party));
+  }),
+
+  removeOrderedSku: asyncHandler(async (req, res) => {
+    const { party, removed } = await partyService.removeOrderedSku(req.params.id, req.params.itemId, req.user?._id);
+    res.json(ApiResponse.ok(`${removed} removed`, party));
+  }),
 };

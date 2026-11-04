@@ -508,7 +508,7 @@ const PurchaseMasterData = () => {
     try {
       const { tab, row } = deleteRow;
       await deleteFns[tab](DELETE_WITH_REASON.has(tab) ? { id: row._id, reason: deleteReason.trim() } : row._id).unwrap();
-      enqueueSnackbar(`${TAB_LABEL_SINGULAR[tab]} deleted`, { variant: 'success' });
+      enqueueSnackbar(`${TAB_LABEL_SINGULAR[tab]} moved to the Recycle Bin`, { variant: 'success' });
       closeDelete();
     } catch (err) {
       // Shown in the dialog — e.g. which later record must be deleted first.
@@ -742,6 +742,7 @@ const PurchaseMasterData = () => {
             This will delete{' '}
             <b>{deleteRow ? (deleteRow.row[RECORD_NUMBER_FIELD[deleteRow.tab]] || 'this record') : ''}</b> and undo what it
             changed on earlier steps. It is refused while a later step still uses it — that record is named.
+            It moves to the Recycle Bin, where it can be restored.
           </Typography>
           {deleteRow && DELETE_WITH_REASON.has(deleteRow.tab) && (
             <TextField label="Reason for deleting *" fullWidth size="small" sx={{ mt: 2 }} value={deleteReason}

@@ -14,6 +14,8 @@ import Machine from '../machines/machine.model.js';
 import Operator from './machineOperator.model.js';
 import MachineOperatorAssignment from './machineOperatorAssignment.model.js';
 import { AppError } from '../../../utils/apiResponse.js';
+import { recycleBinService } from '../../recycle-bin/recycleBin.service.js';
+import { binPlan, registerRestoreHook } from '../../recycle-bin/recycleBin.restore.js';
 
 const live = { isDeleted: { $ne: true } };
 
@@ -119,7 +121,32 @@ export const assignmentService = {
     await assignment.save();
 
     await syncOperatorMachineCodes(operator._id);
-    return { machineId: machine._id, operatorId: operator._id, unassigned: true };
+    return {
+      machineId: machine._id, operatorId: operator._id, unassigned: true,
+      assignmentId: assignment._id, machineCode: machine.code, operatorName: operator.name,
+    };
+  },
+
+  /**
+   * The Unassign button (machine or operator screen): unassign, and keep the
+   * link in the Recycle Bin. Edits that replace a whole set don't use this.
+   */
+  async unassignToBin(machineId, operatorId, userId, openPath) {
+    const result = await this.unassign(machineId, operatorId, userId);
+    await recycleBinService.record('machineAssignment', {
+      recordId: result.assignmentId,
+      title: `${result.operatorName} → ${result.machineCode}`,
+      subtitle: 'Operator unassigned from machine',
+      keywords: [result.machineCode, result.operatorName],
+      actor: userId,
+      openPath,
+      plan: {
+        steps: [binPlan.set(MachineOperatorAssignment.modelName, result.assignmentId, {}, { optional: true })],
+        after: [binPlan.hook('masters.reattach', { assignmentIds: [result.assignmentId], strict: true })],
+        afterCommit: [binPlan.hook('masters.syncOperatorCodes', { operatorIds: [result.operatorId] })],
+      },
+    });
+    return result;
   },
 
   /** Replace a machine's whole operator set in one call (used by the edit drawer). */
@@ -270,5 +297,42 @@ export const assignmentService = {
     return res.modifiedCount || 0;
   },
 };
+
+// ── Recycle Bin restore hooks ───────────────────────────────
+
+/**
+ * Bring back machine ↔ operator links a delete or unassign took away. A link
+ * comes back only while both sides are live and the pair hasn't been linked
+ * again since; `strict` (a single unassign) refuses instead of skipping.
+ */
+registerRestoreHook('masters.reattach', async ({ assignmentIds = [], strict = false }, { session }) => {
+  const refuse = (message) => { if (strict) throw new AppError(message, 409); };
+  const rows = await MachineOperatorAssignment.find({ _id: { $in: assignmentIds } }).session(session || null).lean();
+  if (!rows.length) refuse("Can't restore — that machine assignment no longer exists.");
+  for (const row of rows) {
+    if (!row.isDeleted) { refuse('It is already back — nothing to restore.'); continue; }
+    const [machine, operator] = await Promise.all([
+      Machine.findOne({ _id: row.machineId, ...live }).session(session || null).lean(),
+      Operator.findOne({ _id: row.operatorId, ...live }).session(session || null).lean(),
+    ]);
+    if (!machine || !operator) {
+      refuse(`Can't restore — the ${!machine ? 'machine' : 'operator'} is deleted. Restore it first.`);
+      continue;
+    }
+    const again = await MachineOperatorAssignment.exists({ machineId: row.machineId, operatorId: row.operatorId, isDeleted: false })
+      .session(session || null);
+    if (again) { refuse(`${operator.name} is already assigned to ${machine.code} again.`); continue; }
+    await MachineOperatorAssignment.updateOne(
+      { _id: row._id },
+      { $set: { isDeleted: false, isActive: true, deletedAt: null, deletedBy: null, machineCode: machine.code } },
+      { session: session || undefined },
+    );
+  }
+});
+
+/** Refresh the operators' machineCodes mirror once a restore is saved. */
+registerRestoreHook('masters.syncOperatorCodes', async ({ operatorIds = [] }) => {
+  for (const id of [...new Set(operatorIds.map(String))]) await syncOperatorMachineCodes(id);
+});
 
 export default assignmentService;
