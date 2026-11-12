@@ -298,6 +298,16 @@ const grnSchema = new Schema({
   invoiceDocument:  { type: grnDocumentSchema, default: () => ({}) },
 
   remarks: { type: String, trim: true, default: '' },
+
+  /**
+   * Incoming QC typed on the combined GRN + QC form while this GRN is still a
+   * DRAFT — a QC record can only exist once the GRN is completed, so until then
+   * the entries are kept here (see grnQcSave.service). Storage only: no posting,
+   * stock or approval rule reads it. Cleared once the QC records exist.
+   *   [{ poId, qcDate, checkedByName, preparedBy, remarks, qcReportDocument,
+   *      items: [{ lineKey, receivedQty, acceptedQty, rejectedQty, reworkQty, qcRemarks, … }] }]
+   */
+  qcDraft: { type: mongoose.Schema.Types.Mixed, default: null },
 }, baseSchemaOptions);
 
 grnSchema.index({ grnNumber: 'text', poNumber: 'text', vendorName: 'text', invoiceNumber: 'text', uniqueId: 'text' });

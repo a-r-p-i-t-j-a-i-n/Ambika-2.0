@@ -51,7 +51,6 @@ import { isMdForDirectSave } from './poDirectSave';
 
 import { GrnStatusChip } from '../grn/grnMeta';
 import GrnFormDialog from '../grn/GrnFormDialog';
-import GrnCompleteDialog from '../grn/GrnCompleteDialog';
 import FmsDoerCard from '../../fms-doers/FmsDoerCard';
 
 // ── Page-wide design tokens — same spacing/typography scale as Indent Detail
@@ -202,7 +201,8 @@ const PurchaseOrderDetail = () => {
 
   // Step 1.8 — goods receipt notes against this PO.
   const [grnFormOpen, setGrnFormOpen] = useState(false);
-  const [grnCompleteOpen, setGrnCompleteOpen] = useState(false);
+  // The draft GRN opened in the GRN + QC form (where it is saved and completed).
+  const [grnDraftOpen, setGrnDraftOpen] = useState(false);
   const grnRelevant = Boolean(data?.data) &&
     ['RELEASED_TO_VENDOR', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(data.data.poStatus);
   const { data: grnRes } = useGetGrnsByPoQuery(id, { skip: !grnRelevant });
@@ -226,14 +226,14 @@ const PurchaseOrderDetail = () => {
   const totalReceived = (po?.items || []).reduce((s, it) => s + (it.receivedQty || 0), 0);
   const totalOrdered = (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0);
   // GRN-state gate — drives the Next Action / Quick Actions once a GRN exists:
-  // Draft → Complete GRN; Partial-received with pending qty → Create Next GRN;
+  // Draft → Open GRN + QC; Partial-received with pending qty → Create Next GRN;
   // Partial/Fully received with QC still pending → Open GRN & QC (QC sits on the GRN page).
   const grnGate = (() => {
     if (!activeGrn) return null;
     if (activeGrn.grnStatus === 'DRAFT') {
       return {
-        tone: 'warning', text: 'A GRN has been created for this PO — complete it, then Incoming QC posts the accepted stock.',
-        primary: { label: 'Complete GRN', icon: <PackageCheck size={16} />, onClick: () => setGrnCompleteOpen(true) },
+        tone: 'warning', text: 'A draft GRN exists for this PO — finish it and its Incoming QC on the GRN + QC form; accepted stock posts when the QC completes.',
+        primary: { label: 'Open GRN + QC', icon: <PackageCheck size={16} />, onClick: () => setGrnDraftOpen(true) },
       };
     }
     if (activeGrn.qcStatus !== 'PENDING') return null; // this GRN's QC is already resolved
@@ -897,7 +897,7 @@ const PurchaseOrderDetail = () => {
       <PurchaseOrderPiNotRequiredDialog open={piNotReqOpen} po={po} onClose={() => setPiNotReqOpen(false)} />
 
       <GrnFormDialog open={grnFormOpen} presetPo={po} onClose={() => setGrnFormOpen(false)} />
-      <GrnCompleteDialog open={grnCompleteOpen} grn={activeGrn} onClose={() => setGrnCompleteOpen(false)} />
+      <GrnFormDialog open={grnDraftOpen} grn={activeGrn} onClose={() => setGrnDraftOpen(false)} />
 
     </Box>
   );

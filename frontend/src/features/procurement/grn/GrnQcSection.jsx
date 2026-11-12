@@ -1,271 +1,113 @@
-import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, Typography, Paper, Button, Chip, Alert, CircularProgress, Grid } from '@mui/material';
-import { ClipboardCheck, Save, FileDown, ExternalLink } from 'lucide-react';
-import { useSnackbar } from 'notistack';
-import {
-  useCreateIncomingQcMutation, useUpdateIncomingQcMutation, useGetIncomingQcsByGrnQuery,
-} from '../../../store/api/procurementApi';
+import { Box, Typography, Button, Chip, Alert, CircularProgress, Grid } from '@mui/material';
+import { ClipboardCheck, FileDown, ExternalLink, Lock, PencilLine } from 'lucide-react';
+import { useGetIncomingQcsByGrnQuery } from '../../../store/api/procurementApi';
 import QcInspectionForm from '../incoming-qc/QcInspectionForm';
-import IncomingQCCompleteDialog from '../incoming-qc/IncomingQCCompleteDialog';
 import IncomingQCPdfPreview from '../incoming-qc/IncomingQCPdfPreview';
 import { QcStatusChip, QcResultChip, fmtDate } from '../incoming-qc/qcMeta';
-import {
-  emptyHeader, headerFromQc, linesFromGrn, linesFromQc, allLinesBalanced, buildQcPayload, expectedQcResult,
-  mergeEnteredLines, lineKey, pickGrnQc,
-} from '../incoming-qc/qcForm';
-import { pfmsCardSx } from '../pfmsTheme';
+import { headerFromQc, linesFromQc, pickGrnQc } from '../incoming-qc/qcForm';
+import { PFMS } from '../pfmsTheme';
+import { FormSection } from '../components/PfmsFormDialog';
+import { lazyWithRetry } from '../../../utils/lazyWithRetry';
 import GrnQcStatusChip from './GrnQcStatusChip';
-import GrnCompleteDialog from './GrnCompleteDialog';
 import { resolveGrnQcStage } from './grnQcStage';
 import { isGrnCompleted } from './grnMeta';
+
+// The combined GRN + QC form. Lazy: it renders this section itself (for a
+// completed QC), so a static import would be a cycle.
+const GrnFormDialog = lazyWithRetry(() => import('./GrnFormDialog'));
 
 const noop = () => {};
 
 const Field = ({ label, value }) => (
   <Box sx={{ minWidth: 0 }}>
-    <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'text.secondary', mb: 0.25 }}>{label}</Typography>
-    <Typography component="div" sx={{ fontWeight: 600, color: 'text.primary' }}>{value ?? '—'}</Typography>
+    <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', color: PFMS.sub, mb: 0.25 }}>{label}</Typography>
+    <Typography component="div" sx={{ fontWeight: 700, fontSize: '0.9rem', color: PFMS.ink }}>{value ?? '—'}</Typography>
   </Box>
 );
 
-// QC typed in before the QC record may exist (GRN not yet completed)
-// is kept on this device so it is not lost between the steps. Cleared as soon as
-// the QC is saved to the server, which from then on is the only copy.
-const localKey = (grnId) => `grnQcDraft:${grnId}`;
-const readLocal = (grnId) => {
-  try { return JSON.parse(localStorage.getItem(localKey(grnId)) || 'null') || {}; } catch { return {}; }
-};
-const writeLocal = (grnId, v) => { try { localStorage.setItem(localKey(grnId), JSON.stringify(v)); } catch { /* storage unavailable */ } };
-const clearLocal = (grnId) => { try { localStorage.removeItem(localKey(grnId)); } catch { /* storage unavailable */ } };
-
-const ENTERED = ['receivedQty', 'acceptedQty', 'rejectedQty', 'reworkQty', 'defectType', 'defectSeverity', 'qcRemarks'];
-const pick = (it) => Object.fromEntries(ENTERED.map((f) => [f, it[f]]));
-
-/**
- * The Incoming QC form for a saved GRN, with the one combined action
- * "Complete GRN + QC". Each click performs the NEXT step the existing rules
- * allow, each through its existing confirmation:
- *
- *   GRN draft     → Complete GRN (GrnCompleteDialog — receipt finalised, no stock yet)
- *   completed     → save the QC and complete it (IncomingQCCompleteDialog) —
- *                   on a QC-gated GRN this is when accepted qty is posted to stock
- *
- * The GRN's MD signature is recorded separately (MD Approval card / screen) and
- * never holds the QC back. A QC draft can be saved to the server once the GRN
- * is completed; before that the entries are kept on this device. Keyed by the QC id, so it re-seeds only when
- * the QC record itself appears — never on a refetch.
- */
-const GrnQcEditor = ({ grn, qc, poId, stage, prepareGrn, onCompleteGrn, onRequestComplete, onConflict, footerSlot }) => {
-  const { enqueueSnackbar } = useSnackbar();
-  const [local] = useState(() => (qc ? {} : readLocal(grn._id)));
-  const [header, setHeader] = useState(() => (qc ? headerFromQc(qc) : { ...emptyHeader(), ...(local.header || {}) }));
-  const [doc, setDoc] = useState(() => (qc?.qcReportDocument?.fileUrl ? { ...qc.qcReportDocument } : (local.doc || null)));
-  const [serverItems, setServerItems] = useState(() => (qc ? linesFromQc(qc) : []));
-  const [entered, setEntered] = useState(() => (qc ? {} : (local.entered || {})));
-  const [uploading, setUploading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  // Set as soon as Save creates the QC, so a second click updates it instead of
-  // trying to create another one before the list refetches.
-  const [createdId, setCreatedId] = useState(null);
-  const qcId = qc?._id || createdId;
-
-  const [createQc, { isLoading: creating }] = useCreateIncomingQcMutation();
-  const [updateQc, { isLoading: updating }] = useUpdateIncomingQcMutation();
-  const working = creating || updating || uploading || busy;
-
-  // Before a QC record exists the lines follow the GRN (scoped to this PO on a
-  // multi-PO GRN); typed values ride on top.
-  const items = qc ? serverItems : mergeEnteredLines(linesFromGrn(grn, poId), entered);
-  const setItem = (idx, patch) => {
-    if (qc) { setServerItems((cur) => cur.map((it, i) => (i === idx ? { ...it, ...patch } : it))); return; }
-    const line = items[idx];
-    setEntered((cur) => ({ ...cur, [lineKey(line)]: { ...pick(line), ...patch } }));
-  };
-  const balanced = allLinesBalanced(items);
-
-  useEffect(() => {
-    if (qcId) return;
-    writeLocal(grn._id, { header, doc, entered });
-  }, [grn._id, qcId, header, doc, entered]);
-
-  const canSaveDraft = stage.editable;
-
-  /** Create (first time) or update the QC; returns the saved record or null. */
-  const save = async () => {
-    if (!items.length) { enqueueSnackbar('No received items to inspect', { variant: 'warning' }); return null; }
-    const payload = buildQcPayload({ header, items, doc });
-    try {
-      if (qcId) return (await updateQc({ id: qcId, ...payload }).unwrap())?.data || null;
-      const saved = (await createQc({ ...payload, grnId: grn._id, poId: poId || undefined }).unwrap())?.data || null;
-      if (saved?._id) { setCreatedId(saved._id); clearLocal(grn._id); }
-      return saved;
-    } catch (err) {
-      enqueueSnackbar(err?.data?.message || 'Failed to save QC', { variant: 'error' });
-      // Another request already created this GRN's QC — reload so it is resumed here.
-      if (err?.status === 409) onConflict?.();
-      return null;
-    }
-  };
-
-  const onSaveDraft = async () => {
-    const saved = await save();
-    if (saved) enqueueSnackbar(`QC ${saved.qcNumber || ''} saved as draft`, { variant: 'success' });
-  };
-
-  const onCompleteAll = async () => {
-    if (!items.length) { enqueueSnackbar('No received items to inspect', { variant: 'warning' }); return; }
-    if (!balanced) {
-      enqueueSnackbar('Accepted + Rejected must equal Received on every line', { variant: 'warning' });
-      return;
-    }
-    if (stage.key === 'GRN_DRAFT') {
-      setBusy(true);
-      try {
-        // Unsaved GRN edits (Create / Edit GRN form) are saved first, so what is
-        // received is exactly what is on screen.
-        if (prepareGrn && !(await prepareGrn())) return;
-        onCompleteGrn();
-      } finally { setBusy(false); }
-      return;
-    }
-    if (stage.editable) {
-      const saved = await save();
-      if (saved) onRequestComplete(saved);
-    }
-  };
-
-  // GRNs completed before QC-gated posting already hold their stock; on every
-  // other GRN nothing is usable until this QC completes.
-  const legacyStock = Boolean(grn.stockPosted) && !grn.stockPostingStage && stage.key !== 'GRN_DRAFT';
-  const nextText = (() => {
-    if (stage.key === 'GRN_DRAFT') return 'Next action: Complete GRN, then complete the QC — stock is posted only when the QC is completed.';
-    return legacyStock
-      ? 'Next action: Complete QC — this earlier GRN already added its stock, so rejected quantities move out of stock.'
-      : 'Next action: Complete QC — accepted quantities are then posted to stock; rejected quantities never enter it.';
-  })();
-
-  const actionButtons = (
-    <>
-      {/* The server creates a QC only for a completed GRN, so before that there
-          is nothing to save — entries are kept on this device meanwhile. */}
-      {canSaveDraft && (
-        <Button variant="outlined" onClick={onSaveDraft} disabled={working} data-testid="grn-qc-save-draft"
-          startIcon={creating || updating ? <CircularProgress size={14} color="inherit" /> : <Save size={16} />}>
-          Save QC Draft
-        </Button>
-      )}
-      <Button variant="contained" color="success" onClick={onCompleteAll} disabled={working || !items.length} data-testid="grn-qc-complete"
-        startIcon={busy ? <CircularProgress size={14} color="inherit" /> : <ClipboardCheck size={16} />}>
-        Complete GRN + QC
-      </Button>
-    </>
-  );
-
-  return (
-    <>
-      {stage.key === 'QC_DRAFT' && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          Resuming draft {qc.qcNumber} — saved {fmtDate(qc.updatedAt)}.
-        </Alert>
-      )}
-      <QcInspectionForm
-        header={header} onHeaderChange={(patch) => setHeader((h) => ({ ...h, ...patch }))}
-        items={items} onItemChange={setItem}
-        doc={doc} onDocChange={setDoc} onUploadingChange={setUploading}
-        sourceField={null}
-        emptyText="Enter received quantities on the GRN and save it to inspect its lines."
-      />
-      <Box data-testid="grn-qc-actions" sx={{
-        mt: 2, p: 1.5, borderRadius: '10px', border: '1px solid', borderColor: 'divider', bgcolor: '#fff',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, flexWrap: 'wrap',
-      }}>
-        <Box sx={{ minWidth: 220, flex: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            <Typography variant="caption" color="text.secondary" fontWeight={700}>Expected result</Typography>
-            <QcResultChip result={items.length ? expectedQcResult(items) : ''} />
-            <Typography variant="caption" color={balanced ? 'text.secondary' : 'error'}>
-              · {items.length} line(s) · {balanced ? 'balanced' : 'not balanced'}
-            </Typography>
-          </Box>
-          <Typography variant="body2" data-testid="grn-qc-next" sx={{ mt: 0.5, color: 'text.secondary' }}>{nextText}</Typography>
-        </Box>
-        {/* In the Create / Edit GRN form these buttons live in its sticky footer
-            (footerSlot); elsewhere they stay here. */}
-        {!footerSlot && <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>{actionButtons}</Box>}
-      </Box>
-      {footerSlot && createPortal(actionButtons, footerSlot)}
-    </>
-  );
+const NEXT_TEXT = {
+  GRN_DRAFT: 'The GRN is a draft. Its Incoming QC is entered on the same GRN + QC form and both are completed by one Save — stock posts only when the QC is completed.',
+  QC_READY: 'The GRN is completed and its Incoming QC is pending — open the GRN + QC form to inspect and complete it. Accepted quantities post to stock then.',
+  QC_DRAFT: 'A QC draft is saved — open the GRN + QC form to finish it. Accepted quantities post to stock when it is completed.',
 };
 
 /**
- * The Incoming QC part of a GRN — shown directly under the GRN, on the GRN page
- * and in the Create / Edit GRN form once the GRN is saved. Same QC record, APIs
- * and rules as before; it loads the GRN's QC itself, so both places behave alike.
+ * The Incoming QC of a GRN as shown on the GRN page and in the task runner —
+ * and, for a completed QC, inside the GRN + QC form. A completed QC is shown
+ * read-only. A QC still to be done is NOT entered here: there is one place to
+ * enter and save GRN + QC (GrnFormDialog), and this opens it.
  *
  * A multi-PO GRN gets one QC per PO (see incomingQc.service.js) — the caller
- * renders one <GrnQcSection poId poNumber /> per PO in that case (see
- * GrnQcSections below); a single-PO / W/O PO GRN renders exactly one,
- * unscoped, identical to before.
+ * renders one <GrnQcSection poId poNumber /> per PO (GrnQcSections below); a
+ * single-PO / W/O PO GRN renders exactly one, unscoped.
  *
- *   grn         the saved GRN (live from the API)
- *   prepareGrn  optional async () => boolean — save unsaved GRN edits first
- *   poId        scope to one PO's QC on a multi-PO GRN (omit for single-PO/W-O-PO)
- *   poNumber    that PO's number, for the section title
+ *   grn          the saved GRN (live from the API)
+ *   poId         scope to one PO's QC on a multi-PO GRN
+ *   poNumber     that PO's number, for the section title
+ *   readOnlyGrn  show the "GRN read-only" mark (inside the form)
  */
-const GrnQcSection = ({ grn, prepareGrn, poId, poNumber, footerSlot }) => {
+const GrnQcSection = ({ grn, poId, poNumber, readOnlyGrn = false }) => {
   const navigate = useNavigate();
   const completedGrn = isGrnCompleted(grn);
-  const { data: qcRes, isLoading: qcLoading, refetch } = useGetIncomingQcsByGrnQuery(grn._id, { skip: !completedGrn });
+  const { data: qcRes, isLoading: qcLoading } = useGetIncomingQcsByGrnQuery(grn._id, { skip: !completedGrn });
   const qc = pickGrnQc(qcRes?.data || [], poId);
   const stage = resolveGrnQcStage(grn, qc);
-
-  const [grnCompleteOpen, setGrnCompleteOpen] = useState(false);
-  const [completeTarget, setCompleteTarget] = useState(null);
   const [pdfOpen, setPdfOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
 
-  const editing = ['GRN_DRAFT', 'QC_READY', 'QC_DRAFT'].includes(stage.key);
+  const open = ['GRN_DRAFT', 'QC_READY', 'QC_DRAFT'].includes(stage.key);
 
   return (
-    <Paper id={poId ? `grn-qc-section-${poId}` : 'grn-qc-section'} sx={{ ...pfmsCardSx, p: 2, scrollMarginTop: 80 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, fontSize: '0.92rem', color: 'primary.main' }}>
-            <ClipboardCheck size={18} /> Incoming QC{poNumber ? ` — PO ${poNumber}` : ''}
-          </Typography>
-          {qc?.qcNumber && <Chip size="small" variant="outlined" label={qc.qcNumber} sx={{ fontWeight: 700 }} />}
+    <FormSection id={poId ? `grn-qc-section-${poId}` : 'grn-qc-section'} sx={{ scrollMarginTop: 80 }}
+      icon={<ClipboardCheck size={20} />} title={`Incoming QC${poNumber ? ` — PO ${poNumber}` : ''}`}
+      badge={(
+        <>
           <span data-testid="grn-qc-status"><GrnQcStatusChip stage={stage} /></span>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {qc?.qcNumber && <Chip size="small" variant="outlined" label={qc.qcNumber} sx={{ fontWeight: 700 }} />}
+          {readOnlyGrn && <Chip size="small" variant="outlined" icon={<Lock size={12} />} label="GRN read-only" sx={{ fontWeight: 700 }} />}
+        </>
+      )}
+      actions={(qc?.qcPdfUrl || qc?._id) ? (
+        <>
           {qc?.qcPdfUrl && (
             <Button size="small" variant="outlined" startIcon={<FileDown size={14} />} onClick={() => setPdfOpen(true)}>QC Report</Button>
           )}
           {/* Full saved record: every stored field (incl. earlier rework / defect /
-              severity), the timeline and attachments. Viewing only — QC is still
-              entered and completed here. */}
+              severity), the timeline and attachments. Viewing only. */}
           {qc?._id && (
             <Button size="small" variant="text" startIcon={<ExternalLink size={14} />}
               onClick={() => navigate(`/procurement/incoming-qc/${qc._id}`)}>
               View full QC record
             </Button>
           )}
-        </Box>
-      </Box>
-
+        </>
+      ) : null}>
       {completedGrn && qcLoading && !qc ? (
         <Box sx={{ display: 'grid', placeItems: 'center', py: 4 }}><CircularProgress size={22} /></Box>
       ) : (
         <>
           {stage.key === 'CANCELLED' && <Alert severity="info">{stage.desc}</Alert>}
 
-          {editing && (
-            <GrnQcEditor key={qc?._id || 'new'} grn={grn} qc={stage.key === 'QC_DRAFT' ? qc : null} poId={poId} stage={stage}
-              prepareGrn={prepareGrn} footerSlot={footerSlot}
-              onCompleteGrn={() => setGrnCompleteOpen(true)}
-              onRequestComplete={setCompleteTarget}
-              onConflict={refetch} />
+          {open && (
+            <Box data-testid="grn-qc-actions" sx={{
+              p: 1.5, px: 2, borderRadius: '10px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surfaceAlt,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, flexWrap: 'wrap',
+            }}>
+              <Box sx={{ minWidth: 220, flex: 1 }}>
+                {stage.key === 'QC_DRAFT' && (
+                  <Typography sx={{ fontSize: '0.86rem', fontWeight: 700, color: PFMS.ink, mb: 0.25 }}>
+                    Draft {qc.qcNumber} saved {fmtDate(qc.updatedAt)} · accepted {qc.totalAccepted ?? '—'} · rejected {qc.totalRejected ?? '—'}
+                  </Typography>
+                )}
+                <Typography data-testid="grn-qc-next" sx={{ fontSize: '0.84rem', color: PFMS.sub }}>{NEXT_TEXT[stage.key]}</Typography>
+              </Box>
+              <Button variant="contained" color="success" startIcon={<PencilLine size={16} />} onClick={() => setFormOpen(true)}
+                data-testid="grn-qc-open-form" sx={{ fontWeight: 700 }}>
+                Open GRN + QC form
+              </Button>
+            </Box>
           )}
 
           {stage.key === 'QC_DONE' && (
@@ -293,24 +135,24 @@ const GrnQcSection = ({ grn, prepareGrn, poId, poNumber, footerSlot }) => {
         </>
       )}
 
-      <GrnCompleteDialog open={grnCompleteOpen} grn={grn} onClose={() => setGrnCompleteOpen(false)} />
-      <IncomingQCCompleteDialog open={Boolean(completeTarget)} qc={completeTarget} onClose={() => setCompleteTarget(null)} />
       {qc && <IncomingQCPdfPreview open={pdfOpen} qc={qc} onClose={() => setPdfOpen(false)} />}
-    </Paper>
+      {formOpen && (
+        <Suspense fallback={null}>
+          <GrnFormDialog open grn={grn} onClose={() => setFormOpen(false)} />
+        </Suspense>
+      )}
+    </FormSection>
   );
 };
 
 /**
  * Renders the GRN's Incoming QC section(s) — one per PO on a multi-PO GRN
  * (`grn.poIds.length > 1`), or exactly one, unscoped, for every single-PO or
- * W/O PO GRN (identical to always rendering `<GrnQcSection grn={grn} />`,
- * the only thing every pre-existing GRN ever does).
+ * W/O PO GRN.
  */
-export const GrnQcSections = ({ grn, footerSlot, ...rest }) => {
+export const GrnQcSections = ({ grn, ...rest }) => {
   const poIds = grn?.poIds || [];
-  // `footerSlot` (the GRN form's sticky footer) hosts the buttons of a single QC;
-  // a multi-PO GRN has several, so each keeps its own buttons in its panel.
-  if (poIds.length <= 1) return <GrnQcSection grn={grn} footerSlot={footerSlot} {...rest} />;
+  if (poIds.length <= 1) return <GrnQcSection grn={grn} {...rest} />;
   const poNumbers = grn?.poNumbers || [];
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>

@@ -1,5 +1,6 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
 import { grnService } from './grn.service.js';
+import { grnQcSaveService } from './grnQcSave.service.js';
 import { attachStepTiming } from '../stepTiming.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 
@@ -28,6 +29,13 @@ export const grnController = {
   create: asyncHandler(async (req, res) => {
     const grn = await grnService.create(req.body, req.user);
     res.status(201).json(ApiResponse.created('GRN created', grn));
+  }),
+
+  // One Save on the combined GRN + Incoming QC form (draft, or complete both).
+  saveWithQc: asyncHandler(async (req, res) => {
+    const result = await grnQcSaveService.save(req.params.id || null, req.body, req.user);
+    const msg = req.body.complete ? 'GRN and Incoming QC completed' : 'GRN and Incoming QC saved as draft';
+    res.status(req.params.id ? 200 : 201).json(ApiResponse.ok(msg, result));
   }),
 
   // Preview the GRN PDF from current (unsaved) form data — streams the PDF, persists nothing.

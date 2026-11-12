@@ -53,6 +53,12 @@ export const pfmsUnderStepTabsStyle = { '--pfms-chrome': `calc(var(--pfms-hub-ch
 export const pfmsTitleSx ={ fontSize: '1rem', fontWeight: 800, color: PFMS.ink, lineHeight: 1.2 };
 export const pfmsSubtitleSx = { fontSize: '0.72rem', color: PFMS.sub, fontWeight: 500 };
 export const pfmsCardSx = { borderRadius: '8px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surface };
+// Number inputs in form tables (GRN Material Receipt, QC Inspection): no
+// up/down spinner, which crowds a narrow centred quantity.
+export const pfmsNoSpinSx = {
+  '& input[type=number]': { MozAppearance: 'textfield' },
+  '& input[type=number]::-webkit-outer-spin-button, & input[type=number]::-webkit-inner-spin-button': { WebkitAppearance: 'none', margin: 0 },
+};
 export const pfmsTableHeadSx = {
   bgcolor: PFMS.surfaceAlt,
   fontWeight: 800,

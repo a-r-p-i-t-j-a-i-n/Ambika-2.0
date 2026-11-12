@@ -214,7 +214,8 @@ const EDIT_CONFIG = {
   // A completed GRN opens in correction mode (procurement.editGrn).
   grn:           { Component: GrnFormDialog,            prop: 'grn',     canEdit: (r, can) => r.grnStatus === 'DRAFT' || (isGrnCompleted(r) && can('procurement.editGrn')),
     extraProps: (r) => ({ correct: isGrnCompleted(r) }) },
-  qc:            { Component: IncomingQCFormDialog,     prop: 'qc',      canEdit: (r) => ['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus) },
+  // A goods QC (on a GRN) is entered and saved on its GRN + QC form only.
+  qc:            { Component: IncomingQCFormDialog,     prop: 'qc',      canEdit: (r) => ['DRAFT', 'IN_PROGRESS'].includes(r.qcStatus) && !r.grnId },
   vendorInvoice: { Component: VendorInvoiceFormDialog,  prop: 'invoice', canEdit: (r) => ['DRAFT', 'RECEIVED', 'APPROVED', 'PAYMENT_PENDING'].includes(r.invoiceStatus) },
   voucher:       { Component: VoucherFormDialog,        prop: 'voucher', canEdit: (r) => r.voucherStatus === 'DRAFT' },
   tally:         { Component: TallyEntryFormDialog,     prop: 'entry',   canEdit: (r) => r.tallyEntryStatus === 'PENDING' },

@@ -18,6 +18,7 @@ import {
   grnQuerySchema,
   mongoIdParamSchema,
   poIdParamSchema,
+  saveGrnWithQcSchema,
 } from './grn.validation.js';
 
 const router = Router();
@@ -26,6 +27,10 @@ router.use(protect);
 router.route('/')
   .get(validate(grnQuerySchema, 'query'), c.getAll)
   .post(validate(createGrnSchema), c.create);
+
+// Combined GRN + Incoming QC Save (grnQcSave.service): create, or update by id.
+router.post('/save-with-qc', validate(saveGrnWithQcSchema), c.saveWithQc);
+router.post('/:id/save-with-qc', validate(mongoIdParamSchema, 'params'), validate(saveGrnWithQcSchema), c.saveWithQc);
 
 router.post('/preview-pdf', validate(previewGrnPdfSchema), c.previewPdf);
 
