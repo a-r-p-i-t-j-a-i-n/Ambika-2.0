@@ -287,11 +287,11 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
     .map((it) => {
       const pending = round2((it.quantity || 0) - (it.receivedQty || 0));
       return {
-        // For JSL, itemName is the "Grade Width Finish" label that should be
-        // shown as the Item Description; itemDescription only holds the raw
-        // indent item name and is not used for display.
+        // JSL PO lines keep the "Grade Width Finish" label in itemName and the
+        // real description in itemDescription — the GRN shows the description
+        // (older JSL lines without one keep the label). Server re-stamps it too.
         poItemId: it._id, poId: p._id, poNumber: p.poNumber,
-        itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
+        itemName: (p.poFormatType === 'JSL' && it.itemDescription?.trim()) || it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.quantity || 0, previouslyReceivedQty: it.receivedQty || 0,
         pendingBefore: pending, invoiceQty: pending, receivedQty: pending, rate: it.rate || 0, batchNo: '', remarks: '',
         howItemReceived: DEFAULT_HOW_ITEM_RECEIVED,
