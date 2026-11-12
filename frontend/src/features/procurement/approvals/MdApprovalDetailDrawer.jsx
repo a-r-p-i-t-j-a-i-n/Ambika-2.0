@@ -83,9 +83,44 @@ const VoucherContent = ({ id }) => {
   if (isLoading) return <CircularProgress size={18} />;
   if (!v) return null;
   const expense = v.voucherType === 'EXPENSE';
+  const direct = v.voucherType === 'DIRECT_PURCHASE';
   return (
     <Grid container spacing={2}>
-      {expense ? (
+      {direct ? (
+        <>
+          <Grid item xs={6}><Field label="Voucher Type" value="Direct Purchase (no Indent / PO / GRN)" /></Grid>
+          <Grid item xs={6}><Field label="Vendor Invoice" value={[v.invoiceNumber, v.invoiceDate ? fmtDate(v.invoiceDate) : ''].filter(Boolean).join(' · ')} /></Grid>
+          <Grid item xs={4}><Field label="Taxable" value={fmtINR(v.taxableAmount)} /></Grid>
+          <Grid item xs={4}><Field label="Tax" value={fmtINR(v.taxAmount)} /></Grid>
+          <Grid item xs={4}><Field label="Items" value={String((v.items || []).length)} /></Grid>
+          {(v.items || []).length > 0 && (
+            <Grid item xs={12}>
+              <Box sx={{ overflowX: 'auto', border: `1px solid ${PFMS.line}`, borderRadius: '8px' }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      {['Item', 'Qty', 'Rate', 'GST %', 'Line Total'].map((h, i) => (
+                        <TableCell key={h} sx={{ fontWeight: 700, fontSize: '0.72rem' }} align={i ? 'right' : 'left'}>{h}</TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {v.items.map((it, i) => (
+                      <TableRow key={it._id || i}>
+                        <TableCell sx={{ fontSize: '0.78rem' }}>{it.itemName}{it.skuCode ? ` (${it.skuCode})` : ''}</TableCell>
+                        <TableCell sx={{ fontSize: '0.78rem' }} align="right">{it.quantity} {it.unit}</TableCell>
+                        <TableCell sx={{ fontSize: '0.78rem' }} align="right">{fmtINR(it.rate)}</TableCell>
+                        <TableCell sx={{ fontSize: '0.78rem' }} align="right">{it.gstRate}</TableCell>
+                        <TableCell sx={{ fontSize: '0.78rem', fontWeight: 700 }} align="right">{fmtINR(it.lineTotal)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            </Grid>
+          )}
+        </>
+      ) : expense ? (
         <>
           <Grid item xs={6}><Field label="Expense Type" value={expenseTypeMeta(expenseTypeOf(v)).label} /></Grid>
           <Grid item xs={6}><Field label="Against" value={[v.poNumber, ...(v.grnNumbers || [])].filter(Boolean).join(' · ') || 'Without PO / GRN'} /></Grid>

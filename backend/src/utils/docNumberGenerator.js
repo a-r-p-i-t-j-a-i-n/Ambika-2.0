@@ -242,6 +242,22 @@ export async function generateExpenseVoucherNumber(date = new Date()) {
 }
 
 /**
+ * Generate next Direct Purchase Voucher number (Step 1.11 — voucherType
+ * DIRECT_PURCHASE: goods bought with no Indent / PO / GRN). Own series, so the
+ * PUR / EXP sequences are untouched.
+ * @returns {string} e.g. "AGL/DPV-001/26-27"
+ */
+export async function generateDirectPurchaseVoucherNumber(date = new Date()) {
+  const fy = getFiscalYear(date);
+  const counter = await Counter.findByIdAndUpdate(
+    `DPV_${fy}`,
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `AGL/DPV-${String(counter.seq).padStart(3, '0')}/${fy}`;
+}
+
+/**
  * Generate next Purchase Tally Entry number (Purchase FMS — Step 1.12).
  * Zero-padded sequence, reset per fiscal year.
  * @param {Date} date — date to determine fiscal year

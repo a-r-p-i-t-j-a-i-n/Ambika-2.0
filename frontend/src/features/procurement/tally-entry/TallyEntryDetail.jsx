@@ -19,7 +19,7 @@ import { TallyStatusChip, CHECKLIST_ITEMS, CHECKLIST_TOTAL, checklistProgress, f
 import TallyEntryFormDialog from './TallyEntryFormDialog';
 import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
 import WorkflowStepper from '../components/WorkflowStepper';
-import { resolveWorkflowSteps } from '../components/purchaseFmsWorkflow';
+import { resolveWorkflowSteps, isInvoiceFreeVoucher } from '../components/purchaseFmsWorkflow';
 import NextStepBanner from '../components/NextStepBanner';
 import { PFMS, pfmsPageSx, pfmsCardSx } from '../pfmsTheme';
 
@@ -43,7 +43,15 @@ const TallyEntryDetail = () => {
   const { enqueueSnackbar } = useSnackbar();
   const { data, isLoading } = useGetTallyEntryByIdQuery(id);
   const t = data?.data;
-  const wfSteps = resolveWorkflowSteps({ tallyEntry: t });
+  // The entry doesn't carry its voucher's type; the voucher decides which steps
+  // apply (Direct Purchase / Expense have no GRN or Vendor Invoice step).
+  const { data: wfVoucherRes, isLoading: wfVoucherLoading } = useGetVoucherByIdQuery(t?.voucherId, { skip: !t?.voucherId });
+  const wfVoucher = wfVoucherRes?.data || null;
+  // Until the voucher is known, show no stepper rather than the wrong one.
+  // A normal Purchase Voucher keeps the original tally-entry pipeline untouched.
+  const wfSteps = t && (wfVoucher || !wfVoucherLoading)
+    ? resolveWorkflowSteps({ tallyEntry: t, voucher: isInvoiceFreeVoucher(wfVoucher) ? wfVoucher : null })
+    : [];
 
   const [formOpen, setFormOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
@@ -137,7 +145,8 @@ const TallyEntryDetail = () => {
               <Grid item xs={6}><Field label="Vendor" value={t.vendorName || '—'} /></Grid>
               <Grid item xs={6}><Field label="Voucher" value={t.voucherNumber || '—'} /></Grid>
               <Grid item xs={6}><Field label="Invoice" value={t.invoiceNumber || '—'} /></Grid>
-              <Grid item xs={6}><Field label="PO" value={t.poNumber || '—'} /></Grid>
+              {/* Direct Purchase / expense vouchers have no PO — no empty reference. */}
+              {t.poNumber ? <Grid item xs={6}><Field label="PO" value={t.poNumber} /></Grid> : null}
               <Grid item xs={6}><Field label="Planned" value={fmtDate(t.plannedAt)} /></Grid>
               <Grid item xs={6}><Field label="Actual" value={fmtDate(t.actualAt)} /></Grid>
               <Grid item xs={6}><Field label="Tally Voucher No" value={t.tallyVoucherNumber || '—'} /></Grid>

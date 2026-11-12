@@ -73,7 +73,8 @@ export const buildFinalPaymentPdfBuffer = (p, company = {}) => new Promise((reso
     doc.font('Helvetica').fontSize(8.5).fill(navy);
     doc.text(`Voucher: ${p.voucherNumber || '—'}`, vx, ly, { width: vW }); ly += 13;
     doc.text(`Invoice: ${p.invoiceNumber || '—'}`, vx, ly, { width: vW }); ly += 13;
-    doc.text(`PO: ${p.poNumber || '—'}`, vx, ly, { width: vW });
+    // A Direct Purchase / expense voucher has no PO — don't print an empty reference.
+    if (p.poNumber) doc.text(`PO: ${p.poNumber}`, vx, ly, { width: vW });
 
     y += CARD_H + 16;
 

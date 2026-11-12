@@ -8,6 +8,8 @@ import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
 import VendorVoucher from '../voucher/voucher.model.js';
 import { invoiceWorkflowFilter } from './invoiceWorkflow.js';
 import { assertNoLiveExpenseOnPos } from '../voucher/expenseLink.js';
+import { findBillNumberUse, billNumberUseMessage } from '../voucher/billNumber.js';
+import { supplierIdsFor } from '../voucher/supplierIdentity.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
@@ -285,8 +287,10 @@ const duplicateNumberError = (existing) => {
 const assertUniqueInvoiceNumber = async (vendorId, invoiceNumber, excludeInvoiceId = null) => {
   const no = String(invoiceNumber || '').trim();
   if (!vendorId || !no) return;
+  // The same supplier may sit in both masters (Vendor and the older Party) — a
+  // record with the same valid GSTIN counts as the same supplier.
   const filter = {
-    vendorId,
+    vendorId: { $in: await supplierIdsFor(vendorId) },
     invoiceNumber: new RegExp(`^${escapeRegex(no)}$`, 'i'),
     isDeleted: { $ne: true },
     invoiceStatus: { $ne: INVOICE_STATUS.REJECTED },
@@ -294,6 +298,10 @@ const assertUniqueInvoiceNumber = async (vendorId, invoiceNumber, excludeInvoice
   if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
   const existing = await VendorInvoice.findOne(filter).select('invoiceNumber grnNumber grnNumbers').lean();
   if (existing) throw duplicateNumberError(existing);
+  // The same bill already passed as a Direct Purchase voucher or an expense
+  // bill must not be invoiced — and paid — a second time.
+  const used = await findBillNumberUse(vendorId, no, { invoices: false });
+  if (used) throw new AppError(billNumberUseMessage(used), 400);
 };
 
 /**

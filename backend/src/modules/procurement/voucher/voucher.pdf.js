@@ -187,7 +187,108 @@ export const buildExpenseVoucherPdfBuffer = (v, company = {}, mdSig = null) => n
   } catch (err) { reject(err); }
 });
 
+// ── Direct Purchase Voucher (AGL/DPV) — goods bought with no Indent / PO / GRN ──
+// Shows no PO / GRN / Indent rows at all (none exist); says so in one line.
+const qtyText = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 });
+const rateText = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+const amtText = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+export const buildDirectPurchaseVoucherPdfBuffer = (v, company = {}, mdSig = null) => new Promise((resolve, reject) => {
+  try {
+    const doc = new PDFDocument({ size: 'A4', margin: PAGE.m });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    const W = PAGE.w - PAGE.m * 2;
+
+    // Two lines: on one line this longer title runs into the company address.
+    let y = drawHeader(doc, company, 'DIRECT PURCHASE\nVOUCHER');
+    const half = W / 2 - 8;
+    const lY = infoRows(doc, PAGE.m, y, half, [
+      ['Voucher No', v.voucherNumber], ['Voucher Date', fmtDate(v.voucherDate)],
+      ['Voucher Type', 'Direct Purchase'], ['Reference', 'Direct purchase — no Indent / PO / GRN'],
+    ]);
+    const rY = infoRows(doc, PAGE.m + half + 16, y, half, [
+      ['Vendor', v.vendorName], ['Invoice No', v.invoiceNumber], ['Invoice Date', fmtDate(v.invoiceDate)],
+      ['Payment Terms', v.paymentTerms], ['Due Date', fmtDate(v.dueDate)],
+    ]);
+    const boxH = Math.max(lY, rY) - y + 6;
+    doc.roundedRect(PAGE.m, y, half, boxH, 6).stroke(line);
+    doc.roundedRect(PAGE.m + half + 16, y, half, boxH, 6).stroke(line);
+    y += boxH + 18;
+
+    // Items table. Widths sum to W (515.28).
+    const cols = [
+      { k: 'n', h: '#', w: 18, a: 'left' },
+      { k: 'item', h: 'Item / SKU', w: 145, a: 'left' },
+      { k: 'qty', h: 'Qty', w: 50, a: 'right' },
+      { k: 'unit', h: 'Unit', w: 34, a: 'left' },
+      { k: 'rate', h: 'Rate', w: 56, a: 'right' },
+      { k: 'disc', h: 'Discount', w: 52, a: 'right' },
+      { k: 'gst', h: 'GST %', w: 34, a: 'right' },
+      { k: 'tax', h: 'Tax', w: 56, a: 'right' },
+      { k: 'total', h: 'Line Total', w: 70.28, a: 'right' },
+    ];
+    const drawHead = () => {
+      doc.rect(PAGE.m, y, W, 18).fill('#eef3fc');
+      let x = PAGE.m;
+      doc.font('Helvetica-Bold').fontSize(7.5).fill(navy);
+      cols.forEach((c) => { doc.text(c.h, x + 3, y + 5, { width: c.w - 6, align: c.a, lineBreak: false }); x += c.w; });
+      y += 18;
+    };
+    doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('PURCHASED ITEMS', PAGE.m, y); y += 12;
+    drawHead();
+    (v.items || []).forEach((it, i) => {
+      const itemText = [
+        `${it.itemName || '—'}${it.skuCode ? ` (${it.skuCode})` : ''}`,
+        it.description ? it.description : '',
+        it.hsn ? `HSN ${it.hsn}` : '',
+      ].filter(Boolean).join('\n');
+      const cells = {
+        n: String(i + 1), item: itemText, qty: qtyText(it.quantity), unit: it.unit || '',
+        rate: rateText(it.rate), disc: it.discountAmount ? amtText(it.discountAmount) : '—',
+        gst: `${Number(it.gstRate || 0)}`, tax: amtText(it.taxAmount), total: amtText(it.lineTotal),
+      };
+      doc.font('Helvetica').fontSize(7.5);
+      const rowH = Math.max(16, doc.heightOfString(itemText, { width: cols[1].w - 6 }) + 8);
+      // Keep room for the totals + signature block on the last page.
+      if (y + rowH > PAGE.h - 170) { doc.addPage(); y = PAGE.m; drawHead(); }
+      let x = PAGE.m;
+      doc.fill(navy);
+      cols.forEach((c) => { doc.text(cells[c.k], x + 3, y + 4, { width: c.w - 6, align: c.a }); x += c.w; });
+      y += rowH;
+      doc.moveTo(PAGE.m, y).lineTo(PAGE.m + W, y).strokeColor(line).lineWidth(0.6).stroke();
+    });
+    y += 12;
+    if (y > PAGE.h - 320) { doc.addPage(); y = PAGE.m; }
+
+    y = totalsBlock(doc, y, [
+      ['Sub Total (Qty × Rate)', INR(v.grossAmount)],
+      ['Less Discount', INR(v.discountTotal)],
+      ['Taxable Amount', INR(v.taxableAmount)],
+      ['Total Tax (GST)', INR(v.taxAmount)],
+      ['Grand Total / Amount Payable', INR(v.netPayableAmount), true],
+    ]);
+
+    y += 10;
+    doc.font('Helvetica').fontSize(7.5).fill('#475a8a')
+      .text('Financial voucher only — no stock is posted from this voucher.', PAGE.m, y, { width: W - 200 });
+    y += 14;
+    if (v.remarks) {
+      doc.font('Helvetica').fontSize(8);
+      // The signature block is anchored ~160pt above the page bottom.
+      if (y + 12 + doc.heightOfString(v.remarks, { width: W - 200 }) > PAGE.h - 160) { doc.addPage(); y = PAGE.m; }
+      doc.font('Helvetica-Bold').fontSize(8).fill(blue).text('REMARKS', PAGE.m, y); y += 12;
+      doc.font('Helvetica').fontSize(8).fill(navy).text(v.remarks, PAGE.m, y, { width: W - 200 });
+    }
+    signature(doc, company, mdSig);
+    doc.end();
+  } catch (err) { reject(err); }
+});
+
 // Dispatch by voucher type.
-export const buildVoucherPdfBuffer = (v, company = {}, mdSig = null) => (
-  v?.voucherType === 'EXPENSE' ? buildExpenseVoucherPdfBuffer(v, company, mdSig) : buildPurchaseVoucherPdfBuffer(v, company, mdSig)
-);
+export const buildVoucherPdfBuffer = (v, company = {}, mdSig = null) => {
+  if (v?.voucherType === 'EXPENSE') return buildExpenseVoucherPdfBuffer(v, company, mdSig);
+  if (v?.voucherType === 'DIRECT_PURCHASE') return buildDirectPurchaseVoucherPdfBuffer(v, company, mdSig);
+  return buildPurchaseVoucherPdfBuffer(v, company, mdSig);
+};

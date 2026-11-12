@@ -200,7 +200,8 @@ const FinalPaymentDetail = () => {
               <Field label="Vendor" value={p.vendorName || '—'} />
               <Field label="Voucher" value={p.voucherNumber || '—'} />
               <Field label="Invoice" value={p.invoiceNumber || '—'} />
-              <Field label="PO" value={p.poNumber || '—'} />
+              {/* Direct Purchase / expense vouchers have no PO — no empty reference. */}
+              {p.poNumber ? <Field label="PO" value={p.poNumber} /> : null}
             </FieldGrid>
           </SectionCard>
         </Box>
