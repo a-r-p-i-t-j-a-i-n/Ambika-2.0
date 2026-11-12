@@ -88,7 +88,7 @@ const AssetCard = ({ def, asset }) => {
   const onRemove = async () => {
     try {
       await remove(def.kind).unwrap();
-      enqueueSnackbar(`${def.title} removed`, { variant: 'success' });
+      enqueueSnackbar(`${def.title} removed — it can be restored from the Recycle Bin`, { variant: 'success' });
       setConfirmOpen(false);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || `Could not remove the ${def.title.toLowerCase()}`, { variant: 'error' });

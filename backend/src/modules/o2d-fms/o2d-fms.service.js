@@ -43,6 +43,8 @@ import { logger } from '../../utils/logger.js';
 import { notificationsService } from '../notifications/notification.service.js';
 import { authService } from '../auth/auth.service.js';
 import { delegationLinkOn, fetchSuitePeople } from './suite-client.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan, registerRestoreHook } from '../recycle-bin/recycleBin.restore.js';
 
 // Notify every assigned doer (and every buddy) that a step is waiting on them.
 const notifyStepOwners = async (process, step) => {
@@ -2059,7 +2061,9 @@ export const o2dFmsService = {
    * carries item-by-item evidence rather than one undifferentiated pile.
    */
   async setChecklistProof(processId, stepCode, itemId, { fileName, fileUrl, fileKey, link, removeId }, user, privileged = false) {
-    return withVersionRetry(async () => {
+    let removed = null; // what a removal took out — for the Recycle Bin
+    const result = await withVersionRetry(async () => {
+      removed = null;
       const process = await O2DProcess.findById(processId);
       if (!process) throw new AppError('O2D process not found', 404);
       const step = process.steps.find((s) => s.stepCode === stepCode);
@@ -2070,12 +2074,22 @@ export const o2dFmsService = {
       if (!Array.isArray(item.proofs)) item.proofs = [];
 
       if (removeId) {
-        const before = item.proofs.length;
+        const index = item.proofs.findIndex((p) => String(p._id) === String(removeId));
+        if (index < 0) throw new AppError('Proof not found', 404);
+        const proof = item.proofs[index];
+        removed = {
+          index,
+          proof: proof?.toObject ? proof.toObject() : { ...proof },
+          untick: null,
+          itemText: item.text,
+          soNumber: process.soNumber || process.uniqueO2DId || '',
+          partyName: process.partyName || '',
+        };
         item.proofs = item.proofs.filter((p) => String(p._id) !== String(removeId));
-        if (item.proofs.length === before) throw new AppError('Proof not found', 404);
         // Last piece of evidence withdrawn → the tick it backed can't stand any more,
         // unless the whole step has already been signed off (don't rewrite history).
         if (!item.proofs.length && item.done && !['DONE', 'DELAYED'].includes(step.status)) {
+          removed.untick = { doneBy: item.doneBy || null, doneByName: item.doneByName || null, doneAt: item.doneAt || null };
           item.done = false;
           item.doneBy = null; item.doneByName = null; item.doneAt = null;
         }
@@ -2101,6 +2115,22 @@ export const o2dFmsService = {
       const defMap = await loadDefMap();
       return enrichSteps(process, defMap);
     });
+    if (removed) {
+      const name = removed.proof.fileName || removed.proof.link || 'Proof';
+      await recycleBinService.record('o2dProof', {
+        recordId: removed.proof._id,
+        title: name,
+        subtitle: [`${stepCode} · ${removed.itemText}`, removed.soNumber, removed.partyName].filter(Boolean).join(' · '),
+        keywords: [stepCode, removed.proof.link],
+        actor: user,
+        openPath: `/o2d-fms/task/${processId}/${encodeURIComponent(stepCode)}`,
+        plan: {
+          steps: [binPlan.set(O2DProcess.modelName, processId, {}, { optional: true })],
+          after: [binPlan.hook('o2d.restoreProof', { processId, stepCode, itemId, ...removed })],
+        },
+      });
+    }
+    return result;
   },
 
   /** Answer a Yes/No verification question. A "NO" must carry a remark. */
@@ -2678,11 +2708,25 @@ export const o2dFmsService = {
   },
 
   async deactivateDefinition(id, actor) {
-    const def = await StepDefinition.findByIdAndUpdate(
-      id, { $set: { isActive: false, updatedBy: actor?._id } }, { new: true });
+    const before = await StepDefinition.findByIdAndUpdate(
+      id, { $set: { isActive: false, updatedBy: actor?._id } }, { new: false });
     clearDefMapCache();
-    if (!def) throw new AppError('Step definition not found', 404);
-    return def.toObject();
+    if (!before) throw new AppError('Step definition not found', 404);
+    if (before.isActive !== false) {
+      await recycleBinService.record('o2dStep', {
+        recordId: before._id,
+        title: `${before.stepCode} · ${before.name}`,
+        subtitle: before.fmsKey ? `Workflow ${before.fmsKey}` : '',
+        actor,
+        plan: {
+          steps: [binPlan.set(StepDefinition.modelName, before._id, { isActive: true })],
+          afterCommit: [binPlan.hook('o2d.clearDefCache')],
+        },
+      });
+    }
+    const def = before.toObject();
+    def.isActive = false;
+    return def;
   },
 
   // ── TaskTemplate CRUD (the reusable work plan) ────────────────────────────
@@ -2727,11 +2771,56 @@ export const o2dFmsService = {
   },
 
   async deleteTemplate(id) {
-    const tpl = await TaskTemplate.findByIdAndUpdate(id, { $set: { isDeleted: true, isDefault: false } }, { new: true });
-    if (!tpl) throw new AppError('Template not found', 404);
+    const before = await TaskTemplate.findByIdAndUpdate(id, { $set: { isDeleted: true, isDefault: false } }, { new: false });
+    if (!before) throw new AppError('Template not found', 404);
+    if (before.isDeleted !== true) {
+      await recycleBinService.record('o2dTemplate', {
+        recordId: before._id,
+        title: before.name,
+        subtitle: [before.isDefault ? 'Default template' : '', before.fmsKey ? `Workflow ${before.fmsKey}` : ''].filter(Boolean).join(' · '),
+        plan: {
+          steps: [binPlan.unhide(TaskTemplate.modelName, before._id)],
+          // It was the default: it is the default again only if no other has been made default since.
+          after: before.isDefault ? [binPlan.hook('o2d.restoreTemplateDefault', { id: before._id, fmsKey: before.fmsKey || DEFAULT_FMS_KEY })] : [],
+        },
+      });
+    }
     return { id };
   },
 };
+
+// ── Recycle Bin restore hooks ───────────────────────────────
+
+registerRestoreHook('o2d.clearDefCache', async () => { clearDefMapCache(); });
+
+registerRestoreHook('o2d.restoreTemplateDefault', async ({ id, fmsKey }, { session }) => {
+  const other = await TaskTemplate.exists({ _id: { $ne: id }, isDefault: true, isDeleted: { $ne: true }, ...fmsScope(fmsKey) }).session(session || null);
+  if (!other) await TaskTemplate.updateOne({ _id: id }, { $set: { isDefault: true } }, { session: session || undefined });
+});
+
+// A removed proof file goes back on its checklist item — and the tick it backed,
+// when removing it had undone that tick and nobody has ticked it since.
+registerRestoreHook('o2d.restoreProof', async ({ processId, stepCode, itemId, index, proof, untick }, { session }) => {
+  const q = O2DProcess.findById(processId);
+  if (session) q.session(session);
+  const process = await q;
+  if (!process || process.isDeleted) throw new AppError("Can't restore — its O2D process no longer exists.", 409);
+  const step = process.steps.find((s) => s.stepCode === stepCode);
+  const item = step?.checklist?.id(itemId);
+  if (!item) throw new AppError(`Can't restore — that checklist item is no longer on step ${stepCode}.`, 409);
+  if (!Array.isArray(item.proofs)) item.proofs = [];
+  if (item.proofs.some((p) => String(p._id) === String(proof._id))) throw new AppError('It is already back — nothing to restore.', 409);
+  item.proofs.splice(Math.min(Number(index) || 0, item.proofs.length), 0, proof);
+  if (untick && !item.done) {
+    item.done = true;
+    item.doneBy = untick.doneBy; item.doneByName = untick.doneByName; item.doneAt = untick.doneAt;
+  }
+  process.activityTimeline.push({
+    action: 'CHECKLIST_PROOF',
+    description: `${stepCode} · proof restored to "${item.text}" (Recycle Bin)`,
+  });
+  await (session ? process.save({ session }) : process.save());
+});
 
 // Shared with the Delegation task sync (o2d-delegation.js).
 export { loadDefMap, stepDoerIds, stepBuddyIds };

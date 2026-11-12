@@ -13,6 +13,10 @@ import ProcessRoute from './processRoute.model.js';
 import Die from './die.model.js';
 import SKU from '../skus/sku.model.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { recordMachineDelete } from '../masters/machines/machine.service.js';
+import { recordOperatorDelete } from '../masters/machine-operators/machineOperator.service.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 import {
   HOUR_SLOTS, PLANNED_REASONS, DOWNTIME_REASONS, DEFECT_TYPES, SHIFTS, MACHINE_TYPES,
 } from './dpr.constants.js';
@@ -150,8 +154,26 @@ export const dprMasterService = {
 
   async deleteMaster(kind, id) {
     const Model = this._resolve(kind);
-    const doc = await Model.findByIdAndUpdate(id, { $set: { isDeleted: true } }, { new: true }).lean();
-    if (!doc) throw new AppError('Record not found', 404);
+    const before = await Model.findByIdAndUpdate(id, { $set: { isDeleted: true } }, { new: false }).lean();
+    if (!before) throw new AppError('Record not found', 404);
+    // Recycle Bin. This delete only hides the row (no operator links are
+    // detached here), so restoring just un-hides it.
+    if (before.isDeleted !== true) {
+      if (kind === 'machine') await recordMachineDelete(before, { wasActive: before.isActive !== false });
+      else if (kind === 'operator') await recordOperatorDelete(before, { wasActive: before.isActive !== false });
+      else {
+        const title = kind === 'die'
+          ? `Die ${before.completeDieNo}`
+          : `${before.skuCode} · Op ${before.operationNo}${before.operationName ? ` ${before.operationName}` : ''}`;
+        await recycleBinService.record('dprMaster', {
+          recordId: before._id,
+          title,
+          subtitle: kind === 'die' ? [before.dieName, before.skuCode].filter(Boolean).join(' · ') : 'Process route',
+          keywords: [kind, before.skuName, before.machineType, before.rackNo, before.opCode],
+          plan: { steps: [binPlan.unhide(Model.modelName, before._id)] },
+        });
+      }
+    }
     return { _id: id, deleted: true };
   },
 

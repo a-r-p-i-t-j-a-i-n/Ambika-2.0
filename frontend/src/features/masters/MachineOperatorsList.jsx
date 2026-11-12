@@ -310,7 +310,7 @@ const MachineOperatorsList = () => {
           <Box>
             <Typography sx={{ fontWeight: 800, fontSize: '1.05rem' }}>Delete this operator?</Typography>
             <Typography sx={{ fontSize: '0.78rem', color: 'text.secondary' }}>
-              They will be soft-deleted and hidden from all lists.
+              They will be hidden from all lists. They move to the Recycle Bin, where they can be restored.
             </Typography>
           </Box>
         </DialogTitle>

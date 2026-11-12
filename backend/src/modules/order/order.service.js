@@ -7,6 +7,8 @@ import { SO_STATUS } from '../../config/constants.js';
 import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 import { partyService } from '../clients/party.service.js';
 import { logger } from '../../utils/logger.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 export const orderService = {
   /**
@@ -260,18 +262,39 @@ export const orderService = {
   },
 
   /**
-   * Delete an order.
+   * Delete an order. A full copy (with its O2D process) goes to the Recycle
+   * Bin first, so it can be put back exactly as it was.
    */
   async remove(id) {
-    const order = await SalesOrder.findByIdAndDelete(id);
+    const order = await SalesOrder.findById(id).lean();
     if (!order) throw new AppError('Sales Order not found', 404);
-    // Cascade: remove the order's O2D FMS process so no orphan tracker remains.
-    try {
-      const { O2DProcess } = await import('../o2d-fms/o2d-fms.model.js');
-      await O2DProcess.deleteOne({ salesOrderId: order._id });
-    } catch (err) {
-      logger.error(`[order.remove] failed to clean O2D process for ${order.soNumber}: ${err.message}`);
+    const { O2DProcess } = await import('../o2d-fms/o2d-fms.model.js');
+    const process = await O2DProcess.findOne({ salesOrderId: order._id }).lean();
+    const checks = [binPlan.absent(SalesOrder.modelName, { soNumber: order.soNumber }, `Can't restore — ${order.soNumber} is now used by another sales order.`)];
+    if (order.uniqueO2DId) {
+      checks.push(binPlan.absent(SalesOrder.modelName, { uniqueO2DId: order.uniqueO2DId }, `Can't restore — O2D ID ${order.uniqueO2DId} is now used by another sales order.`));
     }
+    await recycleBinService.capture('salesOrder', {
+      recordId: order._id,
+      title: order.soNumber,
+      subtitle: [order.partyName, order.poNumber && `PO ${order.poNumber}`].filter(Boolean).join(' · '),
+      keywords: [order.poNumber, order.uniqueO2DId, (order.items || []).map((i) => [i.skuName, i.skuCode])],
+      plan: {
+        checks,
+        steps: [
+          binPlan.reinsert(SalesOrder.modelName, order),
+          ...(process ? [binPlan.reinsert(O2DProcess.modelName, process, { optional: true })] : []),
+        ],
+      },
+    }, async () => {
+      await SalesOrder.deleteOne({ _id: order._id });
+      // Cascade: remove the order's O2D FMS process so no orphan tracker remains.
+      try {
+        await O2DProcess.deleteOne({ salesOrderId: order._id });
+      } catch (err) {
+        logger.error(`[order.remove] failed to clean O2D process for ${order.soNumber}: ${err.message}`);
+      }
+    });
     return order;
   },
 

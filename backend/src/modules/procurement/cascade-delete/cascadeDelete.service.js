@@ -75,6 +75,8 @@ import {
   STEP_TYPES, STEP_ORDER, INDENT_STEP_TYPES, isRootType, blockOf, warningsOf, foreignRefs, reasonRequired, rootEffects,
 } from './cascadeDelete.graph.js';
 import PurchaseCascadeDeletion, { CASCADE_STATUS } from './cascadeDelete.model.js';
+import { RecycleBinItem } from '../../recycle-bin/recycleBin.model.js';
+import { binPlan } from '../../recycle-bin/recycleBin.restore.js';
 
 const MODELS = {
   INDENT: PurchaseIndent,
@@ -483,6 +485,35 @@ const restoreDownstream = async (downstream, stamp) => {
   }
 };
 
+/**
+ * Recycle Bin: the selected record's own delete (step 4) made its bin row; the
+ * downstream records deleted with it are added to that row, so one Restore
+ * brings back the whole set. Never fails the deletion.
+ */
+const addDownstreamToBin = async (plan, stamp) => {
+  if (!plan.downstream.length) return;
+  const row = await RecycleBinItem.findOne({ recordId: plan.rootDoc._id, status: 'pending', deletedAt: { $gte: stamp } })
+    .sort({ deletedAt: -1 }).select('subtitle keywords').lean();
+  if (!row) return;
+  const groups = new Map();
+  for (const { type, doc } of plan.downstream) {
+    // A deleted follow-up was taken off "active"; it gets back what it had.
+    const set = type === 'FOLLOW_UP' ? { isActiveFollowUp: doc.isActiveFollowUp === true } : {};
+    const key = `${type}|${JSON.stringify(set)}`;
+    if (!groups.has(key)) groups.set(key, { model: MODELS[type].modelName, set, ids: [] });
+    groups.get(key).ids.push(doc._id);
+  }
+  const numbers = plan.downstream.map(({ type, doc }) => numberOf(type, doc)).filter(Boolean);
+  const shown = numbers.slice(0, 5).join(', ') + (numbers.length > 5 ? '…' : '');
+  await RecycleBinItem.updateOne({ _id: row._id }, {
+    $push: { 'plan.steps': { $each: [...groups.values()].map((g) => binPlan.unhide(g.model, g.ids, g.set, { timeline: true })) } },
+    $set: {
+      subtitle: [row.subtitle, `+ ${plan.downstream.length} linked record(s) deleted with it${shown ? `: ${shown}` : ''}`].filter(Boolean).join(' · '),
+      keywords: [row.keywords, ...numbers].filter(Boolean).join(' ').toLowerCase(),
+    },
+  });
+};
+
 let indexesReady = null;
 const ensureIndexes = () => {
   // The lock is the unique index — make sure it exists before relying on it.
@@ -604,6 +635,8 @@ export const cascadeDeleteService = {
       }
       try {
         await removeRoot(rootType, plan.rootDoc._id, user, why);
+        await addDownstreamToBin(plan, stamp)
+          .catch((err) => logger.error(`[cascade-delete] Recycle Bin row for ${rootLabel} not extended: ${err.message}`));
       } catch (err) {
         if (plan.downstream.length) {
           await restoreDownstream(plan.downstream, stamp);

@@ -1,6 +1,55 @@
 import Party from './party.model.js';
+import Sku from '../skus/sku.model.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
+
+/** The same SKU: by SKU id, else by code (rows from the Party sheet may have no id). */
+const sameSku = (entry, sku) => (
+  (entry.skuId && String(entry.skuId) === String(sku._id))
+  || (Boolean(entry.skuCode) && Boolean(sku.code) && String(entry.skuCode).toUpperCase() === String(sku.code).toUpperCase())
+);
+
+/**
+ * Add SKUs from the SKU master to a party's Ordered SKUs (plain objects in,
+ * plain objects out; the input list is not changed).
+ *   • a SKU not on the list is added, with its unit, packing and price;
+ *   • a row already there by code but not yet tied to the SKU master gets its
+ *     skuId (it now auto-fills on Sales Orders) — reported as `linked`;
+ *   • a SKU already on the list is left as it is — reported as `already`.
+ */
+export const addToOrderedSkus = (list = [], skus = []) => {
+  const next = list.map((entry) => ({ ...entry }));
+  const added = [];
+  const linked = [];
+  const already = [];
+  skus.forEach((sku) => {
+    const existing = next.find((entry) => sameSku(entry, sku));
+    if (existing) {
+      if (!existing.skuId) {
+        existing.skuId = sku._id;
+        linked.push(sku.name);
+      } else {
+        already.push(sku.name);
+      }
+      return;
+    }
+    next.push({
+      skuId: sku._id,
+      skuName: sku.name,
+      skuCode: String(sku.code || '').toUpperCase(),
+      unit: sku.unit || 'Pcs',
+      pcsPerBox: Number(sku.pcsPerBox) || 0,
+      weightPerBox: Number(sku.weightPerBox) || 0,
+      sellingPrice: Number(sku.sellingPrice) || 0,
+      priceHistory: [],
+      lastOrderedAt: null,
+    });
+    added.push(sku.name);
+  });
+  return { list: next, added, linked, already };
+};
 
 export const partyService = {
   async create(data, userId) {
@@ -74,6 +123,16 @@ export const partyService = {
       }
     );
     if (!party) throw new AppError('Party not found', 404);
+    if (!party.isDeleted) {
+      await recycleBinService.record('party', {
+        recordId: party._id,
+        title: party.name,
+        subtitle: [party.code, party.location].filter(Boolean).join(' · '),
+        keywords: [party.gstNo, party.contactPerson, party.email, party.state],
+        actor: userId,
+        plan: { steps: [binPlan.unhide(Party.modelName, party._id, {}, { timeline: true })] },
+      });
+    }
     return party;
   },
 
@@ -90,6 +149,68 @@ export const partyService = {
 
   async getByName(name) {
     return Party.findOne({ name: new RegExp(`^${name}$`, 'i') }).lean();
+  },
+
+  /**
+   * Party → Ordered SKUs → Add: SKUs picked from the SKU master join this
+   * party's list (they then auto-fill on its Sales Orders). Only this list is
+   * written; past orders are untouched.
+   * @returns {{ party: object, added: string[], linked: string[], already: string[] }}
+   */
+  async addOrderedSkus(id, skuIds, userId) {
+    const party = await Party.findOne({ _id: id, isDeleted: { $ne: true } });
+    if (!party) throw new AppError('Party not found', 404);
+    const skus = await Sku.find({ _id: { $in: skuIds }, isDeleted: { $ne: true } })
+      .select('name code unit pcsPerBox weightPerBox sellingPrice').lean();
+    if (!skus.length) throw new AppError('Those SKUs are no longer in the SKU master', 404);
+
+    const current = (party.orderedSkus || []).map((entry) => entry.toObject());
+    const { list, added, linked, already } = addToOrderedSkus(current, skus);
+    if (added.length || linked.length) {
+      party.orderedSkus = list;
+      party.markModified('orderedSkus');
+      party.updatedBy = userId;
+      party.activityTimeline.push({
+        action: 'UPDATE',
+        description: `Ordered SKUs added: ${[...added, ...linked].join(', ')}`.slice(0, 500),
+        actorId: userId,
+      });
+      await party.save();
+    }
+    return { party: party.toObject(), added, linked, already };
+  },
+
+  /**
+   * Party → Ordered SKUs → Remove one item. It stops auto-filling on new Sales
+   * Orders; past orders are untouched. (A later order with this SKU adds it
+   * back — see syncOrderedSkus.)
+   */
+  async removeOrderedSku(id, itemId, userId) {
+    const party = await Party.findOne({ _id: id, isDeleted: { $ne: true } });
+    if (!party) throw new AppError('Party not found', 404);
+    const item = party.orderedSkus.id(itemId);
+    if (!item) throw new AppError('That SKU is no longer on this party', 404);
+    const name = item.skuName || item.skuCode || 'SKU';
+    const index = party.orderedSkus.findIndex((e) => String(e._id) === String(itemId));
+    const saved = item.toObject();
+    party.orderedSkus.pull({ _id: itemId });
+    party.updatedBy = userId;
+    party.activityTimeline.push({
+      action: 'UPDATE',
+      description: `Ordered SKU removed: ${name}`.slice(0, 500),
+      actorId: userId,
+    });
+    await party.save();
+    await recycleBinService.record('partySku', {
+      recordId: saved._id,
+      title: name,
+      subtitle: [saved.skuCode, party.name].filter(Boolean).join(' · '),
+      keywords: [party.code],
+      openPath: `/parties/${party._id}`,
+      actor: userId,
+      plan: { steps: [binPlan.repush(Party.modelName, party._id, 'orderedSkus', saved, index)] },
+    });
+    return { party: party.toObject(), removed: name };
   },
 
   /**

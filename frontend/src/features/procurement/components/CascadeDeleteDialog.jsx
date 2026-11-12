@@ -151,7 +151,7 @@ export const CascadeDeleteContent = ({ type, id, what, number, onClose, onDone, 
               <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: RED, textTransform: 'uppercase', letterSpacing: 0.3, mb: 0.75 }}>
                 {blocked
                   ? 'These records would be deleted once nothing blocks it'
-                  : downstream.length ? 'The following records will be permanently deleted' : 'This record will be deleted'}
+                  : downstream.length ? 'The following records will be deleted (they go to the Recycle Bin and can be restored)' : 'This record will be deleted'}
               </Typography>
               <Box sx={{ border: `1px solid #fecaca`, borderRadius: '8px', bgcolor: '#fffafa' }} data-testid="cascade-affected">
                 {plan.affected.map((g) => <AffectedGroup key={g.type} g={g} />)}

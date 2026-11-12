@@ -6,8 +6,30 @@ import Operator, { operatorNameKey } from './machineOperator.model.js';
 import assignmentService from './assignment.service.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
+import MachineOperatorAssignment from './machineOperatorAssignment.model.js';
+import { recycleBinService } from '../../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../../recycle-bin/recycleBin.restore.js';
 
 const live = { isDeleted: { $ne: true } };
+
+/**
+ * Recycle Bin entry for a deleted operator (Master Data or PPC → DPR Masters).
+ * Restore refuses when a live operator now has the same name; `links` are the
+ * machine links the delete detached.
+ */
+export const recordOperatorDelete = (operator, { wasActive = true, links = [], actor } = {}) => recycleBinService.record('operator', {
+  recordId: operator._id,
+  title: operator.name,
+  subtitle: [operator.code, operator.department, operator.shift && `Shift ${operator.shift}`].filter(Boolean).join(' · '),
+  keywords: [operator.machineCodes],
+  actor,
+  plan: {
+    checks: [binPlan.absent(Operator.modelName, { nameKey: operator.nameKey, isDeleted: false }, `Can't restore — another live operator is now named ${operator.name}.`, operator._id)],
+    steps: [binPlan.unhide(Operator.modelName, operator._id, { isActive: wasActive }, { timeline: Array.isArray(operator.activityTimeline) })],
+    after: links.length ? [binPlan.hook('masters.reattach', { assignmentIds: links.map((l) => l._id) })] : [],
+    afterCommit: links.length ? [binPlan.hook('masters.syncOperatorCodes', { operatorIds: [operator._id] })] : [],
+  },
+});
 
 /**
  * Operators have no employee code in the source, so identity is the normalized
@@ -111,6 +133,9 @@ export const machineOperatorService = {
   async remove(id, userId) {
     const operator = await Operator.findOne({ _id: id, ...live });
     if (!operator) throw new AppError('Machine operator not found', 404);
+    const wasActive = operator.isActive !== false;
+    const links = await MachineOperatorAssignment.find({ operatorId: operator._id, isDeleted: { $ne: true } })
+      .select('_id').lean();
 
     operator.isDeleted = true;
     operator.isActive = false;
@@ -120,6 +145,7 @@ export const machineOperatorService = {
     await operator.save({ validateBeforeSave: false });
 
     await assignmentService.detachOperator(operator._id, userId);
+    await recordOperatorDelete(operator, { wasActive, links, actor: userId });
     return { ok: true, name: operator.name };
   },
 
@@ -147,7 +173,7 @@ export const machineOperatorService = {
   },
 
   unassignMachine(id, machineId, userId) {
-    return assignmentService.unassign(machineId, id, userId);
+    return assignmentService.unassignToBin(machineId, id, userId, `/machine-operators/${id}`);
   },
 };
 

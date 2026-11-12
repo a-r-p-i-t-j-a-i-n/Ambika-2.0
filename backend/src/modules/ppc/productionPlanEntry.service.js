@@ -12,6 +12,8 @@ import ProductionPlanEntry from './production-plan-entry.model.js';
 import Party from '../clients/party.model.js';
 import SKU from '../skus/sku.model.js';
 import { generateDocNumber } from '../../utils/docNumberGenerator.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 const toNum = (v) => {
   const n = Number(v);
@@ -239,6 +241,8 @@ export async function deletePlan(id, userId) {
     err.statusCode = 400;
     throw err;
   }
+  // The delete marks the plan CANCELLED; its status before is kept for a restore.
+  const before = await ProductionPlanEntry.findOne({ _id: id, isDeleted: { $ne: true } }).select('planStatus').lean();
   const doc = await ProductionPlanEntry.findOneAndUpdate(
     { _id: id, isDeleted: { $ne: true } },
     { isDeleted: true, deletedAt: new Date(), deletedBy: userId, planStatus: 'CANCELLED' },
@@ -250,6 +254,14 @@ export async function deletePlan(id, userId) {
     err.statusCode = 404;
     throw err;
   }
+  await recycleBinService.record('productionPlan', {
+    recordId: doc._id,
+    title: doc.planNo || 'Production plan',
+    subtitle: [doc.partyName, before?.planStatus].filter(Boolean).join(' · '),
+    keywords: [(doc.items || []).map((i) => [i.skuName, i.skuCode])],
+    actor: userId,
+    plan: { steps: [binPlan.unhide(ProductionPlanEntry.modelName, doc._id, { planStatus: before?.planStatus || 'PLANNED' })] },
+  });
   return doc;
 }
 

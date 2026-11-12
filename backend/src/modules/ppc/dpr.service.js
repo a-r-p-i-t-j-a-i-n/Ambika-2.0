@@ -16,6 +16,8 @@ import ProcessRoute from './processRoute.model.js';
 import SKU from '../skus/sku.model.js';
 import { computeOee, minutesBetween } from './oee.service.js';
 import { AppError } from '../../utils/apiResponse.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 const rx = (s) => new RegExp(String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 const IST_OFFSET = '+05:30';
@@ -217,8 +219,18 @@ export const dprService = {
   },
 
   async remove(id) {
-    const doc = await DprEntry.findByIdAndUpdate(id, { $set: { isDeleted: true } }, { new: true }).lean();
-    if (!doc) throw new AppError('DPR entry not found', 404);
+    const before = await DprEntry.findByIdAndUpdate(id, { $set: { isDeleted: true } }, { new: false }).lean();
+    if (!before) throw new AppError('DPR entry not found', 404);
+    if (before.isDeleted !== true) {
+      const day = before.date ? new Date(before.date).toISOString().slice(0, 10) : '';
+      await recycleBinService.record('dprEntry', {
+        recordId: before._id,
+        title: `DPR ${day} · ${before.machineCode}`,
+        subtitle: [before.shift && `Shift ${before.shift}`, before.operatorName, before.skuCode].filter(Boolean).join(' · '),
+        keywords: [before.skuName],
+        plan: { steps: [binPlan.unhide(DprEntry.modelName, before._id)] },
+      });
+    }
     return { _id: id, deleted: true };
   },
 

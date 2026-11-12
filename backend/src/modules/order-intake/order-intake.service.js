@@ -5,6 +5,8 @@ import { o2dFmsService } from '../o2d-fms/o2d-fms.service.js';
 import { ApiFeatures } from '../../utils/apiFeatures.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan } from '../recycle-bin/recycleBin.restore.js';
 
 export const orderIntakeService = {
   async create(data, actor) {
@@ -94,21 +96,41 @@ export const orderIntakeService = {
   async remove(id, actor) {
     const intake = await OrderIntake.findById(id);
     if (!intake) throw new AppError('Order intake not found', 404);
+    const wasDeleted = intake.isDeleted === true;
 
     intake.isDeleted = true;
     intake.updatedBy = actor?._id;
     await intake.save();
 
+    // Its FMS process is retired with it — noted so a restore brings both back.
+    let hiddenProcess = null;
     if (intake.intakeStatus !== INTAKE_STATUS.CONVERTED) {
       try {
         const { O2DProcess } = await import('../o2d-fms/o2d-fms.model.js');
-        await O2DProcess.updateOne(
-          { intakeId: intake._id, salesOrderId: null },
+        hiddenProcess = await O2DProcess.findOneAndUpdate(
+          { intakeId: intake._id, salesOrderId: null, isDeleted: { $ne: true } },
           { $set: { isDeleted: true, updatedBy: actor?._id } },
-        );
+        ).select('_id').lean();
       } catch (err) {
         logger.error(`[order-intake] FMS cleanup failed for ${intake.intakeNo}: ${err.message}`);
       }
+    }
+
+    if (!wasDeleted) {
+      const { O2DProcess } = await import('../o2d-fms/o2d-fms.model.js');
+      await recycleBinService.record('orderIntake', {
+        recordId: intake._id,
+        title: intake.intakeNo || 'Order intake',
+        subtitle: [intake.partyName, intake.channel, intake.intakeStatus].filter(Boolean).join(' · '),
+        keywords: [intake.poNumber, intake.remarks],
+        actor,
+        plan: {
+          steps: [
+            binPlan.unhide(OrderIntake.modelName, intake._id, {}, { timeline: true }),
+            ...(hiddenProcess ? [binPlan.unhide(O2DProcess.modelName, hiddenProcess._id, {}, { optional: true })] : []),
+          ],
+        },
+      });
     }
     return { id: intake._id, intakeNo: intake.intakeNo };
   },

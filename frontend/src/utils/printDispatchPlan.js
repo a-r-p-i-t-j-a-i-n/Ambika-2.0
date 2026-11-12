@@ -100,6 +100,11 @@ export function printDispatchPlanByDate(schedule = {}, opts = {}) {
   const m = buildPlanModel(schedule);
   const { company, brandName, today } = m;
   const s = schedule;
+  // The tab title is the "Save as PDF" file name. Client's naming:
+  // "Dispatch Plan - <PO number>" (SO number when there is no PO) — the same
+  // name the server gives the PDF attached to the step 2.05 email.
+  const ref = String(s.poNumber || s.soNumber || '').trim().replace(/[\\/:*?"<>|]+/g, '-');
+  const pdfTitle = `Dispatch Plan - ${ref}${isInternal ? ' (Internal)' : ''}`;
 
   // SKUs become columns; dates become rows → wide only in the SKU count.
   const skuCount = m.rows.length;
@@ -140,7 +145,7 @@ export function printDispatchPlanByDate(schedule = {}, opts = {}) {
 
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" />
-<title>Dispatch Plan${isInternal ? ' (Internal)' : ''} — ${esc(s.soNumber || '')}</title>
+<title>${esc(pdfTitle)}</title>
 <style>
   :root { --navy:#0b2545; --navy2:#16305a; --blue:#1d4ed8; --ink:#1a2438; --line:#c9d2e2; --soft:#eef2fb; --muted:#6a7690; }
   * { box-sizing:border-box; }

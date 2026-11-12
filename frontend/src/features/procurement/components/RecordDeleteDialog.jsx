@@ -20,7 +20,7 @@ const RecordDeleteDialog = ({ row, what, number, consequence, needsReason, remov
     setError('');
     try {
       await remove(needsReason ? { id: row._id, reason: reason.trim() } : row._id).unwrap();
-      enqueueSnackbar(`${what} ${number} deleted`.replace(/\s+/g, ' '), { variant: 'success' });
+      enqueueSnackbar(`${what} ${number} moved to the Recycle Bin`.replace(/\s+/g, ' '), { variant: 'success' });
       onClose();
     } catch (err) {
       setError(err?.data?.message || `Could not delete this ${what.toLowerCase()}`);
@@ -33,7 +33,8 @@ const RecordDeleteDialog = ({ row, what, number, consequence, needsReason, remov
     <>
       <DialogTitle sx={{ fontWeight: 800 }}>Delete {what} {number}?</DialogTitle>
       <DialogContent>
-        {consequence && <Typography variant="body2" color="text.secondary" sx={{ mb: needsReason ? 2 : 0 }}>{consequence}</Typography>}
+        {consequence && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{consequence}</Typography>}
+        <Typography variant="body2" color="text.secondary" sx={{ mb: needsReason ? 2 : 0 }}>It moves to the Recycle Bin, where it can be restored.</Typography>
         {needsReason && (
           <TextField label="Reason for deleting *" fullWidth size="small" autoFocus value={reason}
             onChange={(e) => setReason(e.target.value)} inputProps={{ maxLength: 500, 'data-testid': 'record-delete-reason' }}

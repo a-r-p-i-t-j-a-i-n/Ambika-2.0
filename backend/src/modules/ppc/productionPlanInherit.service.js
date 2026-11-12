@@ -206,9 +206,89 @@ export async function releasePlanConsumption({ soNumber, phaseNo }) {
   return released;
 }
 
+/**
+ * What releasePlanConsumption({ soNumber, phaseNo }) would hand back — read
+ * only. Plan items carry no _id, so each entry notes the item's position and
+ * SKU; the Recycle Bin keeps the list to put it back (reconsumePlan).
+ */
+export async function consumptionsFor({ soNumber, phaseNo }) {
+  if (!soNumber) return [];
+  const plans = await ProductionPlanEntry.find({ consumedBySo: soNumber, isDeleted: { $ne: true } }).lean();
+  const out = [];
+  plans.forEach((plan) => (plan.items || []).forEach((item, itemIndex) => {
+    (item.consumptions || []).forEach((c) => {
+      if (c.soNumber === soNumber && (!phaseNo || c.phaseNo === phaseNo)) {
+        out.push({
+          planId: plan._id, planNo: plan.planNo || '', itemIndex,
+          skuId: item.skuId || null, skuCode: item.skuCode || '',
+          consumption: { soNumber: c.soNumber, phaseNo: c.phaseNo, qty: num(c.qty), at: c.at || null },
+        });
+      }
+    });
+  }));
+  return out;
+}
+
+/** The plan line an entry from consumptionsFor() was taken from (position first, then SKU). */
+export const findPlanItem = (items, entry) => {
+  const same = (it) => it && (
+    (entry.skuId && it.skuId && String(it.skuId) === String(entry.skuId))
+    || (!entry.skuId && entry.skuCode && keyOf(it.skuCode) === keyOf(entry.skuCode))
+  );
+  const atIndex = (items || [])[entry.itemIndex];
+  if (same(atIndex)) return atIndex;
+  return (items || []).find(same) || null;
+};
+
+/**
+ * Restore what a dispatch-phase delete released. Exact or nothing: when a
+ * plan day no longer has the free capacity (another order drew on it since),
+ * or the plan / line is gone, it refuses.
+ */
+export async function reconsumePlan(entries, session) {
+  const byPlan = new Map();
+  (entries || []).forEach((e) => {
+    const key = String(e.planId);
+    byPlan.set(key, [...(byPlan.get(key) || []), e]);
+  });
+  for (const [planId, list] of byPlan) {
+    const q = ProductionPlanEntry.findById(planId);
+    if (session) q.session(session);
+    // eslint-disable-next-line no-await-in-loop
+    const plan = await q;
+    const label = list[0].planNo || 'the production plan';
+    if (!plan || plan.isDeleted) {
+      throw new AppError(`Can't restore — ${label} it drew on has been deleted. Restore that plan first.`, 409);
+    }
+    for (const e of list) {
+      const item = findPlanItem(plan.items, e);
+      if (!item) throw new AppError(`Can't restore — the ${e.skuCode || 'SKU'} line is no longer on ${label}.`, 409);
+      const c = e.consumption;
+      const already = (item.consumptions || []).some((x) => x.soNumber === c.soNumber && x.phaseNo === c.phaseNo
+        && num(x.qty) === num(c.qty) && String(x.at ? new Date(x.at).getTime() : '') === String(c.at ? new Date(c.at).getTime() : ''));
+      if (already) continue;
+      const free = Math.max(0, num(item.plannedQty) - num(item.consumedQty));
+      if (free < num(c.qty)) {
+        throw new AppError(`Can't restore — ${label} (${e.skuCode || 'SKU'}) has only ${free} free now; ${num(c.qty)} is needed. Another order used that capacity.`, 409);
+      }
+      item.consumedQty = num(item.consumedQty) + num(c.qty);
+      item.consumptions = [...(item.consumptions || []), { ...c }];
+    }
+    plan.totalConsumedQty = plan.items.reduce((sum, it) => sum + num(it.consumedQty), 0);
+    plan.consumedBySo = [...new Set(
+      plan.items.flatMap((it) => (it.consumptions || []).map((x) => x.soNumber).filter(Boolean)),
+    )];
+    plan.markModified('items');
+    // eslint-disable-next-line no-await-in-loop
+    await (session ? plan.save({ session }) : plan.save());
+  }
+}
+
 export const productionPlanInheritService = {
   previewInherit,
   consumePlanLine,
   releasePlanConsumption,
+  consumptionsFor,
+  reconsumePlan,
   isValidId: (v) => mongoose.isValidObjectId(v),
 };

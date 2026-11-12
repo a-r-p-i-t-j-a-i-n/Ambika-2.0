@@ -74,7 +74,7 @@ const TransporterMaster = () => {
   };
 
   const remove = async (id) => {
-    if (!window.confirm('Delete this transporter?')) return;
+    if (!window.confirm('Delete this transporter? It moves to the Recycle Bin, where it can be restored.')) return;
     try { await deleteTransporter(id).unwrap(); enqueueSnackbar('Transporter deleted', { variant: 'success' }); }
     catch (e) { enqueueSnackbar(e?.data?.message || 'Could not delete', { variant: 'error' }); }
   };

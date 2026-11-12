@@ -27,6 +27,8 @@ import {
   computeEffectivePermissions,
   invalidateRoleCache,
 } from '../../middleware/permission.middleware.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan, registerRestoreHook } from '../recycle-bin/recycleBin.restore.js';
 
 const MD_ROLE_KEY = 'MD';
 
@@ -402,7 +404,19 @@ export const deleteRole = async (roleId, actor, req) => {
     throw new AppError(`Role '${role.key}' is still assigned to ${inUse} user(s). Reassign them first.`, 400);
   }
 
-  await role.deleteOne();
+  const copy = await Role.findById(role._id).lean();
+  await recycleBinService.capture('role', {
+    recordId: role._id,
+    title: role.name || role.key,
+    subtitle: `${role.key} · ${(role.permissions || []).length} permissions`,
+    keywords: [role.description],
+    actor,
+    plan: {
+      checks: [binPlan.absent(Role.modelName, { key: role.key }, `Can't restore — a role with the key ${role.key} exists again.`)],
+      steps: [binPlan.reinsert(Role.modelName, copy)],
+      afterCommit: [binPlan.hook('access.invalidateRoleCache', { key: role.key })],
+    },
+  }, () => role.deleteOne());
   await writeAudit({
     actor, action: 'ROLE_DELETED',
     targetType: 'Role', targetId: role._id, targetLabel: role.key,
@@ -413,6 +427,9 @@ export const deleteRole = async (roleId, actor, req) => {
   invalidateRoleCache(role.key);
   return { ok: true };
 };
+
+// Recycle Bin → a restored role's permissions take effect straight away.
+registerRestoreHook('access.invalidateRoleCache', async ({ key }) => { invalidateRoleCache(key); });
 
 // ── Audit Log ──────────────────────────────────────────────────────
 export const getAuditLog = async ({

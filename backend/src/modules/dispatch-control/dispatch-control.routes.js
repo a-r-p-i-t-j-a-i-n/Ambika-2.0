@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import validate from '../../middleware/validate.js';
+import { protect } from '../../middleware/auth.middleware.js';
 import { dispatchControlController } from './dispatch-control.controller.js';
 import {
   actualDispatchSchema,
@@ -16,7 +17,10 @@ import {
   updatePhaseSchema,
 } from './dispatch-control.validation.js';
 
+// Signed-in users only — every caller is an ERP screen sending its token, and
+// writes are then stamped with who made them (buildActor).
 const router = Router();
+router.use(protect);
 
 // ── Reads ────────────────────────────────────────────────────
 router.get('/dashboard', validate(dashboardQuerySchema, 'query'), dispatchControlController.getDashboard);

@@ -13,6 +13,8 @@ export const SESSION_GRANTABLE = new Set([
   // Master Data → Delete, per master.
   'masters.deleteSku', 'masters.deleteParty', 'masters.deleteMachine',
   'masters.deleteOperator', 'masters.deleteVendor', 'masters.deleteTransporter',
+  // Recycle Bin switches.
+  'recycleBin.view', 'recycleBin.viewAll', 'recycleBin.restore', 'recycleBin.purge', 'recycleBin.settings',
 ]);
 
 // …and the ones it may switch off for that session (Master Data → Edit, per

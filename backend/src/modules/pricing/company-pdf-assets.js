@@ -21,6 +21,8 @@ import CompanySettings from './company-settings.model.js';
 import AuditLog from '../audit-logs/audit-log.model.js';
 import { AppError } from '../../utils/apiResponse.js';
 import { logger } from '../../utils/logger.js';
+import { recycleBinService } from '../recycle-bin/recycleBin.service.js';
+import { binPlan, registerRestoreHook } from '../recycle-bin/recycleBin.restore.js';
 import { PO_TERMS_SETTING_FIELDS, defaultPoTerms } from '../procurement/purchase-order/poTerms.js';
 
 // URL kind → CompanySettings field.
@@ -214,7 +216,19 @@ export const companyPdfAssetsService = {
     const s = await CompanySettings.getSingleton();
     const previous = s[field];
     if (!previous?.sha256) throw new AppError(`${LABELS[kind]} is not configured.`, 404);
-    await CompanySettings.updateOne({ _id: s._id }, { $unset: { [field]: 1 }, $set: { updatedBy: req.user?._id } });
+    // The image bytes live only here, so the Recycle Bin keeps a full copy first.
+    const stored = await CompanySettings.findById(s._id).select(`+${field}.data`).lean();
+    const asset = { ...stored[field], data: toBuffer(stored[field]?.data) };
+    await recycleBinService.capture('pdfAsset', {
+      title: LABELS[kind],
+      subtitle: [asset.fileName, asset.uploadedByName && `uploaded by ${asset.uploadedByName}`].filter(Boolean).join(' · '),
+      keywords: [kind, 'signature', 'stamp'],
+      actor: req.user,
+      plan: {
+        steps: [binPlan.set(CompanySettings.modelName, s._id, {}, { optional: true })],
+        after: [binPlan.hook('settings.restorePdfAsset', { settingsId: s._id, kind, field, asset })],
+      },
+    }, () => CompanySettings.updateOne({ _id: s._id }, { $unset: { [field]: 1 }, $set: { updatedBy: req.user?._id } }));
     await audit(s._id, kind, previous, null, req);
     logger.info(`[settings] ${LABELS[kind]} removed by ${req.user?.name || req.user?._id}`);
     return { kind, asset: null };
@@ -229,6 +243,22 @@ export const companyPdfAssetsService = {
     return { data, mimeType: sniffImageType(data) || 'application/octet-stream' };
   },
 };
+
+// Recycle Bin → put a removed signature / stamp back, only while the slot is
+// still empty (a newer upload is never overwritten).
+registerRestoreHook('settings.restorePdfAsset', async ({ settingsId, kind, field, asset }, { session, actor }) => {
+  if (!Object.values(PDF_ASSET_FIELDS).includes(field)) throw new AppError("Can't restore — unknown company image.", 409);
+  const data = toBuffer(asset?.data);
+  if (!data) throw new AppError("Can't restore — the saved image is empty.", 409);
+  const res = await CompanySettings.collection.updateOne(
+    { _id: settingsId, [field]: { $in: [null] } },
+    { $set: { [field]: { ...asset, data }, updatedBy: actor?.id || null, updatedAt: new Date() } },
+    session ? { session } : {},
+  );
+  if (!res.matchedCount) {
+    throw new AppError(`Can't restore — a new ${String(LABELS[kind] || 'image').toLowerCase()} was uploaded since. Remove it first if you want the old one back.`, 409);
+  }
+});
 
 // lean() hands Buffers back as BSON Binary.
 const toBuffer = (v) => {

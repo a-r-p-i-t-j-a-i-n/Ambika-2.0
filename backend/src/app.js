@@ -67,6 +67,8 @@ import approvalRoutes from './modules/approvals/approval.routes.js';
 import fmsDoerRoutes from './modules/fms-doers/fmsDoer.routes.js';
 import { fmsWorkflowSync } from './modules/fms-doers/fmsDoerSync.middleware.js';
 import { getInvoiceNumberIndexStatus } from './modules/procurement/vendor-invoice/invoiceNumberIndexGuard.js';
+import recycleBinRoutes from './modules/recycle-bin/recycleBin.routes.js';
+import { requestContext } from './middleware/requestContext.js';
 
 
 
@@ -99,6 +101,7 @@ app.use(hpp());
 // ── Body Parsing & Compression ──────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(requestContext); // lets the Recycle Bin see who deleted, from which screen
 app.use(compression());
 
 // ── Logging ─────────────────────────────────────────────────
@@ -166,6 +169,7 @@ app.use('/api/v1/o2d-fms',          o2dFmsRoutes); // Flow Management System (pr
 app.use('/api/v1/suite-link',       suiteLinkRoutes); // Delegation Suite server → ERP (signed, no login)
 app.use('/api/v1/notifications',    notificationRoutes);
 app.use('/api/v1/order-intake',     orderIntakeRoutes);
+app.use('/api/v1/recycle-bin',      recycleBinRoutes); // Deleted items → restore / delete forever (Suite's Recycle Bin page)
 // FMS doer tasks follow Purchase FMS progress: after any successful write under
 // these paths, re-sync step tasks (post-response; never alters the request).
 app.use('/api/v1/procurement', fmsWorkflowSync);
