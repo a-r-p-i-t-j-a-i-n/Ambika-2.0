@@ -164,16 +164,62 @@ export const voucherService = {
     // ── PURCHASE — voucher only from an approved (payment-pending) invoice. ──
     const inv = await VendorInvoice.findOne({ _id: data.invoiceId, isDeleted: { $ne: true } });
     if (!inv) throw new AppError('Vendor invoice not found', 404);
+    return (await this.createPurchaseForInvoice(inv, data, user)).voucher;
+  },
+
+  /**
+   * Draft purchase voucher for an approved invoice — the one code path behind
+   * both the manual "Create Voucher" and the automatic preparation on invoice
+   * approval (`auto: true`). Idempotent: the invoice's live voucher is never
+   * duplicated. A manual create against an invoice that already has one is
+   * refused as before; an automatic one (a retry, or a concurrent manual
+   * create) simply returns the existing voucher. Resolves { voucher, created }.
+   */
+  async createPurchaseForInvoice(inv, data = {}, user, { auto = false } = {}) {
     if (inv.invoiceStatus !== INVOICE_STATUS.PAYMENT_PENDING) {
       throw new AppError('Voucher can only be created from an approved (payment-pending) invoice', 400);
     }
-    const existing = await VendorVoucher.findOne({ invoiceId: inv._id, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED } }).lean();
-    if (existing) throw new AppError(`A voucher (${existing.voucherNumber}) already exists for this invoice`, 400);
+    const findLive = () => VendorVoucher.findOne({ invoiceId: inv._id, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED } });
+    const refuseExisting = (v) => new AppError(`A voucher (${v.voucherNumber}) already exists for this invoice`, 400);
+    const existing = await findLive();
+    if (existing) {
+      if (auto) return { voucher: existing, created: false };
+      throw refuseExisting(existing);
+    }
 
     const netPayableAmount = round2(inv.netPayableAmount);
     const voucherNumber = await generatePurchaseVoucherNumber(data.voucherDate || new Date());
 
     // Step 1.11 is voucher passing / approval only — NO payment is recorded here.
+    let voucher;
+    try {
+      voucher = await this._insertPurchaseVoucher(inv, data, user, { auto, voucherNumber, netPayableAmount });
+    } catch (err) {
+      // Lost the race to a concurrent create: the unique index (one live
+      // purchase voucher per invoice) refused this one — nothing was written.
+      if (err?.code === 11000 && /invoiceId|uniq_live_purchase_voucher_per_invoice/.test(`${err.message} ${JSON.stringify(err.keyPattern || {})}`)) {
+        const winner = await findLive();
+        if (winner) {
+          if (auto) return { voucher: winner, created: false };
+          throw refuseExisting(winner);
+        }
+      }
+      throw err;
+    }
+    // Safety net where the unique index is not in place (a failed build, or
+    // older duplicates): the earliest live voucher keeps the invoice, a later
+    // twin that no one has seen yet is removed.
+    const live = await VendorVoucher.find({ invoiceId: inv._id, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED } })
+      .sort('_id').select('_id voucherNumber').lean();
+    if (live.length > 1 && String(live[0]._id) !== String(voucher._id)) {
+      await VendorVoucher.deleteOne({ _id: voucher._id });
+      if (auto) return { voucher: await findLive(), created: false };
+      throw refuseExisting(live[0]);
+    }
+    return { voucher, created: true };
+  },
+
+  async _insertPurchaseVoucher(inv, data, user, { auto, voucherNumber, netPayableAmount }) {
     const voucher = await VendorVoucher.create({
       voucherNumber,
       voucherType: VOUCHER_TYPE.PURCHASE,
@@ -191,7 +237,13 @@ export const voucherService = {
       voucherStatus: VOUCHER_STATUS.DRAFT,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `Purchase voucher created for ${inv.invoiceNumber}`, actorId: user?._id }],
+      activityTimeline: [{
+        action: 'CREATE',
+        description: auto
+          ? `Purchase voucher prepared automatically on approval of invoice ${inv.invoiceNumber}`
+          : `Purchase voucher created for ${inv.invoiceNumber}`,
+        actorId: user?._id,
+      }],
     });
     return voucher;
   },

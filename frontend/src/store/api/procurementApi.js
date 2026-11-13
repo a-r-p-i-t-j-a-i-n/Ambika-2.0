@@ -502,7 +502,8 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     approveVendorInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vendor-invoices/${id}/approve`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }],
+      // Approval also prepares the invoice's draft voucher, so voucher caches refresh too.
+      invalidatesTags: (_r, _e, { id }) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }, 'Voucher', 'VoucherStats'],
     }),
     rejectVendorInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vendor-invoices/${id}/reject`, method: 'POST', body }),

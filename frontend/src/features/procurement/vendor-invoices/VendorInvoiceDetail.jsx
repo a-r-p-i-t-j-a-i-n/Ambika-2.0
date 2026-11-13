@@ -103,14 +103,14 @@ const VendorInvoiceDetail = () => {
   const nextStep = (() => {
     if (inv.invoiceStatus === 'REJECTED') return null;
     if (canApproveReject) {
-      return { tone: 'info', title: 'Next: approve this Vendor Invoice (Step 1.10)',
-        desc: 'Review the invoice and its linked GRN/QC, then approve it to raise a payment voucher.',
+      return { tone: 'info', title: 'Next: approve this Vendor Invoice',
+        desc: 'Review the invoice and its linked GRN/QC. Approving it prepares the draft Payment Voucher automatically.',
         primary: { label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, onClick: () => setApprovalOpen(true) },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
     if (canCreateVoucher) {
-      return { tone: 'success', title: 'Invoice approved — next: create the Payment Voucher (Step 1.11)',
-        desc: 'Raise a voucher for this invoice to move it toward MD approval and payment.',
+      return { tone: 'success', title: 'Invoice approved — its Payment Voucher has not been created yet',
+        desc: 'Vouchers are prepared automatically when an invoice is approved. This invoice was approved earlier (or the automatic step could not finish) — create the voucher here; it is never duplicated.',
         primary: { label: 'Create Voucher', icon: <Banknote size={16} />, onClick: () => setVoucherFormOpen(true) } };
     }
     if (inv.invoiceStatus === 'PAYMENT_COMPLETED') {
@@ -295,7 +295,12 @@ const VendorInvoiceDetail = () => {
         {/* Payment Voucher — master-detail: the invoice's voucher managed in place */}
         <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
           <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 800, color: PFMS.ink, mb: 1.5 }}>
-            <Banknote size={18} /> Payment Voucher
+            <Banknote size={18} /> Payment Voucher{liveVoucher ? ` · ${liveVoucher.voucherNumber}` : ''}
+          </Typography>
+          <Typography variant="body2" sx={{ color: PFMS.sub, mt: -1, mb: 1.5 }} data-testid="invoice-voucher-caption">
+            {liveVoucher
+              ? 'The accounting voucher for this supplier invoice, prepared when the invoice was approved. Post it, track MD approval and Tally, and record each payment below.'
+              : 'The accounting voucher for this supplier invoice appears here once the invoice is approved.'}
           </Typography>
           {liveVoucher ? (
             <VoucherPanel
@@ -315,11 +320,11 @@ const VendorInvoiceDetail = () => {
                 <Box>
                   <Chip label="Voucher Not Created" variant="outlined" sx={{ fontWeight: 700, mb: 1.5 }} />
                   <Typography color="text.secondary">
-                    This invoice is approved and awaiting a payment voucher. Use <b>Create Voucher</b> above to raise one.
+                    This invoice is approved but has no payment voucher yet — usually an invoice approved before vouchers were prepared automatically. Use <b>Create Voucher</b> above; it will not create a duplicate.
                   </Typography>
                 </Box>
               ) : (
-                <Typography color="text.secondary">Approve this invoice to enable voucher creation.</Typography>
+                <Typography color="text.secondary">Approve this invoice and its draft Payment Voucher is prepared automatically.</Typography>
               )}
               {cancelledVouchers.length > 0 && (
                 <Box sx={{ mt: 2, pt: 2, borderTop: '1px dashed', borderColor: 'divider' }}>

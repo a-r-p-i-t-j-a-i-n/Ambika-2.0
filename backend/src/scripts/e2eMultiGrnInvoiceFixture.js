@@ -258,8 +258,11 @@ const run = async ({ seedOnly = false } = {}) => {
   check('rejecting INV-REST puts B1 back: pending 35 (100 − 65)', e1c?.items[0].pendingInvoiceQty === 35, JSON.stringify(e1c?.items.map((i) => i.pendingInvoiceQty)));
 
   console.log('\n[downstream: voucher → Tally → MD → final payment]');
-  await vis.approve(String(multi._id), {}, user);
-  const voucher = await voucherService.create({ invoiceId: String(multi._id) }, user);
+  const approved = await vis.approve(String(multi._id), {}, user);
+  // Approval prepares the draft voucher itself; a manual create is then refused (never a second one).
+  check('approval prepared the draft voucher', approved.preparedVoucher?.voucherStatus === 'DRAFT' && !approved.voucherPrepareError, JSON.stringify(approved.preparedVoucher));
+  check('a manual Create Voucher is refused (no duplicate)', /already exists/.test(await errMsg(voucherService.create({ invoiceId: String(multi._id) }, user))));
+  const voucher = await VendorVoucher.findById(approved.preparedVoucher._id).lean();
   check('voucher carries both GRNs + QCs', voucher.grnNumbers.join() === 'GRN-E2E-MG1,GRN-E2E-MG2' && voucher.qcIds.length === 2);
   check('voucher amounts = invoice (9036.2 net, 1000 advance, 100 DN)',
     voucher.netPayableAmount === 9036.2 && voucher.advancePaid === 1000 && voucher.debitNoteAmount === 100 && voucher.invoiceAmount === 10136.2);

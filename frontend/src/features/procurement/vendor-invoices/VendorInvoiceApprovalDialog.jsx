@@ -110,8 +110,15 @@ const ApprovalForm = ({ invoice: given, onClose }) => {
   const decide = async (kind) => {
     const fn = kind === 'approve' ? approveInv : rejectInv;
     try {
-      await fn({ id: inv._id, remarks: remarks.trim() }).unwrap();
-      enqueueSnackbar(kind === 'approve' ? 'Invoice approved — payment pending' : 'Invoice rejected', { variant: kind === 'approve' ? 'success' : 'info' });
+      const res = await fn({ id: inv._id, remarks: remarks.trim() }).unwrap();
+      if (kind === 'approve') {
+        // The server prepares the draft Payment Voucher on approval (see
+        // vendorInvoice.service approve); say so, or say how to retry.
+        const pv = res?.data?.preparedVoucher;
+        if (pv) enqueueSnackbar(`Invoice approved — draft voucher ${pv.voucherNumber} prepared. Review & Post it next.`, { variant: 'success' });
+        else if (res?.data?.voucherPrepareError) enqueueSnackbar(`Invoice approved, but the voucher could not be prepared automatically (${res.data.voucherPrepareError}). Use Create Voucher on the invoice.`, { variant: 'warning' });
+        else enqueueSnackbar('Invoice approved — payment pending', { variant: 'success' });
+      } else enqueueSnackbar('Invoice rejected', { variant: 'info' });
       onClose(true);
     } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed', { variant: 'error' }); }
   };

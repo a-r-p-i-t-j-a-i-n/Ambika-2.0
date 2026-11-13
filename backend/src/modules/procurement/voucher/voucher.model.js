@@ -203,5 +203,29 @@ voucherSchema.index({ voucherNumber: 'text', invoiceNumber: 'text', vendorName: 
 voucherSchema.index({ vendorId: 1, voucherStatus: 1 });
 voucherSchema.index({ voucherDate: -1 });
 
+// One LIVE purchase voucher per vendor invoice, enforced by the database so two
+// concurrent creates (an approval's automatic voucher and a manual "Create
+// Voucher", or two approvals) can never both win. Partial: a cancelled or
+// deleted voucher frees the invoice for a new one, and expense / direct-purchase
+// vouchers (no invoiceId) are never indexed. The service's findOne pre-check
+// stays as the friendly first line and the only check against older vouchers
+// the index does not cover.
+export const LIVE_PURCHASE_VOUCHER_STATUSES = [
+  VOUCHER_STATUS.DRAFT, VOUCHER_STATUS.POSTED, VOUCHER_STATUS.PARTIALLY_PAID,
+  VOUCHER_STATUS.FULLY_PAID, VOUCHER_STATUS.SHORT_CLOSED,
+];
+voucherSchema.index(
+  { invoiceId: 1 },
+  {
+    name: 'uniq_live_purchase_voucher_per_invoice',
+    unique: true,
+    partialFilterExpression: {
+      voucherType: VOUCHER_TYPE.PURCHASE,
+      isDeleted: false,
+      voucherStatus: { $in: LIVE_PURCHASE_VOUCHER_STATUSES },
+    },
+  },
+);
+
 const VendorVoucher = model('VendorVoucher', voucherSchema);
 export default VendorVoucher;

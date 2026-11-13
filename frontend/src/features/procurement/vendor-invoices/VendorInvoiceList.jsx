@@ -26,6 +26,7 @@ import { InvoiceStatusChip, INVOICE_STATUSES, fmtINR, fmtDate } from './invoiceM
 import { VoucherStatusChip } from '../vouchers/voucherMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
+import InvoiceVoucherExplainer from './InvoiceVoucherExplainer';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
@@ -71,7 +72,7 @@ const InvoiceVoucherCell = ({ row }) => {
 const WORKFLOW_CHIPS = [
   { id: 'ALL', label: 'All', serverStatus: '' },
   { id: 'AWAITING_INVOICE', label: 'Awaiting Invoice Action', serverStatus: '', workflow: 'AWAITING_INVOICE' },
-  { id: 'AWAITING_VOUCHER', label: 'Awaiting Voucher', serverStatus: '', workflow: 'AWAITING_VOUCHER' },
+  { id: 'AWAITING_VOUCHER', label: 'Awaiting Voucher (older / retry)', serverStatus: '', workflow: 'AWAITING_VOUCHER' },
   { id: 'AWAITING_MD_APPROVAL', label: 'Awaiting MD Approval', serverStatus: '', workflow: 'AWAITING_MD_APPROVAL' },
   { id: 'VOUCHER_POSTED', label: 'Voucher Posted / MD Approved', serverStatus: '', workflow: 'VOUCHER_POSTED' },
   { id: 'PARTIALLY_PAID', label: 'Partially Paid', serverStatus: '', workflow: 'PARTIALLY_PAID' },
@@ -197,13 +198,15 @@ const VendorInvoiceList = () => {
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
           <Typography sx={pfmsTitleSx}>Vendor Invoices & Payments ({stats.total || 0})</Typography>
-          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.10–1.11 · Invoice / Debit Note received, with each invoice's payment voucher managed in place</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Supplier invoices and the payment voucher prepared for each one on approval — review, post and pay from the invoice</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate('/procurement/vouchers')}>Expense / All Vouchers</Button>
+          <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate('/procurement/vouchers')}>All Payment Vouchers (incl. Expense & Direct Purchase)</Button>
           <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditInv(null); setFormOpen(true); }}>New Invoice</Button>
         </Box>
       </Box>
+
+      <InvoiceVoucherExplainer />
 
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ReceiptText size={20} />} label="Total"            value={stats.total}            color="#2563eb" /></Grid>

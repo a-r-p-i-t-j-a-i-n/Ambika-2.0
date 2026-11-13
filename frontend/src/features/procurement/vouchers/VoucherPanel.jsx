@@ -212,9 +212,9 @@ const VoucherPanel = ({
   const nextStep = (() => {
     if (v.voucherStatus === 'CANCELLED') return null;
     if (isDraft && !isLocked) {
-      return { tone: 'info', title: 'Next: post this voucher (Step 1.11)',
-        desc: 'Posting passes the voucher for MD approval — no payment is recorded here.',
-        primary: { label: 'Post Voucher', icon: <Send size={16} />, onClick: doApprove, loading: posting },
+      return { tone: 'info', title: 'Next: review and post this voucher',
+        desc: 'Check the amounts, then post. Posting passes the voucher for MD approval and enables the Tally Entry — no payment is recorded here.',
+        primary: { label: 'Review & Post Voucher', icon: <Send size={16} />, onClick: doApprove, loading: posting },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
     // MD approval is tracked on its own and does not hold the Tally Entry back.
@@ -283,7 +283,7 @@ const VoucherPanel = ({
           {showInvoiceLink && v.invoiceId && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${v.invoiceId}`)}>View Invoice</Button>}
           {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={() => setCancelOpen(true)}>Cancel</Button>}
-          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />} onClick={doApprove} disabled={posting}>Post Voucher</Button>}
+          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />} onClick={doApprove} disabled={posting}>Review & Post Voucher</Button>}
         </Box>
       </Box>
 
