@@ -26,10 +26,9 @@ import { InvoiceStatusChip, INVOICE_STATUSES, fmtINR, fmtDate } from './invoiceM
 import { VoucherStatusChip } from '../vouchers/voucherMeta';
 import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
-import InvoiceVoucherExplainer from './InvoiceVoucherExplainer';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx,pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -196,17 +195,12 @@ const VendorInvoiceList = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
-        <Box>
-          <Typography sx={pfmsTitleSx}>Vendor Invoices & Payments ({stats.total || 0})</Typography>
-          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Supplier invoices and the payment voucher prepared for each one on approval — review, post and pay from the invoice</Typography>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate('/procurement/vouchers')}>All Payment Vouchers (incl. Expense & Direct Purchase)</Button>
+        <Typography sx={pfmsTitleSx}>Vendor Invoices & Payments ({stats.total || 0})</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'nowrap', gap: 1, flexShrink: 0, '& .MuiButton-root': { whiteSpace: 'nowrap', minWidth: 'max-content', height: 36, px: 1.75, borderRadius: 1.5, fontSize: '0.8125rem', fontWeight: 600, textTransform: 'none' } }}>
+          <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate('/procurement/vouchers')}>All Vouchers</Button>
           <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditInv(null); setFormOpen(true); }}>New Invoice</Button>
         </Box>
       </Box>
-
-      <InvoiceVoucherExplainer />
 
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ReceiptText size={20} />} label="Total"            value={stats.total}            color="#2563eb" /></Grid>
