@@ -19,6 +19,9 @@ import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchContr
 import { fmtINR, fmtDate, EXPENSE_CATEGORIES, EXPENSE_TYPES, expenseTypeOf, expenseTypeMeta } from './voucherMeta';
 import { fileHref } from '../indents/indentMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import DirectPurchaseFields, {
+  emptyDirectPurchase, directPurchaseFromVoucher, directPurchaseProblem, directPurchasePayload,
+} from './DirectPurchaseFields';
 
 const ACCEPT = '.pdf,image/*,.xls,.xlsx,.doc,.docx';
 const NO_SPIN = {
@@ -52,12 +55,14 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
   const [voucherType, setVoucherType] = useState('PURCHASE');
   const [pf, setPf] = useState(emptyPurchase);     // purchase form
   const [ef, setEf] = useState(emptyExpense);       // expense form
+  const [df, setDf] = useState(emptyDirectPurchase); // direct purchase form
   const [invoiceDoc, setInvoiceDoc] = useState(null);
   const isExpense = voucherType === 'EXPENSE';
+  const isDirect = voucherType === 'DIRECT_PURCHASE';
 
   const { data: invRes } = useGetVendorInvoicesQuery(
     { invoiceStatus: 'PAYMENT_PENDING', limit: 200, sort: '-createdAt' },
-    { skip: !open || isExpense || Boolean(presetInvoice) },
+    { skip: !open || isExpense || isDirect || Boolean(presetInvoice) },
   );
   const invoiceOptions = useMemo(() => {
     const list = invRes?.data || [];
@@ -116,11 +121,13 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
         paymentTerms: voucher.paymentTerms || '', dueDate: voucher.dueDate ? voucher.dueDate.slice(0, 10) : '', preparedBy: voucher.preparedBy || '',
         remarks: voucher.remarks || '',
       });
+      setDf(voucher.voucherType === 'DIRECT_PURCHASE' ? directPurchaseFromVoucher(voucher) : emptyDirectPurchase());
       setInvoiceDoc(voucher.invoiceDocument?.fileUrl ? { fileUrl: voucher.invoiceDocument.fileUrl, fileName: voucher.invoiceDocument.fileName } : null);
     } else {
       setVoucherType('PURCHASE');
       setPf({ ...emptyPurchase, invoiceId: presetInvoice?._id || '' });
       setEf(emptyExpense);
+      setDf(emptyDirectPurchase());
       setInvoiceDoc(null);
     }
   }, [open, isEdit, voucher, presetInvoice]);
@@ -176,6 +183,11 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
   };
 
   const buildPayload = () => {
+    if (isDirect) {
+      const problem = directPurchaseProblem(df);
+      if (problem) { enqueueSnackbar(problem, { variant: 'warning' }); return null; }
+      return directPurchasePayload(df, invoiceDoc);
+    }
     if (isExpense) {
       const warn = (msg) => { enqueueSnackbar(msg, { variant: 'warning' }); return null; };
       if (linkKind === 'PO' && !ef.poId) return warn('Select the Purchase Order this expense is against');
@@ -259,10 +271,28 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
     </Grid>
   );
 
+  // Invoice / bill attachment — same upload mechanism for Expense and Direct Purchase.
+  const uploadField = (
+    <>
+      <FormLabel sx={{ fontSize: '0.7rem', fontWeight: 700, display: 'block', mb: 0.5 }}>Invoice Upload</FormLabel>
+      <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={handleFile} data-testid="voucher-invoice-file" />
+      {invoiceDoc ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, p: 0.5, border: '1px solid', borderColor: 'divider', borderRadius: '8px' }}>
+          <FileText size={15} /><Typography variant="caption" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>{invoiceDoc.fileName}</Typography>
+          <Button size="small" startIcon={<ExternalLink size={12} />} href={fileHref(invoiceDoc.fileUrl)} target="_blank" rel="noopener">View</Button>
+          <IconButton size="small" color="error" onClick={() => setInvoiceDoc(null)}><X size={13} /></IconButton>
+        </Box>
+      ) : (
+        <Button size="small" variant="outlined" startIcon={uploading ? <CircularProgress size={13} /> : <Upload size={14} />} onClick={() => fileRef.current?.click()} disabled={uploading}>Upload</Button>
+      )}
+    </>
+  );
+  const typeTitle = isDirect ? 'Direct Purchase' : isExpense ? 'Expense' : 'Purchase';
+
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth={isExpense ? 'md' : 'sm'} fullWidth>
+    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth={isDirect ? 'lg' : isExpense ? 'md' : 'sm'} fullWidth>
       <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Banknote size={20} /> {isEdit ? `Edit ${isExpense ? 'Expense' : 'Purchase'} Voucher` : 'New Voucher'}
+        <Banknote size={20} /> {isEdit ? `Edit ${typeTitle} Voucher` : 'New Voucher'}
       </DialogTitle>
       <DialogContent dividers>
         {/* Step 1 — Voucher Type */}
@@ -270,6 +300,7 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
           <FormLabel sx={{ fontSize: '0.8rem', fontWeight: 700 }}>Voucher Type *</FormLabel>
           <RadioGroup row value={voucherType} onChange={(e) => setVoucherType(e.target.value)}>
             <FormControlLabel value="PURCHASE" control={<Radio />} label="Purchase Voucher" disabled={isEdit} />
+            <FormControlLabel value="DIRECT_PURCHASE" control={<Radio inputProps={{ 'data-testid': 'voucher-type-direct-purchase' }} />} label="Direct Purchase Voucher" disabled={isEdit} />
             <FormControlLabel value="EXPENSE" control={<Radio />} label="Expense / Direct Bill" disabled={isEdit} />
           </RadioGroup>
           {isExpense && (
@@ -277,9 +308,16 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
               Office, service, repair, maintenance or other vendor bills — not from a Vendor Invoice.
             </Typography>
           )}
+          {isDirect && (
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
+              Goods bought directly from a vendor — no Purchase Indent, PO or GRN.
+            </Typography>
+          )}
         </FormControl>
 
-        {isExpense ? (
+        {isDirect ? (
+          <DirectPurchaseFields open={open} df={df} setDf={setDf} uploadField={uploadField} />
+        ) : isExpense ? (
           <Grid container spacing={2}>
             <Grid item xs={12} sm={linkKind ? 6 : 12}>
               <TextField select fullWidth size="small" label="Expense Type *" value={ef.expenseType} onChange={changeExpenseType}
@@ -382,19 +420,7 @@ const VoucherFormDialog = ({ open, onClose, voucher, presetInvoice }) => {
             <Grid item xs={12} sm={4}>
               <DateInputDDMMYYYY fullWidth size="small" label="Bill Date (optional)" value={ef.expenseInvoiceDate} onChange={(v) => setEf((f) => ({ ...f, expenseInvoiceDate: v }))} />
             </Grid>
-            <Grid item xs={12} sm={4}>
-              <FormLabel sx={{ fontSize: '0.7rem', fontWeight: 700, display: 'block', mb: 0.5 }}>Invoice Upload</FormLabel>
-              <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={handleFile} />
-              {invoiceDoc ? (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, p: 0.5, border: '1px solid', borderColor: 'divider', borderRadius: '8px' }}>
-                  <FileText size={15} /><Typography variant="caption" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>{invoiceDoc.fileName}</Typography>
-                  <Button size="small" startIcon={<ExternalLink size={12} />} href={fileHref(invoiceDoc.fileUrl)} target="_blank" rel="noopener">View</Button>
-                  <IconButton size="small" color="error" onClick={() => setInvoiceDoc(null)}><X size={13} /></IconButton>
-                </Box>
-              ) : (
-                <Button size="small" variant="outlined" startIcon={uploading ? <CircularProgress size={13} /> : <Upload size={14} />} onClick={() => fileRef.current?.click()} disabled={uploading}>Upload</Button>
-              )}
-            </Grid>
+            <Grid item xs={12} sm={4}>{uploadField}</Grid>
 
             <Grid item xs={12}><Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>AMOUNT DETAILS</Typography></Grid>
             {NumField('Basic Value', 'basicValue')}

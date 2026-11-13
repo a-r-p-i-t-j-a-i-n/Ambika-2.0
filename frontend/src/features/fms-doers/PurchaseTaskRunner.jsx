@@ -33,7 +33,6 @@ const ProformaInvoiceFormDrawer = lazy(() => import('../procurement/proforma-inv
 const ProformaInvoiceApprovalDialog = lazy(() => import('../procurement/proforma-invoices/ProformaInvoiceApprovalDialog'));
 const AdvancePaymentFormDialog = lazy(() => import('../procurement/advance-payments/AdvancePaymentFormDialog'));
 const GrnFormDialog = lazy(() => import('../procurement/grn/GrnFormDialog'));
-const GrnCompleteDialog = lazy(() => import('../procurement/grn/GrnCompleteDialog'));
 const GrnQcSections = lazy(() => import('../procurement/grn/GrnQcSection').then((m) => ({ default: m.GrnQcSections })));
 const VendorInvoiceFormDialog = lazy(() => import('../procurement/vendor-invoices/VendorInvoiceFormDialog'));
 const VendorInvoiceApprovalDialog = lazy(() => import('../procurement/vendor-invoices/VendorInvoiceApprovalDialog'));
@@ -156,7 +155,7 @@ const FollowUpStep = ({ po, onClose }) => {
   );
 };
 
-// Step 1.8 — as PurchaseOrderDetail: a draft GRN on this PO → Complete GRN; else a new GRN.
+// Step 1.8 — as PurchaseOrderDetail: a draft GRN on this PO → its GRN + QC form; else a new GRN.
 const GrnStep = ({ po, onClose }) => {
   const { data, isLoading, isError } = useGetGrnsByPoQuery(po._id);
   const choice = useOnce(!isLoading && (data || isError), () => {
@@ -165,7 +164,7 @@ const GrnStep = ({ po, onClose }) => {
   });
   if (!choice) return <Loading />;
   return choice.draft
-    ? <GrnCompleteDialog open grn={choice.draft} onClose={onClose} />
+    ? <GrnFormDialog open grn={choice.draft} onClose={onClose} />
     : <GrnFormDialog open presetPo={po} onClose={onClose} />;
 };
 

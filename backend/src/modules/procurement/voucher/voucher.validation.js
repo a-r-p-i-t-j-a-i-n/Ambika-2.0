@@ -45,7 +45,44 @@ const expenseFields = {
   preparedBy:   Joi.string().trim().max(120).allow('', null),
 };
 
-export const createVoucherSchema = Joi.object({
+// Direct Purchase Voucher line (voucherType DIRECT_PURCHASE). Only the SKU id
+// and the user's own figures are taken — name / code / unit come from the SKU
+// Master, every amount is computed by the service (directPurchase.js).
+const directPurchaseItem = Joi.object({
+  _id:            objectId.allow('', null),
+  skuId:          objectId.required().messages({ 'any.required': 'Pick each item from the SKU Master list', 'string.pattern.base': 'Pick each item from the SKU Master list' }),
+  description:    Joi.string().trim().max(500).allow('', null),
+  hsn:            Joi.string().trim().max(20).allow('', null),
+  quantity:       Joi.number().greater(0).required(),
+  rate:           Joi.number().min(0).required(),
+  discountAmount: Joi.number().min(0).default(0),
+  gstRate:        Joi.number().min(0).max(100).required(),
+});
+
+const directPurchaseFields = {
+  vendorId:        objectId,
+  invoiceNumber:   Joi.string().trim().max(120),
+  invoiceDate:     Joi.date(),
+  invoiceDocument: Joi.object({ fileUrl: Joi.string().allow('', null), fileName: Joi.string().allow('', null) }).allow(null),
+  items:           Joi.array().items(directPurchaseItem).min(1).max(200),
+  paymentTerms:    Joi.string().trim().max(200).allow('', null),
+  dueDate:         Joi.date().allow('', null),
+};
+
+// DIRECT_PURCHASE create: vendor, invoice and at least one item. No PO / GRN /
+// invoice link and no expense fields — anything else is stripped.
+const createDirectPurchaseSchema = Joi.object({
+  voucherType: Joi.string().valid(VOUCHER_TYPE.DIRECT_PURCHASE).required(),
+  voucherDate: Joi.date().optional(),
+  remarks:     Joi.string().trim().max(1000).allow('', null),
+  ...directPurchaseFields,
+  vendorId:      directPurchaseFields.vendorId.required().messages({ 'any.required': 'Select the vendor from the Vendor Master' }),
+  invoiceNumber: directPurchaseFields.invoiceNumber.required().messages({ 'any.required': 'Vendor Invoice Number is required', 'string.empty': 'Vendor Invoice Number is required' }),
+  invoiceDate:   directPurchaseFields.invoiceDate.required().messages({ 'any.required': 'Invoice Date is required' }),
+  items:         directPurchaseFields.items.required().messages({ 'any.required': 'Add at least one purchase item', 'array.min': 'Add at least one purchase item' }),
+});
+
+const createPurchaseOrExpenseSchema = Joi.object({
   voucherType: Joi.string().valid('PURCHASE', 'EXPENSE').default('PURCHASE'),
   voucherDate: Joi.date().optional(),
   remarks:     Joi.string().trim().max(1000).allow('', null),
@@ -70,12 +107,35 @@ export const createVoucherSchema = Joi.object({
   expenseInvoiceNo: expenseFields.expenseInvoiceNo.when('expenseType', { is: LINKED.required(), then: Joi.required().invalid('', null) }),
 });
 
-export const updateVoucherSchema = Joi.object({
+// PURCHASE / EXPENSE requests validate exactly as before; only a request that
+// says voucherType DIRECT_PURCHASE takes the direct purchase schema.
+export const createVoucherSchema = Joi.alternatives().conditional(
+  Joi.object({ voucherType: Joi.valid(VOUCHER_TYPE.DIRECT_PURCHASE).required() }).unknown(),
+  { then: createDirectPurchaseSchema, otherwise: createPurchaseOrExpenseSchema },
+);
+
+const updatePurchaseOrExpenseSchema = Joi.object({
   voucherDate:     Joi.date(),
   paymentMode:     Joi.string().valid(...Object.values(PAYMENT_MODE)),
   remarks:         Joi.string().trim().max(1000).allow('', null),
   ...expenseFields,
 }).min(1);
+
+// Direct purchase draft edit — the request says voucherType DIRECT_PURCHASE
+// (the service refuses it for a voucher of another type). No expense fields.
+const updateDirectPurchaseSchema = Joi.object({
+  voucherType: Joi.string().valid(VOUCHER_TYPE.DIRECT_PURCHASE).required(),
+  voucherDate: Joi.date(),
+  paymentMode: Joi.string().valid(...Object.values(PAYMENT_MODE)),
+  remarks:     Joi.string().trim().max(1000).allow('', null),
+  ...directPurchaseFields,
+}).min(2);
+
+// PURCHASE / EXPENSE edits validate exactly as before.
+export const updateVoucherSchema = Joi.alternatives().conditional(
+  Joi.object({ voucherType: Joi.valid(VOUCHER_TYPE.DIRECT_PURCHASE).required() }).unknown(),
+  { then: updateDirectPurchaseSchema, otherwise: updatePurchaseOrExpenseSchema },
+);
 
 // Step 1.11 post = passing / approval only (no payment captured here).
 export const postVoucherSchema = Joi.object({

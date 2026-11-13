@@ -1,21 +1,20 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Dialog, Box, Typography, TextField, Button, IconButton, Divider,
-  Grid, Autocomplete, CircularProgress, Paper, Chip, MenuItem,
+  Dialog, Box, Typography, TextField, Button, IconButton, Alert,
+  Autocomplete, CircularProgress, Paper, Chip, MenuItem,
   Checkbox, FormControlLabel, ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  X, Save, PackageCheck, Building2, FileText, Eye, Upload, ExternalLink, ClipboardCheck, Lock,
-  Plus, Trash2, ShoppingBag, Ban,
+  Save, PackageCheck, FileText, Eye, ClipboardCheck, Lock,
+  Plus, Trash2, ShoppingBag, Ban, MessageSquareText, Boxes,
 } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useGetPurchaseOrdersQuery,
   useGetGrnByIdQuery,
   useGetIncomingQcsByGrnQuery,
-  useCreateGrnMutation,
-  useUpdateGrnMutation,
+  useSaveGrnWithQcMutation,
   useCorrectGrnMutation,
   useGetGrnChangeCheckQuery,
   usePreviewGrnPdfMutation,
@@ -35,13 +34,23 @@ import { fmtINR, HOW_ITEM_RECEIVED, howReceivedLabel, isGrnCompleted } from './g
 import { DEFAULT_HOW_ITEM_RECEIVED, lineReceiptType } from './grnReceiptType';
 import { resolveGrnQcStage } from './grnQcStage';
 import GrnQcStatusChip from './GrnQcStatusChip';
-import { GrnQcSections } from './GrnQcSection';
+import GrnQcSection from './GrnQcSection';
 import StatusChip, { TONES } from '../components/StatusChip';
-import { pickGrnQc } from '../incoming-qc/qcForm';
+import {
+  pickGrnQc, emptyHeader, headerFromQc, linesFromGrn, mergeEnteredLines, lineKey, allLinesBalanced,
+  expectedQcResult, qcTotals,
+} from '../incoming-qc/qcForm';
+import QcInspectionForm from '../incoming-qc/QcInspectionForm';
+import { QcResultChip, fmtDate } from '../incoming-qc/qcMeta';
 import { destinationOf, routingProblemOf, destinationText, DESTINATION_META } from './inventoryDestination';
 import PdfPreviewSubmitModal from '../common/PdfPreviewSubmitModal';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
-import { PFMS, pfmsCardSx } from '../pfmsTheme';
+import { PFMS, pfmsCardSx, pfmsNoSpinSx } from '../pfmsTheme';
+import {
+  PfmsFormDialog, FormDialogHeader, MetaPill, FormVendorBar, FormDialogBody, FormSection, LabeledField,
+  FormTableHead, CellCaption, FormTotals, RemarksField, AttachmentDrop, FormDialogFooter,
+} from '../components/PfmsFormDialog';
+import { useElementWidth } from '../components/useElementWidth';
 // The SAME two values and default the RM Stock In screen uses, so "Received At"
 // has one definition across both modules.
 import { RECEIVED_AT_OPTIONS } from '../../rm-ims/receivedAt';
@@ -56,9 +65,8 @@ const ACCEPT = '.pdf,image/*';
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const SECTION = { p: 2, ...pfmsCardSx };
-// The read-only GRN No. / Incoming QC boxes in the dialog header.
-const META_PILL_SX = { px: 1.25, py: 0.5, borderRadius: '8px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surfaceAlt, display: 'flex', flexDirection: 'column', minWidth: 0 };
-const META_LABEL_SX = { fontSize: '0.62rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: PFMS.sub, lineHeight: 1.2 };
+// The server's limit for the GRN's own remarks (grn.validation.js).
+const REMARKS_MAX = 1000;
 
 // A W/O PO line has no PO to source ordered/pending qty from — always 0/N-A,
 // never fabricated. Only itemName + receivedQty are required (mirrors the
@@ -71,20 +79,39 @@ const emptyWopoItem = () => ({
 });
 
 // Row grids — minmax(0, …) so every row lines up with its header row and a
-// long value can never push the table wider than the dialog. The Material
-// Receipt Type column keeps 140px so its longest word always fits.
-const PO_ROW_COLS = 'minmax(0,1.5fr) minmax(0,0.65fr) minmax(0,0.65fr) minmax(0,0.8fr) minmax(0,0.75fr) minmax(0,0.95fr) minmax(0,0.95fr) minmax(140px,1.45fr) minmax(0,1fr) minmax(0,1fr)';
-const WOPO_ROW_COLS = 'minmax(0,1.5fr) minmax(0,0.7fr) minmax(0,0.9fr) minmax(0,0.85fr) minmax(140px,1.4fr) minmax(0,0.95fr) minmax(0,1fr) minmax(0,0.4fr)';
+// long value can never push the table wider than the dialog. The qty inputs
+// keep 84px and the Material Receipt Type column 140px so its longest word fits.
+const PO_ROW_COLS = '28px minmax(0,1.4fr) minmax(0,0.85fr) minmax(0,0.55fr) minmax(0,0.65fr) minmax(0,0.55fr) minmax(84px,0.75fr) minmax(84px,0.75fr) minmax(140px,1.25fr) minmax(0,1.1fr) minmax(0,1.1fr)';
+const PO_HEAD = ['#', 'Description', 'SKU', 'Ordered Qty', 'Already Received', 'Pending Qty', 'Invoice Qty', 'Received Qty', 'Material Receipt Type', 'Batch No', 'Remarks'];
+const PO_ALIGN = ['center', 'left', 'left', 'center', 'center', 'center', 'center', 'center', 'left', 'left', 'left'];
+const WOPO_ROW_COLS = '28px minmax(0,1.7fr) minmax(0,0.6fr) minmax(84px,0.8fr) minmax(84px,0.8fr) minmax(140px,1.3fr) minmax(0,0.95fr) minmax(0,1fr) 34px';
+const WOPO_HEAD = ['#', 'Description / SKU', 'Unit', 'Received Qty', 'Rate', 'Material Receipt Type', 'Batch No', 'Remarks', ''];
+const WOPO_ALIGN = ['center', 'left', 'left', 'center', 'center', 'left', 'left', 'left', 'left'];
+// Below this width (the Material Receipt card's own, which follows the sidebar,
+// not the viewport) each line becomes a stacked card with captions.
+const TABLE_MIN = 900;
+const QTY_INPUT = { min: 0, step: 0.01, style: { textAlign: 'center', fontWeight: 700 } };
 
 // Material Receipt Type of ONE material row — the same options and labels the
 // GRN header dropdown used. The selected label wraps instead of being cut off
-// in a narrow column.
+// in a narrow column. Its column head (or the row caption) names it.
 const ReceiptTypeSelect = ({ value, onChange, error, lineKey }) => (
-  <TextField size="small" select label="Material Receipt Type" value={value || ''}
+  <TextField size="small" select fullWidth value={value || ''}
     onChange={(e) => onChange(e.target.value)} error={error} helperText={error ? 'Required' : undefined}
-    SelectProps={{ SelectDisplayProps: { 'data-testid': 'grn-line-receipt-type', 'data-line': lineKey, style: { whiteSpace: 'normal', lineHeight: 1.3, fontSize: '0.85rem' } } }}>
+    SelectProps={{ SelectDisplayProps: {
+      'data-testid': 'grn-line-receipt-type', 'data-line': lineKey, 'aria-label': 'Material Receipt Type', 'aria-labelledby': undefined,
+      style: { whiteSpace: 'normal', lineHeight: 1.3, fontSize: '0.8rem', fontWeight: 700 },
+    } }}>
     {HOW_ITEM_RECEIVED.map((v) => <MenuItem key={v} value={v}>{howReceivedLabel(v)}</MenuItem>)}
   </TextField>
+);
+
+/** One cell of a Material Receipt row; stacked rows caption it (the table head does on a wide one). */
+const Cell = ({ caption, wide, children, sx }) => (
+  <Box sx={{ minWidth: 0, ...sx }}>
+    {!wide && caption ? <CellCaption>{caption}</CellCaption> : null}
+    {children}
+  </Box>
 );
 
 // A later step resting on a completed GRN, as the correction panel names it.
@@ -93,14 +120,23 @@ const laterStepText = (s) => (s.type === 'STOCK'
   ? `stock already posted (${s.count} entr${s.count === 1 ? 'y' : 'ies'})`
   : `${LATER_STEP_LABEL[s.type] || s.type} ${s.number || ''}`.trim());
 
-// Read-only qty display — the mobile-only caption keeps each stacked row legible
-// once the column headers (desktop-only) are hidden.
-const QtyCell = ({ label, value, color }) => (
-  <Box sx={{ textAlign: { xs: 'left', md: 'right' } }}>
-    <Typography variant="caption" color="text.disabled" sx={{ display: { xs: 'block', md: 'none' } }}>{label}</Typography>
-    <Typography variant="body2" sx={{ fontWeight: 700, color: color || 'text.secondary' }}>{value}</Typography>
+// Read-only qty display — centred under its column head; a stacked row captions it.
+const QtyCell = ({ label, value, color, wide }) => (
+  <Box sx={{ textAlign: wide ? 'center' : 'left', minWidth: 0 }}>
+    {!wide && <CellCaption>{label}</CellCaption>}
+    <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', lineHeight: wide ? '40px' : 1.4, color: color || PFMS.ink }}>{value}</Typography>
   </Box>
 );
+
+// QC typed before this form saved QC with the GRN was kept on the device under
+// this key; such a draft is still picked up once, then the server copy wins.
+const localQcKey = (grnId) => `grnQcDraft:${grnId}`;
+const readLocalQc = (grnId) => {
+  try { return JSON.parse(localStorage.getItem(localQcKey(grnId)) || 'null') || {}; } catch { return {}; }
+};
+const clearLocalQc = (grnId) => { try { localStorage.removeItem(localQcKey(grnId)); } catch { /* storage unavailable */ } };
+const QC_ENTERED = ['receivedQty', 'acceptedQty', 'rejectedQty', 'reworkQty', 'defectType', 'defectSeverity', 'qcRemarks'];
+const pickQcEntered = (it) => Object.fromEntries(QC_ENTERED.map((f) => [f, it[f]]));
 
 // `correct`: opened to correct a COMPLETED GRN (procurement.editGrn) rather than view it.
 const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, correct = false }) => {
@@ -142,6 +178,10 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   const [reason, setReason] = useState('');
   const grnLocked = !correcting && Boolean(liveGrn?._id) && (isGrnCompleted(liveGrn) || liveGrn.approvalStatus === 'MD_APPROVED' || liveGrn.grnStatus === 'CANCELLED');
 
+  // Jump links in the header: the GRN part and the Incoming QC part are one form.
+  const bodyRef = useRef(null);
+  const jumpTo = (id) => bodyRef.current?.querySelector(`#${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
   // One or more compatible (same-vendor) POs — a GRN can now cover several at once.
   const [pos, setPos] = useState([]);
   // 'PO' | 'WITHOUT_PO' — chosen only when creating; an existing GRN's mode is
@@ -161,7 +201,15 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   });
   const [items, setItems] = useState([]);
   const [doc, setDoc] = useState(null);
-  const fileRef = useRef(null);
+  // Incoming QC typed on this form, per QC (one per PO on a multi-PO GRN):
+  // { [scopeKey]: { header, entered, doc } }. Only what the user changed — the
+  // rest is seeded from the saved QC / the GRN's saved QC draft (see qcSeedFor).
+  const [qcEdits, setQcEdits] = useState({});
+  // The Material Receipt card's width decides table vs stacked rows.
+  const [itemsEl, setItemsEl] = useState(null);
+  const itemsWidth = useElementWidth(itemsEl);
+  const wide = itemsWidth >= TABLE_MIN;
+  const stackCols = itemsWidth >= 560 ? 3 : 2;
 
   const isWithoutPo = isEdit ? Boolean(current?.isWithoutPo) : mode === 'WITHOUT_PO';
 
@@ -194,21 +242,18 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   const addWopoItem = () => setItems((cur) => [...cur, emptyWopoItem()]);
   const removeWopoItem = (idx) => setItems((cur) => cur.filter((_, i) => i !== idx));
 
-  const [createGrn, { isLoading: creating }] = useCreateGrnMutation();
-  const [updateGrn, { isLoading: updating }] = useUpdateGrnMutation();
+  // GRN and its Incoming QC are saved together, by ONE request (grnQcSave.service).
+  const [saveGrnWithQc, { isLoading: saving, originalArgs: saveArgs }] = useSaveGrnWithQcMutation();
+  const completing = saving && saveArgs?.complete === true;
   const [previewGrnPdf, { isLoading: previewing }] = usePreviewGrnPdfMutation();
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
-  const saving = creating || updating;
   const [correctGrn, { isLoading: correctSaving }] = useCorrectGrnMutation();
-  const busy = saving || previewing || uploading || correctSaving;
+  const [qcUploading, setQcUploading] = useState(false);
+  const busy = saving || previewing || uploading || correctSaving || qcUploading;
   // 'correct' — the save the over-receipt consent is for.
   const [overReceiptFor, setOverReceiptFor] = useState(null);
-  // The footer node the Incoming QC panel renders its buttons into.
-  const [footerSlot, setFooterSlot] = useState(null);
 
-  const handleUpload = async (e) => {
-    const f = e.target.files?.[0]; e.target.value = '';
-    if (!f) return;
+  const handleUpload = async (f) => {
     try {
       const res = await uploadDoc(f).unwrap();
       const d = res?.data || {};
@@ -242,11 +287,11 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
     .map((it) => {
       const pending = round2((it.quantity || 0) - (it.receivedQty || 0));
       return {
-        // For JSL, itemName is the "Grade Width Finish" label that should be
-        // shown as the Item Description; itemDescription only holds the raw
-        // indent item name and is not used for display.
+        // JSL PO lines keep the "Grade Width Finish" label in itemName and the
+        // real description in itemDescription — the GRN shows the description
+        // (older JSL lines without one keep the label). Server re-stamps it too.
         poItemId: it._id, poId: p._id, poNumber: p.poNumber,
-        itemName: it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
+        itemName: (p.poFormatType === 'JSL' && it.itemDescription?.trim()) || it.itemName, skuCode: it.skuCode || '', skuId: it.skuId || '',
         unit: it.unit || 'Pcs', orderedQty: it.quantity || 0, previouslyReceivedQty: it.receivedQty || 0,
         pendingBefore: pending, invoiceQty: pending, receivedQty: pending, rate: it.rate || 0, batchNo: '', remarks: '',
         howItemReceived: DEFAULT_HOW_ITEM_RECEIVED,
@@ -262,6 +307,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
     if (!open) return;
     setSavedGrn(null);
     setReason('');
+    setQcEdits({});
     if (grn) {
       // A multi-PO GRN carries poIds/poNumbers; a legacy single-PO GRN only has
       // the primary poId/poNumber — both resolve to the same shape here.
@@ -432,6 +478,74 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   };
   const batchMissing = (it) => !!rmKindOf(it) && !it.batchNo?.trim();
 
+  // ── Incoming QC, on this same form ─────────────────────────────────────────
+  // One QC per PO on a multi-PO GRN, else one. Its lines follow the GRN lines AS
+  // TYPED here (nothing has to be saved first); the server re-anchors them on
+  // the saved GRN and checks the split again when completing.
+  const qcRecords = qcRes?.data || [];
+  const qcScopes = useMemo(() => {
+    const ids = liveGrn?.poIds?.length ? liveGrn.poIds.map(String) : pos.map((p) => String(p._id));
+    const nums = liveGrn?.poNumbers?.length ? liveGrn.poNumbers : pos.map((p) => p.poNumber);
+    return ids.length > 1
+      ? ids.map((poId, i) => ({ key: poId, poId, poNumber: nums[i] || '' }))
+      : [{ key: 'all', poId: null, poNumber: '' }];
+  }, [liveGrn, pos]);
+  const qcLinesOf = (scope) => linesFromGrn({ items }, scope.poId);
+  const qcRecordOf = (scope) => pickGrnQc(qcRecords, scope.poId || undefined);
+  const qcStageOf = (scope) => resolveGrnQcStage(liveGrn, qcRecordOf(scope));
+  const QC_FINAL = ['QC_DONE', 'QC_DONE_LEGACY', 'CANCELLED'];
+  const qcEditable = (scope) => !QC_FINAL.includes(qcStageOf(scope).key);
+
+  /** Where a scope's QC starts from: its saved QC record, else the QC kept on the draft GRN, else this device (older drafts), else blank. */
+  const qcSeedFor = (scope) => {
+    const lines = qcLinesOf(scope);
+    const rec = qcRecordOf(scope);
+    if (rec && ['DRAFT', 'IN_PROGRESS'].includes(rec.qcStatus)) {
+      const entered = {};
+      lines.forEach((l) => {
+        const qi = (rec.items || []).find((q) => l.grnItemId && String(q.grnItemId) === String(l.grnItemId));
+        if (qi) entered[lineKey(l)] = { receivedQty: qi.receivedQty, acceptedQty: qi.acceptedQty, rejectedQty: qi.rejectedQty, reworkQty: qi.reworkQty, defectType: qi.defectType || '', defectSeverity: qi.defectSeverity || '', qcRemarks: qi.qcRemarks || '' };
+      });
+      return { header: headerFromQc(rec), entered, doc: rec.qcReportDocument?.fileUrl ? { ...rec.qcReportDocument } : null };
+    }
+    const kept = (liveGrn?.qcDraft || []).find((q) => (scope.poId ? String(q.poId) === String(scope.poId) : true));
+    if (kept) {
+      return {
+        header: { ...emptyHeader(), qcDate: kept.qcDate ? String(kept.qcDate).slice(0, 10) : emptyHeader().qcDate, checkedByName: kept.checkedByName || '', preparedBy: kept.preparedBy || '', remarks: kept.remarks || '' },
+        entered: Object.fromEntries((kept.items || []).map((it) => [it.lineKey, it])),
+        doc: kept.qcReportDocument?.fileUrl ? { ...kept.qcReportDocument } : null,
+      };
+    }
+    const local = !scope.poId && liveGrn?._id ? readLocalQc(liveGrn._id) : {};
+    return { header: { ...emptyHeader(), ...(local.header || {}) }, entered: local.entered || {}, doc: local.doc || null };
+  };
+  const qcOf = (scope) => qcEdits[scope.key] || qcSeedFor(scope);
+  const setQc = (scope, patch) => setQcEdits((cur) => ({ ...cur, [scope.key]: { ...(cur[scope.key] || qcSeedFor(scope)), ...patch } }));
+  const qcItemsOf = (scope) => mergeEnteredLines(qcLinesOf(scope), qcOf(scope).entered);
+  const setQcItem = (scope, idx, patch) => {
+    const line = qcItemsOf(scope)[idx];
+    const entered = { ...qcOf(scope).entered, [lineKey(line)]: { ...pickQcEntered(line), ...patch } };
+    setQc(scope, { entered });
+  };
+  const editableScopes = correcting ? [] : qcScopes.filter(qcEditable);
+  const allQcDone = !correcting && Boolean(liveGrn?._id) && editableScopes.length === 0;
+  const qcPayload = () => editableScopes.map((scope) => {
+    const q = qcOf(scope);
+    return {
+      poId: scope.poId || null,
+      qcDate: q.header.qcDate || null,
+      checkedByName: q.header.checkedByName || '', preparedBy: q.header.preparedBy || '', remarks: q.header.remarks || '',
+      qcReportDocument: q.doc?.fileUrl ? { fileName: q.doc.fileName, fileUrl: q.doc.fileUrl, fileType: q.doc.fileType } : null,
+      items: qcItemsOf(scope).map((l) => ({
+        lineKey: lineKey(l), grnItemId: l.grnItemId ? String(l.grnItemId) : '', poItemId: l.poItemId ? String(l.poItemId) : '',
+        itemName: l.itemName, receivedQty: round2(l.receivedQty),
+        acceptedQty: Math.max(0, round2(l.acceptedQty)), rejectedQty: Math.max(0, round2(l.rejectedQty)), reworkQty: Math.max(0, round2(l.reworkQty)),
+        defectType: l.defectType || '', defectSeverity: l.defectSeverity || '', qcRemarks: l.qcRemarks || '',
+      })),
+    };
+  });
+  const qcFooterTotals = qcTotals(editableScopes.flatMap(qcItemsOf));
+
   // Highlight the header Remarks field — and escalate it to a required/warning
   // state when an over-pending (extra) receipt has no remark of its own. Not
   // applicable to a W/O PO GRN — there is no "pending" to receive extra against.
@@ -518,38 +632,48 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
     })),
   });
 
-  // `stay`: save without closing (used before "Complete GRN + QC" posts stock).
-  const handleSubmit = async ({ stay = false } = {}) => {
-    if (!validateForm()) return false;
-    const payload = buildPayload();
-    try {
-      if (isEdit) {
-        const res = await updateGrn({ id: current._id, ...payload }).unwrap();
-        if (savedGrn) {
-          // Draft created in this session — stay on it so its GRN No. stays in view.
-          setSavedGrn(res?.data || savedGrn);
-          enqueueSnackbar(`Draft ${current.grnNumber} saved`, { variant: 'success' });
-          return true;
-        }
-        enqueueSnackbar('GRN updated', { variant: 'success' });
-        if (stay) return true;
-      } else {
-        const res = await createGrn(isWithoutPo ? payload : { ...payload, poIds: pos.map((p) => p._id) }).unwrap();
-        setSavedGrn(res?.data || null);
-        enqueueSnackbar(`GRN ${res?.data?.grnNumber || ''} created (draft)`, { variant: 'success' });
-        return true;
+  /**
+   * The one Save: GRN and Incoming QC together, in one request.
+   *   complete = false  a draft of both — incomplete is fine; never posts stock
+   *   complete = true   GRN completed + QC completed (accepted qty posts to
+   *                     stock) — only once everything below checks out; the
+   *                     server checks all of it again and decides
+   */
+  const saveAll = async (complete) => {
+    if (!grnLocked && !validateForm()) return false;
+    if (complete) {
+      const empty = editableScopes.find((s) => qcItemsOf(s).length === 0);
+      if (empty) { enqueueSnackbar('Enter a received quantity on at least one item — there is nothing to inspect', { variant: 'warning' }); return false; }
+      const off = editableScopes.find((s) => !allLinesBalanced(qcItemsOf(s)));
+      if (off) {
+        enqueueSnackbar(`Incoming QC${off.poNumber ? ` (PO ${off.poNumber})` : ''}: Accepted + Rejected must equal Received on every line`, { variant: 'warning' });
+        jumpTo(off.poId ? `grn-qc-section-${off.poId}` : 'grn-qc-section');
+        return false;
       }
-      onClose?.(true);
+    }
+    const payload = buildPayload();
+    const grnBody = grnLocked ? null : (isEdit || isWithoutPo ? payload : { ...payload, poIds: pos.map((p) => p._id) });
+    try {
+      const res = await saveGrnWithQc({ id: current?._id, complete, grn: grnBody, qcs: qcPayload() }).unwrap();
+      const saved = res?.data?.grn;
+      if (!grnProp && saved) setSavedGrn(saved);
+      if (saved?._id) clearLocalQc(saved._id);
+      setQcEdits({});
+      const no = saved?.grnNumber || current?.grnNumber || '';
+      if (complete) {
+        const done = (res?.data?.qcs || []).filter((q) => ['PASSED', 'PARTIAL', 'FAILED'].includes(q.qcStatus));
+        const acc = done.reduce((s, q) => s + (Number(q.totalAccepted) || 0), 0);
+        const rej = done.reduce((s, q) => s + (Number(q.totalRejected) || 0), 0);
+        enqueueSnackbar(`GRN ${no} and Incoming QC completed — accepted ${acc} posted to stock${rej ? `, rejected ${rej} kept out` : ''}`, { variant: 'success' });
+      } else {
+        enqueueSnackbar(isEdit ? `GRN ${no} updated — draft saved with its QC` : `GRN ${no} created (draft) — GRN and QC saved`, { variant: 'success' });
+      }
       return true;
     } catch (err) {
-      enqueueSnackbar(err?.data?.message || 'Failed to save GRN', { variant: 'error' });
+      enqueueSnackbar(err?.data?.message || 'Failed to save — nothing was completed', { variant: 'error' });
       return false;
     }
   };
-
-  // Finalizing is NOT done from this footer: the GRN is completed from the Incoming
-  // QC panel's "Complete GRN + QC" (which saves pending GRN edits first, then asks
-  // for over-receipt consent / Received At in the Complete GRN dialog).
 
   // ── Save the correction of a completed GRN (procurement.editGrn). With the
   // items locked only the header goes, so nothing a later step uses can move.
@@ -605,9 +729,8 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
 
   const closePreview = () => { setPreviewOpen(false); setPreviewError(''); revokePreview(); };
 
-  // Both Save Draft and Approve & Submit persist the GRN as a draft — the
-  // separate "Complete & Post Stock" action remains the finalize step.
-  const confirmFromPreview = async () => { const ok = await handleSubmit(); if (ok) closePreview(); };
+  // The preview's own action is the same draft Save (GRN + QC).
+  const confirmFromPreview = async () => { const ok = await saveAll(false); if (ok) closePreview(); };
 
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
 
@@ -616,74 +739,77 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
   const indentNumber = pos[0]?.indentNumber || grn?.indentNumber;
   const piNumber = pos[0]?.piNumber || grn?.piNumber;
   const vendorRefs = (isWithoutPo
-    ? [header.vendorGST && `GST ${header.vendorGST}`, header.vendorAddress, header.vendorPhone && `📞 ${header.vendorPhone}`]
-    : [pos.length > 0 && `PO ${pos.map((p) => p.poNumber).join(', ')}`, indentNumber && `Indent ${indentNumber}`, piNumber && `PI ${piNumber}`]
+    ? [header.vendorGST && { label: 'GST', value: header.vendorGST }, header.vendorAddress && { value: header.vendorAddress }, header.vendorPhone && { label: 'Ph', value: header.vendorPhone }]
+    : [pos.length > 0 && { label: 'PO', value: pos.map((p) => p.poNumber).join(', ') }, indentNumber && { label: 'Indent', value: indentNumber }, piNumber && { label: 'PI', value: piNumber }]
   ).filter(Boolean);
 
+  const closeForm = () => onClose?.(Boolean(savedGrn), savedGrn);
+  const grnTitle = grn ? 'Edit GRN' : 'Create GRN';
+  const setHeaderField = (key) => (e) => setHeader((h) => ({ ...h, [key]: e.target.value }));
+  const qcStageTone = TONES[qcStage.tone] || TONES.neutral;
+  // Lines received beyond their PO's pending qty — named once above the table.
+  const overLines = isWithoutPo ? [] : items.filter((it) => isOver(it));
+
+  // Read-only Description cell: name (wraps), unit, conversion and destination.
+  const descriptionCell = (it) => (
+    <>
+      <Typography sx={{ fontWeight: 700, fontSize: '0.92rem', color: PFMS.brand, lineHeight: 1.35, overflowWrap: 'anywhere' }}>{it.itemName}</Typography>
+      <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: PFMS.sub, textTransform: 'uppercase' }}>{it.unit}</Typography>
+      {conversionHint(it)}
+      <Box>{destinationTag(it)}</Box>
+    </>
+  );
+  const rowSx = (wideRow) => ({
+    display: 'grid', gap: wideRow ? 1 : 1.25, alignItems: 'flex-start', minWidth: 0,
+    gridTemplateColumns: wideRow ? undefined : `repeat(${stackCols}, minmax(0,1fr))`,
+    px: 1.5, py: wideRow ? 1 : 1.5, borderRadius: '8px',
+    border: '1px solid', borderColor: wideRow ? 'transparent' : PFMS.line, borderBottomColor: PFMS.lineSoft,
+    '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
+  });
+  const fullRow = { gridColumn: '1 / -1' };
+  const remarksSpan = { gridColumn: stackCols === 3 ? 'span 2' : '1 / -1' };
+
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
-      {/* Header — white with a thin brand line on top: what this is, its GRN No.
-          and QC state, then the vendor it is for and the GRN Date. */}
-      <Box sx={{ flexShrink: 0, bgcolor: PFMS.surface, borderTop: `4px solid ${PFMS.brand}`, borderBottom: `1px solid ${PFMS.line}` }}>
-        <Box sx={{ px: 3, pt: 1.5, pb: 1.25, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-          <Box sx={{ width: 36, height: 36, borderRadius: '8px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(PFMS.brand, 0.08), color: PFMS.brand }}>
-            <PackageCheck size={20} />
+    <PfmsFormDialog open={open} onClose={() => onClose?.(false)}>
+      {/* Header — the GRN and its Incoming QC as ONE form: GRN No., QC state,
+          the vendor it is for and the GRN Date. */}
+      <FormDialogHeader
+        icon={<PackageCheck size={22} />}
+        title={grnTitle}
+        subtitle={correcting ? 'Step 1.8 · Correcting a completed GRN' : 'Steps 1.8 + 1.9 · Receive and inspect material — stock posts when the QC is completed'}
+        onClose={closeForm}
+        nav={correcting ? null : (
+          <Box data-testid="grn-form-jump" sx={{ display: 'flex', gap: 0.75, order: { xs: 10, md: 0 }, flex: { xs: '1 1 100%', md: '0 0 auto' } }}>
+            <Button size="small" variant="outlined" startIcon={<PackageCheck size={14} />} onClick={() => jumpTo('grn-form-grn-part')}
+              sx={{ textTransform: 'none', fontWeight: 700, flex: { xs: 1, md: 'none' } }}>GRN</Button>
+            <Button size="small" variant="outlined" startIcon={<ClipboardCheck size={14} />} onClick={() => jumpTo('grn-form-qc')}
+              sx={{ textTransform: 'none', fontWeight: 700, flex: { xs: 1, md: 'none' } }}>Incoming QC</Button>
           </Box>
-          <Box sx={{ flex: 1, minWidth: 200 }}>
-            <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: PFMS.ink, lineHeight: 1.25 }}>
-              {grn ? 'Edit GRN' : 'Create GRN'}
-            </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: PFMS.sub }}>
-              {correcting ? 'Step 1.8 · Correcting a completed GRN' : 'Step 1.8 · Receive material — stock posts when Incoming QC is completed'}
-            </Typography>
-          </Box>
-          {/* System-generated identifier — read-only, styled apart from form fields. */}
-          <Box
-            title={current?.grnNumber ? 'System-generated GRN No. — stays the same through draft edits and completion' : 'The GRN No. is generated by the system when this GRN is first saved'}
-            sx={META_PILL_SX}>
-            <Typography sx={META_LABEL_SX}>GRN No.</Typography>
-            {current?.grnNumber ? (
-              <Typography sx={{ fontWeight: 800, fontSize: '0.9rem', color: PFMS.ink, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
-                {current.grnNumber}
-              </Typography>
-            ) : (
-              <Typography sx={{ fontWeight: 600, fontSize: '0.8rem', fontStyle: 'italic', color: PFMS.sub, lineHeight: 1.3 }}>
-                Assigned on save
-              </Typography>
-            )}
-          </Box>
-          {/* Incoming QC status — always in view; details in the Incoming QC panel below. */}
-          <Box data-testid="grn-form-qc-badge" title={qcStage.desc} sx={{ ...META_PILL_SX, display: { xs: 'none', sm: 'flex' } }}>
-            <Typography sx={META_LABEL_SX}>Incoming QC</Typography>
-            <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: (TONES[qcStage.tone] || TONES.neutral).fg, lineHeight: 1.3 }}>{qcStage.label}</Typography>
-          </Box>
-          <IconButton onClick={() => onClose?.(Boolean(savedGrn), savedGrn)} sx={{ color: PFMS.sub }}><X size={20} /></IconButton>
-        </Box>
-
+        )}
+        meta={(
+          <>
+            {/* System-generated identifier — read-only, styled apart from form fields. */}
+            <MetaPill label="GRN No." value={current?.grnNumber} placeholder="Assigned on save"
+              title={current?.grnNumber ? 'System-generated GRN No. — stays the same through draft edits and completion' : 'The GRN No. is generated by the system when this GRN is first saved'} />
+            {/* Incoming QC status — always in view; details in the Incoming QC part. */}
+            <MetaPill data-testid="grn-form-qc-badge" title={qcStage.desc} hideXs
+              label="Incoming QC" value={qcStage.label} tone={qcStage.tone} />
+          </>
+        )}>
         {/* The vendor (with the PO / indent / PI it receives against) and the GRN Date. */}
-        <Box data-testid="grn-form-vendor-bar"
-          sx={{ px: 3, py: 1.25, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', borderTop: `1px solid ${PFMS.lineSoft}` }}>
-          <Building2 size={18} color={vendorName ? PFMS.brand : PFMS.faint} style={{ flexShrink: 0 }} />
-          <Box sx={{ flex: 1, minWidth: 220 }}>
-            <Typography noWrap title={vendorName || undefined}
-              sx={{ fontWeight: 800, fontSize: '0.98rem', lineHeight: 1.3, color: vendorName ? PFMS.ink : PFMS.faint }}>
-              {vendorName || (isWithoutPo ? 'No vendor yet — select one below' : 'No vendor yet — pick a PO below')}
-            </Typography>
-            {vendorRefs.length > 0 && (
-              <Typography variant="caption" sx={{ display: 'block', color: PFMS.sub, overflowWrap: 'anywhere' }}>
-                {vendorRefs.join(' · ')}
-              </Typography>
-            )}
-          </Box>
-          {isWithoutPo && <Chip size="small" color="warning" variant="outlined" label="Without PO" sx={{ fontWeight: 700 }} />}
-          <DateInputDDMMYYYY label="GRN Date" value={header.grnDate} disabled={grnLocked} sx={{ width: 200 }}
-            onChange={(val) => setHeader((h) => ({ ...h, grnDate: val }))} />
-        </Box>
-      </Box>
+        <FormVendorBar data-testid="grn-form-vendor-bar" name={vendorName} refs={vendorRefs}
+          emptyText={isWithoutPo ? 'No vendor yet — select one below' : 'No vendor yet — pick a PO below'}
+          extra={isWithoutPo ? <Chip size="small" color="warning" variant="outlined" label="Without PO" sx={{ fontWeight: 700 }} /> : null}
+          aside={(
+            <LabeledField label="GRN Date" htmlFor="grn-f-date">
+              <DateInputDDMMYYYY id="grn-f-date" fullWidth value={header.grnDate} disabled={grnLocked}
+                onChange={(val) => setHeader((h) => ({ ...h, grnDate: val }))} />
+            </LabeledField>
+          )} />
+      </FormDialogHeader>
 
-      {/* Body */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', px: 3, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5, bgcolor: PFMS.surfaceAlt }}>
+      {/* Body — scrolls on its own between the fixed header and footer. */}
+      <FormDialogBody ref={bodyRef}>
         {/* The GRN part. Read-only once completed / signed (the server refuses edits). */}
         {correcting && (
           <Paper elevation={0} data-testid="grn-correction-panel"
@@ -701,17 +827,14 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
               inputProps={{ maxLength: 500, 'data-testid': 'grn-correction-reason' }} />
           </Paper>
         )}
-        <Box data-testid="grn-form-grn-part" aria-disabled={grnLocked || undefined}
-          sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...(grnLocked ? { pointerEvents: 'none', opacity: 0.8 } : {}) }}>
-        <Paper elevation={0} sx={SECTION}>
-          <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, fontWeight: 700, color: 'primary.main' }}>
-            <FileText size={18} /> GRN Header
-          </Typography>
+        <Box id="grn-form-grn-part" data-testid="grn-form-grn-part" aria-disabled={grnLocked || undefined}
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, scrollMarginTop: 8, ...(grnLocked ? { pointerEvents: 'none', opacity: 0.8 } : {}) }}>
+        <FormSection icon={<FileText size={20} />} title="GRN Header">
           {/* Receipt type — fixed once a GRN exists; chosen only when creating one. */}
           {!isEdit && !presetPo && (
             <ToggleButtonGroup
               exclusive size="small" value={mode} onChange={handleModeChange}
-              sx={{ mb: 2 }} data-testid="grn-mode-toggle"
+              sx={{ mb: 2, flexWrap: 'wrap' }} data-testid="grn-mode-toggle"
             >
               <ToggleButton value="PO" sx={{ textTransform: 'none', gap: 0.75, px: 1.5 }}>
                 <ShoppingBag size={15} /> Against Purchase Order
@@ -721,198 +844,207 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
               </ToggleButton>
             </ToggleButtonGroup>
           )}
-          <Grid container spacing={2}>
-            {/* Picking what to receive — only while creating. The chosen vendor,
-                PO(s) and indent then show at the top of the form. */}
-            {!isEdit && !presetPo && (
-              <Grid item xs={12}>
-                {isWithoutPo ? (
-                  <Autocomplete
-                    options={vendorOptions}
-                    loading={vendorsLoading}
-                    value={wopoVendor}
-                    getOptionLabel={(o) => (o?.name || '')}
-                    isOptionEqualToValue={(o, v) => o._id === v._id}
-                    onChange={(_e, v) => applyWopoVendor(v)}
-                    noOptionsText="No matching vendor"
-                    renderInput={(params) => (
-                      <TextField {...params} label="Vendor *" placeholder="Select from Vendor Master"
-                        InputProps={{ ...params.InputProps, endAdornment: (<>{vendorsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
-                    )}
-                  />
-                ) : (
-                  <Autocomplete
-                    multiple
-                    options={poOptions}
-                    loading={posLoading}
-                    value={pos}
-                    getOptionLabel={(o) => (o ? `${o.poNumber} — ${o.vendorName}` : '')}
-                    isOptionEqualToValue={(o, v) => o._id === v._id}
-                    // Once one PO is picked, only the same vendor's other POs stay
-                    // selectable (server re-enforces this regardless).
-                    getOptionDisabled={(o) => pos.length > 0 && pos[0].vendorId && o.vendorId
-                      && String(o.vendorId) !== String(pos[0].vendorId)}
-                    onChange={(_e, v) => applyPos(v)}
-                    noOptionsText="No PO is ready for GRN (needs READY_FOR_GRN + payment completed)"
-                    renderInput={(params) => (
-                      <TextField {...params} label="Purchase Order(s) *" placeholder="Same vendor — READY_FOR_GRN + Payment Completed only"
-                        helperText="Pick one or more compatible POs of the same vendor"
-                        InputProps={{ ...params.InputProps, endAdornment: (<>{posLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
-                    )}
-                  />
-                )}
-              </Grid>
-            )}
-            {/* One row on a laptop screen (the date column a little wider so a
-                full date fits); GRN Date sits at the top with the vendor. */}
-            <Grid item xs={12}>
-              <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, minmax(0, 1fr))', lg: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)' } }}>
-                <TextField label="Challan No" fullWidth value={header.challanNumber} onChange={(e) => setHeader((h) => ({ ...h, challanNumber: e.target.value }))} />
-                <TextField label="Invoice No" fullWidth value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} />
-                <DateInputDDMMYYYY label="Invoice Date" fullWidth value={header.invoiceDate} onChange={(val) => setHeader((h) => ({ ...h, invoiceDate: val }))} />
-                <TextField label="Vehicle No" fullWidth value={header.vehicleNumber} onChange={(e) => setHeader((h) => ({ ...h, vehicleNumber: e.target.value }))} />
-                <TextField label="Received By" fullWidth value={header.receivedBy} onChange={(e) => setHeader((h) => ({ ...h, receivedBy: e.target.value }))} />
-                <TextField label="Prepared By" fullWidth value={header.preparedBy} onChange={(e) => setHeader((h) => ({ ...h, preparedBy: e.target.value }))} />
-              </Box>
-            </Grid>
+          {/* Picking what to receive — only while creating. The chosen vendor,
+              PO(s) and indent then show at the top of the form. */}
+          {!isEdit && !presetPo && (
+            <Box sx={{ mb: 2 }}>
+              {isWithoutPo ? (
+                <Autocomplete
+                  options={vendorOptions}
+                  loading={vendorsLoading}
+                  value={wopoVendor}
+                  getOptionLabel={(o) => (o?.name || '')}
+                  isOptionEqualToValue={(o, v) => o._id === v._id}
+                  onChange={(_e, v) => applyWopoVendor(v)}
+                  noOptionsText="No matching vendor"
+                  renderInput={(params) => (
+                    <TextField {...params} label="Vendor *" placeholder="Select from Vendor Master"
+                      InputProps={{ ...params.InputProps, endAdornment: (<>{vendorsLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
+                  )}
+                />
+              ) : (
+                <Autocomplete
+                  multiple
+                  options={poOptions}
+                  loading={posLoading}
+                  value={pos}
+                  getOptionLabel={(o) => (o ? `${o.poNumber} — ${o.vendorName}` : '')}
+                  isOptionEqualToValue={(o, v) => o._id === v._id}
+                  // Once one PO is picked, only the same vendor's other POs stay
+                  // selectable (server re-enforces this regardless).
+                  getOptionDisabled={(o) => pos.length > 0 && pos[0].vendorId && o.vendorId
+                    && String(o.vendorId) !== String(pos[0].vendorId)}
+                  onChange={(_e, v) => applyPos(v)}
+                  noOptionsText="No PO is ready for GRN (needs READY_FOR_GRN + payment completed)"
+                  renderInput={(params) => (
+                    <TextField {...params} label="Purchase Order(s) *" placeholder="Same vendor — READY_FOR_GRN + Payment Completed only"
+                      helperText="Pick one or more compatible POs of the same vendor"
+                      InputProps={{ ...params.InputProps, endAdornment: (<>{posLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
+                  )}
+                />
+              )}
+            </Box>
+          )}
+          {/* One row when the form is wide enough (measured, so it follows the
+              sidebar), else 3 or 2 a row; GRN Date sits at the top with the vendor. */}
+          <Box sx={{ display: 'grid', columnGap: 2, rowGap: 1.75, gridTemplateColumns: `repeat(${itemsWidth >= 1040 ? 6 : stackCols}, minmax(0,1fr))` }}>
+            <LabeledField label="Challan No" htmlFor="grn-f-challan">
+              <TextField id="grn-f-challan" fullWidth placeholder="Enter challan no." value={header.challanNumber} onChange={setHeaderField('challanNumber')} />
+            </LabeledField>
+            <LabeledField label="Invoice No" htmlFor="grn-f-invoice">
+              <TextField id="grn-f-invoice" fullWidth placeholder="Enter invoice no." value={header.invoiceNumber} onChange={setHeaderField('invoiceNumber')} />
+            </LabeledField>
+            <LabeledField label="Invoice Date" htmlFor="grn-f-invoice-date">
+              <DateInputDDMMYYYY id="grn-f-invoice-date" fullWidth value={header.invoiceDate} onChange={(val) => setHeader((h) => ({ ...h, invoiceDate: val }))} />
+            </LabeledField>
+            <LabeledField label="Vehicle No" htmlFor="grn-f-vehicle">
+              <TextField id="grn-f-vehicle" fullWidth placeholder="Enter vehicle no." value={header.vehicleNumber} onChange={setHeaderField('vehicleNumber')} />
+            </LabeledField>
+            <LabeledField label="Received By" htmlFor="grn-f-received-by">
+              <TextField id="grn-f-received-by" fullWidth placeholder="Enter received by" value={header.receivedBy} onChange={setHeaderField('receivedBy')} />
+            </LabeledField>
+            <LabeledField label="Prepared By" htmlFor="grn-f-prepared-by">
+              <TextField id="grn-f-prepared-by" fullWidth placeholder="Enter prepared by" value={header.preparedBy} onChange={setHeaderField('preparedBy')} />
+            </LabeledField>
             {/* Material Receipt Type is chosen per SKU, on each Material Receipt row. */}
 
             {/* Inventory destination is automatic: each line goes where its SKU
                 master Item Type says (shown on the line). Only Raw Material
                 needs one more answer — where it physically landed. */}
             {hasRmLine && (
-              <Grid item xs={12} sm={6}>
+              <LabeledField label="Received At *" htmlFor="grn-f-received-at" id="grn-f-received-at-label" sx={{ gridColumn: { xs: '1 / -1', sm: 'span 2' } }}>
                 <TextField
-                  label="Received At *" select fullWidth required
+                  id="grn-f-received-at" select fullWidth required
                   value={header.rmReceivedAtLocation}
-                  onChange={(e) => setHeader((h) => ({ ...h, rmReceivedAtLocation: e.target.value }))}
+                  onChange={setHeaderField('rmReceivedAtLocation')}
                   error={!header.rmReceivedAtLocation}
                   helperText="Where the Raw Material physically landed — its RM stock posts here after QC."
+                  SelectProps={{ labelId: 'grn-f-received-at-label' }}
                   inputProps={{ 'data-testid': 'grn-received-at' }}
                 >
                   {RECEIVED_AT_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
                 </TextField>
-              </Grid>
+              </LabeledField>
             )}
-          </Grid>
-        </Paper>
+          </Box>
+        </FormSection>
 
         {/* Items */}
-        <Paper elevation={0} data-testid="grn-form-items" aria-disabled={itemsLocked || undefined}
-          sx={{ ...SECTION, ...(itemsLocked ? { pointerEvents: 'none', opacity: 0.7 } : {}) }}>
-          <Typography component="div" sx={{ fontWeight: 700, color: '#b45309', mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <PackageCheck size={18} /> Material Receipt
-              {itemsLocked && <Chip size="small" icon={<Lock size={12} />} label="Locked" variant="outlined" sx={{ fontWeight: 700, height: 22 }} />}
-            </Box>
-            {isWithoutPo && !grnLocked && (
-              <Button size="small" startIcon={<Plus size={14} />} onClick={addWopoItem} sx={{ textTransform: 'none' }}>
-                Add Item
-              </Button>
-            )}
-          </Typography>
+        <FormSection ref={setItemsEl} data-testid="grn-form-items" aria-disabled={itemsLocked || undefined}
+          icon={<Boxes size={20} />} title="Material Receipt" tone="amber"
+          badge={itemsLocked ? <Chip size="small" icon={<Lock size={12} />} label="Locked" variant="outlined" sx={{ fontWeight: 700, height: 22 }} /> : null}
+          actions={isWithoutPo && !grnLocked ? (
+            <Button size="small" variant="outlined" startIcon={<Plus size={14} />} onClick={addWopoItem} sx={{ textTransform: 'none', fontWeight: 700 }}>
+              Add Item
+            </Button>
+          ) : null}
+          sx={itemsLocked ? { pointerEvents: 'none', opacity: 0.7 } : undefined}>
           {isWithoutPo ? (
             <>
-              <Box sx={{
-                display: { xs: 'none', md: 'grid' },
-                gridTemplateColumns: WOPO_ROW_COLS,
-                gap: 1, px: 1, mb: 0.5,
-              }}>
-                {['Description / SKU', 'Unit', 'Received Qty', 'Rate', 'Material Receipt Type', 'Batch No', 'Remarks', ''].map((h, i) => (
-                  <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
-                ))}
-              </Box>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {wide && <FormTableHead columns={WOPO_HEAD} template={WOPO_ROW_COLS} align={WOPO_ALIGN} />}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: wide ? 0.5 : 1 }}>
                 {items.map((it, idx) => {
                   const skuMatch = skuOptions.find((s) => s._id === it.skuId) || null;
                   return (
-                    <Box key={idx} sx={{
-                      display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', md: WOPO_ROW_COLS },
-                      gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
-                      borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
-                      '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
-                    }}>
-                      <Box sx={{ minWidth: 0 }}>
-                      <Autocomplete
-                        freeSolo
-                        options={skuOptions}
-                        value={skuMatch || it.itemName}
-                        getOptionLabel={(o) => (typeof o === 'string' ? o : (o?.name || ''))}
-                        isOptionEqualToValue={(o, v) => o._id === v?._id}
-                        onChange={(_e, v) => {
-                          // The unit it is bought in: the SKU's Purchase Unit when it has one.
-                          if (v && typeof v === 'object') setItem(idx, { itemName: v.name, skuCode: v.code || '', skuId: v._id, unit: purchaseUnitOf(v) || 'Pcs' });
-                        }}
-                        onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v, skuId: '' }); }}
-                        renderInput={(params) => (
-                          <TextField {...params} size="small" label="Description *" placeholder="Pick a SKU or type a name" />
-                        )}
-                      />
-                      {destinationTag(it)}
-                      {conversionHint(it)}
+                    <Box key={idx} sx={{ ...rowSx(wide), ...(wide ? { gridTemplateColumns: WOPO_ROW_COLS } : {}) }}>
+                      <Typography sx={{ fontWeight: 700, fontSize: '0.88rem', color: PFMS.sub, lineHeight: wide ? '40px' : 1.4, textAlign: wide ? 'center' : 'left', ...(wide ? {} : fullRow) }}>
+                        {wide ? idx + 1 : `Item ${idx + 1}`}
+                      </Typography>
+                      <Cell wide={wide} caption="Description / SKU" sx={wide ? undefined : fullRow}>
+                        <Autocomplete
+                          freeSolo
+                          options={skuOptions}
+                          value={skuMatch || it.itemName}
+                          getOptionLabel={(o) => (typeof o === 'string' ? o : (o?.name || ''))}
+                          isOptionEqualToValue={(o, v) => o._id === v?._id}
+                          onChange={(_e, v) => {
+                            // The unit it is bought in: the SKU's Purchase Unit when it has one.
+                            if (v && typeof v === 'object') setItem(idx, { itemName: v.name, skuCode: v.code || '', skuId: v._id, unit: purchaseUnitOf(v) || 'Pcs' });
+                          }}
+                          onInputChange={(_e, v, reason) => { if (reason === 'input') setItem(idx, { itemName: v, skuId: '' }); }}
+                          renderInput={(params) => (
+                            <TextField {...params} size="small" placeholder="Pick a SKU or type a name *"
+                              inputProps={{ ...params.inputProps, 'aria-label': 'Description *' }} />
+                          )}
+                        />
+                        {destinationTag(it)}
+                        {conversionHint(it)}
+                      </Cell>
+                      <Cell wide={wide} caption="Unit">
+                        <TextField size="small" fullWidth value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })} inputProps={{ 'aria-label': 'Unit' }} />
+                      </Cell>
+                      <Cell wide={wide} caption="Received Qty">
+                        <TextField size="small" type="number" fullWidth value={it.receivedQty} sx={pfmsNoSpinSx}
+                          onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
+                          inputProps={{ ...QTY_INPUT, 'aria-label': 'Received Qty' }} />
+                      </Cell>
+                      <Cell wide={wide} caption="Rate">
+                        <TextField size="small" type="number" fullWidth value={it.rate} sx={pfmsNoSpinSx}
+                          onChange={(e) => setItem(idx, { rate: e.target.value })}
+                          inputProps={{ ...QTY_INPUT, 'aria-label': 'Rate' }} />
+                      </Cell>
+                      <Cell wide={wide} caption="Material Receipt Type">
+                        <ReceiptTypeSelect value={it.howItemReceived} lineKey={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
+                          error={!it.howItemReceived && round2(it.receivedQty) > 0}
+                          onChange={(v) => setItem(idx, { howItemReceived: v })} />
+                      </Cell>
+                      <Cell wide={wide} caption={rmKindOf(it) ? 'Batch No *' : 'Batch No'}>
+                        <TextField size="small" fullWidth
+                          placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'optional'}
+                          value={it.batchNo}
+                          error={batchMissing(it) && round2(it.receivedQty) > 0}
+                          onChange={(e) => setItem(idx, { batchNo: e.target.value })}
+                          inputProps={{ 'aria-label': rmKindOf(it) ? 'Batch No *' : 'Batch No' }} />
+                      </Cell>
+                      <Cell wide={wide} caption="Remarks">
+                        <TextField size="small" fullWidth placeholder="optional" value={it.remarks} onChange={(e) => setItem(idx, { remarks: e.target.value })}
+                          inputProps={{ 'aria-label': 'Remarks' }} />
+                      </Cell>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: wide ? 'center' : 'flex-end', height: wide ? 40 : 'auto', ...(wide ? {} : fullRow) }}>
+                        <IconButton size="small" onClick={() => removeWopoItem(idx)} disabled={items.length <= 1} title="Remove item">
+                          <Trash2 size={15} />
+                        </IconButton>
                       </Box>
-                      <TextField size="small" label="Unit" value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })} />
-                      <TextField size="small" type="number" label="Received Qty" value={it.receivedQty}
-                        onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
-                        inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                      <TextField size="small" type="number" label="Rate" value={it.rate}
-                        onChange={(e) => setItem(idx, { rate: e.target.value })}
-                        inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                      <ReceiptTypeSelect value={it.howItemReceived} lineKey={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
-                        error={!it.howItemReceived && round2(it.receivedQty) > 0}
-                        onChange={(v) => setItem(idx, { howItemReceived: v })} />
-                      <TextField size="small"
-                        label={rmKindOf(it) ? 'Batch No *' : 'Batch No'}
-                        placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'optional'}
-                        value={it.batchNo}
-                        error={batchMissing(it) && round2(it.receivedQty) > 0}
-                        onChange={(e) => setItem(idx, { batchNo: e.target.value })} />
-                      <TextField size="small" label="Remarks" value={it.remarks} onChange={(e) => setItem(idx, { remarks: e.target.value })} />
-                      <IconButton size="small" onClick={() => removeWopoItem(idx)} disabled={items.length <= 1} title="Remove item">
-                        <Trash2 size={15} />
-                      </IconButton>
                     </Box>
                   );
                 })}
               </Box>
-              <Divider sx={{ my: 2 }} />
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
-                <Box sx={{ textAlign: 'right' }}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={700}>RECEIVED QTY</Typography>
-                  <Typography variant="h6" fontWeight={800} color="primary.dark">{totals.received}</Typography>
-                </Box>
-                <Box sx={{ textAlign: 'right' }}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={700}>RECEIPT VALUE</Typography>
-                  <Typography variant="h6" fontWeight={800}>{fmtINR(totals.value)}</Typography>
-                </Box>
-              </Box>
+              <FormTotals items={[
+                { label: 'Received Qty', value: totals.received, color: PFMS.brand },
+                { label: 'Receipt Value', value: fmtINR(totals.value) },
+              ]} />
             </>
           ) : items.length === 0 ? (
-            <Typography variant="body2" color="text.disabled" sx={{ py: 2 }}>
+            <Typography sx={{ py: 2, fontSize: '0.86rem', color: PFMS.faint }}>
               {pos.length > 0 ? 'Nothing pending to receive on the selected PO(s).' : 'Select one or more eligible POs to load their items.'}
             </Typography>
           ) : (
             <>
-              <Box sx={{
-                display: { xs: 'none', md: 'grid' },
-                gridTemplateColumns: PO_ROW_COLS,
-                gap: 1, px: 1, mb: 0.5,
-              }}>
-                {['Description', 'SKU', 'Ordered Qty', 'Already Received', 'Pending Qty', 'Invoice Qty', 'Received Qty', 'Material Receipt Type', 'Batch No', 'Remarks'].map((h, i) => (
-                  <Typography key={i} variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem' }}>{h}</Typography>
-                ))}
-              </Box>
+              {/* Shown only while a line receives MORE than its PO's pending qty
+                  (excess = received − pending > 0); each such line asks for its
+                  own Allow Over-Receipt tick below, which the server re-checks. */}
+              {overLines.length > 0 && (
+                <Alert severity="warning" data-testid="grn-over-receipt-summary" sx={{ mb: 1.5 }}>
+                  <b>{overLines.length === 1 ? '1 line exceeds' : `${overLines.length} lines exceed`} its pending PO quantity</b> — tick Allow Over-Receipt on {overLines.length === 1 ? 'it' : 'each'} to save:
+                  {overLines.map((it) => (
+                    <Box key={`${it.poId}|${it.poItemId}`} component="span" sx={{ display: 'block', mt: 0.25 }}>
+                      {it.itemName}{it.skuCode ? ` (${it.skuCode})` : ''}: pending {round2(it.pendingBefore)} · received {round2(it.receivedQty)} · excess {round2(it.receivedQty - it.pendingBefore)} {it.unit || ''}
+                      {it.allowOverReceipt ? ' — allowed' : ''}
+                    </Box>
+                  ))}
+                </Alert>
+              )}
+              {wide && <FormTableHead columns={PO_HEAD} template={PO_ROW_COLS} align={PO_ALIGN} />}
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {itemGroups.map((g, gi) => (
                   <Box key={gi}>
                     {pos.length > 1 && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, mb: 0.5, bgcolor: alpha('#0b2545', 0.06), borderRadius: '8px' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5, mb: 0.5, bgcolor: alpha('#0b2545', 0.06), borderRadius: '8px' }}>
                         <ShoppingBag size={13} color="#0b2545" />
-                        <Typography variant="caption" sx={{ fontWeight: 800 }}>PO {g.poNumber}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 800, color: PFMS.ink }}>PO {g.poNumber}</Typography>
                       </Box>
                     )}
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: wide ? 0.5 : 1, mb: 1 }}>
                       {g.rows.map(({ it, idx }) => {
                         // Pending Qty is fixed (orderedQty − alreadyReceived), computed from the
                         // PO — read-only and never recalculated off the in-progress receivedQty.
@@ -920,56 +1052,77 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
                         const extra = round2(it.receivedQty) > pendingBefore;
                         const extraQty = extra ? round2(it.receivedQty - pendingBefore) : 0;
                         return (
-                          <Box key={idx} sx={{
-                            display: 'grid',
-                            gridTemplateColumns: { xs: '1fr', md: PO_ROW_COLS },
-                            gap: 1, alignItems: 'flex-start', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
-                            borderRadius: '10px', border: { xs: '1px solid', md: 'none' }, borderColor: 'divider',
-                            '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
-                          }}>
-                            <Box sx={{ minWidth: 0 }}>
-                              <Typography variant="body2" fontWeight={600} noWrap>{it.itemName}</Typography>
-                              <Typography variant="caption" color="text.disabled">{it.unit}</Typography>
-                              {conversionHint(it)}
-                              <Box>{destinationTag(it)}</Box>
+                          <Box key={idx} sx={{ ...rowSx(wide), ...(wide ? { gridTemplateColumns: PO_ROW_COLS } : {}) }}>
+                            {wide ? (
+                              <Typography sx={{ fontWeight: 700, fontSize: '0.88rem', color: PFMS.ink, lineHeight: '24px', textAlign: 'center' }}>{idx + 1}</Typography>
+                            ) : null}
+                            <Box sx={{ minWidth: 0, ...(wide ? {} : fullRow) }}>
+                              {!wide && <CellCaption>Item {idx + 1}</CellCaption>}
+                              {descriptionCell(it)}
+                              {!wide && it.skuCode ? <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: PFMS.brand, overflowWrap: 'anywhere', mt: 0.25 }}>SKU {it.skuCode}</Typography> : null}
                             </Box>
-                            <Typography variant="body2" color="primary.main" fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>{it.skuCode || '—'}</Typography>
-                            <QtyCell label="Ordered Qty" value={it.orderedQty} />
-                            <QtyCell label="Already Received" value={it.previouslyReceivedQty} />
-                            <QtyCell label="Pending Qty" value={pendingBefore} color={pendingBefore > 0 ? '#b45309' : '#0f766e'} />
-                            <TextField size="small" type="number" label="Invoice Qty" value={it.invoiceQty}
-                              onChange={(e) => setItem(idx, { invoiceQty: e.target.value })}
-                              helperText={`Pending: ${pendingBefore}`}
-                              inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                            <TextField size="small" type="number" label="Received Qty" value={it.receivedQty} error={extra}
-                              onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
-                              helperText={extra ? `Pending: ${pendingBefore} · Extra ${extraQty}` : `Pending: ${pendingBefore}`}
-                              inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }} />
-                            <ReceiptTypeSelect value={it.howItemReceived} lineKey={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
-                              error={!it.howItemReceived && round2(it.receivedQty) > 0}
-                              onChange={(v) => setItem(idx, { howItemReceived: v })} />
+                            {wide && (
+                              <Typography sx={{ fontWeight: 700, fontSize: '0.88rem', color: PFMS.brand, overflowWrap: 'anywhere', lineHeight: 1.35, pt: '2px', minWidth: 0 }}>{it.skuCode || '—'}</Typography>
+                            )}
+                            {wide ? (
+                              <>
+                                <QtyCell wide label="Ordered Qty" value={it.orderedQty} />
+                                <QtyCell wide label="Already Received" value={it.previouslyReceivedQty} />
+                                <QtyCell wide label="Pending Qty" value={pendingBefore} color={pendingBefore > 0 ? '#c2410c' : '#0f766e'} />
+                              </>
+                            ) : (
+                              <Box sx={{ ...fullRow, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 1, p: 1, borderRadius: '8px', bgcolor: PFMS.surfaceAlt }}>
+                                <QtyCell label="Ordered Qty" value={it.orderedQty} />
+                                <QtyCell label="Already Received" value={it.previouslyReceivedQty} />
+                                <QtyCell label="Pending Qty" value={pendingBefore} color={pendingBefore > 0 ? '#c2410c' : '#0f766e'} />
+                              </Box>
+                            )}
+                            <Cell wide={wide} caption="Invoice Qty">
+                              <TextField size="small" type="number" fullWidth value={it.invoiceQty} sx={pfmsNoSpinSx}
+                                onChange={(e) => setItem(idx, { invoiceQty: e.target.value })}
+                                helperText={`Pending: ${pendingBefore}`}
+                                FormHelperTextProps={{ sx: { textAlign: 'center', mx: 0 } }}
+                                inputProps={{ ...QTY_INPUT, 'aria-label': 'Invoice Qty' }} />
+                            </Cell>
+                            <Cell wide={wide} caption="Received Qty">
+                              <TextField size="small" type="number" fullWidth value={it.receivedQty} error={extra} sx={pfmsNoSpinSx}
+                                onChange={(e) => setItem(idx, { receivedQty: e.target.value })}
+                                helperText={extra ? `Pending: ${pendingBefore} · Extra ${extraQty}` : `Pending: ${pendingBefore}`}
+                                FormHelperTextProps={{ sx: { textAlign: 'center', mx: 0 } }}
+                                inputProps={{ ...QTY_INPUT, 'aria-label': 'Received Qty' }} />
+                            </Cell>
+                            <Cell wide={wide} caption="Material Receipt Type">
+                              <ReceiptTypeSelect value={it.howItemReceived} lineKey={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
+                                error={!it.howItemReceived && round2(it.receivedQty) > 0}
+                                onChange={(v) => setItem(idx, { howItemReceived: v })} />
+                            </Cell>
                             {/* Required for Coil and Circle only — every other item
                                 keeps the original optional field untouched. */}
-                            <TextField size="small"
-                              label={rmKindOf(it) ? 'Batch No *' : 'Batch No'}
-                              placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'optional'}
-                              value={it.batchNo}
-                              error={batchMissing(it) && round2(it.receivedQty) > 0}
-                              onChange={(e) => setItem(idx, { batchNo: e.target.value })} />
-                            <TextField size="small" label="Remarks" placeholder={extra ? 'required (extra)' : 'optional'} value={it.remarks}
-                              onChange={(e) => setItem(idx, { remarks: e.target.value })} error={extra && !it.remarks?.trim() && !header.remarks.trim()} />
+                            <Cell wide={wide} caption={rmKindOf(it) ? 'Batch No *' : 'Batch No'}>
+                              <TextField size="small" fullWidth
+                                placeholder={rmKindOf(it) ? `required for ${rmKindOf(it)}` : 'Batch No'}
+                                value={it.batchNo}
+                                error={batchMissing(it) && round2(it.receivedQty) > 0}
+                                onChange={(e) => setItem(idx, { batchNo: e.target.value })}
+                                inputProps={{ 'aria-label': rmKindOf(it) ? 'Batch No *' : 'Batch No' }} />
+                            </Cell>
+                            <Cell wide={wide} caption="Remarks" sx={wide ? undefined : remarksSpan}>
+                              <TextField size="small" fullWidth placeholder={extra ? 'required (extra)' : 'Remarks'} value={it.remarks}
+                                onChange={(e) => setItem(idx, { remarks: e.target.value })} error={extra && !it.remarks?.trim() && !header.remarks.trim()}
+                                inputProps={{ 'aria-label': 'Remarks' }} />
+                            </Cell>
                             {/* Only a line that really exceeds its pending qty can be
                                 over-received; the tick is per line and is dropped as soon
                                 as Received Qty comes back within pending. */}
                             {extra && (
                               <Box data-testid="grn-over-receipt" data-line={`${it.poNumber || ''}|${it.skuCode || it.itemName}`}
-                                sx={{ gridColumn: { md: '1 / -1' }, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 1, py: 0.25, borderRadius: '8px', bgcolor: alpha('#b45309', 0.08), border: '1px solid', borderColor: alpha('#b45309', 0.35) }}>
+                                sx={{ ...fullRow, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 1, py: 0.25, borderRadius: '8px', bgcolor: alpha('#b45309', 0.08), border: '1px solid', borderColor: alpha('#b45309', 0.35) }}>
                                 <FormControlLabel sx={{ m: 0 }}
                                   control={<Checkbox size="small" checked={Boolean(it.allowOverReceipt)} inputProps={{ 'data-testid': 'grn-allow-over-receipt' }}
                                     onChange={(e) => setItem(idx, { allowOverReceipt: e.target.checked })} />}
-                                  label={<Typography variant="body2" fontWeight={700}>Allow Over-Receipt</Typography>} />
+                                  label={<Typography variant="body2" fontWeight={700} sx={{ color: PFMS.ink }}>Allow Over-Receipt</Typography>} />
                                 <Typography variant="caption" data-testid="grn-over-receipt-warning" sx={{ color: '#b45309', fontWeight: 700 }}>
-                                  Warning: receiving {it.receivedQty} against {pendingBefore} pending — {extraQty} {it.unit || ''} over the PO.
+                                  Warning: {it.itemName} — receiving {it.receivedQty} against {pendingBefore} pending — excess {extraQty} {it.unit || ''} over the PO.
                                   {it.allowOverReceipt ? '' : ' Tick to confirm, or reduce Received Qty.'}
                                 </Typography>
                               </Box>
@@ -981,140 +1134,148 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
                   </Box>
                 ))}
               </Box>
-              <Divider sx={{ my: 2 }} />
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' }}>
-                <Box sx={{ textAlign: 'right' }}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={700}>INVOICE QTY</Typography>
-                  <Typography fontWeight={700}>{totals.invoice}</Typography>
-                </Box>
-                <Box sx={{ textAlign: 'right' }}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={700}>RECEIVED QTY</Typography>
-                  <Typography variant="h6" fontWeight={800} color="primary.dark">{totals.received}</Typography>
-                </Box>
-                <Box sx={{ textAlign: 'right' }}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={700}>RECEIPT VALUE</Typography>
-                  <Typography variant="h6" fontWeight={800}>{fmtINR(totals.value)}</Typography>
-                </Box>
-              </Box>
+              <FormTotals items={[
+                { label: 'Invoice Qty', value: totals.invoice, color: PFMS.brand },
+                { label: 'Received Qty', value: totals.received, color: PFMS.brand },
+                { label: 'Receipt Value', value: fmtINR(totals.value) },
+              ]} />
             </>
           )}
-        </Paper>
+        </FormSection>
 
-        <TextField
-          label="Remarks"
-          fullWidth
-          multiline
-          minRows={2}
-          value={header.remarks}
-          onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))}
-          error={remarksRequired}
-          placeholder="Add any notes about this receipt…"
-          helperText={remarksRequired
-            ? 'Remarks are required when receiving more than the pending quantity'
-            : 'Required for extra receipts'}
-          sx={{
-            bgcolor: remarksRequired ? alpha('#b45309', 0.06) : alpha('#2563eb', 0.05),
-            borderRadius: '12px',
-            '& .MuiOutlinedInput-root fieldset': {
-              borderColor: remarksRequired ? '#b45309' : '#2563eb',
-              borderWidth: 2,
-            },
-            '& .MuiInputLabel-root': {
-              fontWeight: 700,
-              color: remarksRequired ? '#b45309' : 'primary.main',
-            },
-          }} />
+        <FormSection icon={<MessageSquareText size={20} />} title="Remarks"
+          sx={remarksRequired ? { borderColor: '#b45309', bgcolor: alpha('#b45309', 0.03) } : undefined}>
+          <RemarksField id="grn-f-remarks" value={header.remarks} max={REMARKS_MAX}
+            onChange={(v) => setHeader((h) => ({ ...h, remarks: v }))}
+            error={remarksRequired}
+            placeholder="Enter remarks (optional) — add any notes about this receipt"
+            helperText={remarksRequired
+              ? 'Remarks are required when receiving more than the pending quantity'
+              : 'Required for extra receipts'}
+            inputProps={{ 'aria-label': 'GRN Remarks' }} />
+        </FormSection>
 
         {/* Attachment (challan / invoice copy / photo) */}
-        <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={handleUpload} />
-        <Box>
-          <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mb: 0.75 }}>
-            ATTACHMENT (challan / invoice copy — optional)
-          </Typography>
-          {doc?.fileUrl ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: '10px', bgcolor: '#fff' }}>
-              <FileText size={16} />
-              <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0 }} noWrap>{doc.fileName}</Typography>
-              <Button size="small" startIcon={<ExternalLink size={13} />} href={fileHref(doc.fileUrl)} target="_blank" rel="noopener">View</Button>
-              <Chip size="small" label="Remove" onDelete={() => setDoc(null)} onClick={() => setDoc(null)} deleteIcon={<X size={13} />} />
-            </Box>
-          ) : (
-            <Button variant="outlined" size="small" startIcon={uploading ? <CircularProgress size={14} /> : <Upload size={14} />}
-              onClick={() => fileRef.current?.click()} disabled={uploading}>
-              Upload PDF / Image
-            </Button>
-          )}
-        </Box>
+        <AttachmentDrop label="Attachment (challan / invoice copy — optional)" accept={ACCEPT}
+          doc={doc} uploading={uploading} hrefOf={fileHref}
+          onFile={handleUpload} onRemove={() => setDoc(null)}
+          onReject={() => enqueueSnackbar('Attach a PDF or an image', { variant: 'warning' })} />
         </Box>
 
-        {/* Incoming QC — directly under the GRN, on this same form. Before the GRN
-            exists there is nothing to inspect; once saved, the real QC form. */}
-        {correcting ? null : !liveGrn?._id ? (
-          <Paper elevation={0} sx={SECTION} data-testid="grn-form-qc-placeholder">
-            <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 700, color: 'primary.main', mb: 1 }}>
-              <ClipboardCheck size={18} /> Incoming QC
-            </Typography>
-            <Typography variant="body2" color="text.secondary">Save GRN first to enter QC details.</Typography>
-          </Paper>
-        ) : (
-          <Box>
-            <Box data-testid="grn-form-saved-summary" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
-              <Typography variant="body2" fontWeight={800}>{liveGrn.grnNumber}</Typography>
-              <StatusChip status={liveGrn.grnStatus} />
-              <GrnQcStatusChip stage={qcStage} />
+        {/* Incoming QC — the second part of the SAME form: entered beside the GRN
+            (nothing has to be saved first), saved by the same Save and completed
+            together with it. A completed QC shows read-only. */}
+        {!correcting && (
+          <Box id="grn-form-qc" sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, scrollMarginTop: 8 }}>
+            <Box data-testid="grn-form-saved-summary"
+              sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 2, py: 1.25, borderRadius: '10px', bgcolor: alpha(PFMS.brand, 0.06), border: `1px solid ${alpha(PFMS.brand, 0.18)}` }}>
+              <ClipboardCheck size={18} color={PFMS.brand} />
+              <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', color: PFMS.ink }}>Step 1.9 · Incoming QC</Typography>
+              <Typography sx={{ fontSize: '0.78rem', color: PFMS.sub, flex: '1 1 200px' }}>inspect what was received above — saved with the GRN</Typography>
+              {liveGrn?._id && <Typography sx={{ fontWeight: 800, fontSize: '0.86rem', color: PFMS.ink }}>{liveGrn.grnNumber}</Typography>}
+              {liveGrn?._id && <StatusChip status={liveGrn.grnStatus} />}
               {grnLocked && <Chip size="small" variant="outlined" icon={<Lock size={12} />} label="GRN read-only" sx={{ fontWeight: 700 }} />}
             </Box>
-            <GrnQcSections grn={liveGrn} footerSlot={footerSlot} prepareGrn={grnLocked ? undefined : () => handleSubmit({ stay: true })} />
+            {qcScopes.map((scope) => {
+              if (!qcEditable(scope)) {
+                return <GrnQcSection key={scope.key} grn={liveGrn} poId={scope.poId || undefined} poNumber={scope.poNumber} />;
+              }
+              const stage = qcStageOf(scope);
+              const rec = qcRecordOf(scope);
+              const q = qcOf(scope);
+              const lines = qcItemsOf(scope);
+              const balanced = allLinesBalanced(lines);
+              const t = qcTotals(lines);
+              const legacyStock = Boolean(liveGrn?.stockPosted) && !liveGrn?.stockPostingStage && isGrnCompleted(liveGrn);
+              const nextText = !lines.length
+                ? 'Enter received quantities above — every received line is inspected here.'
+                : !balanced
+                  ? 'Accepted + Rejected must equal Received on every line before completing.'
+                  : legacyStock
+                    ? `On Save & Complete: this earlier GRN already added its stock, so rejected ${t.rejected} move out of stock.`
+                    : `On Save & Complete: the GRN is finalised and accepted ${t.accepted} posts to stock${t.rejected ? `; rejected ${t.rejected} never enters it` : ''}. Save as Draft keeps everything without posting.`;
+              return (
+                <FormSection key={scope.key} id={scope.poId ? `grn-qc-section-${scope.poId}` : 'grn-qc-section'} sx={{ scrollMarginTop: 8 }}
+                  icon={<ClipboardCheck size={20} />} title={scope.poNumber ? `QC entry — PO ${scope.poNumber}` : 'QC entry'}
+                  badge={(
+                    <>
+                      <span data-testid="grn-qc-status"><GrnQcStatusChip stage={stage} /></span>
+                      {rec?.qcNumber && <Chip size="small" variant="outlined" label={rec.qcNumber} sx={{ fontWeight: 700 }} />}
+                    </>
+                  )}>
+                  {stage.key === 'QC_DRAFT' && rec && (
+                    <Alert severity="info" sx={{ mb: 2 }}>Resuming draft {rec.qcNumber} — saved {fmtDate(rec.updatedAt)}.</Alert>
+                  )}
+                  <QcInspectionForm
+                    header={q.header} onHeaderChange={(patch) => setQc(scope, { header: { ...q.header, ...patch } })}
+                    items={lines} onItemChange={(idx, patch) => setQcItem(scope, idx, patch)}
+                    doc={q.doc} onDocChange={(d) => setQc(scope, { doc: d })} onUploadingChange={setQcUploading}
+                    emptyText="Enter received quantities in Material Receipt above to inspect them."
+                    summary={(
+                      <Box data-testid="grn-qc-actions" sx={{ p: 1.5, px: 2, borderRadius: '10px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surface }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
+                          <Typography sx={{ fontWeight: 800, fontSize: '0.9rem', color: PFMS.ink }}>Expected result</Typography>
+                          <QcResultChip result={lines.length ? expectedQcResult(lines) : ''} />
+                          <Typography sx={{ fontSize: '0.86rem', fontWeight: 600, color: balanced ? PFMS.ink : 'error.main' }}>
+                            · {lines.length} line(s) · {balanced ? 'balanced' : 'not balanced'}
+                          </Typography>
+                        </Box>
+                        <Typography data-testid="grn-qc-next" sx={{ mt: 0.5, fontSize: '0.8rem', color: PFMS.sub }}>{nextText}</Typography>
+                      </Box>
+                    )} />
+                </FormSection>
+              );
+            })}
           </Box>
         )}
-      </Box>
+      </FormDialogBody>
 
-      {/* Footer */}
-      <Divider />
-      {/* One line on a laptop (the summary text wraps first); stacks only on a phone. */}
-      <Box sx={{ px: 3, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: { xs: 'wrap', md: 'nowrap' }, gap: 1.5, bgcolor: '#fff' }}>
-        <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
-          {correcting
-            ? `Editing ${current?.grnNumber || 'GRN'} · ${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)}`
-            : grnLocked
-              ? 'GRN completed — read-only'
-              : `${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)} · stock posts when QC completes`}
-          {' · '}Incoming QC: <b>{qcStage.label}</b>
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1.5, flexShrink: { xs: 1, md: 0 }, flexWrap: { xs: 'wrap', md: 'nowrap' }, justifyContent: 'flex-end' }}>
-          {/* Second arg = the draft created in this session, so the caller can open it. */}
-          <Button variant="outlined" onClick={() => onClose?.(Boolean(savedGrn), savedGrn)} disabled={busy}>
-            {savedGrn ? 'Close' : 'Cancel'}
+      {/* Footer — fixed. ONE Save path: a draft of GRN + QC, or both completed. */}
+      <FormDialogFooter summary={correcting
+        ? <>Editing {current?.grnNumber || 'GRN'} · {validItems.length} item(s) · received {totals.received} · {fmtINR(totals.value)} · Incoming QC: <b>{qcStage.label}</b></>
+        : (
+          <>
+            {grnLocked
+              ? `GRN ${current?.grnNumber || ''} completed`
+              : `${validItems.length} item(s) · received ${totals.received} · ${fmtINR(totals.value)}`}
+            {editableScopes.length > 0 ? ` · accepted ${qcFooterTotals.accepted} · rejected ${qcFooterTotals.rejected}` : ''}
+            {' · '}Incoming QC: <Box component="b" sx={{ color: qcStageTone.fg }}>{qcStage.label}</Box>
+          </>
+        )}>
+        {/* Second arg = the draft created in this session, so the caller can open it. */}
+        <Button variant="outlined" onClick={closeForm} disabled={busy}>
+          {savedGrn || allQcDone ? 'Close' : 'Cancel'}
+        </Button>
+        {correcting && (
+          <Button variant="contained" data-testid="grn-correction-save"
+            startIcon={correctSaving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+            onClick={handleCorrect} disabled={busy || !changeCheck}>
+            Save Changes
           </Button>
-          {correcting && (
-            <Button variant="contained" data-testid="grn-correction-save"
-              startIcon={correctSaving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-              onClick={handleCorrect} disabled={busy || !changeCheck}>
-              Save Changes
-            </Button>
-          )}
-          {!grnLocked && !correcting && (
-            <Button variant="outlined" startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
-              onClick={handlePreview} disabled={busy}>
-              Preview PDF
-            </Button>
-          )}
-          {!grnLocked && !correcting && (
-            <Button variant="outlined" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-              onClick={() => handleSubmit()} disabled={busy}>
-              Save as Draft
-            </Button>
-          )}
-          {/* Incoming QC actions (Save QC Draft, Complete GRN + QC) render here. */}
-          <Box ref={setFooterSlot} sx={{ display: 'contents' }} />
-          {!correcting && !liveGrn?._id && (
-            <Button variant="contained" color="success" disabled startIcon={<ClipboardCheck size={16} />}
-              title="Save as Draft first — the QC is entered on the saved GRN">
-              Complete GRN + QC
-            </Button>
-          )}
-        </Box>
-      </Box>
+        )}
+        {!grnLocked && !correcting && (
+          <Button variant="outlined" startIcon={previewing ? <CircularProgress size={16} color="inherit" /> : <Eye size={16} />}
+            onClick={handlePreview} disabled={busy}>
+            Preview PDF
+          </Button>
+        )}
+        {!correcting && !allQcDone && (
+          <Button variant="outlined" data-testid="grn-save-draft"
+            startIcon={saving && !completing ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+            onClick={() => saveAll(false)} disabled={busy}
+            title="Saves the GRN and its QC as they are — nothing is completed and no stock is posted">
+            Save as Draft
+          </Button>
+        )}
+        {!correcting && !allQcDone && (
+          <Button variant="contained" color="success" data-testid="grn-save-complete"
+            startIcon={completing ? <CircularProgress size={16} color="inherit" /> : <ClipboardCheck size={16} />}
+            onClick={() => saveAll(true)} disabled={busy}
+            title="Saves, completes the GRN and completes its Incoming QC — accepted quantities are posted to stock">
+            {grnLocked ? 'Save & Complete QC' : 'Save & Complete GRN + QC'}
+          </Button>
+        )}
+      </FormDialogFooter>
 
       {/* Over-receipt consent — mirrors the same checkbox/confirmation the
           separate "Complete GRN" dialog already asks for; the server
@@ -1150,7 +1311,7 @@ const GrnFormDialog = ({ open, onClose, grn: grnProp = null, presetPo = null, co
         showSaveDraft={false}
         approveLabel="Save as Draft"
       />
-    </Dialog>
+    </PfmsFormDialog>
   );
 };
 

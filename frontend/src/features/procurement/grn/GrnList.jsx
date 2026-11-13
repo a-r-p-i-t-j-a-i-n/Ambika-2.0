@@ -26,7 +26,6 @@ import { GrnStatusChip, GRN_STATUSES, fmtDate, isGrnDraft, isGrnCompleted } from
 import GrnQcStatusChip from './GrnQcStatusChip';
 import { resolveGrnQcStage } from './grnQcStage';
 import GrnFormDialog from './GrnFormDialog';
-import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
@@ -63,8 +62,6 @@ const GrnList = () => {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editGrn, setEditGrn] = useState(null);
-  const [completeOpen, setCompleteOpen] = useState(false);
-  const [activeGrn, setActiveGrn] = useState(null);
   const menuRef = useRef(null); // the ⋮ menu — RowActionsMenu owns its open state
   const [quickRow, setQuickRow] = useState(null); // row whose quick view is open
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -95,7 +92,6 @@ const GrnList = () => {
 
   const onView = (r) => { navigate(`/procurement/grns/${r._id}`); closeMenu(); };
   const onEdit = (r) => { setEditGrn(r); setFormOpen(true); closeMenu(); };
-  const onComplete = (r) => { setActiveGrn(r); setCompleteOpen(true); closeMenu(); };
   const onPdf = (r) => { window.open(resolveFileUrl(r.grnPdfUrl), '_blank'); closeMenu(); };
   const onCancel = async (r) => {
     closeMenu();
@@ -105,13 +101,13 @@ const GrnList = () => {
 
   const onDelete = (r) => { setDeleteTarget(r); closeMenu(); };
 
-  // DRAFT → Edit | Complete | Cancel | Delete. A completed GRN is edited /
+  // DRAFT → Open GRN + QC | Cancel | Delete. A completed GRN is edited /
   // deleted only with procurement.editGrn / procurement.deleteGrn (MD has both).
   const actionsFor = (r) => {
     const a = [{ key: 'view', label: isGrnCompleted(r) && !canEditGrn ? 'View (read-only)' : 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (isGrnDraft(r)) {
-      a.push({ key: 'edit', label: 'Edit Draft', icon: <Pencil size={16} />, fn: () => onEdit(r) });
-      a.push({ key: 'complete', label: 'Complete GRN', icon: <PackageCheck size={16} />, fn: () => onComplete(r) });
+      // One form for the GRN and its Incoming QC — saved and completed there.
+      a.push({ key: 'edit', label: 'Open GRN + QC', icon: <Pencil size={16} />, fn: () => onEdit(r) });
       a.push({ key: 'cancel', label: 'Cancel', icon: <Ban size={16} />, fn: () => onCancel(r) });
     }
     if (isGrnCompleted(r)) {
@@ -320,7 +316,6 @@ const GrnList = () => {
         // A new GRN opens on its page, where Complete, MD approval and the QC section sit together.
         if (created?._id && !editGrn) navigate(`/procurement/grns/${created._id}`);
       }} />
-      <GrnCompleteDialog open={completeOpen} grn={activeGrn} onClose={() => { setCompleteOpen(false); setActiveGrn(null); }} />
       <GrnDeleteDialog open={Boolean(deleteTarget)} grn={deleteTarget} onClose={() => setDeleteTarget(null)} />
       <RowQuickViewDialog open={Boolean(quickRow)} onClose={() => setQuickRow(null)}
         title="GRN Details" number={quickRow?.grnNumber}

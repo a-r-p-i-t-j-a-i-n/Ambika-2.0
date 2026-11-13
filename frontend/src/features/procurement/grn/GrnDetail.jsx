@@ -23,7 +23,6 @@ import {
 import { GrnStatusChip, howReceivedLabel, fmtINR, fmtDate, isGrnDraft, isGrnCompleted } from './grnMeta';
 import { lineReceiptType, receiptTypeSummaryLabel } from './grnReceiptType';
 import GrnFormDialog from './GrnFormDialog';
-import GrnCompleteDialog from './GrnCompleteDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
 import GrnPdfPreview from './GrnPdfPreview';
 import { GrnQcSections } from './GrnQcSection';
@@ -137,7 +136,8 @@ const GrnDetail = () => {
   const existingInvoice = (invByQcRes?.data || [])[0] || null;
 
   const [formOpen, setFormOpen] = useState(false);
-  const [completeOpen, setCompleteOpen] = useState(false);
+  // The GRN + QC form opened to enter / finish the Incoming QC (not a correction).
+  const [qcFormOpen, setQcFormOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
@@ -174,26 +174,24 @@ const GrnDetail = () => {
 
   // ── "What's next?" — single, obvious call-to-action for the current stage. ──
   const qcStage = resolveGrnQcStage(grn, qc);
-  const toQcSection = () => scrollToId('grn-qc-section');
   const nextStep = (() => {
     if (isDraft) {
-      return { tone: 'info', title: 'Next action: Complete GRN',
-        desc: 'Confirm the received quantities. Incoming QC (below) opens once the GRN is completed; accepted quantities are posted to stock when the QC is completed.',
-        primary: { label: 'Complete GRN', icon: <PackageCheck size={16} />, onClick: () => setCompleteOpen(true) },
-        secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
+      return { tone: 'info', title: 'Next action: finish the GRN and its Incoming QC',
+        desc: 'Both are entered on one GRN + QC form and completed by one Save; accepted quantities are posted to stock when the QC is completed.',
+        primary: { label: 'Open GRN + QC form', icon: <PackageCheck size={16} />, onClick: () => setFormOpen(true) } };
     }
     if (qcStage.key === 'CANCELLED') return null;
     if (qcStage.key === 'QC_DRAFT') {
       return { tone: 'info', title: `QC draft ${qc.qcNumber} saved — finish the inspection below`,
         desc: 'Record accepted / rejected / rework quantities and complete the QC.',
-        primary: { label: 'Resume QC', icon: <ClipboardCheck size={16} />, onClick: toQcSection } };
+        primary: { label: 'Resume QC', icon: <ClipboardCheck size={16} />, onClick: () => setQcFormOpen(true) } };
     }
     if (qcStage.key === 'QC_READY') {
       return { tone: 'success', title: 'Goods received — next: Incoming QC (below)',
         desc: grn.approvalStatus === 'MD_APPROVED'
           ? 'Inspect the received material and record the QC result in section B.'
           : 'Inspect the received material and record the QC result in section B. MD approval of this GRN is tracked separately and does not hold the QC back.',
-        primary: { label: 'Start QC', icon: <ClipboardCheck size={16} />, onClick: toQcSection },
+        primary: { label: 'Start QC', icon: <ClipboardCheck size={16} />, onClick: () => setQcFormOpen(true) },
         secondary: grn.poId ? { label: 'View PO', onClick: () => navigate(`/procurement/purchase-orders/${grn.poId}`) } : null };
     }
     if (qcStage.key === 'QC_DONE') {
@@ -273,7 +271,6 @@ const GrnDetail = () => {
             </Button>
           ))}
           {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
-          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={<PackageCheck size={16} />} onClick={() => setCompleteOpen(true)}>Complete GRN</Button>}
           {grn.grnPdfUrl && <Button variant="outlined" startIcon={<FileDown size={16} />} onClick={() => setPdfOpen(true)}>{isLocked ? 'View Signed PDF' : 'GRN PDF'}</Button>}
           {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={handleCancel}>Cancel</Button>}
           {isDraft && !isLocked && canDeleteGrn && <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} onClick={() => setDeleteOpen(true)}>Delete</Button>}
@@ -524,7 +521,7 @@ const GrnDetail = () => {
 
       {/* Dialogs */}
       <GrnFormDialog open={formOpen} grn={grn} correct={isCompleted} onClose={() => setFormOpen(false)} />
-      <GrnCompleteDialog open={completeOpen} grn={grn} onClose={() => setCompleteOpen(false)} />
+      <GrnFormDialog open={qcFormOpen} grn={grn} onClose={() => setQcFormOpen(false)} />
       <GrnDeleteDialog open={deleteOpen} grn={grn}
         onClose={(deleted) => { setDeleteOpen(false); if (deleted) navigate('/purchase-fms/grn'); }} />
       <GrnPdfPreview open={pdfOpen} grn={grn} onClose={() => setPdfOpen(false)} />

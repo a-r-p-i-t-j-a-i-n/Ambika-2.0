@@ -30,11 +30,37 @@ export const PAYMENT_MODE = {
   OTHER:  'OTHER',
 };
 
-// Purchase voucher (from a vendor invoice) vs direct expense voucher.
+// Purchase voucher (from a vendor invoice) vs direct expense voucher vs direct
+// purchase of goods with no Indent / PO / GRN behind it (see directPurchase.js).
+// DIRECT_PURCHASE is its own type, never inferred from missing references, and
+// never an expense. It is financial only: it posts no stock.
 export const VOUCHER_TYPE = {
-  PURCHASE: 'PURCHASE',
-  EXPENSE:  'EXPENSE',
+  PURCHASE:        'PURCHASE',
+  EXPENSE:         'EXPENSE',
+  DIRECT_PURCHASE: 'DIRECT_PURCHASE',
 };
+
+export const isDirectPurchase = (v) => v?.voucherType === VOUCHER_TYPE.DIRECT_PURCHASE;
+
+// One purchased item on a DIRECT_PURCHASE voucher. SKU name / code / unit are
+// copied from the SKU Master on save. Amounts are server-computed:
+// gross = qty × rate, taxable = gross − discount, tax = taxable × gst%.
+const directPurchaseItemSchema = new Schema({
+  skuId:          { type: Schema.Types.ObjectId, ref: 'SKU', required: true },
+  skuCode:        { type: String, trim: true, uppercase: true, default: '' },
+  itemName:       { type: String, trim: true, default: '' },
+  description:    { type: String, trim: true, default: '' },
+  hsn:            { type: String, trim: true, default: '' },
+  quantity:       { type: Number, required: true, min: 0 },
+  unit:           { type: String, trim: true, default: '' },
+  rate:           { type: Number, default: 0, min: 0 },
+  grossAmount:    { type: Number, default: 0, min: 0 },
+  discountAmount: { type: Number, default: 0, min: 0 },
+  taxableAmount:  { type: Number, default: 0, min: 0 },
+  gstRate:        { type: Number, default: 0, min: 0, max: 100 },
+  taxAmount:      { type: Number, default: 0, min: 0 },
+  lineTotal:      { type: Number, default: 0, min: 0 },
+}, { _id: true });
 
 // What an EXPENSE voucher is raised against. Only DIRECT existed before, so an
 // expense voucher with no expenseType reads as DIRECT (see expenseTypeOf).
@@ -117,6 +143,17 @@ const voucherSchema = new Schema({
   advanceAmount:              { type: Number, default: 0 }, // advance payment deduction
   otherReason:                { type: String, trim: true, default: '' },
   totalAmountPayable:         { type: Number, default: 0 }, // = netPayableAmount for downstream
+
+  // ── Direct Purchase voucher (voucherType = DIRECT_PURCHASE) ──
+  // invoiceNumber (above) holds the vendor's invoice number; invoiceId stays
+  // empty, as do poId / grnId / grnIds: none exist. taxableAmount / taxAmount
+  // (above) hold the item totals; invoiceAmount = netPayable = grand total.
+  // Empty on PURCHASE / EXPENSE vouchers.
+  invoiceDate:   { type: Date, default: null },
+  items:         { type: [directPurchaseItemSchema], default: undefined },
+  grossAmount:   { type: Number, default: 0 },   // Σ qty × rate
+  discountTotal: { type: Number, default: 0 },   // Σ line discounts
+
   paymentTerms: { type: String, trim: true, default: '' },
   dueDate:      { type: Date, default: null },
   preparedBy:   { type: String, trim: true, default: '' },
@@ -165,6 +202,30 @@ const voucherSchema = new Schema({
 voucherSchema.index({ voucherNumber: 'text', invoiceNumber: 'text', vendorName: 'text', referenceNumber: 'text' });
 voucherSchema.index({ vendorId: 1, voucherStatus: 1 });
 voucherSchema.index({ voucherDate: -1 });
+
+// One LIVE purchase voucher per vendor invoice, enforced by the database so two
+// concurrent creates (an approval's automatic voucher and a manual "Create
+// Voucher", or two approvals) can never both win. Partial: a cancelled or
+// deleted voucher frees the invoice for a new one, and expense / direct-purchase
+// vouchers (no invoiceId) are never indexed. The service's findOne pre-check
+// stays as the friendly first line and the only check against older vouchers
+// the index does not cover.
+export const LIVE_PURCHASE_VOUCHER_STATUSES = [
+  VOUCHER_STATUS.DRAFT, VOUCHER_STATUS.POSTED, VOUCHER_STATUS.PARTIALLY_PAID,
+  VOUCHER_STATUS.FULLY_PAID, VOUCHER_STATUS.SHORT_CLOSED,
+];
+voucherSchema.index(
+  { invoiceId: 1 },
+  {
+    name: 'uniq_live_purchase_voucher_per_invoice',
+    unique: true,
+    partialFilterExpression: {
+      voucherType: VOUCHER_TYPE.PURCHASE,
+      isDeleted: false,
+      voucherStatus: { $in: LIVE_PURCHASE_VOUCHER_STATUSES },
+    },
+  },
+);
 
 const VendorVoucher = model('VendorVoucher', voucherSchema);
 export default VendorVoucher;

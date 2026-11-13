@@ -63,6 +63,31 @@ const grnQcState = (grnStatus, qcStatus) => {
   return q === 'pending' ? 'active' : q;
 };
 
+/** Direct Purchase / Expense vouchers are raised without a Vendor Invoice. */
+export const isInvoiceFreeVoucher = (v) => v?.voucherType === 'DIRECT_PURCHASE' || v?.voucherType === 'EXPENSE';
+
+/**
+ * Steps for an invoice-free voucher: Voucher → Tally Entry → Final Payment.
+ * An expense against a GRN really does rest on a received GRN, so it keeps the
+ * GRN & QC step (done — the GRN had to be completed to bill it).
+ */
+const invoiceFreeSteps = (all, voucher, tallyEntry) => {
+  const [grnQcStep, , voucherStep, tallyStep, paymentStep] = all;
+  voucherStep.state = voucherState(voucher.voucherStatus);
+  voucherStep.sublabel = voucher.voucherNumber || '';
+  const tallyStatus = tallyEntry?.tallyEntryStatus || voucher.tallyEntryStatus;
+  if (tallyStatus) tallyStep.state = tallyState(tallyStatus);
+  if (tallyEntry) tallyStep.sublabel = tallyEntry.entryNumber || '';
+  // Same rule as the purchase pipeline: a completed tally entry makes payment the active step.
+  if (tallyStep.state === 'completed') paymentStep.state = 'active';
+  if (voucher.voucherType === 'EXPENSE' && voucher.expenseType === 'AGAINST_GRN') {
+    grnQcStep.state = 'completed';
+    grnQcStep.sublabel = (voucher.grnNumbers || []).join(', ');
+    return [grnQcStep, voucherStep, tallyStep, paymentStep];
+  }
+  return [voucherStep, tallyStep, paymentStep];
+};
+
 export function resolveWorkflowSteps({ grn, qc, invoice, voucher, tallyEntry } = {}) {
   const steps = STEPS_TEMPLATE();
 
@@ -84,6 +109,12 @@ export function resolveWorkflowSteps({ grn, qc, invoice, voucher, tallyEntry } =
     steps[1].sublabel = invoice.invoiceNumber || '';
     return steps;
   }
+
+  // Direct Purchase and Expense vouchers have no Vendor Invoice (and, except an
+  // expense against a GRN, no GRN & QC) — show only the steps that exist for
+  // them. A tally entry alone doesn't say which kind of voucher it belongs to,
+  // so the tally page passes the voucher along with it.
+  if (voucher && isInvoiceFreeVoucher(voucher)) return invoiceFreeSteps(steps, voucher, tallyEntry);
 
   if (voucher) {
     steps[0].state = 'completed';

@@ -16,6 +16,7 @@ import {
   useDeleteVoucherMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
+import { useGetVendorsQuery } from '../../../store/api/vendorApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
@@ -82,6 +83,14 @@ const VoucherList = () => {
   const { data: statsRes } = useGetVoucherStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
+  // Vouchers carry Vendor Master ids (PO / Direct Purchase) or Party ids
+  // (expense bills) — the Vendor filter offers both, once each.
+  const { data: vendorsRes } = useGetVendorsQuery({ limit: 1000, sort: 'name' });
+  const vendorFilterOptions = React.useMemo(() => {
+    const byId = new Map();
+    [...(vendorsRes?.data || []), ...(partiesRes?.data || [])].forEach((o) => { if (o?._id && !byId.has(o._id)) byId.set(o._id, o); });
+    return [...byId.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  }, [vendorsRes, partiesRes]);
 
   const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
   const closeMenu = () => menuRef.current?.close();
@@ -118,7 +127,9 @@ const VoucherList = () => {
       // Expense against a PO / GRN: the category plus that document.
       valueGetter: (_v, row) => (row.voucherType === 'EXPENSE'
         ? [row.expenseCategory || '—', row.poNumber, ...(row.grnNumbers || [])].filter(Boolean).join(' · ')
-        : (row.invoiceNumber || '—')),
+        : row.voucherType === 'DIRECT_PURCHASE'
+          ? `Direct · ${row.invoiceNumber || '—'}`
+          : (row.invoiceNumber || '—')),
       renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value}</Typography> },
     { field: 'vendorName', headerName: 'VENDOR / PARTY', flex: 1, minWidth: 150, renderCell: (p) => <Typography variant="body2" fontWeight={600} noWrap>{p.value || '—'}</Typography> },
     { field: 'netPayableAmount', headerName: 'NET PAYABLE', width: 120, align: 'right', headerAlign: 'right', renderCell: (p) => fmtINR(p.value) },
@@ -137,11 +148,12 @@ const VoucherList = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
-        <Box>
-          <Typography sx={pfmsTitleSx}>Payment Vouchers ({stats.total || 0})</Typography>
-          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.11 · Voucher processing — posting marks the invoice Accounts Ready</Typography>
+        <Box sx={{ flex: '1 1 0', minWidth: 0, maxWidth: 820 }}>
+          <Typography sx={pfmsTitleSx}>All Payment Vouchers ({stats.total || 0})</Typography>
+          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>Every payment voucher in one place: purchase vouchers prepared from approved vendor invoices, plus Expense and Direct Purchase vouchers that have no invoice. Review & Post here, then Tally and payment</Typography>
         </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditVoucher(null); setFormOpen(true); }}>New Voucher</Button>
+        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditVoucher(null); setFormOpen(true); }}
+          sx={{ whiteSpace: 'nowrap', minWidth: 'max-content', flexShrink: 0, height: 36, px: 1.75, borderRadius: 1.5, fontSize: '0.8125rem', fontWeight: 600, textTransform: 'none' }}>New Voucher</Button>
       </Box>
 
       <PurchaseFmsStepper
@@ -190,7 +202,7 @@ const VoucherList = () => {
                 <Box sx={{ flex: '0 1 200px', minWidth: 180 }}>
                   <Autocomplete
                     size="small" fullWidth
-                    options={partiesRes?.data || []}
+                    options={vendorFilterOptions}
                     value={vendorFilter}
                     getOptionLabel={(o) => o?.name || ''}
                     isOptionEqualToValue={(o, v) => o._id === v._id}
@@ -288,6 +300,10 @@ const VoucherList = () => {
           { label: 'Date', value: fmtDate(quickRow.voucherDate) },
           { label: quickRow.voucherType === 'EXPENSE' ? 'Category' : 'Invoice', value: quickRow.voucherType === 'EXPENSE' ? quickRow.expenseCategory : quickRow.invoiceNumber },
           ...(quickRow.voucherType === 'EXPENSE' ? [{ label: 'Expense Type', value: expenseTypeMeta(expenseTypeOf(quickRow)).label }] : []),
+          ...(quickRow.voucherType === 'DIRECT_PURCHASE' ? [
+            { label: 'Reference', value: 'Direct purchase — no Indent / PO / GRN' },
+            { label: 'Items', value: String((quickRow.items || []).length) },
+          ] : []),
           { label: 'Net Payable', value: fmtINR(quickRow.netPayableAmount) },
           { label: 'Paid', value: fmtINR(quickRow.paidAmount) },
           { label: 'Balance', value: fmtINR(quickRow.balanceAmount) },

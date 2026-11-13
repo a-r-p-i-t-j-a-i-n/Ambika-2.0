@@ -1,14 +1,18 @@
 import fs from 'fs';
 import path from 'path';
-import VendorVoucher, { VOUCHER_STATUS, VOUCHER_TYPE, EXPENSE_TYPE, LINKED_EXPENSE_TYPES, expenseTypeOf } from './voucher.model.js';
+import VendorVoucher, { VOUCHER_STATUS, VOUCHER_TYPE, EXPENSE_TYPE, LINKED_EXPENSE_TYPES, expenseTypeOf, isDirectPurchase } from './voucher.model.js';
 import {
   resolveExpenseLink, expenseLinkConflictAfterWrite, grossBillAmount, listExpenseLinkOptions, EMPTY_EXPENSE_LINK,
 } from './expenseLink.js';
+import {
+  resolveDirectPurchase, resolveDirectPurchaseVendor, assertBillNumberFree, directPurchaseNumberConflictAfterWrite,
+} from './directPurchase.js';
+import { findBillNumberUse, billNumberUseMessage } from './billNumber.js';
 import VendorInvoice, { INVOICE_STATUS } from '../vendor-invoice/vendorInvoice.model.js';
 import Party from '../../clients/party.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
-import { generatePurchaseVoucherNumber, generateExpenseVoucherNumber } from '../../../utils/docNumberGenerator.js';
+import { generatePurchaseVoucherNumber, generateExpenseVoucherNumber, generateDirectPurchaseVoucherNumber } from '../../../utils/docNumberGenerator.js';
 import { s3Enabled, buildKey, uploadBuffer } from '../../../common/uploads/s3.service.js';
 import { buildVoucherPdfBuffer } from './voucher.pdf.js';
 import { logger } from '../../../utils/logger.js';
@@ -46,18 +50,21 @@ const resolveExpenseVendor = async (data) => {
   return { vendorId: party._id, vendorName: party.name };
 };
 
-/** Reject a vendor-linked bill whose number repeats an existing, live voucher for the same vendor. */
-const assertNoDuplicateBill = async (vendorId, expenseInvoiceNo, excludeId) => {
+/**
+ * Reject a vendor-linked bill whose number repeats a live bill of the same
+ * supplier: another expense bill, a Direct Purchase voucher (its vendor invoice
+ * number) or a Vendor Invoice. "Same supplier" = same master id, or another
+ * Vendor / Party record with the same valid GSTIN (billNumber.js).
+ * `includeInvoices: false` skips the Vendor Invoice side — used when an edit
+ * keeps the bill's vendor and number, so a draft saved before this rule existed
+ * stays editable.
+ */
+const assertNoDuplicateBill = async (vendorId, expenseInvoiceNo, excludeId, { includeInvoices = true } = {}) => {
   if (!vendorId || !expenseInvoiceNo?.trim()) return;
-  const existing = await VendorVoucher.findOne({
-    _id: { $ne: excludeId },
-    vendorId,
-    voucherType: VOUCHER_TYPE.EXPENSE,
-    expenseInvoiceNo: new RegExp(`^${expenseInvoiceNo.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-    isDeleted: { $ne: true },
-    voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED },
-  }).lean();
-  if (existing) throw new AppError(`A bill (${existing.voucherNumber}) with this number already exists for this vendor`, 400);
+  const hit = await findBillNumberUse(vendorId, expenseInvoiceNo, { excludeVoucherId: excludeId, invoices: includeInvoices });
+  if (!hit) return;
+  if (hit.kind === 'INVOICE') throw new AppError(billNumberUseMessage(hit), 400);
+  throw new AppError(`A bill (${hit.voucherNumber}) with this number already exists for this vendor`, 400);
 };
 
 /** Authoritative tax amount: derived from taxable amount + GST rate when given, else the submitted flat amount. */
@@ -114,7 +121,7 @@ registerApprovalDocument('VOUCHER', {
     }[v.voucherStatus] || v.voucherStatus || '—';
     return {
       module: 'Vendor Invoices & Payments',
-      documentLabel: v.voucherType === VOUCHER_TYPE.EXPENSE ? 'Expense Voucher' : 'Purchase Voucher',
+      documentLabel: { [VOUCHER_TYPE.EXPENSE]: 'Expense Voucher', [VOUCHER_TYPE.DIRECT_PURCHASE]: 'Direct Purchase Voucher' }[v.voucherType] || 'Purchase Voucher',
       vendorName: v.vendorName || v.partyName || '',
       amount: Number(v.netPayableAmount) || 0,
       documentDate: v.voucherDate || null,
@@ -152,20 +159,67 @@ const withGrnRefs = async (v) => {
 export const voucherService = {
   async create(data, user) {
     if (data.voucherType === VOUCHER_TYPE.EXPENSE) return this.createExpense(data, user);
+    if (data.voucherType === VOUCHER_TYPE.DIRECT_PURCHASE) return this.createDirectPurchase(data, user);
 
     // ── PURCHASE — voucher only from an approved (payment-pending) invoice. ──
     const inv = await VendorInvoice.findOne({ _id: data.invoiceId, isDeleted: { $ne: true } });
     if (!inv) throw new AppError('Vendor invoice not found', 404);
+    return (await this.createPurchaseForInvoice(inv, data, user)).voucher;
+  },
+
+  /**
+   * Draft purchase voucher for an approved invoice — the one code path behind
+   * both the manual "Create Voucher" and the automatic preparation on invoice
+   * approval (`auto: true`). Idempotent: the invoice's live voucher is never
+   * duplicated. A manual create against an invoice that already has one is
+   * refused as before; an automatic one (a retry, or a concurrent manual
+   * create) simply returns the existing voucher. Resolves { voucher, created }.
+   */
+  async createPurchaseForInvoice(inv, data = {}, user, { auto = false } = {}) {
     if (inv.invoiceStatus !== INVOICE_STATUS.PAYMENT_PENDING) {
       throw new AppError('Voucher can only be created from an approved (payment-pending) invoice', 400);
     }
-    const existing = await VendorVoucher.findOne({ invoiceId: inv._id, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED } }).lean();
-    if (existing) throw new AppError(`A voucher (${existing.voucherNumber}) already exists for this invoice`, 400);
+    const findLive = () => VendorVoucher.findOne({ invoiceId: inv._id, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED } });
+    const refuseExisting = (v) => new AppError(`A voucher (${v.voucherNumber}) already exists for this invoice`, 400);
+    const existing = await findLive();
+    if (existing) {
+      if (auto) return { voucher: existing, created: false };
+      throw refuseExisting(existing);
+    }
 
     const netPayableAmount = round2(inv.netPayableAmount);
     const voucherNumber = await generatePurchaseVoucherNumber(data.voucherDate || new Date());
 
     // Step 1.11 is voucher passing / approval only — NO payment is recorded here.
+    let voucher;
+    try {
+      voucher = await this._insertPurchaseVoucher(inv, data, user, { auto, voucherNumber, netPayableAmount });
+    } catch (err) {
+      // Lost the race to a concurrent create: the unique index (one live
+      // purchase voucher per invoice) refused this one — nothing was written.
+      if (err?.code === 11000 && /invoiceId|uniq_live_purchase_voucher_per_invoice/.test(`${err.message} ${JSON.stringify(err.keyPattern || {})}`)) {
+        const winner = await findLive();
+        if (winner) {
+          if (auto) return { voucher: winner, created: false };
+          throw refuseExisting(winner);
+        }
+      }
+      throw err;
+    }
+    // Safety net where the unique index is not in place (a failed build, or
+    // older duplicates): the earliest live voucher keeps the invoice, a later
+    // twin that no one has seen yet is removed.
+    const live = await VendorVoucher.find({ invoiceId: inv._id, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED } })
+      .sort('_id').select('_id voucherNumber').lean();
+    if (live.length > 1 && String(live[0]._id) !== String(voucher._id)) {
+      await VendorVoucher.deleteOne({ _id: voucher._id });
+      if (auto) return { voucher: await findLive(), created: false };
+      throw refuseExisting(live[0]);
+    }
+    return { voucher, created: true };
+  },
+
+  async _insertPurchaseVoucher(inv, data, user, { auto, voucherNumber, netPayableAmount }) {
     const voucher = await VendorVoucher.create({
       voucherNumber,
       voucherType: VOUCHER_TYPE.PURCHASE,
@@ -183,7 +237,13 @@ export const voucherService = {
       voucherStatus: VOUCHER_STATUS.DRAFT,
       remarks: data.remarks || '',
       createdBy: user?._id,
-      activityTimeline: [{ action: 'CREATE', description: `Purchase voucher created for ${inv.invoiceNumber}`, actorId: user?._id }],
+      activityTimeline: [{
+        action: 'CREATE',
+        description: auto
+          ? `Purchase voucher prepared automatically on approval of invoice ${inv.invoiceNumber}`
+          : `Purchase voucher created for ${inv.invoiceNumber}`,
+        actorId: user?._id,
+      }],
     });
     return voucher;
   },
@@ -260,6 +320,80 @@ export const voucherService = {
     return voucher;
   },
 
+  // ── DIRECT PURCHASE — goods bought from a Vendor Master vendor with no
+  //    Indent / PO / GRN (see directPurchase.js). Financial only: no stock. ──
+  async createDirectPurchase(data, user) {
+    const resolved = await resolveDirectPurchase(data);
+    const voucherDate = data.voucherDate || new Date();
+    const voucherNumber = await generateDirectPurchaseVoucherNumber(voucherDate);
+    const voucher = await VendorVoucher.create({
+      voucherNumber,
+      voucherType: VOUCHER_TYPE.DIRECT_PURCHASE,
+      voucherDate,
+      ...resolved,
+      invoiceDate: data.invoiceDate,
+      invoiceDocument: data.invoiceDocument?.fileUrl
+        ? { fileUrl: data.invoiceDocument.fileUrl, fileName: data.invoiceDocument.fileName || '' }
+        : { fileUrl: '', fileName: '' },
+      paymentTerms: data.paymentTerms || '',
+      dueDate: data.dueDate || null,
+      advancePaid: 0,
+      debitNoteAmount: 0,
+      paidAmount: 0,
+      balanceAmount: resolved.netPayableAmount,
+      voucherStatus: VOUCHER_STATUS.DRAFT,
+      remarks: data.remarks || '',
+      createdBy: user?._id,
+      activityTimeline: [{
+        action: 'CREATE',
+        description: `Direct purchase voucher created — invoice ${resolved.invoiceNumber}, ${resolved.items.length} item(s), no Indent / PO / GRN`,
+        actorId: user?._id,
+      }],
+    });
+    // A concurrent save of the same vendor bill may have slipped in — undo this
+    // one (never shown to anyone yet) rather than keep both.
+    const conflict = await directPurchaseNumberConflictAfterWrite(voucher);
+    if (conflict) {
+      await VendorVoucher.deleteOne({ _id: voucher._id });
+      throw new AppError(conflict, 409);
+    }
+    return voucher;
+  },
+
+  /** Draft edit of a direct purchase voucher: only its own fields, all re-validated. */
+  async updateDirectPurchase(v, data, user) {
+    const EDITABLE = ['voucherDate', 'remarks', 'paymentMode', 'vendorId', 'invoiceNumber', 'invoiceDate',
+      'invoiceDocument', 'items', 'paymentTerms', 'dueDate'];
+    const picked = Object.fromEntries(EDITABLE.filter((k) => data[k] !== undefined).map((k) => [k, data[k]]));
+    const merged = { ...v.toObject(), ...picked };
+    // Items are re-bound to the SKU Master only when the edit sends them; a
+    // header-only edit keeps the saved lines (totals are recomputed either way).
+    const resolved = await resolveDirectPurchase(merged, { excludeVoucherId: v._id, keepStoredItems: picked.items === undefined });
+    const next = {
+      ...picked,
+      ...resolved,
+      invoiceDocument: picked.invoiceDocument !== undefined
+        ? (picked.invoiceDocument?.fileUrl ? { fileUrl: picked.invoiceDocument.fileUrl, fileName: picked.invoiceDocument.fileName || '' } : { fileUrl: '', fileName: '' })
+        : v.toObject().invoiceDocument,
+      paidAmount: 0,
+      balanceAmount: resolved.netPayableAmount,
+    };
+    const snapshot = v.toObject();
+    const before = Object.fromEntries(Object.keys(next).map((k) => [k, snapshot[k]]));
+    Object.assign(v, next);
+    v.updatedBy = user?._id;
+    v.activityTimeline.push({ action: 'UPDATE', description: 'Voucher updated', actorId: user?._id });
+    await v.save();
+    const conflict = await directPurchaseNumberConflictAfterWrite(v);
+    if (conflict) {
+      Object.assign(v, before);
+      v.activityTimeline.push({ action: 'UPDATE_REVERTED', description: `Edit reverted — ${conflict}`, actorId: user?._id });
+      await v.save();
+      throw new AppError(conflict, 409);
+    }
+    return v;
+  },
+
   /** PO / GRN picker options for an expense voucher (only what can be linked now). */
   async getExpenseLinkOptions(query) {
     return listExpenseLinkOptions(query);
@@ -319,8 +453,14 @@ export const voucherService = {
       throw new AppError('This voucher has been digitally signed by the MD and is locked for editing', 400);
     }
     if (v.voucherStatus !== VOUCHER_STATUS.DRAFT) throw new AppError('Only draft vouchers can be edited', 400);
+    if (isDirectPurchase(v)) return this.updateDirectPurchase(v, data, user);
+    if (data.voucherType === VOUCHER_TYPE.DIRECT_PURCHASE) {
+      throw new AppError('This is not a Direct Purchase voucher — its type cannot be changed', 400);
+    }
     // Never accept payment/status mutations here — those belong to Step 1.13.
-    const { paidAmount, balanceAmount, voucherStatus, ...rest } = data;
+    // Direct-purchase-only fields never reach a purchase / expense voucher.
+    // eslint-disable-next-line no-unused-vars
+    const { paidAmount, balanceAmount, voucherStatus, items, invoiceNumber, invoiceDate, ...rest } = data;
     let linked = false;
     let before = null;
     // Expense vouchers: re-resolve the vendor / PO / GRN link, re-check for a
@@ -347,7 +487,10 @@ export const voucherService = {
         ({ vendorId, vendorName } = await resolveExpenseVendor(merged));
         Object.assign(rest, EMPTY_EXPENSE_LINK);
       }
-      await assertNoDuplicateBill(vendorId, rest.expenseInvoiceNo ?? v.expenseInvoiceNo, v._id);
+      const billNo = rest.expenseInvoiceNo ?? v.expenseInvoiceNo;
+      const sameBill = String(vendorId || '') === String(v.vendorId || '')
+        && String(billNo || '').trim().toLowerCase() === String(v.expenseInvoiceNo || '').trim().toLowerCase();
+      await assertNoDuplicateBill(vendorId, billNo, v._id, { includeInvoices: !sameBill });
       rest.expenseType = expenseType;
       rest.vendorId = vendorId;
       rest.vendorName = vendorName || rest.partyName || v.partyName || '';
@@ -438,6 +581,14 @@ export const voucherService = {
     // A linked expense must still be the PO's / GRN's only payment path.
     const linkConflict = await expenseLinkConflictAfterWrite(v);
     if (linkConflict) throw new AppError(`Cannot post: ${linkConflict}`, 400);
+    // A direct purchase is posted only for a vendor still active in the Vendor
+    // Master, and only while its invoice number is still this voucher's alone.
+    if (isDirectPurchase(v)) {
+      try {
+        await resolveDirectPurchaseVendor(v.vendorId);
+        await assertBillNumberFree(v.vendorId, v.invoiceNumber, { excludeVoucherId: v._id });
+      } catch (err) { throw new AppError(`Cannot post: ${err.message}`, 400); }
+    }
 
     v.paidAmount = 0;
     v.balanceAmount = round2(v.netPayableAmount);
@@ -540,6 +691,14 @@ registerRestoreHook('procurement.voucher.check', async ({ voucherId }, { session
       invoiceId: v.invoiceId, _id: { $ne: v._id }, isDeleted: { $ne: true }, voucherStatus: { $ne: VOUCHER_STATUS.CANCELLED },
     }).session(session || null).select('voucherNumber').lean();
     if (other) refuse(`Invoice ${inv.invoiceNumber} has another voucher now (${other.voucherNumber}).`);
+    return;
+  }
+  if (isDirectPurchase(v)) {
+    try {
+      await assertBillNumberFree(v.vendorId, v.invoiceNumber, { excludeVoucherId: v._id });
+    } catch (err) {
+      refuse(`Can't restore — ${err.message}`);
+    }
     return;
   }
   if (v.voucherType === VOUCHER_TYPE.EXPENSE) {

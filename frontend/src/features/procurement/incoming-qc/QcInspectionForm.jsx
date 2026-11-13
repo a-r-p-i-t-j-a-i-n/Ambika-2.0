@@ -1,26 +1,34 @@
-import React, { useRef, useEffect } from 'react';
-import {
-  Box, Typography, TextField, Button, Grid, CircularProgress, Paper, Chip, Alert, useMediaQuery,
-} from '@mui/material';
-import { alpha, useTheme } from '@mui/material/styles';
-import { X, ClipboardCheck, FileText, Upload, ExternalLink } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Box, Typography, TextField, Alert } from '@mui/material';
+import { alpha } from '@mui/material/styles';
+import { ClipboardCheck, FileText, MessageSquareText } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
 import { fileHref } from '../indents/indentMeta';
 import { lineBalanced, legacyLineDetail, round2 } from './qcForm';
 import { frozenRule, frozenStockText } from '../../../utils/unitConversion';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
-import { pfmsCardSx } from '../pfmsTheme';
+import {
+  FormSection, LabeledField, FormTableHead, CellCaption, AttachmentDrop, RemarksField,
+} from '../components/PfmsFormDialog';
+import { useElementWidth } from '../components/useElementWidth';
+import { PFMS, pfmsNoSpinSx } from '../pfmsTheme';
 
 const ACCEPT = '.pdf,image/*';
-const COLS = '1.8fr 0.9fr 0.7fr 0.85fr 0.85fr 1.7fr';
+const COLS = 'minmax(0,1.8fr) minmax(0,1fr) minmax(64px,0.6fr) minmax(96px,0.8fr) minmax(96px,0.8fr) minmax(0,1.8fr)';
 const HEAD = ['Item', 'SKU', 'Received', 'Accepted', 'Rejected', 'Remark'];
-const NUMERIC = ['Received', 'Accepted', 'Rejected'];
+const ALIGN = ['left', 'left', 'center', 'center', 'center', 'left'];
+// Below this width (the card's own, not the viewport's) each line stacks.
+const TABLE_MIN = 720;
+// The server's limit for the QC's overall remarks (incomingQc.validation.js).
+const REMARKS_MAX = 1000;
+
 
 /**
  * The Incoming QC inspection form body (Step 1.9): QC header, the inspection
  * table — Item · SKU · Received (from the saved GRN, read-only) · Accepted ·
- * Rejected · Remark (optional) — and the optional QC report / photo.
+ * Rejected · Remark (optional) — the optional QC report / photo, the caller's
+ * summary (expected result) and the QC remarks.
  * Every received unit is Accepted or Rejected (Accepted + Rejected = Received).
  *
  * Rework / defect / severity are no longer entered, but anything the earlier
@@ -30,26 +38,24 @@ const NUMERIC = ['Received', 'Accepted', 'Rejected'];
  *
  *   sourceField    node in the header's first slot (GRN picker / GRN number)
  *   sourceSummary  node under the header (vendor / PO / PI chips)
+ *   summary        node between the attachment and the remarks (expected result)
  *   readOnly       render values only (completed QC)
  *   onUploadingChange  told when an attachment upload starts / ends (to hold the parent's actions)
  */
 const QcInspectionForm = ({
   header, onHeaderChange, items, onItemChange, doc, onDocChange,
-  readOnly = false, sourceField = null, sourceSummary = null, onUploadingChange,
+  readOnly = false, sourceField = null, sourceSummary = null, summary = null, onUploadingChange,
   emptyText = 'Select a GRN to load its received items.',
 }) => {
   const { enqueueSnackbar } = useSnackbar();
-  const theme = useTheme();
-  const narrow = useMediaQuery(theme.breakpoints.down('md'));
-  const fileRef = useRef(null);
+  const [tableEl, setTableEl] = useState(null);
+  const wide = useElementWidth(tableEl) >= TABLE_MIN;
   const [uploadDoc, { isLoading: uploading }] = useUploadOrderDocumentMutation();
   useEffect(() => { onUploadingChange?.(uploading); }, [uploading, onUploadingChange]);
 
   const unbalanced = readOnly ? [] : items.filter((it) => !lineBalanced(it));
 
-  const handleUpload = async (e) => {
-    const f = e.target.files?.[0]; e.target.value = '';
-    if (!f) return;
+  const handleUpload = async (f) => {
     try {
       const d = (await uploadDoc(f).unwrap())?.data || {};
       onDocChange({ fileName: d.fileName || f.name, fileUrl: d.url, fileType: d.mimeType || f.type });
@@ -64,76 +70,75 @@ const QcInspectionForm = ({
     ...(round2(it.reworkQty) > 0 ? { reworkQty: 0 } : {}),
   });
 
-  const qtyField = (idx, it, key, label) => (readOnly
-    ? <Typography variant="body2" sx={{ textAlign: { md: 'right' } }}>{narrow ? `${label}: ` : ''}{it[key]}</Typography>
-    : (
-      <TextField size="small" type="number" value={it[key]} error={!lineBalanced(it)} label={narrow ? label : undefined}
-        onChange={(e) => setQty(idx, it, key, e.target.value)}
-        // No up/down spinner arrows, and the mouse wheel can't nudge the value.
-        onWheel={(e) => e.target.blur()}
-        sx={{
-          '& input[type=number]': { MozAppearance: 'textfield' },
-          '& input[type=number]::-webkit-outer-spin-button, & input[type=number]::-webkit-inner-spin-button': { WebkitAppearance: 'none', margin: 0 },
-        }}
-        inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' }, 'aria-label': `${label} — ${it.itemName}` }} />
-    ));
+  const qtyField = (idx, it, key, label) => (
+    <Box sx={{ minWidth: 0 }}>
+      {!wide && <CellCaption>{label}</CellCaption>}
+      {readOnly ? (
+        <Typography sx={{ textAlign: wide ? 'center' : 'left', fontWeight: 700, fontSize: '0.92rem', color: PFMS.ink }}>{it[key]}</Typography>
+      ) : (
+        <TextField size="small" type="number" fullWidth value={it[key]} error={!lineBalanced(it)}
+          onChange={(e) => setQty(idx, it, key, e.target.value)}
+          // No up/down spinner arrows, and the mouse wheel can't nudge the value.
+          onWheel={(e) => e.target.blur()}
+          sx={pfmsNoSpinSx}
+          inputProps={{ min: 0, step: 0.01, style: { textAlign: 'center', fontWeight: 700 }, 'aria-label': `${label} — ${it.itemName}` }} />
+      )}
+    </Box>
+  );
+
+  const fieldsCols = sourceField
+    ? { xs: 'repeat(2, minmax(0,1fr))', md: 'minmax(0,1.6fr) repeat(3, minmax(0,1fr))' }
+    : { xs: 'repeat(2, minmax(0,1fr))', sm: 'repeat(3, minmax(0,1fr))' };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
       {/* Header */}
-      <Paper elevation={0} sx={{ p: 2.5, ...pfmsCardSx }}>
-        <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, fontWeight: 700, color: 'primary.main' }}>
-          <FileText size={18} /> QC Header
-        </Typography>
-        <Grid container spacing={2}>
-          {sourceField ? <Grid item xs={12} sm={5}>{sourceField}</Grid> : null}
-          <Grid item xs={6} sm={sourceField ? 2.4 : 4}>
-            <DateInputDDMMYYYY label="QC Date" fullWidth value={header.qcDate} disabled={readOnly}
+      <FormSection icon={<FileText size={20} />} title="QC Header">
+        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: fieldsCols }}>
+          {sourceField ? <Box sx={{ gridColumn: { xs: '1 / -1', md: 'auto' }, minWidth: 0 }}>{sourceField}</Box> : null}
+          {/* The date takes a full row on a phone so dd/mm/yyyy is never cut. */}
+          <LabeledField label="QC Date" htmlFor="qc-f-date" sx={{ gridColumn: { xs: '1 / -1', sm: 'auto' } }}>
+            <DateInputDDMMYYYY id="qc-f-date" fullWidth value={header.qcDate} disabled={readOnly}
               onChange={(val) => onHeaderChange({ qcDate: val })} />
-          </Grid>
-          <Grid item xs={6} sm={sourceField ? 2.3 : 4}>
-            <TextField label="Checked By" fullWidth value={header.checkedByName} disabled={readOnly}
+          </LabeledField>
+          <LabeledField label="Checked By" htmlFor="qc-f-checked">
+            <TextField id="qc-f-checked" fullWidth value={header.checkedByName} disabled={readOnly} placeholder="Enter checked by"
               onChange={(e) => onHeaderChange({ checkedByName: e.target.value })} />
-          </Grid>
-          <Grid item xs={12} sm={sourceField ? 2.3 : 4}>
-            <TextField label="Prepared By" fullWidth value={header.preparedBy} disabled={readOnly}
+          </LabeledField>
+          <LabeledField label="Prepared By" htmlFor="qc-f-prepared">
+            <TextField id="qc-f-prepared" fullWidth value={header.preparedBy} disabled={readOnly} placeholder="Enter prepared by"
               onChange={(e) => onHeaderChange({ preparedBy: e.target.value })} />
-          </Grid>
-        </Grid>
+          </LabeledField>
+        </Box>
         {sourceSummary}
-      </Paper>
+      </FormSection>
 
       {/* Inspection */}
-      <Paper elevation={0} sx={{ p: 2.5, ...pfmsCardSx }}>
-        <Typography sx={{ fontWeight: 700, color: '#b45309', mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <ClipboardCheck size={18} /> Inspection
-        </Typography>
+      <FormSection icon={<ClipboardCheck size={20} />} title="Inspection" tone="amber" ref={setTableEl}>
         {items.length === 0 ? (
-          <Typography variant="body2" color="text.disabled" sx={{ py: 2 }}>{emptyText}</Typography>
+          <Typography sx={{ py: 2, fontSize: '0.86rem', color: PFMS.faint }}>{emptyText}</Typography>
         ) : (
           <>
-            <Box sx={{ display: { xs: 'none', md: 'grid' }, gridTemplateColumns: COLS, gap: 1.5, px: 1, mb: 0.5 }}>
-              {HEAD.map((h) => (
-                <Typography key={h} variant="caption" sx={{
-                  fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.62rem',
-                  textAlign: NUMERIC.includes(h) ? 'right' : 'left', pl: h === 'Remark' ? 1.5 : 0,
-                }}>{h}</Typography>
-              ))}
-            </Box>
+            {wide && <FormTableHead columns={HEAD} template={COLS} align={ALIGN} gap={1.5} />}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               {items.map((it, idx) => {
                 const bad = !readOnly && !lineBalanced(it);
                 const legacy = legacyLineDetail(it);
                 return (
                   <Box key={it.grnItemId || idx} data-testid="qc-line" sx={{
-                    display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: COLS },
-                    gap: { xs: 1, md: 1.5 }, alignItems: 'center', p: { xs: 1.5, md: 0.5 }, px: { md: 1 },
-                    borderRadius: '10px', border: { xs: '1px solid', md: bad ? '1px solid' : 'none' }, borderColor: bad ? 'error.main' : 'divider',
+                    display: 'grid', gridTemplateColumns: wide ? COLS : 'repeat(3, minmax(0,1fr))',
+                    gap: wide ? 1.5 : 1.25, alignItems: wide ? 'center' : 'start',
+                    px: 1.5, py: wide ? 1 : 1.5,
+                    borderRadius: '8px', border: '1px solid', borderColor: bad ? 'error.main' : (wide ? 'transparent' : PFMS.line),
+                    borderBottomColor: bad ? 'error.main' : PFMS.lineSoft,
                     '&:hover': { bgcolor: alpha('#2563eb', 0.03) },
                   }}>
-                    <Box sx={{ minWidth: 0, gridColumn: { xs: '1 / -1', md: 'auto' } }}>
-                      <Typography variant="body2" fontWeight={600} noWrap title={it.itemName}>{it.itemName}</Typography>
-                      {it.batchNo ? <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>Batch {it.batchNo}</Typography> : null}
+                    <Box sx={{ minWidth: 0, gridColumn: wide ? 'auto' : '1 / -1' }}>
+                      <Typography title={it.itemName} sx={{ fontWeight: 700, fontSize: '0.92rem', color: PFMS.brand, overflowWrap: 'anywhere', lineHeight: 1.35 }}>
+                        {it.itemName}
+                      </Typography>
+                      {!wide && it.skuCode ? <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: PFMS.sub, overflowWrap: 'anywhere' }}>{it.skuCode}</Typography> : null}
+                      {it.batchNo ? <Typography variant="caption" sx={{ display: 'block', color: PFMS.sub }}>Batch {it.batchNo}</Typography> : null}
                       {/* Received in the purchase unit: the GRN's frozen rule and what the
                           accepted qty will post to stock as. */}
                       {frozenRule(it) ? (
@@ -142,24 +147,30 @@ const QcInspectionForm = ({
                         </Typography>
                       ) : null}
                       {legacy ? (
-                        <Typography variant="caption" data-testid="qc-line-legacy" sx={{ display: 'block', color: round2(it.reworkQty) > 0 && !readOnly ? 'warning.dark' : 'text.secondary' }}>
+                        <Typography variant="caption" data-testid="qc-line-legacy" sx={{ display: 'block', color: round2(it.reworkQty) > 0 && !readOnly ? 'warning.dark' : PFMS.sub }}>
                           {round2(it.reworkQty) > 0 && !readOnly
                             ? `Earlier form recorded rework ${round2(it.reworkQty)} — enter it as Accepted or Rejected`
                             : `Also recorded: ${legacy}`}
                         </Typography>
                       ) : null}
                     </Box>
-                    <Typography variant="body2" color="primary.main" fontWeight={700}>{it.skuCode || '—'}</Typography>
-                    <Typography variant="body2" sx={{ textAlign: { md: 'right' }, fontWeight: 700 }}>
-                      {narrow ? 'Received: ' : ''}{it.receivedQty}
-                    </Typography>
+                    {wide && (
+                      <Typography sx={{ fontWeight: 700, fontSize: '0.88rem', color: PFMS.brand, overflowWrap: 'anywhere', minWidth: 0 }}>{it.skuCode || '—'}</Typography>
+                    )}
+                    <Box sx={{ minWidth: 0 }}>
+                      {!wide && <CellCaption>Received</CellCaption>}
+                      <Typography sx={{ textAlign: wide ? 'center' : 'left', fontWeight: 800, fontSize: '0.95rem', color: PFMS.brand, lineHeight: wide ? 1.4 : '40px' }}>
+                        {it.receivedQty}
+                      </Typography>
+                    </Box>
                     {qtyField(idx, it, 'acceptedQty', 'Accepted')}
                     {qtyField(idx, it, 'rejectedQty', 'Rejected')}
-                    <Box sx={{ gridColumn: { xs: '1 / -1', md: 'auto' }, minWidth: 0, pl: { md: 1.5 } }}>
+                    <Box sx={{ gridColumn: wide ? 'auto' : '1 / -1', minWidth: 0 }}>
+                      {!wide && <CellCaption>Remark</CellCaption>}
                       {readOnly ? (
-                        <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{it.qcRemarks || '—'}</Typography>
+                        <Typography sx={{ fontSize: '0.86rem', color: PFMS.sub, overflowWrap: 'anywhere' }}>{it.qcRemarks || '—'}</Typography>
                       ) : (
-                        <TextField size="small" fullWidth placeholder="Remark (optional)" label={narrow ? 'Remark' : undefined}
+                        <TextField size="small" fullWidth placeholder="Remark (optional)"
                           value={it.qcRemarks || ''} onChange={(e) => onItemChange(idx, { qcRemarks: e.target.value })}
                           inputProps={{ maxLength: 500, 'aria-label': `Remark — ${it.itemName}` }} />
                       )}
@@ -176,35 +187,31 @@ const QcInspectionForm = ({
             )}
           </>
         )}
-      </Paper>
-
-      {/* A completed / historical QC's overall remark, kept on the record. */}
-      {readOnly && header.remarks ? (
-        <Typography variant="body2" color="text.secondary"><b>Remarks:</b> {header.remarks}</Typography>
-      ) : null}
+      </FormSection>
 
       {/* Attachment (QC report / photo) — the existing QC attachment */}
-      <input ref={fileRef} type="file" accept={ACCEPT} hidden onChange={handleUpload} data-testid="qc-attachment-input" />
-      <Box>
-        <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mb: 0.75 }}>
-          ATTACHMENT (QC report / photo — optional)
-        </Typography>
-        {doc?.fileUrl ? (
-          <Box data-testid="qc-attachment" sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: '10px', bgcolor: '#fff' }}>
-            <FileText size={16} />
-            <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0 }} noWrap>{doc.fileName}</Typography>
-            <Button size="small" startIcon={<ExternalLink size={13} />} href={fileHref(doc.fileUrl)} target="_blank" rel="noopener">View</Button>
-            {!readOnly && <Chip size="small" label="Remove" onDelete={() => onDocChange(null)} onClick={() => onDocChange(null)} deleteIcon={<X size={13} />} />}
-          </Box>
-        ) : readOnly ? (
-          <Typography variant="body2" color="text.disabled">No attachment</Typography>
-        ) : (
-          <Button variant="outlined" size="small" startIcon={uploading ? <CircularProgress size={14} /> : <Upload size={14} />}
-            onClick={() => fileRef.current?.click()} disabled={uploading}>
-            Upload PDF / Image
-          </Button>
-        )}
-      </Box>
+      <AttachmentDrop label="Attachment (QC report / photo — optional)" accept={ACCEPT}
+        doc={doc} readOnly={readOnly} uploading={uploading} hrefOf={fileHref}
+        onFile={handleUpload} onRemove={() => onDocChange(null)}
+        onReject={() => enqueueSnackbar('Attach a PDF or an image', { variant: 'warning' })}
+        inputProps={{ 'data-testid': 'qc-attachment-input' }} fileTestId="qc-attachment" />
+
+      {summary}
+
+      {/* The QC's overall remark, kept on the record. */}
+      {readOnly ? (
+        header.remarks ? (
+          <FormSection icon={<MessageSquareText size={20} />} title="QC Remarks">
+            <Typography sx={{ fontSize: '0.88rem', color: PFMS.ink, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{header.remarks}</Typography>
+          </FormSection>
+        ) : null
+      ) : (
+        <FormSection icon={<MessageSquareText size={20} />} title="QC Remarks">
+          <RemarksField id="qc-f-remarks" value={header.remarks || ''} max={REMARKS_MAX}
+            onChange={(v) => onHeaderChange({ remarks: v })} placeholder="Enter QC remarks (optional)"
+            inputProps={{ 'aria-label': 'QC Remarks' }} />
+        </FormSection>
+      )}
     </Box>
   );
 };

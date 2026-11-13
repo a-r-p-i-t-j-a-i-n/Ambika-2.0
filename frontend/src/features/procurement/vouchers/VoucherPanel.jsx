@@ -5,6 +5,7 @@ import { useSelector } from 'react-redux';
 import {
   Box, Typography, Paper, Button, IconButton, CircularProgress, Chip, Link,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField,
+  Table, TableHead, TableBody, TableRow, TableCell,
 } from '@mui/material';
 import {
   ArrowLeft, Pencil, Send, Ban, Banknote, Building2, FileText, ReceiptText,
@@ -141,6 +142,7 @@ const VoucherPanel = ({
 
   const isDraft = v.voucherStatus === 'DRAFT';
   const isExpense = v.voucherType === 'EXPENSE';
+  const isDirect = v.voucherType === 'DIRECT_PURCHASE';
   // MD-signed vouchers are locked — editing/cancelling/posting is blocked here
   // (mirrors the backend guard in voucher.service.js).
   const isLocked = v.approvalStatus === 'MD_APPROVED';
@@ -210,9 +212,9 @@ const VoucherPanel = ({
   const nextStep = (() => {
     if (v.voucherStatus === 'CANCELLED') return null;
     if (isDraft && !isLocked) {
-      return { tone: 'info', title: 'Next: post this voucher (Step 1.11)',
-        desc: 'Posting passes the voucher for MD approval — no payment is recorded here.',
-        primary: { label: 'Post Voucher', icon: <Send size={16} />, onClick: doApprove, loading: posting },
+      return { tone: 'info', title: 'Next: review and post this voucher',
+        desc: 'Check the amounts, then post. Posting passes the voucher for MD approval and enables the Tally Entry — no payment is recorded here.',
+        primary: { label: 'Review & Post Voucher', icon: <Send size={16} />, onClick: doApprove, loading: posting },
         secondary: { label: 'Edit', onClick: () => setFormOpen(true) } };
     }
     // MD approval is tracked on its own and does not hold the Tally Entry back.
@@ -267,7 +269,9 @@ const VoucherPanel = ({
           <Typography variant="body2" sx={{ color: PFMS.sub, overflowWrap: 'anywhere' }}>
             {isExpense
               ? `${v.expenseCategory || 'Expense'} · ${v.partyName || v.vendorName || '—'} · ${fmtDate(v.voucherDate)}`
-              : `${v.vendorName} · Invoice ${v.invoiceNumber || '—'} · ${fmtDate(v.voucherDate)}`}
+              : isDirect
+                ? `Direct Purchase · ${v.vendorName || '—'} · Invoice ${v.invoiceNumber || '—'} · ${fmtDate(v.voucherDate)}`
+                : `${v.vendorName} · Invoice ${v.invoiceNumber || '—'} · ${fmtDate(v.voucherDate)}`}
           </Typography>
         </Box>
         <Box sx={{
@@ -279,7 +283,7 @@ const VoucherPanel = ({
           {showInvoiceLink && v.invoiceId && <Button variant="outlined" startIcon={<ReceiptText size={16} />} onClick={() => navigate(`/procurement/vendor-invoices/${v.invoiceId}`)}>View Invoice</Button>}
           {isDraft && !isLocked && <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setFormOpen(true)}>Edit</Button>}
           {isDraft && !isLocked && <Button variant="outlined" color="error" startIcon={<Ban size={16} />} onClick={() => setCancelOpen(true)}>Cancel</Button>}
-          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />} onClick={doApprove} disabled={posting}>Post Voucher</Button>}
+          {isDraft && !isLocked && <Button variant="contained" color="success" startIcon={posting ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />} onClick={doApprove} disabled={posting}>Review & Post Voucher</Button>}
         </Box>
       </Box>
 
@@ -306,8 +310,25 @@ const VoucherPanel = ({
           {v.remarks ? <Box sx={{ mt: 1.5 }}><Field label="Remarks" value={v.remarks} /></Box> : null}
         </SectionCard>
 
-        <SectionCard icon={<Building2 size={18} />} title={isExpense ? 'Expense & Party' : 'Vendor & Linkage'}>
-          {isExpense ? (
+        <SectionCard icon={<Building2 size={18} />} title={isExpense ? 'Expense & Party' : isDirect ? 'Vendor & Invoice' : 'Vendor & Linkage'}>
+          {isDirect ? (
+            // No Indent / PO / GRN rows: none exist for a direct purchase.
+            <FieldGrid cols={HALF_CARD_COLS}>
+              <Box sx={FULL_ROW}><Chip size="small" label="Direct Purchase — no Indent / PO / GRN" sx={{ fontWeight: 700 }} data-testid="voucher-direct-purchase" /></Box>
+              <Field label="Vendor" value={v.vendorName || '—'} />
+              <Field label="Vendor Invoice No" value={v.invoiceNumber || '—'} />
+              <Field label="Invoice Date" value={fmtDate(v.invoiceDate)} />
+              <Field label="Status" value={<VoucherStatusChip status={v.voucherStatus} />} />
+              <Field label="Payment Terms" value={v.paymentTerms || '—'} />
+              <Field label="Due Date" value={fmtDate(v.dueDate)} />
+              <Field label="Stock" value="Not posted (financial voucher)" sx={SPAN_2} />
+              {v.invoiceDocument?.fileUrl && (
+                <Box sx={FULL_ROW}>
+                  <Button size="small" variant="outlined" startIcon={<FileText size={15} />} href={resolveFileUrl(v.invoiceDocument.fileUrl)} target="_blank" rel="noopener">View Invoice File</Button>
+                </Box>
+              )}
+            </FieldGrid>
+          ) : isExpense ? (
             <FieldGrid cols={HALF_CARD_COLS}>
               <Box sx={FULL_ROW}><Chip size="small" label={expenseTypeMeta(expenseTypeOf(v)).label} sx={{ fontWeight: 700 }} data-testid="voucher-expense-type" /></Box>
               {expenseTypeOf(v) === 'AGAINST_PO' && (
@@ -346,12 +367,55 @@ const VoucherPanel = ({
           )}
         </SectionCard>
 
+        {isDirect && (
+          <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
+            <SectionCard icon={<FileText size={18} />} title={`Purchased Items (${(v.items || []).length})`}>
+              <Box sx={{ overflowX: 'auto', border: `1px solid ${PFMS.line}`, borderRadius: '8px' }}>
+                <Table size="small" data-testid="voucher-items-table" sx={{ minWidth: 820 }}>
+                  <TableHead>
+                    <TableRow>
+                      {['#', 'Item', 'SKU Code', 'Description', 'Qty', 'Unit', 'Rate', 'Discount', 'GST %', 'Tax', 'Line Total'].map((h, i) => (
+                        <TableCell key={h} sx={{ fontWeight: 700, fontSize: '0.72rem' }} align={i >= 4 && i !== 5 ? 'right' : 'left'}>{h}</TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(v.items || []).map((it, i) => (
+                      <TableRow key={it._id || i}>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{i + 1}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{it.itemName}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{it.skuCode || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', overflowWrap: 'anywhere' }}>{it.description || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{it.quantity}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{it.unit || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{fmtINR(it.rate)}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{it.discountAmount ? fmtINR(it.discountAmount) : '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{it.gstRate}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{fmtINR(it.taxAmount)}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', fontWeight: 700 }} align="right">{fmtINR(it.lineTotal)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            </SectionCard>
+          </Box>
+        )}
+
         {/* Financials — compact: the Paid/Balance totals sit beside the fields from
             lg (fields 3-up there, one row of 6 from xl) instead of a full-width band. */}
         <Box sx={{ ...FULL_ROW, minWidth: 0 }}>
           <SectionCard icon={<ReceiptText size={18} />} title="Financials">
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) auto' }, gap: 2, alignItems: 'center' }}>
-              {isExpense ? (
+              {isDirect ? (
+                <FieldGrid cols={{ xs: 2, sm: 3, xl: 5 }}>
+                  <Field label="Sub Total" value={fmtINR(v.grossAmount)} />
+                  <Field label="Discount (−)" value={fmtINR(v.discountTotal)} />
+                  <Field label="Taxable" value={fmtINR(v.taxableAmount)} />
+                  <Field label="Total Tax" value={fmtINR(v.taxAmount)} />
+                  <Field label="Grand Total" value={<Box component="span" data-testid="voucher-grand-total">{fmtINR(v.netPayableAmount)}</Box>} />
+                </FieldGrid>
+              ) : isExpense ? (
                 <FieldGrid cols={{ xs: 2, sm: 3, xl: 5 }}>
                   <Field label="Basic Value" value={fmtINR(v.basicValue)} />
                   <Field label="Freight" value={fmtINR(v.freightCharges)} />

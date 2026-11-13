@@ -8,6 +8,8 @@ import ProformaInvoice from '../proforma-invoice/proformaInvoice.model.js';
 import VendorVoucher from '../voucher/voucher.model.js';
 import { invoiceWorkflowFilter } from './invoiceWorkflow.js';
 import { assertNoLiveExpenseOnPos } from '../voucher/expenseLink.js';
+import { findBillNumberUse, billNumberUseMessage } from '../voucher/billNumber.js';
+import { supplierIdsFor } from '../voucher/supplierIdentity.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
 import { AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
@@ -285,8 +287,10 @@ const duplicateNumberError = (existing) => {
 const assertUniqueInvoiceNumber = async (vendorId, invoiceNumber, excludeInvoiceId = null) => {
   const no = String(invoiceNumber || '').trim();
   if (!vendorId || !no) return;
+  // The same supplier may sit in both masters (Vendor and the older Party) — a
+  // record with the same valid GSTIN counts as the same supplier.
   const filter = {
-    vendorId,
+    vendorId: { $in: await supplierIdsFor(vendorId) },
     invoiceNumber: new RegExp(`^${escapeRegex(no)}$`, 'i'),
     isDeleted: { $ne: true },
     invoiceStatus: { $ne: INVOICE_STATUS.REJECTED },
@@ -294,6 +298,10 @@ const assertUniqueInvoiceNumber = async (vendorId, invoiceNumber, excludeInvoice
   if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
   const existing = await VendorInvoice.findOne(filter).select('invoiceNumber grnNumber grnNumbers').lean();
   if (existing) throw duplicateNumberError(existing);
+  // The same bill already passed as a Direct Purchase voucher or an expense
+  // bill must not be invoiced — and paid — a second time.
+  const used = await findBillNumberUse(vendorId, no, { invoices: false });
+  if (used) throw new AppError(billNumberUseMessage(used), 400);
 };
 
 /**
@@ -654,14 +662,48 @@ export const vendorInvoiceService = {
     if (inv.invoiceStatus === INVOICE_STATUS.REJECTED) throw new AppError('Cannot approve a rejected invoice', 400);
     if (!inv.invoiceDocument?.fileUrl) throw new AppError('Upload the invoice document before approving', 400);
 
-    inv.invoiceStatus = INVOICE_STATUS.PAYMENT_PENDING;
-    inv.approvedBy = user?.name || '';
-    inv.approvedById = user?._id;
-    inv.approvedAt = new Date();
-    inv.approvalRemarks = data.remarks || '';
-    inv.updatedBy = user?._id;
-    inv.activityTimeline.push({ action: 'APPROVE', description: 'Invoice approved — payment pending', actorId: user?._id });
-    return inv.save();
+    // Claim the approval atomically: of two concurrent approvals exactly one
+    // moves the invoice out of DRAFT / RECEIVED; the other is refused below.
+    const claimed = await VendorInvoice.findOneAndUpdate(
+      { _id: inv._id, isDeleted: { $ne: true }, invoiceStatus: { $in: [INVOICE_STATUS.DRAFT, INVOICE_STATUS.RECEIVED] } },
+      {
+        $set: {
+          invoiceStatus: INVOICE_STATUS.PAYMENT_PENDING,
+          approvedBy: user?.name || '',
+          approvedById: user?._id,
+          approvedAt: new Date(),
+          approvalRemarks: data.remarks || '',
+          updatedBy: user?._id,
+        },
+        $push: { activityTimeline: { action: 'APPROVE', description: 'Invoice approved — payment pending', actorId: user?._id } },
+      },
+      { new: true },
+    );
+    if (!claimed) throw new AppError('Invoice is already approved', 400);
+
+    // The supplier invoice is now the accounting basis, so its draft purchase
+    // voucher is prepared right away (posting, MD approval, Tally and payment
+    // stay separate, manual stages). The approval is a decision that already
+    // happened and is NOT undone if the voucher can't be prepared: the invoice
+    // simply stays in "Awaiting Voucher", where Create Voucher (idempotent —
+    // it never makes a second voucher) is the retry. The failure is recorded
+    // on the invoice's audit timeline and returned to the caller.
+    let preparedVoucher = null;
+    let voucherPrepareError = '';
+    try {
+      const { voucherService } = await import('../voucher/voucher.service.js');
+      const { voucher } = await voucherService.createPurchaseForInvoice(claimed, {}, user, { auto: true });
+      if (voucher) preparedVoucher = { _id: voucher._id, voucherNumber: voucher.voucherNumber, voucherStatus: voucher.voucherStatus };
+    } catch (err) {
+      voucherPrepareError = err?.message || 'Voucher could not be prepared';
+      logger.error(`[vendor-invoice] automatic voucher for ${claimed.invoiceNumber} failed: ${voucherPrepareError}`);
+      try {
+        await VendorInvoice.updateOne({ _id: claimed._id }, {
+          $push: { activityTimeline: { action: 'VOUCHER_PREPARE_FAILED', description: `Voucher could not be prepared automatically (${voucherPrepareError}) — create it from the invoice`, actorId: user?._id } },
+        });
+      } catch { /* the response still carries the error */ }
+    }
+    return { ...claimed.toObject(), preparedVoucher, voucherPrepareError };
   },
 
   async reject(id, data, user) {

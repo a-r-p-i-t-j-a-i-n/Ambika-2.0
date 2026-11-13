@@ -7,10 +7,33 @@ import StatusChip, { TONES } from '../components/StatusChip';
 export const VOUCHER_STATUSES = ['DRAFT', 'POSTED', 'PARTIALLY_PAID', 'FULLY_PAID', 'SHORT_CLOSED', 'CANCELLED'];
 export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH', 'OTHER'];
 
+// DIRECT_PURCHASE = goods bought with no Indent / PO / GRN. Its own type — a
+// purchase, never an expense — and financial only (it posts no stock).
 export const VOUCHER_TYPES = [
   { value: 'PURCHASE', label: 'Purchase Voucher', short: 'PUR' },
+  { value: 'DIRECT_PURCHASE', label: 'Direct Purchase Voucher', short: 'DPV' },
   { value: 'EXPENSE', label: 'Expense / Direct Bill', short: 'EXP' },
 ];
+export const isDirectPurchase = (v) => v?.voucherType === 'DIRECT_PURCHASE';
+export const voucherTypeLabel = (type) => (VOUCHER_TYPES.find((t) => t.value === type) || VOUCHER_TYPES[0]).label;
+
+// Preview of the server's line math (voucher/directPurchase.js — the server
+// always recomputes): gross = qty × rate, taxable = gross − discount,
+// tax = taxable × GST%, each rounded to paise.
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+export const directPurchaseLine = (it = {}) => {
+  const grossAmount = r2((Number(it.quantity) || 0) * (Number(it.rate) || 0));
+  const discountAmount = r2(it.discountAmount);
+  const taxableAmount = r2(Math.max(0, grossAmount - discountAmount));
+  const taxAmount = r2(taxableAmount * (Number(it.gstRate) || 0) / 100);
+  return { grossAmount, discountAmount, taxableAmount, taxAmount, lineTotal: r2(taxableAmount + taxAmount) };
+};
+export const directPurchaseTotals = (items = []) => {
+  const lines = items.map(directPurchaseLine);
+  const sum = (k) => r2(lines.reduce((s, l) => s + l[k], 0));
+  const t = { grossAmount: sum('grossAmount'), discountTotal: sum('discountAmount'), taxableAmount: sum('taxableAmount'), taxAmount: sum('taxAmount') };
+  return { ...t, grandTotal: r2(t.taxableAmount + t.taxAmount) };
+};
 
 // What an Expense / Direct Bill voucher is raised against. Vouchers saved
 // before this choice existed have no expenseType and read as DIRECT.
@@ -34,10 +57,10 @@ export const EXPENSE_CATEGORIES = [
 export const VoucherStatusChip = ({ status }) => <StatusChip status={status} />;
 
 export const VoucherTypeChip = ({ type }) => {
-  const isExpense = type === 'EXPENSE';
-  const tone = isExpense ? TONES.orange : TONES.blue;
+  const meta = VOUCHER_TYPES.find((t) => t.value === type) || VOUCHER_TYPES[0];
+  const tone = type === 'EXPENSE' ? TONES.orange : type === 'DIRECT_PURCHASE' ? TONES.teal : TONES.blue;
   return (
-    <Chip size="small" label={isExpense ? 'EXP' : 'PUR'}
+    <Chip size="small" label={meta.short} title={meta.label} data-testid="voucher-type-chip"
       sx={{ fontWeight: 800, bgcolor: tone.bg, color: tone.fg }} />
   );
 };

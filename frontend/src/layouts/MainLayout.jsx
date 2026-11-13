@@ -1,5 +1,5 @@
 import React, {
-  useState, useMemo, useRef, useCallback, lazy, Suspense,
+  useState, useMemo, useRef, useCallback, useLayoutEffect, lazy, Suspense,
 } from 'react';
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
@@ -487,6 +487,16 @@ const MainLayout = () => {
   const { can, canAny, isRoot } = usePermissions();
 
   const drawerWidth = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
+
+  // The width the permanent sidebar takes from the page, for overlays that must
+  // open beside it rather than over it (PfmsFormDialog). 0 on a phone (the
+  // sidebar is a temporary drawer there) and when embedded (no sidebar).
+  const sidebarWidth = isEmbedded || isMobile ? 0 : drawerWidth;
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--app-sidebar-width', `${sidebarWidth}px`);
+    return () => root.style.removeProperty('--app-sidebar-width');
+  }, [sidebarWidth]);
 
   // Live badge for the Approval Inbox sidebar entry.
   const { data: pendingRes } = useGetPendingRevisionsQuery(undefined, {

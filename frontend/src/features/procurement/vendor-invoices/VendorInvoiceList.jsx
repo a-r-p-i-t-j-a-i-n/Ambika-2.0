@@ -28,7 +28,7 @@ import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx,pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -71,7 +71,7 @@ const InvoiceVoucherCell = ({ row }) => {
 const WORKFLOW_CHIPS = [
   { id: 'ALL', label: 'All', serverStatus: '' },
   { id: 'AWAITING_INVOICE', label: 'Awaiting Invoice Action', serverStatus: '', workflow: 'AWAITING_INVOICE' },
-  { id: 'AWAITING_VOUCHER', label: 'Awaiting Voucher', serverStatus: '', workflow: 'AWAITING_VOUCHER' },
+  { id: 'AWAITING_VOUCHER', label: 'Awaiting Voucher (older / retry)', serverStatus: '', workflow: 'AWAITING_VOUCHER' },
   { id: 'AWAITING_MD_APPROVAL', label: 'Awaiting MD Approval', serverStatus: '', workflow: 'AWAITING_MD_APPROVAL' },
   { id: 'VOUCHER_POSTED', label: 'Voucher Posted / MD Approved', serverStatus: '', workflow: 'VOUCHER_POSTED' },
   { id: 'PARTIALLY_PAID', label: 'Partially Paid', serverStatus: '', workflow: 'PARTIALLY_PAID' },
@@ -195,12 +195,9 @@ const VendorInvoiceList = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
-        <Box>
-          <Typography sx={pfmsTitleSx}>Vendor Invoices & Payments ({stats.total || 0})</Typography>
-          <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.10–1.11 · Invoice / Debit Note received, with each invoice's payment voucher managed in place</Typography>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate('/procurement/vouchers')}>Expense / All Vouchers</Button>
+        <Typography sx={pfmsTitleSx}>Vendor Invoices & Payments ({stats.total || 0})</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'nowrap', gap: 1, flexShrink: 0, '& .MuiButton-root': { whiteSpace: 'nowrap', minWidth: 'max-content', height: 36, px: 1.75, borderRadius: 1.5, fontSize: '0.8125rem', fontWeight: 600, textTransform: 'none' } }}>
+          <Button variant="outlined" startIcon={<Banknote size={16} />} onClick={() => navigate('/procurement/vouchers')}>All Vouchers</Button>
           <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditInv(null); setFormOpen(true); }}>New Invoice</Button>
         </Box>
       </Box>

@@ -451,6 +451,19 @@ const receivedByPoLines = async (pos = [], { excludeGrnId = null } = {}) => {
 };
 
 /**
+ * Item Description a GRN line shows for a PO line. JSL PO lines store the
+ * "Grade Width Finish" label as itemName and the real description (from the
+ * indent / SKU) as itemDescription, so a JSL line reads itemDescription. Other
+ * PO formats, and JSL lines raised before itemDescription existed, keep the
+ * name they already had (`current`, else the PO line's itemName).
+ */
+export const grnLineName = (po, poLine, current = '') => {
+  const desc = String(poLine?.itemDescription || '').trim();
+  if (po?.poFormatType === 'JSL' && desc) return desc;
+  return current || poLine?.itemName || '';
+};
+
+/**
  * Rebuild GRN lines with ordered / previously-received qty taken from the
  * current PO(s) + completed GRNs — never from the client. Only the physical
  * receipt fields (invoice/received qty, batch, remarks) come from `items`.
@@ -468,6 +481,10 @@ const snapshotFromPos = (pos, received, items = []) => {
     seen.add(key);
     return {
       ...it,
+      // A JSL PO line's itemName is its "Grade Width Finish" label; the line's
+      // real Item Description is itemDescription. Re-stamping it here fixes
+      // drafts saved with the label too. Any other name is left as typed.
+      itemName: grnLineName(po, p, it.itemName),
       poItemId: p._id, poId: po._id, poNumber: po.poNumber,
       // The PO line's unit, not the form's: a PO for 5 BOX is received as BOX,
       // and the unit decides the stock conversion (stampConversion).
@@ -1009,11 +1026,9 @@ export const grnService = {
         const prev = received.get(`${po._id}|${it._id}`) || 0;
         const pending = round2((it.quantity || 0) - prev);
         return {
-          // For JSL, itemName is the "Grade Width Finish" label that should be
-          // shown as the Item Description; itemDescription only holds the raw
-          // indent item name and is not used for display.
+          // JSL: the real description, not the "Grade Width Finish" label (grnLineName).
           poItemId: it._id, poId: po._id, poNumber: po.poNumber,
-          skuId: it.skuId, skuCode: it.skuCode, itemName: it.itemName, unit: it.unit,
+          skuId: it.skuId, skuCode: it.skuCode, itemName: grnLineName(po, it, it.itemName), unit: it.unit,
           orderedQty: it.quantity, previouslyReceivedQty: prev,
           invoiceQty: pending, receivedQty: pending, rate: it.rate, batchNo: '', remarks: '',
         };

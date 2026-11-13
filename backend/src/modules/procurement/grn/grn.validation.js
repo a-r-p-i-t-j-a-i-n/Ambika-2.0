@@ -212,6 +212,40 @@ export const correctGrnSchema = Joi.object({
   items:           Joi.array().items(grnItemSchema).min(1),
 });
 
+// One Save on the combined GRN + Incoming QC form (grnQcSave.service). `grn` is
+// the GRN form's own create/update body — validated by the service with
+// createGrnSchema / updateGrnSchema, exactly as POST/PATCH /grns would. `qcs`
+// is one inspection per QC (one per PO on a multi-PO GRN), each line keyed the
+// way the form keys it (PO line, else GRN line). `complete` finalises the GRN
+// and completes its QC — the only path here that posts stock.
+const qcEntryItemSchema = Joi.object({
+  lineKey:        Joi.string().trim().max(300).required(),
+  grnItemId:      Joi.string().trim().max(60).allow('', null),
+  poItemId:       Joi.string().trim().max(60).allow('', null),
+  itemName:       Joi.string().trim().max(300).allow('', null),
+  receivedQty:    Joi.number().min(0).allow(null),
+  acceptedQty:    Joi.number().min(0).default(0),
+  rejectedQty:    Joi.number().min(0).default(0),
+  reworkQty:      Joi.number().min(0).default(0),
+  defectType:     Joi.string().trim().max(200).allow('', null),
+  defectSeverity: Joi.string().trim().max(40).allow('', null),
+  qcRemarks:      Joi.string().trim().max(500).allow('', null),
+});
+const qcEntrySchema = Joi.object({
+  poId:             objectId.allow('', null),
+  qcDate:           Joi.date().allow('', null),
+  checkedByName:    Joi.string().trim().max(120).allow('', null),
+  preparedBy:       Joi.string().trim().max(120).allow('', null),
+  remarks:          Joi.string().trim().max(1000).allow('', null),
+  qcReportDocument: grnDocumentSchema.allow(null),
+  items:            Joi.array().items(qcEntryItemSchema).max(500).default([]),
+});
+export const saveGrnWithQcSchema = Joi.object({
+  complete: Joi.boolean().default(false),
+  grn:      Joi.object().unknown(true).allow(null),
+  qcs:      Joi.array().items(qcEntrySchema).max(50).default([]),
+});
+
 // Deleting a completed GRN asks why (kept on its history); a draft needs none.
 export const deleteGrnSchema = Joi.object({
   reason: Joi.string().trim().max(500).allow('', null),

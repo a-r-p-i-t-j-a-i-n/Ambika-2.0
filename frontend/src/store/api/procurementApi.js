@@ -382,6 +382,13 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/complete`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'InventoryStock', 'InventoryMovement', 'RmOverview', 'RmDashboard', 'ImsOverview', 'ImsDashboard', { type: 'Grn', id }],
     }),
+    // One Save on the combined GRN + Incoming QC form — a draft of both, or
+    // (complete: true) the GRN completed and its QC completed (stock posts there).
+    saveGrnWithQc: builder.mutation({
+      query: ({ id, ...body }) => ({ url: id ? `/procurement/grns/${id}/save-with-qc` : '/procurement/grns/save-with-qc', method: 'POST', body }),
+      invalidatesTags: ['Grn', 'GrnStats', 'PurchaseOrder', 'PurchaseOrderStats', 'ProformaInvoice', 'IncomingQc', 'IncomingQcStats',
+        'InventoryStock', 'InventoryMovement', 'RmOverview', 'RmDashboard', 'ImsOverview', 'ImsDashboard'],
+    }),
     cancelGrn: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/grns/${id}/cancel`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['Grn', 'GrnStats', { type: 'Grn', id }],
@@ -495,7 +502,8 @@ export const procurementApi = baseApi.injectEndpoints({
     }),
     approveVendorInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vendor-invoices/${id}/approve`, method: 'POST', body }),
-      invalidatesTags: (_r, _e, { id }) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }],
+      // Approval also prepares the invoice's draft voucher, so voucher caches refresh too.
+      invalidatesTags: (_r, _e, { id }) => ['VendorInvoice', 'VendorInvoiceStats', { type: 'VendorInvoice', id }, 'Voucher', 'VoucherStats'],
     }),
     rejectVendorInvoice: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/vendor-invoices/${id}/reject`, method: 'POST', body }),
@@ -795,6 +803,7 @@ export const {
   useGetGrnChangeCheckQuery,
   useCorrectGrnMutation,
   useCompleteGrnMutation,
+  useSaveGrnWithQcMutation,
   useCancelGrnMutation,
   useGetInventoryMovementsByRefQuery,
   useGetIncomingQcsQuery,

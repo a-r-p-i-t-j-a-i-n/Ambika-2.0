@@ -1,11 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Dialog, Box, Typography, TextField, Button, IconButton, Divider,
-  Autocomplete, CircularProgress, Chip,
+  Box, TextField, Button, Autocomplete, CircularProgress, Chip,
 } from '@mui/material';
-import { alpha } from '@mui/material/styles';
-import { X, Save, ClipboardCheck, Building2 } from 'lucide-react';
+import { Save, ClipboardCheck } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import {
   useGetGrnsQuery,
@@ -14,9 +12,13 @@ import {
 } from '../../../store/api/procurementApi';
 import QcInspectionForm from './QcInspectionForm';
 import {
-  emptyHeader, headerFromQc, linesFromGrn, linesFromQc, allLinesBalanced, buildQcPayload,
+  emptyHeader, headerFromQc, linesFromGrn, linesFromQc, allLinesBalanced, buildQcPayload, qcTotals,
 } from './qcForm';
 import { PFMS } from '../pfmsTheme';
+import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
+import {
+  PfmsFormDialog, FormDialogHeader, MetaPill, FormVendorBar, FormDialogBody, FormDialogFooter, LabeledField,
+} from '../components/PfmsFormDialog';
 
 /**
  * Create / edit an Incoming QC (Step 1.9). Only completed GRNs that are still
@@ -92,76 +94,83 @@ const IncomingQCFormDialog = ({ open, onClose, qc = null, presetGrn = null }) =>
   };
 
   const sourceField = isEdit || presetGrn ? (
-    <TextField label="GRN Number" fullWidth value={grn?.grnNumber || ''} disabled />
+    <LabeledField label="GRN Number" htmlFor="qc-f-grn">
+      <TextField id="qc-f-grn" fullWidth value={grn?.grnNumber || ''} disabled />
+    </LabeledField>
   ) : (
-    <Autocomplete
-      options={grnOptions}
-      loading={grnLoading}
-      value={grn}
-      getOptionLabel={(o) => (o ? `${o.grnNumber} — ${o.vendorName}` : '')}
-      isOptionEqualToValue={(o, v) => o._id === v._id}
-      onChange={(_e, v) => applyGrn(v)}
-      noOptionsText="No completed GRN is pending QC"
-      renderInput={(params) => (
-        <TextField {...params} label="GRN *" placeholder="Completed GRNs pending QC"
-          InputProps={{ ...params.InputProps, endAdornment: (<>{grnLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
-      )}
-    />
+    <LabeledField label="GRN *" htmlFor="qc-f-grn">
+      <Autocomplete
+        id="qc-f-grn"
+        options={grnOptions}
+        loading={grnLoading}
+        value={grn}
+        getOptionLabel={(o) => (o ? `${o.grnNumber} — ${o.vendorName}` : '')}
+        isOptionEqualToValue={(o, v) => o._id === v._id}
+        onChange={(_e, v) => applyGrn(v)}
+        noOptionsText="No completed GRN is pending QC"
+        renderInput={(params) => (
+          <TextField {...params} placeholder="Completed GRNs pending QC"
+            InputProps={{ ...params.InputProps, endAdornment: (<>{grnLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
+        )}
+      />
+    </LabeledField>
   );
 
-  const sourceSummary = grn ? (
-    <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha('#2563eb', 0.04), display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'center' }}>
-      <Building2 size={16} color="#1d4ed8" />
-      <Typography variant="caption" fontWeight={700}>{grn.vendorName || qc?.vendorName || '—'}</Typography>
-      {grn.isWithoutPo
-        ? <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} />
-        : (grn.poNumber || qc?.poNumber) && <Chip size="small" variant="outlined" label={`PO ${grn.poNumber || qc?.poNumber}`} sx={{ fontWeight: 700 }} />}
-      {(grn.piNumber || qc?.piNumber) && <Chip size="small" variant="outlined" label={`PI ${grn.piNumber || qc?.piNumber}`} sx={{ fontWeight: 700 }} />}
-    </Box>
-  ) : null;
+  // The vendor and what the GRN was received against, in the shared vendor bar.
+  const vendorName = grn?.vendorName || qc?.vendorName || '';
+  const poNumber = grn?.poNumber || qc?.poNumber;
+  const piNumber = grn?.piNumber || qc?.piNumber;
+  const vendorRefs = [
+    grn?.grnNumber && { label: 'GRN', value: grn.grnNumber },
+    !grn?.isWithoutPo && poNumber && { label: 'PO', value: poNumber },
+    piNumber && { label: 'PI', value: piNumber },
+  ].filter(Boolean);
+  const totals = qcTotals(items);
 
   return (
-    <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth
-      PaperProps={{ sx: { height: { xs: '100%', md: '92vh' }, display: 'flex', flexDirection: 'column', borderRadius: { xs: 0, md: '8px' }, overflow: 'hidden' } }}>
-      <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%)', color: '#fff' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <ClipboardCheck size={22} />
-          <Box>
-            <Typography sx={{ fontWeight: 800, fontSize: '1.05rem', color: '#fff' }}>
-              {isEdit ? `Edit ${qc.qcNumber}` : 'New Incoming QC Check'}
-            </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.8)' }}>
-              Step 1.9 · Inspect received material — rejected qty moves out of stock on Complete
-            </Typography>
-          </Box>
-        </Box>
-        <IconButton onClick={() => onClose?.(false)} sx={{ color: '#fff' }}><X size={20} /></IconButton>
-      </Box>
+    <PfmsFormDialog open={open} onClose={() => onClose?.(false)}>
+      <FormDialogHeader
+        icon={<ClipboardCheck size={22} />}
+        title={isEdit ? `Edit ${qc.qcNumber}` : 'New Incoming QC Check'}
+        subtitle="Step 1.9 · Inspect received material — rejected qty moves out of stock on Complete"
+        onClose={() => onClose?.(false)}
+        meta={(
+          <>
+            <MetaPill label="QC No." value={qc?.qcNumber} placeholder="Assigned on save" />
+            <MetaPill label="QC Status" hideXs value={qc?.qcStatus ? qc.qcStatus.replace(/_/g, ' ') : null} tone={qc ? 'indigo' : undefined} placeholder="Not saved yet" />
+          </>
+        )}>
+        <FormVendorBar name={vendorName} refs={vendorRefs} emptyText="No GRN yet — select one below"
+          extra={grn?.isWithoutPo ? <Chip size="small" variant="outlined" color="warning" label="Without PO" sx={{ fontWeight: 700 }} /> : null}
+          aside={(
+            <LabeledField label="QC Date" htmlFor="qc-f-date-bar">
+              <DateInputDDMMYYYY id="qc-f-date-bar" fullWidth value={header.qcDate}
+                onChange={(val) => setHeader((h) => ({ ...h, qcDate: val }))} />
+            </LabeledField>
+          )} />
+      </FormDialogHeader>
 
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, bgcolor: PFMS.canvas }}>
+      <FormDialogBody>
         <QcInspectionForm
           header={header} onHeaderChange={(patch) => setHeader((h) => ({ ...h, ...patch }))}
           items={items} onItemChange={setItem}
           doc={doc} onDocChange={setDoc} onUploadingChange={setUploading}
-          sourceField={sourceField} sourceSummary={sourceSummary}
+          sourceField={sourceField}
         />
-      </Box>
+      </FormDialogBody>
 
-      <Divider />
-      <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#fff' }}>
-        <Typography variant="caption" color={allBalanced ? 'text.secondary' : 'error'}>
-          {items.length} item(s) · {allBalanced ? 'quantities balanced' : 'quantities not balanced'}
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || uploading}>Cancel</Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-            onClick={handleSubmit} disabled={saving || uploading}>
-            {isEdit ? 'Save Changes' : 'Create QC'}
-          </Button>
+      <FormDialogFooter summary={(
+        <Box component="span" sx={{ color: allBalanced ? PFMS.sub : 'error.main' }}>
+          {items.length} item(s) · received {totals.received} · accepted {totals.accepted} · rejected {totals.rejected} · {allBalanced ? 'quantities balanced' : 'quantities not balanced'}
         </Box>
-      </Box>
-    </Dialog>
+      )}>
+        <Button variant="outlined" onClick={() => onClose?.(false)} disabled={saving || uploading}>Cancel</Button>
+        <Button variant="contained" startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+          onClick={handleSubmit} disabled={saving || uploading}>
+          {isEdit ? 'Save Changes' : 'Create QC'}
+        </Button>
+      </FormDialogFooter>
+    </PfmsFormDialog>
   );
 };
 
