@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Tooltip,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Tooltip,
   Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -29,7 +29,8 @@ import GrnFormDialog from './GrnFormDialog';
 import GrnDeleteDialog from './GrnDeleteDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -57,6 +58,22 @@ const GrnList = () => {
   // stays always visible (the field most GRN lookups start from).
   const secondaryCount = [vendorFilter, poNumber, poTypeFilter, from, to].filter(Boolean).length;
   const clearSecondary = () => { setVendorFilter(null); setPoNumber(''); setPoTypeFilter(''); setFrom(''); setTo(''); resetPage(); };
+  // KPI cards filter by exactly what they count (grn.service getStats).
+  // Received Qty lists the completed GRNs it sums. Pending Qty is PO-line
+  // quantity (ordered − received) over POs released to the vendor or partially
+  // received (grn.service getStats), so it opens Purchase Orders on exactly
+  // those POs.
+  const kpi = useKpiFilter({
+    statusFilter, setStatusFilter, resetPage,
+    defs: {
+      total: {},
+      // Received Qty sums completed GRNs (grn.service POSTED_GRN_STATUSES).
+      received: { status: 'RECEIVED,PARTIAL_RECEIVED,FULLY_RECEIVED', label: 'ALL COMPLETED GRNs' },
+      partial: { status: 'PARTIAL_RECEIVED' },
+      full: { status: 'FULLY_RECEIVED' },
+    },
+  });
+  const kpiCard = (k) => ({ active: kpi.isActive(k), onClick: () => kpi.select(k) });
   const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
@@ -81,7 +98,7 @@ const GrnList = () => {
     ...(from ? { 'grnDate[gte]': `${from}T00:00:00` } : {}),
     ...(to ? { 'grnDate[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetGrnsQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetGrnsQuery(queryArgs);
   const { data: statsRes } = useGetGrnStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -190,13 +207,14 @@ const GrnList = () => {
       </Box>
 
       {/* KPIs */}
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<FileStack size={20} />}   label="Total GRNs"       value={stats.total}           color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageOpen size={20} />}  label="Partial Received" value={stats.partialReceived} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Fully Received"   value={stats.fullyReceived}   color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Boxes size={20} />}        label="Received Qty"     value={stats.receivedQty}     color="#16a34a" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}    label="Pending Qty"      value={stats.pendingQty}      color="#be123c" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(5)}>
+        <PfmsKpiCard icon={<FileStack size={20} />}   label="Total GRNs"       value={stats.total}           color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<PackageOpen size={20} />}  label="Partial Received" value={stats.partialReceived} color="#c2410c" {...kpiCard('partial')} />
+        <PfmsKpiCard icon={<PackageCheck size={20} />} label="Fully Received"   value={stats.fullyReceived}   color="#16a34a" {...kpiCard('full')} />
+        <PfmsKpiCard icon={<Boxes size={20} />}        label="Received Qty"     value={stats.receivedQty}     color="#0f766e" {...kpiCard('received')} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}    label="Pending Qty"      value={stats.pendingQty}      color="#b45309"
+          onClick={() => navigate('/purchase-fms/purchase-orders?poStatus=RELEASED_TO_VENDOR,PARTIAL_RECEIVED')} />
+      </Box>
 
       {/* Filters — Search + Status stay visible; Vendor, PO Number, PO Type
           and the date range move into Filters, which only counts those as
@@ -220,6 +238,7 @@ const GrnList = () => {
                 <TextField id="grn-status" size="small" select fullWidth value={statusFilter}
                   SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
+                  {kpi.menuOptions.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
                   {GRN_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                 </TextField>
               </Box>
@@ -294,6 +313,7 @@ const GrnList = () => {
           columns={columns}
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No GRNs yet' }) }}
           paginationMode="server"
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}

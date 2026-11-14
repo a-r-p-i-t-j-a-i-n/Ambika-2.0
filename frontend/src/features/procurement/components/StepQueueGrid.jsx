@@ -12,7 +12,7 @@ import DateInputDDMMYYYY from './DateInputDDMMYYYY';
 import { useDebouncedSearch } from './useDebouncedSearch';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from './rowActionsColumn';
-import { PFMS, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 /**
  * "Awaiting this step" table — the upstream records waiting at a Purchase FMS
@@ -28,13 +28,34 @@ import { PFMS, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme
  */
 
 // State tiles — also the filter. READY = actionable now; IN_PROGRESS = started;
-// WAITING = blocked on someone else first.
+// WAITING = blocked on someone else first. "All awaiting" leads the row, the
+// same as the Total card on every Purchase FMS list.
 const TILES = [
+  { key: 'ALL', label: 'All awaiting', icon: <ListChecks size={18} />, color: '#2563eb' },
   { key: 'READY', label: 'Ready for action', icon: <Hourglass size={18} />, color: '#b45309' },
   { key: 'IN_PROGRESS', label: 'In progress', icon: <Loader size={18} />, color: '#4338ca' },
   { key: 'WAITING', label: 'Waiting (MD / prerequisite)', icon: <ShieldAlert size={18} />, color: '#64748b' },
-  { key: 'ALL', label: 'All awaiting', icon: <ListChecks size={18} />, color: '#2563eb' },
 ];
+
+// The states each queue can actually put a row in — MIRRORS the `state:` values
+// of each queue in backend/src/modules/procurement/stepQueue.rules.js (keep the
+// two in step). A state a queue never produces would be a tile that always
+// reads 0 and always filters to an empty table, so it is not shown. Display
+// only: the server still decides every row's state, and "All awaiting" always
+// lists every row. A queue not listed here shows every tile.
+const QUEUE_STATES = {
+  FOLLOW_UP:       ['READY'],
+  ADVANCE_PAYMENT: ['READY', 'WAITING'],
+  GRN:             ['READY', 'WAITING'],
+  INCOMING_QC:     ['READY', 'IN_PROGRESS'],
+  VENDOR_INVOICE:  ['READY'],
+  TALLY_ENTRY:     ['READY'],
+  FINAL_PAYMENT:   ['READY', 'WAITING'],
+};
+const tilesFor = (queue) => {
+  const states = QUEUE_STATES[queue];
+  return states ? TILES.filter((t) => t.key === 'ALL' || states.includes(t.key)) : TILES;
+};
 const STATE_TONE = { READY: 'amber', IN_PROGRESS: 'indigo', WAITING: 'neutral' };
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
@@ -73,6 +94,7 @@ const StepQueueGrid = ({ queue, numberHeader = 'Ref No', dateHeader = 'Date', am
   const allCount = Object.values(counts).reduce((s, n) => s + (n || 0), 0);
   const vendors = data?.data?.vendors || [];
   const total = data?.meta?.total || 0;
+  const tiles = tilesFor(queue);
 
   const columns = [
     serialColumn(),
@@ -120,12 +142,12 @@ const StepQueueGrid = ({ queue, numberHeader = 'Ref No', dateHeader = 'Date', am
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, flexGrow: 1, minHeight: 0 }}>
-      <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' } }}>
-        {TILES.map((t) => (
+      <Box sx={pfmsKpiRowSx(tiles.length)}>
+        {tiles.map((t) => (
           <PfmsKpiCard key={t.key} icon={t.icon} label={t.label} color={t.color}
             value={t.key === 'ALL' ? allCount : (counts[t.key] || 0)}
             active={state === t.key}
-            onClick={() => { setState(t.key); resetPage(); }} />
+            onClick={() => { setState(state === t.key ? 'ALL' : t.key); resetPage(); }} />
         ))}
       </Box>
 

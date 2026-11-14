@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -26,7 +26,8 @@ import ProformaInvoiceFormDrawer from './ProformaInvoiceFormDrawer';
 import ProformaInvoiceApprovalDialog from './ProformaInvoiceApprovalDialog';
 import ProformaInvoicePdfPreview from './ProformaInvoicePdfPreview';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -58,8 +59,22 @@ const ProformaInvoiceList = () => {
   // (it's the one field everyone filters by first on this screen).
   const secondaryCount = [vendorFilter, from, to].filter(Boolean).length;
   const clearSecondary = () => { setVendorFilter(null); setFrom(''); setTo(''); resetPage(); };
-  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
-  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
+  // KPI cards filter by exactly what they count (proformaInvoice.service
+  // getStats). "Pending Approval" = PENDING approval and not cancelled (a
+  // cancelled PI keeps its approvalStatus), sent as every other PI status.
+  const kpi = useKpiFilter({
+    statusFilter, setStatusFilter, resetPage,
+    defs: {
+      total:     {},
+      pending:   { params: { approvalStatus: 'PENDING', piStatus: PI_STATUSES.filter((s) => s !== 'CANCELLED').join(',') }, label: 'PENDING APPROVAL' },
+      approved:  { params: { approvalStatus: 'APPROVED' }, label: 'ALL APPROVED PIs' },
+      ready:     { status: 'READY_FOR_ADVANCE_PAYMENT' },
+      cancelled: { status: 'CANCELLED' },
+    },
+  });
+  const kpiCard = (k) => ({ active: kpi.isActive(k), onClick: () => kpi.select(k) });
+  const anyFilterActive = Boolean(search || statusFilter || kpi.key || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); kpi.clear(); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [editPi, setEditPi] = useState(null);
@@ -76,10 +91,11 @@ const ProformaInvoiceList = () => {
     search: search || undefined,
     vendorId: vendorFilter?._id || undefined,
     piStatus: statusFilter || undefined,
+    ...kpi.params,
     ...(from ? { 'piDate[gte]': `${from}T00:00:00` } : {}),
     ...(to ? { 'piDate[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetProformaInvoicesQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetProformaInvoicesQuery(queryArgs);
   const { data: statsRes } = useGetProformaInvoiceStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -182,13 +198,13 @@ const ProformaInvoiceList = () => {
       </Box>
 
       {/* KPIs */}
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ReceiptText size={20} />} label="Total PI"          value={stats.total}           color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending Approval"  value={stats.pendingApproval} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Approved"          value={stats.approved}        color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Wallet size={20} />}      label="Ready For Payment" value={stats.readyForPayment} color="#16a34a" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<CircleSlash size={20} />} label="Cancelled"         value={stats.cancelled}       color="#be123c" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(5)}>
+        <PfmsKpiCard icon={<ReceiptText size={20} />} label="Total PI"          value={stats.total}           color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending Approval"  value={stats.pendingApproval} color="#b45309" {...kpiCard('pending')} />
+        <PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Approved"          value={stats.approved}        color="#0f766e" {...kpiCard('approved')} />
+        <PfmsKpiCard icon={<Wallet size={20} />}      label="Ready For Payment" value={stats.readyForPayment} color="#16a34a" {...kpiCard('ready')} />
+        <PfmsKpiCard icon={<CircleSlash size={20} />} label="Cancelled"         value={stats.cancelled}       color="#be123c" {...kpiCard('cancelled')} />
+      </Box>
 
       {/* Filters — compact single row: Search + PI Status stay visible (the
           two fields most PI lookups start from); Vendor and the date range
@@ -207,9 +223,10 @@ const ProformaInvoiceList = () => {
             { key: 'status', minWidth: 170, node: (
               <Box sx={{ flex: '0 1 170px', minWidth: 150 }}>
                 <Typography component="label" htmlFor="pi-status" sx={pfmsFieldLabelSx}>PI Status</Typography>
-                <TextField id="pi-status" size="small" select fullWidth value={statusFilter}
-                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                <TextField id="pi-status" size="small" select fullWidth value={kpi.menuValue}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => kpi.onMenuChange(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
+                  {kpi.menuOptions.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
                   {PI_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                 </TextField>
               </Box>
@@ -262,6 +279,7 @@ const ProformaInvoiceList = () => {
           columns={columns}
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No proforma invoices yet' }) }}
           paginationMode="server"
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}

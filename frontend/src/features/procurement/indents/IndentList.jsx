@@ -26,7 +26,8 @@ import {
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 import { TONES } from '../components/StatusChip';
 import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
@@ -43,6 +44,14 @@ import { usePermissions } from '../../../hooks/usePermission';
 import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import IndentQuickViewDialog from './IndentQuickViewDialog';
+// The indent's workflow stage (the Stage filter), mirroring the backend enum
+// INDENT_OVERALL_STATUS (indent.model.js) in its own order.
+const OVERALL_STATUSES = [
+  'INDENT_GENERATED', 'INDENT_APPROVED', 'QUOTE_PENDING', 'QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED',
+  'QUOTATION_APPROVED', 'QUOTATION_NOT_APPROVED', 'PARTIAL_PO_CREATED', 'PO_READY',
+  'SERVICE_PENDING', 'SERVICE_COMPLETED', 'SERVICE_QC_PASSED', 'SERVICE_QC_FAILED', 'SERVICE_QC_PARTIAL', 'CLOSED',
+];
+
 // Map the Step-1.2 statusDone (or legacy quoteStep) to a chip state.
 const quoteStateOf = (row) => {
   const sd = row.quoteComparativeStep?.statusDone;
@@ -228,7 +237,8 @@ const IndentList = () => {
     ...(from ? { 'timestamp[gte]': `${from}T00:00:00` } : {}),
     ...(to ? { 'timestamp[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetIndentsQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetIndentsQuery(queryArgs);
+  const anyFilterActive = Boolean(search || approvalStatus || overallStatus || department || requestType || from || to);
   const { data: statsRes } = useGetIndentStatsQuery();
   const stats = statsRes?.data || {};
 
@@ -444,17 +454,7 @@ const IndentList = () => {
       </Box>
 
       {/* Summary row — also the status filter */}
-      <Box
-        sx={{
-          display: 'grid',
-          gap: 1,
-          gridTemplateColumns: {
-            xs: 'repeat(2, minmax(0, 1fr))',
-            sm: 'repeat(3, minmax(0, 1fr))',
-            lg: 'repeat(5, minmax(0, 1fr))',
-          },
-        }}
-      >
+      <Box sx={pfmsKpiRowSx(kpis.length)}>
         {kpis.map((k) => (
           <PfmsKpiCard
             key={k.key}
@@ -495,6 +495,21 @@ const IndentList = () => {
                     onChange={(e) => onFilterChange(setApprovalStatus)(e.target.value)}>
                     <MenuItem value="">All</MenuItem>
                     {APPROVAL_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
+                  </TextField>
+                </Box>
+              ) },
+              // The workflow stage — what the Quote Pending / Quotation Approved
+              // cards filter on. Without it those cards left every dropdown on
+              // "All" and the only visible status (Approval) read APPROVED, so a
+              // quote-pending list looked like an approved list.
+              { key: 'stage', minWidth: 170, node: (
+                <Box sx={{ flex: '0 1 170px', minWidth: 140 }}>
+                  <Typography component="label" htmlFor="indent-stage" sx={pfmsFieldLabelSx}>Stage</Typography>
+                  <TextField id="indent-stage" size="small" select fullWidth value={overallStatus}
+                    SelectProps={ALL_WHEN_UNSET}
+                    onChange={(e) => onFilterChange(setOverallStatus)(e.target.value)}>
+                    <MenuItem value="">All</MenuItem>
+                    {OVERALL_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                   </TextField>
                 </Box>
               ) },
@@ -604,6 +619,7 @@ const IndentList = () => {
           columns={columns}
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No indents yet' }) }}
           paginationMode="server"
           rowCount={filteredTotal || 0}
           paginationModel={paginationModel}

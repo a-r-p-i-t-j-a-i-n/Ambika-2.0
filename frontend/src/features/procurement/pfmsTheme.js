@@ -53,6 +53,72 @@ export const pfmsUnderStepTabsStyle = { '--pfms-chrome': `calc(var(--pfms-hub-ch
 export const pfmsTitleSx ={ fontSize: '1rem', fontWeight: 800, color: PFMS.ink, lineHeight: 1.2 };
 export const pfmsSubtitleSx = { fontSize: '0.72rem', color: PFMS.sub, fontWeight: 500 };
 export const pfmsCardSx = { borderRadius: '8px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surface };
+// The KPI card row above every Purchase FMS list — one responsive grid for all
+// steps (the layout Purchase Indents introduced): 2 cards per row on phones,
+// up to 3 on tablets, the whole row on desktop. Rows longer than 6 cards
+// (Advance Payments' 7) wrap at 4 on desktop, as they did before. Layout
+// only — the cards themselves are unchanged.
+// ── KPI summary row ──
+// Every Purchase FMS summary row (11 step routes + the Awaiting queues) is laid
+// out here, so all rows share one rhythm. The cards always fill 100% of the
+// row: N cards = N equal columns. When a row is too narrow for all of them it
+// wraps into equal columns, and a shorter last line stretches to the full
+// width too — no empty space at the right, no horizontal overflow.
+const KPI_GAP_PX = 10;
+// Width of one card when `n` share a line (the half pixel keeps sub-pixel
+// rounding from pushing the last card onto a new line; flex-grow takes it back).
+const kpiBasis = (n) => `calc((100% - ${(n - 1) * KPI_GAP_PX}px) / ${n} - 0.5px)`;
+// Cards per line by screen width (MUI default breakpoints; content width is the
+// screen minus the sidebar). Medium screens split 5-6 cards 3+N, 7-8 cards 4+N.
+const KPI_MD_COLS = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 3, 6: 3, 7: 4, 8: 4 };
+const kpiCardsPerLine = (count) => ({
+  xs: Math.min(count, 2),
+  md: KPI_MD_COLS[count] || 4,
+  lg: count <= 6 ? count : 4,
+  xl: Math.min(count, 8), // ≥ 1400px: a 7-8 card row fits on one line
+});
+export const pfmsKpiRowSx = (count = 5) => {
+  const per = kpiCardsPerLine(count);
+  return {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: `${KPI_GAP_PX}px`,
+    width: '100%',
+    '& > *': { flex: `1 1 ${kpiBasis(per.xs)}`, minWidth: 0 },
+    '@media (min-width: 900px)': { '& > *': { flexBasis: kpiBasis(per.md) } },
+    '@media (min-width: 1200px)': { '& > *': { flexBasis: kpiBasis(per.lg) } },
+    '@media (min-width: 1400px)': { '& > *': { flexBasis: kpiBasis(per.xl) } },
+  };
+};
+
+// Coordinated light tones for KPI cards, one per KPI category. A card's
+// `color` picks its tone (see kpiToneFor); every tone is a soft pastel
+// surface + hairline border + icon chip around one saturated ink, so a row
+// of mixed categories still reads as one family.
+export const PFMS_KPI_TONES = {
+  total:    { fg: '#1d4ed8', bg: '#f4f8ff', border: '#dbe6fd', chip: '#e3ecfe' }, // Total / All
+  pending:  { fg: '#b45309', bg: '#fffaf1', border: '#f9e6c3', chip: '#fdeecf' }, // Pending / awaiting action
+  progress: { fg: '#0f766e', bg: '#f1fbf9', border: '#cdeee7', chip: '#d8f3ee' }, // Approved / in progress
+  done:     { fg: '#15803d', bg: '#f3fbf5', border: '#d2efdb', chip: '#dcf4e4' }, // Done / completed
+  partial:  { fg: '#c2410c', bg: '#fff7f2', border: '#fbdfcd', chip: '#fee8da' }, // Partial
+  negative: { fg: '#be123c', bg: '#fff5f7', border: '#f9d8e0', chip: '#fde3ea' }, // Cancelled / failed / delayed
+  short:    { fg: '#7e22ce', bg: '#fbf7ff', border: '#eadcfa', chip: '#f2e7fd' }, // Short-closed
+  payment:  { fg: '#0e7490', bg: '#f1fafc', border: '#cdebf2', chip: '#d9f1f7' }, // Payment / quote stage
+  neutral:  { fg: '#475569', bg: '#f7f9fc', border: '#dfe5ee', chip: '#e8edf4' }, // Skipped / waiting on others
+};
+// The hex colours the screens pass, by category.
+const KPI_TONE_BY_COLOR = {
+  '#2563eb': 'total',
+  '#b45309': 'pending', '#d97706': 'pending',
+  '#0f766e': 'progress', '#4338ca': 'progress',
+  '#16a34a': 'done', '#15803d': 'done',
+  '#c2410c': 'partial',
+  '#be123c': 'negative', '#dc2626': 'negative',
+  '#7e22ce': 'short',
+  '#0e7490': 'payment',
+  '#64748b': 'neutral',
+};
+export const kpiToneFor = (color) => PFMS_KPI_TONES[KPI_TONE_BY_COLOR[String(color || '').toLowerCase()]] || null;
 // Number inputs in form tables (GRN Material Receipt, QC Inspection): no
 // up/down spinner, which crowds a narrow centred quantity.
 export const pfmsNoSpinSx = {

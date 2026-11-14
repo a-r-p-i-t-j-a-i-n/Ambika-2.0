@@ -7,6 +7,13 @@ import { RATE_REASON_MAX } from '../rate-change/rateChange.rules.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
+// A list filter on one status, or several comma-separated (?status=A,B) for a
+// KPI card that counts more than one — ApiFeatures.filter() turns a comma list
+// into $in. Every value must still be a known status.
+const statusList = (values) => Joi.string()
+  .custom((v, helpers) => (v.split(',').every((s) => values.includes(s)) ? v : helpers.error('any.only')))
+  .messages({ 'any.only': `{{#label}} must be one or more (comma-separated) of [${values.join(', ')}]` });
+
 // The PO's own Terms & Conditions (printed on its PDF). Blank = the format's
 // default from Company Settings.
 const termsAndConditions = Joi.string().max(PO_TERMS_MAX).allow('', null).custom(normalizePoTerms)
@@ -239,7 +246,7 @@ export const poQuerySchema = Joi.object({
   searchFields:   Joi.string(),
   vendorId:       objectId,
   indentId:       objectId,
-  poStatus:       Joi.string().valid(...Object.values(PO_STATUS)),
+  poStatus:       statusList(Object.values(PO_STATUS)),
   approvalStatus: Joi.string().valid(...Object.values(PO_APPROVAL_STATUS)),
   populate:       Joi.string(),
   poDate:         Joi.object().unknown(true), // poDate[gte]/[lte] range

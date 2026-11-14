@@ -2,14 +2,14 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete, Alert,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, Eye, Pencil, Send, Ban,
   Banknote, FileStack, Coins, CheckCheck, Wallet,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useGetVouchersQuery,
   useGetVoucherStatsQuery,
@@ -55,14 +55,27 @@ const VoucherList = () => {
   const resetPage = () => setPaginationModel((m) => ({ ...m, page: 0 }));
   const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
 
+  // Opened from Final Payments › "Pending Amount" (?finalPaymentStatus=PART_PAYMENT):
+  // exactly the part-paid vouchers whose balance that card sums
+  // (finalPayment.service getStats). Only that value is honoured; clearing it
+  // drops the parameter and shows every voucher again.
+  const [params, setParams] = useSearchParams();
+  const partPaidOnly = params.get('finalPaymentStatus') === 'PART_PAYMENT';
+  const clearPartPaid = () => {
+    const next = new URLSearchParams(params);
+    next.delete('finalPaymentStatus');
+    setParams(next, { replace: true });
+    resetPage();
+  };
+
   // "Filters" covers Vendor, Type, Category, Payment Mode and the date range —
   // Status stays always visible.
   const secondaryCount = [vendorFilter, typeFilter, categoryFilter, modeFilter, from, to].filter(Boolean).length;
   const clearSecondary = () => {
     setVendorFilter(null); setTypeFilter(''); setCategoryFilter(''); setModeFilter(''); setFrom(''); setTo(''); resetPage();
   };
-  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
-  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
+  const anyFilterActive = Boolean(search || statusFilter || secondaryCount || partPaidOnly);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); if (partPaidOnly) clearPartPaid(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [editVoucher, setEditVoucher] = useState(null);
@@ -77,6 +90,9 @@ const VoucherList = () => {
     // `.unknown(true)` and paymentMode is a real, indexed enum field on the
     // model — ApiFeatures.filter() exact-matches it with no backend change.
     paymentMode: modeFilter || undefined,
+    // finalPaymentStatus: no dedicated Joi rule either; a real, indexed enum
+    // field on the voucher model — exact-matched by ApiFeatures.filter().
+    finalPaymentStatus: partPaidOnly ? 'PART_PAYMENT' : undefined,
     ...(from ? { 'voucherDate[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'voucherDate[lte]': `${to}T23:59:59` } : {}),
   };
   const { data, isLoading, isFetching } = useGetVouchersQuery(queryArgs);
@@ -169,6 +185,13 @@ const VoucherList = () => {
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<CheckCheck size={20} />} label="Fully Paid"     value={stats.fullyPaid}     color="#16a34a" /></Grid>
         <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Wallet size={20} />}    label="Outstanding"    value={fmtINR(stats.outstanding)} color="#dc2626" /></Grid>
       </Grid>
+
+      {partPaidOnly && (
+        <Alert severity="info" data-testid="vo-part-paid-filter"
+          action={<Button color="inherit" size="small" onClick={clearPartPaid}>Show all vouchers</Button>}>
+          Showing part-paid vouchers awaiting final payment — their Balance adds up to Final Payments › Pending Amount.
+        </Alert>
+      )}
 
       {/* Filters — Search + Status stay visible; Vendor, Type (+ its
           type-gated Category), Payment Mode and the date range move into

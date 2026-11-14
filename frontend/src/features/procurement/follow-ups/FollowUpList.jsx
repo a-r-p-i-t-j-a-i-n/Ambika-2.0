@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button, Grid, Tooltip,
+  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button, Tooltip,
   Autocomplete, FormControlLabel, Switch, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -25,6 +25,7 @@ import FollowUpFormDrawer from './FollowUpFormDrawer';
 import FollowUpDoneDialog from './FollowUpDoneDialog';
 import FollowUpReadyForGrnDialog from './FollowUpReadyForGrnDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
+import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
 import RowActionsCell from '../components/RowActionsCell';
@@ -32,7 +33,7 @@ import RowActionsMenu from '../components/RowActionsMenu';
 import { usePermissions } from '../../../hooks/usePermission';
 import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 const FollowUpList = () => {
   const navigate = useNavigate();
@@ -49,12 +50,40 @@ const FollowUpList = () => {
   const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
 
   // "Filters" covers Vendor, the date range and the Delayed-only toggle —
-  // Status stays always visible (disabled while Delayed-only is on, same as
-  // before: that toggle already implies its own status set).
+  // Status stays always visible. It names whichever card is active (Pending =
+  // PENDING + RESCHEDULED, Delayed = the Delayed-only toggle) and choosing one
+  // of those there selects the card, so card, dropdown and toggle agree.
   const secondaryCount = [vendorFilter, from, to, delayedOnly].filter(Boolean).length;
   const clearSecondary = () => { setVendorFilter(null); setFrom(''); setTo(''); setDelayedOnly(false); resetPage(); };
-  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
-  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
+  // KPI cards filter by exactly what they count (followUp.service getStats).
+  // Pending = PENDING + RESCHEDULED (the list API takes the comma list);
+  // Delayed is the existing Delayed-only toggle.
+  const kpi = useKpiFilter({
+    statusFilter, setStatusFilter, resetPage,
+    defs: {
+      total:   {},
+      pending: { params: { followUpStatus: 'PENDING,RESCHEDULED' }, label: 'PENDING + NEXT FOLLOW-UP SET' },
+      done:    { status: 'DONE' },
+      ready:   { status: 'READY_FOR_GRN' },
+    },
+  });
+  const kpiCard = (k) => ({
+    active: !delayedOnly && kpi.isActive(k),
+    onClick: () => { setDelayedOnly(false); kpi.select(k); },
+  });
+  const delayedCard = {
+    active: delayedOnly,
+    onClick: () => { kpi.clear(); setStatusFilter(''); onFilterChange(setDelayedOnly)(!delayedOnly); },
+  };
+  const DELAYED_OPTION = 'delayed';
+  const statusMenuValue = delayedOnly ? DELAYED_OPTION : kpi.menuValue;
+  const onStatusMenuChange = (value) => {
+    if (value === DELAYED_OPTION) { kpi.clear(); onFilterChange(setDelayedOnly)(true); return; }
+    setDelayedOnly(false);
+    kpi.onMenuChange(value);
+  };
+  const anyFilterActive = Boolean(search || statusFilter || kpi.key || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); kpi.clear(); clearSecondary(); };
 
   const [formOpen, setFormOpen] = useState(false);
   const [editFu, setEditFu] = useState(null);
@@ -76,9 +105,11 @@ const FollowUpList = () => {
     ...(delayedOnly ? { 'plannedAt[lte]': new Date().toISOString() } : {}),
     ...(from ? { 'plannedAt[gte]': `${from}T00:00:00` } : {}),
     ...(to && !delayedOnly ? { 'plannedAt[lte]': `${to}T23:59:59` } : {}),
-  }), [paginationModel, search, vendorFilter, statusFilter, from, to, delayedOnly]);
+    ...(delayedOnly ? {} : kpi.params),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- kpi.params is derived from kpi.key
+  }), [paginationModel, search, vendorFilter, statusFilter, from, to, delayedOnly, kpi.key]);
 
-  const { data, isLoading, isFetching } = useGetFollowUpsQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetFollowUpsQuery(queryArgs);
   const { data: statsRes } = useGetFollowUpStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -200,13 +231,13 @@ const FollowUpList = () => {
       </Box>
 
       {/* KPIs */}
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PhoneCall size={20} />}   label="Total Follow-ups" value={stats.total}       color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending"          value={stats.pending}     color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Done"             value={stats.done}        color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<AlarmClock size={20} />}  label="Delayed"          value={stats.delayed}     color="#be123c" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Ready For GRN"   value={stats.readyForGrn} color="#16a34a" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(5)}>
+        <PfmsKpiCard icon={<PhoneCall size={20} />}   label="Total Follow-ups" value={stats.total}       color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending"          value={stats.pending}     color="#b45309" {...kpiCard('pending')} />
+        <PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Done"             value={stats.done}        color="#0f766e" {...kpiCard('done')} />
+        <PfmsKpiCard icon={<AlarmClock size={20} />}  label="Delayed"          value={stats.delayed}     color="#be123c" {...delayedCard} />
+        <PfmsKpiCard icon={<PackageCheck size={20} />} label="Ready For GRN"   value={stats.readyForGrn} color="#16a34a" {...kpiCard('ready')} />
+      </Box>
 
       {/* Filters — Search + Status stay visible (Status disables while
           Delayed-only is on, same as before — that toggle implies its own
@@ -226,9 +257,11 @@ const FollowUpList = () => {
             { key: 'status', minWidth: 160, node: (
               <Box sx={{ flex: '0 1 160px', minWidth: 140 }}>
                 <Typography component="label" htmlFor="fu-status" sx={pfmsFieldLabelSx}>Status</Typography>
-                <TextField id="fu-status" size="small" select fullWidth value={statusFilter} disabled={delayedOnly}
-                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                <TextField id="fu-status" size="small" select fullWidth value={statusMenuValue}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onStatusMenuChange(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
+                  {kpi.menuOptions.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+                  <MenuItem value={DELAYED_OPTION}>DELAYED (PAST PLANNED DATE)</MenuItem>
                   {FOLLOWUP_STATUSES.map((s) => <MenuItem key={s} value={s}>{(FU_STATUS_LABEL[s] || s).replace(/_/g, ' ').toUpperCase()}</MenuItem>)}
                 </TextField>
               </Box>
@@ -272,7 +305,7 @@ const FollowUpList = () => {
               node: (
                 <Box sx={{ flex: '0 0 150px', minWidth: 140, pb: 0.5 }}>
                   <FormControlLabel
-                    control={<Switch size="small" checked={delayedOnly} onChange={(e) => onFilterChange(setDelayedOnly)(e.target.checked)} />}
+                    control={<Switch size="small" checked={delayedOnly} onChange={(e) => { if (e.target.checked) kpi.clear(); onFilterChange(setDelayedOnly)(e.target.checked); }} />}
                     label={<Typography variant="caption" fontWeight={700}>Delayed only</Typography>}
                     sx={{ ml: 0 }}
                   />
@@ -293,6 +326,7 @@ const FollowUpList = () => {
           columns={columns}
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No follow-ups yet' }) }}
           paginationMode="server"
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}
