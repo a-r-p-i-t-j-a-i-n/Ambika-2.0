@@ -20,6 +20,7 @@ import { usePermissions } from '../../hooks/usePermission';
 import { resolveActionLink, resolveEntityLink, actionLinkMeta } from './actionLinks';
 import BoardRowEditDialog from './BoardRowEditDialog';
 import BulkEmailDialog from './BulkEmailDialog';
+import OrderEntryDrawer from '../orders/OrderEntryDrawer';
 import { O2D } from './o2dTheme';
 import { useHiddenSteps, useO2dRights, stepKey } from '../../utils/embed';
 
@@ -440,6 +441,9 @@ const O2dStepBoard = () => {
   const [cancelling, setCancelling] = useState(false);
   const [deleteOrder, { isLoading: deleting }] = useDeleteOrderMutation();
   const [confirmRow, setConfirmRow] = useState(null); // { p, dc } pending delete confirmation
+  // New Sales Order opens over the board (same drawer as Sales Orders), so
+  // Cancel leaves the user here and the sidebar keeps O2D FMS selected.
+  const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [sortBy, setSortBy] = useState('recentFirst');
   const { data, isLoading, refetch } = useGetProcessesQuery({ limit: 300, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const rows = useMemo(() => data?.data || [], [data]);
@@ -841,7 +845,7 @@ const O2dStepBoard = () => {
           />
           {rights.canAdd && (
             <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />}
-              onClick={() => navigate('/orders?new=1')}
+              onClick={() => setNewOrderOpen(true)}
               sx={{
                 whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '6px',
                 bgcolor: O2D.brand, flexShrink: 0, px: { md: 1.1, xl: 1.6 },
@@ -1530,6 +1534,8 @@ const O2dStepBoard = () => {
             ))}
           </Stack>
         </Paper>
+
+      <OrderEntryDrawer open={newOrderOpen} onClose={() => setNewOrderOpen(false)} />
 
       {isEmailStep && (
         <BulkEmailDialog
