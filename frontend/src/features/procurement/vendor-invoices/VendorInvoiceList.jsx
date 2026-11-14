@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Autocomplete,
   Chip, CircularProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -28,7 +28,8 @@ import VendorInvoiceFormDialog from './VendorInvoiceFormDialog';
 import VendorInvoiceApprovalDialog from './VendorInvoiceApprovalDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx,pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx,pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -110,6 +111,28 @@ const VendorInvoiceList = () => {
     setPaginationModel((p) => ({ ...p, page: 0 }));
   };
 
+  // KPI cards reuse the chips / Status filter above, each matching exactly what
+  // the card counts (vendorInvoice.service getStats):
+  //   Pending Approval = DRAFT + RECEIVED   = the "Awaiting Invoice Action" chip
+  //   Payment Pending  = PAYMENT_PENDING    = the Status filter
+  //   Payment Done     = PAYMENT_COMPLETED  = the "Paid / Short Closed" chip
+  //   Approved         = APPROVED + PAYMENT_PENDING + PAYMENT_COMPLETED
+  //                      = the Status filter, as one comma list
+  const chipOf = (id) => WORKFLOW_CHIPS.find((c) => c.id === id);
+  const chipCard = (id) => ({
+    active: workflowChip === id,
+    onClick: () => selectWorkflowChip(chipOf(workflowChip === id ? 'ALL' : id)),
+  });
+  const statusCard = (status) => {
+    const active = workflowChip === 'ALL' && statusFilter === status;
+    return { active, onClick: () => { onFilterChange(setStatusFilter)(active ? '' : status); setWorkflowChip('ALL'); } };
+  };
+  const APPROVED_STATUSES = 'APPROVED,PAYMENT_PENDING,PAYMENT_COMPLETED';
+  const paidCard = {
+    active: statusFilter === 'PAYMENT_COMPLETED' && ['ALL', 'PAID_SHORT_CLOSED'].includes(workflowChip),
+    onClick: () => selectWorkflowChip(chipOf(statusFilter === 'PAYMENT_COMPLETED' ? 'ALL' : 'PAID_SHORT_CLOSED')),
+  };
+
   const [formOpen, setFormOpen] = useState(false);
   const [editInv, setEditInv] = useState(null);
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -124,7 +147,7 @@ const VendorInvoiceList = () => {
     workflow: activeChip?.workflow || undefined,
     ...(from ? { 'invoiceDate[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'invoiceDate[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetVendorInvoicesQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetVendorInvoicesQuery(queryArgs);
   const { data: statsRes } = useGetVendorInvoiceStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -202,13 +225,14 @@ const VendorInvoiceList = () => {
         </Box>
       </Box>
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ReceiptText size={20} />} label="Total"            value={stats.total}            color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending Approval" value={stats.pendingApproval}  color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Approved"         value={stats.approved}         color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Wallet size={20} />}      label="Payment Pending"  value={stats.paymentPending}   color="#0e7490" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<CheckCheck size={20} />}  label="Payment Done"     value={stats.paymentCompleted} color="#16a34a" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(5)}>
+        <PfmsKpiCard icon={<ReceiptText size={20} />} label="Total"            value={stats.total}            color="#2563eb"
+          active={workflowChip === 'ALL' && !statusFilter} onClick={() => selectWorkflowChip(WORKFLOW_CHIPS[0])} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending Approval" value={stats.pendingApproval}  color="#b45309" {...chipCard('AWAITING_INVOICE')} />
+        <PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Approved"         value={stats.approved}         color="#0f766e" {...statusCard(APPROVED_STATUSES)} />
+        <PfmsKpiCard icon={<Wallet size={20} />}      label="Payment Pending"  value={stats.paymentPending}   color="#0e7490" {...statusCard('PAYMENT_PENDING')} />
+        <PfmsKpiCard icon={<CheckCheck size={20} />}  label="Payment Done"     value={stats.paymentCompleted} color="#16a34a" {...paidCard} />
+      </Box>
 
       {/* Search + the Workflow Chips below are the primary filtering surface
           for this screen. Vendor, the precise Status list and the date range
@@ -251,6 +275,7 @@ const VendorInvoiceList = () => {
                     SelectProps={ALL_WHEN_UNSET}
                     onChange={(e) => { onFilterChange(setStatusFilter)(e.target.value); setWorkflowChip('ALL'); }}>
                     <MenuItem value="">All</MenuItem>
+                    <MenuItem value={APPROVED_STATUSES}>APPROVED (ANY PAYMENT STAGE)</MenuItem>
                     {INVOICE_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                   </TextField>
                 </Box>
@@ -295,6 +320,7 @@ const VendorInvoiceList = () => {
 
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={rows} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No vendor invoices yet' }) }}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
           {...rowNav.gridProps} {...rowActionsGridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
           rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />

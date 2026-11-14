@@ -16,7 +16,7 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import { DEPARTMENTS, REQUEST_TYPES, fileHref, itemRef, isItemEligibleForQuote } from './indentMeta';
 import RowActionsCell from '../components/RowActionsCell';
@@ -177,7 +177,7 @@ const QuotationStepList = ({ step }) => {
     ...(canDeleteIndent ? [del.action(r, { divider: !quotationStepDone(r, step) })] : []),
   ];
 
-  const { data, isLoading, isFetching } = useGetIndentsQuery({
+  const { data, isLoading, isFetching, isError } = useGetIndentsQuery({
     page: paginationModel.page + 1,
     limit: paginationModel.pageSize,
     sort: '-createdAt',
@@ -293,8 +293,8 @@ const QuotationStepList = ({ step }) => {
       </Box>
 
       {/* State tiles — also the filter. */}
-      <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' } }}>
-        {['PENDING', 'DONE', 'NOT_REQUIRED', 'ALL'].map((key) => (
+      <Box sx={pfmsKpiRowSx(4)}>
+        {['ALL', 'PENDING', 'DONE', 'NOT_REQUIRED'].map((key) => (
           <PfmsKpiCard
             key={key}
             icon={TILE_STYLE[key].icon}
@@ -302,7 +302,7 @@ const QuotationStepList = ({ step }) => {
             value={counts[key]}
             color={TILE_STYLE[key].color}
             active={stepState === key}
-            onClick={() => { setStepState(key); resetPage(); }}
+            onClick={() => { setStepState(stepState === key ? 'ALL' : key); resetPage(); }}
           />
         ))}
       </Box>
@@ -372,7 +372,7 @@ const QuotationStepList = ({ step }) => {
           disableRowSelectionOnClick
           getRowHeight={() => 'auto'}
           columnHeaderHeight={42}
-          localeText={{ noRowsLabel: stepState === 'PENDING' ? `Nothing pending at Step ${cfg.code}`
+          localeText={{ noRowsLabel: isError ? 'Could not load this list — try again' : stepState === 'PENDING' ? `Nothing pending at Step ${cfg.code}`
             : stepState === 'ALL' ? `No indents have reached Step ${cfg.code} yet` : `No indents in “${cfg.tiles[stepState]}”` }}
           sx={[{
             border: 0,

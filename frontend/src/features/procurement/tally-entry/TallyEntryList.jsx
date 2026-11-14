@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Autocomplete,
   LinearProgress,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -24,7 +24,8 @@ import { TallyStatusChip, TALLY_STATUSES, CHECKLIST_TOTAL, checklistProgress } f
 import TallyEntryFormDialog from './TallyEntryFormDialog';
 import TallyEntryCompleteDialog from './TallyEntryCompleteDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -46,6 +47,17 @@ const TallyEntryList = () => {
   const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
   const secondaryCount = [vendorFilter, from, to].filter(Boolean).length;
   const clearSecondary = () => { setVendorFilter(null); setFrom(''); setTo(''); resetPage(); };
+  // KPI cards filter by exactly what they count (tallyEntry.service getStats).
+  const kpi = useKpiFilter({
+    statusFilter, setStatusFilter, resetPage,
+    defs: {
+      total: {},
+      pending: { status: 'PENDING' },
+      completed: { status: 'COMPLETED' },
+      cancelled: { status: 'CANCELLED' },
+    },
+  });
+  const kpiCard = (k) => ({ active: kpi.isActive(k), onClick: () => kpi.select(k) });
   const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
@@ -61,7 +73,7 @@ const TallyEntryList = () => {
     search: search || undefined, vendorId: vendorFilter?._id || undefined, tallyEntryStatus: statusFilter || undefined,
     ...(from ? { 'plannedAt[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'plannedAt[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetTallyEntriesQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetTallyEntriesQuery(queryArgs);
   const { data: statsRes } = useGetTallyEntryStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -130,12 +142,12 @@ const TallyEntryList = () => {
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setEditEntry(null); setFormOpen(true); }}>New Tally Entry</Button>
       </Box>
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<FileSpreadsheet size={20} />} label="Total"     value={stats.total}     color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<Hourglass size={20} />}      label="Pending"   value={stats.pending}   color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<CheckCheck size={20} />}     label="Completed" value={stats.completed} color="#16a34a" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<XCircle size={20} />}        label="Cancelled" value={stats.cancelled} color="#dc2626" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(4)}>
+        <PfmsKpiCard icon={<FileSpreadsheet size={20} />} label="Total"     value={stats.total}     color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}      label="Pending"   value={stats.pending}   color="#b45309" {...kpiCard('pending')} />
+        <PfmsKpiCard icon={<CheckCheck size={20} />}     label="Completed" value={stats.completed} color="#16a34a" {...kpiCard('completed')} />
+        <PfmsKpiCard icon={<XCircle size={20} />}        label="Cancelled" value={stats.cancelled} color="#dc2626" {...kpiCard('cancelled')} />
+      </Box>
 
       {/* Filters — Search + Status stay visible; Vendor and the date range
           move into Filters, which only counts those as active. */}
@@ -203,6 +215,7 @@ const TallyEntryList = () => {
 
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No Tally entries yet' }) }}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
           {...rowNav.gridProps} {...rowActionsGridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
           rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />

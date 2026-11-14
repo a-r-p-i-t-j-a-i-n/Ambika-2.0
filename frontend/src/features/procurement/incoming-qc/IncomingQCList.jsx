@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -26,7 +26,8 @@ import IncomingQCFormDialog from './IncomingQCFormDialog';
 import IncomingQCCompleteDialog from './IncomingQCCompleteDialog';
 import { resolveFileUrl } from '../../../utils/fileUrl';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -57,6 +58,19 @@ const IncomingQCList = () => {
   // always visible.
   const secondaryCount = [vendorFilter, resultFilter, from, to].filter(Boolean).length;
   const clearSecondary = () => { setVendorFilter(null); setResultFilter(''); setFrom(''); setTo(''); resetPage(); };
+  // KPI cards filter by exactly what they count (incomingQc.service getStats).
+  // Pending QC = DRAFT + IN_PROGRESS.
+  const kpi = useKpiFilter({
+    statusFilter, setStatusFilter, resetPage,
+    defs: {
+      total: {},
+      pending: { status: 'DRAFT,IN_PROGRESS', label: 'PENDING QC (DRAFT + IN PROGRESS)' },
+      passed: { status: 'PASSED' },
+      failed: { status: 'FAILED' },
+      partial: { status: 'PARTIAL' },
+    },
+  });
+  const kpiCard = (k) => ({ active: kpi.isActive(k), onClick: () => kpi.select(k) });
   const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
@@ -78,7 +92,7 @@ const IncomingQCList = () => {
     ...(from ? { 'qcDate[gte]': `${from}T00:00:00` } : {}),
     ...(to ? { 'qcDate[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetIncomingQcsQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetIncomingQcsQuery(queryArgs);
   const { data: statsRes } = useGetIncomingQcStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -161,13 +175,13 @@ const IncomingQCList = () => {
         </Box>
       </Box>
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ShieldCheck size={20} />} label="Total QC"    value={stats.total}   color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending QC"  value={stats.pending} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Passed"      value={stats.passed}  color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ShieldX size={20} />}     label="Failed"      value={stats.failed}  color="#be123c" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ShieldAlert size={20} />} label="Partial"     value={stats.partial} color="#c2410c" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(5)}>
+        <PfmsKpiCard icon={<ShieldCheck size={20} />} label="Total QC"    value={stats.total}   color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}   label="Pending QC"  value={stats.pending} color="#b45309" {...kpiCard('pending')} />
+        <PfmsKpiCard icon={<BadgeCheck size={20} />}  label="Passed"      value={stats.passed}  color="#16a34a" {...kpiCard('passed')} />
+        <PfmsKpiCard icon={<ShieldX size={20} />}     label="Failed"      value={stats.failed}  color="#be123c" {...kpiCard('failed')} />
+        <PfmsKpiCard icon={<ShieldAlert size={20} />} label="Partial"     value={stats.partial} color="#c2410c" {...kpiCard('partial')} />
+      </Box>
 
       {/* Filters — Search + QC Status stay visible; Vendor, Result and the
           date range move into Filters, which only counts those as active. */}
@@ -188,6 +202,7 @@ const IncomingQCList = () => {
                 <TextField id="qc-status" size="small" select fullWidth value={statusFilter}
                   SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
+                  {kpi.menuOptions.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
                   {QC_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                 </TextField>
               </Box>
@@ -252,6 +267,7 @@ const IncomingQCList = () => {
           columns={columns}
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No QC records yet' }) }}
           paginationMode="server"
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}

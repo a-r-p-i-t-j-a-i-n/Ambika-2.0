@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -27,7 +27,8 @@ import { PaymentStatusChip, PAYMENT_STATUSES, PAYMENT_MODES, paymentModeLabel, f
 import FinalPaymentFormDialog from './FinalPaymentFormDialog';
 import PdfViewerModal from '../common/PdfViewerModal';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -51,6 +52,22 @@ const FinalPaymentList = () => {
   const onFilterChange = (setter) => (value) => { setter(value); resetPage(); };
   const secondaryCount = [vendorFilter, modeFilter, from, to].filter(Boolean).length;
   const clearSecondary = () => { setVendorFilter(null); setModeFilter(''); setFrom(''); setTo(''); resetPage(); };
+  // KPI cards filter by exactly what they count (finalPayment.service getStats).
+  // Paid Amount lists every non-cancelled payment it sums. Pending Amount is a
+  // voucher balance (part-paid vouchers), so it opens the voucher list on
+  // exactly those vouchers.
+  const kpi = useKpiFilter({
+    statusFilter, setStatusFilter, resetPage,
+    defs: {
+      total: {},
+      // Paid Amount sums every payment that is not cancelled.
+      paid: { status: 'PART_PAYMENT,FULL_PAYMENT,SHORT_PAYMENT_COMPLETED', label: 'ALL PAID (NOT CANCELLED)' },
+      part: { status: 'PART_PAYMENT' },
+      full: { status: 'FULL_PAYMENT' },
+      short: { status: 'SHORT_PAYMENT_COMPLETED' },
+    },
+  });
+  const kpiCard = (k) => ({ active: kpi.isActive(k), onClick: () => kpi.select(k) });
   const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
@@ -71,7 +88,13 @@ const FinalPaymentList = () => {
     paymentMode: modeFilter || undefined,
     ...(from ? { 'paymentDate[gte]': `${from}T00:00:00` } : {}), ...(to ? { 'paymentDate[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetFinalPaymentsQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetFinalPaymentsQuery(queryArgs);
+  // Total = every payment the unfiltered list shows, cancelled included — the
+  // same list the Total card returns to. Read from that list's own count (one
+  // row requested); the stats endpoint's total leaves cancelled payments out
+  // and is left as it is for the other figures.
+  const { data: allRes } = useGetFinalPaymentsQuery({ page: 1, limit: 1, sort: '-createdAt' });
+  const allCount = allRes?.meta?.total;
   const { data: statsRes } = useGetFinalPaymentStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -146,20 +169,21 @@ const FinalPaymentList = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, ...pfmsPageSx }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
         <Box>
-          <Typography sx={pfmsTitleSx}>Final Payments ({stats.total || 0})</Typography>
+          <Typography sx={pfmsTitleSx}>Final Payments ({allCount ?? 0})</Typography>
           <Typography sx={{ ...pfmsSubtitleSx, mt: 0.25 }}>Step 1.13 · Make Payment — final settlement after Tally Entry → Accounts Closed</Typography>
         </Box>
         <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => setFormOpen(true)}>Make Payment</Button>
       </Box>
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2}><PfmsKpiCard icon={<Wallet size={20} />}                 label="Total Payments" value={stats.total}                 color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2}><PfmsKpiCard icon={<Coins size={20} />}                  label="Paid Amount"    value={fmtINR(stats.paidAmount)}    color="#16a34a" /></Grid>
-        <Grid item xs={12} sm={6} md={2}><PfmsKpiCard icon={<Hourglass size={20} />}              label="Pending Amount" value={fmtINR(stats.pendingAmount)} color="#dc2626" /></Grid>
-        <Grid item xs={12} sm={6} md={2}><PfmsKpiCard icon={<SplitSquareHorizontal size={20} />} label="Part Payments"  value={stats.part}                  color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2}><PfmsKpiCard icon={<CheckCheck size={20} />}             label="Full Payments"  value={stats.full}                  color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2}><PfmsKpiCard icon={<Scissors size={20} />}               label="Short Closed"   value={stats.shortClosed}           color="#7e22ce" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(6)}>
+        <PfmsKpiCard icon={<Wallet size={20} />}                 label="Total Payments" value={allCount}                    color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<Coins size={20} />}                  label="Paid Amount"    value={fmtINR(stats.paidAmount)}    color="#0f766e" {...kpiCard('paid')} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}              label="Pending Amount" value={fmtINR(stats.pendingAmount)} color="#b45309"
+          onClick={() => navigate('/procurement/vouchers?finalPaymentStatus=PART_PAYMENT')} />
+        <PfmsKpiCard icon={<SplitSquareHorizontal size={20} />} label="Part Payments"  value={stats.part}                  color="#c2410c" {...kpiCard('part')} />
+        <PfmsKpiCard icon={<CheckCheck size={20} />}             label="Full Payments"  value={stats.full}                  color="#16a34a" {...kpiCard('full')} />
+        <PfmsKpiCard icon={<Scissors size={20} />}               label="Short Closed"   value={stats.shortClosed}           color="#7e22ce" {...kpiCard('short')} />
+      </Box>
 
       {/* Filters — Search + Status stay visible; Vendor, Payment Mode and the
           date range move into Filters, which only counts those as active. */}
@@ -180,6 +204,7 @@ const FinalPaymentList = () => {
                 <TextField id="fp-status" size="small" select fullWidth value={statusFilter}
                   SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
+                  {kpi.menuOptions.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
                   {PAYMENT_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                 </TextField>
               </Box>
@@ -240,6 +265,7 @@ const FinalPaymentList = () => {
 
       <Paper sx={{ ...pfmsCardSx, flexGrow: 1, minHeight: 420, overflow: 'hidden' }}>
         <DataGrid rows={data?.data || []} columns={columns} getRowId={(r) => r._id} loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No final payments yet' }) }}
           paginationMode="server" rowCount={data?.meta?.total || 0} paginationModel={paginationModel} onPaginationModelChange={setPaginationModel}
           {...rowNav.gridProps} {...rowActionsGridProps} pageSizeOptions={[10, 25, 50, 100]} disableRowSelectionOnClick
           rowHeight={50} columnHeaderHeight={44} sx={[{ border: 0 }, rowNavigationGridSx, rowActionsGridSx]} />

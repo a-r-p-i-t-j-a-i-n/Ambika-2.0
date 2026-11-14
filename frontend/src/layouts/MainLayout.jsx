@@ -37,6 +37,32 @@ const COLLAPSED_WIDTH = 76;
 // used by the collapsed rail, where nested dropdowns have no room to expand.
 const firstLeafPath = (item) => (item.children ? firstLeafPath(item.children[0]) : item.path);
 
+// ── Active nav row ──
+// A leaf owns its own path and everything under it, plus any extra route
+// prefixes listed in `match` (e.g. Purchase FMS also owns the /procurement
+// record pages it opens). The most specific owner wins, so exactly one branch
+// of the tree is active: /purchase-fms/rate-change-approvals is Purchase
+// Approval (not Purchase FMS), /procurement/vendors is Vendor Details.
+const basePath = (p) => String(p || '').split('?')[0];
+const pathUnder = (pathname, p) => pathname === p || (p !== '/' && pathname.startsWith(`${p}/`));
+const activeLeafPathFor = (sections, pathname) => {
+  let best = null;
+  let bestLen = -1;
+  const walk = (items) => items.forEach((it) => {
+    if (it.children) { walk(it.children); return; }
+    if (!it.path) return;
+    [basePath(it.path), ...(it.match || [])].forEach((p) => {
+      if (pathUnder(pathname, p) && p.length > bestLen) { best = basePath(it.path); bestLen = p.length; }
+    });
+  });
+  sections.forEach((s) => walk(s.items));
+  return best;
+};
+// Does this (possibly nested) item contain the active leaf?
+const subtreeOwns = (item, leafPath) => (item.children
+  ? item.children.some((c) => subtreeOwns(c, leafPath))
+  : !!leafPath && !!item.path && basePath(item.path) === leafPath);
+
 // ── Ambika 2.0 simplified sidebar ──────────────────────────────────────────
 // The client wants a minimal nav: FMS (O2D / Purchase), Master, Employees.
 // NOTHING was deleted — the complete 1.0 nav still lives in `navSectionsFull`
@@ -243,7 +269,10 @@ const navSectionsSimple = [
             text: 'Purchase',
             icon: <ShoppingCart size={19} />,
             children: [
-              { text: 'Purchase FMS',   icon: <Workflow size={19} />, path: '/purchase-fms' },
+              // Also owns the /procurement record pages (indent, PO, PI, GRN…
+              // detail) the step lists open; Master Data and Vendor Details keep
+              // their own /procurement paths (the longer match wins).
+              { text: 'Purchase FMS',   icon: <Workflow size={19} />, path: '/purchase-fms', match: ['/procurement'] },
               // PO rate change requests (Requests / History). Open to every
               // Purchase FMS user like the lists; only approvers get Approve /
               // Reject, and the API enforces that.
@@ -475,8 +504,8 @@ const MainLayout = () => {
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   // Tracks which expandable nav groups (e.g. Pricing Hub) the user has
-  // toggled. `undefined` for a group falls back to auto-open when the active
-  // route lives inside it.
+  // toggled, as { open, at: the pathname it was toggled on }. `undefined` for a
+  // group falls back to auto-open when the active route lives inside it.
   const [openMenus, setOpenMenus] = useState({});
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -646,15 +675,19 @@ const MainLayout = () => {
 
   // Does the active route live anywhere inside this item's subtree? Recursive,
   // so a parent like "IMS" opens when any nested screen under it is active.
-  const treeHasActive = (item) => {
-    if (item.children) return item.children.some(treeHasActive);
-    if (!item.path) return false;
-    const p = item.path.split('?')[0];
-    return location.pathname === p || (p !== '/' && location.pathname.startsWith(`${p}/`));
-  };
+  const activeLeafPath = useMemo(() => activeLeafPathFor(sections, location.pathname), [sections, location.pathname]);
+  const treeHasActive = (item) => subtreeOwns(item, activeLeafPath);
   // A group is open if the user toggled it; otherwise it auto-opens whenever the
-  // active route lives under one of its (possibly nested) descendants.
-  const isMenuOpen = (item) => openMenus[item.text] ?? treeHasActive(item);
+  // active route lives under one of its (possibly nested) descendants. A toggle
+  // remembers the page it was made on: folding the active branch lasts for that
+  // page only, so arriving on another route under it re-opens it and the active
+  // row is never hidden. Pure derivation — no effect, no extra render.
+  const isMenuOpen = (item) => {
+    const o = openMenus[item.text];
+    if (!o) return treeHasActive(item);
+    if (!o.open && o.at !== location.pathname && treeHasActive(item)) return true;
+    return o.open;
+  };
 
   // `mini` collapses the sidebar to icons only. The temporary (mobile)
   // drawer always renders the full version, so it is passed mini=false.
@@ -673,13 +706,16 @@ const MainLayout = () => {
           py: indent ? 0.7 : 0.9,
           justifyContent: mini ? 'center' : 'flex-start',
           color: 'text.primary',
+          // Hover is a neutral grey; the active row is a primary tint with the
+          // left accent — the two never look alike.
+          '&:hover': { bgcolor: alpha(theme.palette.text.primary, 0.05) },
           '&.Mui-selected': {
-            background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.10)} 0%, ${alpha(theme.palette.primary.main, 0.04)} 100%)`,
+            background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.14)} 0%, ${alpha(theme.palette.primary.main, 0.06)} 100%)`,
             color: 'primary.dark',
             '& .MuiListItemIcon-root': { color: 'primary.main' },
             '& .MuiListItemText-primary': { color: 'primary.dark', fontWeight: 700 },
             '&:hover': {
-              background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.14)} 0%, ${alpha(theme.palette.primary.main, 0.06)} 100%)`,
+              background: `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.18)} 0%, ${alpha(theme.palette.primary.main, 0.08)} 100%)`,
             },
             '&::before': {
               content: '""',
@@ -749,7 +785,7 @@ const MainLayout = () => {
           <React.Fragment key={item.text}>
             <ListItem disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
-                onClick={() => setOpenMenus((m) => ({ ...m, [item.text]: !open }))}
+                onClick={() => setOpenMenus((m) => ({ ...m, [item.text]: { open: !open, at: location.pathname } }))}
                 sx={{
                   borderRadius: 2, px: 1.25, pl: indent ? 2.75 : 1.25, py: indent ? 0.7 : 0.9,
                   color: active ? 'primary.dark' : 'text.primary',
@@ -827,7 +863,7 @@ const MainLayout = () => {
           ? (location.pathname === childPath && childPart === item.part)
           : depth === 0
             ? location.pathname.startsWith(item.path)
-            : location.pathname === childPath;
+            : childPath === activeLeafPath;
 
       if (mini) {
         return (

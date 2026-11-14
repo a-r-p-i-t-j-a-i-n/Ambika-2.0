@@ -4,6 +4,13 @@ import { PI_APPROVAL_STATUS, PI_STATUS } from './proformaInvoice.model.js';
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/);
 
+// A list filter on one status, or several comma-separated (?status=A,B) for a
+// KPI card that counts more than one — ApiFeatures.filter() turns a comma list
+// into $in. Every value must still be a known status.
+const statusList = (values) => Joi.string()
+  .custom((v, helpers) => (v.split(',').every((s) => values.includes(s)) ? v : helpers.error('any.only')))
+  .messages({ 'any.only': `{{#label}} must be one or more (comma-separated) of [${values.join(', ')}]` });
+
 const piItemSchema = Joi.object({
   _id:      Joi.string().optional(),
   itemName: Joi.string().trim().min(1).max(300).required(),
@@ -66,7 +73,7 @@ export const piQuerySchema = Joi.object({
   searchFields:   Joi.string(),
   vendorId:       objectId,
   poId:           objectId,
-  piStatus:       Joi.string().valid(...Object.values(PI_STATUS)),
+  piStatus:       statusList(Object.values(PI_STATUS)),
   approvalStatus: Joi.string().valid(...Object.values(PI_APPROVAL_STATUS)),
   populate:       Joi.string(),
   piDate:         Joi.object().unknown(true), // piDate[gte]/[lte] range

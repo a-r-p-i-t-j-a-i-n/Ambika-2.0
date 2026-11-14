@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Tooltip,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Tooltip,
   Autocomplete, Tabs, Tab,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -10,7 +10,7 @@ import {
   Search, Plus, Eye, Pencil, CheckCircle2, Send, FileText,
   Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, RotateCcw, SendHorizontal,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import {
   useGetPurchaseOrdersQuery,
@@ -34,14 +34,18 @@ import BulkReleasePoDialog from './BulkReleasePoDialog';
 import PoItemsQuickViewDialog from './PoItemsQuickViewDialog';
 import PendingForPoGrid from './PendingForPoGrid';
 import PfmsKpiCard from '../components/PfmsKpiCard';
+import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
 import RowActionsCell from '../components/RowActionsCell';
 import RowActionsMenu from '../components/RowActionsMenu';
 import { usePermissions } from '../../../hooks/usePermission';
 import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
+// Open POs still awaiting material: what GRN › Pending Qty sums over.
+const OPEN_FOR_RECEIPT = 'RELEASED_TO_VENDOR,PARTIAL_RECEIVED';
+
 const PurchaseOrderList = () => {
   const navigate = useNavigate();
   const rowNav = useRowNavigation({ to: (r) => `/procurement/purchase-orders/${r._id}` });
@@ -50,7 +54,19 @@ const PurchaseOrderList = () => {
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 25 });
   const [searchInput, setSearchInput, search, resetSearch] = useDebouncedSearch('');
   const [vendorFilter, setVendorFilter] = useState(null);
-  const [statusFilter, setStatusFilter] = useState('');
+  // GRN › "Pending Qty" opens this list with ?poStatus=RELEASED_TO_VENDOR,PARTIAL_RECEIVED
+  // — the POs whose open lines that card sums. Only that exact preset is
+  // honoured; the first status change drops it from the address.
+  const [params, setParams] = useSearchParams();
+  const [statusFilter, setStatusFilterState] = useState(() => (params.get('poStatus') === OPEN_FOR_RECEIPT ? OPEN_FOR_RECEIPT : ''));
+  const setStatusFilter = (v) => {
+    setStatusFilterState(v);
+    if (params.has('poStatus')) {
+      const next = new URLSearchParams(params);
+      next.delete('poStatus');
+      setParams(next, { replace: true });
+    }
+  };
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
 
@@ -60,12 +76,27 @@ const PurchaseOrderList = () => {
   // "Filters" covers Vendor, From and To — Status stays always visible.
   const secondaryCount = [vendorFilter, from, to].filter(Boolean).length;
   const clearSecondary = () => { setVendorFilter(null); setFrom(''); setTo(''); resetPage(); };
-  const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
-  const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
+  // KPI cards filter by exactly what they count (purchaseOrder.service getStats).
+  const kpi = useKpiFilter({
+    statusFilter, setStatusFilter, resetPage,
+    defs: {
+      total:    {},
+      approved: { params: { approvalStatus: 'APPROVED' }, label: 'ALL APPROVED POs' },
+      released: { params: { releaseStatus: 'RELEASED' }, label: 'ALL RELEASED POs' },
+      partial:  { status: 'PARTIAL_RECEIVED' },
+      full:     { status: 'FULLY_RECEIVED' },
+      // No card here — GRN › Pending Qty's preset, named in the Status dropdown.
+      openForReceipt: { status: OPEN_FOR_RECEIPT, label: 'OPEN FOR RECEIPT (RELEASED + PARTIAL)' },
+    },
+  });
+  const anyFilterActive = Boolean(search || statusFilter || kpi.key || secondaryCount);
+  const clearAll = () => { resetSearch(); setStatusFilter(''); kpi.clear(); clearSecondary(); };
 
   // 'orders' = the PO list; 'pending' = approved indent items not yet on an
   // active PO (same source as the Create PO drawer's item picker).
   const [view, setView] = useState('orders');
+  // A card filters the Purchase Orders tab, so it brings that tab forward.
+  const kpiCard = (k) => ({ active: kpi.isActive(k), onClick: () => { setView('orders'); kpi.select(k); } });
   const { data: pendingRes, isFetching: pendingFetching } = useGetAllApprovedItemsQuery();
   const pendingItems = pendingRes?.data?.items || [];
   // Create PO from a pending row — the drawer pre-selects just that item.
@@ -90,10 +121,11 @@ const PurchaseOrderList = () => {
     search: search || undefined,
     vendorId: vendorFilter?._id || undefined,
     poStatus: statusFilter || undefined,
+    ...kpi.params,
     ...(from ? { 'poDate[gte]': `${from}T00:00:00` } : {}),
     ...(to ? { 'poDate[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetPurchaseOrdersQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetPurchaseOrdersQuery(queryArgs);
   const { data: statsRes } = useGetPurchaseOrderStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -234,13 +266,13 @@ const PurchaseOrderList = () => {
       </Box>
 
       {/* KPIs */}
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<ShoppingBag size={20} />}  label="Total POs"        value={stats.total}           color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<BadgeCheck size={20} />}   label="Approved"         value={stats.approved}        color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Truck size={20} />}        label="Released"         value={stats.released}        color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageOpen size={20} />}  label="Partial Received" value={stats.partialReceived} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<PackageCheck size={20} />} label="Fully Received"   value={stats.fullyReceived}   color="#16a34a" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(5)}>
+        <PfmsKpiCard icon={<ShoppingBag size={20} />}  label="Total POs"        value={stats.total}           color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<BadgeCheck size={20} />}   label="Approved"         value={stats.approved}        color="#0f766e" {...kpiCard('approved')} />
+        <PfmsKpiCard icon={<Truck size={20} />}        label="Released"         value={stats.released}        color="#0e7490" {...kpiCard('released')} />
+        <PfmsKpiCard icon={<PackageOpen size={20} />}  label="Partial Received" value={stats.partialReceived} color="#c2410c" {...kpiCard('partial')} />
+        <PfmsKpiCard icon={<PackageCheck size={20} />} label="Fully Received"   value={stats.fullyReceived}   color="#16a34a" {...kpiCard('full')} />
+      </Box>
 
       <Tabs value={view} onChange={(_e, v) => setView(v)}
         sx={{ minHeight: 40, '& .MuiTab-root': { minHeight: 40, fontWeight: 700, textTransform: 'none' } }}>
@@ -267,9 +299,10 @@ const PurchaseOrderList = () => {
             { key: 'status', minWidth: 180, node: (
               <Box sx={{ flex: '0 1 180px', minWidth: 150 }}>
                 <Typography component="label" htmlFor="po-status" sx={pfmsFieldLabelSx}>Status</Typography>
-                <TextField id="po-status" size="small" select fullWidth value={statusFilter}
-                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
+                <TextField id="po-status" size="small" select fullWidth value={kpi.menuValue}
+                  SelectProps={ALL_WHEN_UNSET} onChange={(e) => kpi.onMenuChange(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
+                  {kpi.menuOptions.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
                   {PO_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                 </TextField>
               </Box>
@@ -322,6 +355,7 @@ const PurchaseOrderList = () => {
           columns={columns}
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No purchase orders yet' }) }}
           paginationMode="server"
           rowCount={data?.meta?.total || 0}
           paginationModel={paginationModel}

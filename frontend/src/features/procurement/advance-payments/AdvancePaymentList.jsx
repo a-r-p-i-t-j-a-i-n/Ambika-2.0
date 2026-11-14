@@ -6,7 +6,7 @@ import AdvancePaymentDetailDialog from './AdvancePaymentDetailDialog';
 import useAdvancePaymentPdf from './useAdvancePaymentPdf';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
-  Grid, Autocomplete, Chip,
+  Autocomplete, Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Search, Wallet, IndianRupee, Hourglass, AlertTriangle, CircleSlash, FileText, Plus, FileDown, Paperclip, CircleDollarSign, CircleCheck, CircleDashed } from 'lucide-react';
@@ -30,7 +30,8 @@ import { PaymentStatusChip, PAYMENT_STATUSES, PAYMENT_MODES, PI_PAYMENT_STATES, 
 import StatusChip from '../components/StatusChip';
 import { fileHref } from '../indents/indentMeta';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { listEmptyLabel } from '../components/useKpiFilter';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 const AdvancePaymentList = () => {
   // No standalone advance-payment detail page — a row opens its PI, and rows
@@ -78,6 +79,11 @@ const AdvancePaymentList = () => {
   const anyFilterActive = Boolean(search || statusFilter || secondaryCount);
   const clearAll = () => { resetSearch(); setStatusFilter(''); clearSecondary(); };
 
+  // Total Paid sums every payment that is not cancelled (advancePayment.service
+  // getStats) — the list API takes those statuses as one comma list.
+  const PAID_STATUSES = PAYMENT_STATUSES.filter((s) => s !== 'CANCELLED').join(',');
+  const paidActive = statusFilter === PAID_STATUSES && !stateFilter;
+
   const queryArgs = {
     page: paginationModel.page + 1,
     limit: paginationModel.pageSize,
@@ -94,7 +100,7 @@ const AdvancePaymentList = () => {
     ...(from ? { 'paymentDate[gte]': `${from}T00:00:00` } : {}),
     ...(to ? { 'paymentDate[lte]': `${to}T23:59:59` } : {}),
   };
-  const { data, isLoading, isFetching } = useGetAdvancePaymentsQuery(queryArgs);
+  const { data, isLoading, isFetching, isError } = useGetAdvancePaymentsQuery(queryArgs);
   const { data: statsRes } = useGetAdvancePaymentStatsQuery();
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
@@ -157,17 +163,27 @@ const AdvancePaymentList = () => {
       </Box>
 
       {/* KPIs */}
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<Wallet size={20} />}           label="Total Advance Required" value={fmtINR(stats.totalAdvanceRequired)} color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<IndianRupee size={20} />}      label="Total Paid"             value={fmtINR(stats.totalPaid)}            color="#0f766e" /></Grid>
-        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<Hourglass size={20} />}        label="Remaining Advance"      value={fmtINR(stats.remainingAdvance)}     color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<CircleDashed size={20} />}     label="Partially Paid POs/PIs" value={stats.partiallyPaidCount}           color="#c2410c"
-          onClick={() => onFilterChange(setStateFilter)(stateFilter === 'PARTIALLY_PAID' ? '' : 'PARTIALLY_PAID')} active={stateFilter === 'PARTIALLY_PAID'} /></Grid>
-        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<CircleCheck size={20} />}      label="Fully Paid POs/PIs"     value={stats.fullyPaidCount}               color="#15803d"
-          onClick={() => onFilterChange(setStateFilter)(stateFilter === 'FULLY_PAID' ? '' : 'FULLY_PAID')} active={stateFilter === 'FULLY_PAID'} /></Grid>
-        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<AlertTriangle size={20} />}    label="Outstanding (Short)"    value={fmtINR(stats.outstandingAmount)}    color="#be123c" /></Grid>
-        <Grid item xs={12} sm={6} md={4} lg={3}><PfmsKpiCard icon={<CircleSlash size={20} />}      label="Cancelled Entries"      value={stats.cancelled}                    color="#64748b" /></Grid>
-      </Grid>
+      <Box sx={pfmsKpiRowSx(7)}>
+        {/* Cards are shortcuts for this screen's own Advance Status / Status
+            filters (advancePayment.service getStats). Total Advance Required
+            clears both; Remaining Advance is the balance of the PIs listed on
+            the Awaiting Advance tab (same findPayablePis source), so it opens
+            that tab. Total Paid lists the non-cancelled payments it sums. */}
+        <PfmsKpiCard icon={<Wallet size={20} />}           label="Total Advance Required" value={fmtINR(stats.totalAdvanceRequired)} color="#2563eb"
+          onClick={() => { setStateFilter(''); onFilterChange(setStatusFilter)(''); }} active={!stateFilter && !statusFilter} />
+        <PfmsKpiCard icon={<IndianRupee size={20} />}      label="Total Paid"             value={fmtINR(stats.totalPaid)}            color="#0f766e"
+          onClick={() => { setStateFilter(''); onFilterChange(setStatusFilter)(paidActive ? '' : PAID_STATUSES); }} active={paidActive} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}        label="Remaining Advance"      value={fmtINR(stats.remainingAdvance)}     color="#b45309"
+          onClick={() => navigate('/purchase-fms/advance-payments?view=awaiting')} />
+        <PfmsKpiCard icon={<CircleDashed size={20} />}     label="Partially Paid POs/PIs" value={stats.partiallyPaidCount}           color="#c2410c"
+          onClick={() => onFilterChange(setStateFilter)(stateFilter === 'PARTIALLY_PAID' ? '' : 'PARTIALLY_PAID')} active={stateFilter === 'PARTIALLY_PAID'} />
+        <PfmsKpiCard icon={<CircleCheck size={20} />}      label="Fully Paid POs/PIs"     value={stats.fullyPaidCount}               color="#15803d"
+          onClick={() => onFilterChange(setStateFilter)(stateFilter === 'FULLY_PAID' ? '' : 'FULLY_PAID')} active={stateFilter === 'FULLY_PAID'} />
+        <PfmsKpiCard icon={<AlertTriangle size={20} />}    label="Outstanding (Short)"    value={fmtINR(stats.outstandingAmount)}    color="#7e22ce"
+          onClick={() => onFilterChange(setStateFilter)(stateFilter === 'SHORT_CLOSED' ? '' : 'SHORT_CLOSED')} active={stateFilter === 'SHORT_CLOSED'} />
+        <PfmsKpiCard icon={<CircleSlash size={20} />}      label="Cancelled Entries"      value={stats.cancelled}                    color="#be123c"
+          onClick={() => onFilterChange(setStatusFilter)(statusFilter === 'CANCELLED' ? '' : 'CANCELLED')} active={statusFilter === 'CANCELLED'} />
+      </Box>
 
       {/* Filters — Search + Status stay visible; Vendor, Payment Mode and the
           date range move into Filters, which only counts those as active. */}
@@ -188,6 +204,7 @@ const AdvancePaymentList = () => {
                 <TextField id="ap-status" size="small" select fullWidth value={statusFilter}
                   SelectProps={ALL_WHEN_UNSET} onChange={(e) => onFilterChange(setStatusFilter)(e.target.value)}>
                   <MenuItem value="">All</MenuItem>
+                  <MenuItem value={PAID_STATUSES}>ALL PAID (NOT CANCELLED)</MenuItem>
                   {PAYMENT_STATUSES.map((s) => <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>)}
                 </TextField>
               </Box>
@@ -266,6 +283,7 @@ const AdvancePaymentList = () => {
           columns={columns}
           getRowId={(r) => r._id}
           loading={isLoading || isFetching}
+          localeText={{ noRowsLabel: listEmptyLabel({ isError, filtered: anyFilterActive, empty: 'No advance payments yet' }) }}
           paginationMode="server"
           sortingMode="server"
           sortModel={sortModel}
