@@ -35,6 +35,8 @@ const ChallanDetail        = lazyWithRetry(() => import('./features/execution/Ch
 const PhaseDetail          = lazyWithRetry(() => import('./features/execution/PhaseDetail'));
 const InvoicesList         = lazyWithRetry(() => import('./features/ledger/InvoicesList'));
 const SkusList             = lazyWithRetry(() => import('./features/masters/SkusList'));
+const SkuRegisterDialog    = lazyWithRetry(() => import('./features/masters/SkuRegisterDialog'));
+const SkuEditDialog        = lazyWithRetry(() => import('./features/masters/SkuEditDialog'));
 const PartiesList          = lazyWithRetry(() => import('./features/masters/PartiesList'));
 const PartyDetails         = lazyWithRetry(() => import('./features/masters/PartyDetails'));
 const MachinesList         = lazyWithRetry(() => import('./features/masters/MachinesList'));
@@ -250,7 +252,11 @@ function App() {
 
             <Route path="/challans/:id" element={<ChallanDetail />} />
             <Route path="/invoices" element={<InvoicesList />} />
-            <Route path="/skus" element={<SkusList />} />
+            {/* Register / Edit SKU open as dialogs over the SKU Master (it renders <Outlet />). */}
+            <Route path="/skus" element={<SkusList />}>
+              <Route path="new" element={<SkuRegisterDialog />} />
+              <Route path=":id/edit" element={<SkuEditDialog />} />
+            </Route>
             <Route path="/parties" element={<PartiesList />} />
             <Route path="/parties/:id" element={<PartyDetails />} />
             <Route path="/machines" element={<MachinesList />} />

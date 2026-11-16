@@ -98,7 +98,8 @@ check('list shows the rule per SKU: 1 BOX = 30 PCS and 1 BOX = 24 PCS', /1 BOX =
 await shot('01-sku-list');
 
 await editRow('UC Nitrile Gloves');
-const drawer = page.locator('.MuiDrawer-paper').filter({ hasText: 'Edit SKU Item' });
+// Edit SKU opens as a dialog over the SKU Master (/skus/:id/edit); Save / Cancel close it.
+const drawer = page.getByTestId('sku-edit-dialog');
 await drawer.waitFor({ timeout: 10000 });
 check('drawer: Stock Unit PCS, Purchase Unit BOX, factor 30',
   (await drawer.getByTestId('sku-stock-unit').inputValue()) === 'PCS'
@@ -132,7 +133,8 @@ check('cancel stores nothing (still 1 BOX = 30 PCS)', afterCancel.purchaseUnit =
 console.log('\n── Register New SKU: 1 BOX = 15 PCS');
 const newCode = `UC-UI-${Date.now().toString(36).toUpperCase()}`;
 await page.getByRole('button', { name: /register sku/i }).first().click();
-const reg = page.locator('.MuiDrawer-paper').filter({ hasText: 'Register New SKU' });
+// Register SKU opens as a dialog over the SKU Master (/skus/new); Save / Cancel close it.
+const reg = page.getByTestId('sku-register-dialog');
 await reg.waitFor({ timeout: 10000 });
 check('the first question defaults to "No", with no conversion fields shown',
   await reg.getByTestId('sku-convert-no').isChecked()
@@ -176,7 +178,7 @@ check('stored as purchaseUnit BOX, factor 15, unit PCS, Consumable',
 await page.getByPlaceholder('Search SKU item or code').fill(newCode);
 await page.waitForTimeout(1200);
 await editRow(newCode);
-const reopen = page.locator('.MuiDrawer-paper').filter({ hasText: 'Edit SKU Item' });
+const reopen = page.getByTestId('sku-edit-dialog');
 await reopen.waitFor({ timeout: 10000 });
 check('reopening shows Yes, BOX, 15, PCS and 1 BOX = 15 PCS',
   await reopen.getByTestId('sku-convert-yes').isChecked()
@@ -188,7 +190,7 @@ await reopen.getByRole('button', { name: /^cancel$/i }).click();
 
 // A plain SKU registered with "No" behaves like every existing SKU.
 await page.getByRole('button', { name: /register sku/i }).first().click();
-const reg2 = page.locator('.MuiDrawer-paper').filter({ hasText: 'Register New SKU' });
+const reg2 = page.getByTestId('sku-register-dialog');
 await reg2.waitFor({ timeout: 10000 });
 const plainCode = `${newCode}-P`;
 await reg2.getByLabel('SKU Code').fill(plainCode);
@@ -261,22 +263,22 @@ if (g1) {
 }
 
 // ── Phone width ──────────────────────────────────────────────────────────────
-console.log('\n── SKU drawer at 390px');
+console.log('\n── Edit SKU dialog at 390px');
 await page.setViewportSize({ width: 390, height: 844 });
 await go('/skus');
 await page.getByPlaceholder('Search SKU item or code').fill('UC-GLOVE');
 await page.getByText('UC Nitrile Gloves').first().waitFor({ timeout: 15000 });
 await editRow('UC Nitrile Gloves');
-const mdrawer = page.locator('.MuiDrawer-paper').filter({ hasText: 'Edit SKU Item' });
+const mdrawer = page.getByTestId('sku-edit-dialog');
 await mdrawer.waitFor({ timeout: 10000 });
 await mdrawer.getByTestId('sku-purchase-conversion').scrollIntoViewIfNeeded();
 const fit = await page.evaluate(() => {
   const box = document.querySelector('[data-testid="sku-purchase-conversion"]').getBoundingClientRect();
-  const paper = document.querySelector('.MuiDrawer-paper');
+  const paper = document.querySelector('[data-testid="sku-edit-dialog"]');
   return { right: box.right, vw: window.innerWidth, paperOverflow: paper.scrollWidth - paper.clientWidth };
 });
 check('conversion section fits the phone width (no sideways scroll)', fit.right <= fit.vw && fit.paperOverflow <= 1, JSON.stringify(fit));
-await shot('06-sku-drawer-390');
+await shot('06-sku-edit-dialog-390');
 
 check('no page errors', pageErrors.length === 0, pageErrors.join(' || ').slice(0, 300));
 await browser.close();
