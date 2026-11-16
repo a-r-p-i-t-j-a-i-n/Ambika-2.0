@@ -16,6 +16,11 @@ export const skuApi = baseApi.injectEndpoints({
       }),
       providesTags: ['SKU'],
     }),
+    // One SKU (GET /skus/:id) — loaded fresh by the Edit SKU dialog.
+    getSkuById: builder.query({
+      query: (id) => ({ url: `/skus/${id}` }),
+      providesTags: ['SKU'],
+    }),
     createSku: builder.mutation({
       query: (body) => ({
         url: '/skus',
@@ -53,6 +58,7 @@ export const skuApi = baseApi.injectEndpoints({
 export const {
   useGetSkusQuery,
   useGetSkuLookupQuery,
+  useGetSkuByIdQuery,
   useCreateSkuMutation,
   useUpdateSkuMutation,
   useBulkUpsertSkusMutation,

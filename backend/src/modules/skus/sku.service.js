@@ -82,7 +82,12 @@ export const getSkus = async (query = {}) => {
   
   const filter = { isDeleted: false };
   if (query.clientId) filter.clientId = query.clientId;
-  if (query.itemType) filter.itemType = query.itemType;
+  if (query.itemType) {
+    // A comma-separated list (e.g. the SKU Master's "Other" tab) matches any of
+    // them. A single value is used exactly as before.
+    const types = String(query.itemType).split(',').map((s) => s.trim()).filter(Boolean);
+    filter.itemType = types.length > 1 ? { $in: types } : query.itemType;
+  }
   if (query.category) filter.category = query.category;
 
   if (query.search) {
