@@ -14,6 +14,7 @@ import {
   ReceiptText, FileSpreadsheet,
   Boxes, PackagePlus, PackageMinus, History, Layers, Recycle, PackageCheck, Factory,
   Cpu, HardHat, Disc3, ListOrdered, Building2, Scale,
+  GitBranch,
 } from 'lucide-react';
 import { Badge } from '@mui/material';
 import { useGetPendingRevisionsQuery } from '../store/api/pricingApi';
@@ -280,6 +281,15 @@ const navSectionsSimple = [
               { text: 'Master Data',    icon: <FileText size={19} />, path: '/procurement/master-data' },
             ],
           },
+          {
+            // One order dispatched in parts: each split tracked on its own (2.06 → 2.13).
+            text: 'Split FMS',
+            icon: <GitBranch size={19} />,
+            children: [
+              { text: 'O2D Splits',      icon: <Truck size={19} />,        path: '/split-fms/o2d',      perm: 'o2dfms.view' },
+              { text: 'Purchase Splits', icon: <ShoppingCart size={19} />, path: '/split-fms/purchase', perm: 'o2dfms.view' },
+            ],
+          },
           // Step-wise doers across FMS modules. `perm` hides the row from users
           // who cannot open it (the route is gated the same way).
           { text: 'Doer Assignment', icon: <SlidersHorizontal size={19} />, path: '/fms/doer-assignment', perm: 'fms.manageDoers' },
@@ -452,6 +462,7 @@ const PAGE_TITLES = {
   '/pricing/documents':      'Pricing Documents',
   '/pricing/analytics':      'Pricing Analytics',
   '/quotes':                 'Quotes',
+  '/split-fms':              'Split FMS',
   // Listed before the bare '/o2d-fms' key — the title lookup is a first-match
   // startsWith scan, so the more specific path must come first.
   '/o2d-fms/steps':          'O2D — Step Board',
