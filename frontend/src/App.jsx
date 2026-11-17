@@ -107,6 +107,7 @@ const DprMisScoring        = lazyWithRetry(() => import('./features/ppc/dpr/DprM
 const DprMasters           = lazyWithRetry(() => import('./features/ppc/dpr/DprMasters'));
 const FmsProcessList       = lazyWithRetry(() => import('./features/o2d-fms/ProcessList'));
 const O2dStepBoard         = lazyWithRetry(() => import('./features/o2d-fms/O2dStepBoard'));
+const SplitFms             = lazyWithRetry(() => import('./features/split-fms/SplitFms'));
 const FmsProcessDetail     = lazyWithRetry(() => import('./features/o2d-fms/ProcessDetail'));
 const FmsDashboard         = lazyWithRetry(() => import('./features/o2d-fms/FmsDashboard'));
 const FmsStepConfig        = lazyWithRetry(() => import('./features/o2d-fms/StepDefinitionsConfig'));
@@ -353,6 +354,8 @@ function App() {
             <Route path="/o2d-fms/steps/:stepCode" element={<RequirePermission slug="o2dfms.view" fallback="inline"><O2dStepBoard /></RequirePermission>} />
             <Route path="/o2d-fms/master" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsMasterBoard /></RequirePermission>} />
             <Route path="/o2d-fms/master-data" element={<RequirePermission slug="o2dfms.view" fallback="inline"><O2dMasterData /></RequirePermission>} />
+            <Route path="/split-fms" element={<RequirePermission slug="o2dfms.view" fallback="inline"><SplitFms /></RequirePermission>} />
+            <Route path="/split-fms/:fms" element={<RequirePermission slug="o2dfms.view" fallback="inline"><SplitFms /></RequirePermission>} />
             <Route path="/o2d-fms/transporters" element={<RequirePermission slug="o2dfms.view" fallback="inline"><TransporterMaster /></RequirePermission>} />
             <Route path="/o2d-fms/process/:id" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsProcessDetail /></RequirePermission>} />
             <Route path="/o2d-fms/task/:processId/:stepCode" element={<RequirePermission slug="o2dfms.view" fallback="inline"><FmsTaskPage /></RequirePermission>} />

@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useState } from 'react';
-import { Box, Typography, Button, Stack, ToggleButtonGroup, ToggleButton } from '@mui/material';
-import { FilePlus2, ShoppingCart, Truck } from 'lucide-react';
+import { Box, Typography, Button, Divider, Stack, ToggleButtonGroup, ToggleButton } from '@mui/material';
+import { Banknote, FilePlus2, PackageCheck, ShoppingBag, ShoppingCart, Truck } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { usePermissions } from '../../hooks/usePermission';
 import { pfmsPageSx, pfmsTitleSx } from '../procurement/pfmsTheme';
@@ -17,13 +17,20 @@ import { useHiddenSteps, useO2dRights, stepKey } from '../../utils/embed';
 // Quick actions — open the form right here (the same drawers their own pages
 // use), so starting a piece of work never needs a trip through the menus.
 const IndentFormDrawer = lazy(() => import('../procurement/indents/IndentFormDrawer'));
+const PurchaseOrderFormDrawer = lazy(() => import('../procurement/purchase-orders/PurchaseOrderFormDrawer'));
+const GrnFormDialog = lazy(() => import('../procurement/grn/GrnFormDialog'));
+const VoucherFormDialog = lazy(() => import('../procurement/vouchers/VoucherFormDialog'));
 const OrderEntryDrawer = lazy(() => import('../orders/OrderEntryDrawer'));
 const DispatchEntry = lazy(() => import('../execution/DispatchEntry'));
 
+// Purchase ones carry their Purchase FMS step (hidden with it, as in the hub).
 const QUICK_ACTIONS = [
-  { key: 'indent', label: 'Indent Form', icon: FilePlus2 },
-  { key: 'order', label: 'Sales Order', icon: ShoppingCart },
-  { key: 'dispatch', label: 'Actual Dispatch', icon: Truck },
+  { key: 'indent', label: 'Indent', title: 'Create Indent', icon: FilePlus2, group: 'purchase', step: 'purchase-indents' },
+  { key: 'po', label: 'PO', title: 'Create Purchase Order', icon: ShoppingBag, group: 'purchase', step: 'purchase-orders' },
+  { key: 'grn', label: 'GRN', title: 'Create GRN', icon: PackageCheck, group: 'purchase', step: 'grn' },
+  { key: 'voucher', label: 'Passing Voucher', title: 'Create Passing Voucher', icon: Banknote, group: 'purchase', step: 'invoices-payments' },
+  { key: 'order', label: 'Sales Order', title: 'Create Sales Order', icon: ShoppingCart, group: 'o2d' },
+  { key: 'dispatch', label: 'Actual Dispatch', title: 'Record Actual Dispatch', icon: Truck, group: 'o2d' },
 ];
 
 const FmsTasksPage = () => {
@@ -55,7 +62,7 @@ const FmsTasksPage = () => {
   const hiddenO2d = useHiddenSteps('o2d');
   const o2dRights = useO2dRights();
   const quickActions = QUICK_ACTIONS.filter((a) => (
-    a.key === 'indent' ? !hiddenPurchase.has(stepKey('purchase-indents'))
+    a.step ? !hiddenPurchase.has(stepKey(a.step))
       : a.key === 'order' ? o2dRights.canAdd
         : !hiddenO2d.has(stepKey('2.06'))
   ));
@@ -74,15 +81,22 @@ const FmsTasksPage = () => {
           </ToggleButtonGroup>
         )}
         <Box sx={{ flex: 1 }} />
-        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
-          {quickActions.map((a) => {
+        <Stack direction="row" alignItems="center" sx={{ flexWrap: 'wrap', gap: 0.75 }}>
+          {quickActions.map((a, i) => {
             const Icon = a.icon;
             return (
-              <Button key={a.key} variant="contained" disableElevation size="small" startIcon={<Icon size={15} />}
-                onClick={() => setQuick(a.key)}
-                sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, px: 1.75, whiteSpace: 'nowrap' }}>
-                {a.label}
-              </Button>
+              <React.Fragment key={a.key}>
+                {/* A thin line between the Purchase and the O2D buttons. */}
+                {i > 0 && quickActions[i - 1].group !== a.group && (
+                  <Divider orientation="vertical" flexItem sx={{ mx: 0.25, my: 0.5 }} />
+                )}
+                <Button variant="contained" disableElevation size="small" startIcon={<Icon size={14} />}
+                  onClick={() => setQuick(a.key)} title={a.title} aria-label={a.title}
+                  sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.78rem', borderRadius: 1.5, px: 1.25, py: 0.5,
+                    minWidth: 0, whiteSpace: 'nowrap', '& .MuiButton-startIcon': { mr: 0.5 } }}>
+                  {a.label}
+                </Button>
+              </React.Fragment>
             );
           })}
         </Stack>
@@ -98,6 +112,9 @@ const FmsTasksPage = () => {
 
       <Suspense fallback={null}>
         {quick === 'indent' && <IndentFormDrawer open onClose={closeQuick} />}
+        {quick === 'po' && <PurchaseOrderFormDrawer open onClose={closeQuick} />}
+        {quick === 'grn' && <GrnFormDialog open onClose={closeQuick} />}
+        {quick === 'voucher' && <VoucherFormDialog open onClose={closeQuick} />}
         {quick === 'order' && <OrderEntryDrawer open onClose={closeQuick} />}
         {quick === 'dispatch' && <DispatchEntry open onClose={closeQuick} />}
       </Suspense>
