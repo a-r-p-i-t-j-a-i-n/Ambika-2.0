@@ -7,9 +7,10 @@ import { PackagePlus, Trash2, Save, ArrowRight, Info } from 'lucide-react';
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import {
-  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, newRequestId,
-  O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx, IMS_FORM_MAX, emptyCellSx,
+  ImsShell, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, FormSection, newRequestId,
+  O2D, O2D_TIP, STOCK_TOKENS, num, inr, IMS_FORM_MAX, emptyCellSx,
 } from './imsMeta';
+import { FLUENT, FLUENT_DEPTH, fluentTableSx } from './imsFluent';
 import { useGetImsOverviewQuery, useImsReceiveMutation } from '../../store/api/imsApi';
 import { FIELD } from './imsFieldHelp';
 
@@ -115,10 +116,10 @@ const ImsStockIn = () => {
       {/* What this screen does and does not do — stated up front so nobody
           double-enters a vendor receipt that GRN already posted. */}
       <Paper elevation={0} sx={{
-        borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt,
+        borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg,
       }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">
-          <Box sx={{ color: O2D.brand, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
+          <Box sx={{ color: FLUENT.blue.accent, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
           <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>
             Use this only for stock you are adding <b>by hand</b> — opening balances, corrections, or a receipt with no
             purchase order. Vendor GRNs raised in Procurement already post into IMS automatically, so entering them here
@@ -128,9 +129,9 @@ const ImsStockIn = () => {
       </Paper>
 
       {/* ── Step 1 — the receipt header ── */}
-      <Panel>
-        <StepHead n={1} title="Receipt details" hint="When it arrived and why it is being added." done={!!date} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
+      <FormSection step={1} done={!!date} fluent={FLUENT.lavender} title="Receipt details"
+          hint="When it arrived and why it is being added." testId="cp-in-details">
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 1.25 }}>
           <TextField label="Date received" type="date" size="small" value={date} onChange={(e) => setDate(e.target.value)}
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
           {/* One control, both jobs: pick a predefined reason or type your own.
@@ -190,11 +191,11 @@ const ImsStockIn = () => {
             helperText="Helps you trace this entry later in History."
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
         </Box>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 2 — the lines ── */}
-      <Panel>
-        <StepHead n={2} title="What is coming in?" hint="Tick the items that arrived, add them, then type each quantity." done={lines.length > 0} />
+      <FormSection step={2} done={lines.length > 0} fluent={FLUENT.blue} title="What is coming in?"
+          hint="Tick the items that arrived, add them, then type each quantity." testId="cp-in-items">
         {/* Multi-select: tick several items and add them in one go. Each one
             still lands as an ordinary row with an EMPTY quantity, exactly as a
             one-by-one add did. */}
@@ -204,8 +205,8 @@ const ImsStockIn = () => {
           onAdd={addItems}
         />
 
-        <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-          <Table size="small" sx={imsTableSx(820)}>
+        <TableScroll sx={{ mx: { xs: -1.75, md: -2.25 }, mb: { xs: -1.75, md: -2.25 }, maxWidth: 'none', borderTop: `1px solid ${FLUENT.blue.border}` }}>
+          <Table size="small" sx={fluentTableSx(820, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -277,15 +278,15 @@ const ImsStockIn = () => {
             </TableBody>
           </Table>
         </TableScroll>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 3 — confirm. Totals sit next to the button so the client sees
           exactly what they are committing before they click. ── */}
       <Paper elevation={0} sx={{
-        position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '8px', px: 1.5, py: 1.15,
-        border: `1px solid ${valid ? STOCK_TOKENS.OK.border : O2D.line}`,
-        bgcolor: valid ? STOCK_TOKENS.OK.tint : O2D.surface,
-        boxShadow: '0 6px 20px rgba(28,30,33,0.08)',
+        position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '10px', px: 1.5, py: 1.15,
+        border: `1px solid ${valid ? STOCK_TOKENS.OK.border : FLUENT.grey.border}`,
+        bgcolor: valid ? STOCK_TOKENS.OK.tint : '#fff',
+        boxShadow: FLUENT_DEPTH.hover,
       }}>
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
           <StepHead n={3} title="Confirm and save" hint={valid ? 'Everything looks right.' : 'Add at least one item with a quantity above zero.'} done={valid} />

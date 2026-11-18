@@ -8,8 +8,9 @@ import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import {
   ImsShell, Panel, TableScroll, KpiCard, KpiGrid, MoveChip, EmptyNote, Th,
-  O2D, moveToken, txnLabel, num, imsTableSx,
+  O2D, moveToken, txnLabel, num,
 } from './imsMeta';
+import { FLUENT, fluentTableSx, headerBtnSx } from './imsFluent';
 import { useGetImsMovementsQuery } from '../../store/api/imsApi';
 import { FIELD } from './imsFieldHelp';
 
@@ -104,26 +105,26 @@ const ImsMovements = () => {
       subtitle="Every unit that came in or went out — what, when, why and who recorded it."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!filtered.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          sx={headerBtnSx}>
           Export
         </Button>
       )}
     >
       <KpiGrid>
         <KpiCard label="Movements" value={num(inPeriod.length)} sub={periodLabel}
-          color={O2D.brand} icon={History} actionLabel="Show all" onClick={showAllMovements}
+          tone={FLUENT.blue} icon={History} actionLabel="Show all" onClick={showAllMovements}
           hint="Show every movement in this period — in and out." />
         <KpiCard label="Units received" value={`+${num(totals.in)}`} sub="Came into the store"
-          color={moveToken('IN').color} icon={ArrowDownLeft} actionLabel="Filter"
+          tone={FLUENT.teal} icon={ArrowDownLeft} actionLabel="Filter"
           active={dir === 'IN' && !netView} onClick={() => toggleDir('IN')}
           hint="Show only movements coming into the store." />
         <KpiCard label="Units issued" value={`−${num(totals.out)}`} sub="Left the store"
-          color={moveToken('OUT').color} icon={ArrowUpRight} actionLabel="Filter"
+          tone={FLUENT.orange} icon={ArrowUpRight} actionLabel="Filter"
           active={dir === 'OUT' && !netView} onClick={() => toggleDir('OUT')}
           hint="Show only movements going out of the store." />
         <KpiCard label="Net change" value={`${net >= 0 ? '+' : '−'}${num(Math.abs(net))}`}
           sub={net >= 0 ? 'Store grew this period' : 'Store shrank this period'}
-          color={net >= 0 ? moveToken('IN').color : moveToken('OUT').color} icon={Scale} actionLabel="By item"
+          tone={FLUENT.lavender} icon={Scale} actionLabel="By item"
           active={netView} onClick={toggleNet}
           hint="Break the net change down item by item." />
       </KpiGrid>
@@ -165,7 +166,7 @@ const ImsMovements = () => {
             </Button>
           )}>
           <TableScroll>
-            <Table size="small" sx={imsTableSx(860)} data-testid="ims-net-by-item">
+            <Table size="small" sx={fluentTableSx(860)} data-testid="ims-net-by-item">
               <TableHead>
                 <TableRow>
                   <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -187,7 +188,7 @@ const ImsMovements = () => {
                 {netPaged.map((r, i) => {
                   const t = moveToken(r.net >= 0 ? 'IN' : 'OUT');
                   return (
-                    <TableRow key={r.key} hover sx={{ cursor: r.skuId ? 'pointer' : 'default', borderLeft: `3px solid ${r.net === 0 ? 'transparent' : t.color}` }}
+                    <TableRow key={r.key} hover sx={{ cursor: r.skuId ? 'pointer' : 'default', '& > td:first-of-type': { boxShadow: `inset 3px 0 0 ${r.net === 0 ? 'transparent' : r.net > 0 ? FLUENT.teal.accent : FLUENT.orange.accent}` } }}
                       onClick={() => r.skuId && navigate(`/ims/item/${r.skuId}`)}>
                       <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                       <TableCell sx={{ maxWidth: 280 }}>
@@ -217,7 +218,7 @@ const ImsMovements = () => {
       ) : (
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1000)}>
+          <Table size="small" sx={fluentTableSx(1000)} data-testid="ims-movements-table">
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -244,7 +245,7 @@ const ImsMovements = () => {
               {paged.map((m, i) => {
                 const t = moveToken(m.movementType);
                 return (
-                  <TableRow key={m._id} hover sx={{ cursor: m.skuId ? 'pointer' : 'default' }}
+                  <TableRow key={m._id} hover data-direction={m.movementType} sx={{ cursor: m.skuId ? 'pointer' : 'default', '& > td:first-of-type': { boxShadow: `inset 3px 0 0 ${m.movementType === 'IN' ? FLUENT.teal.accent : FLUENT.orange.accent}` } }}
                     onClick={() => m.skuId && navigate(`/ims/item/${m.skuId}`)}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>

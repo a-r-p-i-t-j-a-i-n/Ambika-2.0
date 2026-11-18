@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import {
-  Box, Paper, Stack, Typography, Skeleton, Table, TableHead, TableBody, TableRow, TableCell,
+  Box, Stack, Typography, Skeleton, Table, TableHead, TableBody, TableRow, TableCell,
   Button, LinearProgress, alpha,
 } from '@mui/material';
 import {
@@ -13,11 +13,12 @@ import {
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import {
-  FgShell, Panel, TableScroll, KpiTile, StatusChip, MoveChip, EmptyNote, Help,
+  FgShell, Panel, TableScroll, KpiCard, KpiGrid, DashboardAlert, StatusChip, MoveChip, EmptyNote, Help,
   O2D, STOCK_TOKENS, STOCK_ORDER, num, inr, compactInr, imsTableSx, moveToken,
   FG_ACCENT, FG_ACCENT_DARK, FG_STATUS_LABEL,
   Th,
 } from './fgImsMeta';
+import { FLUENT, headerBtnSx, primaryBtnSx } from '../ims/imsFluent';
 import { useGetFgDashboardQuery } from '../../store/api/fgImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -118,7 +119,7 @@ const FgImsDashboard = () => {
 
   if (isFetching && !d) {
     return (
-      <FgShell icon={LayoutDashboard} title="Finished Goods" subtitle="Loading your stock position…">
+      <FgShell icon={LayoutDashboard} title="Dashboard" subtitle="Finished Goods — loading your stock position…">
         <Skeleton variant="rounded" height={72} />
         <Skeleton variant="rounded" height={280} />
         <Skeleton variant="rounded" height={280} />
@@ -129,77 +130,54 @@ const FgImsDashboard = () => {
   return (
     <FgShell
       icon={LayoutDashboard}
-      title="Finished Goods"
-      subtitle="Where your finished stock stands today — and what needs producing next."
+      title="Dashboard"
+      subtitle="Finished Goods — where your finished stock stands today, and what needs producing next."
       actions={(
-        <Stack direction="row" spacing={0.75}>
-          <Button size="small" variant="outlined" startIcon={<Boxes size={14} />} onClick={() => navigate('/fg-ims/stock')}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
-            Open stock list
+        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
+          {/* The production verdict, as one clickable alert beside the stock
+              list: how many finished goods need a production run, and it opens
+              the Production Plan that lists them. */}
+          <DashboardAlert
+            count={needProduction}
+            label={`finished good${needProduction === 1 ? ' needs' : 's need'} production`}
+            okLabel="Every finished good is at a healthy level"
+            detail={needProduction
+              ? `${num(s.outOfStock)} out of stock · ${num(s.reorder)} at the Reorder At level · ${num(s.low)} running low. Opens the Production Plan.`
+              : 'Nothing is at or below its Reorder At level right now.'}
+            onClick={() => navigate('/fg-ims/planning')}
+            onOkClick={() => navigate('/fg-ims/stock')}
+          />
+          <Button size="small" variant="outlined" startIcon={<Boxes size={14} />} onClick={() => navigate('/fg-ims/stock')} sx={headerBtnSx}>
+            Open Stock List
           </Button>
           <Button size="small" variant="contained" disableElevation startIcon={<Factory size={14} />}
-            onClick={() => navigate('/fg-ims/planning')}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: FG_ACCENT, '&:hover': { bgcolor: FG_ACCENT_DARK } }}>
-            Production plan
+            onClick={() => navigate('/fg-ims/planning')} sx={primaryBtnSx(FG_ACCENT, FG_ACCENT_DARK)}>
+            Production Plan
           </Button>
         </Stack>
       )}
     >
-      {/* ── The one-line verdict. This is the first thing to read: either there
-          is production to schedule, or there isn't. ── */}
-      <Paper elevation={0} sx={{
-        borderRadius: '8px', px: 1.75, py: 1.4,
-        border: `1px solid ${needProduction ? STOCK_TOKENS.REORDER.border : STOCK_TOKENS.OK.border}`,
-        bgcolor: needProduction ? STOCK_TOKENS.REORDER.tint : STOCK_TOKENS.OK.tint,
-      }}>
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Box sx={{
-            width: 34, height: 34, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0,
-            bgcolor: needProduction ? STOCK_TOKENS.REORDER.bg : STOCK_TOKENS.OK.bg,
-            color: needProduction ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color,
-          }}>
-            {needProduction ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-          </Box>
-          <Box sx={{ minWidth: 0, mr: 'auto' }}>
-            <Typography sx={{
-              fontSize: '0.9rem', fontWeight: 800, lineHeight: 1.25,
-              color: needProduction ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color,
-            }}>
-              {needProduction
-                ? `${needProduction} finished good${needProduction > 1 ? 's need' : ' needs'} production`
-                : 'Every finished good is at a healthy level'}
-            </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>
-              {needProduction
-                ? `${num(s.outOfStock)} out of stock · ${num(s.reorder)} at the Reorder At level · ${num(s.low)} running low.`
-                : 'Nothing is at or below its Reorder At level right now. Check back after the next dispatch.'}
-            </Typography>
-          </Box>
-          {needProduction > 0 && (
-            <Button size="small" variant="contained" disableElevation endIcon={<ArrowRight size={14} />}
-              onClick={() => navigate('/fg-ims/planning')}
-              sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: STOCK_TOKENS.REORDER.color }}>
-              See what to produce
-            </Button>
-          )}
-        </Stack>
-      </Paper>
-
-      {/* ── Headline numbers. Every tile is a shortcut into the filtered list. ── */}
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Finished goods" value={num(s.itemCount)} sub="Tracked in the master list"
-          color={FG_ACCENT} icon={Boxes} onClick={() => navigate('/fg-ims/stock')} />
-        <KpiTile label="Closing Stock" value={num(s.totalOnHand)} sub="Total units across all items"
-          color="#0f766e" icon={PackageOpen} onClick={() => navigate('/fg-ims/stock')} />
-        <KpiTile label="Stock value" value={inr(s.totalStockValue)} sub="At the costing rate"
-          color="#6366f1" icon={IndianRupee} />
-        <KpiTile label="Booked (orders)" value={num(s.totalBooked)} sub="Committed to customer orders"
-          color="#1d4ed8" icon={ClipboardList} />
-        <KpiTile label="Need production" value={num(needProduction)} sub="At or below Reorder At"
-          color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle} onClick={() => navigate('/fg-ims/planning')} />
-        <KpiTile label="Low cover" value={num(s.low)} sub="Watch these next"
-          color={STOCK_TOKENS.LOW.color} icon={TrendingDown} onClick={() => navigate('/fg-ims/stock?status=LOW')} />
-      </Stack>
+      {/* ── Headline numbers. Every card opens the screen that explains it. ── */}
+      <KpiGrid compact>
+        <KpiCard compact label="Finished goods" value={num(s.itemCount)} sub="Tracked in the master list"
+          tone={FLUENT.teal} icon={Boxes} onClick={() => navigate('/fg-ims/stock')}
+          hint="Open Stock & Master Data with every finished good." />
+        <KpiCard compact label="Closing Stock" value={num(s.totalOnHand)} sub="Total units across all items"
+          tone={FLUENT.blue} icon={PackageOpen} onClick={() => navigate('/fg-ims/stock?view=in-stock')}
+          hint="Open Stock & Master Data showing only items with stock on hand, highest first." />
+        <KpiCard compact label="Stock value" value={inr(s.totalStockValue)} sub="At the costing rate"
+          tone={FLUENT.grey} icon={IndianRupee} onClick={() => navigate('/fg-ims/stock?view=value')}
+          hint="Open Stock & Master Data ranked by stock value, highest first." />
+        <KpiCard compact label="Booked (orders)" value={num(s.totalBooked)} sub="Committed to customer orders"
+          tone={FLUENT.lavender} icon={ClipboardList} onClick={() => navigate('/fg-ims/stock?view=booked')}
+          hint="Open Stock & Master Data showing the items booked to customer orders, most booked first." />
+        <KpiCard compact label="Need production" value={num(needProduction)} sub="Out of stock + at Reorder At"
+          tone={FLUENT.orange} icon={AlertTriangle} onClick={() => navigate('/fg-ims/planning')}
+          hint="Open the Production Plan with how much to produce for each." />
+        <KpiCard compact label="Low cover" value={num(s.low)} sub="Watch these next"
+          tone={FLUENT.amber} icon={TrendingDown} onClick={() => navigate('/fg-ims/stock?status=LOW')}
+          hint="Open Stock & Master Data filtered to items running low." />
+      </KpiGrid>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) minmax(0, 1.25fr)' }, gap: 1.25 }}>
         {/* ── Stock health donut + a legend that spells out every state ── */}

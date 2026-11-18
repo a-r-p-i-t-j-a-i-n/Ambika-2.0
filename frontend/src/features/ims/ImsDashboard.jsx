@@ -13,10 +13,11 @@ import {
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import {
-  ImsShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, MoveChip, EmptyNote, Help,
+  ImsShell, Panel, TableScroll, KpiCard, KpiGrid, DashboardAlert, StatusChip, MoveChip, EmptyNote, Help,
   O2D, STOCK_TOKENS, STOCK_ORDER, num, inr, compactInr, imsTableSx, moveToken,
   Th,
 } from './imsMeta';
+import { FLUENT, headerBtnSx, primaryBtnSx } from './imsFluent';
 import { useGetImsDashboardQuery } from '../../store/api/imsApi';
 import { FIELD } from './imsFieldHelp';
 
@@ -102,75 +103,44 @@ const ImsDashboard = () => {
       title="Dashboard"
       subtitle="Consumables & Packaging — where your stock stands today, and what needs buying next."
       actions={(
-        <Stack direction="row" spacing={0.75}>
-          <Button size="small" variant="outlined" startIcon={<Boxes size={14} />} onClick={() => navigate('/ims/stock')}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
-            Open stock list
+        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
+          {/* The buying verdict, as one clickable alert beside the stock list. */}
+          <DashboardAlert
+            count={needBuying}
+            label={`item${needBuying === 1 ? ' needs' : 's need'} to be ordered`}
+            okLabel="Every item is at a healthy level"
+            detail={needBuying
+              ? `${num(s.outOfStock)} out of stock · ${num(s.reorder)} at reorder point · ${num(s.low)} running low. Opens the Buying List.`
+              : 'Nothing is at or below its reorder point right now.'}
+            onClick={() => navigate('/ims/reorder')}
+            onOkClick={() => navigate('/ims/stock')}
+          />
+          <Button size="small" variant="outlined" startIcon={<Boxes size={14} />} onClick={() => navigate('/ims/stock')} sx={headerBtnSx}>
+            Open Stock List
           </Button>
           <Button size="small" variant="contained" disableElevation startIcon={<ShoppingCart size={14} />}
-            onClick={() => navigate('/ims/reorder')}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
-            Buying list
+            onClick={() => navigate('/ims/reorder')} sx={primaryBtnSx(O2D.brand)}>
+            Buying List
           </Button>
         </Stack>
       )}
     >
-      {/* ── The one-line verdict. This is the first thing the client should read:
-          either there is buying to do, or there isn't. ── */}
-      <Paper elevation={0} sx={{
-        borderRadius: '8px', px: 1.75, py: 1.4,
-        border: `1px solid ${needBuying ? STOCK_TOKENS.REORDER.border : STOCK_TOKENS.OK.border}`,
-        bgcolor: needBuying ? STOCK_TOKENS.REORDER.tint : STOCK_TOKENS.OK.tint,
-      }}>
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Box sx={{
-            width: 34, height: 34, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0,
-            bgcolor: needBuying ? STOCK_TOKENS.REORDER.bg : STOCK_TOKENS.OK.bg,
-            color: needBuying ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color,
-          }}>
-            {needBuying ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-          </Box>
-          <Box sx={{ minWidth: 0, mr: 'auto' }}>
-            <Typography sx={{
-              fontSize: '0.9rem', fontWeight: 800, lineHeight: 1.25,
-              color: needBuying ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color,
-            }}>
-              {needBuying
-                ? `${needBuying} item${needBuying > 1 ? 's' : ''} need${needBuying > 1 ? '' : 's'} to be ordered`
-                : 'Every item is at a healthy level'}
-            </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>
-              {needBuying
-                ? `${num(s.outOfStock)} out of stock · ${num(s.reorder)} at reorder point · ${num(s.low)} running low.`
-                : 'Nothing is at or below its reorder point right now. Check back after the next production issue.'}
-            </Typography>
-          </Box>
-          {needBuying > 0 && (
-            <Button size="small" variant="contained" disableElevation endIcon={<ArrowRight size={14} />}
-              onClick={() => navigate('/ims/reorder')}
-              sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: STOCK_TOKENS.REORDER.color }}>
-              See what to buy
-            </Button>
-          )}
-        </Stack>
-      </Paper>
-
-      {/* ── Headline numbers. Every tile is a shortcut into the filtered list. ── */}
-      <KpiGrid min={190}>
-        <KpiCard label="Items tracked" value={num(s.itemCount)} sub="Consumables & packaging"
-          color={O2D.brand} icon={Boxes} actionLabel="Open" onClick={() => navigate('/ims/stock')}
+      {/* ── Headline numbers. Every card opens the screen that explains it. ── */}
+      <KpiGrid compact>
+        <KpiCard compact label="Items tracked" value={num(s.itemCount)} sub="Consumables & packaging"
+          tone={FLUENT.teal} icon={Boxes} onClick={() => navigate('/ims/stock')}
           hint="Open Stock & Master Data with every item." />
-        <KpiCard label="Closing Stock" value={num(s.totalOnHand)} sub="Total units across all items"
-          color="#0f766e" icon={PackageOpen} actionLabel="In stock" onClick={() => navigate('/ims/stock?view=in-stock')}
+        <KpiCard compact label="Closing Stock" value={num(s.totalOnHand)} sub="Total units across all items"
+          tone={FLUENT.blue} icon={PackageOpen} onClick={() => navigate('/ims/stock?view=in-stock')}
           hint="Open Stock & Master Data showing only items with stock on hand." />
-        <KpiCard label="Value in store" value={inr(s.totalStockValue)} sub="At last purchase cost"
-          color="#4338ca" icon={IndianRupee} actionLabel="Open" onClick={() => navigate('/ims/stock')}
-          hint="Open Stock & Master Data." />
-        <KpiCard label="To order now" value={num(needBuying)} sub="At or below reorder point"
-          color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle} actionLabel="Buying List" onClick={() => navigate('/ims/reorder')}
+        <KpiCard compact label="Value in store" value={inr(s.totalStockValue)} sub="At last purchase cost"
+          tone={FLUENT.grey} icon={IndianRupee} onClick={() => navigate('/ims/stock?view=value')}
+          hint="Open Stock & Master Data ranked by stock value, highest first." />
+        <KpiCard compact label="To order now" value={num(needBuying)} sub="Out of stock + at reorder point"
+          tone={FLUENT.orange} icon={AlertTriangle} onClick={() => navigate('/ims/reorder')}
           hint="Open the Buying List." />
-        <KpiCard label="Running low" value={num(s.low)} sub="Watch these next"
-          color={STOCK_TOKENS.LOW.color} icon={TrendingDown} actionLabel="Filter" onClick={() => navigate('/ims/stock?status=LOW')}
+        <KpiCard compact label="Running low" value={num(s.low)} sub="Watch these next"
+          tone={FLUENT.amber} icon={TrendingDown} onClick={() => navigate('/ims/stock?status=LOW')}
           hint="Open Stock & Master Data filtered to items running low." />
       </KpiGrid>
 
