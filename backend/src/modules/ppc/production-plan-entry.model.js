@@ -8,7 +8,8 @@
  * director wants that visible party-wise on a calendar long before any PO.
  *
  * So this is the same idea turned the other way round: PARTY + DATE first,
- * order optional. One document = one party, one date, N SKU lines.
+ * order optional. One document = one party (or none), one date, N SKU lines.
+ * Lines entered on different dates are saved as one document per date.
  *   - no order?  → `source: 'MANUAL'`, salesOrderId stays null
  *   - order came → link it via salesOrderId/soNumber; the plan is unchanged
  *
@@ -56,9 +57,9 @@ const ProductionPlanEntrySchema = new Schema({
 
   planNo:     { type: String, unique: true, index: true },
 
-  // ── Who and when — the two things the planner always knows ──────────
-  partyId:    { type: Schema.Types.ObjectId, ref: 'Party', required: true, index: true },
-  partyName:  { type: String, required: true },
+  // ── Who and when — the party is optional (a plan can be for SKUs only) ──
+  partyId:    { type: Schema.Types.ObjectId, ref: 'Party', default: null, index: true },
+  partyName:  { type: String, default: '' },
   plannedDate:{ type: Date, required: true, index: true },
 
   items: {

@@ -186,7 +186,11 @@ export default function ProductionPlanCalendar() {
   });
   const [deletePlan] = useDeleteProductionPlanMutation();
 
-  const plans = useMemo(() => res?.data || [], [res]);
+  // A plan made for SKUs only shows under "No party" (filter, cards, party grid, export).
+  const plans = useMemo(
+    () => (res?.data || []).map((p) => (p.partyName ? p : { ...p, partyName: 'No party' })),
+    [res],
+  );
 
   const partyOptions = useMemo(
     () => [...new Set(plans.map((p) => p.partyName).filter(Boolean))].sort(),
