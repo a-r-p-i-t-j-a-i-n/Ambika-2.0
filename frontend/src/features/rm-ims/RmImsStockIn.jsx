@@ -7,10 +7,11 @@ import { PackagePlus, Plus, Trash2, Save, ArrowRight, Info } from 'lucide-react'
 import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import {
-  RmShell, Panel, TableScroll, EmptyNote, Th, KindChip, uomOf, newRequestId,
+  RmShell, TableScroll, EmptyNote, FormSection, Th, KindChip, uomOf, newRequestId,
   STOCK_IN_REASON_OPTIONS, RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
-  O2D, O2D_TIP, STOCK_TOKENS, num, inr, imsTableSx, IMS_FORM_MAX,
+  O2D, O2D_TIP, STOCK_TOKENS, num, inr, IMS_FORM_MAX,
 } from './rmImsMeta';
+import { FLUENT, FLUENT_DEPTH, rmTableSx } from './rmFluent';
 import { useGetRmOverviewQuery, useRmReceiveMutation, useGetRmReceivedCoilsQuery } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -217,13 +218,13 @@ const RmImsStockIn = () => {
   return (
     <RmShell
       icon={PackagePlus}
-      title="Stock In — bring raw material into the store"
-      subtitle="Record what arrived. On-hand goes up and the movement is logged against your name."
+      title="Stock In"
+      subtitle="Bring raw material into the store. On-hand goes up and the movement is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
-      <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+      <Paper elevation={0} sx={{ borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">
-          <Box sx={{ color: O2D.brand, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
+          <Box sx={{ color: FLUENT.blue.accent, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
           <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>
             Use this only for material you are adding <b>by hand</b> — opening balances, corrections, or a receipt with no
             purchase order. Vendor GRNs raised in Purchase FMS already post into RM IMS automatically, so entering them
@@ -232,127 +233,129 @@ const RmImsStockIn = () => {
         </Stack>
       </Paper>
 
-      {/* ── One form: the items, then when / why / where, then Save ── */}
-      <Panel dense>
-        <TableScroll>
-          <Table size="small" sx={imsTableSx(1140)}>
-            <TableHead>
-              <TableRow>
-                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
-                <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
-                <TableCell align="right"><Th label="UOM" hint={H.unit} /></TableCell>
-                <TableCell align="right">In store now</TableCell>
-                <TableCell align="right">Quantity in</TableCell>
-                {/* Circles are counted in pieces but also weighed. Recording the
-                    weight beside the count keeps both, and keeps them apart. */}
-                <TableCell align="right"><Th label="Weight (kg)" hint={H.weightKg} /></TableCell>
-                <TableCell align="right"><Th label="Cost per unit" hint={H.costPerUnit} /></TableCell>
-                <TableCell><Th label="Batch" hint={H.batchNo} /></TableCell>
-                <TableCell align="right"><Th label="New balance" hint={H.newBalance} /></TableCell>
-                <TableCell align="right" />
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {lines.map((l, i) => {
-                const qty = Number(l.quantity || 0);
-                const newBal = Number(l.sku?.onHand || 0) + qty;
-                return (
-                  <TableRow key={i} hover>
-                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
-                    <TableCell sx={{ minWidth: 290 }}>
-                      <Autocomplete
-                        size="small" options={items} value={l.sku} onChange={(_, v) => setLine(i, 'sku', v)}
-                        getOptionLabel={(o) => (o ? `${o.skuCode} — ${o.skuName}` : '')}
-                        isOptionEqualToValue={(a, b) => a.skuId === b?.skuId}
-                        renderOption={(props, o) => (
-                          <li {...props} key={o.skuId}>
-                            <Box sx={{ flex: 1, minWidth: 0 }}>
-                              <Stack direction="row" spacing={0.75} alignItems="center">
-                                <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }}>{o.skuName}</Typography>
-                                <KindChip kind={o.kind} withHint={false} />
-                              </Stack>
-                              <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
-                                {o.skuCode} · {num(o.onHand)} in store
-                              </Typography>
-                            </Box>
-                          </li>
+      {/* ── What is coming in?, then when, why and where, then Save — each in a Register SKU-style section ── */}
+      <FormSection step={1} fluent={FLUENT.blue} title="What is coming in?" hint="Pick each coil or circle and how much arrived. A batch number looks up the receipt behind it." bodySx={{ gap: 1.5 }} testId="rm-entry-items">
+        <Box sx={{ mx: { xs: -1.75, md: -2.25 }, borderTop: `1px solid ${O2D.lineSoft}`, borderBottom: `1px solid ${O2D.lineSoft}` }}>
+          <TableScroll>
+            <Table size="small" sx={rmTableSx(1140, { zebra: false })}>
+              <TableHead>
+                <TableRow>
+                  <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                  <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
+                  <TableCell align="right"><Th label="UOM" hint={H.unit} /></TableCell>
+                  <TableCell align="right">In store now</TableCell>
+                  <TableCell align="right">Quantity in</TableCell>
+                  {/* Circles are counted in pieces but also weighed. Recording the
+                      weight beside the count keeps both, and keeps them apart. */}
+                  <TableCell align="right"><Th label="Weight (kg)" hint={H.weightKg} /></TableCell>
+                  <TableCell align="right"><Th label="Cost per unit" hint={H.costPerUnit} /></TableCell>
+                  <TableCell><Th label="Batch" hint={H.batchNo} /></TableCell>
+                  <TableCell align="right"><Th label="New balance" hint={H.newBalance} /></TableCell>
+                  <TableCell align="right" />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {lines.map((l, i) => {
+                  const qty = Number(l.quantity || 0);
+                  const newBal = Number(l.sku?.onHand || 0) + qty;
+                  return (
+                    <TableRow key={i} hover>
+                      <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
+                      <TableCell sx={{ minWidth: 290 }}>
+                        <Autocomplete
+                          size="small" options={items} value={l.sku} onChange={(_, v) => setLine(i, 'sku', v)}
+                          getOptionLabel={(o) => (o ? `${o.skuCode} — ${o.skuName}` : '')}
+                          isOptionEqualToValue={(a, b) => a.skuId === b?.skuId}
+                          renderOption={(props, o) => (
+                            <li {...props} key={o.skuId}>
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Stack direction="row" spacing={0.75} alignItems="center">
+                                  <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }}>{o.skuName}</Typography>
+                                  <KindChip kind={o.kind} withHint={false} />
+                                </Stack>
+                                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
+                                  {o.skuCode} · {num(o.onHand)} in store
+                                </Typography>
+                              </Box>
+                            </li>
+                          )}
+                          renderInput={(p) => <TextField {...p} placeholder="Search a coil or circle…" />}
+                        />
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontSize: '0.7rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
+                        {l.sku ? uomOf(l.sku) : '—'}
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>
+                        {l.sku ? num(l.sku.onHand) : '—'}
+                      </TableCell>
+                      <TableCell align="right" sx={{ width: 130 }}>
+                        <TextField size="small" type="number" value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)}
+                          inputProps={{ min: 0, style: { textAlign: 'right', width: 82, fontWeight: 700 },
+                            'aria-label': `Quantity in — ${l.sku?.skuName || 'item'}` }} placeholder="0" />
+                      </TableCell>
+                      <TableCell align="right" sx={{ width: 120 }}>
+                        {/* Weight, optional and entered on its own for every item — never
+                            copied from the quantity. For an item counted in kg the two
+                            should agree, so a different figure is pointed out (not blocked). */}
+                        {!l.sku ? (
+                          <Tooltip arrow slotProps={O2D_TIP} title="Pick an item first.">
+                            <Box component="span" sx={{ color: O2D.faint, cursor: 'help' }}>—</Box>
+                          </Tooltip>
+                        ) : (
+                          <WeightField line={l} onChange={(v) => setLine(i, 'quantityKg', v)} />
                         )}
-                        renderInput={(p) => <TextField {...p} placeholder="Search a coil or circle…" />}
-                      />
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.7rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
-                      {l.sku ? uomOf(l.sku) : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>
-                      {l.sku ? num(l.sku.onHand) : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ width: 130 }}>
-                      <TextField size="small" type="number" value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)}
-                        inputProps={{ min: 0, style: { textAlign: 'right', width: 82, fontWeight: 700 },
-                          'aria-label': `Quantity in — ${l.sku?.skuName || 'item'}` }} placeholder="0" />
-                    </TableCell>
-                    <TableCell align="right" sx={{ width: 120 }}>
-                      {/* Weight, optional and entered on its own for every item — never
-                          copied from the quantity. For an item counted in kg the two
-                          should agree, so a different figure is pointed out (not blocked). */}
-                      {!l.sku ? (
-                        <Tooltip arrow slotProps={O2D_TIP} title="Pick an item first.">
-                          <Box component="span" sx={{ color: O2D.faint, cursor: 'help' }}>—</Box>
+                      </TableCell>
+                      <TableCell align="right" sx={{ width: 130 }}>
+                        <TextField size="small" type="number" value={l.unitCost} onChange={(e) => setLine(i, 'unitCost', e.target.value)}
+                          InputProps={{ startAdornment: <Typography sx={{ fontSize: '0.75rem', color: O2D.faint, mr: 0.4 }}>₹</Typography> }}
+                          inputProps={{ min: 0, style: { textAlign: 'right', width: 70 } }}
+                          placeholder={l.sku?.rate ? String(l.sku.rate) : '0'} />
+                      </TableCell>
+                      <TableCell sx={{ width: 230, minWidth: 230 }}>
+                        <BatchField
+                          value={l.batchNo}
+                          sku={l.sku}
+                          onChange={(v) => setLine(i, 'batchNo', v)}
+                          onResolve={(found, mismatch) => applyReceipt(i, found, mismatch)}
+                        />
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        {l.sku && qty > 0 ? (
+                          <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end">
+                            <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>{num(l.sku.onHand)}</Typography>
+                            <ArrowRight size={12} color={O2D.faint} />
+                            <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: STOCK_TOKENS.OK.color }}>{num(newBal)}</Typography>
+                          </Stack>
+                        ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>}
+                      </TableCell>
+                      <TableCell align="right" sx={{ width: 48 }}>
+                        <Tooltip arrow slotProps={O2D_TIP} title="Clear this line">
+                          <IconButton size="small" onClick={() => delLine(i)} sx={{ color: O2D.faint, '&:hover': { color: STOCK_TOKENS.OUT_OF_STOCK.color } }}>
+                            <Trash2 size={15} />
+                          </IconButton>
                         </Tooltip>
-                      ) : (
-                        <WeightField line={l} onChange={(v) => setLine(i, 'quantityKg', v)} />
-                      )}
-                    </TableCell>
-                    <TableCell align="right" sx={{ width: 130 }}>
-                      <TextField size="small" type="number" value={l.unitCost} onChange={(e) => setLine(i, 'unitCost', e.target.value)}
-                        InputProps={{ startAdornment: <Typography sx={{ fontSize: '0.75rem', color: O2D.faint, mr: 0.4 }}>₹</Typography> }}
-                        inputProps={{ min: 0, style: { textAlign: 'right', width: 70 } }}
-                        placeholder={l.sku?.rate ? String(l.sku.rate) : '0'} />
-                    </TableCell>
-                    <TableCell sx={{ width: 230, minWidth: 230 }}>
-                      <BatchField
-                        value={l.batchNo}
-                        sku={l.sku}
-                        onChange={(v) => setLine(i, 'batchNo', v)}
-                        onResolve={(found, mismatch) => applyReceipt(i, found, mismatch)}
-                      />
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                      {l.sku && qty > 0 ? (
-                        <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end">
-                          <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>{num(l.sku.onHand)}</Typography>
-                          <ArrowRight size={12} color={O2D.faint} />
-                          <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: STOCK_TOKENS.OK.color }}>{num(newBal)}</Typography>
-                        </Stack>
-                      ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>}
-                    </TableCell>
-                    <TableCell align="right" sx={{ width: 48 }}>
-                      <Tooltip arrow slotProps={O2D_TIP} title="Clear this line">
-                        <IconButton size="small" onClick={() => delLine(i)} sx={{ color: O2D.faint, '&:hover': { color: STOCK_TOKENS.OUT_OF_STOCK.color } }}>
-                          <Trash2 size={15} />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {lines.length === 0 && (
-                <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
-                  <EmptyNote icon={PackagePlus} title="No items added yet" hint="Add a line to start." />
-                </TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableScroll>
-
-        <Box sx={{ px: 1.5, pb: 1.5 }}>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {lines.length === 0 && (
+                  <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
+                    <EmptyNote icon={PackagePlus} title="No items added yet" hint="Add a line to start." />
+                  </TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableScroll>
+        </Box>
           <Button size="small" startIcon={<Plus size={14} />} onClick={addLine}
-            sx={{ mt: 1, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', color: O2D.brand }}>
+            sx={{ alignSelf: 'flex-start', mt: -0.5, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', color: O2D.brand }}>
             Add another item
           </Button>
+      </FormSection>
 
+      <FormSection step={2} fluent={FLUENT.lavender} title="When, why and where" hint="The date it arrived, why it is being added by hand, and where it landed." testId="rm-entry-details">
           {/* When it arrived, why it is added, and where it landed. */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25, mt: 1.75 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.5 }}>
             <TextField size="small" type="date" label="Date received" value={header.date}
               onChange={(e) => setHeader((h) => ({ ...h, date: e.target.value }))}
               InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
@@ -375,10 +378,17 @@ const RmImsStockIn = () => {
                 inputProps={{ maxLength: 200 }} />
             )}
           </Box>
+      </FormSection>
 
+        {/* ── Save — pinned, so it is always in reach ── */}
+        <Paper elevation={0} data-testid="rm-entry-savebar" sx={{
+          position: 'sticky', bottom: 10, zIndex: 4, borderRadius: '12px', px: { xs: 1.5, md: 2.25 }, py: 1.25,
+          border: `1px solid ${ready ? STOCK_TOKENS.OK.border : FLUENT.grey.border}`,
+          bgcolor: ready ? STOCK_TOKENS.OK.tint : '#fff',
+          boxShadow: FLUENT_DEPTH.hover,
+        }}>
           {/* Save — the last line of the same form. */}
-          <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap
-            sx={{ mt: 1.75, pt: 1.25, borderTop: `1px solid ${O2D.lineSoft}` }}>
+          <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: ready ? STOCK_TOKENS.OK.color : O2D.sub, mr: 'auto' }}>{status}</Typography>
             <Chip size="small" label={`${valid.length} item${valid.length === 1 ? '' : 's'}`}
               sx={{ height: 24, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
@@ -394,8 +404,7 @@ const RmImsStockIn = () => {
               Add to store
             </Button>
           </Stack>
-        </Box>
-      </Panel>
+        </Paper>
     </RmShell>
   );
 };

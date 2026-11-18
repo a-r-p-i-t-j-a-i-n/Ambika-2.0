@@ -1,21 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, TextField, InputAdornment, Table, TableHead, TableBody, TableRow, TableCell,
-  IconButton, Tooltip, Skeleton, Dialog, DialogTitle, DialogContent, DialogActions, Button, MenuItem,
-  CircularProgress, Collapse, TablePagination, Chip, Switch, FormControlLabel, Alert,
+  IconButton, Tooltip, Skeleton, Button, MenuItem, Collapse, TablePagination, Chip, Alert, alpha,
 } from '@mui/material';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Layers, Search, Pencil, Eye, X, Save, Info, Download, Calculator, Disc3, CircleDashed } from 'lucide-react';
+import { Layers, Search, Pencil, Eye, X, Download, Calculator, Disc3, CircleDashed, AlertTriangle, IndianRupee } from 'lucide-react';
 import dayjs from 'dayjs';
-import { enqueueSnackbar } from 'notistack';
 import {
-  RmShell, Panel, TableScroll, KpiTile, StatusChip, StatusLegend, EmptyNote, Th, Eyebrow,
+  RmShell, Panel, TableScroll, RmKpiCard, RmKpiGrid, StatusChip, StatusLegend, EmptyNote, Th,
   KindChip, AvailMeter, availBand, uomOf,
-  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr, imsTableSx,
+  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr,
 } from './rmImsMeta';
+import { FLUENT, rmTableSx } from './rmFluent';
 import QtyRangeFilter from '../ims/QtyRangeFilter';
 import { NO_QTY_RANGE, matchesQtyRange } from '../ims/qtyRange';
-import { useGetRmOverviewQuery, useUpsertRmPolicyMutation } from '../../store/api/rmImsApi';
+import { useGetRmOverviewQuery } from '../../store/api/rmImsApi';
+import RmPolicyDialog from './RmPolicyDialog';
 import { FIELD } from '../ims/imsFieldHelp';
 import AwaitingQcNote from '../ims/AwaitingQcNote';
 
@@ -163,265 +163,15 @@ const ColorCodingLegend = () => (
   </Stack>
 );
 
-const helperSx = { sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0, mt: 0.4 } };
-
-// Safety Factor bounds — the same 1.0–5.0 in 0.1 steps that Consumables &
-// Packaging uses and that rmPolicySchema now enforces server-side. Below 1.0 the
-// "safety" stock sits under the lead-time demand, which is a negative buffer.
-const SF_MIN = 1;
-const SF_MAX = 5;
-const SF_STEP = 0.1;
-
-/** '' when the value is a valid Safety Factor, otherwise the message to show. */
-const safetyFactorError = (v) => {
-  if (v === '' || v === null || v === undefined) return 'Safety Factor is required.';
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 'Enter a number.';
-  if (n < SF_MIN || n > SF_MAX) return `Must be between ${SF_MIN.toFixed(1)} and ${SF_MAX.toFixed(1)}.`;
-  // 1.2 / 0.1 is 11.999… in binary floating point, so compare against the
-  // nearest whole step with a tolerance instead of using a modulo.
-  const steps = n / SF_STEP;
-  if (Math.abs(steps - Math.round(steps)) > 1e-6) return 'Use steps of 0.1 — e.g. 1.0, 1.2, 1.5, 2.0.';
-  return '';
-};
-
-// ── Planning policy dialog ───────────────────────────────────────────────────
-// Same idea as the consumables drawer: show the arithmetic live, so nobody has
-// to save a change to find out what it did to the reorder point.
-const PolicyDialog = ({ row, onClose }) => {
-  const [save, { isLoading }] = useUpsertRmPolicyMutation();
-  const [f, setF] = useState({
-    consumptionMode: row.consumptionMode || 'LOW',
-    adcLow: row.adcLow || 0, adcNormal: row.adcNormal || 0, adcPeak: row.adcPeak || 0,
-    leadDays: row.leadDays || 16, safetyFactor: row.safetyFactor ?? 1.5,
-    moq: row.moq || 0,
-    // The stored override, not the resolved figure: in AUTO the field shows the
-    // live formula instead, so seeding it with the resolved max level would turn
-    // a calculated number into a "manual" one the moment somebody toggled.
-    maxLevel: row.storedMaxLevel || '',
-    // The server resolves MANUAL only when the stored Max Level is a genuine
-    // override (explicitly set, or a legacy value the formula cannot explain).
-    // Anything else follows ADC × Lead Time × Safety Factor.
-    maxLevelMode: row.maxLevelMode === 'MANUAL' ? 'MANUAL' : 'AUTO',
-    materialInTransit: row.inTransit || 0, bookedQty: row.booked || 0,
-    vendorName: row.vendorName || '', rate: row.rate || 0,
-  });
-  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
-
-  const activeAdc = Number({ LOW: f.adcLow, NORMAL: f.adcNormal, PEAK: f.adcPeak }[f.consumptionMode]) || 0;
-  const lead = Number(f.leadDays) || 0;
-  const sf = Number(f.safetyFactor) || 0;
-  const manual = f.maxLevelMode === 'MANUAL';
-  const storedMax = Number(f.maxLevel) || 0;
-  // Max Level = Daily Avg Consumption × Lead Time × Safety Factor. Kept live, so
-  // moving the Safety Factor moves the level in front of the user's eyes.
-  const formulaMax = Math.round(activeAdc * lead * sf);
-  const effectiveMax = manual && storedMax > 0 ? storedMax : formulaMax;
-  // The reorder point is lead-time demand and carries NO Safety Factor — the
-  // Safety Factor belongs to the Max Level. Mirrors rmIms.service.js, which
-  // computes reorderPoint = adc × leadDays.
-  const derivedReorderAt = Math.round(activeAdc * lead);
-  const safetyStock = Math.max(0, effectiveMax - derivedReorderAt);
-  const modeLabel = { LOW: 'Low', NORMAL: 'Normal', PEAK: 'Peak' }[f.consumptionMode];
-  const uom = uomOf(row);
-
-  const sfError = safetyFactorError(f.safetyFactor);
-  const maxError = manual && !(storedMax > 0) ? 'Enter a Max Level, or switch back to the calculated value.' : '';
-
-  const submit = async () => {
-    if (sfError || maxError) { enqueueSnackbar(sfError || maxError, { variant: 'warning' }); return; }
-    try {
-      await save({
-        skuId: row.skuId,
-        consumptionMode: f.consumptionMode,
-        adcLow: Number(f.adcLow) || 0, adcNormal: Number(f.adcNormal) || 0, adcPeak: Number(f.adcPeak) || 0,
-        leadDays: lead, safetyFactor: sf,
-        moq: Number(f.moq) || 0,
-        // Always sent, so the server never has to infer this row's mode again.
-        maxLevel: storedMax, maxLevelMode: f.maxLevelMode,
-        materialInTransit: Number(f.materialInTransit) || 0, bookedQty: Number(f.bookedQty) || 0,
-        vendorName: f.vendorName || '', rate: Number(f.rate) || 0,
-      }).unwrap();
-      enqueueSnackbar('Planning policy saved.', { variant: 'success' });
-      onClose();
-    } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not save the policy.', { variant: 'error' }); }
-  };
-
-  return (
-    <Dialog open onClose={onClose} maxWidth="sm" fullWidth
-      PaperProps={{ sx: { borderRadius: '10px', border: `1px solid ${O2D.line}` } }}>
-      <DialogTitle sx={{ py: 1.25, borderBottom: `1px solid ${O2D.lineSoft}` }}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Box sx={{ minWidth: 0, mr: 'auto' }}>
-            <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: O2D.ink }}>Planning policy</Typography>
-            <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub }}>
-              {row.skuName} · {row.skuCode}
-            </Typography>
-          </Box>
-          <KindChip kind={row.kind} withHint={false} />
-          <IconButton size="small" onClick={onClose} sx={{ color: O2D.sub }}><X size={16} /></IconButton>
-        </Stack>
-      </DialogTitle>
-
-      <DialogContent sx={{ bgcolor: O2D.canvas, p: 1.5 }}>
-        <Stack spacing={1.25}>
-          <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-            <Eyebrow>How fast is it used?</Eyebrow>
-            <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mt: 0.4, mb: 1.25 }}>
-              Enter the daily consumption at each production rate, then pick which rate we are planning against today.
-              Only the selected one drives the reorder point.
-            </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
-              <TextField size="small" type="number" label="Daily Avg Consumption (Low)" value={f.adcLow} onChange={set('adcLow')} fullWidth
-                InputProps={{ endAdornment: <InputAdornment position="end"><Box sx={{ fontSize: '0.66rem', color: O2D.faint }}>{uom}/day</Box></InputAdornment> }} />
-              <TextField size="small" type="number" label="Daily Avg Consumption (Normal)" value={f.adcNormal} onChange={set('adcNormal')} fullWidth
-                InputProps={{ endAdornment: <InputAdornment position="end"><Box sx={{ fontSize: '0.66rem', color: O2D.faint }}>{uom}/day</Box></InputAdornment> }} />
-              <TextField size="small" type="number" label="Daily Avg Consumption (Peak)" value={f.adcPeak} onChange={set('adcPeak')} fullWidth
-                InputProps={{ endAdornment: <InputAdornment position="end"><Box sx={{ fontSize: '0.66rem', color: O2D.faint }}>{uom}/day</Box></InputAdornment> }} />
-            </Stack>
-            <TextField select size="small" label="Choose Current Consumption" value={f.consumptionMode} onChange={set('consumptionMode')}
-              fullWidth sx={{ mt: 1.5 }}
-              helperText="Switch this when the factory moves between a slow season and a busy one."
-              FormHelperTextProps={helperSx}>
-              <MenuItem value="LOW">Low production</MenuItem>
-              <MenuItem value="NORMAL">Normal production</MenuItem>
-              <MenuItem value="PEAK">Peak production</MenuItem>
-            </TextField>
-          </Paper>
-
-          <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-            <Eyebrow>How long does it take to arrive?</Eyebrow>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ mt: 1.25 }}>
-              <TextField size="small" type="number" label="Lead Time (From Indent to Receipt)" value={f.leadDays} onChange={set('leadDays')} fullWidth
-                helperText="Days the vendor takes to deliver after you place the order." FormHelperTextProps={helperSx} />
-              <TextField size="small" type="number" label="Safety Factor" value={f.safetyFactor} onChange={set('safetyFactor')} fullWidth
-                inputProps={{ min: SF_MIN, max: SF_MAX, step: SF_STEP }}
-                error={!!sfError}
-                helperText={sfError || `Cushion for demand spikes and late deliveries. ${SF_MIN.toFixed(1)}–${SF_MAX.toFixed(1)} in 0.1 steps; 1.5 keeps 50% extra. Set per item — this changes this item only.`}
-                FormHelperTextProps={helperSx} />
-            </Stack>
-          </Paper>
-
-          {/* Live arithmetic */}
-          <Paper elevation={0} sx={{
-            p: 1.5, borderRadius: '8px',
-            border: `1px solid ${STOCK_TOKENS.OK.border}`, bgcolor: STOCK_TOKENS.OK.tint,
-          }}>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
-              <Box sx={{ color: STOCK_TOKENS.OK.color, display: 'flex' }}><Calculator size={15} /></Box>
-              <Typography sx={{ fontSize: '0.75rem', fontWeight: 800, color: STOCK_TOKENS.OK.color }}>What this works out to</Typography>
-            </Stack>
-            <Stack spacing={0.5} sx={{ fontSize: '0.74rem', color: O2D.body }}>
-              {activeAdc > 0 && lead > 0 && sf > 0 ? (
-                <>
-                  <Typography sx={{ fontSize: 'inherit', color: 'inherit' }}>
-                    <b>Reorder at {num(derivedReorderAt)} {uom}</b> — {num(activeAdc)} per day × {num(lead)} days
-                    at the <b>{modeLabel}</b> rate. No Safety Factor here, so changing it never moves this number.
-                  </Typography>
-                  <Typography sx={{ fontSize: 'inherit', color: 'inherit' }}>
-                    <b>Max Level {num(effectiveMax)} {uom}</b> — {manual
-                      ? 'entered by hand below; the formula is overridden.'
-                      : `${num(activeAdc)} per day × ${num(lead)} days × ${num(sf)} safety.`}
-                  </Typography>
-                  <Typography sx={{ fontSize: 'inherit', color: 'inherit' }}>
-                    <b>Safety Stock {num(safetyStock)} {uom}</b> — Max Level {num(effectiveMax)} − lead-time demand {num(derivedReorderAt)}.
-                  </Typography>
-                  <Typography sx={{ fontSize: 'inherit', color: 'inherit' }}>
-                    IMS flags this item for buying the moment stock falls to {num(derivedReorderAt)}, and suggests
-                    ordering back up to {num(effectiveMax)}.
-                  </Typography>
-                </>
-              ) : (
-                <Typography sx={{ fontSize: 'inherit', color: 'inherit' }}>
-                  {`Enter the ${modeLabel} daily consumption, Lead Time and Safety Factor to see the levels they produce.`}
-                </Typography>
-              )}
-            </Stack>
-          </Paper>
-
-          <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-            <Eyebrow>Buying rules and current commitments</Eyebrow>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ mt: 1.25, alignItems: 'flex-start' }}>
-              <TextField size="small" type="number" label="MOQ" value={f.moq} onChange={set('moq')} fullWidth
-                helperText="The smallest quantity the supplier will accept. Leave blank if there is none."
-                FormHelperTextProps={helperSx} />
-              <Box sx={{ width: '100%' }}>
-                <FormControlLabel
-                  control={<Switch size="small" checked={manual}
-                    onChange={(e) => setF((p) => ({ ...p, maxLevelMode: e.target.checked ? 'MANUAL' : 'AUTO' }))} />}
-                  label={<Typography sx={{ fontSize: '0.72rem', color: O2D.body }}>Set Max Level manually</Typography>}
-                  sx={{ ml: 0, mb: 0.5 }}
-                />
-                {/* In AUTO the field shows the LIVE formula result rather than a
-                    stored value, so the Safety Factor edit above is visible here
-                    immediately instead of only after a save. */}
-                <TextField size="small" type="number" label="Max Level" fullWidth
-                  value={manual ? f.maxLevel : formulaMax}
-                  onChange={set('maxLevel')}
-                  disabled={!manual}
-                  inputProps={{ min: 0, step: 0.01 }}
-                  error={!!maxError}
-                  helperText={maxError || (manual
-                    ? 'Overrides the formula. This number stays put whatever the Safety Factor is.'
-                    : 'Calculated as Daily Avg Consumption × Lead Time × Safety Factor. Moves whenever you change the Safety Factor.')}
-                  FormHelperTextProps={helperSx} />
-                {manual && (
-                  <Alert severity="warning" icon={false}
-                    sx={{ mt: 0.75, py: 0.25, fontSize: '0.68rem', borderRadius: '6px', '& .MuiAlert-message': { py: 0.5 } }}>
-                    Max Level is manually overridden. Changing Safety Factor will not affect this value.
-                  </Alert>
-                )}
-              </Box>
-            </Stack>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ mt: 1.5 }}>
-              <TextField size="small" type="number" label="Material In Transit" value={f.materialInTransit} onChange={set('materialInTransit')} fullWidth
-                helperText="Ordered but not yet received." FormHelperTextProps={helperSx} />
-              <TextField size="small" type="number" label="Booked Qty" value={f.bookedQty} onChange={set('bookedQty')} fullWidth
-                helperText="Promised to confirmed orders." FormHelperTextProps={helperSx} />
-            </Stack>
-            {/* Opening Stock Quantity deliberately lives on Stock In, not here.
-                Editing it in the policy posted no movement, so the planning row
-                and the stock ledger silently drifted apart. Stock In → reason
-                "Opening stock" records the same balance AND the movement. */}
-            <Typography sx={{ fontSize: '0.66rem', color: O2D.faint, mt: 1 }}>
-              Opening Stock Quantity is recorded on the Stock In screen, under the reason “Opening stock”, so it
-              lands in the ledger too.
-            </Typography>
-          </Paper>
-
-          <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-            <Eyebrow>Supplier</Eyebrow>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ mt: 1.25 }}>
-              <TextField size="small" label="Vendor Name" value={f.vendorName} onChange={set('vendorName')} fullWidth />
-              <TextField size="small" type="number" label="Rate" value={f.rate} onChange={set('rate')} sx={{ width: { xs: '100%', sm: 180 } }}
-                InputProps={{ startAdornment: <InputAdornment position="start"><Box sx={{ fontSize: '0.72rem', color: O2D.faint }}>₹</Box></InputAdornment> }}
-                helperText={`Per ${uom}. Used to value stock and estimate spend.`} FormHelperTextProps={helperSx} />
-            </Stack>
-          </Paper>
-
-          <Typography sx={{ fontSize: '0.68rem', color: O2D.faint }}>
-            Changing this policy never changes the stock itself — on-hand only moves through Stock In, Stock Out and coil cutting.
-          </Typography>
-        </Stack>
-      </DialogContent>
-
-      <DialogActions sx={{ borderTop: `1px solid ${O2D.lineSoft}`, px: 1.5, py: 1 }}>
-        <Button onClick={onClose} sx={{ textTransform: 'none', fontWeight: 700, color: O2D.body }}>Cancel</Button>
-        <Button variant="contained" disableElevation onClick={submit} disabled={isLoading}
-          startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
-          Save policy
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-};
-
 const RmImsStockList = () => {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const [kind, setKind] = useState(params.get('kind') || 'ALL');
   const [status, setStatus] = useState(params.get('status') || 'ALL');
+  // KPI-card views, kept in the URL so the Dashboard can deep-link to them:
+  //   IN_STOCK  only items holding stock, highest quantity first
+  //   VALUE     only items holding value, highest stock value first
+  const [view, setView] = useState({ 'in-stock': 'IN_STOCK', value: 'VALUE' }[params.get('view')] || 'ALL');
   const [search, setSearch] = useState('');
   // Available qty — below / above / between (QtyRangeFilter).
   const [qtyRange, setQtyRange] = useState(NO_QTY_RANGE);
@@ -452,20 +202,26 @@ const RmImsStockList = () => {
 
   const filtered = useMemo(() => {
     const list = (status === 'ALL' ? kindRows : kindRows.filter((r) => r.status === status))
-      .filter((r) => matchesQtyRange(qtyRange, r.onHand));
+      .filter((r) => matchesQtyRange(qtyRange, r.onHand))
+      .filter((r) => (view === 'IN_STOCK' ? Number(r.onHand || 0) > 0
+        : view === 'VALUE' ? Number(r.stockValue || 0) > 0 : true));
+    if (view === 'IN_STOCK') return [...list].sort((a, b) => Number(b.onHand || 0) - Number(a.onHand || 0));
+    if (view === 'VALUE') return [...list].sort((a, b) => Number(b.stockValue || 0) - Number(a.stockValue || 0));
     // Worst first, then thinnest availability — the order a planner works in.
     return [...list].sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
       || (a.availablePct ?? 1e9) - (b.availablePct ?? 1e9));
-  }, [kindRows, status, qtyRange]);
+  }, [kindRows, status, qtyRange, view]);
 
-  useEffect(() => { setPage(0); }, [search, kind, status, rowsPerPage, qtyRange]);
+  useEffect(() => { setPage(0); }, [search, kind, status, view, rowsPerPage, qtyRange]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const summary = useMemo(() => ({
     coils: rows.filter((r) => r.kind === 'COIL').length,
     circles: rows.filter((r) => r.kind === 'CIRCLE').length,
     onHand: rows.reduce((t, r) => t + Number(r.onHand || 0), 0),
-    value: rows.reduce((t, r) => t + Number(r.onHand || 0) * Number(r.rate || 0), 0),
+    value: rows.reduce((t, r) => t + Number(r.stockValue || 0), 0),
+    inStock: rows.filter((r) => Number(r.onHand || 0) > 0).length,
+    valued: rows.filter((r) => Number(r.stockValue || 0) > 0).length,
     toOrder: rows.filter((r) => ['REORDER', 'OUT_OF_STOCK'].includes(r.status)).length,
   }), [rows]);
 
@@ -497,7 +253,20 @@ const RmImsStockList = () => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
-  const activeFilters = (kind !== 'ALL' ? 1 : 0) + (status !== 'ALL' ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
+  const activeFilters = (kind !== 'ALL' ? 1 : 0) + (status !== 'ALL' ? 1 : 0) + (view !== 'ALL' ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
+  const VIEW_PARAM = { IN_STOCK: 'in-stock', VALUE: 'value' };
+  // A KPI view toggles: clicking the active card again turns it off.
+  const toggleView = (v) => {
+    const next = view === v ? 'ALL' : v;
+    setView(next);
+    if (next === 'ALL') params.delete('view'); else params.set('view', VIEW_PARAM[next]);
+    setParams(params, { replace: true });
+  };
+  const clearAll = () => {
+    setSearch(''); setQtyRange(NO_QTY_RANGE); setKind('ALL'); setStatus('ALL'); setView('ALL');
+    ['kind', 'status', 'view'].forEach((k) => params.delete(k));
+    setParams(params, { replace: true });
+  };
 
   return (
     <RmShell
@@ -511,16 +280,26 @@ const RmImsStockList = () => {
         </Button>
       )}
     >
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Coils" value={num(summary.coils)} sub="Uncut raw metal" color="#0f766e" icon={Disc3}
-          active={kind === 'COIL'} onClick={() => setParam('kind', kind === 'COIL' ? 'ALL' : 'COIL', setKind)} />
-        <KpiTile label="Circles" value={num(summary.circles)} sub="Cut and ready" color="#4338ca" icon={CircleDashed}
-          active={kind === 'CIRCLE'} onClick={() => setParam('kind', kind === 'CIRCLE' ? 'ALL' : 'CIRCLE', setKind)} />
-        <KpiTile label="Total Available Quantity" value={num(summary.onHand)} sub="Across all raw material" color={O2D.brand} icon={Layers} />
-        <KpiTile label="Value in store" value={inr(summary.value)} sub="At the recorded rate" color="#7c3aed" icon={Calculator} />
-        <KpiTile label="To order now" value={num(summary.toOrder)} sub="At or below reorder point"
-          color={STOCK_TOKENS.REORDER.color} icon={Info} />
-      </Stack>
+      <RmKpiGrid>
+        <RmKpiCard label="Coils" value={num(summary.coils)} sub="Uncut raw metal" tone={FLUENT.teal} icon={Disc3}
+          actionLabel="Filter" active={kind === 'COIL'} onClick={() => setParam('kind', kind === 'COIL' ? 'ALL' : 'COIL', setKind)}
+          hint="Show coils only." />
+        <RmKpiCard label="Circles" value={num(summary.circles)} sub="Cut and ready" tone={FLUENT.lavender} icon={CircleDashed}
+          actionLabel="Filter" active={kind === 'CIRCLE'} onClick={() => setParam('kind', kind === 'CIRCLE' ? 'ALL' : 'CIRCLE', setKind)}
+          hint="Show circles only." />
+        <RmKpiCard label="Total Available Quantity" value={num(summary.onHand)}
+          sub={`${num(summary.inStock)} item${summary.inStock === 1 ? '' : 's'} hold stock`} tone={FLUENT.blue} icon={Layers}
+          actionLabel="In stock" active={view === 'IN_STOCK'} onClick={() => toggleView('IN_STOCK')}
+          hint="Show only items with stock on hand, highest first." />
+        <RmKpiCard label="Value in store" value={inr(summary.value)} sub="At the recorded rate" tone={FLUENT.grey} icon={IndianRupee}
+          actionLabel="By value" active={view === 'VALUE'} onClick={() => toggleView('VALUE')}
+          hint="Rank the items holding value, highest stock value first." />
+        {/* Counts Out of stock + Order now together, so it opens the Buying List
+            (as on Consumables) rather than a single-status filter. */}
+        <RmKpiCard label="To order now" value={num(summary.toOrder)} sub="Out of stock + at reorder point"
+          tone={FLUENT.orange} icon={AlertTriangle} actionLabel="Buying List"
+          onClick={() => navigate('/rm-ims/reorder')} hint="Open the Buying List with how much to order for each." />
+      </RmKpiGrid>
 
       <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -536,7 +315,7 @@ const RmImsStockList = () => {
           </Typography>
           {activeFilters > 0 && (
             <Button size="small" startIcon={<X size={12} />}
-              onClick={() => { setSearch(''); setQtyRange(NO_QTY_RANGE); setParam('kind', 'ALL', setKind); setParam('status', 'ALL', setStatus); }}
+              onClick={clearAll}
               sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.body }}>
               Clear ({activeFilters})
             </Button>
@@ -583,7 +362,7 @@ const RmImsStockList = () => {
 
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1860)}>
+          <Table size="small" sx={rmTableSx(1860, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -701,10 +480,12 @@ const RmImsStockList = () => {
                     <TableCell align="center"><StatusChip status={r.status} /></TableCell>
                     <TableCell align="right" sx={{ width: 84, whiteSpace: 'nowrap' }}>
                       <Tooltip arrow slotProps={O2D_TIP} title="Open this item — stock, planning, purchase orders and its day-by-day history">
-                        <IconButton size="small" onClick={() => navigate(`/rm-ims/item/${r.skuId}`)} sx={{ color: O2D.sub }}><Eye size={15} /></IconButton>
+                        <IconButton size="small" aria-label={`Open ${r.skuCode}`} onClick={() => navigate(`/rm-ims/item/${r.skuId}`)}
+                          sx={{ color: O2D.sub, '&:hover': { color: O2D.brand, bgcolor: alpha(O2D.brand, 0.08) } }}><Eye size={15} /></IconButton>
                       </Tooltip>
                       <Tooltip arrow slotProps={O2D_TIP} title="Edit the planning policy (Daily Avg Consumption, Lead Time, Safety Factor, MOQ)">
-                        <IconButton size="small" onClick={() => setEdit(r)} sx={{ color: O2D.sub }}><Pencil size={15} /></IconButton>
+                        <IconButton size="small" aria-label={`Edit planning policy for ${r.skuCode}`} onClick={() => setEdit(r)}
+                          sx={{ color: O2D.sub, '&:hover': { color: O2D.brand, bgcolor: alpha(O2D.brand, 0.08) } }}><Pencil size={15} /></IconButton>
                       </Tooltip>
                     </TableCell>
                   </TableRow>
@@ -747,7 +528,7 @@ const RmImsStockList = () => {
           })}
       </Stack>
 
-      {edit && <PolicyDialog row={edit} onClose={() => setEdit(null)} />}
+      {edit && <RmPolicyDialog row={edit} onClose={() => setEdit(null)} />}
     </RmShell>
   );
 };

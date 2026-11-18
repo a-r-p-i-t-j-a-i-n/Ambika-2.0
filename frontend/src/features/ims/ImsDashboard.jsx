@@ -13,7 +13,7 @@ import {
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import {
-  ImsShell, Panel, TableScroll, KpiTile, StatusChip, MoveChip, EmptyNote, Help,
+  ImsShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, MoveChip, EmptyNote, Help,
   O2D, STOCK_TOKENS, STOCK_ORDER, num, inr, compactInr, imsTableSx, moveToken,
   Th,
 } from './imsMeta';
@@ -88,7 +88,7 @@ const ImsDashboard = () => {
 
   if (isFetching && !d) {
     return (
-      <ImsShell icon={LayoutDashboard} title="Consumables & Packaging" subtitle="Loading your stock position…">
+      <ImsShell icon={LayoutDashboard} title="Dashboard" subtitle="Consumables & Packaging — loading your stock position…">
         <Skeleton variant="rounded" height={72} />
         <Skeleton variant="rounded" height={280} />
         <Skeleton variant="rounded" height={280} />
@@ -99,8 +99,8 @@ const ImsDashboard = () => {
   return (
     <ImsShell
       icon={LayoutDashboard}
-      title="Consumables & Packaging"
-      subtitle="Where your stock stands today — and what needs buying next."
+      title="Dashboard"
+      subtitle="Consumables & Packaging — where your stock stands today, and what needs buying next."
       actions={(
         <Stack direction="row" spacing={0.75}>
           <Button size="small" variant="outlined" startIcon={<Boxes size={14} />} onClick={() => navigate('/ims/stock')}
@@ -156,18 +156,23 @@ const ImsDashboard = () => {
       </Paper>
 
       {/* ── Headline numbers. Every tile is a shortcut into the filtered list. ── */}
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Items tracked" value={num(s.itemCount)} sub="Consumables & packaging"
-          color={O2D.brand} icon={Boxes} onClick={() => navigate('/ims/stock')} />
-        <KpiTile label="Closing Stock" value={num(s.totalOnHand)} sub="Total units across all items"
-          color="#0f766e" icon={PackageOpen} onClick={() => navigate('/ims/stock')} />
-        <KpiTile label="Value in store" value={inr(s.totalStockValue)} sub="At last purchase cost"
-          color="#4338ca" icon={IndianRupee} onClick={() => navigate('/ims/stock')} />
-        <KpiTile label="To order now" value={num(needBuying)} sub="At or below reorder point"
-          color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle} onClick={() => navigate('/ims/reorder')} />
-        <KpiTile label="Running low" value={num(s.low)} sub="Watch these next"
-          color={STOCK_TOKENS.LOW.color} icon={TrendingDown} onClick={() => navigate('/ims/stock?status=LOW')} />
-      </Stack>
+      <KpiGrid min={190}>
+        <KpiCard label="Items tracked" value={num(s.itemCount)} sub="Consumables & packaging"
+          color={O2D.brand} icon={Boxes} actionLabel="Open" onClick={() => navigate('/ims/stock')}
+          hint="Open Stock & Master Data with every item." />
+        <KpiCard label="Closing Stock" value={num(s.totalOnHand)} sub="Total units across all items"
+          color="#0f766e" icon={PackageOpen} actionLabel="In stock" onClick={() => navigate('/ims/stock?view=in-stock')}
+          hint="Open Stock & Master Data showing only items with stock on hand." />
+        <KpiCard label="Value in store" value={inr(s.totalStockValue)} sub="At last purchase cost"
+          color="#4338ca" icon={IndianRupee} actionLabel="Open" onClick={() => navigate('/ims/stock')}
+          hint="Open Stock & Master Data." />
+        <KpiCard label="To order now" value={num(needBuying)} sub="At or below reorder point"
+          color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle} actionLabel="Buying List" onClick={() => navigate('/ims/reorder')}
+          hint="Open the Buying List." />
+        <KpiCard label="Running low" value={num(s.low)} sub="Watch these next"
+          color={STOCK_TOKENS.LOW.color} icon={TrendingDown} actionLabel="Filter" onClick={() => navigate('/ims/stock?status=LOW')}
+          hint="Open Stock & Master Data filtered to items running low." />
+      </KpiGrid>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) minmax(0, 1.25fr)' }, gap: 1.25 }}>
         {/* ── Stock health donut + a legend that spells out every state ── */}

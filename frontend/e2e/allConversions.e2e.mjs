@@ -176,8 +176,9 @@ const run = async () => {
     return { rows: out };
   };
   const cardsMatch = (c, t) => new RegExp(`Total Conversions ${fmt(t.cuts)} `, 'i').test(`${c} `)
-    && new RegExp(`Total Coil Weight Cut ${fmt(t.cutKg)} kg ${fmt(t.circlesKg)} kg circles`, 'i').test(c)
-    && new RegExp(`Total Scrap Generated ${fmt(t.scrapKg)} kg`, 'i').test(c);
+    && new RegExp(`Total Coil Used ${fmt(t.cutKg)} kg ${fmt(t.circlesKg)} kg circles`, 'i').test(c)
+    // "Total Scrap Generated" is no longer a card (removed on request).
+    && !/Total Scrap Generated/i.test(c);
   const conversionsCard = (n) => new RegExp(`Total Conversions ${fmt(n)} `);
   // Σ of the "Cut (kg)" column on the page shown (its first line — a coil's
   // second line is the coil's total weight).
@@ -211,10 +212,10 @@ const run = async () => {
 
   /* ── The page: its header, one table, no second "All conversions" section ── */
   const header = flat(await page.locator('body').innerText());
-  check('the header: "Coil to Circle", "Track coil cutting history, circle output and remaining weight.", "New Cutting Entry"; the RM tab is "Coil to Circle"',
+  check('the header: "Cut Coils into Circles", "Track coil cutting history, circle output and remaining weight.", "New Cutting Entry"; the RM tab is "Cut Coils into Circles" (the sidebar name)',
     /Track coil cutting history, circle output and remaining weight\./.test(header)
       && flat(await page.getByTestId('open-coil-to-circle').innerText()) === 'New Cutting Entry'
-      && (await page.getByRole('link', { name: 'Coil to Circle' }).or(page.getByRole('tab', { name: 'Coil to Circle' })).or(page.getByRole('button', { name: 'Coil to Circle' })).count()) >= 1);
+      && (await page.getByRole('link', { name: 'Cut Coils into Circles' }).or(page.getByRole('tab', { name: 'Cut Coils into Circles' })).or(page.getByRole('button', { name: 'Cut Coils into Circles' })).count()) >= 1);
   const one = {
     history: await page.getByRole('table', { name: 'Coil to Circle history' }).count(),
     allConversions: await page.getByRole('table', { name: 'All conversions' }).count(),
@@ -246,8 +247,8 @@ const run = async () => {
   const c0 = await cards();
   check(`11. the cards: 4 physical coils (3 partially · 1 fully cut) and ${CUTS} conversions — 61 on physical coils, 43 without`,
     /Physical Coils 4 3 partially cut · 1 fully cut/.test(c0) && /Total Conversions 104 61 on physical coils · 43 without physical coil/.test(c0), c0);
-  check('11. …and the weights ARE every cut: 11,330 kg cut · 9,672 kg circles · 1,658 kg scrap, split PLG01 / job worker',
-    cardsMatch(c0, t0) && /Total Coil Weight Cut 11,330 kg 9,672 kg circles · Yield/.test(c0) && /Total Scrap Generated 1,658 kg PLG01 [\d,.]+ kg · Job worker [\d,.]+ kg/.test(c0), c0);
+  check('11. …and the weights ARE every cut: 11,330 kg cut · 9,672 kg circles (no scrap card any more)',
+    cardsMatch(c0, t0) && /Total Coil Used 11,330 kg 9,672 kg circles · Yield/.test(c0), c0);
   check('11. the line under the cards says what they cover — and keeps the average yield per cut (84.94%) and the unplaced scrap',
     /^The weights add up all 104 recorded cuts — every page, each cut once\. Coils are counted, never added\./.test(await scope())
       && /Yield averaged per cut: 84\.94%/.test(await scope()) && /kg of the scrap has no recorded cutting location/.test(await scope()), await scope());
@@ -583,13 +584,11 @@ const run = async () => {
     after[0] === plgId && same(after.slice(1), before.filter((x) => x !== plgId).slice(0, 19)), after.slice(0, 4).join(','));
   check('14. …its row now says 31 rounds', /31 rounds/.test(flat(await coilRows().first().innerText())), flat(await coilRows().first().innerText()));
   check('14. …and the cards count the new cut once: 105 conversions, 11,380 kg', /Total Conversions 105 62 on physical coils/.test(await cards())
-    && /Total Coil Weight Cut 11,380 kg/.test(await cards()), await cards());
+    && /Total Coil Used 11,380 kg/.test(await cards()), await cards());
   await shot('04-after-cut', false);
 
-  /* ── 16. "Total Scrap Generated" opens Scrap by Physical Coil ── */
-  await page.getByTestId('card-scrap').click();
-  await page.waitForURL(/\/scrap-ims\/by-coil/, { timeout: 15000 }).catch(() => {});
-  check('16. clicking "Total Scrap Generated" opens Scrap by Physical Coil', /\/scrap-ims\/by-coil/.test(page.url()), page.url());
+  /* ── 16. The "Total Scrap Generated" card was removed on request ── */
+  check('16. there is no "Total Scrap Generated" card', (await page.getByTestId('card-scrap').count()) === 0);
 
   /* ── 17. Laptop, tablet and phone ── */
   const sizes = [

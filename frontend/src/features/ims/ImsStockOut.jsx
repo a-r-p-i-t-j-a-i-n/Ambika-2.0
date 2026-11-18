@@ -122,8 +122,8 @@ const ImsStockOut = () => {
   return (
     <ImsShell
       icon={PackageMinus}
-      title="Stock Out — issue material to production"
-      subtitle="Record what left the store. Closing Stock comes down and the issue is logged against your name."
+      title="Stock Out"
+      subtitle="Issue material to production. Record what left the store — Closing Stock comes down and the issue is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
       <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
