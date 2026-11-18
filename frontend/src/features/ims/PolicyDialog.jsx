@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
 import {
-  Drawer, Box, Paper, Stack, Typography, IconButton, TextField, Button, Skeleton,
-  CircularProgress, Divider, FormControlLabel, Switch, Alert,
+  Box, Paper, Stack, Typography, TextField, Button, Skeleton,
+  CircularProgress, FormControlLabel, Switch, Alert, alpha,
 } from '@mui/material';
-import { X, Save, Calculator } from 'lucide-react';
+import {
+  Save, Calculator, SlidersHorizontal, ShoppingCart, StickyNote,
+} from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
-import { O2D, STOCK_TOKENS, Eyebrow, num } from './imsMeta';
+import { O2D, STOCK_TOKENS, num } from './imsMeta';
 import { useGetImsPolicyQuery, useUpsertImsPolicyMutation } from '../../store/api/imsApi';
+// The same large centered dialog Register SKU / Edit SKU use (imported, not changed).
+import SkuDialogShell from '../masters/SkuDialogShell';
 
 const helperSx = { sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0, mt: 0.4 } };
 
@@ -29,20 +33,67 @@ const safetyFactorError = (raw) => {
   return '';
 };
 
-/** Right-side drawer to edit an item's IMS planning policy. Reused by the Stock
- *  list and the Item detail page.
+/** A section card in the dialog body — the Register SKU form's section style. */
+const FormSection = ({ icon, title, hint, children, tone }) => {
+  const Icon = icon;
+  return (
+  <Paper sx={{
+    p: 2.5, borderRadius: '14px',
+    ...(tone ? { border: `1px solid ${tone.border}`, bgcolor: tone.tint, boxShadow: 'none' } : null),
+  }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: hint ? 0.5 : 1.5 }}>
+      <Box sx={(t) => ({
+        width: 24, height: 24, borderRadius: '8px', display: 'grid', placeItems: 'center',
+        bgcolor: tone ? alpha(tone.color, 0.12) : alpha(t.palette.primary.main, 0.10),
+        color: tone ? tone.color : 'primary.main',
+      })}>
+        <Icon size={13} strokeWidth={2.5} />
+      </Box>
+      <Typography sx={{
+        fontSize: '0.72rem', fontWeight: 700, color: tone ? tone.color : 'text.secondary',
+        textTransform: 'uppercase', letterSpacing: '0.08em',
+      }}>{title}</Typography>
+    </Box>
+    {hint && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>{hint}</Typography>}
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</Box>
+  </Paper>
+  );
+};
+
+/** One live figure in the bottom bar. */
+const SummaryItem = ({ label, value, color = 'text.primary' }) => (
+  <Box sx={{ minWidth: 0 }}>
+    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{label}</Typography>
+    <Typography variant="body2" fontWeight={800} color={color} noWrap sx={{ fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
+  </Box>
+);
+
+/**
+ * Edit an item's IMS planning policy — a large centered dialog in the Register
+ * SKU style (it replaced the right-side Planning policy drawer). Used by Stock &
+ * Master Data and the item page.
  *
- *  These four numbers are the whole engine behind the buying list, so the drawer
- *  explains each one in plain English AND shows the reorder point it produces —
- *  a client should never have to save a change to find out what it did. */
-const PolicyDrawer = ({ skuId, onClose }) => {
+ * Everything that decides what is saved is unchanged from the drawer: the same
+ * fields, the same Safety Factor / manual Max Level checks, the same live
+ * arithmetic (exactly as ims.service computes it) and the same PUT
+ * /ims/policy/:skuId payload.
+ *
+ * @param skuId  the SKU being edited (the dialog is open while this is set)
+ * @param item   optional { skuCode, skuName } for the header
+ */
+const PolicyDialog = ({ skuId, item, onClose }) => {
   const { data, isFetching } = useGetImsPolicyQuery(skuId, { skip: !skuId });
   const [save, { isLoading }] = useUpsertImsPolicyMutation();
   const [form, setForm] = useState(null);
 
   React.useEffect(() => {
     if (!skuId) { setForm(null); return; }
-    const p = data || {};
+    // The query returns the API envelope { success, data: policy } — the policy
+    // is `data.data` (as FgPolicyDrawer reads it). The drawer this replaced read
+    // `data` itself, so it never prefilled: it always opened on the defaults
+    // (ADC 0, Safety Factor 1.5, no MOQ / Max Level), and Save would then have
+    // written those defaults over the item's real policy.
+    const p = data?.data || {};
     setForm({
       // Read-only: measured from the CONSUME_OUT ledger, not editable here.
       calculatedAdc: p.calculatedAdc ?? 0,
@@ -102,25 +153,32 @@ const PolicyDrawer = ({ skuId, onClose }) => {
     } catch (e) { enqueueSnackbar(e?.data?.message || 'Could not save the policy.', { variant: 'error' }); }
   };
 
-  return (
-    <Drawer anchor="right" open={!!skuId} onClose={onClose}
-      PaperProps={{ sx: { width: { xs: '100%', sm: 430 }, bgcolor: O2D.canvas, display: 'flex', flexDirection: 'column' } }}>
-      {/* Header — same flush white bar as every IMS screen. */}
-      <Stack direction="row" alignItems="center" spacing={1}
-        sx={{ px: 1.75, py: 1.15, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}` }}>
-        <Box sx={{ minWidth: 0, mr: 'auto' }}>
-          <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>Planning policy</Typography>
-          <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>Tells IMS when to warn you and how much to buy.</Typography>
-        </Box>
-        <IconButton onClick={onClose} size="small" sx={{ color: O2D.sub }}><X size={17} /></IconButton>
-      </Stack>
+  const loading = isFetching || !form;
+  const subtitle = item?.skuCode || item?.skuName
+    ? [item.skuCode, item.skuName].filter(Boolean).join(' · ')
+    : 'Tells IMS when to warn you and how much to buy.';
 
-      <Box sx={{ p: 1.5, overflowY: 'auto', flex: 1 }}>
-        {isFetching || !form ? <Skeleton variant="rounded" height={380} /> : (
-          <Stack spacing={1.25}>
-            <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-              <Eyebrow>The numbers that drive everything</Eyebrow>
-              <Stack spacing={1.5} sx={{ mt: 1.25 }}>
+  return (
+    <SkuDialogShell
+      open={!!skuId}
+      onClose={onClose}
+      testId="ims-policy-dialog"
+      icon={SlidersHorizontal}
+      title="Edit Planning Policy"
+      subtitle={subtitle}
+    >
+      {/* ── Body (scrolls on its own) ───────────────────────────────────── */}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: { xs: 2, sm: 3 }, py: 2.5 }} data-testid="ims-policy-body">
+        {loading ? (
+          <Stack spacing={2}>
+            <Skeleton variant="rounded" height={170} />
+            <Skeleton variant="rounded" height={220} />
+          </Stack>
+        ) : (
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) minmax(0, 1fr)' }, gap: 2, alignItems: 'start' }}>
+            <Stack spacing={2} sx={{ minWidth: 0 }}>
+              <FormSection icon={SlidersHorizontal} title="The numbers that drive everything"
+                hint="These three numbers decide when IMS warns you and how much it suggests buying.">
                 {/* Calculated, never typed. It comes from the CONSUME_OUT ledger,
                     so there is nothing to edit and no way to disagree with it. */}
                 <TextField label="Average Daily Consumption" size="small" fullWidth
@@ -137,55 +195,16 @@ const PolicyDrawer = ({ skuId, onClose }) => {
                   inputProps={{ min: SF_MIN, max: SF_MAX, step: SF_STEP }}
                   helperText={sfError || `Cushion for demand spikes and late deliveries. ${SF_MIN.toFixed(1)}–${SF_MAX.toFixed(1)} in 0.1 steps; 1.5 keeps 50% extra. Set per item — this changes this item only.`}
                   FormHelperTextProps={sfError ? undefined : helperSx} />
-              </Stack>
-            </Paper>
+              </FormSection>
 
-            {/* Live arithmetic — the reorder point these three numbers produce,
-                shown before the client commits to them. */}
-            <Paper elevation={0} sx={{
-              p: 1.5, borderRadius: '8px',
-              border: `1px solid ${STOCK_TOKENS.OK.border}`, bgcolor: STOCK_TOKENS.OK.tint,
-            }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
-                <Box sx={{ color: STOCK_TOKENS.OK.color, display: 'flex' }}><Calculator size={15} /></Box>
-                <Typography sx={{ fontSize: '0.75rem', fontWeight: 800, color: STOCK_TOKENS.OK.color }}>What this works out to</Typography>
-              </Stack>
-              {adc > 0 && lead > 0 && sf > 0 ? (
-                <Stack spacing={0.4}>
-                  <Typography sx={{ fontSize: '0.74rem', color: O2D.body }}>
-                    <b>Reorder at {num(leadTimeDemand)}</b> — {num(adc)} per day × {num(lead)} days.
-                    {' '}No Safety Factor here, so changing it never moves this number.
-                  </Typography>
-                  <Typography sx={{ fontSize: '0.74rem', color: O2D.body }}>
-                    <b>Max Level {num(effectiveMax)}</b> — {manual
-                      ? 'entered by hand below; the formula is overridden.'
-                      : <>{num(adc)} per day × {num(lead)} days × {num(sf)} safety.</>}
-                  </Typography>
-                  <Typography sx={{ fontSize: '0.74rem', color: O2D.body }}>
-                    <b>Safety Stock {num(safetyStock)}</b> — Max Level {num(effectiveMax)} − lead-time demand {num(leadTimeDemand)}.
-                  </Typography>
-                  <Typography sx={{ fontSize: '0.74rem', color: O2D.body }}>
-                    IMS flags this item for buying the moment Closing Stock falls to {num(leadTimeDemand)},
-                    and suggests ordering back up to {num(effectiveMax)}.
-                  </Typography>
-                </Stack>
-              ) : (
-                <Typography sx={{ fontSize: '0.74rem', color: O2D.body }}>
-                  Once this item has consumption history, and Lead Time and Safety Factor are set, the levels they produce appear here.
-                </Typography>
-              )}
-            </Paper>
-
-            <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-              <Eyebrow>Buying rules</Eyebrow>
-              <Stack spacing={1.5} sx={{ mt: 1.25 }}>
+              <FormSection icon={ShoppingCart} title="Buying rules">
                 <TextField label="MOQ" type="number" size="small" fullWidth
                   value={form.moq} onChange={set('moq')}
                   helperText="The smallest quantity the supplier will accept. Leave blank if there is none."
                   FormHelperTextProps={helperSx} />
                 {/* Max Level is formula-driven by default so the Safety Factor
                     actually bites. A deliberate override is opt-in, and the
-                    drawer says plainly what that costs. */}
+                    dialog says plainly what that costs. */}
                 <Box>
                   <FormControlLabel
                     sx={{ ml: 0 }}
@@ -214,44 +233,81 @@ const PolicyDrawer = ({ skuId, onClose }) => {
                   value={form.materialInTransit} onChange={set('materialInTransit')}
                   helperText="Ordered but not yet received — subtracted from what the buying list asks for."
                   FormHelperTextProps={helperSx} />
-              </Stack>
-            </Paper>
+              </FormSection>
+            </Stack>
 
-            <Paper elevation={0} sx={{ p: 1.5, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-              <Eyebrow>Notes</Eyebrow>
-              <Stack spacing={1.5} sx={{ mt: 1.25 }}>
+            <Stack spacing={2} sx={{ minWidth: 0 }}>
+              {/* Live arithmetic — the levels these numbers produce, shown
+                  before the client commits to them. */}
+              <FormSection icon={Calculator} title="What this works out to" tone={STOCK_TOKENS.OK}>
+                {adc > 0 && lead > 0 && sf > 0 ? (
+                  <Stack spacing={0.75} data-testid="ims-policy-live">
+                    <Typography sx={{ fontSize: '0.78rem', color: O2D.body }}>
+                      <b>Reorder at {num(leadTimeDemand)}</b> — {num(adc)} per day × {num(lead)} days.
+                      {' '}No Safety Factor here, so changing it never moves this number.
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.78rem', color: O2D.body }}>
+                      <b>Max Level {num(effectiveMax)}</b> — {manual
+                        ? 'entered by hand; the formula is overridden.'
+                        : <>{num(adc)} per day × {num(lead)} days × {num(sf)} safety.</>}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.78rem', color: O2D.body }}>
+                      <b>Safety Stock {num(safetyStock)}</b> — Max Level {num(effectiveMax)} − lead-time demand {num(leadTimeDemand)}.
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.78rem', color: O2D.body }}>
+                      IMS flags this item for buying the moment Closing Stock falls to {num(leadTimeDemand)},
+                      and suggests ordering back up to {num(effectiveMax)}.
+                    </Typography>
+                  </Stack>
+                ) : (
+                  <Typography sx={{ fontSize: '0.78rem', color: O2D.body }} data-testid="ims-policy-live">
+                    Once this item has consumption history, and Lead Time and Safety Factor are set, the levels they produce appear here.
+                  </Typography>
+                )}
+              </FormSection>
+
+              <FormSection icon={StickyNote} title="Notes">
                 {/* SKU master data — shown here for context, edited in SKU Master
                     so there is exactly one place it can be changed. */}
                 <TextField label="Converted Item Name (For Resale)" size="small" fullWidth
                   value={form.convertedItemNameForResale || '—'} InputProps={{ readOnly: true }}
                   helperText="Master data — set this in SKU Master."
                   FormHelperTextProps={helperSx} />
-                <TextField label="Remarks" size="small" fullWidth multiline minRows={2}
+                <TextField label="Remarks" size="small" fullWidth multiline minRows={3}
                   value={form.remarks} onChange={set('remarks')} />
-              </Stack>
-            </Paper>
+              </FormSection>
 
-            <Divider sx={{ borderColor: O2D.lineSoft }} />
-            <Typography sx={{ fontSize: '0.68rem', color: O2D.faint }}>
-              Changing this policy never changes the stock itself — on-hand only moves through Stock In and Stock Out.
-            </Typography>
-          </Stack>
+              <Typography sx={{ fontSize: '0.7rem', color: O2D.faint, px: 0.5 }}>
+                Changing this policy never changes the stock itself — on-hand only moves through Stock In and Stock Out.
+              </Typography>
+            </Stack>
+          </Box>
         )}
       </Box>
 
-      {/* Sticky save — always reachable, however long the form scrolls. */}
-      <Box sx={{ p: 1.25, bgcolor: O2D.surface, borderTop: `1px solid ${O2D.line}` }}>
-        <Stack direction="row" spacing={1}>
-          <Button onClick={onClose} sx={{ textTransform: 'none', fontWeight: 700, color: O2D.body }}>Cancel</Button>
-          <Button fullWidth variant="contained" disableElevation disabled={isLoading || !form || blocked} onClick={submit}
-            startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
+      {/* ── Fixed bottom action bar ─────────────────────────────────────── */}
+      <Box sx={{
+        flexShrink: 0, zIndex: 10,
+        borderTop: '1px solid', borderColor: 'divider', bgcolor: 'background.paper',
+        px: { xs: 2, sm: 3 }, py: 1.75,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap',
+      }}>
+        <Stack direction="row" spacing={2.5} sx={{ minWidth: 0, display: { xs: 'none', sm: 'flex' } }}>
+          <SummaryItem label="Reorder at" value={loading ? '—' : num(leadTimeDemand)} color={STOCK_TOKENS.REORDER.color} />
+          <SummaryItem label={manual ? 'Max Level (manual)' : 'Max Level'} value={loading ? '—' : num(effectiveMax)} color={STOCK_TOKENS.OK.color} />
+          <SummaryItem label="Safety Stock" value={loading ? '—' : num(safetyStock)} />
+        </Stack>
+        <Stack direction="row" spacing={1.25} sx={{ ml: 'auto' }}>
+          <Button variant="outlined" onClick={onClose} sx={{ minWidth: 110 }}>Cancel</Button>
+          <Button variant="contained" onClick={submit} disabled={isLoading || !form || blocked}
+            startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
+            sx={{ minWidth: 150 }}>
             Save policy
           </Button>
         </Stack>
       </Box>
-    </Drawer>
+    </SkuDialogShell>
   );
 };
 
-export default PolicyDrawer;
+export default PolicyDialog;

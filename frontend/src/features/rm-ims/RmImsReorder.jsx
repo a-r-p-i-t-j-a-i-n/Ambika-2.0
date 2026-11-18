@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Table, TableHead, TableBody, TableRow, TableCell,
-  Skeleton, Button, Tooltip, TextField, MenuItem, InputAdornment, TablePagination,
+  Skeleton, Button, Tooltip, TextField, MenuItem, InputAdornment, TablePagination, Chip,
 } from '@mui/material';
-import { ShoppingCart, Download, Copy, Check, CheckCircle2, Search, ArrowRight, IndianRupee, Disc3, CircleDashed, Layers } from 'lucide-react';
+import { ShoppingCart, Download, Copy, Check, CheckCircle2, Search, ArrowRight, IndianRupee, Disc3, CircleDashed, Layers, X } from 'lucide-react';
 import dayjs from 'dayjs';
+import { useSearchParams } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
 import {
-  RmShell, Panel, TableScroll, KpiTile, StatusChip, EmptyNote, Th, KindChip, uomOf,
-  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr, imsTableSx,
+  RmShell, Panel, TableScroll, RmKpiCard, RmKpiGrid, StatusChip, EmptyNote, Th, KindChip, uomOf,
+  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr,
 } from './rmImsMeta';
+import { FLUENT, rmTableSx } from './rmFluent';
 import { useGetRmReorderQuery } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -33,8 +35,25 @@ const KIND_FILTERS = [
   { value: 'CIRCLE', label: 'Circles only' },
 ];
 
+// The two ranking cards. Each shows only the items that carry the figure, in
+// descending order of it.
+const RANKS = {
+  UNITS: { label: 'Items with a quantity to order — largest first', key: 'suggestedOrderQty' },
+  SPEND: { label: 'Items with an estimated spend — highest first', key: 'buyCost' },
+};
+
 const RmImsReorder = () => {
+  const [params, setParams] = useSearchParams();
   const [kind, setKind] = useState('ALL');
+  // Which ranking card is active (kept in the URL so it survives a refresh).
+  const [rank, setRank] = useState(() => (RANKS[params.get('rank')] ? params.get('rank') : null));
+  const pickRank = (r) => {
+    const next = rank === r ? null : r;   // clicking the active card turns it off
+    setRank(next);
+    if (next) params.set('rank', next); else params.delete('rank');
+    setParams(params, { replace: true });
+  };
+  const showAll = () => { setKind('ALL'); setSearch(''); setRank(null); params.delete('rank'); setParams(params, { replace: true }); };
   const [search, setSearch] = useState('');
   const [copied, setCopied] = useState(false);
   const [page, setPage] = useState(0);
@@ -48,19 +67,30 @@ const RmImsReorder = () => {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows
+    const list = rows
       .filter((r) => (kind === 'ALL' || r.kind === kind)
-        && (!q || `${r.skuCode || ''} ${r.skuName || ''} ${r.vendorName || ''}`.toLowerCase().includes(q)))
-      // Worst first, then tightest cover — the order a buyer works in.
-      .sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
-        || (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9));
-  }, [rows, search, kind]);
+        && (!q || `${r.skuCode || ''} ${r.skuName || ''} ${r.vendorName || ''}`.toLowerCase().includes(q))
+        && (!rank || Number(r[RANKS[rank].key] || 0) > 0));
+    if (rank) {
+      const k = RANKS[rank].key;
+      return list.sort((a, b) => Number(b[k] || 0) - Number(a[k] || 0));
+    }
+    // Worst first, then tightest cover — the order a buyer works in.
+    return list.sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
+      || (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9));
+  }, [rows, search, kind, rank]);
 
-  useEffect(() => { setPage(0); }, [search, kind, rowsPerPage]);
+  useEffect(() => { setPage(0); }, [search, kind, rank, rowsPerPage]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
+  // What the filtered table adds up to (the summary line, the copy and the export)…
   const totalQty = filtered.reduce((s, r) => s + Number(r.suggestedOrderQty || 0), 0);
   const totalSpend = filtered.reduce((s, r) => s + Number(r.buyCost || 0), 0);
+  // …and what the whole list holds (the KPI cards — they never change as you filter).
+  const listQty = rows.reduce((s, r) => s + Number(r.suggestedOrderQty || 0), 0);
+  const listSpend = rows.reduce((s, r) => s + Number(r.buyCost || 0), 0);
+  const qtyItems = rows.filter((r) => Number(r.suggestedOrderQty || 0) > 0).length;
+  const spendItems = rows.filter((r) => Number(r.buyCost || 0) > 0).length;
   const coilCount = rows.filter((r) => r.kind === 'COIL').length;
   const circleCount = rows.filter((r) => r.kind === 'CIRCLE').length;
 
@@ -110,7 +140,7 @@ const RmImsReorder = () => {
   return (
     <RmShell
       icon={ShoppingCart}
-      title="Buying list"
+      title="Buying List"
       subtitle="Coils and circles at or below their reorder point, with how much to order — worst first."
       actions={rows.length > 0 && (
         <Stack direction="row" spacing={0.75}>
@@ -125,16 +155,23 @@ const RmImsReorder = () => {
         </Stack>
       )}
     >
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Items to order" value={num(rows.length)} sub="On this list today"
-          color={rows.length ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color} icon={ShoppingCart} />
-        <KpiTile label="Coils" value={num(coilCount)} sub="Uncut raw metal" color="#0f766e" icon={Disc3}
-          active={kind === 'COIL'} onClick={() => setKind(kind === 'COIL' ? 'ALL' : 'COIL')} />
-        <KpiTile label="Circles" value={num(circleCount)} sub="Cut and ready" color="#4338ca" icon={CircleDashed}
-          active={kind === 'CIRCLE'} onClick={() => setKind(kind === 'CIRCLE' ? 'ALL' : 'CIRCLE')} />
-        <KpiTile label="Units to order" value={num(totalQty)} sub="Total across the list" color={O2D.brand} icon={ArrowRight} />
-        <KpiTile label="Estimated spend" value={inr(totalSpend)} sub="At the recorded rates" color="#7c3aed" icon={IndianRupee} />
-      </Stack>
+      <RmKpiGrid>
+        <RmKpiCard label="Items to order" value={num(rows.length)} sub="Everything on this list today"
+          tone={rows.length ? FLUENT.orange : FLUENT.teal} icon={ShoppingCart}
+          actionLabel="Show all" onClick={showAll} hint="Show every item on the buying list." />
+        <RmKpiCard label="Coils" value={num(coilCount)} sub="Uncut raw metal" tone={FLUENT.teal} icon={Disc3}
+          actionLabel="Filter" active={kind === 'COIL'} onClick={() => setKind(kind === 'COIL' ? 'ALL' : 'COIL')}
+          hint="Show coils only." />
+        <RmKpiCard label="Circles" value={num(circleCount)} sub="Cut and ready" tone={FLUENT.lavender} icon={CircleDashed}
+          actionLabel="Filter" active={kind === 'CIRCLE'} onClick={() => setKind(kind === 'CIRCLE' ? 'ALL' : 'CIRCLE')}
+          hint="Show circles only." />
+        <RmKpiCard label="Units to order" value={num(listQty)} sub={`Across ${num(qtyItems)} item${qtyItems === 1 ? '' : 's'}`}
+          tone={FLUENT.blue} icon={ArrowRight} actionLabel="Rank" active={rank === 'UNITS'} onClick={() => pickRank('UNITS')}
+          hint="Show the items with a quantity to order, largest order first." />
+        <RmKpiCard label="Estimated spend" value={inr(listSpend)} sub={`At the recorded rates · ${num(spendItems)} item${spendItems === 1 ? '' : 's'}`}
+          tone={FLUENT.grey} icon={IndianRupee} actionLabel="Rank" active={rank === 'SPEND'} onClick={() => pickRank('SPEND')}
+          hint="Show the items with an estimated spend, highest first." />
+      </RmKpiGrid>
 
       {rows.length > 0 && (
         <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
@@ -145,6 +182,10 @@ const RmImsReorder = () => {
             <TextField select size="small" label="Material" value={kind} onChange={(e) => setKind(e.target.value)} sx={{ minWidth: 175 }}>
               {KIND_FILTERS.map((k) => <MenuItem key={k.value} value={k.value}>{k.label}</MenuItem>)}
             </TextField>
+            {rank && (
+              <Chip size="small" label={`Showing: ${RANKS[rank].label}`} onDelete={() => pickRank(rank)} deleteIcon={<X size={13} />}
+                sx={{ height: 26, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
+            )}
             <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, ml: 'auto', whiteSpace: 'nowrap' }}>
               <b>{filtered.length}</b> of {rows.length} · <b>{num(totalQty)}</b> units
             </Typography>
@@ -154,7 +195,7 @@ const RmImsReorder = () => {
 
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1480)}>
+          <Table size="small" sx={rmTableSx(1560)}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -205,7 +246,7 @@ const RmImsReorder = () => {
                       <Typography sx={{ fontSize: '0.62rem', color: O2D.faint }}>{uomOf(r)}</Typography>
                     </TableCell>
                     <TableCell><KindChip kind={r.kind} /></TableCell>
-                    <TableCell sx={{ maxWidth: 270 }}>
+                    <TableCell sx={{ minWidth: 260, maxWidth: 320 }}>
                       <Typography sx={{ fontSize: '0.73rem', color: t.color, fontWeight: 600 }}>{reasonFor(r)}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>

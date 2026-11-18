@@ -163,6 +163,8 @@ export const {
   useGetRmForecastQuery,
   useGetRmPolicyQuery,
   useGetRmMovementsQuery,
+  // Read page by page by Movement History's "Net change by item" view.
+  useLazyGetRmMovementsQuery,
   useGetRmConversionsQuery,
   useGetRmReceivedCoilsQuery,
   useGetRmCoilLineageQuery,

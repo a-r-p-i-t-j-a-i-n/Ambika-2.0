@@ -8,7 +8,7 @@ import { useTheme } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 import {
   History, ChevronRight, ChevronDown, AlertTriangle, ArrowUpRight, Scissors, HelpCircle, MoreVertical,
-  RotateCcw, Disc3, Layers, Scale, Trash2, Receipt, Pencil, RefreshCw, Unlink, ListTree, FileText,
+  RotateCcw, Disc3, Layers, Scale, Receipt, Pencil, RefreshCw, Unlink, ListTree, FileText,
   CircleDashed, CheckCheck,
 } from 'lucide-react';
 import dayjs from 'dayjs';
@@ -16,6 +16,7 @@ import {
   TableScroll, EmptyNote, YieldChip, CutStatusChip,
   O2D, O2D_TIP, num, imsTableSx, panelSx,
 } from './rmImsMeta';
+import { FLUENT, FLUENT_DEPTH } from './rmFluent';
 import { CuttingFilterBar, WhereCut } from './cuttingShared';
 import { useCuttingFilters } from './cuttingFilters';
 import {
@@ -82,11 +83,15 @@ const historyTableSx = (showType) => {
     // class so it outranks the theme's own head rule.
     '& > .MuiTableHead-root > .MuiTableRow-root > .MuiTableCell-root': {
       ...base['& thead th'], whiteSpace: 'nowrap', lineHeight: 1.25, verticalAlign: 'bottom',
-      textTransform: 'none', letterSpacing: 0, fontSize: '0.74rem', fontWeight: 800, color: O2D.ink,
+      textTransform: 'none', letterSpacing: 0, fontSize: '0.74rem', fontWeight: 700, color: '#2f3d55',
+      bgcolor: '#f2f6fc', py: 1.2,
       // The header row is fixed: the rows and their data scroll under it.
       position: 'sticky', top: 0, zIndex: 2,
-      borderBottom: `1px solid ${O2D.line}`, boxShadow: `0 1px 0 ${O2D.line}`,
+      borderBottom: '1px solid #dfe7f2', boxShadow: '0 1px 0 #dfe7f2',
     },
+    '& td': { ...base['& td, & th'], borderColor: '#edf0f5' },
+    // A clear hover for THIS table's rows (not the rounds table opened inside).
+    '& > .MuiTableBody-root > tr[data-id]:hover': { bgcolor: '#f1f6fe' },
   };
 };
 /**
@@ -97,7 +102,7 @@ const historyTableSx = (showType) => {
 const actionCellSx = (bg = O2D.surface) => ({
   ...colSx('action'), position: 'sticky', right: 0, zIndex: 1, bgcolor: bg, whiteSpace: 'nowrap',
   boxShadow: `inset 1px 0 0 ${O2D.line}, -8px 0 10px -8px rgba(28,30,33,0.22)`,
-  'tr:hover > &': { bgcolor: O2D.surfaceAlt },
+  'tr:hover > &': { bgcolor: '#f1f6fe' },
 });
 // The scroll box: sideways always; downwards only once the rows are taller
 // than the screen allows (then the header and the scrollbar stay in view).
@@ -614,30 +619,32 @@ const CutDetails = ({ cut, compact }) => {
  * says, and shows a chevron; without one it is only a figure.
  */
 const SummaryCard = ({
-  label, value, sub, icon, color, tint, onClick, actionLabel, active, testId,
+  label, value, sub, icon, tone = FLUENT.blue, onClick, actionLabel, active, testId,
 }) => {
   const Icon = icon;
-  // Compact, so all five cards sit on one line on a normal screen.
+  // The Raw Material KPI look (RmKpiCard): a soft tint, the label above the
+  // figure, nothing clipped — a long caption wraps onto a second line.
   const content = (
-    <Stack direction="row" spacing={1.1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
-      <Box sx={{ width: 34, height: 34, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(color, 0.12), color }}>
+    <Stack direction="row" spacing={1.1} alignItems="flex-start" sx={{ width: '100%', minWidth: 0 }}>
+      <Box sx={{ width: 34, height: 34, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: '#fff', color: tone.accent, border: `1px solid ${tone.border}` }}>
         <Icon size={17} />
       </Box>
       <Box sx={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
-        <Typography noWrap sx={{ fontSize: '0.72rem', fontWeight: 700, color: O2D.body }}>{label}</Typography>
-        <Typography sx={{ fontSize: { xs: '1.1rem', md: '1.15rem' }, fontWeight: 800, color, lineHeight: 1.25, ...numSx }}>{value}</Typography>
-        <Typography sx={{ fontSize: '0.66rem', color: O2D.sub, mt: 0.15, lineHeight: 1.35 }}>{sub}</Typography>
+        <Typography sx={{ fontSize: '0.76rem', fontWeight: 600, color: tone.ink, opacity: 0.9, lineHeight: 1.3 }}>{label}</Typography>
+        <Typography sx={{ fontSize: { xs: '1.15rem', md: '1.3rem' }, fontWeight: 800, color: tone.ink, lineHeight: 1.2, mt: 0.25, ...numSx }}>{value}</Typography>
+        <Typography sx={{ fontSize: '0.68rem', color: O2D.sub, mt: 0.25, lineHeight: 1.35 }}>{sub}</Typography>
       </Box>
-      {onClick && <Box sx={{ color: O2D.sub, display: 'flex', flexShrink: 0 }}><ChevronRight size={16} /></Box>}
+      {onClick && <Box sx={{ color: active ? tone.accent : tone.ink, opacity: active ? 1 : 0.45, display: 'flex', flexShrink: 0 }}><ChevronRight size={16} /></Box>}
     </Stack>
   );
   const sx = {
-    ...panelSx, p: { xs: 1.25, md: 1.25 }, bgcolor: tint || O2D.surface, display: 'flex', width: '100%', minWidth: 0,
-    ...(active ? { borderColor: color, boxShadow: `inset 0 0 0 1px ${color}` } : null),
+    ...panelSx, p: 1.5, borderRadius: '10px', display: 'flex', width: '100%', minWidth: 0, alignItems: 'stretch',
+    bgcolor: active ? tone.tint : tone.bg, borderColor: active ? tone.accent : tone.border,
+    boxShadow: active ? `inset 0 0 0 1px ${tone.accent}, ${FLUENT_DEPTH.rest}` : FLUENT_DEPTH.rest,
   };
   return onClick ? (
-    <ButtonBase onClick={onClick} aria-label={actionLabel} data-testid={testId}
-      sx={{ ...sx, transition: 'border-color .15s, box-shadow .15s', '&:hover': { borderColor: color, boxShadow: '0 2px 10px rgba(28,30,33,0.08)' }, '&:focus-visible': { outline: `2px solid ${color}`, outlineOffset: 2 } }}>
+    <ButtonBase onClick={onClick} aria-label={actionLabel} aria-pressed={!!active} data-testid={testId}
+      sx={{ ...sx, transition: 'border-color .15s, box-shadow .15s, transform .15s', '&:hover': { borderColor: tone.accent, boxShadow: FLUENT_DEPTH.hover, transform: 'translateY(-1px)' }, '&:focus-visible': { outline: `2px solid ${tone.accent}`, outlineOffset: 2 } }}>
       {content}
     </ButtonBase>
   ) : (
@@ -670,7 +677,7 @@ const AvailableCirclesCard = ({ circleSkuId, onOpen }) => {
   else if (isError) { value = '—'; sub = 'Could not load circle stock'; }
 
   return (
-    <SummaryCard label="Available Circles" value={value} sub={sub} icon={CircleDashed} color="#047857" tint="#f2fbf6"
+    <SummaryCard label="Available Circles" value={value} sub={sub} icon={CircleDashed} tone={FLUENT.lavender}
       onClick={onOpen} actionLabel="Open circle stock" testId="card-available-circles" />
   );
 };
@@ -954,11 +961,18 @@ const CuttingHistoryPanel = ({ refreshKey = 0, onCutCoil }) => {
   // Until the records area has been measured, the window decides.
   const cards = recordsWidth ? recordsWidth < CARDS_BELOW : narrowWindow;
   const showType = recordsWidth >= TYPE_COLUMN;
-  // All five summary cards on one line where they have room; fewer per row on
+  // All four summary cards on one line where they have room; two per row on
   // narrower screens.
   const summaryColumns = recordsWidth
-    ? `repeat(${recordsWidth >= 980 ? 5 : recordsWidth >= 720 ? 3 : recordsWidth >= 440 ? 2 : 1}, minmax(0, 1fr))`
-    : { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(5, minmax(0, 1fr))' };
+    ? `repeat(${recordsWidth >= 860 ? 4 : recordsWidth >= 440 ? 2 : 1}, minmax(0, 1fr))`
+    : { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' };
+  // "Total Conversions" shows every cut: it clears all the filters and brings
+  // the history into view, so it does something even when nothing is filtered.
+  const recordsBox = React.useRef(null);
+  const showAllCuts = () => {
+    reset();
+    setTimeout(() => recordsBox.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  };
   const cols = showType ? 16 : 15;
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const filters = useCuttingFilters();
@@ -1070,21 +1084,19 @@ const CuttingHistoryPanel = ({ refreshKey = 0, onCutCoil }) => {
       {view && (
         <Box sx={{ opacity: stale ? 0.6 : 1 }}>
           <Box data-testid="history-cards" sx={{ display: 'grid', gap: 1.25, gridTemplateColumns: summaryColumns }}>
-            <SummaryCard label="Physical Coils" value={num(meta.coils || 0)} icon={Layers} color={O2D.brand}
+            <SummaryCard label="Physical Coils" value={num(meta.coils || 0)} icon={Layers} tone={FLUENT.blue}
               sub={`${num(meta.partiallyCut || 0)} partially cut · ${num(meta.fullyCut || 0)} fully cut`}
-              onClick={() => setNow('entryType', 'COIL')} actionLabel="Show the physical coil records" active={applied.entryType === 'COIL'}
+              onClick={() => setNow('entryType', applied.entryType === 'COIL' ? '' : 'COIL')} actionLabel="Show the physical coil records" active={applied.entryType === 'COIL'}
               testId="card-physical-coils" />
-            <SummaryCard label="Total Conversions" value={num(meta.cuts || 0)} icon={Disc3} color="#0f766e" tint="#f3fbf9"
+            <SummaryCard label="Total Conversions" value={num(meta.cuts || 0)} icon={Disc3} tone={FLUENT.teal}
               sub={meta.unlinked
                 ? `${num(meta.coilCuts || 0)} on physical coils · ${num(meta.unlinked)} without physical coil`
                 : (cutFiltered ? 'Cuts matching the filters' : 'Cutting rounds of these coils')}
-              onClick={() => setNow('entryType', '')} actionLabel="Show all records" testId="card-conversions" />
-            <SummaryCard label="Total Coil Used" value={`${num(meta.cutKg || 0)} kg`} icon={Scale} color="#4338ca"
+              onClick={showAllCuts} actionLabel="Show every cut — clears the filters" testId="card-conversions" />
+            <SummaryCard label="Total Coil Used" value={`${num(meta.cutKg || 0)} kg`} icon={Scale} tone={FLUENT.orange}
               sub={`${num(meta.circlesKg || 0)} kg circles${meta.yieldPct != null ? ` · Yield ${num(meta.yieldPct)}%` : ''}`}
+              onClick={() => navigate('/rm-ims/movements?txnType=CONVERT_OUT')} actionLabel="Open the coil cut-up ledger in Movement History"
               testId="card-weight" />
-            <SummaryCard label="Total Scrap Generated" value={`${num(meta.scrapKg || 0)} kg`} icon={Trash2} color="#b45309" tint="#fffaf2"
-              sub={`PLG01 ${num(meta.plantScrapKg || 0)} kg · Job worker ${num(meta.jobWorkScrapKg || 0)} kg`}
-              onClick={() => navigate('/scrap-ims/by-coil')} actionLabel="Open Scrap by Physical Coil" testId="card-scrap" />
             <AvailableCirclesCard circleSkuId={applied.circleSkuId} onOpen={() => navigate('/rm-ims/stock?kind=CIRCLE')} />
           </Box>
           {/* What the cards cover — and the two figures too long for a card. */}
@@ -1114,9 +1126,10 @@ const CuttingHistoryPanel = ({ refreshKey = 0, onCutCoil }) => {
       </CuttingFilterBar>
 
       {/* ── The records ── */}
-      <Paper elevation={0} ref={recordsRef} sx={{ ...panelSx, overflow: 'hidden' }}>
-        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ px: { xs: 1.25, md: 1.75 }, pt: 1.5, pb: 0.5 }}>
-          <Box sx={{ width: 32, height: 32, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: alpha(O2D.brand, 0.08), color: O2D.brand, flexShrink: 0 }}>
+      <Paper elevation={0} ref={(el) => { recordsRef(el); recordsBox.current = el; }}
+        sx={{ ...panelSx, overflow: 'hidden', borderRadius: '10px', borderColor: FLUENT.blue.border, boxShadow: FLUENT_DEPTH.rest, scrollMarginTop: 120 }}>
+        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.25, bgcolor: FLUENT.blue.bg, borderBottom: `1px solid ${FLUENT.blue.border}` }}>
+          <Box sx={{ width: 32, height: 32, borderRadius: '8px', display: 'grid', placeItems: 'center', bgcolor: '#fff', border: `1px solid ${FLUENT.blue.border}`, color: FLUENT.blue.accent, flexShrink: 0 }}>
             <History size={16} />
           </Box>
           <Box sx={{ minWidth: 0 }}>
@@ -1170,7 +1183,7 @@ const CuttingHistoryPanel = ({ refreshKey = 0, onCutCoil }) => {
                   <TableCell sx={colSx('source')}>GRN / Source</TableCell>
                   <TableCell align="center" sx={colSx('location')}>Location</TableCell>
                   {showType && <TableCell align="center" sx={colSx('type')}>Type</TableCell>}
-                  <TableCell align="right" sx={{ ...actionCellSx(O2D.surfaceAlt), pr: 1.5 }}>Action</TableCell>
+                  <TableCell align="right" sx={{ ...actionCellSx('#f2f6fc'), pr: 1.5 }}>Action</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody data-testid="history-records">

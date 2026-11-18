@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import {
-  Recycle, Plus, X, Disc3, ArrowUpRight,
+  Recycle, Plus, X, Disc3, ArrowUpRight, Sparkles,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -93,7 +93,7 @@ const RmImsConversion = () => {
   return (
     <RmShell
       icon={Recycle}
-      title="Coil to Circle"
+      title="Cut Coils into Circles"
       subtitle="Track coil cutting history, circle output and remaining weight."
       actions={(
         <Button variant="contained" disableElevation onClick={() => openForm()} startIcon={<Plus size={16} />}
@@ -151,21 +151,24 @@ const RmImsConversion = () => {
           },
         }}
       >
-        <Stack direction="row" alignItems="center" spacing={1.25}
-          sx={{ px: { xs: 1.5, md: 2 }, py: 1.1, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}` }}>
-          <Box sx={{ width: 32, height: 32, borderRadius: '7px', display: 'grid', placeItems: 'center', bgcolor: `${O2D.brand}1a`, color: O2D.brand, flexShrink: 0 }}>
-            <Recycle size={17} />
+        <Stack direction="row" alignItems="center" spacing={1.5}
+          sx={{ px: { xs: 2, md: 3 }, py: 2, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, flexShrink: 0 }}>
+          <Box sx={{
+            width: 38, height: 38, borderRadius: '12px', display: 'grid', placeItems: 'center', flexShrink: 0,
+            background: `linear-gradient(135deg, ${theme.palette.primary.light}, ${theme.palette.primary.dark})`, color: '#fff',
+          }}>
+            <Recycle size={18} />
           </Box>
           {/* flex: 1, not mr: auto — the Stack's spacing resets its children's
               margins, which left the close button mid-header. */}
           <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography id="coil-to-circle-form-title" sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>
+            <Typography id="coil-to-circle-form-title" sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.15 }}>
               {preset?.cutType === 'FULL' ? `Full cut — coil ${preset.batchNo}`
                 : preset?.cutType === 'PARTIAL' ? `Partial cut — coil ${preset.batchNo}`
                   : 'Coil to Circle — new cutting entry'}
             </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>
-              Partial cut: only the weight cut. Full cut: finish the coil and enter its circles.
+            <Typography sx={{ fontSize: '0.72rem', color: O2D.sub, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Sparkles size={11} /> Partial cut: only the weight cut. Full cut: finish the coil and enter its circles.
             </Typography>
           </Box>
           {/* The coil the form found — and where it stands — at a glance. */}
@@ -188,7 +191,7 @@ const RmImsConversion = () => {
             </span>
           </Tooltip>
         </Stack>
-        <DialogContent sx={{ p: { xs: 1.25, md: 1.75 }, bgcolor: O2D.canvas }}>
+        <DialogContent sx={{ px: { xs: 1.5, md: 3 }, py: { xs: 1.5, md: 2.5 }, bgcolor: O2D.canvas }}>
           <CoilToCircleForm onSaved={onSaved} onCancel={requestClose} onStateChange={onFormState} preset={preset} />
         </DialogContent>
       </Dialog>

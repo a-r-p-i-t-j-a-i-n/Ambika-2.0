@@ -5,7 +5,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ImsShell, StatusChip, O2D } from './imsMeta';
 import ItemHistoryView from './ItemHistoryView';
 import { useGetImsForecastQuery, useGetImsItemLedgerQuery } from '../../store/api/imsApi';
-import PolicyDrawer from './PolicyDrawer';
+import PolicyDialog from './PolicyDialog';
 
 /**
  * ONE CONSUMABLES & PACKAGING ITEM — opened from the eye on Stock & Master
@@ -44,7 +44,7 @@ const ImsItemDetail = () => {
         <ItemHistoryView skuId={skuId} useLedger={useGetImsItemLedgerQuery}
           unit={sku.unit || ''} onHand={m.onHand} status={m.status} />
       )}
-      <PolicyDrawer skuId={editSku} onClose={() => setEditSku(null)} />
+      <PolicyDialog skuId={editSku} item={sku} onClose={() => setEditSku(null)} />
     </ImsShell>
   );
 };

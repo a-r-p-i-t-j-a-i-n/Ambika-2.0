@@ -10,17 +10,17 @@ import {
   ChevronRight, Info, X, Download,
 } from 'lucide-react';
 import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ReferenceLine, CartesianGrid,
+  ResponsiveContainer, ComposedChart, Line, Area, Bar, XAxis, YAxis, Tooltip as RTooltip, ReferenceLine, CartesianGrid,
 } from 'recharts';
 import dayjs from 'dayjs';
 import {
-  ImsShell, Panel, TableScroll, KpiTile, StatusChip, StatusLegend, EmptyNote, Th, Eyebrow,
+  ImsShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, StatusLegend, EmptyNote, Th,
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, imsTableSx,
 } from './imsMeta';
 import QtyRangeFilter from './QtyRangeFilter';
 import { NO_QTY_RANGE, matchesQtyRange } from './qtyRange';
-import { useGetImsOverviewQuery, useGetImsForecastQuery } from '../../store/api/imsApi';
-import PolicyDrawer from './PolicyDrawer';
+import { useGetImsOverviewQuery, useGetImsForecastQuery, useGetImsHistoryQuery } from '../../store/api/imsApi';
+import PolicyDialog from './PolicyDialog';
 import { TYPE_META } from '../masters/itemTypeMeta';
 import { FIELD } from './imsFieldHelp';
 import AwaitingQcNote from './AwaitingQcNote';
@@ -111,89 +111,217 @@ const ColorCodingLegend = () => (
   </Stack>
 );
 
-// ── Stock projection dialog ──────────────────────────────────────────────────
+// ── Stock & consumption graph (row Graph icon) ───────────────────────────────
+// One chart, three real series, nothing invented:
+//   • Actual stock      — the closing balance of every past day, rebuilt from the
+//                         ledger by GET /ims/history (it reconciles with on-hand).
+//   • Units out / day   — what actually left the store each past day (same call).
+//   • Forecast          — GET /ims/forecast: today's stock, + Awaiting QC and
+//                         in-transit when due, − Average Daily Consumption a day.
+//                         Its daily use (the ADC it assumes) is drawn as faint bars.
+// The period toggle sets both directions: N days back and N days ahead.
+const SERIES = {
+  actual: { color: O2D.brand, label: 'Actual stock' },
+  forecast: { color: '#7c3aed', label: 'Forecast stock' },
+  out: { color: '#c2410c', label: 'Units out (actual)' },
+  outForecast: { color: '#c2410c', label: 'Daily use (forecast)' },
+};
+
+const ChartLegendDot = ({ color, label, dashed, bar, faint }) => (
+  <Stack direction="row" spacing={0.6} alignItems="center">
+    {bar
+      ? <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: color, opacity: faint ? 0.3 : 0.85 }} />
+      : <Box sx={{ width: 16, height: 0, borderTop: `2.5px ${dashed ? 'dashed' : 'solid'} ${color}` }} />}
+    <Typography sx={{ fontSize: '0.68rem', color: O2D.body, fontWeight: 600 }}>{label}</Typography>
+  </Stack>
+);
+
+const GraphTip = ({ active, payload, unit }) => {
+  if (!active || !payload?.length) return null;
+  const p = payload[0].payload;
+  const rows = [
+    p.actual != null && ['Actual stock', p.actual, SERIES.actual.color],
+    p.forecast != null && !p.isPast && ['Forecast stock', p.forecast, SERIES.forecast.color],
+    p.isPast && ['Units out', p.out || 0, SERIES.out.color],
+    p.isPast && p.inQty > 0 && ['Units in', p.inQty, STOCK_TOKENS.OK.color],
+    !p.isPast && p.outForecast != null && ['Forecast use', p.outForecast, SERIES.out.color],
+  ].filter(Boolean);
+  return (
+    <Box sx={{ bgcolor: O2D.surface, border: `1px solid ${O2D.line}`, borderRadius: '7px', px: 1.1, py: 0.75, boxShadow: '0 8px 24px rgba(28,30,33,0.16)' }}>
+      <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: O2D.ink, mb: 0.25 }}>
+        {dayjs(p.key).format('ddd, DD MMM YYYY')}{p.isToday ? ' · today' : p.isPast ? '' : ' · forecast'}
+      </Typography>
+      {rows.map(([k, v, c]) => (
+        <Typography key={k} sx={{ fontSize: '0.72rem', color: c, fontWeight: 700 }}>
+          {k}: {num(v)}{unit ? ` ${unit}` : ''}
+        </Typography>
+      ))}
+    </Box>
+  );
+};
+
 const ForecastDialog = ({ item, onClose }) => {
   const [days, setDays] = useState(30);
-  const { data, isFetching } = useGetImsForecastQuery({ skuId: item?.skuId, days }, { skip: !item });
-  const fc = data?.data;
-  const m = fc?.metrics || {};
-  const series = (fc?.series || []).map((p) => ({ ...p, label: dayjs(p.date).format('DD MMM') }));
+  const skuId = item?.skuId;
+  // History window: the last `days` IST calendar days up to today (inclusive).
+  const to = dayjs().format('YYYY-MM-DD');
+  const from = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD');
+  const fc = useGetImsForecastQuery({ skuId, days }, { skip: !item });
+  const hist = useGetImsHistoryQuery({ skuId, from, to }, { skip: !item });
+  const f = fc.data?.data;
+  const h = hist.data?.data;
+  const m = f?.metrics || {};
+  const unit = f?.sku?.unit || item?.unit || '';
+  const loading = (fc.isFetching && !f) || (hist.isFetching && !h);
+  const error = fc.error || hist.error;
+
+  const { data: chartData, todayKey, summary } = useMemo(() => {
+    if (!f || !h) return { data: [], todayKey: null, summary: null };
+    const pastDays = h.days || [];
+    const lastKey = pastDays.length ? pastDays[pastDays.length - 1].date : to;
+    const points = pastDays.map((d) => ({
+      key: d.date, label: dayjs(d.date).format('DD MMM'),
+      actual: d.closing, out: d.outQty, inQty: d.inQty, isPast: true, isToday: d.date === lastKey,
+    }));
+    const series = f.series || [];
+    // Day 0 of the forecast is today: it starts where the actual line ends, so
+    // the two lines meet instead of leaving a gap.
+    if (points.length && series[0]) points[points.length - 1].forecast = series[0].projected;
+    let left = series[0]?.projected ?? 0;
+    series.slice(1).forEach((p) => {
+      const key = dayjs(lastKey).add(p.day, 'day').format('YYYY-MM-DD');
+      // The daily use the projection assumes: the ADC, but never more than the
+      // forecast says is left — once stock reaches 0 there is nothing to use.
+      const use = m.adc > 0 ? Math.max(0, Math.min(m.adc, left)) : 0;
+      left = p.projected;
+      points.push({
+        key, label: dayjs(key).format('DD MMM'), forecast: p.projected,
+        outForecast: Math.round(use * 100) / 100, isPast: false,
+      });
+    });
+    return { data: points, todayKey: lastKey, summary: h.summary };
+  }, [f, h, m.adc, to]);
+
+  const hasHistory = (summary?.totalIn || 0) + (summary?.totalOut || 0) > 0 || (summary?.closingBalance || 0) > 0;
 
   // The two dates that matter — spelled as sentences, not as chips full of jargon.
-  const verdict = fc?.stockoutDay != null
-    ? { tone: STOCK_TOKENS.OUT_OF_STOCK, text: `At the current rate this item runs out in about ${fc.stockoutDay} days.` }
-    : fc?.reorderDay != null
-      ? { tone: STOCK_TOKENS.REORDER, text: `Stock hits its reorder point in about ${fc.reorderDay} days — plan the purchase order now.` }
-      : { tone: STOCK_TOKENS.OK, text: `No reorder and no stock-out expected in the next ${days} days.` };
+  const verdict = f?.stockoutDay != null
+    ? { tone: STOCK_TOKENS.OUT_OF_STOCK, text: f.stockoutDay === 0 ? 'This item is out of stock today.' : `At the current rate this item runs out in about ${f.stockoutDay} days.` }
+    : f?.reorderDay != null
+      ? { tone: STOCK_TOKENS.REORDER, text: f.reorderDay === 0 ? 'Stock is already at its reorder point — plan the purchase order now.' : `Stock hits its reorder point in about ${f.reorderDay} days — plan the purchase order now.` }
+      : { tone: STOCK_TOKENS.OK, text: m.adc > 0 ? `No reorder and no stock-out expected in the next ${days} days.` : `Nothing was consumed in the last 90 days, so stock is expected to stay at ${num(m.onHand)}${unit ? ` ${unit}` : ''}.` };
+
+  const chips = [
+    ['Closing Stock', `${num(m.onHand)}${unit ? ` ${unit}` : ''}`],
+    ['Avg daily use (90d)', `${num(m.adc)}/day`],
+    [`Out, last ${days}d`, num(summary?.totalOut)],
+    [`In, last ${days}d`, num(summary?.totalIn)],
+    ['Reorder at', num(m.reorderPoint)],
+    ['Max Level', num(m.maxLevel)],
+    ['Days of cover', m.daysCover == null ? '—' : num(m.daysCover)],
+  ];
 
   return (
-    <Dialog open={!!item} onClose={onClose} maxWidth="md" fullWidth
-      PaperProps={{ sx: { borderRadius: '10px', border: `1px solid ${O2D.line}` } }}>
+    <Dialog open={!!item} onClose={onClose} maxWidth="lg" fullWidth
+      PaperProps={{ sx: { borderRadius: '12px', border: `1px solid ${O2D.line}` }, 'data-testid': 'ims-graph-dialog' }}>
       <DialogTitle sx={{ py: 1.25, borderBottom: `1px solid ${O2D.lineSoft}` }}>
-        <Stack direction="row" alignItems="center" spacing={1}>
+        <Stack direction="row" alignItems="center" spacing={1.25}>
+          <Box sx={{
+            width: 34, height: 34, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0,
+            bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand, border: `1px solid ${alpha(O2D.brand, 0.18)}`,
+          }}>
+            <LineChartIcon size={17} />
+          </Box>
           <Box sx={{ minWidth: 0, mr: 'auto' }}>
             <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: O2D.ink }}>
-              What happens to this stock next?
+              Stock &amp; consumption — actual and forecast
             </Typography>
             <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub }}>
               {item?.skuName} · {item?.skuCode}
             </Typography>
           </Box>
-          <IconButton size="small" onClick={onClose}><X size={16} /></IconButton>
+          <IconButton size="small" onClick={onClose} aria-label="Close"><X size={16} /></IconButton>
         </Stack>
       </DialogTitle>
       <DialogContent sx={{ bgcolor: O2D.canvas, p: 1.5 }}>
-        <Stack spacing={1.25}>
-          <Paper elevation={0} sx={{
-            borderRadius: '8px', px: 1.5, py: 1.1,
-            border: `1px solid ${verdict.tone.border}`, bgcolor: verdict.tone.tint,
-          }}>
-            <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: verdict.tone.color }}>{verdict.text}</Typography>
-          </Paper>
+        <Stack spacing={1.25} sx={{ pt: 1.25 }}>
+          {error ? (
+            <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1.1, border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: STOCK_TOKENS.OUT_OF_STOCK.color }}>
+                {error?.data?.message || 'Could not load this item’s stock history.'}
+              </Typography>
+            </Paper>
+          ) : (
+            <Paper elevation={0} data-testid="ims-graph-verdict" sx={{
+              borderRadius: '8px', px: 1.5, py: 1.1,
+              border: `1px solid ${verdict.tone.border}`, bgcolor: verdict.tone.tint,
+            }}>
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: verdict.tone.color }}>{loading ? 'Working it out…' : verdict.text}</Typography>
+            </Paper>
+          )}
 
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
-            {[
-              ['Closing Stock', num(m.onHand)],
-              ['Used per day', `${num(m.adc)}/day`],
-              ['Reorder at', num(m.reorderPoint)],
-              ['Max Level', num(m.maxLevel)],
-            ].map(([k, v]) => (
-              <Chip key={k} size="small" label={<span><b>{k}:</b> {v}</span>}
-                sx={{ height: 24, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
+          <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap alignItems="center">
+            {chips.map(([k, v]) => (
+              <Chip key={k} size="small" label={<span><b>{k}:</b> {loading ? '…' : v}</span>}
+                sx={{ height: 24, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surface, border: `1px solid ${O2D.line}`, color: O2D.body }} />
             ))}
             <Box sx={{ ml: 'auto' }}>
               <ToggleButtonGroup size="small" exclusive value={days} onChange={(_, v) => v && setDays(v)}
-                sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 700, fontSize: '0.7rem', px: 1.1, py: 0.3, borderColor: O2D.line } }}>
-                {[15, 30, 60, 90].map((n) => <ToggleButton key={n} value={n}>{n} days</ToggleButton>)}
+                sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 700, fontSize: '0.7rem', px: 1.1, py: 0.3, borderColor: O2D.line, bgcolor: O2D.surface } }}>
+                {[15, 30, 60, 90].map((d) => <ToggleButton key={d} value={d}>{d} days</ToggleButton>)}
               </ToggleButtonGroup>
             </Box>
           </Stack>
 
-          <Paper elevation={0} sx={{ borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, p: 1.5 }}>
-            {isFetching ? <Skeleton variant="rounded" height={300} /> : (
-              <Box sx={{ height: 310 }}>
+          <Paper elevation={0} sx={{ borderRadius: '10px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, p: 1.5 }}>
+            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+              <ChartLegendDot color={SERIES.actual.color} label={`Actual stock (last ${days} days)`} />
+              <ChartLegendDot color={SERIES.forecast.color} label={`Forecast stock (next ${days} days)`} dashed />
+              <ChartLegendDot color={SERIES.out.color} label="Units out per day (actual)" bar />
+              <ChartLegendDot color={SERIES.out.color} label="Daily use the forecast assumes" bar faint />
+            </Stack>
+            {loading ? <Skeleton variant="rounded" height={320} /> : (
+              <Box sx={{ height: 330 }} data-testid="ims-graph-chart">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={series} margin={{ top: 14, right: 20, left: 0, bottom: 0 }}>
+                  <ComposedChart data={chartData} margin={{ top: 14, right: 8, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="imsActualFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={SERIES.actual.color} stopOpacity={0.18} />
+                        <stop offset="100%" stopColor={SERIES.actual.color} stopOpacity={0.01} />
+                      </linearGradient>
+                    </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={O2D.lineSoft} />
                     <XAxis dataKey="label" tick={{ fontSize: 10, fill: O2D.sub }} interval="preserveStartEnd"
-                      minTickGap={24} tickLine={false} axisLine={{ stroke: O2D.line }} />
-                    <YAxis tick={{ fontSize: 10, fill: O2D.sub }} allowDecimals={false} tickLine={false} axisLine={false} width={44} />
-                    <RTooltip formatter={(v) => [num(v), 'Projected stock']} />
+                      minTickGap={28} tickLine={false} axisLine={{ stroke: O2D.line }} />
+                    <YAxis yAxisId="stock" tick={{ fontSize: 10, fill: O2D.sub }} allowDecimals={false} tickLine={false} axisLine={false} width={48} />
+                    <YAxis yAxisId="flow" orientation="right" tick={{ fontSize: 10, fill: SERIES.out.color }} allowDecimals={false} tickLine={false} axisLine={false} width={40} />
+                    <RTooltip content={<GraphTip unit={unit} />} />
+                    {todayKey && (
+                      <ReferenceLine yAxisId="stock" x={dayjs(todayKey).format('DD MMM')} stroke={O2D.faint} strokeDasharray="2 3"
+                        label={{ value: 'Today', fontSize: 10, fill: O2D.sub, position: 'insideTopRight' }} />
+                    )}
                     {m.reorderPoint > 0 && (
-                      <ReferenceLine y={m.reorderPoint} stroke={STOCK_TOKENS.REORDER.color} strokeDasharray="4 4"
-                        label={{ value: 'Reorder at', fontSize: 10, fill: STOCK_TOKENS.REORDER.color, position: 'insideTopLeft' }} />
+                      <ReferenceLine yAxisId="stock" y={m.reorderPoint} stroke={STOCK_TOKENS.REORDER.color} strokeDasharray="4 4"
+                        label={{ value: `Reorder at ${num(m.reorderPoint)}`, fontSize: 10, fill: STOCK_TOKENS.REORDER.color, position: 'insideTopLeft' }} />
                     )}
                     {m.maxLevel > 0 && (
-                      <ReferenceLine y={m.maxLevel} stroke={STOCK_TOKENS.OK.color} strokeDasharray="4 4"
-                        label={{ value: 'Max Level', fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
+                      <ReferenceLine yAxisId="stock" y={m.maxLevel} stroke={STOCK_TOKENS.OK.color} strokeDasharray="4 4"
+                        label={{ value: `Max Level ${num(m.maxLevel)}`, fontSize: 10, fill: STOCK_TOKENS.OK.color, position: 'insideTopLeft' }} />
                     )}
-                    <Line type="monotone" dataKey="projected" stroke={O2D.brand} strokeWidth={2.5} dot={false} />
-                  </LineChart>
+                    <Bar yAxisId="flow" dataKey="out" fill={SERIES.out.color} fillOpacity={0.8} maxBarSize={14} radius={[3, 3, 0, 0]} />
+                    <Bar yAxisId="flow" dataKey="outForecast" fill={SERIES.out.color} fillOpacity={0.22} maxBarSize={14} radius={[3, 3, 0, 0]} />
+                    <Area yAxisId="stock" type="linear" dataKey="actual" stroke={SERIES.actual.color} strokeWidth={2.5}
+                      fill="url(#imsActualFill)" dot={false} connectNulls={false} isAnimationActive={false} />
+                    <Line yAxisId="stock" type="linear" dataKey="forecast" stroke={SERIES.forecast.color} strokeWidth={2.25}
+                      strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} />
+                  </ComposedChart>
                 </ResponsiveContainer>
               </Box>
             )}
             <Typography sx={{ fontSize: '0.68rem', color: O2D.faint, mt: 0.75 }}>
-              The line assumes today's average daily use continues and no new stock arrives.
+              Actual stock and units out come straight from this item's movements. The forecast assumes today's average daily
+              use (last 90 days) continues, adds stock awaiting QC and material in transit when due, and nothing else arrives.
+              {!loading && !hasHistory && ' This item has no movements in the selected period.'}
             </Typography>
           </Paper>
         </Stack>
@@ -214,7 +342,10 @@ const ImsStockList = () => {
   const [qtyRange, setQtyRange] = useState(NO_QTY_RANGE);
   const [status, setStatus] = useState(params.get('status') || 'ALL');
   const [sort, setSort] = useState('urgency');
-  const [editSku, setEditSku] = useState(null);
+  // The row being edited — the Planning Policy dialog shows its code and name.
+  const [editItem, setEditItem] = useState(null);
+  // 'IN_STOCK' = the Closing Stock card's view: only items with stock on hand.
+  const [view, setView] = useState(params.get('view') === 'in-stock' ? 'IN_STOCK' : 'ALL');
   const [forecast, setForecast] = useState(null);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
@@ -230,6 +361,24 @@ const ImsStockList = () => {
     if (s === 'ALL') { params.delete('status'); } else { params.set('status', s); }
     setParams(params, { replace: true });
   };
+  const pickView = (v) => {
+    setView(v);
+    if (v === 'IN_STOCK') params.set('view', 'in-stock'); else params.delete('view');
+    setParams(params, { replace: true });
+  };
+  // KPI cards. Each one is a filter shortcut; clicking the active card again
+  // turns its filter off.
+  const showEverything = () => {
+    setSearch(''); setCategory(''); setQtyRange(NO_QTY_RANGE); setSort('urgency');
+    setStatus('ALL'); setView('ALL');
+    params.delete('status'); params.delete('view');
+    setParams(params, { replace: true });
+  };
+  const toggleInStock = () => {
+    if (view === 'IN_STOCK') { pickView('ALL'); return; }
+    pickView('IN_STOCK'); setSort('onhand');
+  };
+  const toggleLow = () => pickStatus(status === 'LOW' ? 'ALL' : 'LOW');
 
   const { data, isFetching } = useGetImsOverviewQuery({ search: search || undefined });
   const rows = useMemo(() => data?.data || [], [data]);
@@ -256,6 +405,7 @@ const ImsStockList = () => {
 
   const filtered = useMemo(() => {
     const list = rows.filter((r) => (status === 'ALL' || r.status === status)
+      && (view !== 'IN_STOCK' || Number(r.onHand || 0) > 0)
       && (!category || (r.itemType || UNMAPPED_KEY) === category)
       && matchesQtyRange(qtyRange, r.onHand));
     const sorters = {
@@ -266,9 +416,9 @@ const ImsStockList = () => {
       onhand: (a, b) => Number(b.onHand || 0) - Number(a.onHand || 0),
     };
     return [...list].sort(sorters[sort] || sorters.urgency);
-  }, [rows, status, category, sort, qtyRange]);
+  }, [rows, status, view, category, sort, qtyRange]);
 
-  useEffect(() => { setPage(0); }, [search, category, status, sort, rowsPerPage, qtyRange]);
+  useEffect(() => { setPage(0); }, [search, category, status, view, sort, rowsPerPage, qtyRange]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const exportCsv = () => {
@@ -294,7 +444,9 @@ const ImsStockList = () => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
-  const activeFilters = (status !== 'ALL' ? 1 : 0) + (category ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
+  const activeFilters = (status !== 'ALL' ? 1 : 0) + (view !== 'ALL' ? 1 : 0) + (category ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
+  const inStockCount = useMemo(() => rows.filter((r) => Number(r.onHand || 0) > 0).length, [rows]);
+  const toOrder = (summary.reorder || 0) + (summary.outOfStock || 0);
 
   return (
     <ImsShell
@@ -309,19 +461,27 @@ const ImsStockList = () => {
         </Button>
       )}
     >
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Items" value={num(summary.itemCount)} sub="In the master list" color={O2D.brand} icon={Boxes} />
-        <KpiTile label="Closing Stock" value={num(summary.totalOnHand)} sub="Total units physically in store" color="#0f766e" icon={PackageOpen} />
-        {/* This tile counts Out of stock + Order now together, so it opens the
-            Buying list rather than a single-status filter that would show fewer
-            rows than the number on the tile. */}
-        <KpiTile label="To order now" value={num((summary.reorder || 0) + (summary.outOfStock || 0))}
-          sub="Open the buying list" color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle}
-          onClick={() => navigate('/ims/reorder')} />
-        <KpiTile label="Running low" value={num(summary.low)} sub="Watch these next"
-          color={STOCK_TOKENS.LOW.color} icon={TrendingDown}
-          active={status === 'LOW'} onClick={() => pickStatus('LOW')} />
-      </Stack>
+      <KpiGrid>
+        <KpiCard label="Items" value={num(summary.itemCount)} sub="Every item in the master list"
+          color={O2D.brand} icon={Boxes} actionLabel="Show all" onClick={showEverything}
+          hint="Show every item — clears all filters." />
+        <KpiCard label="Closing Stock" value={num(summary.totalOnHand)}
+          sub={`Units in store · ${num(inStockCount)} item${inStockCount === 1 ? '' : 's'} hold stock`}
+          color="#0f766e" icon={PackageOpen} actionLabel="In stock"
+          active={view === 'IN_STOCK'} onClick={toggleInStock}
+          hint="Show only items with stock on hand, highest first." />
+        {/* This card counts Out of stock + Order now together, so it opens the
+            Buying List rather than a single-status filter that would show fewer
+            rows than the number on the card. */}
+        <KpiCard label="To order now" value={num(toOrder)} sub="Out of stock + at reorder point"
+          color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle} actionLabel="Buying List"
+          onClick={() => navigate('/ims/reorder')}
+          hint="Open the Buying List with how much to order for each." />
+        <KpiCard label="Running low" value={num(summary.low)} sub="Watch these next"
+          color={STOCK_TOKENS.LOW.color} icon={TrendingDown} actionLabel="Filter"
+          active={status === 'LOW'} onClick={toggleLow}
+          hint="Show only items that are running low." />
+      </KpiGrid>
 
       {/* ── Filters — one line, then the status legend doubling as a filter ── */}
       <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
@@ -346,7 +506,7 @@ const ImsStockList = () => {
           </Typography>
           {activeFilters > 0 && (
             <Button size="small" startIcon={<X size={12} />}
-              onClick={() => { setSearch(''); setCategory(''); setQtyRange(NO_QTY_RANGE); pickStatus('ALL'); }}
+              onClick={showEverything}
               sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.body }}>
               Clear ({activeFilters})
             </Button>
@@ -482,13 +642,15 @@ const ImsStockList = () => {
                     <TableCell align="center"><StatusChip status={r.status} /></TableCell>
                     <TableCell align="center" sx={{ width: 108, whiteSpace: 'nowrap' }}>
                       <Stack direction="row" spacing={0.25} justifyContent="center" alignItems="center">
-                        <Tooltip arrow slotProps={O2D_TIP} title="See when this runs out">
-                          <IconButton size="small" onClick={(e) => { e.stopPropagation(); setForecast(r); }} sx={{ color: O2D.sub }}>
+                        <Tooltip arrow slotProps={O2D_TIP} title="Graph — actual stock and consumption, and the forecast">
+                          <IconButton size="small" aria-label={`Graph for ${r.skuCode}`} onClick={(e) => { e.stopPropagation(); setForecast(r); }}
+                            sx={{ color: O2D.sub, '&:hover': { color: O2D.brand, bgcolor: alpha(O2D.brand, 0.08) } }}>
                             <LineChartIcon size={15} />
                           </IconButton>
                         </Tooltip>
                         <Tooltip arrow slotProps={O2D_TIP} title="Edit the planning policy (Lead Time, Safety Factor, MOQ)">
-                          <IconButton size="small" onClick={(e) => { e.stopPropagation(); setEditSku(r.skuId); }} sx={{ color: O2D.sub }}>
+                          <IconButton size="small" aria-label={`Edit planning policy for ${r.skuCode}`} onClick={(e) => { e.stopPropagation(); setEditItem(r); }}
+                            sx={{ color: O2D.sub, '&:hover': { color: O2D.brand, bgcolor: alpha(O2D.brand, 0.08) } }}>
                             <Pencil size={15} />
                           </IconButton>
                         </Tooltip>
@@ -524,7 +686,7 @@ const ImsStockList = () => {
         </Box>
       </Panel>
 
-      <PolicyDrawer skuId={editSku} onClose={() => setEditSku(null)} />
+      <PolicyDialog skuId={editItem?.skuId || null} item={editItem} onClose={() => setEditItem(null)} />
       <ForecastDialog item={forecast} onClose={() => setForecast(null)} />
     </ImsShell>
   );

@@ -131,7 +131,7 @@ const run = async () => {
 
   /* ── 1. Table first, form closed ── */
   const body0 = flat(await page.locator('body').innerText());
-  check('1. title "Coil to Circle" and its explanation', /Coil to Circle/.test(body0)
+  check('1. title "Cut Coils into Circles" (the sidebar name) and its explanation', /Cut Coils into Circles/.test(body0)
     && body0.includes('View cutting records, track remaining coil weight and record new cutting rounds.'));
   check('1. the history table is visible', await page.getByRole('table', { name: 'Coil to Circle history' }).isVisible());
   check('1. the entry form is NOT open', (await dialog.count()) === 0 && (await page.getByTestId('coil-to-circle-form').count()) === 0);
