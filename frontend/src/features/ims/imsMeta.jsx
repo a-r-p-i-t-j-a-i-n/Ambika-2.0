@@ -138,13 +138,16 @@ export const Th = ({ label, hint }) => (hint
 // see it → look it up → bring it in → send it out → buy more → check history.
 // Clients stop hunting in the sidebar because the whole area is one strip away.
 // The Raw-Material area passes its own list (it has an extra Conversion screen).
+// Labels are the sidebar's names, word for word (MainLayout → Consumables &
+// Packaging), so a screen is called the same thing wherever it is reached from.
+// Only Consumables & Packaging uses this list — RM, FG and Scrap pass their own.
 export const IMS_NAV = [
-  { label: 'Overview',   short: 'Overview',  path: '/ims',           icon: LayoutDashboard, exact: true },
-  { label: 'Stock list', short: 'Stock',     path: '/ims/stock',     icon: Boxes },
-  { label: 'Stock In',   short: 'In',        path: '/ims/stock-in',  icon: PackagePlus },
-  { label: 'Stock Out',  short: 'Out',       path: '/ims/stock-out', icon: PackageMinus },
-  { label: 'Buying list', short: 'Buy',      path: '/ims/reorder',   icon: ShoppingCart },
-  { label: 'History',    short: 'History',   path: '/ims/movements', icon: History },
+  { label: 'Dashboard',           short: 'Dashboard', path: '/ims',           icon: LayoutDashboard, exact: true },
+  { label: 'Stock & Master Data', short: 'Stock',     path: '/ims/stock',     icon: Boxes },
+  { label: 'Stock In',            short: 'In',        path: '/ims/stock-in',  icon: PackagePlus },
+  { label: 'Stock Out',           short: 'Out',       path: '/ims/stock-out', icon: PackageMinus },
+  { label: 'Buying List',         short: 'Buy',       path: '/ims/reorder',   icon: ShoppingCart },
+  { label: 'Movement History',    short: 'History',   path: '/ims/movements', icon: History },
 ];
 
 // ── Which tab is lit ─────────────────────────────────────────────────────────
@@ -341,6 +344,117 @@ export const KpiTile = ({ label, value, sub, color = O2D.brand, icon: Icon, onCl
     </Paper>
   );
 };
+
+// ── KPI card (Consumables & Packaging) ──────────────────────────────────────
+// The enterprise KPI card the Consumables & Packaging screens use. Additive —
+// KpiTile above is untouched, so Raw Material, Finished Goods and Scrap look
+// exactly as before.
+//
+//   • a thin accent strip carries the card's colour code without shouting
+//   • a clickable card says so: pointer, lift on hover, and a "view" arrow
+//   • the card currently filtering the page is tinted, ringed and labelled
+//     "Filtered", so it is always obvious why the table shows what it shows
+//   • it is a real button for the keyboard (Tab, Enter / Space)
+export const KpiCard = ({ label, value, sub, color = O2D.brand, icon: Icon, onClick, active, hint, actionLabel = 'View' }) => {
+  const clickable = !!onClick;
+  const onKey = (e) => {
+    if (!clickable) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); }
+  };
+  const card = (
+    <Paper
+      elevation={0}
+      onClick={onClick}
+      onKeyDown={onKey}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-pressed={clickable ? !!active : undefined}
+      aria-label={clickable ? `${label}: ${value}` : undefined}
+      sx={{
+        position: 'relative', overflow: 'hidden', minWidth: 0,
+        borderRadius: '10px', border: `1px solid ${active ? color : O2D.line}`,
+        bgcolor: active ? alpha(color, 0.06) : O2D.surface,
+        boxShadow: active ? `inset 0 0 0 1px ${color}` : '0 1px 2px rgba(28,30,33,0.04)',
+        px: 1.6, pt: 1.5, pb: 1.25,
+        transition: 'border-color .15s, box-shadow .15s, transform .15s, background-color .15s',
+        // The colour code: a 3px strip along the top edge.
+        '&::before': {
+          content: '""', position: 'absolute', left: 0, right: 0, top: 0, height: 3,
+          bgcolor: color, opacity: active ? 1 : 0.75,
+        },
+        ...(clickable ? {
+          cursor: 'pointer', outline: 'none',
+          '&:hover': { borderColor: color, transform: 'translateY(-1px)', boxShadow: '0 6px 18px rgba(28,30,33,0.08)' },
+          '&:hover .kpi-go': { opacity: 1, transform: 'translateX(0)' },
+          '&:focus-visible': { boxShadow: `0 0 0 3px ${alpha(color, 0.3)}` },
+        } : null),
+      }}
+    >
+      <Stack direction="row" spacing={1.25} alignItems="flex-start">
+        {Icon && (
+          <Box sx={{
+            width: 36, height: 36, borderRadius: '9px', display: 'grid', placeItems: 'center',
+            flexShrink: 0, bgcolor: alpha(color, 0.1), color, border: `1px solid ${alpha(color, 0.18)}`,
+          }}>
+            <Icon size={17} />
+          </Box>
+        )}
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Typography noWrap sx={{
+              fontSize: '0.64rem', fontWeight: 800, letterSpacing: '0.06em',
+              textTransform: 'uppercase', color: O2D.sub, minWidth: 0,
+            }}>{label}</Typography>
+            {/* Top-right: "Filtered" while this card filters the page, otherwise
+                the action it performs — so the caption below keeps its width. */}
+            {active ? (
+              <Box component="span" sx={{
+                ml: 'auto !important', px: 0.75, py: 0.1, borderRadius: '999px', flexShrink: 0,
+                fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase',
+                color: '#fff', bgcolor: color,
+              }}>Filtered</Box>
+            ) : clickable && (
+              <Box className="kpi-go" component="span" sx={{
+                ml: 'auto !important', display: 'inline-flex', alignItems: 'center', gap: 0.25, flexShrink: 0,
+                fontSize: '0.64rem', fontWeight: 800, color, whiteSpace: 'nowrap',
+                opacity: 0.6, transform: 'translateX(-2px)', transition: 'opacity .15s, transform .15s',
+              }}>
+                {actionLabel}<ArrowRight size={11} />
+              </Box>
+            )}
+          </Stack>
+          <Typography sx={{
+            fontWeight: 800, fontSize: '1.35rem', lineHeight: 1.2, mt: 0.25,
+            color: O2D.ink, fontVariantNumeric: 'tabular-nums',
+          }}>{value}</Typography>
+          {sub && (
+            <Typography noWrap title={typeof sub === 'string' ? sub : undefined}
+              sx={{ fontSize: '0.68rem', color: O2D.sub, minWidth: 0, mt: 0.15 }}>{sub}</Typography>
+          )}
+        </Box>
+      </Stack>
+    </Paper>
+  );
+  // Above the card and never interactive: below it, an interactive tooltip sits
+  // over the filter bar and swallows clicks meant for the controls there.
+  return hint ? (
+    <Tooltip arrow placement="top" disableInteractive title={hint} slotProps={KPI_TIP}>{card}</Tooltip>
+  ) : card;
+};
+const KPI_TIP = {
+  ...O2D_TIP,
+  popper: { ...(O2D_TIP.popper || {}), sx: { ...(O2D_TIP.popper?.sx || {}), pointerEvents: 'none' } },
+};
+
+/** The row KPI cards sit in — equal widths, wrapping cleanly on smaller screens. */
+export const KpiGrid = ({ children, min = 210 }) => (
+  <Box sx={{
+    display: 'grid', gap: 1.25,
+    gridTemplateColumns: { xs: '1fr', sm: `repeat(auto-fit, minmax(${min}px, 1fr))` },
+  }}>
+    {children}
+  </Box>
+);
 
 // ── Numbered step header ─────────────────────────────────────────────────────
 // Forms that read as 1 → 2 → 3 are the single biggest legibility win for a

@@ -1,20 +1,30 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Table, TableHead, TableBody, TableRow, TableCell,
-  Skeleton, Button, Tooltip, TextField, MenuItem, InputAdornment, TablePagination,
+  Skeleton, Button, Tooltip, TextField, MenuItem, InputAdornment, TablePagination, Chip,
 } from '@mui/material';
-import { ShoppingCart, Download, Copy, Check, CheckCircle2, Search, Boxes, ArrowRight } from 'lucide-react';
+import { ShoppingCart, Download, Copy, Check, CheckCircle2, Search, Boxes, ArrowRight, X } from 'lucide-react';
 import dayjs from 'dayjs';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
 import {
-  ImsShell, Panel, TableScroll, KpiTile, StatusChip, EmptyNote, Th,
+  ImsShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, EmptyNote, Th,
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, imsTableSx,
 } from './imsMeta';
 import { useGetImsReorderQuery } from '../../store/api/imsApi';
 import { FIELD } from './imsFieldHelp';
 
 const H = FIELD.ims;
+
+// What each KPI card filters the list to. 'ALL' is the whole list.
+//   OUT_OF_STOCK / REORDER  — that status only
+//   UNITS                   — items with a quantity to order, largest first
+const KPI_FILTERS = {
+  ALL: 'All items on the list',
+  OUT_OF_STOCK: 'Out of stock',
+  REORDER: 'At reorder point',
+  UNITS: 'Items with a quantity to order — largest first',
+};
 
 // One sentence saying WHY this item is on the list. A number in a "days cover"
 // column is data; this is the reason a buyer can act on without interpreting.
@@ -35,6 +45,15 @@ const ImsReorder = () => {
   const rows = useMemo(() => data?.data || [], [data]);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
+  const [params, setParams] = useSearchParams();
+  // Which KPI card is filtering the list (kept in the URL, so it survives a refresh).
+  const [kpi, setKpi] = useState(() => (KPI_FILTERS[params.get('show')] ? params.get('show') : 'ALL'));
+  const pickKpi = (k) => {
+    const next = kpi === k ? 'ALL' : k;   // clicking the active card turns it off
+    setKpi(next);
+    if (next === 'ALL') params.delete('show'); else params.set('show', next);
+    setParams(params, { replace: true });
+  };
   const [copied, setCopied] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
@@ -43,21 +62,30 @@ const ImsReorder = () => {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows
+    const list = rows
       .filter((r) => (!category || r.category === category)
-        && (!q || `${r.skuCode || ''} ${r.skuName || ''} ${r.category || ''}`.toLowerCase().includes(q)))
-      // Worst first, then by the tightest cover — the order a buyer would work in.
-      .sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
+        && (!q || `${r.skuCode || ''} ${r.skuName || ''} ${r.category || ''}`.toLowerCase().includes(q))
+        && (kpi === 'ALL' || kpi === 'UNITS' || r.status === kpi)
+        && (kpi !== 'UNITS' || Number(r.suggestedOrderQty || 0) > 0));
+    // The Units card ranks by how much to order; everything else is worst first,
+    // then by the tightest cover — the order a buyer would work in.
+    return kpi === 'UNITS'
+      ? list.sort((a, b) => Number(b.suggestedOrderQty || 0) - Number(a.suggestedOrderQty || 0))
+      : list.sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
         || (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9));
-  }, [rows, search, category]);
+  }, [rows, search, category, kpi]);
 
   // Page resets whenever the result set changes, so you never land on an empty page.
-  useEffect(() => { setPage(0); }, [search, category, rowsPerPage]);
+  useEffect(() => { setPage(0); }, [search, category, kpi, rowsPerPage]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
+  // What the filtered table adds up to (the summary line, the copy and the export)…
   const totalSuggested = filtered.reduce((s, r) => s + Number(r.suggestedOrderQty || 0), 0);
+  // …and what the whole list holds (the KPI cards — they never change as you filter).
+  const listSuggested = rows.reduce((s, r) => s + Number(r.suggestedOrderQty || 0), 0);
   const outCount = rows.filter((r) => r.status === 'OUT_OF_STOCK').length;
   const reorderCount = rows.filter((r) => r.status === 'REORDER').length;
+  const unitsItems = rows.filter((r) => Number(r.suggestedOrderQty || 0) > 0).length;
 
   const exportCsv = () => {
     // "Available Qty" is what the column is called on every IMS screen; the
@@ -94,7 +122,7 @@ const ImsReorder = () => {
   return (
     <ImsShell
       icon={ShoppingCart}
-      title="Buying list"
+      title="Buying List"
       subtitle="Everything at or below its reorder point, with how much to order — worst first."
       actions={rows.length > 0 && (
         <Stack direction="row" spacing={0.75}>
@@ -109,16 +137,25 @@ const ImsReorder = () => {
         </Stack>
       )}
     >
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Items to order" value={num(rows.length)} sub="On this list today"
-          color={rows.length ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color} icon={ShoppingCart} />
-        <KpiTile label="Out of stock" value={num(outCount)} sub="Order these first"
-          color={STOCK_TOKENS.OUT_OF_STOCK.color} icon={Boxes} />
-        <KpiTile label="At reorder point" value={num(reorderCount)} sub="Due for a purchase order"
-          color={STOCK_TOKENS.REORDER.color} icon={ShoppingCart} />
-        <KpiTile label="Units to order" value={num(totalSuggested)} sub="Total across the list"
-          color={O2D.brand} icon={ArrowRight} />
-      </Stack>
+      <KpiGrid>
+        <KpiCard label="Items to order" value={num(rows.length)} sub="Everything on this list today"
+          color={rows.length ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color} icon={ShoppingCart}
+          actionLabel="Show all" onClick={() => pickKpi(kpi)}
+          hint="Show every item on the buying list." />
+        <KpiCard label="Out of stock" value={num(outCount)} sub="Order these first"
+          color={STOCK_TOKENS.OUT_OF_STOCK.color} icon={Boxes}
+          actionLabel="Filter" active={kpi === 'OUT_OF_STOCK'} onClick={() => pickKpi('OUT_OF_STOCK')}
+          hint="Show only the items with nothing left in the store." />
+        <KpiCard label="At reorder point" value={num(reorderCount)} sub="Due for a purchase order"
+          color={STOCK_TOKENS.REORDER.color} icon={ShoppingCart}
+          actionLabel="Filter" active={kpi === 'REORDER'} onClick={() => pickKpi('REORDER')}
+          hint="Show only the items at or below their reorder point." />
+        <KpiCard label="Units to order" value={num(listSuggested)}
+          sub={`Across ${num(unitsItems)} item${unitsItems === 1 ? '' : 's'}`}
+          color={O2D.brand} icon={ArrowRight}
+          actionLabel="Rank" active={kpi === 'UNITS'} onClick={() => pickKpi('UNITS')}
+          hint="Show the items with a quantity to order, largest order first." />
+      </KpiGrid>
 
       {rows.length > 0 && (
         <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
@@ -130,6 +167,11 @@ const ImsReorder = () => {
               <MenuItem value="">All categories</MenuItem>
               {categories.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </TextField>
+            {kpi !== 'ALL' && (
+              <Chip size="small" label={`Showing: ${KPI_FILTERS[kpi]}`} onDelete={() => pickKpi(kpi)}
+                deleteIcon={<X size={13} />}
+                sx={{ height: 26, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
+            )}
             <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, ml: 'auto', whiteSpace: 'nowrap' }}>
               <b>{filtered.length}</b> of {rows.length} · <b>{num(totalSuggested)}</b> units
             </Typography>
@@ -167,8 +209,8 @@ const ImsReorder = () => {
               )}
               {!isFetching && rows.length > 0 && filtered.length === 0 && (
                 <TableRow><TableCell colSpan={10} sx={{ border: 0 }}>
-                  <EmptyNote icon={Search} title="No items match your search"
-                    hint="Clear the search box or pick a different category." />
+                  <EmptyNote icon={Search} title={kpi !== 'ALL' ? `No items match “${KPI_FILTERS[kpi]}”` : 'No items match your search'}
+                    hint={kpi !== 'ALL' ? 'Click the highlighted card again, or clear the search and category.' : 'Clear the search box or pick a different category.'} />
                 </TableCell></TableRow>
               )}
               {paged.map((r, i) => {

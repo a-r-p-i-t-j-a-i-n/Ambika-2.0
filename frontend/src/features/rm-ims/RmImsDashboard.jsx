@@ -12,10 +12,11 @@ import {
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import {
-  RmShell, Panel, TableScroll, KpiTile, StatusChip, MoveChip, EmptyNote, Help, YieldChip,
+  RmShell, Panel, TableScroll, RmKpiCard, RmKpiGrid, StatusChip, MoveChip, EmptyNote, Help, YieldChip,
   O2D, STOCK_TOKENS, STOCK_ORDER, moveToken, num, inr, compactInr, imsTableSx,
   Th,
 } from './rmImsMeta';
+import { FLUENT } from './rmFluent';
 import { useGetRmDashboardQuery } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -81,7 +82,7 @@ const RmImsDashboard = () => {
 
   if (isFetching && !d) {
     return (
-      <RmShell icon={Layers} title="Raw Material" subtitle="Loading your coil and circle position…">
+      <RmShell icon={Layers} title="Dashboard" subtitle="Raw Material — loading your coil and circle position…">
         <Skeleton variant="rounded" height={72} />
         <Skeleton variant="rounded" height={280} />
         <Skeleton variant="rounded" height={280} />
@@ -92,8 +93,8 @@ const RmImsDashboard = () => {
   return (
     <RmShell
       icon={Layers}
-      title="Raw Material"
-      subtitle="Coils and circles — what you hold, what it's worth, and what needs buying."
+      title="Dashboard"
+      subtitle="Raw Material — the coils and circles you hold, what they are worth, and what needs buying."
       actions={(
         <Stack direction="row" spacing={0.75}>
           <Button size="small" variant="outlined" startIcon={<Recycle size={14} />} onClick={() => navigate('/rm-ims/conversion?new=1')}
@@ -103,7 +104,7 @@ const RmImsDashboard = () => {
           <Button size="small" variant="contained" disableElevation startIcon={<ShoppingCart size={14} />}
             onClick={() => navigate('/rm-ims/reorder')}
             sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
-            Buying list
+            Buying List
           </Button>
         </Stack>
       )}
@@ -147,20 +148,27 @@ const RmImsDashboard = () => {
         </Stack>
       </Paper>
 
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Coils" value={num(s.coilCount)} sub="Uncut raw metal"
-          color="#0f766e" icon={Disc3} onClick={() => navigate('/rm-ims/stock?kind=COIL')} />
-        <KpiTile label="Circles" value={num(s.circleCount)} sub="Cut and ready"
-          color="#4338ca" icon={CircleDashed} onClick={() => navigate('/rm-ims/stock?kind=CIRCLE')} />
-        <KpiTile label="Total Available Quantity" value={num(s.totalOnHand)} sub="Coils and circles together"
-          color={O2D.brand} icon={PackageOpen} onClick={() => navigate('/rm-ims/stock')} />
-        <KpiTile label="Value in store" value={inr(s.totalStockValue)} sub="At last known rate"
-          color="#7c3aed" icon={IndianRupee} />
-        <KpiTile label="To order now" value={num(needBuying)} sub="Open the buying list"
-          color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle} onClick={() => navigate('/rm-ims/reorder')} />
-        <KpiTile label="Running low" value={num(s.low)} sub="Watch these next"
-          color={STOCK_TOKENS.LOW.color} icon={TrendingDown} onClick={() => navigate('/rm-ims/stock?status=LOW')} />
-      </Stack>
+      {/* Every card opens the screen that explains its number. */}
+      <RmKpiGrid compact>
+        <RmKpiCard compact label="Coils" value={num(s.coilCount)} sub="Uncut raw metal"
+          tone={FLUENT.teal} icon={Disc3} actionLabel="Open" onClick={() => navigate('/rm-ims/stock?kind=COIL')}
+          hint="Open Stock & Master Data showing coils only." />
+        <RmKpiCard compact label="Circles" value={num(s.circleCount)} sub="Cut and ready"
+          tone={FLUENT.lavender} icon={CircleDashed} actionLabel="Open" onClick={() => navigate('/rm-ims/stock?kind=CIRCLE')}
+          hint="Open Stock & Master Data showing circles only." />
+        <RmKpiCard compact label="Total Available Quantity" value={num(s.totalOnHand)} sub="Coils and circles together"
+          tone={FLUENT.blue} icon={PackageOpen} actionLabel="In stock" onClick={() => navigate('/rm-ims/stock?view=in-stock')}
+          hint="Open Stock & Master Data showing only items with stock on hand, highest first." />
+        <RmKpiCard compact label="Value in store" value={inr(s.totalStockValue)} sub="At last known rate"
+          tone={FLUENT.grey} icon={IndianRupee} actionLabel="By value" onClick={() => navigate('/rm-ims/stock?view=value')}
+          hint="Open Stock & Master Data ranked by stock value, highest first." />
+        <RmKpiCard compact label="To order now" value={num(needBuying)} sub="Out of stock + at reorder point"
+          tone={FLUENT.orange} icon={AlertTriangle} actionLabel="Buying List" onClick={() => navigate('/rm-ims/reorder')}
+          hint="Open the Buying List." />
+        <RmKpiCard compact label="Running low" value={num(s.low)} sub="Watch these next"
+          tone={FLUENT.amber} icon={TrendingDown} actionLabel="Filter" onClick={() => navigate('/rm-ims/stock?status=LOW')}
+          hint="Open Stock & Master Data filtered to items running low." />
+      </RmKpiGrid>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) minmax(0, 1.25fr)' }, gap: 1.25 }}>
         <Panel title="How healthy is the stock?" icon={Layers}

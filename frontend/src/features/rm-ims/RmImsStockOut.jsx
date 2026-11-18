@@ -7,10 +7,11 @@ import { PackageMinus, Plus, Trash2, Save, AlertTriangle, ArrowRight, Info } fro
 import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import {
-  RmShell, Panel, TableScroll, EmptyNote, Th, KindChip, uomOf, newRequestId,
+  RmShell, TableScroll, EmptyNote, FormSection, Th, KindChip, uomOf, newRequestId,
   STOCK_OUT_REASON_OPTIONS, RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
-  O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx, IMS_FORM_MAX,
+  O2D, O2D_TIP, STOCK_TOKENS, num, IMS_FORM_MAX,
 } from './rmImsMeta';
+import { FLUENT, FLUENT_DEPTH, rmTableSx } from './rmFluent';
 import { useGetRmOverviewQuery, useRmIssueMutation } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -133,138 +134,137 @@ const RmImsStockOut = () => {
   return (
     <RmShell
       icon={PackageMinus}
-      title="Stock Out — raw material to production"
-      subtitle="Record what left the store and who received it. On-hand comes down and the entry is logged against your name."
+      title="Stock Out"
+      subtitle="Send raw material to production. Record what left the store and who received it — on-hand comes down and the entry is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
-      <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+      <Paper elevation={0} sx={{ borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">
-          <Box sx={{ color: O2D.brand, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
+          <Box sx={{ color: FLUENT.blue.accent, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
           <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>
             For material going out to production or being used up. <b>Cutting a coil into circles?</b> Use
-            Coil to Circle instead — it takes the coil out, puts the circles in and records the scrap in one entry.
+            Cut Coils into Circles instead — it takes the coil out, puts the circles in and records the scrap in one entry.
           </Typography>
         </Stack>
       </Paper>
 
-      {/* ── One form: the items, then who received them, then Save ── */}
-      <Panel dense>
-        <TableScroll>
-          <Table size="small" sx={imsTableSx(1060)}>
-            <TableHead>
-              <TableRow>
-                <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
-                <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
-                <TableCell align="right"><Th label="UOM" hint={H.unit} /></TableCell>
-                <TableCell align="right">In store now</TableCell>
-                <TableCell align="right">Quantity out</TableCell>
-                <TableCell align="right"><Th label="Weight (kg)" hint={H.weightKg} /></TableCell>
-                <TableCell align="right"><Th label="Left after this" hint={H.newBalance} /></TableCell>
-                <TableCell><Th label="Notes" hint={H.movementNotes} /></TableCell>
-                <TableCell align="right" />
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {lines.map((l, i) => {
-                const qty = Number(l.quantity || 0);
-                const onHand = Number(l.sku?.onHand || 0);
-                const over = !!l.sku && qty > onHand;
-                const after = onHand - qty;
-                const rp = Number(l.sku?.reorderPoint || 0);
-                const belowReorder = !over && rp > 0 && after <= rp;
-                const tone = over ? STOCK_TOKENS.OUT_OF_STOCK : belowReorder ? STOCK_TOKENS.REORDER : STOCK_TOKENS.OK;
-                return (
-                  <TableRow key={i} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
-                    <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
-                    <TableCell sx={{ minWidth: 290 }}>
-                      <Autocomplete
-                        size="small" options={items} value={l.sku} onChange={(_, v) => setLine(i, 'sku', v)}
-                        getOptionLabel={(o) => (o ? `${o.skuCode} — ${o.skuName}` : '')}
-                        isOptionEqualToValue={(a, b) => a.skuId === b?.skuId}
-                        renderOption={(props, o) => (
-                          <li {...props} key={o.skuId}>
-                            <Box sx={{ flex: 1, minWidth: 0 }}>
-                              <Stack direction="row" spacing={0.75} alignItems="center">
-                                <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }}>{o.skuName}</Typography>
-                                <KindChip kind={o.kind} withHint={false} />
-                              </Stack>
-                              <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
-                                {o.skuCode} · {num(o.onHand)} in store
-                              </Typography>
-                            </Box>
-                          </li>
+      {/* ── What is going out?, then who received it, and when, then Save — each in a Register SKU-style section ── */}
+      <FormSection step={1} fluent={FLUENT.blue} title="What is going out?" hint="Pick each coil or circle and how much left the store." bodySx={{ gap: 1.5 }} testId="rm-entry-items">
+        <Box sx={{ mx: { xs: -1.75, md: -2.25 }, borderTop: `1px solid ${O2D.lineSoft}`, borderBottom: `1px solid ${O2D.lineSoft}` }}>
+          <TableScroll>
+            <Table size="small" sx={rmTableSx(1060, { zebra: false })}>
+              <TableHead>
+                <TableRow>
+                  <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
+                  <TableCell><Th label="Item" hint={H.skuName} /></TableCell>
+                  <TableCell align="right"><Th label="UOM" hint={H.unit} /></TableCell>
+                  <TableCell align="right">In store now</TableCell>
+                  <TableCell align="right">Quantity out</TableCell>
+                  <TableCell align="right"><Th label="Weight (kg)" hint={H.weightKg} /></TableCell>
+                  <TableCell align="right"><Th label="Left after this" hint={H.newBalance} /></TableCell>
+                  <TableCell><Th label="Notes" hint={H.movementNotes} /></TableCell>
+                  <TableCell align="right" />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {lines.map((l, i) => {
+                  const qty = Number(l.quantity || 0);
+                  const onHand = Number(l.sku?.onHand || 0);
+                  const over = !!l.sku && qty > onHand;
+                  const after = onHand - qty;
+                  const rp = Number(l.sku?.reorderPoint || 0);
+                  const belowReorder = !over && rp > 0 && after <= rp;
+                  const tone = over ? STOCK_TOKENS.OUT_OF_STOCK : belowReorder ? STOCK_TOKENS.REORDER : STOCK_TOKENS.OK;
+                  return (
+                    <TableRow key={i} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
+                      <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
+                      <TableCell sx={{ minWidth: 290 }}>
+                        <Autocomplete
+                          size="small" options={items} value={l.sku} onChange={(_, v) => setLine(i, 'sku', v)}
+                          getOptionLabel={(o) => (o ? `${o.skuCode} — ${o.skuName}` : '')}
+                          isOptionEqualToValue={(a, b) => a.skuId === b?.skuId}
+                          renderOption={(props, o) => (
+                            <li {...props} key={o.skuId}>
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Stack direction="row" spacing={0.75} alignItems="center">
+                                  <Typography noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, color: O2D.ink }}>{o.skuName}</Typography>
+                                  <KindChip kind={o.kind} withHint={false} />
+                                </Stack>
+                                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>
+                                  {o.skuCode} · {num(o.onHand)} in store
+                                </Typography>
+                              </Box>
+                            </li>
+                          )}
+                          renderInput={(p) => <TextField {...p} placeholder="Search a coil or circle…" />}
+                        />
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontSize: '0.7rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
+                        {l.sku ? uomOf(l.sku) : '—'}
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>
+                        {l.sku ? num(onHand) : '—'}
+                      </TableCell>
+                      <TableCell align="right" sx={{ width: 130 }}>
+                        <TextField size="small" type="number" value={l.quantity} error={over && !header.allowNegative}
+                          onChange={(e) => setLine(i, 'quantity', e.target.value)}
+                          inputProps={{ min: 0, style: { textAlign: 'right', width: 82, fontWeight: 700 },
+                            'aria-label': `Quantity out — ${l.sku?.skuName || 'item'}` }} placeholder="0" />
+                      </TableCell>
+                      <TableCell align="right" sx={{ width: 120 }}>
+                        {/* Weight, optional and entered on its own for every item — never
+                            copied from the quantity. For an item counted in kg the two
+                            should agree, so a different figure is pointed out (not blocked). */}
+                        {!l.sku ? (
+                          <Tooltip arrow slotProps={O2D_TIP} title="Pick an item first.">
+                            <Box component="span" sx={{ color: O2D.faint, cursor: 'help' }}>—</Box>
+                          </Tooltip>
+                        ) : (
+                          <WeightField line={l} onChange={(v) => setLine(i, 'quantityKg', v)} />
                         )}
-                        renderInput={(p) => <TextField {...p} placeholder="Search a coil or circle…" />}
-                      />
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.7rem', fontWeight: 700, color: O2D.sub, whiteSpace: 'nowrap' }}>
-                      {l.sku ? uomOf(l.sku) : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: O2D.sub, whiteSpace: 'nowrap' }}>
-                      {l.sku ? num(onHand) : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ width: 130 }}>
-                      <TextField size="small" type="number" value={l.quantity} error={over && !header.allowNegative}
-                        onChange={(e) => setLine(i, 'quantity', e.target.value)}
-                        inputProps={{ min: 0, style: { textAlign: 'right', width: 82, fontWeight: 700 },
-                          'aria-label': `Quantity out — ${l.sku?.skuName || 'item'}` }} placeholder="0" />
-                    </TableCell>
-                    <TableCell align="right" sx={{ width: 120 }}>
-                      {/* Weight, optional and entered on its own for every item — never
-                          copied from the quantity. For an item counted in kg the two
-                          should agree, so a different figure is pointed out (not blocked). */}
-                      {!l.sku ? (
-                        <Tooltip arrow slotProps={O2D_TIP} title="Pick an item first.">
-                          <Box component="span" sx={{ color: O2D.faint, cursor: 'help' }}>—</Box>
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        {l.sku && qty > 0 ? (
+                          <Tooltip arrow slotProps={O2D_TIP}
+                            title={over
+                              ? `Only ${num(onHand)} are in the store. Taking out ${num(qty)} would leave the balance negative.`
+                              : belowReorder
+                                ? `This drops the item to or below its reorder point of ${num(rp)} — it will appear on the buying list.`
+                                : 'Balance stays healthy after this.'}>
+                            <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end" sx={{ cursor: 'help' }}>
+                              <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>{num(onHand)}</Typography>
+                              <ArrowRight size={12} color={O2D.faint} />
+                              <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: tone.color }}>{num(after)}</Typography>
+                            </Stack>
+                          </Tooltip>
+                        ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>}
+                      </TableCell>
+                      <TableCell sx={{ minWidth: 160 }}>
+                        <TextField size="small" value={l.remarks} onChange={(e) => setLine(i, 'remarks', e.target.value)} fullWidth placeholder="Optional" />
+                      </TableCell>
+                      <TableCell align="right" sx={{ width: 48 }}>
+                        <Tooltip arrow slotProps={O2D_TIP} title="Clear this line">
+                          <IconButton size="small" onClick={() => delLine(i)} sx={{ color: O2D.faint, '&:hover': { color: STOCK_TOKENS.OUT_OF_STOCK.color } }}>
+                            <Trash2 size={15} />
+                          </IconButton>
                         </Tooltip>
-                      ) : (
-                        <WeightField line={l} onChange={(v) => setLine(i, 'quantityKg', v)} />
-                      )}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                      {l.sku && qty > 0 ? (
-                        <Tooltip arrow slotProps={O2D_TIP}
-                          title={over
-                            ? `Only ${num(onHand)} are in the store. Taking out ${num(qty)} would leave the balance negative.`
-                            : belowReorder
-                              ? `This drops the item to or below its reorder point of ${num(rp)} — it will appear on the buying list.`
-                              : 'Balance stays healthy after this.'}>
-                          <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end" sx={{ cursor: 'help' }}>
-                            <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>{num(onHand)}</Typography>
-                            <ArrowRight size={12} color={O2D.faint} />
-                            <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: tone.color }}>{num(after)}</Typography>
-                          </Stack>
-                        </Tooltip>
-                      ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>}
-                    </TableCell>
-                    <TableCell sx={{ minWidth: 160 }}>
-                      <TextField size="small" value={l.remarks} onChange={(e) => setLine(i, 'remarks', e.target.value)} fullWidth placeholder="Optional" />
-                    </TableCell>
-                    <TableCell align="right" sx={{ width: 48 }}>
-                      <Tooltip arrow slotProps={O2D_TIP} title="Clear this line">
-                        <IconButton size="small" onClick={() => delLine(i)} sx={{ color: O2D.faint, '&:hover': { color: STOCK_TOKENS.OUT_OF_STOCK.color } }}>
-                          <Trash2 size={15} />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {lines.length === 0 && (
-                <TableRow><TableCell colSpan={9} sx={{ border: 0 }}>
-                  <EmptyNote icon={PackageMinus} title="No items added yet" hint="Add a line to start." />
-                </TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableScroll>
-
-        <Box sx={{ px: 1.5, pb: 1.5 }}>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {lines.length === 0 && (
+                  <TableRow><TableCell colSpan={9} sx={{ border: 0 }}>
+                    <EmptyNote icon={PackageMinus} title="No items added yet" hint="Add a line to start." />
+                  </TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableScroll>
+        </Box>
           <Button size="small" startIcon={<Plus size={14} />} onClick={addLine}
-            sx={{ mt: 1, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', color: O2D.brand }}>
+            sx={{ alignSelf: 'flex-start', mt: -0.5, textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', color: O2D.brand }}>
             Add another item
           </Button>
-
           {blocked && (
             <Stack direction="row" spacing={1.25} alignItems="center" sx={{
               mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
@@ -293,9 +293,11 @@ const RmImsStockOut = () => {
               </Typography>
             </Stack>
           )}
+      </FormSection>
 
+      <FormSection step={2} fluent={FLUENT.lavender} title="Who received it, and when" hint="Who it was handed to, when, why it went out and the location it left from." testId="rm-entry-details">
           {/* Who received it, and when. */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1.25, mt: 1.75 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1.5 }}>
             <TextField size="small" type="date" label="Date" value={header.date}
               onChange={(e) => setHeader((h) => ({ ...h, date: e.target.value }))}
               InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
@@ -323,10 +325,17 @@ const RmImsStockOut = () => {
                 sx={{ gridColumn: { md: 'span 2' } }} />
             )}
           </Box>
+      </FormSection>
 
+        {/* ── Save — pinned, so it is always in reach ── */}
+        <Paper elevation={0} data-testid="rm-entry-savebar" sx={{
+          position: 'sticky', bottom: 10, zIndex: 4, borderRadius: '12px', px: { xs: 1.5, md: 2.25 }, py: 1.25,
+          border: `1px solid ${ready ? STOCK_TOKENS.OK.border : FLUENT.grey.border}`,
+          bgcolor: ready ? STOCK_TOKENS.OK.tint : '#fff',
+          boxShadow: FLUENT_DEPTH.hover,
+        }}>
           {/* Save — the last line of the same form. */}
-          <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap
-            sx={{ mt: 1.75, pt: 1.25, borderTop: `1px solid ${O2D.lineSoft}` }}>
+          <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
             <FormControlLabel sx={{ mr: 0 }}
               control={<Switch size="small" checked={header.allowNegative}
                 onChange={(e) => setHeader((h) => ({ ...h, allowNegative: e.target.checked }))} />}
@@ -343,8 +352,7 @@ const RmImsStockOut = () => {
               Save stock out
             </Button>
           </Stack>
-        </Box>
-      </Panel>
+        </Paper>
     </RmShell>
   );
 };

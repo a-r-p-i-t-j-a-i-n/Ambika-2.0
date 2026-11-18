@@ -478,20 +478,26 @@ const PAGE_TITLES = {
 
   // IMS families — deep paths listed before their base so startsWith resolves
   // to the most specific title first.
-  '/ims/stock':              'Consumables & Packaging — Stock & Master',
-  '/ims/item':               'Consumables & Packaging — Item',
+  // '/ims/stock-in' and '/ims/stock-out' must sit above '/ims/stock': with a
+  // startsWith scan '/ims/stock' also matches them, and used to title the Stock
+  // In / Stock Out screens "Stock & Master". Names match the sidebar exactly.
   '/ims/stock-in':           'Consumables & Packaging — Stock In',
   '/ims/stock-out':          'Consumables & Packaging — Stock Out',
+  '/ims/stock':              'Consumables & Packaging — Stock & Master Data',
+  '/ims/item':               'Consumables & Packaging — Item',
   '/ims/reorder':            'Consumables & Packaging — Buying List',
-  '/ims/movements':          'Consumables & Packaging — Movements',
-  '/ims':                    'Consumables & Packaging IMS',
-  '/rm-ims/stock':           'Raw Material — Stock & Master',
+  '/ims/movements':          'Consumables & Packaging — Movement History',
+  '/ims':                    'Consumables & Packaging — Dashboard',
+  // '/rm-ims/stock-in' and '/rm-ims/stock-out' must sit above '/rm-ims/stock':
+  // with a startsWith scan '/rm-ims/stock' also matches them, and used to title
+  // the Stock In / Stock Out screens "Stock & Master". Names match the sidebar.
   '/rm-ims/stock-in':        'Raw Material — Stock In',
   '/rm-ims/stock-out':       'Raw Material — Stock Out',
+  '/rm-ims/stock':           'Raw Material — Stock & Master Data',
   '/rm-ims/conversion':      'Raw Material — Cut Coils into Circles',
   '/rm-ims/reorder':         'Raw Material — Buying List',
-  '/rm-ims/movements':       'Raw Material — Movements',
-  '/rm-ims':                 'Raw Material IMS',
+  '/rm-ims/movements':       'Raw Material — Movement History',
+  '/rm-ims':                 'Raw Material — Dashboard',
   '/fg-ims/stock':           'Finished Goods — Stock & Master',
   '/fg-ims/item':            'Finished Goods — Item',
   '/scrap-ims/records':      'Scrap — Master Data',

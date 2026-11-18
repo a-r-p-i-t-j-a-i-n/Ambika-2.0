@@ -108,8 +108,8 @@ const ImsStockIn = () => {
   return (
     <ImsShell
       icon={PackagePlus}
-      title="Stock In — bring material into the store"
-      subtitle="Record what arrived. Closing Stock goes up and the movement is logged against your name."
+      title="Stock In"
+      subtitle="Bring material into the store. Record what arrived — Closing Stock goes up and the movement is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
       {/* What this screen does and does not do — stated up front so nobody
