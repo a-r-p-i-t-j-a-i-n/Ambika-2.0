@@ -12,6 +12,8 @@ import { useGetDprOptionsQuery } from '../../store/api/dprApi';
 export {
   // layout
   Panel, TableScroll, KpiTile, EmptyNote, Eyebrow, ItemMultiPicker, StepHead, IntroNote,
+  // the shared Fluent pieces (same card, grid, form band and alert as RM / C&P)
+  KpiCard, KpiGrid, FormSection, SummaryItem, DashboardAlert,
   // transaction entry — the same primitives the Consumables screens use
   QtyField, BalanceDelta, ConfirmBar, SuccessNote, SummaryChip, newRequestId,
   // status + movement
@@ -38,14 +40,16 @@ export const FG_ACCENT_DARK = '#047857';
 
 // The FG sub-navigation, in workflow order: see it → look it up → make it →
 // ship it → plan the next run → check history. Rendered by the shared ImsNav so
-// every inventory area navigates the same way.
+// every inventory area navigates the same way. Labels are the sidebar's names,
+// word for word (MainLayout → Finished Goods), exactly as Consumables &
+// Packaging and Raw Material do, so a screen has one name wherever it is reached.
 export const FG_NAV = [
-  { label: 'Overview',      short: 'Overview', path: '/fg-ims',               icon: LayoutDashboard, exact: true },
-  { label: 'Stock list',    short: 'Stock',    path: '/fg-ims/stock',         icon: Boxes },
-  { label: 'Production In', short: 'In',       path: '/fg-ims/production-in', icon: Factory },
-  { label: 'Dispatch Out',  short: 'Out',      path: '/fg-ims/dispatch-out',  icon: Truck },
-  { label: 'Production Plan', short: 'Plan',   path: '/fg-ims/planning',      icon: ClipboardList },
-  { label: 'History',       short: 'History',  path: '/fg-ims/movements',     icon: History },
+  { label: 'Dashboard',           short: 'Dashboard', path: '/fg-ims',               icon: LayoutDashboard, exact: true },
+  { label: 'Stock & Master Data', short: 'Stock',     path: '/fg-ims/stock',         icon: Boxes },
+  { label: 'Production In (DPR)', short: 'In',        path: '/fg-ims/production-in', icon: Factory },
+  { label: 'Dispatch Out',        short: 'Out',       path: '/fg-ims/dispatch-out',  icon: Truck },
+  { label: 'Production Plan',     short: 'Plan',      path: '/fg-ims/planning',      icon: ClipboardList },
+  { label: 'Movement History',    short: 'History',   path: '/fg-ims/movements',     icon: History },
 ];
 
 // The FG page shell — the shared ImsShell carrying FG's own nav and accent, so
@@ -155,9 +159,11 @@ export const useFgProductionMasters = () => {
 };
 
 // Available-vs-target % → colour (mirrors the RM sheet's coloured % column).
+// Critically low reads a muted orange rather than red — the Status chip on the
+// same row already carries the genuine severity.
 export const pctColor = (p) => {
   if (p == null) return '#94a3b8';
-  if (p < 33) return '#dc2626';
+  if (p < 33) return '#c4560d';
   if (p <= 66) return '#b45309';
   if (p <= 110) return '#0f766e';
   return '#6366f1';

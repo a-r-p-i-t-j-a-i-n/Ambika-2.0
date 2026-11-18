@@ -18,6 +18,7 @@ import {
   RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
   O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx,
 } from './rmImsMeta';
+import { FLUENT } from './rmFluent';
 import {
   useGetRmOverviewQuery, useGetRmReceivedCoilsQuery, useGetRmCuttingHistoryQuery,
   useGetRmCircleOptionsQuery, useGetRmCoilLineageQuery, useRmConvertMutation, useLookupRmManualCoilQuery,
@@ -1152,10 +1153,11 @@ const CoilToCircleForm = ({
             <Stack direction="row" spacing={1} alignItems="flex-start" data-testid="coil-cut-before"
               sx={{
                 gridColumn: '1 / -1', px: 1.25, py: 0.9, borderRadius: '7px',
-                border: `1px solid ${(coilDone ? STOCK_TOKENS.OUT_OF_STOCK : STOCK_TOKENS.LOW).border}`,
-                bgcolor: (coilDone ? STOCK_TOKENS.OUT_OF_STOCK : STOCK_TOKENS.LOW).tint,
+                // A fully cut coil is a fact, not an error: neutral grey. Part-cut: soft amber.
+                border: `1px solid ${(coilDone ? FLUENT.grey : FLUENT.amber).border}`,
+                bgcolor: (coilDone ? FLUENT.grey : FLUENT.amber).bg,
               }}>
-              <Box sx={{ color: (coilDone ? STOCK_TOKENS.OUT_OF_STOCK : STOCK_TOKENS.LOW).color, display: 'flex', pt: 0.2 }}><History size={16} /></Box>
+              <Box sx={{ color: (coilDone ? FLUENT.grey : FLUENT.amber).accent, display: 'flex', pt: 0.2 }}><History size={16} /></Box>
               <Typography sx={{ fontSize: '0.76rem', color: O2D.ink, lineHeight: 1.45 }}>
                 {coilDone ? (
                   <><b>This coil is already fully cut</b> — {num(coilFacts.alreadyCutKg)} kg of {num(coilFacts.originalKg)} kg. Nothing is left on it to cut.</>
@@ -1268,7 +1270,7 @@ const CoilToCircleForm = ({
         {!overCut && overdrawn && (
           <Paper elevation={0} data-testid="overdrawn-warning" sx={{
             mt: 0.75, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+            border: `1px solid ${FLUENT.rose.border}`, bgcolor: FLUENT.rose.bg,
           }}>
             <Stack direction="row" spacing={1} alignItems="center">
               <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>
@@ -1288,7 +1290,7 @@ const CoilToCircleForm = ({
         {locationOverridden && (
           <Paper elevation={0} sx={{
             mt: 1.5, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
+            border: `1px solid ${FLUENT.amber.border}`, bgcolor: FLUENT.amber.bg,
           }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex', pt: 0.15 }}><AlertTriangle size={16} /></Box>
@@ -1334,7 +1336,7 @@ const CoilToCircleForm = ({
         {!!coil && coilIsMapped === false && (
           <Paper elevation={0} sx={{
             mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+            border: `1px solid ${FLUENT.rose.border}`, bgcolor: FLUENT.rose.bg,
           }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex', pt: 0.15 }}><AlertTriangle size={16} /></Box>
@@ -1352,7 +1354,7 @@ const CoilToCircleForm = ({
         {!!coil && !!circleMapMeta.missingCodes?.length && (
           <Paper elevation={0} sx={{
             mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
+            border: `1px solid ${FLUENT.amber.border}`, bgcolor: FLUENT.amber.bg,
           }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex', pt: 0.15 }}><AlertTriangle size={16} /></Box>
@@ -1448,7 +1450,7 @@ const CoilToCircleForm = ({
         {missingPcs.length > 0 && (
           <Paper elevation={0} data-testid="missing-pcs-warning" sx={{
             mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
+            border: `1px solid ${FLUENT.amber.border}`, bgcolor: FLUENT.amber.bg,
           }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex', pt: 0.15 }}><AlertTriangle size={16} /></Box>
@@ -1462,7 +1464,7 @@ const CoilToCircleForm = ({
         {overCut && (
           <Paper elevation={0} data-testid="over-cut-warning" sx={{
             mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-            border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+            border: `1px solid ${FLUENT.rose.border}`, bgcolor: FLUENT.rose.bg,
           }}>
             <Stack direction="row" spacing={1} alignItems="center">
               <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={16} /></Box>

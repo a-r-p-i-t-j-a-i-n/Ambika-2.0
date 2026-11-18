@@ -11,7 +11,7 @@ import {
   STOCK_OUT_REASON_OPTIONS, RECEIVED_AT_OPTIONS, DEFAULT_RECEIVED_AT,
   O2D, O2D_TIP, STOCK_TOKENS, num, IMS_FORM_MAX,
 } from './rmImsMeta';
-import { FLUENT, FLUENT_DEPTH, rmTableSx } from './rmFluent';
+import { FLUENT, FLUENT_DEPTH, rmTableSx, overLineRowSx } from './rmFluent';
 import { useGetRmOverviewQuery, useRmIssueMutation } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -176,7 +176,7 @@ const RmImsStockOut = () => {
                   const belowReorder = !over && rp > 0 && after <= rp;
                   const tone = over ? STOCK_TOKENS.OUT_OF_STOCK : belowReorder ? STOCK_TOKENS.REORDER : STOCK_TOKENS.OK;
                   return (
-                    <TableRow key={i} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
+                    <TableRow key={i} hover sx={over ? overLineRowSx : null}>
                       <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                       <TableCell sx={{ minWidth: 290 }}>
                         <Autocomplete
@@ -268,7 +268,7 @@ const RmImsStockOut = () => {
           {blocked && (
             <Stack direction="row" spacing={1.25} alignItems="center" sx={{
               mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+              border: `1px solid ${FLUENT.rose.border}`, bgcolor: FLUENT.rose.bg,
             }}>
               <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={17} /></Box>
               <Box sx={{ minWidth: 0 }}>
@@ -285,7 +285,7 @@ const RmImsStockOut = () => {
           {!blocked && willTrigger.length > 0 && (
             <Stack direction="row" spacing={1.25} alignItems="center" sx={{
               mt: 1.25, borderRadius: '8px', px: 1.5, py: 1,
-              border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
+              border: `1px solid ${FLUENT.amber.border}`, bgcolor: FLUENT.amber.bg,
             }}>
               <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex' }}><AlertTriangle size={17} /></Box>
               <Typography sx={{ fontSize: '0.78rem', color: STOCK_TOKENS.REORDER.color, fontWeight: 700 }}>

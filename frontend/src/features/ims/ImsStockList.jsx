@@ -7,7 +7,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Boxes, Search, Pencil, LineChart as LineChartIcon, PackageOpen, AlertTriangle, TrendingDown,
-  ChevronRight, Info, X, Download,
+  ChevronRight, Info, X, Download, IndianRupee,
 } from 'lucide-react';
 import {
   ResponsiveContainer, ComposedChart, Line, Area, Bar, XAxis, YAxis, Tooltip as RTooltip, ReferenceLine, CartesianGrid,
@@ -15,8 +15,9 @@ import {
 import dayjs from 'dayjs';
 import {
   ImsShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, StatusLegend, EmptyNote, Th,
-  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, imsTableSx,
+  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr,
 } from './imsMeta';
+import { FLUENT, fluentTableSx, statusRowSx, pastelOf, pastelPanelSx, headerBtnSx } from './imsFluent';
 import QtyRangeFilter from './QtyRangeFilter';
 import { NO_QTY_RANGE, matchesQtyRange } from './qtyRange';
 import { useGetImsOverviewQuery, useGetImsForecastQuery, useGetImsHistoryQuery } from '../../store/api/imsApi';
@@ -254,9 +255,9 @@ const ForecastDialog = ({ item, onClose }) => {
           ) : (
             <Paper elevation={0} data-testid="ims-graph-verdict" sx={{
               borderRadius: '8px', px: 1.5, py: 1.1,
-              border: `1px solid ${verdict.tone.border}`, bgcolor: verdict.tone.tint,
+              ...pastelPanelSx(verdict.tone),
             }}>
-              <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: verdict.tone.color }}>{loading ? 'Working it out…' : verdict.text}</Typography>
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: pastelOf(verdict.tone).ink }}>{loading ? 'Working it out…' : verdict.text}</Typography>
             </Paper>
           )}
 
@@ -341,11 +342,14 @@ const ImsStockList = () => {
   // Available qty — below / above / between (QtyRangeFilter).
   const [qtyRange, setQtyRange] = useState(NO_QTY_RANGE);
   const [status, setStatus] = useState(params.get('status') || 'ALL');
-  const [sort, setSort] = useState('urgency');
+  // A deep-linked card view sorts the way its card promises from the first render.
+  const [sort, setSort] = useState(() => ({ 'in-stock': 'onhand', value: 'value' }[params.get('view')] || 'urgency'));
   // The row being edited — the Planning Policy dialog shows its code and name.
   const [editItem, setEditItem] = useState(null);
-  // 'IN_STOCK' = the Closing Stock card's view: only items with stock on hand.
-  const [view, setView] = useState(params.get('view') === 'in-stock' ? 'IN_STOCK' : 'ALL');
+  // KPI-card views, kept in the URL so the Dashboard can deep-link to them:
+  //   IN_STOCK  the Closing Stock card — only items with stock on hand
+  //   VALUE     the Value in store card — only items holding value, highest first
+  const [view, setView] = useState({ 'in-stock': 'IN_STOCK', value: 'VALUE' }[params.get('view')] || 'ALL');
   const [forecast, setForecast] = useState(null);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
@@ -363,7 +367,8 @@ const ImsStockList = () => {
   };
   const pickView = (v) => {
     setView(v);
-    if (v === 'IN_STOCK') params.set('view', 'in-stock'); else params.delete('view');
+    const param = { IN_STOCK: 'in-stock', VALUE: 'value' }[v];
+    if (param) params.set('view', param); else params.delete('view');
     setParams(params, { replace: true });
   };
   // KPI cards. Each one is a filter shortcut; clicking the active card again
@@ -377,6 +382,10 @@ const ImsStockList = () => {
   const toggleInStock = () => {
     if (view === 'IN_STOCK') { pickView('ALL'); return; }
     pickView('IN_STOCK'); setSort('onhand');
+  };
+  const toggleValue = () => {
+    if (view === 'VALUE') { pickView('ALL'); setSort('urgency'); return; }
+    pickView('VALUE'); setSort('value');
   };
   const toggleLow = () => pickStatus(status === 'LOW' ? 'ALL' : 'LOW');
 
@@ -406,6 +415,7 @@ const ImsStockList = () => {
   const filtered = useMemo(() => {
     const list = rows.filter((r) => (status === 'ALL' || r.status === status)
       && (view !== 'IN_STOCK' || Number(r.onHand || 0) > 0)
+      && (view !== 'VALUE' || Number(r.stockValue || 0) > 0)
       && (!category || (r.itemType || UNMAPPED_KEY) === category)
       && matchesQtyRange(qtyRange, r.onHand));
     const sorters = {
@@ -414,6 +424,7 @@ const ImsStockList = () => {
       name: (a, b) => (a.skuName || '').localeCompare(b.skuName || ''),
       code: (a, b) => (a.skuCode || '').localeCompare(b.skuCode || ''),
       onhand: (a, b) => Number(b.onHand || 0) - Number(a.onHand || 0),
+      value: (a, b) => Number(b.stockValue || 0) - Number(a.stockValue || 0),
     };
     return [...list].sort(sorters[sort] || sorters.urgency);
   }, [rows, status, view, category, sort, qtyRange]);
@@ -446,6 +457,7 @@ const ImsStockList = () => {
 
   const activeFilters = (status !== 'ALL' ? 1 : 0) + (view !== 'ALL' ? 1 : 0) + (category ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
   const inStockCount = useMemo(() => rows.filter((r) => Number(r.onHand || 0) > 0).length, [rows]);
+  const valuedCount = useMemo(() => rows.filter((r) => Number(r.stockValue || 0) > 0).length, [rows]);
   const toOrder = (summary.reorder || 0) + (summary.outOfStock || 0);
 
   return (
@@ -455,30 +467,36 @@ const ImsStockList = () => {
       subtitle="Every consumable and packaging item — the Closing Stock, and when to buy more."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv}
-          disabled={!filtered.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          disabled={!filtered.length} sx={headerBtnSx}>
           Export
         </Button>
       )}
     >
       <KpiGrid>
         <KpiCard label="Items" value={num(summary.itemCount)} sub="Every item in the master list"
-          color={O2D.brand} icon={Boxes} actionLabel="Show all" onClick={showEverything}
+          tone={FLUENT.teal} icon={Boxes} actionLabel="Show all" onClick={showEverything}
           hint="Show every item — clears all filters." />
         <KpiCard label="Closing Stock" value={num(summary.totalOnHand)}
           sub={`Units in store · ${num(inStockCount)} item${inStockCount === 1 ? '' : 's'} hold stock`}
-          color="#0f766e" icon={PackageOpen} actionLabel="In stock"
+          tone={FLUENT.blue} icon={PackageOpen} actionLabel="In stock"
           active={view === 'IN_STOCK'} onClick={toggleInStock}
           hint="Show only items with stock on hand, highest first." />
+        {/* Sums the same per-item Stock value the Dashboard's "Value in store"
+            card totals, so the figure here and there always agree. */}
+        <KpiCard label="Value in store" value={inr(summary.totalStockValue)}
+          sub={`At last purchase cost · ${num(valuedCount)} item${valuedCount === 1 ? '' : 's'} hold value`}
+          tone={FLUENT.grey} icon={IndianRupee} actionLabel="By value"
+          active={view === 'VALUE'} onClick={toggleValue}
+          hint="Rank the items holding value, highest stock value first." />
         {/* This card counts Out of stock + Order now together, so it opens the
             Buying List rather than a single-status filter that would show fewer
             rows than the number on the card. */}
         <KpiCard label="To order now" value={num(toOrder)} sub="Out of stock + at reorder point"
-          color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle} actionLabel="Buying List"
+          tone={FLUENT.orange} icon={AlertTriangle} actionLabel="Buying List"
           onClick={() => navigate('/ims/reorder')}
           hint="Open the Buying List with how much to order for each." />
         <KpiCard label="Running low" value={num(summary.low)} sub="Watch these next"
-          color={STOCK_TOKENS.LOW.color} icon={TrendingDown} actionLabel="Filter"
+          tone={FLUENT.amber} icon={TrendingDown} actionLabel="Filter"
           active={status === 'LOW'} onClick={toggleLow}
           hint="Show only items that are running low." />
       </KpiGrid>
@@ -498,6 +516,7 @@ const ImsStockList = () => {
             <MenuItem value="urgency">Most urgent first</MenuItem>
             <MenuItem value="cover">Least days of cover</MenuItem>
             <MenuItem value="onhand">Highest stock</MenuItem>
+            <MenuItem value="value">Highest stock value</MenuItem>
             <MenuItem value="name">Item name (A–Z)</MenuItem>
             <MenuItem value="code">Item code</MenuItem>
           </TextField>
@@ -521,7 +540,7 @@ const ImsStockList = () => {
 
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1120)}>
+          <Table size="small" sx={fluentTableSx(1120, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -555,14 +574,12 @@ const ImsStockList = () => {
                 </TableCell></TableRow>
               )}
               {paged.map((r, i) => {
-                const t = stockToken(r.status);
-                const critical = r.status === 'OUT_OF_STOCK' || r.status === 'REORDER';
                 return (
-                  <TableRow key={r.skuId} hover sx={{
+                  <TableRow key={r.skuId} hover data-status={r.status} sx={{
                     cursor: 'pointer',
-                    // Problem rows carry a faint wash and a coloured left edge, so
-                    // they're findable while scrolling without reading a chip.
-                    ...(critical ? { bgcolor: t.tint, borderLeft: `3px solid ${t.color}` } : { borderLeft: '3px solid transparent' }),
+                    // Problem rows carry a soft pastel wash and a muted left edge,
+                    // so they're findable while scrolling without a wall of red.
+                    ...statusRowSx(r.status),
                     '&:hover .row-go': { opacity: 1, transform: 'translateX(0)' },
                   }} onClick={() => navigate(`/ims/item/${r.skuId}`)}>
                     {/* Derived from the page offset, not the array index, so page 2

@@ -1,23 +1,24 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Paper, Stack, Typography, TextField, MenuItem, InputAdornment, Table, TableHead, TableBody, alpha,
+  Box, Paper, Stack, Typography, TextField, MenuItem, InputAdornment, Table, TableHead, TableBody,
   TableRow, TableCell, Chip, IconButton, Tooltip, Button, Skeleton, TablePagination, Collapse,
   Dialog, DialogTitle, DialogContent, DialogActions, ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Boxes, Search, Pencil, LineChart as LineChartIcon, PackageOpen, AlertTriangle, TrendingDown,
-  ChevronRight, ClipboardList, Download, Info, X,
+  ChevronRight, ClipboardList, Download, Info, X, IndianRupee,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ReferenceLine, CartesianGrid,
 } from 'recharts';
 import dayjs from 'dayjs';
 import {
-  FgShell, Panel, TableScroll, KpiTile, StatusChip, StatusLegend, EmptyNote, Th, Eyebrow,
-  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, num, imsTableSx,
-  pctColor, MODE_LABEL, FG_GLOSSARY, FG_ACCENT, FG_STATUS_MEANING, FG_STATUS_LABEL,
+  FgShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, StatusLegend, EmptyNote, Th, Eyebrow,
+  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, num, inr,
+  MODE_LABEL, FG_GLOSSARY, FG_ACCENT, FG_STATUS_MEANING, FG_STATUS_LABEL,
 } from './fgImsMeta';
+import { FLUENT, fluentTableSx, statusRowSx, pctFluent, pastelOf, pastelPanelSx, headerBtnSx } from '../ims/imsFluent';
 import QtyRangeFilter from '../ims/QtyRangeFilter';
 import { NO_QTY_RANGE, matchesQtyRange } from '../ims/qtyRange';
 import { useGetFgOverviewQuery, useGetFgForecastQuery } from '../../store/api/fgImsApi';
@@ -56,12 +57,13 @@ const NotConfigured = () => (
 
 const PctPill = ({ value }) => {
   if (value == null) return <Typography sx={{ fontSize: '0.8rem', color: O2D.faint }}>—</Typography>;
-  const c = pctColor(value);
+  // Pastel, the same bands as before — critically low reads orange, not red.
+  const c = pctFluent(value);
   return (
     <Chip size="small" label={`${value}%`}
       sx={{
         height: 22, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px',
-        bgcolor: alpha(c, 0.12), color: c, border: `1px solid ${alpha(c, 0.32)}`,
+        bgcolor: c.tint, color: c.accent, border: `1px solid ${c.border}`,
         '& .MuiChip-label': { px: 1 },
       }} />
   );
@@ -129,9 +131,9 @@ const ForecastDialog = ({ item, onClose }) => {
         <Stack spacing={1.25}>
           <Paper elevation={0} sx={{
             borderRadius: '8px', px: 1.5, py: 1.1,
-            border: `1px solid ${verdict.tone.border}`, bgcolor: verdict.tone.tint,
+            ...pastelPanelSx(verdict.tone),
           }}>
-            <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: verdict.tone.color }}>{verdict.text}</Typography>
+            <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: pastelOf(verdict.tone).ink }}>{verdict.text}</Typography>
           </Paper>
 
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
@@ -188,6 +190,10 @@ const ForecastDialog = ({ item, onClose }) => {
   );
 };
 
+const VIEW_OF = { 'in-stock': 'IN_STOCK', value: 'VALUE', booked: 'BOOKED' };
+const VIEW_PARAM = { IN_STOCK: 'in-stock', VALUE: 'value', BOOKED: 'booked' };
+const VIEW_SORT = { IN_STOCK: 'onhand', VALUE: 'value', BOOKED: 'booked' };
+
 const FgImsStockList = () => {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -196,7 +202,12 @@ const FgImsStockList = () => {
   // Available qty — below / above / between (QtyRangeFilter).
   const [qtyRange, setQtyRange] = useState(NO_QTY_RANGE);
   const [status, setStatus] = useState(params.get('status') || 'ALL');
-  const [sort, setSort] = useState('urgency');
+  const [sort, setSort] = useState(VIEW_SORT[VIEW_OF[params.get('view')]] || 'urgency');
+  // KPI-card views, kept in the URL so the Dashboard can deep-link to them:
+  //   IN_STOCK  the Closing Stock card — only items with stock, highest first
+  //   VALUE     the Stock value card — only items holding value, highest first
+  //   BOOKED    the Booked card — only items booked to orders, most booked first
+  const [view, setView] = useState(VIEW_OF[params.get('view')] || 'ALL');
   const [editSku, setEditSku] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [page, setPage] = useState(0);
@@ -211,6 +222,20 @@ const FgImsStockList = () => {
   const pickStatus = (s) => {
     setStatus(s);
     if (s === 'ALL') { params.delete('status'); } else { params.set('status', s); }
+    setParams(params, { replace: true });
+  };
+  // A KPI view toggles: clicking the active card again turns it off.
+  const toggleView = (v) => {
+    const next = view === v ? 'ALL' : v;
+    setView(next);
+    setSort(next === 'ALL' ? 'urgency' : VIEW_SORT[next]);
+    if (next === 'ALL') params.delete('view'); else params.set('view', VIEW_PARAM[next]);
+    setParams(params, { replace: true });
+  };
+  const showEverything = () => {
+    setSearch(''); setCategory(''); setQtyRange(NO_QTY_RANGE); setSort('urgency');
+    setStatus('ALL'); setView('ALL');
+    params.delete('status'); params.delete('view');
     setParams(params, { replace: true });
   };
 
@@ -231,21 +256,29 @@ const FgImsStockList = () => {
 
   const filtered = useMemo(() => {
     const list = rows.filter((r) => (status === 'ALL' || r.status === status) && (!category || r.category === category)
-      && matchesQtyRange(qtyRange, r.onHand));
+      && matchesQtyRange(qtyRange, r.onHand)
+      && (view !== 'IN_STOCK' || Number(r.onHand || 0) > 0)
+      && (view !== 'VALUE' || Number(r.stockValue || 0) > 0)
+      && (view !== 'BOOKED' || Number(r.booked || 0) > 0));
     const sorters = {
       urgency: (a, b) => urgency(a) - urgency(b) || (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9),
       cover: (a, b) => (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9),
       produce: (a, b) => Number(b.suggestedProduceQty || 0) - Number(a.suggestedProduceQty || 0),
       onhand: (a, b) => Number(b.onHand || 0) - Number(a.onHand || 0),
+      value: (a, b) => Number(b.stockValue || 0) - Number(a.stockValue || 0),
+      booked: (a, b) => Number(b.booked || 0) - Number(a.booked || 0),
       name: (a, b) => (a.skuName || '').localeCompare(b.skuName || ''),
       code: (a, b) => (a.skuCode || '').localeCompare(b.skuCode || ''),
     };
     return [...list].sort(sorters[sort] || sorters.urgency);
-  }, [rows, status, category, sort, qtyRange]);
+  }, [rows, status, category, sort, qtyRange, view]);
 
-  const activeFilters = (status !== 'ALL' ? 1 : 0) + (category ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
+  const activeFilters = (status !== 'ALL' ? 1 : 0) + (view !== 'ALL' ? 1 : 0) + (category ? 1 : 0) + (search ? 1 : 0) + (qtyRange.mode ? 1 : 0);
+  const inStockCount = useMemo(() => rows.filter((r) => Number(r.onHand || 0) > 0).length, [rows]);
+  const valuedCount = useMemo(() => rows.filter((r) => Number(r.stockValue || 0) > 0).length, [rows]);
+  const bookedCount = useMemo(() => rows.filter((r) => Number(r.booked || 0) > 0).length, [rows]);
 
-  useEffect(() => { setPage(0); }, [search, category, status, sort, rowsPerPage, qtyRange]);
+  useEffect(() => { setPage(0); }, [search, category, status, sort, rowsPerPage, qtyRange, view]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const exportCsv = () => {
@@ -280,26 +313,42 @@ const FgImsStockList = () => {
       subtitle="Every finished good — what is in stock, its seasonal demand policy and what to produce next."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv}
-          disabled={!filtered.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          disabled={!filtered.length} sx={headerBtnSx}>
           Export
         </Button>
       )}
     >
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Finished goods" value={num(summary.itemCount)} sub="In the master list" color={FG_ACCENT} icon={Boxes} />
-        <KpiTile label="Closing Stock" value={num(summary.totalOnHand)} sub="Total units physically in store" color="#0f766e" icon={PackageOpen} />
-        <KpiTile label="Booked (orders)" value={num(summary.totalBooked)} sub="Committed to customer orders" color="#1d4ed8" icon={ClipboardList} />
+      {/* Every card is a filter shortcut; clicking the active card again turns it off. */}
+      <KpiGrid>
+        <KpiCard label="Finished goods" value={num(summary.itemCount)} sub="Every item in the master list"
+          tone={FLUENT.teal} icon={Boxes} actionLabel="Show all" onClick={showEverything}
+          hint="Show every finished good — clears all filters." />
+        <KpiCard label="Closing Stock" value={num(summary.totalOnHand)}
+          sub={`Units in store · ${num(inStockCount)} item${inStockCount === 1 ? '' : 's'} hold stock`}
+          tone={FLUENT.blue} icon={PackageOpen} actionLabel="In stock"
+          active={view === 'IN_STOCK'} onClick={() => toggleView('IN_STOCK')}
+          hint="Show only items with stock on hand, highest first." />
+        <KpiCard label="Stock value" value={inr(summary.totalStockValue)}
+          sub={`At the costing rate · ${num(valuedCount)} item${valuedCount === 1 ? '' : 's'}`}
+          tone={FLUENT.grey} icon={IndianRupee} actionLabel="By value"
+          active={view === 'VALUE'} onClick={() => toggleView('VALUE')}
+          hint="Rank the items holding value, highest stock value first." />
+        <KpiCard label="Booked (orders)" value={num(summary.totalBooked)}
+          sub={`Committed to orders · ${num(bookedCount)} item${bookedCount === 1 ? '' : 's'}`}
+          tone={FLUENT.lavender} icon={ClipboardList} actionLabel="Booked"
+          active={view === 'BOOKED'} onClick={() => toggleView('BOOKED')}
+          hint="Show only the items booked to customer orders, most booked first." />
         {/* Counts Out of stock + Produce together, so it opens the Production
             Plan rather than a single-status filter that would show fewer rows
-            than the number on the tile. */}
-        <KpiTile label="Need production" value={num((summary.reorder || 0) + (summary.outOfStock || 0))}
-          sub="Open the production plan" color={STOCK_TOKENS.REORDER.color} icon={AlertTriangle}
-          onClick={() => navigate('/fg-ims/planning')} />
-        <KpiTile label="Low cover" value={num(summary.low)} sub="Watch these next"
-          color={STOCK_TOKENS.LOW.color} icon={TrendingDown}
-          active={status === 'LOW'} onClick={() => pickStatus('LOW')} />
-      </Stack>
+            than the number on the card. */}
+        <KpiCard label="Need production" value={num((summary.reorder || 0) + (summary.outOfStock || 0))}
+          sub="Out of stock + at Reorder At" tone={FLUENT.orange} icon={AlertTriangle} actionLabel="Production Plan"
+          onClick={() => navigate('/fg-ims/planning')} hint="Open the Production Plan with how much to produce for each." />
+        <KpiCard label="Low cover" value={num(summary.low)} sub="Watch these next"
+          tone={FLUENT.amber} icon={TrendingDown} actionLabel="Filter"
+          active={status === 'LOW'} onClick={() => pickStatus(status === 'LOW' ? 'ALL' : 'LOW')}
+          hint="Show only items that are running low." />
+      </KpiGrid>
 
       {/* ── Filters — one line, then the status legend doubling as a filter ── */}
       <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
@@ -317,6 +366,8 @@ const FgImsStockList = () => {
             <MenuItem value="cover">Least days of cover</MenuItem>
             <MenuItem value="produce">Most to produce</MenuItem>
             <MenuItem value="onhand">Highest stock</MenuItem>
+            <MenuItem value="value">Highest stock value</MenuItem>
+            <MenuItem value="booked">Most booked</MenuItem>
             <MenuItem value="name">Item name (A–Z)</MenuItem>
             <MenuItem value="code">Item code</MenuItem>
           </TextField>
@@ -325,7 +376,7 @@ const FgImsStockList = () => {
           </Typography>
           {activeFilters > 0 && (
             <Button size="small" startIcon={<X size={12} />}
-              onClick={() => { setSearch(''); setCategory(''); setQtyRange(NO_QTY_RANGE); pickStatus('ALL'); }}
+              onClick={showEverything}
               sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', color: O2D.body }}>
               Clear ({activeFilters})
             </Button>
@@ -341,7 +392,7 @@ const FgImsStockList = () => {
 
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1580)}>
+          <Table size="small" sx={fluentTableSx(1580, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -382,15 +433,13 @@ const FgImsStockList = () => {
                 </TableCell></TableRow>
               )}
               {paged.map((r, i) => {
-                const t = STOCK_TOKENS[r.status] || STOCK_TOKENS.OK;
-                const critical = r.status === 'OUT_OF_STOCK' || r.status === 'REORDER';
                 const tightCover = r.daysCover != null && r.daysCover < r.leadDays;
                 return (
-                  <TableRow key={r.skuId} hover sx={{
+                  <TableRow key={r.skuId} hover data-status={r.status} sx={{
                     cursor: 'pointer',
-                    // Problem rows carry a faint wash and a coloured left edge, so
-                    // they're findable while scrolling without reading a chip.
-                    ...(critical ? { bgcolor: t.tint, borderLeft: `3px solid ${t.color}` } : { borderLeft: '3px solid transparent' }),
+                    // Problem rows carry a soft pastel wash and a muted left edge,
+                    // so they're findable while scrolling without a wall of red.
+                    ...statusRowSx(r.status),
                     '&:hover .row-go': { opacity: 1, transform: 'translateX(0)' },
                   }} onClick={() => navigate(`/fg-ims/item/${r.skuId}`)}>
                     {/* Derived from the page offset, not the array index, so page 2
@@ -444,7 +493,7 @@ const FgImsStockList = () => {
                     </TableCell>
                     <TableCell align="right" sx={{
                       fontVariantNumeric: 'tabular-nums', fontWeight: 700,
-                      color: tightCover ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.body,
+                      color: tightCover ? STOCK_TOKENS.REORDER.color : O2D.body,
                     }}>
                       {r.daysCover == null ? '—' : `${num(r.daysCover)}d`}
                     </TableCell>

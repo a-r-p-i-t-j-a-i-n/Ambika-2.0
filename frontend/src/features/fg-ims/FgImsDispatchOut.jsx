@@ -8,10 +8,11 @@ import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
 import {
-  FgShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, IntroNote,
+  FgShell, TableScroll, EmptyNote, Th, ItemMultiPicker, FormSection, IntroNote,
   QtyField, BalanceDelta, ConfirmBar, SuccessNote, SummaryChip, newRequestId,
-  O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx, IMS_FORM_MAX, emptyCellSx, FG_ACCENT, FG_ACCENT_DARK,
+  O2D, O2D_TIP, STOCK_TOKENS, num, IMS_FORM_MAX, emptyCellSx, FG_ACCENT, FG_ACCENT_DARK,
 } from './fgImsMeta';
+import { FLUENT, fluentTableSx, overLineRowSx } from '../ims/imsFluent';
 import { useGetFgOverviewQuery, useFgDispatchMutation } from '../../store/api/fgImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -85,11 +86,11 @@ const FgImsDispatchOut = () => {
   return (
     <FgShell
       icon={Truck}
-      title="Dispatch Out — goods shipped to a customer"
-      subtitle="Record what left the store. Stock comes down and the dispatch is logged against your name."
+      title="Dispatch Out"
+      subtitle="Goods shipped to a customer — record what left the store. Stock comes down and the dispatch is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
-      <IntroNote accent={FG_ACCENT} icon={Info}>
+      <IntroNote fluent accent={FG_ACCENT} icon={Info}>
         Every dispatch recorded here reduces finished-goods stock and feeds the <b>Production Plan</b>. The more
         faithfully the customer and order details are filled in, the easier this is to trace back later.
       </IntroNote>
@@ -118,9 +119,9 @@ const FgImsDispatchOut = () => {
       )}
 
       {/* ── Step 1 — the dispatch header ── */}
-      <Panel>
-        <StepHead n={1} title="Dispatch details" hint="When it went out, who it went to, and on what vehicle." done={!!date} accent={FG_ACCENT} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
+      <FormSection step={1} done={!!date} fluent={FLUENT.lavender} title="Dispatch details"
+          hint="When it went out, who it went to, and on what vehicle." testId="fg-out-details">
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25 }}>
           <TextField label="Dispatch date" type="date" size="small" value={date} onChange={(e) => setDate(e.target.value)}
             InputLabelProps={{ shrink: true }} />
           <TextField label="Customer" size="small" value={customer} onChange={(e) => setCustomer(e.target.value)}
@@ -136,12 +137,11 @@ const FgImsDispatchOut = () => {
             helperText="Helps you trace this entry later in History."
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
         </Box>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 2 — the lines ── */}
-      <Panel>
-        <StepHead n={2} title="What is being dispatched?" hint="Tick the finished goods being shipped, add them, then type each quantity."
-          done={lines.length > 0} accent={FG_ACCENT} />
+      <FormSection step={2} done={lines.length > 0} fluent={FLUENT.blue} title="What is being dispatched?"
+          hint="Tick the finished goods being shipped, add them, then type each quantity." testId="fg-out-items">
         {/* Multi-select: tick several items and add them in one go — the same
             picker the Consumables Stock Out screen uses. */}
         <ItemMultiPicker
@@ -154,8 +154,8 @@ const FgImsDispatchOut = () => {
           emptyHint="No finished goods match that search."
         />
 
-        <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-          <Table size="small" sx={imsTableSx(880)}>
+        <TableScroll sx={{ mx: { xs: -1.75, md: -2.25 }, mb: { xs: -1.75, md: -2.25 }, maxWidth: 'none', borderTop: `1px solid ${FLUENT.blue.border}` }}>
+          <Table size="small" sx={fluentTableSx(880, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -182,7 +182,7 @@ const FgImsDispatchOut = () => {
                 const belowReorder = !over && Number(l.reorderPoint || 0) > 0 && after <= Number(l.reorderPoint);
                 const tone = over ? STOCK_TOKENS.OUT_OF_STOCK : belowReorder ? STOCK_TOKENS.REORDER : STOCK_TOKENS.OK;
                 return (
-                  <TableRow key={l.skuId} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
+                  <TableRow key={l.skuId} hover sx={over ? overLineRowSx : null}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: FG_ACCENT, whiteSpace: 'nowrap' }}>{l.skuCode}</TableCell>
                     <TableCell sx={{ minWidth: 180 }}>
@@ -221,13 +221,13 @@ const FgImsDispatchOut = () => {
             </TableBody>
           </Table>
         </TableScroll>
-      </Panel>
+      </FormSection>
 
       {/* ── Consequences, spelled out before the user commits ── */}
       {blocked && (
         <Paper elevation={0} sx={{
           borderRadius: '8px', px: 1.5, py: 1.1,
-          border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+          border: `1px solid ${FLUENT.rose.border}`, bgcolor: FLUENT.rose.bg,
         }}>
           <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
             <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={17} /></Box>
@@ -246,7 +246,7 @@ const FgImsDispatchOut = () => {
       {!blocked && willTrigger.length > 0 && (
         <Paper elevation={0} sx={{
           borderRadius: '8px', px: 1.5, py: 1.1,
-          border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
+          border: `1px solid ${FLUENT.amber.border}`, bgcolor: FLUENT.amber.bg,
         }}>
           <Stack direction="row" spacing={1.25} alignItems="center">
             <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex' }}><AlertTriangle size={17} /></Box>
@@ -259,7 +259,7 @@ const FgImsDispatchOut = () => {
 
       {/* ── Step 3 — confirm ── */}
       <ConfirmBar
-        n={3} title="Confirm and save" done={valid && !blocked} accent={FG_ACCENT}
+        fluent testId="fg-entry-savebar" n={3} title="Confirm and save" done={valid && !blocked} accent={FG_ACCENT}
         hint={blocked ? 'Fix the over-dispatched lines first.'
           : valid ? 'Everything looks right.' : 'Add at least one finished good with a quantity above zero.'}
         extra={(
