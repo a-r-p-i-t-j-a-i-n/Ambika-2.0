@@ -17,21 +17,27 @@ import {
 // Reads from the O2D design system so the dialog matches the calendar behind it.
 const BRAND = { primary: '#1d4ed8', error: '#be123c', ink: O2D.ink, muted: O2D.sub, line: O2D.line };
 
-const emptyLine = () => ({ _tempId: `${Date.now()}-${Math.random()}`, skuId: '', plannedQty: '', note: '' });
+const today = () => dayjs().format('YYYY-MM-DD');
+// `dateSet`: this line was given its own date, so it no longer follows the first line's.
+const emptyLine = (plannedDate = today()) => ({
+  _tempId: `${Date.now()}-${Math.random()}`, skuId: '', plannedQty: '', plannedDate, dateSet: false, note: '',
+});
 
 /**
- * Create / edit a party-wise production plan.
+ * Create / edit a production plan.
  *
  * Deliberately does NOT ask for a sales order: the whole reason this screen
  * exists is that planning happens before (or without) a PO. The SO/PO boxes are
  * optional free text so a plan can be tied back to paperwork if it turns up.
+ * The party is optional too, and every SKU line has its own date — the first
+ * line's date carries to the rest unless one is changed. The server saves one
+ * plan per date.
  */
 export default function ProductionPlanDialog({ open, onClose, plan = null, defaultDate = null }) {
   const { enqueueSnackbar } = useSnackbar();
   const isEdit = Boolean(plan?._id);
 
   const [partyId, setPartyId] = useState('');
-  const [plannedDate, setPlannedDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [soNumber, setSoNumber] = useState('');
   const [poNumber, setPoNumber] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -81,18 +87,21 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
 
   // Catalog → editable rows with BLANK quantities: the planner's only job is to
   // type how many, which is the whole point of pulling the list in.
-  const catalogToLines = useCallback((catalog) => catalog.map((c, i) => ({
+  // Every catalog row takes the first line's date.
+  const catalogToLines = useCallback((catalog, plannedDate) => catalog.map((c, i) => ({
     _tempId: `cat-${partyId}-${i}-${c.skuCode || c.skuName || 'row'}`,
     skuId: String(c.skuId || ''),
     skuName: c.skuName || '',
     skuCode: c.skuCode || '',
     plannedQty: '',
+    plannedDate,
+    dateSet: false,
     note: '',
   })).filter((l) => l.skuId), [partyId]);
 
   const loadCatalog = () => {
     if (!partyCatalog.length) return;
-    setLines(catalogToLines(partyCatalog));
+    setLines((prev) => catalogToLines(partyCatalog, prev[0]?.plannedDate || today()));
     setFilledPartyId(partyId);
   };
 
@@ -104,8 +113,8 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
   useEffect(() => {
     if (!open) return;
     if (isEdit) {
+      const planDate = dayjs(plan.plannedDate).format('YYYY-MM-DD');
       setPartyId(String(plan.partyId || ''));
-      setPlannedDate(dayjs(plan.plannedDate).format('YYYY-MM-DD'));
       setSoNumber(plan.soNumber || '');
       setPoNumber(plan.poNumber || '');
       setRemarks(plan.remarks || '');
@@ -113,17 +122,20 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
         _tempId: `${it.skuId}-${Math.random()}`,
         skuId: String(it.skuId || ''),
         plannedQty: String(it.plannedQty ?? ''),
+        plannedDate: planDate,
+        dateSet: false,
+        // Already drawn on by an order: it moves only with the whole plan (first line's date).
+        used: Number(it.consumedQty || 0) > 0,
         note: it.note || '',
       })));
       // An existing plan's own lines ARE the fill — never overwrite them with the catalog.
       setFilledPartyId(String(plan.partyId || ''));
     } else {
       setPartyId('');
-      setPlannedDate(defaultDate ? dayjs(defaultDate).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'));
       setSoNumber('');
       setPoNumber('');
       setRemarks('');
-      setLines([emptyLine()]);
+      setLines([emptyLine(defaultDate ? dayjs(defaultDate).format('YYYY-MM-DD') : today())]);
       setFilledPartyId(null);
     }
   }, [open, isEdit, plan, defaultDate]);
@@ -137,7 +149,7 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
     if (!partyCatalog.length) return;
     const pristine = lines.every((l) => !(Number(l.plannedQty) > 0));
     if (!pristine) return;
-    setLines(catalogToLines(partyCatalog));
+    setLines(catalogToLines(partyCatalog, lines[0]?.plannedDate || today()));
     setFilledPartyId(partyId);
   }, [open, partyId, partyCatalog, lines, filledPartyId, catalogToLines]);
 
@@ -145,22 +157,32 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
     () => lines.reduce((s, l) => s + (Number(l.plannedQty) || 0), 0),
     [lines],
   );
+  // How many plans this saves as — one per date.
+  const dateCount = useMemo(
+    () => new Set(lines.filter((l) => l.skuId && Number(l.plannedQty) > 0).map((l) => l.plannedDate)).size,
+    [lines],
+  );
 
   const updateLine = (i, patch) => setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
-  const addLine = () => setLines((prev) => [...prev, emptyLine()]);
+  // The first line's date carries to every line not given its own.
+  const setLineDate = (i, plannedDate) => setLines((prev) => prev.map((l, idx) => {
+    if (idx === i) return { ...l, plannedDate, dateSet: i > 0 };
+    return i === 0 && !l.dateSet ? { ...l, plannedDate } : l;
+  }));
+  const addLine = () => setLines((prev) => [...prev, emptyLine(prev[0]?.plannedDate || today())]);
   const removeLine = (i) => setLines((prev) => (prev.length === 1 ? prev : prev.filter((_, idx) => idx !== i)));
 
   const handleSave = async () => {
-    if (!partyId) return enqueueSnackbar('Select a party', { variant: 'warning' });
-    if (!plannedDate) return enqueueSnackbar('Select a plan date', { variant: 'warning' });
+    const filled = lines.filter((l) => l.skuId && Number(l.plannedQty) > 0);
+    if (!filled.length) return enqueueSnackbar('Add at least one SKU with a quantity', { variant: 'warning' });
+    if (filled.some((l) => !l.plannedDate)) return enqueueSnackbar('Select a date for every SKU', { variant: 'warning' });
 
-    const items = lines
-      .filter((l) => l.skuId && Number(l.plannedQty) > 0)
-      .map((l) => ({ skuId: l.skuId, plannedQty: Number(l.plannedQty), note: l.note.trim() }));
+    const items = filled.map((l) => ({
+      skuId: l.skuId, plannedQty: Number(l.plannedQty), plannedDate: l.plannedDate, note: l.note.trim(),
+    }));
 
-    if (!items.length) return enqueueSnackbar('Add at least one SKU with a quantity', { variant: 'warning' });
-
-    const body = { partyId, plannedDate, soNumber, poNumber, remarks, items };
+    // No party → sent empty, so an edit can also take the party off.
+    const body = { partyId: partyId || null, plannedDate: lines[0]?.plannedDate, soNumber, poNumber, remarks, items };
 
     try {
       if (isEdit) {
@@ -196,7 +218,7 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
             {isEdit ? `Edit Plan ${plan.planNo || ''}` : 'New Production Plan'}
           </Typography>
           <Typography sx={{ fontSize: '0.78rem', color: BRAND.muted, fontWeight: 500 }}>
-            Party and date only — a purchase order is not required
+            Party optional · each SKU can have its own date · no purchase order needed
           </Typography>
         </Box>
         <IconButton size="small" onClick={() => onClose?.(false)}><X size={18} /></IconButton>
@@ -204,7 +226,7 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
       <Divider />
 
       <DialogContent sx={{ pt: 2.5 }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2fr 1fr' }, gap: 1.5, mb: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2fr 1fr 1fr' }, gap: 1.5, mb: 2 }}>
           <Autocomplete
             options={parties}
             loading={partiesLoading}
@@ -212,23 +234,13 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
             value={parties.find((p) => String(p._id) === partyId) || null}
             onChange={(_, p) => setPartyId(p ? String(p._id) : '')}
             isOptionEqualToValue={(opt, val) => String(opt._id) === String(val?._id)}
-            renderInput={(params) => <TextField {...params} label="Party *" size="small" />}
+            renderInput={(params) => <TextField {...params} label="Party (optional)" size="small" />}
           />
-          <TextField
-            label="Plan Date *"
-            type="date"
-            size="small"
-            value={plannedDate}
-            onChange={(e) => setPlannedDate(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-          />
-        </Box>
-
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr 2fr' }, gap: 1.5, mb: 2 }}>
           <TextField label="SO Number (optional)" size="small" value={soNumber} onChange={(e) => setSoNumber(e.target.value)} />
           <TextField label="PO Number (optional)" size="small" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} />
-          <TextField label="Remarks" size="small" value={remarks} onChange={(e) => setRemarks(e.target.value)} />
         </Box>
+
+        <TextField fullWidth label="Remarks" size="small" value={remarks} onChange={(e) => setRemarks(e.target.value)} sx={{ mb: 2 }} />
 
         <Divider sx={{ mb: 1.5 }} />
 
@@ -260,7 +272,7 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
           {lines.map((line, i) => (
             <Box
               key={line._tempId}
-              sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2.2fr 1fr 1.6fr auto' }, gap: 1, alignItems: 'center' }}
+              sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2.2fr 0.8fr 1.15fr 0.9fr auto' }, gap: 1, alignItems: 'center' }}
             >
               <Autocomplete
                 options={skus}
@@ -279,6 +291,17 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
                 onChange={(e) => updateLine(i, { plannedQty: e.target.value })}
                 inputProps={{ min: 0 }}
               />
+              <Tooltip title={line.used && i > 0 ? 'Already used by an order — it moves with the first line\'s date' : ''}>
+                <TextField
+                  label="Date"
+                  type="date"
+                  size="small"
+                  value={line.plannedDate || ''}
+                  onChange={(e) => setLineDate(i, e.target.value)}
+                  disabled={line.used && i > 0}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Tooltip>
               <TextField
                 label="Note"
                 size="small"
@@ -302,7 +325,9 @@ export default function ProductionPlanDialog({ open, onClose, plan = null, defau
         </Stack>
 
         <Box sx={{ mt: 2, p: 1.5, borderRadius: '10px', bgcolor: alpha(BRAND.primary, 0.06), display: 'flex', justifyContent: 'space-between' }}>
-          <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: BRAND.muted }}>Total planned quantity</Typography>
+          <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: BRAND.muted }}>
+            Total planned quantity{dateCount > 1 ? ` · saved as ${dateCount} plans, one per date` : ''}
+          </Typography>
           <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: BRAND.primary }}>
             {total.toLocaleString('en-IN')} pcs
           </Typography>
