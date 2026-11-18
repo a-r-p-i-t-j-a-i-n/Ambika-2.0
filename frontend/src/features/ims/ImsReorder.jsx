@@ -9,8 +9,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
 import {
   ImsShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, EmptyNote, Th,
-  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, imsTableSx,
+  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num,
 } from './imsMeta';
+import { FLUENT, fluentTableSx, statusEdgeSx, statusInk, headerBtnSx } from './imsFluent';
 import { useGetImsReorderQuery } from '../../store/api/imsApi';
 import { FIELD } from './imsFieldHelp';
 
@@ -127,11 +128,11 @@ const ImsReorder = () => {
       actions={rows.length > 0 && (
         <Stack direction="row" spacing={0.75}>
           <Button size="small" variant="outlined" startIcon={copied ? <Check size={14} /> : <Copy size={14} />} onClick={copyList}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: copied ? STOCK_TOKENS.OK.color : O2D.body }}>
+            sx={{ ...headerBtnSx, color: copied ? STOCK_TOKENS.OK.color : O2D.body }}>
             {copied ? 'Copied' : 'Copy as text'}
           </Button>
           <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+            sx={headerBtnSx}>
             Export
           </Button>
         </Stack>
@@ -139,20 +140,20 @@ const ImsReorder = () => {
     >
       <KpiGrid>
         <KpiCard label="Items to order" value={num(rows.length)} sub="Everything on this list today"
-          color={rows.length ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color} icon={ShoppingCart}
+          tone={rows.length ? FLUENT.blue : FLUENT.teal} icon={ShoppingCart}
           actionLabel="Show all" onClick={() => pickKpi(kpi)}
           hint="Show every item on the buying list." />
         <KpiCard label="Out of stock" value={num(outCount)} sub="Order these first"
-          color={STOCK_TOKENS.OUT_OF_STOCK.color} icon={Boxes}
+          tone={FLUENT.orange} icon={Boxes}
           actionLabel="Filter" active={kpi === 'OUT_OF_STOCK'} onClick={() => pickKpi('OUT_OF_STOCK')}
           hint="Show only the items with nothing left in the store." />
         <KpiCard label="At reorder point" value={num(reorderCount)} sub="Due for a purchase order"
-          color={STOCK_TOKENS.REORDER.color} icon={ShoppingCart}
+          tone={FLUENT.amber} icon={ShoppingCart}
           actionLabel="Filter" active={kpi === 'REORDER'} onClick={() => pickKpi('REORDER')}
           hint="Show only the items at or below their reorder point." />
         <KpiCard label="Units to order" value={num(listSuggested)}
           sub={`Across ${num(unitsItems)} item${unitsItems === 1 ? '' : 's'}`}
-          color={O2D.brand} icon={ArrowRight}
+          tone={FLUENT.lavender} icon={ArrowRight}
           actionLabel="Rank" active={kpi === 'UNITS'} onClick={() => pickKpi('UNITS')}
           hint="Show the items with a quantity to order, largest order first." />
       </KpiGrid>
@@ -181,7 +182,7 @@ const ImsReorder = () => {
 
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1040)}>
+          <Table size="small" sx={fluentTableSx(1040, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -214,13 +215,12 @@ const ImsReorder = () => {
                 </TableCell></TableRow>
               )}
               {paged.map((r, i) => {
-                const t = stockToken(r.status);
                 return (
                   // No row wash here. On this screen EVERY row is a problem, so
-                  // tinting them all is noise — the coloured left edge plus the
-                  // status chip carry the severity on their own.
-                  <TableRow key={r.skuId} hover sx={{
-                    cursor: 'pointer', borderLeft: `3px solid ${t.color}`,
+                  // tinting them all is noise — the muted pastel left edge plus
+                  // the status chip carry the severity on their own.
+                  <TableRow key={r.skuId} hover data-status={r.status} sx={{
+                    cursor: 'pointer', ...statusEdgeSx(r.status),
                   }} onClick={() => navigate(`/ims/item/${r.skuId}`)}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{r.skuCode}</TableCell>
@@ -229,7 +229,7 @@ const ImsReorder = () => {
                       <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }}>{r.category || '—'}</Typography>
                     </TableCell>
                     <TableCell sx={{ maxWidth: 280 }}>
-                      <Typography sx={{ fontSize: '0.73rem', color: t.color, fontWeight: 600 }}>{reasonFor(r)}</Typography>
+                      <Typography sx={{ fontSize: '0.73rem', color: statusInk(r.status), fontWeight: 600 }}>{reasonFor(r)}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inTransit ? O2D.body : O2D.faint }}>{r.inTransit ? num(r.inTransit) : '—'}</TableCell>

@@ -8,9 +8,10 @@ import { PackageMinus, Trash2, Save, AlertTriangle, ArrowRight, Info } from 'luc
 import dayjs from 'dayjs';
 import { enqueueSnackbar } from 'notistack';
 import {
-  ImsShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, newRequestId,
-  O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx, IMS_FORM_MAX, emptyCellSx,
+  ImsShell, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, FormSection, newRequestId,
+  O2D, O2D_TIP, STOCK_TOKENS, num, IMS_FORM_MAX, emptyCellSx,
 } from './imsMeta';
+import { FLUENT, FLUENT_DEPTH, fluentTableSx, overLineRowSx } from './imsFluent';
 import { useGetImsOverviewQuery, useImsIssueMutation } from '../../store/api/imsApi';
 import { FIELD } from './imsFieldHelp';
 
@@ -126,9 +127,9 @@ const ImsStockOut = () => {
       subtitle="Issue material to production. Record what left the store — Closing Stock comes down and the issue is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
-      <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+      <Paper elevation={0} sx={{ borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">
-          <Box sx={{ color: O2D.brand, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
+          <Box sx={{ color: FLUENT.blue.accent, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
           <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>
             Every issue you record here also feeds the <b>average daily use</b> behind each item's reorder point. The more
             faithfully this is filled in, the sharper the buying list becomes.
@@ -137,9 +138,9 @@ const ImsStockOut = () => {
       </Paper>
 
       {/* ── Step 1 ── */}
-      <Panel>
-        <StepHead n={1} title="Issue details" hint="When it went out, where it went, and who took it." done={!!date} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
+      <FormSection step={1} done={!!date} fluent={FLUENT.lavender} title="Issue details"
+          hint="When it went out, where it went, and who took it." testId="cp-out-details">
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25 }}>
           <TextField label="Date issued" type="date" size="small" value={date} onChange={(e) => setDate(e.target.value)}
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
           {/* One control, both jobs — the same Reason field Stock In uses: pick a
@@ -207,11 +208,11 @@ const ImsStockOut = () => {
             helperText="Helps you trace this entry later in History."
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }} />
         </Box>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 2 ── */}
-      <Panel>
-        <StepHead n={2} title="What is going out?" hint="Tick the items being issued, add them, then type each quantity." done={lines.length > 0} />
+      <FormSection step={2} done={lines.length > 0} fluent={FLUENT.blue} title="What is going out?"
+          hint="Tick the items being issued, add them, then type each quantity." testId="cp-out-items">
         {/* Multi-select: tick several items and add them in one go. Each one
             still lands as an ordinary row with an EMPTY quantity, exactly as a
             one-by-one add did. */}
@@ -221,8 +222,8 @@ const ImsStockOut = () => {
           onAdd={addItems}
         />
 
-        <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-          <Table size="small" sx={imsTableSx(760)}>
+        <TableScroll sx={{ mx: { xs: -1.75, md: -2.25 }, mb: { xs: -1.75, md: -2.25 }, maxWidth: 'none', borderTop: `1px solid ${FLUENT.blue.border}` }}>
+          <Table size="small" sx={fluentTableSx(760, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -248,7 +249,7 @@ const ImsStockOut = () => {
                 const belowReorder = !over && Number(l.reorderPoint || 0) > 0 && after <= Number(l.reorderPoint);
                 const tone = over ? STOCK_TOKENS.OUT_OF_STOCK : belowReorder ? STOCK_TOKENS.REORDER : STOCK_TOKENS.OK;
                 return (
-                  <TableRow key={l.skuId} hover sx={over ? { bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint } : null}>
+                  <TableRow key={l.skuId} hover sx={over ? overLineRowSx : null}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: O2D.brand, whiteSpace: 'nowrap' }}>{l.skuCode}</TableCell>
                     <TableCell sx={{ minWidth: 180 }}>
@@ -298,13 +299,13 @@ const ImsStockOut = () => {
             </TableBody>
           </Table>
         </TableScroll>
-      </Panel>
+      </FormSection>
 
       {/* ── Consequences, spelled out before the client commits ── */}
       {blocked && (
         <Paper elevation={0} sx={{
           borderRadius: '8px', px: 1.5, py: 1.1,
-          border: `1px solid ${STOCK_TOKENS.OUT_OF_STOCK.border}`, bgcolor: STOCK_TOKENS.OUT_OF_STOCK.tint,
+          border: `1px solid ${FLUENT.rose.border}`, bgcolor: FLUENT.rose.bg,
         }}>
           <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
             <Box sx={{ color: STOCK_TOKENS.OUT_OF_STOCK.color, display: 'flex' }}><AlertTriangle size={17} /></Box>
@@ -323,7 +324,7 @@ const ImsStockOut = () => {
       {!blocked && willTrigger.length > 0 && (
         <Paper elevation={0} sx={{
           borderRadius: '8px', px: 1.5, py: 1.1,
-          border: `1px solid ${STOCK_TOKENS.REORDER.border}`, bgcolor: STOCK_TOKENS.REORDER.tint,
+          border: `1px solid ${FLUENT.amber.border}`, bgcolor: FLUENT.amber.bg,
         }}>
           <Stack direction="row" spacing={1.25} alignItems="center">
             <Box sx={{ color: STOCK_TOKENS.REORDER.color, display: 'flex' }}><AlertTriangle size={17} /></Box>
@@ -336,10 +337,10 @@ const ImsStockOut = () => {
 
       {/* ── Step 3 ── */}
       <Paper elevation={0} sx={{
-        position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '8px', px: 1.5, py: 1.15,
-        border: `1px solid ${valid && !blocked ? STOCK_TOKENS.OK.border : O2D.line}`,
-        bgcolor: valid && !blocked ? STOCK_TOKENS.OK.tint : O2D.surface,
-        boxShadow: '0 6px 20px rgba(28,30,33,0.08)',
+        position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '10px', px: 1.5, py: 1.15,
+        border: `1px solid ${valid && !blocked ? STOCK_TOKENS.OK.border : FLUENT.grey.border}`,
+        bgcolor: valid && !blocked ? STOCK_TOKENS.OK.tint : '#fff',
+        boxShadow: FLUENT_DEPTH.hover,
       }}>
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
           <StepHead n={3} title="Confirm and save"

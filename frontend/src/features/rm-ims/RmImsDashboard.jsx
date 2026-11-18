@@ -12,11 +12,11 @@ import {
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import {
-  RmShell, Panel, TableScroll, RmKpiCard, RmKpiGrid, StatusChip, MoveChip, EmptyNote, Help, YieldChip,
+  RmShell, Panel, TableScroll, RmKpiCard, RmKpiGrid, DashboardAlert, StatusChip, MoveChip, EmptyNote, Help, YieldChip,
   O2D, STOCK_TOKENS, STOCK_ORDER, moveToken, num, inr, compactInr, imsTableSx,
   Th,
 } from './rmImsMeta';
-import { FLUENT } from './rmFluent';
+import { FLUENT, headerBtnSx, primaryBtnSx } from './rmFluent';
 import { useGetRmDashboardQuery } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -95,59 +95,33 @@ const RmImsDashboard = () => {
       icon={Layers}
       title="Dashboard"
       subtitle="Raw Material — the coils and circles you hold, what they are worth, and what needs buying."
+      actionsInline
       actions={(
-        <Stack direction="row" spacing={0.75}>
-          <Button size="small" variant="outlined" startIcon={<Recycle size={14} />} onClick={() => navigate('/rm-ims/conversion?new=1')}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
+          {/* The buying verdict, as one clickable alert beside the stock list. */}
+          <DashboardAlert
+            count={needBuying}
+            label={`raw-material item${needBuying === 1 ? ' needs' : 's need'} to be ordered`}
+            okLabel="Every coil and circle is at a healthy level"
+            detail={needBuying
+              ? `${num(s.outOfStock)} out of stock · ${num(s.reorder)} at reorder point · ${num(s.low)} running low. Opens the Buying List.`
+              : 'Nothing is at or below its reorder point right now.'}
+            onClick={() => navigate('/rm-ims/reorder')}
+            onOkClick={() => navigate('/rm-ims/stock')}
+          />
+          <Button size="small" variant="outlined" startIcon={<Layers size={14} />} onClick={() => navigate('/rm-ims/stock')} sx={headerBtnSx}>
+            Open Stock List
+          </Button>
+          <Button size="small" variant="outlined" startIcon={<Recycle size={14} />} onClick={() => navigate('/rm-ims/conversion?new=1')} sx={headerBtnSx}>
             Cut a coil
           </Button>
           <Button size="small" variant="contained" disableElevation startIcon={<ShoppingCart size={14} />}
-            onClick={() => navigate('/rm-ims/reorder')}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }}>
+            onClick={() => navigate('/rm-ims/reorder')} sx={primaryBtnSx(O2D.brand)}>
             Buying List
           </Button>
         </Stack>
       )}
     >
-      {/* The verdict — buying to do, or not. */}
-      <Paper elevation={0} sx={{
-        borderRadius: '8px', px: 1.75, py: 1.4,
-        border: `1px solid ${needBuying ? STOCK_TOKENS.REORDER.border : STOCK_TOKENS.OK.border}`,
-        bgcolor: needBuying ? STOCK_TOKENS.REORDER.tint : STOCK_TOKENS.OK.tint,
-      }}>
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Box sx={{
-            width: 34, height: 34, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0,
-            bgcolor: needBuying ? STOCK_TOKENS.REORDER.bg : STOCK_TOKENS.OK.bg,
-            color: needBuying ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color,
-          }}>
-            {needBuying ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-          </Box>
-          <Box sx={{ minWidth: 0, mr: 'auto' }}>
-            <Typography sx={{
-              fontSize: '0.9rem', fontWeight: 800, lineHeight: 1.25,
-              color: needBuying ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color,
-            }}>
-              {needBuying
-                ? `${needBuying} raw-material item${needBuying > 1 ? 's need' : ' needs'} to be ordered`
-                : 'Every coil and circle is at a healthy level'}
-            </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>
-              {needBuying
-                ? `${num(s.outOfStock)} out of stock · ${num(s.reorder)} at reorder point · ${num(s.low)} running low.`
-                : 'Nothing is at or below its reorder point right now.'}
-            </Typography>
-          </Box>
-          {needBuying > 0 && (
-            <Button size="small" variant="contained" disableElevation endIcon={<ArrowRight size={14} />}
-              onClick={() => navigate('/rm-ims/reorder')}
-              sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: STOCK_TOKENS.REORDER.color }}>
-              See what to buy
-            </Button>
-          )}
-        </Stack>
-      </Paper>
-
       {/* Every card opens the screen that explains its number. */}
       <RmKpiGrid compact>
         <RmKpiCard compact label="Coils" value={num(s.coilCount)} sub="Uncut raw metal"

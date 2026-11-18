@@ -1,22 +1,26 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Paper, Stack, Typography, Table, TableHead, TableBody, TableRow, TableCell,
-  Skeleton, Button, Tooltip, TextField, MenuItem, InputAdornment, TablePagination,
+  Skeleton, Button, Tooltip, TextField, MenuItem, InputAdornment, TablePagination, Chip,
 } from '@mui/material';
-import { Factory, Download, Copy, Check, CheckCircle2, Search, Boxes, ArrowRight } from 'lucide-react';
+import { Factory, Download, Copy, Check, CheckCircle2, Search, Boxes, ArrowRight, X } from 'lucide-react';
 import dayjs from 'dayjs';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
 import {
-  FgShell, Panel, TableScroll, KpiTile, StatusChip, EmptyNote, Th,
-  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, num, imsTableSx, FG_ACCENT, FG_STATUS_LABEL,
+  FgShell, Panel, TableScroll, KpiCard, KpiGrid, StatusChip, EmptyNote, Th,
+  O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, num, FG_ACCENT, FG_STATUS_LABEL,
 } from './fgImsMeta';
+import { FLUENT, fluentTableSx, statusEdgeSx, statusInk, headerBtnSx } from '../ims/imsFluent';
 import { useGetFgReplenishQuery } from '../../store/api/fgImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
 const H = FIELD.fg;
 
 const fgStatusLabel = (k) => FG_STATUS_LABEL[k] || STOCK_TOKENS[k]?.label || k;
+
+// What each KPI card filters the plan to (the same scheme as the Buying List).
+const KPI_FILTERS = { OUT_OF_STOCK: 'Out of stock', REORDER: 'At reorder level', UNITS: 'Most to produce' };
 
 // One sentence saying WHY this item is on the plan. A number in a "days cover"
 // column is data; this is the reason a planner can act on without interpreting.
@@ -39,6 +43,15 @@ const FgImsPlanning = () => {
   const rows = useMemo(() => data?.data || [], [data]);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
+  const [params, setParams] = useSearchParams();
+  // Which KPI card is filtering the plan (kept in the URL, so it survives a refresh).
+  const [kpi, setKpi] = useState(() => (KPI_FILTERS[params.get('show')] ? params.get('show') : 'ALL'));
+  const pickKpi = (k) => {
+    const next = kpi === k ? 'ALL' : k;   // clicking the active card turns it off
+    setKpi(next);
+    if (next === 'ALL') params.delete('show'); else params.set('show', next);
+    setParams(params, { replace: true });
+  };
   const [copied, setCopied] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
@@ -47,21 +60,29 @@ const FgImsPlanning = () => {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows
+    const list = rows
       .filter((r) => (!category || r.category === category)
-        && (!q || `${r.skuCode || ''} ${r.skuName || ''} ${r.category || ''}`.toLowerCase().includes(q)))
-      // Worst first, then by the tightest cover — the order a planner works in.
-      .sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
+        && (!q || `${r.skuCode || ''} ${r.skuName || ''} ${r.category || ''}`.toLowerCase().includes(q))
+        && (kpi === 'ALL' || kpi === 'UNITS' || r.status === kpi)
+        && (kpi !== 'UNITS' || Number(r.suggestedProduceQty || 0) > 0));
+    // The Units card ranks by how much to produce; everything else is worst
+    // first, then by the tightest cover — the order a planner works in.
+    return kpi === 'UNITS'
+      ? list.sort((a, b) => Number(b.suggestedProduceQty || 0) - Number(a.suggestedProduceQty || 0))
+      : list.sort((a, b) => STOCK_ORDER.indexOf(a.status) - STOCK_ORDER.indexOf(b.status)
         || (a.daysCover ?? 1e9) - (b.daysCover ?? 1e9));
-  }, [rows, search, category]);
+  }, [rows, search, category, kpi]);
 
   // Page resets whenever the result set changes, so you never land on an empty page.
-  useEffect(() => { setPage(0); }, [search, category, rowsPerPage]);
+  useEffect(() => { setPage(0); }, [search, category, rowsPerPage, kpi]);
   const paged = useMemo(() => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [filtered, page, rowsPerPage]);
 
   const totalToProduce = filtered.reduce((s, r) => s + Number(r.suggestedProduceQty || 0), 0);
   const outCount = rows.filter((r) => r.status === 'OUT_OF_STOCK').length;
   const reorderCount = rows.filter((r) => r.status === 'REORDER').length;
+  // The Units card states the whole plan, whatever card is filtering the table.
+  const planUnits = rows.reduce((t, r) => t + Number(r.suggestedProduceQty || 0), 0);
+  const unitsItems = rows.filter((r) => Number(r.suggestedProduceQty || 0) > 0).length;
 
   // A plain-text version to paste straight into a message to the production
   // floor — the way a run list actually leaves most planning desks.
@@ -101,26 +122,35 @@ const FgImsPlanning = () => {
       actions={rows.length > 0 && (
         <Stack direction="row" spacing={0.75}>
           <Button size="small" variant="outlined" startIcon={copied ? <Check size={14} /> : <Copy size={14} />} onClick={copyList}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: copied ? STOCK_TOKENS.OK.color : O2D.body }}>
+            sx={{ ...headerBtnSx, color: copied ? STOCK_TOKENS.OK.color : O2D.body }}>
             {copied ? 'Copied' : 'Copy as text'}
           </Button>
-          <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} sx={headerBtnSx}>
             Export
           </Button>
         </Stack>
       )}
     >
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Items to produce" value={num(rows.length)} sub="On this plan today"
-          color={rows.length ? STOCK_TOKENS.REORDER.color : STOCK_TOKENS.OK.color} icon={Factory} />
-        <KpiTile label="Out of stock" value={num(outCount)} sub="Produce these first"
-          color={STOCK_TOKENS.OUT_OF_STOCK.color} icon={Boxes} />
-        <KpiTile label="At reorder level" value={num(reorderCount)} sub="Due for a production run"
-          color={STOCK_TOKENS.REORDER.color} icon={Factory} />
-        <KpiTile label="Units to produce" value={num(totalToProduce)} sub="Total across the plan"
-          color={FG_ACCENT} icon={ArrowRight} />
-      </Stack>
+      {/* Every card filters the plan; clicking the active card again turns it off. */}
+      <KpiGrid>
+        <KpiCard label="Items to produce" value={num(rows.length)} sub="On this plan today"
+          tone={rows.length ? FLUENT.blue : FLUENT.teal} icon={Factory}
+          actionLabel="Show all" onClick={() => pickKpi(kpi)}
+          hint="Show every item on the production plan." />
+        <KpiCard label="Out of stock" value={num(outCount)} sub="Produce these first"
+          tone={FLUENT.orange} icon={Boxes}
+          actionLabel="Filter" active={kpi === 'OUT_OF_STOCK'} onClick={() => pickKpi('OUT_OF_STOCK')}
+          hint="Show only the finished goods with nothing left in the store." />
+        <KpiCard label="At reorder level" value={num(reorderCount)} sub="Due for a production run"
+          tone={FLUENT.amber} icon={Factory}
+          actionLabel="Filter" active={kpi === 'REORDER'} onClick={() => pickKpi('REORDER')}
+          hint="Show only the finished goods at or below their Reorder At level." />
+        <KpiCard label="Units to produce" value={num(planUnits)}
+          sub={`Across ${num(unitsItems)} item${unitsItems === 1 ? '' : 's'}`}
+          tone={FLUENT.lavender} icon={ArrowRight}
+          actionLabel="Rank" active={kpi === 'UNITS'} onClick={() => pickKpi('UNITS')}
+          hint="Show the items with a quantity to produce, largest run first." />
+      </KpiGrid>
 
       {rows.length > 0 && (
         <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
@@ -132,6 +162,11 @@ const FgImsPlanning = () => {
               <MenuItem value="">All categories</MenuItem>
               {categories.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </TextField>
+            {kpi !== 'ALL' && (
+              <Chip size="small" label={`Showing: ${KPI_FILTERS[kpi]}`} onDelete={() => pickKpi(kpi)}
+                deleteIcon={<X size={13} />}
+                sx={{ height: 26, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: FLUENT.blue.tint, border: `1px solid ${FLUENT.blue.border}`, color: FLUENT.blue.ink }} />
+            )}
             <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, ml: 'auto', whiteSpace: 'nowrap' }}>
               <b>{filtered.length}</b> of {rows.length} · <b>{num(totalToProduce)}</b> units
             </Typography>
@@ -143,7 +178,7 @@ const FgImsPlanning = () => {
         <TableScroll>
           {/* Wide enough that the extra "Why it's here" column scrolls rather
               than crushing the SKU code and reason text into stacks. */}
-          <Table size="small" sx={imsTableSx(1560)}>
+          <Table size="small" sx={fluentTableSx(1560, { zebra: false })}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -174,19 +209,18 @@ const FgImsPlanning = () => {
               )}
               {!isFetching && rows.length > 0 && filtered.length === 0 && (
                 <TableRow><TableCell colSpan={13} sx={{ border: 0 }}>
-                  <EmptyNote icon={Search} title="No items match your search"
-                    hint="Clear the search box or pick a different category." />
+                  <EmptyNote icon={Search} title={kpi !== 'ALL' ? `No items match “${KPI_FILTERS[kpi]}”` : 'No items match your search'}
+                    hint={kpi !== 'ALL' ? 'Click the highlighted card again, or clear the search and category.' : 'Clear the search box or pick a different category.'} />
                 </TableCell></TableRow>
               )}
               {paged.map((r, i) => {
-                const t = STOCK_TOKENS[r.status] || STOCK_TOKENS.OK;
                 const tightCover = r.daysCover != null && r.daysCover < r.leadDays;
                 return (
                   // No row wash here. On this screen EVERY row is a problem, so
-                  // tinting them all is noise — the coloured left edge plus the
-                  // status chip carry the severity on their own.
-                  <TableRow key={r.skuId} hover sx={{
-                    cursor: 'pointer', borderLeft: `3px solid ${t.color}`,
+                  // tinting them all is noise — the muted pastel left edge plus
+                  // the status chip carry the severity on their own.
+                  <TableRow key={r.skuId} hover data-status={r.status} sx={{
+                    cursor: 'pointer', ...statusEdgeSx(r.status),
                   }} onClick={() => navigate(`/fg-ims/item/${r.skuId}`)}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: FG_ACCENT, whiteSpace: 'nowrap' }}>{r.skuCode}</TableCell>
@@ -195,7 +229,7 @@ const FgImsPlanning = () => {
                       <Typography sx={{ fontSize: '0.66rem', color: O2D.sub }}>{r.category || '—'}</Typography>
                     </TableCell>
                     <TableCell sx={{ minWidth: 260, maxWidth: 320 }}>
-                      <Typography sx={{ fontSize: '0.73rem', color: t.color, fontWeight: 600 }}>{reasonFor(r)}</Typography>
+                      <Typography sx={{ fontSize: '0.73rem', color: statusInk(r.status), fontWeight: 600 }}>{reasonFor(r)}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inProduction ? O2D.body : O2D.faint }}>{r.inProduction ? num(r.inProduction) : '—'}</TableCell>
@@ -205,7 +239,7 @@ const FgImsPlanning = () => {
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{num(r.maxLevel)}</TableCell>
                     <TableCell align="right" sx={{
                       fontVariantNumeric: 'tabular-nums', fontWeight: 700,
-                      color: tightCover ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.body,
+                      color: tightCover ? STOCK_TOKENS.REORDER.color : O2D.body,
                     }}>
                       {r.daysCover == null ? '—' : `${num(r.daysCover)}d`}
                     </TableCell>

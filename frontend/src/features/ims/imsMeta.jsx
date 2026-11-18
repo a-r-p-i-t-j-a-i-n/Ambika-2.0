@@ -6,12 +6,13 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Boxes, PackagePlus, PackageMinus, ShoppingCart, History, HelpCircle, ArrowLeft,
-  Search, X, Plus, ArrowRight, CheckCircle2,
+  Search, X, Plus, ArrowRight, ArrowUpRight, CheckCircle2, Check, AlertTriangle,
 } from 'lucide-react';
 import {
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, moveToken, txnLabel,
   num, inr, compactInr, imsTableSx, numCell, panelSx, hScrollSx, IMS_FORM_MAX,
 } from './imsTheme';
+import { FLUENT, FLUENT_DEPTH } from './imsFluent';
 
 // Re-export so screens import everything they need from one place.
 export {
@@ -225,11 +226,16 @@ export const ImsNav = ({ items = IMS_NAV, accent = O2D.brand }) => {
 // `accent` is the area's identity colour — it tints the header icon and the
 // active nav tab only. Everything that encodes STATE still reads from the shared
 // STOCK_TOKENS, so a colour never means two different things across the areas.
-export const ImsShell = ({ icon: Icon, title, subtitle, actions, children, nav = true, navItems, maxWidth, onBack, backLabel = 'Back', accent = O2D.brand }) => (
+// `actionsInline` (opt-in): from a desktop width (lg) up, the title block and
+// the actions share one row — title + description on the left, every action on
+// the right in a single row; the description shortens with "…" (full text on
+// hover) rather than pushing the actions down. Below lg it wraps as before.
+export const ImsShell = ({ icon: Icon, title, subtitle, actions, children, nav = true, navItems, maxWidth, onBack, backLabel = 'Back', accent = O2D.brand, actionsInline = false }) => (
   <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas }}>
     <Box sx={{ position: 'sticky', top: 0, zIndex: 6, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}` }}>
       <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap
-        sx={{ px: { xs: 1.5, md: 2 }, py: 1 }}>
+        data-testid={actionsInline ? 'ims-header' : undefined}
+        sx={{ px: { xs: 1.5, md: 2 }, py: 1, ...(actionsInline ? { flexWrap: { xs: 'wrap', lg: 'nowrap' }, justifyContent: 'space-between' } : null) }}>
         {onBack && (
           <Tooltip arrow title={backLabel} slotProps={O2D_TIP}>
             <ButtonBase onClick={onBack} sx={{
@@ -248,11 +254,16 @@ export const ImsShell = ({ icon: Icon, title, subtitle, actions, children, nav =
             <Icon size={16} />
           </Box>
         )}
-        <Box sx={{ minWidth: 0, mr: 'auto' }}>
+        <Box sx={{ minWidth: 0, mr: 'auto', ...(actionsInline ? { flex: { lg: '1 1 auto' } } : null) }}>
           <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>{title}</Typography>
-          {subtitle && <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub }}>{subtitle}</Typography>}
+          {subtitle && (
+            <Typography noWrap title={actionsInline && typeof subtitle === 'string' ? subtitle : undefined}
+              sx={{ fontSize: '0.72rem', color: O2D.sub }}>{subtitle}</Typography>
+          )}
         </Box>
-        {actions}
+        {actionsInline && actions
+          ? <Box data-testid="ims-header-actions" sx={{ flexShrink: { lg: 0 }, minWidth: 0, maxWidth: '100%' }}>{actions}</Box>
+          : actions}
       </Stack>
       {nav && <ImsNav items={navItems} accent={accent} />}
     </Box>
@@ -345,18 +356,34 @@ export const KpiTile = ({ label, value, sub, color = O2D.brand, icon: Icon, onCl
   );
 };
 
-// ── KPI card (Consumables & Packaging) ──────────────────────────────────────
-// The enterprise KPI card the Consumables & Packaging screens use. Additive —
-// KpiTile above is untouched, so Raw Material, Finished Goods and Scrap look
-// exactly as before.
-//
-//   • a thin accent strip carries the card's colour code without shouting
-//   • a clickable card says so: pointer, lift on hover, and a "view" arrow
-//   • the card currently filtering the page is tinted, ringed and labelled
-//     "Filtered", so it is always obvious why the table shows what it shows
-//   • it is a real button for the keyboard (Tab, Enter / Space)
-export const KpiCard = ({ label, value, sub, color = O2D.brand, icon: Icon, onClick, active, hint, actionLabel = 'View' }) => {
+/**
+ * The IMS KPI card (Consumables & Packaging, Raw Material, Finished Goods). Built so nothing clips: the label wraps onto a
+ * second line instead of being cut to "TOTAL …", the figure steps down a size
+ * when it is long (₹8,74,008), the caption wraps to two lines, and the action
+ * is a small arrow in the corner rather than words competing with the label.
+ * The card is a real button (Tab, Enter / Space) and says when it is filtering.
+ *
+ * `compact` (the default — every IMS KPI row): tighter padding, a smaller
+ * icon, and the arrow moves down beside the caption so the label and the
+ * figure get the card's full width. Same data, same click.
+ */
+export const KpiCard = ({
+  label, value, sub, tone = FLUENT.blue, icon: Icon, onClick, active, hint, actionLabel = 'Open', testId, compact = true,
+}) => {
   const clickable = !!onClick;
+  const text = String(value ?? '');
+  // Compact: the figure is also capped by the card's own width (container
+  // units), so a long amount shrinks to fit instead of being cut off.
+  // ~0.64em per digit / symbol and ~0.3em per comma or point at weight 800.
+  const valueEm = [...text].reduce((w, ch) => w + (/[,.\s]/.test(ch) ? 0.3 : 0.64), 0) || 1;
+  const valueSize = compact
+    ? `min(${text.length > 11 ? '0.98rem' : text.length > 8 ? '1.1rem' : '1.28rem'}, calc(100cqi / ${valueEm.toFixed(2)}))`
+    : (text.length > 11 ? '1.12rem' : text.length > 8 ? '1.25rem' : '1.45rem');
+  const arrow = clickable && (
+    <Box className="rm-kpi-go" aria-hidden sx={{ display: 'flex', color: tone.ink, opacity: active ? 1 : 0.45, flexShrink: 0, transition: 'opacity .15s, color .15s' }}>
+      <ArrowUpRight size={compact ? 13 : 15} />
+    </Box>
+  );
   const onKey = (e) => {
     if (!clickable) return;
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); }
@@ -364,95 +391,215 @@ export const KpiCard = ({ label, value, sub, color = O2D.brand, icon: Icon, onCl
   const card = (
     <Paper
       elevation={0}
+      data-testid={testId}
       onClick={onClick}
       onKeyDown={onKey}
       role={clickable ? 'button' : undefined}
       tabIndex={clickable ? 0 : undefined}
       aria-pressed={clickable ? !!active : undefined}
-      aria-label={clickable ? `${label}: ${value}` : undefined}
+      aria-label={clickable ? `${label}: ${text}` : undefined}
       sx={{
-        position: 'relative', overflow: 'hidden', minWidth: 0,
-        borderRadius: '10px', border: `1px solid ${active ? color : O2D.line}`,
-        bgcolor: active ? alpha(color, 0.06) : O2D.surface,
-        boxShadow: active ? `inset 0 0 0 1px ${color}` : '0 1px 2px rgba(28,30,33,0.04)',
-        px: 1.6, pt: 1.5, pb: 1.25,
-        transition: 'border-color .15s, box-shadow .15s, transform .15s, background-color .15s',
-        // The colour code: a 3px strip along the top edge.
-        '&::before': {
-          content: '""', position: 'absolute', left: 0, right: 0, top: 0, height: 3,
-          bgcolor: color, opacity: active ? 1 : 0.75,
-        },
+        position: 'relative', minWidth: 0, height: '100%', boxSizing: 'border-box',
+        display: 'flex', flexDirection: 'column', gap: compact ? 0.5 : 0.75,
+        ...(compact ? { px: 1.25, py: 1.1, containerType: 'inline-size' } : { p: 1.5 }), borderRadius: '10px',
+        border: `1px solid ${active ? tone.accent : tone.border}`,
+        bgcolor: active ? tone.tint : tone.bg,
+        boxShadow: active ? `inset 0 0 0 1px ${tone.accent}, ${FLUENT_DEPTH.rest}` : FLUENT_DEPTH.rest,
+        transition: 'box-shadow .15s, border-color .15s, transform .15s, background-color .15s',
         ...(clickable ? {
           cursor: 'pointer', outline: 'none',
-          '&:hover': { borderColor: color, transform: 'translateY(-1px)', boxShadow: '0 6px 18px rgba(28,30,33,0.08)' },
-          '&:hover .kpi-go': { opacity: 1, transform: 'translateX(0)' },
-          '&:focus-visible': { boxShadow: `0 0 0 3px ${alpha(color, 0.3)}` },
+          '&:hover': { borderColor: tone.accent, boxShadow: FLUENT_DEPTH.hover, transform: 'translateY(-1px)' },
+          '&:hover .rm-kpi-go': { opacity: 1, color: tone.accent },
+          '&:focus-visible': { boxShadow: `0 0 0 3px ${alpha(tone.accent, 0.3)}` },
         } : null),
       }}
     >
-      <Stack direction="row" spacing={1.25} alignItems="flex-start">
+      {/* Compact: the header is two label-lines tall on every card, so the
+          figures line up across the row whether the label wraps or not. */}
+      <Stack direction="row" spacing={compact ? 0.75 : 1} alignItems={compact ? 'center' : 'flex-start'} sx={compact ? { minHeight: 28 } : undefined}>
         {Icon && (
           <Box sx={{
-            width: 36, height: 36, borderRadius: '9px', display: 'grid', placeItems: 'center',
-            flexShrink: 0, bgcolor: alpha(color, 0.1), color, border: `1px solid ${alpha(color, 0.18)}`,
+            width: compact ? 24 : 32, height: compact ? 24 : 32, borderRadius: compact ? '7px' : '8px',
+            display: 'grid', placeItems: 'center', flexShrink: 0,
+            bgcolor: '#fff', color: tone.accent, border: `1px solid ${tone.border}`,
           }}>
-            <Icon size={17} />
+            <Icon size={compact ? 13 : 16} />
           </Box>
         )}
-        <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Stack direction="row" alignItems="center" spacing={0.75}>
-            <Typography noWrap sx={{
-              fontSize: '0.64rem', fontWeight: 800, letterSpacing: '0.06em',
-              textTransform: 'uppercase', color: O2D.sub, minWidth: 0,
-            }}>{label}</Typography>
-            {/* Top-right: "Filtered" while this card filters the page, otherwise
-                the action it performs — so the caption below keeps its width. */}
-            {active ? (
-              <Box component="span" sx={{
-                ml: 'auto !important', px: 0.75, py: 0.1, borderRadius: '999px', flexShrink: 0,
-                fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase',
-                color: '#fff', bgcolor: color,
-              }}>Filtered</Box>
-            ) : clickable && (
-              <Box className="kpi-go" component="span" sx={{
-                ml: 'auto !important', display: 'inline-flex', alignItems: 'center', gap: 0.25, flexShrink: 0,
-                fontSize: '0.64rem', fontWeight: 800, color, whiteSpace: 'nowrap',
-                opacity: 0.6, transform: 'translateX(-2px)', transition: 'opacity .15s, transform .15s',
-              }}>
-                {actionLabel}<ArrowRight size={11} />
-              </Box>
-            )}
-          </Stack>
-          <Typography sx={{
-            fontWeight: 800, fontSize: '1.35rem', lineHeight: 1.2, mt: 0.25,
-            color: O2D.ink, fontVariantNumeric: 'tabular-nums',
-          }}>{value}</Typography>
-          {sub && (
-            <Typography noWrap title={typeof sub === 'string' ? sub : undefined}
-              sx={{ fontSize: '0.68rem', color: O2D.sub, minWidth: 0, mt: 0.15 }}>{sub}</Typography>
-          )}
-        </Box>
+        {/* The label wraps (two lines at most) — never "TOTAL …". */}
+        <Typography sx={{
+          flex: 1, minWidth: 0, pt: compact ? 0 : 0.25,
+          fontSize: compact ? '0.7rem' : '0.76rem', fontWeight: 600, color: tone.ink, lineHeight: compact ? 1.25 : 1.3, opacity: 0.9,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>{label}</Typography>
+        {!compact && arrow}
+      </Stack>
+      <Typography sx={{
+        fontSize: valueSize, fontWeight: 800, lineHeight: compact ? 1.2 : 1.15, color: tone.ink,
+        fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }} title={text}>{value}</Typography>
+      <Stack direction="row" alignItems={compact ? 'flex-end' : 'center'} spacing={compact ? 0.5 : 0.75} sx={{ mt: 'auto', minWidth: 0 }}>
+        {sub && (
+          <Typography title={typeof sub === 'string' ? sub : undefined} sx={{
+            flex: 1, minWidth: 0, fontSize: compact ? '0.65rem' : '0.7rem', color: O2D.sub, lineHeight: compact ? 1.3 : 1.35,
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>{sub}</Typography>
+        )}
+        {compact && !active && arrow}
+        {active && (
+          <Box component="span" sx={{
+            flexShrink: 0, px: 0.8, py: 0.15, borderRadius: '999px', fontSize: '0.6rem', fontWeight: 800,
+            letterSpacing: '0.03em', textTransform: 'uppercase', color: '#fff', bgcolor: tone.accent,
+          }}>Filtered</Box>
+        )}
       </Stack>
     </Paper>
   );
-  // Above the card and never interactive: below it, an interactive tooltip sits
-  // over the filter bar and swallows clicks meant for the controls there.
-  return hint ? (
-    <Tooltip arrow placement="top" disableInteractive title={hint} slotProps={KPI_TIP}>{card}</Tooltip>
+  // Above the card and never interactive, so it can't sit over the filters.
+  return hint || actionLabel ? (
+    <Tooltip arrow placement="top" disableInteractive title={hint || actionLabel}
+      slotProps={{ ...O2D_TIP, popper: { ...(O2D_TIP.popper || {}), sx: { ...(O2D_TIP.popper?.sx || {}), pointerEvents: 'none' } } }}>
+      {card}
+    </Tooltip>
   ) : card;
 };
-const KPI_TIP = {
-  ...O2D_TIP,
-  popper: { ...(O2D_TIP.popper || {}), sx: { ...(O2D_TIP.popper?.sx || {}), pointerEvents: 'none' } },
+
+/**
+ * The row the IMS KPI cards sit in. Columns are set per screen size from the
+ * number of cards, so a row of six never squeezes into six slivers: three a
+ * row on a laptop, all six only on a wide screen.
+ */
+// `compact` (with compact cards): one row of all the cards from a desktop
+// width up (lg), three a row on a tablet / small laptop, two on a phone.
+export const KpiGrid = ({ count, compact = true, children }) => {
+  const n = count || React.Children.count(children);
+  const wide = n > 5 ? 3 : n;
+  return (
+    <Box sx={{
+      display: 'grid', gap: compact ? 1 : 1.25, alignItems: 'stretch',
+      // Compact: every row as tall as the tallest, so all cards match when they wrap.
+      ...(compact ? { gridAutoRows: '1fr' } : null),
+      gridTemplateColumns: compact ? {
+        xs: `repeat(${Math.min(2, n)}, minmax(0, 1fr))`,
+        sm: `repeat(${Math.min(3, n)}, minmax(0, 1fr))`,
+        lg: `repeat(${n}, minmax(0, 1fr))`,
+      } : {
+        xs: '1fr',
+        sm: `repeat(${Math.min(2, n)}, minmax(0, 1fr))`,
+        md: `repeat(${Math.min(3, n)}, minmax(0, 1fr))`,
+        lg: `repeat(${wide}, minmax(0, 1fr))`,
+        xl: `repeat(${n}, minmax(0, 1fr))`,
+      },
+    }}>
+      {children}
+    </Box>
+  );
 };
 
-/** The row KPI cards sit in — equal widths, wrapping cleanly on smaller screens. */
-export const KpiGrid = ({ children, min = 210 }) => (
-  <Box sx={{
-    display: 'grid', gap: 1.25,
-    gridTemplateColumns: { xs: '1fr', sm: `repeat(auto-fit, minmax(${min}px, 1fr))` },
-  }}>
-    {children}
+
+// ── Dashboard alert button ───────────────────────────────────────────────────
+// Sits in a dashboard's header beside "Open Stock List": a count badge and one
+// sentence ("38 finished goods need production") in a pastel tone, and it opens
+// the screen that resolves it. With nothing to act on it becomes a calm
+// "all healthy" pill that opens the stock list. It shows the same figure the
+// dashboard always computed — nothing new is derived here.
+const NO_POINTER_TIP = { ...O2D_TIP, popper: { ...(O2D_TIP.popper || {}), sx: { ...(O2D_TIP.popper?.sx || {}), pointerEvents: 'none' } } };
+export const DashboardAlert = ({ count = 0, label, okLabel, detail, onClick, onOkClick, testId = 'dashboard-alert' }) => {
+  const alert = count > 0;
+  const tone = alert ? FLUENT.orange : FLUENT.teal;
+  const Icon = alert ? AlertTriangle : CheckCircle2;
+  const text = alert ? label : okLabel;
+  const btn = (
+    <ButtonBase
+      onClick={alert ? onClick : onOkClick}
+      data-testid={testId}
+      data-state={alert ? 'alert' : 'ok'}
+      aria-label={`${alert ? `${num(count)} ${label}` : okLabel}${detail ? `. ${detail}` : ''}`}
+      sx={{
+        height: 32, pl: 0.5, pr: 1, gap: 0.75, borderRadius: '8px', flexShrink: 1, minWidth: 0, maxWidth: '100%',
+        border: `1px solid ${tone.border}`, bgcolor: tone.bg,
+        boxShadow: FLUENT_DEPTH.rest, transition: 'box-shadow .15s, border-color .15s, background-color .15s',
+        '&:hover': { borderColor: tone.accent, bgcolor: tone.tint, boxShadow: FLUENT_DEPTH.hover },
+        '&:hover .dash-alert-go': { transform: 'translateX(2px)' },
+        '&.Mui-focusVisible': { boxShadow: `0 0 0 3px ${alpha(tone.accent, 0.3)}` },
+      }}
+    >
+      <Box sx={{
+        width: 24, height: 24, borderRadius: '6px', display: 'grid', placeItems: 'center', flexShrink: 0,
+        bgcolor: '#fff', color: tone.accent, border: `1px solid ${tone.border}`,
+      }}>
+        <Icon size={14} />
+      </Box>
+      {alert && (
+        <Box component="span" sx={{
+          minWidth: 22, height: 20, px: 0.7, borderRadius: '999px', display: 'grid', placeItems: 'center', flexShrink: 0,
+          bgcolor: tone.accent, color: '#fff', fontSize: '0.7rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+        }}>{num(count)}</Box>
+      )}
+      <Typography component="span" noWrap sx={{ fontSize: '0.76rem', fontWeight: 700, color: tone.ink, minWidth: 0 }}>{text}</Typography>
+      <Box className="dash-alert-go" sx={{ display: 'flex', color: tone.accent, flexShrink: 0, transition: 'transform .15s' }}>
+        <ArrowRight size={14} />
+      </Box>
+    </ButtonBase>
+  );
+  return detail ? <Tooltip arrow disableInteractive title={detail} slotProps={NO_POINTER_TIP}>{btn}</Tooltip> : btn;
+};
+
+// ── Form sections (the Register SKU form's look) ────────────────────────────
+// Every IMS entry form — Stock In / Out, Production In, Dispatch Out and the
+// planning-policy dialogs — groups
+// its fields in these cards, so they read like Register SKU: a rounded panel,
+// a small uppercase label with an icon tile, an optional one-line hint, and an
+// optional step number for the entry screens filled in order.
+export const FormSection = ({ icon, title, hint, step, done, tone, fluent, actions, children, bodySx, testId }) => {
+  const Icon = icon;
+  // `fluent` (a FLUENT tone) gives the section a soft tinted header band on a
+  // white body; `tone` (a STOCK_TOKENS entry) tints the whole card.
+  const color = fluent?.accent || tone?.color || O2D.brand;
+  return (
+    <Paper elevation={0} data-testid={testId} sx={{
+      p: { xs: 1.75, md: 2.25 }, borderRadius: fluent ? '10px' : '14px', minWidth: 0, overflow: 'hidden',
+      border: `1px solid ${fluent ? fluent.border : tone ? tone.border : O2D.line}`,
+      bgcolor: tone ? tone.tint : O2D.surface,
+      boxShadow: fluent ? FLUENT_DEPTH.rest : tone ? 'none' : '0 1px 2px rgba(28,30,33,0.04)',
+    }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{
+        mb: hint ? 0.5 : 1.5,
+        ...(fluent ? {
+          mx: { xs: -1.75, md: -2.25 }, mt: { xs: -1.75, md: -2.25 }, px: { xs: 1.75, md: 2.25 }, py: 1.1,
+          bgcolor: fluent.tint, borderBottom: `1px solid ${fluent.border}`, mb: 1.5,
+        } : null),
+      }}>
+        {step != null ? (
+          <Box data-done={done ? 'true' : undefined} sx={{
+            width: 24, height: 24, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0,
+            fontSize: '0.72rem', fontWeight: 800,
+            ...(done
+              ? { bgcolor: STOCK_TOKENS.OK.color, color: '#fff', border: `1px solid ${STOCK_TOKENS.OK.color}` }
+              : { bgcolor: alpha(color, 0.12), color, border: `1px solid ${alpha(color, 0.25)}` }),
+          }}>{done ? <Check size={13} strokeWidth={3} /> : step}</Box>
+        ) : Icon && (
+          <Box sx={{ width: 24, height: 24, borderRadius: '8px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(color, 0.12), color }}>
+            <Icon size={13} strokeWidth={2.5} />
+          </Box>
+        )}
+        <Typography sx={{
+          fontSize: '0.72rem', fontWeight: 700, color: fluent ? fluent.ink : tone ? tone.color : O2D.sub,
+          textTransform: 'uppercase', letterSpacing: '0.08em', mr: 'auto !important',
+        }}>{title}</Typography>
+        {actions}
+      </Stack>
+      {hint && <Typography sx={{ display: 'block', mb: 1.5, fontSize: '0.72rem', color: O2D.sub }}>{hint}</Typography>}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, ...bodySx }}>{children}</Box>
+    </Paper>
+  );
+};
+
+/** One live figure in a form's bottom bar — the Register SKU footer's summary. */
+export const SummaryItem = ({ label, value, color = O2D.ink }) => (
+  <Box sx={{ minWidth: 0 }}>
+    <Typography sx={{ display: 'block', fontSize: '0.7rem', color: O2D.sub }}>{label}</Typography>
+    <Typography noWrap sx={{ fontSize: '0.88rem', fontWeight: 800, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
   </Box>
 );
 
@@ -906,14 +1053,16 @@ export const BalanceDelta = ({ from, to, tone = STOCK_TOKENS.OK, unit, title }) 
 //
 // `extra` holds any per-screen control that belongs beside the heading (the
 // "allow negative" switch, for instance). `children` is the right-hand cluster.
+// `fluent` (opt-in): the Fluent save bar the Raw Material forms use — white
+// until ready, Fluent depth. Without it the bar looks exactly as before.
 export const ConfirmBar = ({
-  n = 3, title = 'Confirm and save', hint, done, accent = O2D.brand, extra, children,
+  n = 3, title = 'Confirm and save', hint, done, accent = O2D.brand, extra, children, fluent = false, testId,
 }) => (
-  <Paper elevation={0} sx={{
-    position: 'sticky', bottom: 10, zIndex: 4, borderRadius: '8px', px: 1.5, py: 0.85,
-    border: `1px solid ${done ? STOCK_TOKENS.OK.border : O2D.line}`,
-    bgcolor: done ? STOCK_TOKENS.OK.tint : O2D.surface,
-    boxShadow: '0 6px 20px rgba(28,30,33,0.08)',
+  <Paper elevation={0} data-testid={testId} sx={{
+    position: 'sticky', bottom: 10, zIndex: 4, borderRadius: fluent ? '10px' : '8px', px: 1.5, py: 0.85,
+    border: `1px solid ${done ? STOCK_TOKENS.OK.border : fluent ? FLUENT.grey.border : O2D.line}`,
+    bgcolor: done ? STOCK_TOKENS.OK.tint : fluent ? '#fff' : O2D.surface,
+    boxShadow: fluent ? FLUENT_DEPTH.hover : '0 6px 20px rgba(28,30,33,0.08)',
   }}>
     {/* One row on desktop: step heading, any per-screen control, then the
         summary and the single primary action. It only wraps when the viewport
@@ -959,12 +1108,15 @@ export const SuccessNote = ({ title, detail, actions, onDismiss }) => (
 // ── Screen intro note ────────────────────────────────────────────────────────
 // The "what this screen does and does not do" strip every transaction screen
 // opens with, so the rule is stated once, in the same place, in every area.
-export const IntroNote = ({ children, accent = O2D.brand, icon: Icon = HelpCircle }) => (
-  <Paper elevation={0} sx={{
+// `fluent` (opt-in): the soft-blue Fluent note the Raw Material forms open with.
+export const IntroNote = ({ children, accent = O2D.brand, icon: Icon = HelpCircle, fluent = false }) => (
+  <Paper elevation={0} sx={fluent ? {
+    borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg,
+  } : {
     borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt,
   }}>
     <Stack direction="row" spacing={1} alignItems="flex-start">
-      <Box sx={{ color: accent, display: 'flex', pt: 0.15 }}><Icon size={15} /></Box>
+      <Box sx={{ color: fluent ? FLUENT.blue.accent : accent, display: 'flex', pt: 0.15 }}><Icon size={15} /></Box>
       <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>{children}</Typography>
     </Stack>
   </Paper>
