@@ -91,6 +91,39 @@ async function normaliseItems(rawItems, existing = null) {
 
 const sumBy = (items, key) => items.reduce((s, it) => s + toNum(it[key]), 0);
 
+const badRequest = (message) => {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+};
+
+/** The party is optional — a plan can be for SKUs only. */
+async function resolveParty(partyId) {
+  if (!partyId) return { partyId: null, partyName: '' };
+  if (!mongoose.isValidObjectId(partyId)) throw badRequest('That party is invalid');
+  const party = await Party.findById(partyId).select('name').lean();
+  if (!party) throw badRequest('That party no longer exists');
+  return { partyId, partyName: party.name };
+}
+
+/**
+ * Each SKU line may carry its own date (else the plan's). A plan is one date,
+ * so lines are grouped per day, in the order the lines came.
+ */
+function groupByDay(rawItems, fallbackDate) {
+  const groups = new Map();
+  for (const it of Array.isArray(rawItems) ? rawItems : []) {
+    if (!it || !it.skuId || !(toNum(it.plannedQty) > 0)) continue;
+    const raw = it.plannedDate || fallbackDate;
+    if (!raw || Number.isNaN(new Date(raw).getTime())) throw badRequest('Select a date for every SKU');
+    const key = dayStart(raw).getTime();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(it);
+  }
+  if (!groups.size) throw badRequest('Add at least one SKU with a quantity greater than zero');
+  return [...groups.entries()].map(([t, items]) => ({ date: new Date(t), items }));
+}
+
 /**
  * Status follows the numbers. A cancelled plan is the one state a human sets,
  * so it is preserved rather than recomputed.
@@ -148,45 +181,34 @@ export async function listPlans(query = {}) {
   return rows;
 }
 
+/** Creates one plan per date the lines carry; returns them in line order. */
 export async function createPlan(body, userId) {
-  if (!body?.partyId || !mongoose.isValidObjectId(body.partyId)) {
-    const err = new Error('Select a party for this plan');
-    err.statusCode = 400;
-    throw err;
+  const groups = groupByDay(body?.items, body?.plannedDate);
+  const party = await resolveParty(body.partyId);
+  // Every date's lines are checked before any is saved, so a bad line can't
+  // leave half the plans behind.
+  const shaped = await Promise.all(groups.map((g) => buildPayload({ ...body, items: g.items })));
+
+  const docs = [];
+  for (let i = 0; i < groups.length; i += 1) {
+    const planNo = await generateDocNumber('PRODUCTION_PLAN', groups[i].date);
+    const doc = await ProductionPlanEntry.create({
+      ...shaped[i],
+      planNo,
+      ...party,
+      plannedDate: groups[i].date,
+      // An order link is welcome but never required — that is the point of this model.
+      salesOrderId: body.salesOrderId && mongoose.isValidObjectId(body.salesOrderId) ? body.salesOrderId : null,
+      soNumber:     String(body.soNumber || '').trim(),
+      poNumber:     String(body.poNumber || '').trim(),
+      source:       body.salesOrderId ? 'ORDER' : 'MANUAL',
+      remarks:      String(body.remarks || '').trim(),
+      createdBy:    userId,
+      updatedBy:    userId,
+    });
+    docs.push(doc.toObject());
   }
-  if (!body?.plannedDate) {
-    const err = new Error('Select a date for this plan');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const party = await Party.findById(body.partyId).select('name').lean();
-  if (!party) {
-    const err = new Error('That party no longer exists');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const shaped = await buildPayload(body);
-  const planNo = await generateDocNumber('PRODUCTION_PLAN', new Date(body.plannedDate));
-
-  const doc = await ProductionPlanEntry.create({
-    ...shaped,
-    planNo,
-    partyId:     body.partyId,
-    partyName:   party.name,
-    plannedDate: dayStart(body.plannedDate),
-    // An order link is welcome but never required — that is the point of this model.
-    salesOrderId: body.salesOrderId && mongoose.isValidObjectId(body.salesOrderId) ? body.salesOrderId : null,
-    soNumber:     String(body.soNumber || '').trim(),
-    poNumber:     String(body.poNumber || '').trim(),
-    source:       body.salesOrderId ? 'ORDER' : 'MANUAL',
-    remarks:      String(body.remarks || '').trim(),
-    createdBy:    userId,
-    updatedBy:    userId,
-  });
-
-  return doc.toObject();
+  return docs;
 }
 
 export async function updatePlan(id, body, userId) {
@@ -205,15 +227,9 @@ export async function updatePlan(id, body, userId) {
 
   const patch = { updatedBy: userId };
 
-  if (body.partyId && mongoose.isValidObjectId(body.partyId) && String(body.partyId) !== String(existing.partyId)) {
-    const party = await Party.findById(body.partyId).select('name').lean();
-    if (!party) {
-      const err = new Error('That party no longer exists');
-      err.statusCode = 400;
-      throw err;
-    }
-    patch.partyId = body.partyId;
-    patch.partyName = party.name;
+  // Sent empty → the plan no longer has a party.
+  if (body.partyId !== undefined && String(body.partyId || '') !== String(existing.partyId || '')) {
+    Object.assign(patch, await resolveParty(body.partyId));
   }
 
   if (body.plannedDate) patch.plannedDate = dayStart(body.plannedDate);
@@ -221,16 +237,36 @@ export async function updatePlan(id, body, userId) {
   if (body.soNumber !== undefined) patch.soNumber = String(body.soNumber || '').trim();
   if (body.poNumber !== undefined) patch.poNumber = String(body.poNumber || '').trim();
 
+  // Lines given another date leave this plan and become plans of their own.
+  let moved = [];
   // Cancelling is a status-only edit; it must not require resending the lines.
   if (body.planStatus === 'CANCELLED') {
     patch.planStatus = 'CANCELLED';
   } else if (body.items) {
-    Object.assign(patch, await buildPayload(body, existing));
+    const groups = groupByDay(body.items, body.plannedDate || existing.plannedDate);
+    // What an order already drew is recorded on THIS plan, so those lines stay
+    // here (on one date) — moving them would lose the record of the draw.
+    const usedIds = new Set(existing.items.filter((it) => toNum(it.consumedQty) > 0).map((it) => String(it.skuId)));
+    const withUsed = groups.filter((g) => g.items.some((it) => usedIds.has(String(it.skuId))));
+    if (withUsed.length > 1) throw badRequest('SKUs already used by an order must stay on one date');
+    const sameDay = groups.find((g) => g.date.getTime() === dayStart(existing.plannedDate).getTime());
+    const main = withUsed[0] || sameDay || groups[0];
+    moved = groups.filter((g) => g !== main);
+    // Checked before anything is saved.
+    await Promise.all(moved.map((g) => normaliseItems(g.items)));
+    patch.plannedDate = main.date;
+    Object.assign(patch, await buildPayload({ ...body, items: main.items }, existing));
   } else if (body.planStatus) {
     patch.planStatus = deriveStatus(existing.items, body.planStatus);
   }
 
   const updated = await ProductionPlanEntry.findByIdAndUpdate(id, patch, { new: true }).lean();
+  for (const g of moved) {
+    await createPlan({
+      partyId: updated.partyId, salesOrderId: updated.salesOrderId, soNumber: updated.soNumber,
+      poNumber: updated.poNumber, remarks: updated.remarks, plannedDate: g.date, items: g.items,
+    }, userId);
+  }
   return updated;
 }
 
@@ -279,7 +315,7 @@ export async function partySummary(query = {}) {
     if (!byParty.has(key)) {
       byParty.set(key, {
         partyId: key,
-        partyName: r.partyName,
+        partyName: r.partyName || 'No party',
         planCount: 0,
         totalPlannedQty: 0,
         totalProducedQty: 0,

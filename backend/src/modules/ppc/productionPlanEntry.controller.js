@@ -14,8 +14,12 @@ export const productionPlanController = {
   }),
 
   create: asyncHandler(async (req, res) => {
-    const data = await svc.createPlan(req.body, req.user?._id);
-    res.status(201).json(ApiResponse.created(`Plan ${data.planNo} created`, data));
+    // SKUs on different dates come back as one plan per date.
+    const plans = await svc.createPlan(req.body, req.user?._id);
+    const message = plans.length === 1
+      ? `Plan ${plans[0].planNo} created`
+      : `${plans.length} plans created, one per date (${plans.map((p) => p.planNo).join(', ')})`;
+    res.status(201).json(ApiResponse.created(message, plans.length === 1 ? plans[0] : plans));
   }),
 
   update: asyncHandler(async (req, res) => {
