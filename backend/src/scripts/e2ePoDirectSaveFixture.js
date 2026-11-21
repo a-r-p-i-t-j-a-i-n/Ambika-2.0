@@ -218,11 +218,13 @@ const api = async () => {
     n1Now.overallStatus === 'QUOTATION_APPROVED' && !n1Now.items[0].poId && !n1Now.activityTimeline.some((t) => t.action === 'PO_CREATED'), JSON.stringify({ s: n1Now.overallStatus, p: n1Now.items[0].poId }));
 
   // ── D: non-MD draft → approval workflow ──
-  console.log('\nD  Non-MD — Save as Draft, then PO Approval');
-  const dDraft = await fromItems('BUYER', n1, A, 'DRAFT');
+  console.log('\nD  Non-MD — Submit for Approval, then PO Approval');
+  // An explicit 'DRAFT' is now a working draft that cannot be approved until it
+  // is submitted (poSubmission.js) — the approval path below starts from SUBMIT.
+  const dDraft = await fromItems('BUYER', n1, A, 'SUBMIT');
   const dPo = await poNow(dDraft.data?._id);
-  check('D1 Buyer "Save as Draft" → 201 DRAFT (no final number, no approval)', dDraft.status === 201 && isDraft(dPo), `${dDraft.status} ${dDraft.message}`);
-  check('D2 response message is the plain draft message', dDraft.message === 'Purchase order created', dDraft.message);
+  check('D1 Buyer "Submit for Approval" → 201 DRAFT (no final number, no approval)', dDraft.status === 201 && isDraft(dPo), `${dDraft.status} ${dDraft.message}`);
+  check('D2 response message says submitted, not approved', dDraft.message === 'Purchase order created and submitted for approval', dDraft.message);
   check('D3 created by the buyer, timeline CREATE only', String(dPo?.createdBy) === String(users.BUYER._id) && dPo?.activityTimeline.map((t) => t.action).join() === 'CREATE');
   const dInd = await indentNow(n1._id);
   check('D4 indent linked to the draft (item PO_CREATED, ref = draft number)', String(dInd.items[0].poId) === String(dPo?._id) && dInd.items[0].poNumber === dPo?.draftNumber, JSON.stringify({ p: dInd.items[0].poId, n: dInd.items[0].poNumber }));
@@ -256,7 +258,7 @@ const api = async () => {
 
   // Rejection keeps it out of release.
   const d2 = await readyIndent('D2', A);
-  const rejDraft = await fromItems('VIEWER', d2, A, 'DRAFT');
+  const rejDraft = await fromItems('VIEWER', d2, A, 'SUBMIT');
   const rej = await call('MD', 'POST', `/procurement/purchase-orders/${rejDraft.data?._id}/approve`, { decision: 'REJECTED', remarks: 'no' });
   const rejPo = await poNow(rejDraft.data?._id);
   check('D16 a rejected draft gets no PO number and cannot be released', rej.status === 200 && rejPo.approvalStatus === 'REJECTED' && !rejPo.poNumber
@@ -300,7 +302,7 @@ const api = async () => {
 
   // Documented, unchanged: the ordinary approve route has no permission gate.
   const selfRun = await readyIndent('INFO', A);
-  const selfDraft = await fromItems('VIEWER', selfRun, A, 'DRAFT');
+  const selfDraft = await fromItems('VIEWER', selfRun, A, 'SUBMIT');
   const selfAppr = await call('VIEWER', 'POST', `/procurement/purchase-orders/${selfDraft.data?._id}/approve`, { decision: 'APPROVED' });
   console.log(`\n  INFO  existing approval route: a VIEWER approving their own draft → ${selfAppr.status} (unchanged; no permission gate on /:id/approve)`);
 

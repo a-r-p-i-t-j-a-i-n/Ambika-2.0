@@ -84,19 +84,38 @@ const openForm = async (page, go, indent) => {
   await page.getByText('New Purchase Order').waitFor();
   await page.waitForTimeout(1200);
 };
+// The New PO form groups items by vendor (one PO per vendor): an item with no
+// vendor fixed sits under "No vendor yet" with its own vendor picker, and
+// "Change vendor" sends a picked item back there. Choosing "the" vendor = put
+// every such item on that vendor.
 const pickVendor = async (page, name) => {
-  const v = page.getByRole('combobox', { name: 'Vendor *' });
-  await v.click();
-  await v.fill(name.replace(/^VF /, ''));
-  await page.getByRole('option', { name: new RegExp(name) }).first().click();
+  for (let i = 0; i < 20 && await page.getByRole('button', { name: 'Change vendor' }).count(); i += 1) {
+    await page.getByRole('button', { name: 'Change vendor' }).first().click();
+    await page.waitForTimeout(100);
+  }
+  const pending = page.locator('[data-testid="po-no-vendor-line"] input');
+  for (let i = 0; i < 20 && await pending.count(); i += 1) {
+    const v = pending.first();
+    await v.click();
+    await v.fill(name.replace(/^VF /, ''));
+    await page.getByRole('option', { name: new RegExp(name) }).first().click();
+    await page.waitForTimeout(150);
+  }
 };
+// A line before any vendor is picked (in the "No vendor yet" card).
+const noVendorLine = (page, sku) => page.locator(`[data-testid="po-no-vendor-line"][data-sku="${sku}"]`);
 const line = (page, sku) => page.locator(`[data-testid="po-line"][data-sku="${sku}"]`);
 const rateOf = (page, sku) => line(page, sku).locator('[data-testid="po-line-rate"]');
 // A line has "answered" once it shows a vendor rate or one of the messages.
 const answered = (page, sku) => line(page, sku).locator('[data-testid="po-vendor-rate"], [data-testid="po-rate-missing"], [data-testid="po-rate-blocked"], [data-testid="po-rate-error"]')
   .first().waitFor({ timeout: 12000 }).then(() => true).catch(() => false);
 const rateNow = async (page, sku) => Number(await rateOf(page, sku).inputValue());
-const fillLead = async (page) => { await page.locator('[data-testid="po-lead-time"]').fill('7'); await page.waitForTimeout(250); };
+// Each vendor's PO has its own Lead Time.
+const fillLead = async (page) => {
+  const leads = page.locator('[data-testid="po-lead-time"]');
+  for (let i = 0; i < await leads.count(); i += 1) await leads.nth(i).fill('7');
+  await page.waitForTimeout(250);
+};
 const pendingByReason = async (api, reason) => ((await api('GET', '/procurement/rate-changes?status=PENDING&limit=200')).data?.rows || []).filter((r) => r.reason === reason);
 const vendorRate = async (api, vendorId, sku, unit) => (await api('GET', `/procurement/rate-changes/vendor-rate?vendorId=${vendorId}&skuCode=${sku}&unit=${unit}`)).data;
 
@@ -114,8 +133,10 @@ console.log('\n[BUYER] New PO — what each line fetches');
   vendors = Object.fromEntries(Object.entries(m.vendors).map(([k, n]) => [k, vl.find((v) => v.name === n)?._id]));
 
   await openForm(page, go, m.main);
+  // Before a vendor is chosen the lines wait under "No vendor yet" — no rate field, nothing fetched.
   check('F0 the three lines show, no rate fetched before a vendor is chosen',
-    await line(page, SKU.A).count() === 1 && await rateOf(page, SKU.A).inputValue() === '' && await page.locator('[data-testid="po-vendor-rate"]').count() === 0);
+    await noVendorLine(page, SKU.A).count() === 1 && await noVendorLine(page, SKU.BOX).count() === 1 && await noVendorLine(page, SKU.KG).count() === 1
+    && await page.locator('[data-testid="po-line-rate"]').count() === 0 && await page.locator('[data-testid="po-vendor-rate"]').count() === 0);
   await pickVendor(page, m.vendors.V1);
   await answered(page, SKU.A); await answered(page, SKU.BOX); await answered(page, SKU.KG);
   check('F1 V1 Alpha: nuts fetch 50 (its Pcs row)', await rateNow(page, SKU.A) === 50, await rateOf(page, SKU.A).inputValue());
@@ -158,8 +179,11 @@ console.log('\n[BUYER] New PO — what each line fetches');
   await line(page, SKU.A).locator('[data-testid="po-rate-reason"]').fill(REASON_A);
   await line(page, SKU.BOX).locator('[data-testid="po-rate-reason"]').fill(REASON_BOX);
   await shot(page, 'form-two-changes');
-  await page.getByRole('button', { name: 'Save as Draft' }).click();
-  check('F12 saved as a DRAFT — "2 rate changes sent to Rate Change Approvals"', await snack(page, /2 rate changes sent to Rate Change Approvals/));
+  // Submitted (not just saved): only a submitted draft reaches PO Approval, where
+  // the approver below must find it held for the rate changes.
+  await page.getByRole('button', { name: /^Submit (\d+ POs )?for Approval$/ }).click();
+  await page.locator('[data-testid="po-review-confirm"]').click();
+  check('F12 submitted as a DRAFT — "2 rate changes sent to Rate Change Approvals"', await snack(page, /2 rate changes sent to Rate Change Approvals/));
   const ra = (await pendingByReason(api, REASON_A))[0];
   const rb = (await pendingByReason(api, REASON_BOX))[0];
   reqA = ra; reqBox = rb;
@@ -288,6 +312,7 @@ console.log('\n[BUYER] No usable vendor rate');
   const { ctx, page, go, api } = await session('BUYER');
   // Unit: V1 prices the tape per Pcs only; the indent line is BOX.
   await openForm(page, go, m.wrong);
+  await pickVendor(page, m.vendors.V1); // no vendor fixed for the item — V1 is picked on the form
   await answered(page, SKU.WRONG);
   const blocked = await line(page, SKU.WRONG).locator('[data-testid="po-rate-blocked"]').innerText().catch(() => '');
   check('N1 a BOX line the vendor prices per Pcs fetches NOTHING and says why', await rateOf(page, SKU.WRONG).inputValue() === '' && /per Pcs/.test(blocked) && /BOX/.test(blocked), blocked);
@@ -301,6 +326,7 @@ console.log('\n[BUYER] No usable vendor rate');
   const { ctx, page, go, api } = await session('BUYER');
   // Rate 0 row.
   await openForm(page, go, m.zero);
+  await pickVendor(page, m.vendors.V1); // no vendor fixed for the item — V1 is picked on the form
   await answered(page, SKU.ZERO);
   const missing = await line(page, SKU.ZERO).locator('[data-testid="po-rate-missing"]').innerText().catch(() => '');
   check('N3 a vendor row without a rate: "No vendor rate configured for this item." — nothing fetched', await rateOf(page, SKU.ZERO).inputValue() === '' && /No vendor rate configured for this item\./.test(missing), missing);

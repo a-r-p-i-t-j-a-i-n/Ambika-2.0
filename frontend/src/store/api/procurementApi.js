@@ -154,6 +154,11 @@ export const procurementApi = baseApi.injectEndpoints({
       query: deleteRequest('/procurement/purchase-orders'),
       invalidatesTags: (_r, _e, arg) => ['PurchaseOrder', 'RateChange', 'PurchaseOrderStats', 'Indent', 'IndentStats', 'FmsTasks', { type: 'PurchaseOrder', id: deleteArgs(arg).id }],
     }),
+    // Draft → submitted for approval (waits in PO Approval; never approves).
+    submitPurchaseOrder: builder.mutation({
+      query: ({ id }) => ({ url: `/procurement/purchase-orders/${id}/submit`, method: 'POST', body: {} }),
+      invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'PurchaseOrderStats', 'FmsTasks', { type: 'PurchaseOrder', id }],
+    }),
     approvePurchaseOrder: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/purchase-orders/${id}/approve`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['PurchaseOrder', 'RateChange', 'Vendor', 'Pricing', 'PurchaseOrderStats', { type: 'PurchaseOrder', id }],
@@ -749,6 +754,7 @@ export const {
   useGetPoTermsDefaultsQuery,
   useDeletePurchaseOrderMutation,
   useApprovePurchaseOrderMutation,
+  useSubmitPurchaseOrderMutation,
   useReleasePurchaseOrderMutation,
   useGeneratePurchaseOrderPdfMutation,
   useBulkReleasePurchaseOrdersMutation,

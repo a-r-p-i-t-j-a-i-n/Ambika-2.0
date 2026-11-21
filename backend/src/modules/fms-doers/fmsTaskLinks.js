@@ -45,7 +45,7 @@ export const PURCHASE_STEP_LINKS = {
   INDENT_APPROVAL:    { INDENT: 'Approve the indent' },
   QUOTE_COMPARATIVE:  { INDENT: 'Add quotes & comparative' },
   QUOTATION_APPROVAL: { INDENT: 'Approve the quotation' },
-  PO_CREATE:          { INDENT: 'Create the PO' },
+  PO_CREATE:          { INDENT: 'Create the PO', PO: 'Submit the draft PO for approval' },
   PO_APPROVAL:        { PO: 'Approve the PO' },
   PO_RELEASE:         { PO: 'Release the PO' },
   MATERIAL_FOLLOWUP:  { PO: 'Follow up with the vendor' },

@@ -9,6 +9,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import {
   Search, Plus, Eye, Pencil, CheckCircle2, Send, FileText,
   Ban, ShoppingBag, BadgeCheck, Truck, PackageOpen, PackageCheck, RotateCcw, SendHorizontal,
+  FilePen, Hourglass,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
@@ -19,6 +20,7 @@ import {
   useGeneratePurchaseOrderPdfMutation,
   useGetAllApprovedItemsQuery,
   useDeletePurchaseOrderMutation,
+  useSubmitPurchaseOrderMutation,
 } from '../../../store/api/procurementApi';
 import { useGetPartiesQuery } from '../../../store/api/partyApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
@@ -26,6 +28,8 @@ import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import { PoStatusChip, PoReleaseChip, PO_STATUSES, fmtINR, fmtDate, poDisplayNumber } from './poMeta';
 import { PoPiChip } from '../proforma-invoices/piMeta';
+import PoApprovalStateChip from './PoApprovalStateChip';
+import { awaitsSubmission, awaitsApproval } from './poSubmission';
 import PurchaseOrderFormDrawer from './PurchaseOrderFormDrawer';
 import PurchaseOrderApprovalDialog from './PurchaseOrderApprovalDialog';
 import PurchaseOrderReleaseDialog from './PurchaseOrderReleaseDialog';
@@ -38,6 +42,8 @@ import { useKpiFilter, listEmptyLabel } from '../components/useKpiFilter';
 import RowActionsCell from '../components/RowActionsCell';
 import RowActionsMenu from '../components/RowActionsMenu';
 import { usePermissions } from '../../../hooks/usePermission';
+import { useSelector } from 'react-redux';
+import { poApprovalBlockReason } from './poApproval';
 import useRecordDelete from '../components/useRecordDelete';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
@@ -82,6 +88,9 @@ const PurchaseOrderList = () => {
     defs: {
       total:    {},
       approved: { params: { approvalStatus: 'APPROVED' }, label: 'ALL APPROVED POs' },
+      // Drafts: kept back by the buyer vs submitted and waiting in PO Approval.
+      notSubmitted: { params: { approvalStatus: 'DRAFT', poStatus: 'DRAFT', submissionStatus: 'NOT_SUBMITTED' }, label: 'DRAFTS — NOT SUBMITTED' },
+      awaiting: { params: { approvalStatus: 'DRAFT', poStatus: 'DRAFT', submissionStatus: 'SUBMITTED' }, label: 'AWAITING APPROVAL' },
       released: { params: { releaseStatus: 'RELEASED' }, label: 'ALL RELEASED POs' },
       partial:  { status: 'PARTIAL_RECEIVED' },
       full:     { status: 'FULLY_RECEIVED' },
@@ -130,6 +139,7 @@ const PurchaseOrderList = () => {
   const stats = statsRes?.data || {};
   const { data: partiesRes } = useGetPartiesQuery({ limit: 500, sort: 'name' });
   const [cancelPo] = useCancelPurchaseOrderMutation();
+  const [submitPo] = useSubmitPurchaseOrderMutation();
   const [generatePoPdf] = useGeneratePurchaseOrderPdfMutation();
 
   const openMenu = (e, row) => { e.stopPropagation(); menuRef.current?.open(e.currentTarget, row); };
@@ -145,6 +155,14 @@ const PurchaseOrderList = () => {
     setFormOpen(true);
   };
   const onApprove = (r) => { setActivePo(r); setApprovalOpen(true); closeMenu(); };
+  // Draft → PO Approval (never approves). Approval stays the approver's step.
+  const onSubmit = async (r) => {
+    closeMenu();
+    try {
+      await submitPo({ id: r._id }).unwrap();
+      enqueueSnackbar(`${poDisplayNumber(r)} submitted — it now waits in PO Approval`, { variant: 'success' });
+    } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to submit the PO', { variant: 'error' }); }
+  };
   const onRelease = (r) => { setActivePo(r); setReleaseOpen(true); closeMenu(); };
   // A DRAFT/APPROVED (not yet released) PO has no stored poPdfUrl — release()
   // is the only place that generates one. Generate on demand here so Preview
@@ -167,7 +185,9 @@ const PurchaseOrderList = () => {
   // Delete — any status, with the step's delete permission (MD has all). The
   // server refuses while a later step rests on the record, and names it.
   const [removePo] = useDeletePurchaseOrderMutation();
-  const canDeleteRecord = usePermissions().can('procurement.deletePurchaseOrder');
+  const { can } = usePermissions();
+  const canDeleteRecord = can('procurement.deletePurchaseOrder');
+  const authUser = useSelector((s) => s.auth.user);
   const del = useRecordDelete({
     type: 'PO', what: 'PO', numberOf: (r) => r.poNumber || r.draftNumber, remove: removePo,
     needsReason: (r) => r.approvalStatus !== 'DRAFT',
@@ -178,7 +198,10 @@ const PurchaseOrderList = () => {
     const a = [{ key: 'view', label: 'View', icon: <Eye size={16} />, fn: () => onView(r) }];
     if (r.approvalStatus === 'DRAFT') {
       a.push({ key: 'edit', label: 'Edit Draft', icon: <Pencil size={16} />, fn: () => onEdit(r) });
-      a.push({ key: 'approve', label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, fn: () => onApprove(r) });
+      // Not submitted yet: the buyer submits it; only a submitted draft is decided.
+      if (awaitsSubmission(r)) a.push({ key: 'submit', label: 'Submit for Approval', icon: <Send size={16} />, fn: () => onSubmit(r) });
+      // Approve / Reject only for an approver who did not prepare the PO (server enforces).
+      if (awaitsApproval(r) && !poApprovalBlockReason(r, authUser, can)) a.push({ key: 'approve', label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, fn: () => onApprove(r) });
     }
     if (r.approvalStatus === 'APPROVED' && r.releaseStatus !== 'RELEASED') {
       a.push({ key: 'release', label: 'Release to Supplier', icon: <Send size={16} />, fn: () => onRelease(r) });
@@ -227,7 +250,8 @@ const PurchaseOrderList = () => {
     { field: 'grandTotal', headerName: 'GRAND TOTAL', width: 130, align: 'right', headerAlign: 'right',
       renderCell: (p) => <Typography variant="body2" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>{fmtINR(p.value)}</Typography> },
     { field: 'poStatus', headerName: 'STATUS', width: 160,
-      renderCell: (p) => <PoStatusChip status={p.value} /> },
+      // A draft says whether it is still with the buyer or waiting for approval.
+      renderCell: (p) => (p.value === 'DRAFT' ? <PoApprovalStateChip po={p.row} /> : <PoStatusChip status={p.value} />) },
     { field: 'releaseStatus', headerName: 'RELEASE', width: 120,
       renderCell: (p) => <PoReleaseChip status={p.value} /> },
     { field: 'piStatus', headerName: 'PI', width: 150, sortable: false,
@@ -266,8 +290,10 @@ const PurchaseOrderList = () => {
       </Box>
 
       {/* KPIs */}
-      <Box sx={pfmsKpiRowSx(5)}>
+      <Box sx={pfmsKpiRowSx(7)}>
         <PfmsKpiCard icon={<ShoppingBag size={20} />}  label="Total POs"        value={stats.total}           color="#2563eb" {...kpiCard('total')} />
+        <PfmsKpiCard icon={<FilePen size={20} />}      label="Drafts — Not Submitted" value={stats.notSubmitted} color="#64748b" {...kpiCard('notSubmitted')} />
+        <PfmsKpiCard icon={<Hourglass size={20} />}    label="Awaiting Approval" value={stats.awaitingApproval} color="#b45309" {...kpiCard('awaiting')} />
         <PfmsKpiCard icon={<BadgeCheck size={20} />}   label="Approved"         value={stats.approved}        color="#0f766e" {...kpiCard('approved')} />
         <PfmsKpiCard icon={<Truck size={20} />}        label="Released"         value={stats.released}        color="#0e7490" {...kpiCard('released')} />
         <PfmsKpiCard icon={<PackageOpen size={20} />}  label="Partial Received" value={stats.partialReceived} color="#c2410c" {...kpiCard('partial')} />

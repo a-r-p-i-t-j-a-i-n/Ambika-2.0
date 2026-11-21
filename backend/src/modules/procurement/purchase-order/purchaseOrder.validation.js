@@ -68,10 +68,12 @@ const poItemSchema = Joi.object({
 
 const poFormatType = Joi.string().valid('JSL', 'OTHER').default('OTHER');
 
-// Create-time save action: DRAFT (default — existing behaviour) or DIRECT
-// ("Save PO Directly" — create + approve in one go; the controller allows it
-// for the MD only, see poDirectSave.js).
-const saveMode = Joi.string().valid('DRAFT', 'DIRECT').default('DRAFT');
+// Create-time save action (poSubmission.js): DRAFT (working draft, not yet in PO
+// Approval), SUBMIT (submitted for approval) or DIRECT ("Save PO Directly" —
+// create + approve in one go; the controller allows it for the MD only, see
+// poDirectSave.js). Left out = submitted, the behaviour before drafts could be
+// kept back — so existing API clients are unaffected.
+const saveMode = Joi.string().valid('DRAFT', 'SUBMIT', 'DIRECT');
 
 // ── Create (saved as DRAFT; only from an approved-quotation indent) ──
 export const createPoSchema = Joi.object({
@@ -184,6 +186,8 @@ export const updatePoSchema = Joi.object({
   remarks:       Joi.string().trim().max(1000).allow('', null),
   termsAndConditions: termsAndConditions,
   items:         Joi.array().items(poItemSchema).min(1),
+  // "Save & Submit for Approval" — submit a not-yet-submitted draft with this edit.
+  submit:        Joi.boolean(),
 }).min(1);
 
 // ── Terms & Conditions only (PO form / detail "Edit Terms & Conditions") ──
@@ -248,6 +252,8 @@ export const poQuerySchema = Joi.object({
   indentId:       objectId,
   poStatus:       statusList(Object.values(PO_STATUS)),
   approvalStatus: Joi.string().valid(...Object.values(PO_APPROVAL_STATUS)),
+  // Drafts saved but not submitted vs submitted (a PO with no value is submitted).
+  submissionStatus: Joi.string().valid('NOT_SUBMITTED', 'SUBMITTED'),
   populate:       Joi.string(),
   poDate:         Joi.object().unknown(true), // poDate[gte]/[lte] range
 }).unknown(true);

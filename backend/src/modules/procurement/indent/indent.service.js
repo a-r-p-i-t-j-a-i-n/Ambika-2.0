@@ -18,7 +18,9 @@ import {
   QUOTATION_FMS_STEPS, QUOTATION_STEP_STATES, DOWNSTREAM_OF_QUOTATION, quotationStepFilter, isDownstreamOfQuotation,
   quoteComparativePlannedAt, quotationStepDone,
 } from './quotationSteps.js';
-import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
+import {
+  ITEM_VENDOR_SOURCE, quotedVendorsOf, vendorsOnQuotationFiles, approvedVendorProblem,
+} from './itemVendor.js';
 import { bindIndentItemsToSkuMaster } from './itemSku.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
@@ -163,6 +165,60 @@ const buildApprovedVendors = (vendors = []) => vendors.map((v) => {
   };
 });
 
+// Item-wise quotation file + who quoted (vendor name is filled from the Vendor
+// Master later — tagQuotationVendors — never trusted from the client).
+const optNum = (n) => (n === null || n === undefined || n === '' || !Number.isFinite(Number(n)) ? null : Number(n));
+const cleanQuoteFile = (f = {}) => ({
+  ...cleanFile(f),
+  vendorId: f?.vendorId ? String(f.vendorId) : null,
+  vendorName: '',
+  quotedRate: optNum(f?.quotedRate),
+  deliveryDays: optNum(f?.deliveryDays),
+  actualAt: f?.actualAt ? new Date(f.actualAt) : null,
+});
+const NO_VENDOR = { vendorId: null, vendorName: '', quotedRate: null, deliveryDays: null };
+
+// Step 1.2 — resolve the vendor named on each quotation file against the Vendor
+// Master (the name comes from the master). A vendor that is gone is refused; an
+// inactive one only where the file already carried it (an edit that re-saves an
+// earlier quote), never as a new tag.
+const tagQuotationVendors = async (indent, itemQuotations) => {
+  const docs = itemQuotations.flatMap((iq) => iq.quotationDocuments.map((d) => ({ iq, d })));
+  const ids = [...new Set(docs.filter(({ d }) => d.vendorId).map(({ d }) => d.vendorId))];
+  if (!ids.length) return;
+  const vendors = await Vendor.find({ _id: { $in: ids }, isDeleted: { $ne: true } }).select('name isActive').lean();
+  const byId = new Map(vendors.map((v) => [String(v._id), v]));
+  const prevTags = new Set((indent.quoteComparativeStep?.itemQuotations || [])
+    .flatMap((iq) => (iq.quotationDocuments || []).map((d) => (d.vendorId ? `${d.fileUrl}|${d.vendorId}` : ''))));
+  for (const { iq, d } of docs) {
+    if (!d.vendorId) continue;
+    const v = byId.get(d.vendorId);
+    const where = `quotation "${d.fileName || 'file'}" of "${iq.itemName || 'item'}"`;
+    if (!v) throw new AppError(`The vendor on ${where} was not found in the Vendor Master`, 400);
+    if (v.isActive === false && !prevTags.has(`${d.fileUrl}|${d.vendorId}`)) {
+      throw new AppError(`Vendor "${v.name}" (on ${where}) is inactive in the Vendor Master`, 400);
+    }
+    d.vendorName = v.name;
+  }
+};
+
+// Step 1.3 — the kept (approved) files reuse Step 1.2's files, so each one's
+// vendor / quoted rate is copied from the same item's Step 1.2 file (by URL).
+// A file Step 1.2 does not hold for that item carries no vendor.
+const tagApprovedFilesFromStep12 = (indent, itemApprovedQuotations) => {
+  const step12 = indent.quoteComparativeStep?.itemQuotations || [];
+  itemApprovedQuotations.forEach((iq) => {
+    const row = iq.itemId ? step12.find((r) => r?.itemId && String(r.itemId) === String(iq.itemId)) : null;
+    const byUrl = new Map((row?.quotationDocuments || []).map((d) => [d.fileUrl, d]));
+    iq.approvedQuotationDocuments = iq.approvedQuotationDocuments.map((d) => {
+      const src = byUrl.get(d.fileUrl);
+      return src?.vendorId
+        ? { ...d, vendorId: String(src.vendorId), vendorName: src.vendorName || '', quotedRate: optNum(src.quotedRate), deliveryDays: optNum(src.deliveryDays) }
+        : { ...d, ...NO_VENDOR };
+    });
+  });
+};
+
 // Step 1.2 — normalise item-wise quotation uploads (one entry per indent line
 // item, each with its own document list, strictly keyed by itemId/skuCode/
 // itemName as submitted — no cross-item merging happens here).
@@ -180,7 +236,7 @@ const buildItemQuotations = (items = []) => items.map((it) => {
       ? []
       : (Array.isArray(it.quotationDocuments) ? it.quotationDocuments : [])
         .filter((d) => d?.fileUrl)
-        .map(cleanFile),
+        .map(cleanQuoteFile),
     actualAt: it.actualAt ? new Date(it.actualAt) : null,
     remarks: (it.remarks || '').trim(),
   };
@@ -203,7 +259,7 @@ const buildItemApprovedQuotations = (items = []) => items.map((it) => {
       ? []
       : (Array.isArray(it.approvedQuotationDocuments) ? it.approvedQuotationDocuments : [])
         .filter((d) => d?.fileUrl)
-        .map(cleanFile),
+        .map(cleanQuoteFile),
     actualAt: it.actualAt ? new Date(it.actualAt) : null,
     remarks: (it.remarks || '').trim(),
   };
@@ -220,7 +276,13 @@ const resolveApprovedVendorPicks = async (indent, raw, built) => {
     if (!item || !isItemApprovalEffective(indent, item)) return;
     const vendorId = raw[i]?.vendorId;
     if (!vendorId) throw new AppError(`Select the approved vendor for "${item.itemName}"`, 400);
-    picks.push({ item, vendorId: String(vendorId) });
+    // Once Step 1.2 recorded who quoted, only those vendors are eligible.
+    picks.push({
+      item,
+      vendorId: String(vendorId),
+      quoted: quotedVendorsOf(indent, item),
+      kept: vendorsOnQuotationFiles(iq.approvedQuotationDocuments),
+    });
   });
   const ids = [...new Set(picks.map((p) => p.vendorId))];
   const vendors = ids.length
@@ -231,6 +293,10 @@ const resolveApprovedVendorPicks = async (indent, raw, built) => {
     const v = byId.get(p.vendorId);
     if (!v) throw new AppError(`The vendor selected for "${p.item.itemName}" was not found in the Vendor Master`, 400);
     if (v.isActive === false) throw new AppError(`Vendor "${v.name}" (selected for "${p.item.itemName}") is inactive in the Vendor Master`, 400);
+    const problem = approvedVendorProblem({
+      quoted: p.quoted, kept: p.kept, vendorId: p.vendorId, vendorName: v.name, itemName: p.item.itemName,
+    });
+    if (problem) throw new AppError(problem, 400);
     p.vendorName = v.name;
   });
   return picks;
@@ -819,6 +885,8 @@ export const indentService = {
     const itemQuotations = incomingItemQuotations.length
       ? buildItemQuotations(incomingItemQuotations)
       : [];
+    // Who quoted: each file's vendor resolved against the Vendor Master.
+    await tagQuotationVendors(indent, itemQuotations);
     const hasItemQuotations = itemQuotations.length > 0;
     // Aggregate all item-wise files so the legacy quotationDocuments[] field
     // stays populated for older screens.
@@ -1025,6 +1093,8 @@ export const indentService = {
     const itemApprovedQuotations = Array.isArray(data.itemApprovedQuotations) && data.itemApprovedQuotations.length
       ? buildItemApprovedQuotations(data.itemApprovedQuotations)
       : [];
+    // The kept files keep the vendor / rate Step 1.2 recorded for them.
+    tagApprovedFilesFromStep12(indent, itemApprovedQuotations);
     const hasItemQuotations = itemApprovedQuotations.length > 0;
     // Aggregate all item-wise files so the legacy approvedQuotationDocuments[]
     // field stays populated for older screens / the PO flow.
