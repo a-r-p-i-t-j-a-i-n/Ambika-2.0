@@ -263,7 +263,8 @@ const purchase = async () => {
     /* 1.4 PO: create from the approved item -> approve -> release */
     const created = await api('POST', '/procurement/purchase-orders/create-from-items', {
       vendorId, vendorName: p.vendor.name, poFormatType: 'OTHER',
-      deliveryTerms: 'Door delivery', paymentTerms: '30 days credit', leadTime: '7 days', creditPeriod: 30,
+      deliveryTerms: 'Door delivery', paymentTerms: '30 days credit', creditPeriod: 30,
+      expectedDeliveryDate: new Date(Date.now() + 7 * 864e5).toISOString(), // required since the delivery-date rule; the lead time follows from it
       remarks: `Coil purchase — ${p.batchNo}`,
       items: [{
         indentId: String(indent._id), indentNumber: indent.indentNumber, indentItemId: itemId,

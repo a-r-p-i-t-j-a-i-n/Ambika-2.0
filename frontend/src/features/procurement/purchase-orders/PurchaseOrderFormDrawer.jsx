@@ -245,6 +245,56 @@ const jslLineCalc = (it) => {
 const SECTION = { p: 2.5, ...pfmsCardSx };
 const OTHER_GRID =
   "1.7fr 0.85fr 0.7fr 0.95fr 0.7fr 0.8fr 0.8fr 0.65fr 0.85fr 36px";
+// Column titles of the OTHER item rows, each lined up with its column's content:
+// numbers sit on the right, and inside an input or select the text starts / ends
+// after MUI's 14px inner padding (`inset`), so the title does too.
+const OTHER_HEADERS = [
+  { label: "Item Name" },
+  { label: "SKU" },
+  { label: "Qty", align: "right", inset: true },
+  { label: "Unit", inset: true },
+  { label: "Rate", align: "right", inset: true },
+  { label: "GST %", align: "right", inset: true },
+  { label: "Taxable", align: "right" },
+  { label: "Tax", align: "right" },
+  { label: "Total", align: "right" },
+  { label: "" },
+];
+const INPUT_INSET = "14px";
+const OtherHeaderRow = () => (
+  <Box
+    data-testid="po-other-header"
+    sx={{
+      display: { xs: "none", md: "grid" },
+      gridTemplateColumns: OTHER_GRID,
+      gap: 1,
+      px: 1,
+      mb: 0.5,
+    }}
+  >
+    {OTHER_HEADERS.map((h, i) => (
+      <Typography
+        key={i}
+        variant="caption"
+        sx={{
+          display: "block",
+          fontWeight: 700,
+          color: "text.secondary",
+          textTransform: "uppercase",
+          fontSize: "0.62rem",
+          textAlign: h.align || "left",
+          ...(h.inset
+            ? h.align === "right"
+              ? { pr: INPUT_INSET }
+              : { pl: INPUT_INSET }
+            : {}),
+        }}
+      >
+        {h.label}
+      </Typography>
+    ))}
+  </Box>
+);
 const JSL_GRID =
   "1.1fr 0.7fr 0.9fr 0.8fr 0.6fr 0.85fr 0.85fr 0.9fr 0.9fr 0.8fr 0.85fr 36px";
 
@@ -1156,19 +1206,19 @@ const PurchaseOrderFormDrawer = ({
       return;
     }
     if (!groupMode || vendorsLoading || !vendorOptions.length) return;
-    const active = vendorOptions.filter((v) => v.isActive !== false);
+    const active = new Set(
+      vendorOptions.filter((v) => v.isActive !== false).map((v) => String(v._id)),
+    );
     items.forEach((it) => {
       if (!it.indentItemId || vendorKeyOf(it)) return;
       const id = String(it.indentItemId);
-      const sku = String(it.skuCode || "").toUpperCase();
-      if (!sku || autoPickedRef.current.has(id)) return;
+      if (autoPickedRef.current.has(id)) return;
       autoPickedRef.current.add(id);
-      const carriers = active.filter((v) =>
-        (v.products || []).some(
-          (p) => String(p.skuCode || "").toUpperCase() === sku,
-        ),
+      // the item's eligible vendors only (quoted / previously supplied); exactly one (still active) → start on it
+      const carriers = (approvedById.get(id)?.eligibleVendors || []).filter((h) =>
+        active.has(String(h.vendorId)),
       );
-      if (carriers.length === 1) pickItemVendor(it, String(carriers[0]._id));
+      if (carriers.length === 1) pickItemVendor(it, String(carriers[0].vendorId));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, groupMode, items, vendorOptions, vendorsLoading]);
@@ -1203,35 +1253,38 @@ const PurchaseOrderFormDrawer = ({
     setTermsOpen(false);
   };
 
-  // Vendor filter (New PO item-picker): the vendor dropdown is limited to Vendor
-  // Master records whose catalog (products[]) carries EVERY selected item's SKU —
-  // i.e. vendors we can actually buy all the chosen items from. JSL is exempt (it
-  // is always Jindal). `null` = no restriction (no items selected yet, or JSL).
-  const selectedSkuCodes = useMemo(
-    () => [
-      ...new Set(
-        selectedApprovedItems
-          .map((it) => String(it.skuCode || "").toUpperCase())
-          .filter(Boolean),
-      ),
-    ],
-    [selectedApprovedItems],
-  );
-  const skuFilteredVendors = useMemo(() => {
-    if (!approvedItemMode || isJsl || !selectedSkuCodes.length) return null;
-    const hasSku = (v, sku) =>
-      (v.products || []).some(
-        (p) => String(p.skuCode || "").toUpperCase() === sku,
-      );
-    return vendorOptions.filter((v) =>
-      selectedSkuCodes.every((sku) => hasSku(v, sku)),
+  // Vendor filter (New PO item-picker): JSL is exempt (always Jindal); `null` = no restriction
+  // (JSL, or every selected item already has its vendor fixed).
+  // Vendors that have PREVIOUSLY supplied every selected item that has no vendor fixed (placed POs /
+  // Vendor Master item list — row.eligibleVendors from the server). Never the whole Vendor Master.
+  // Items whose vendor is already fixed are held to it (fixedVendor), so they add no restriction.
+  const eligibleAcrossItems = useMemo(() => {
+    if (!approvedItemMode) return null;
+    const open = selectedApprovedItems.filter(
+      (o) => !(o.vendorState === "SET" && o.vendorId),
     );
-  }, [approvedItemMode, isJsl, selectedSkuCodes, vendorOptions]);
+    if (!open.length) return selectedApprovedItems.length ? null : [];
+    const meta = new Map();
+    let ids = null;
+    open.forEach((o) => {
+      const list = o.eligibleVendors || [];
+      list.forEach((h) => meta.set(String(h.vendorId), h));
+      const here = new Set(list.map((h) => String(h.vendorId)));
+      ids = ids ? new Set([...ids].filter((x) => here.has(x))) : here;
+    });
+    return [...(ids || [])].map(
+      (id) =>
+        vendorById.get(id) || { _id: id, name: meta.get(id)?.vendorName || "" },
+    );
+  }, [approvedItemMode, selectedApprovedItems, vendorById]);
+  // JSL is held to Jindal (below) instead of offering a choice, but Jindal must be eligible too.
+  const skuFilteredVendors = isJsl ? null : eligibleAcrossItems;
 
   const vendorOptionsFiltered = skuFilteredVendors || vendorOptions;
   // No Vendor Master record carries the selected SKU(s) → prompt to add one.
   const noVendorForSku =
     skuFilteredVendors !== null && skuFilteredVendors.length === 0;
+  const noItemsYet = approvedItemMode && !isJsl && selectedApprovedItems.length === 0;
 
   const [addVendorOpen, setAddVendorOpen] = useState(false);
 
@@ -1253,6 +1306,12 @@ const PurchaseOrderFormDrawer = ({
 
   // Why the selected items can't go on this PO's vendor ('' = they can).
   const vendorConflict = (() => {
+    if (isJsl && eligibleAcrossItems && selectedApprovedItems.length) {
+      const jsl = findJslVendor(vendorOptions);
+      if (jsl && !eligibleAcrossItems.some((v) => String(v._id) === String(jsl._id))) {
+        return `${JSL_VENDOR_NAME} has neither quoted for nor previously supplied the selected item(s) — a JSL PO is always ${JSL_VENDOR_NAME}. Use the Other format, or add the SKU to its Vendor Master item list.`;
+      }
+    }
     if (!fixedVendor) return "";
     if (fixedVendor.conflict)
       return `The selected items are fixed to different vendors (${fixedVendor.vendors.join(", ")}) — raise one PO per vendor.`;
@@ -2268,53 +2327,20 @@ const PurchaseOrderFormDrawer = ({
     );
   };
 
-  // Column titles of the OTHER item rows.
-  const otherHeaderRow = (
-    <Box
-      sx={{
-        display: { xs: "none", md: "grid" },
-        gridTemplateColumns: OTHER_GRID,
-        gap: 1,
-        px: 1,
-        mb: 0.5,
-      }}
-    >
-      {[
-        "Item Name",
-        "SKU",
-        "Qty",
-        "Unit",
-        "Rate",
-        "GST %",
-        "Taxable",
-        "Tax",
-        "Total",
-        "",
-      ].map((h, i) => (
-        <Typography
-          key={i}
-          variant="caption"
-          sx={{
-            fontWeight: 700,
-            color: "text.secondary",
-            textTransform: "uppercase",
-            fontSize: "0.62rem",
-          }}
-        >
-          {h}
-        </Typography>
-      ))}
-    </Box>
-  );
+  // Column titles of the OTHER item rows (by vendor: inside each vendor's card).
+  const otherHeaderRow = <OtherHeaderRow />;
 
   // By vendor: one card per vendor (= one PO) — the vendor, its delivery and
   // payment terms, its items and total — then the items that still need a vendor.
-  const activeVendors = vendorOptions.filter((v) => v.isActive !== false);
+  const activeVendorIds = new Set(
+    vendorOptions.filter((v) => v.isActive !== false).map((v) => String(v._id)),
+  );
   // Saving several POs runs one request after another — stay busy until all are done.
   const busy = saving || previewing || Boolean(pendingMode);
   const manyPos = groupMode && poGroups.length > 1;
   // One vendor PO's Terms & Conditions summary + its Edit T&C button. By vendor it
-  // sits at the bottom, beside the PO Date (the edit dialog is per vendor PO).
+  // sits at the bottom of that vendor's card, under its items (the edit dialog is
+  // per vendor PO).
   const renderGroupTerms = (g) => {
     const t = termsOfGroup(g);
     return (
@@ -2334,8 +2360,7 @@ const PurchaseOrderFormDrawer = ({
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="caption" sx={{ fontWeight: 700, color: "text.secondary" }}>
-            Terms &amp; Conditions
-            {poGroups.length > 1 ? ` · ${g.vendor?.name || "Vendor"}` : ""} ·{" "}
+            Terms &amp; Conditions ·{" "}
             {t.terms?.edited ? "edited for this PO" : `default ${PO_FORMAT_LABEL.OTHER} terms`}
           </Typography>
           <Typography
@@ -2600,6 +2625,9 @@ const PurchaseOrderFormDrawer = ({
                 )}
               </Box>
             </Box>
+
+            {/* This vendor's own Terms & Conditions — label, summary and Edit T&C */}
+            <Box sx={{ px: 2, pb: 2 }}>{renderGroupTerms(g)}</Box>
           </Box>
         );
       })}
@@ -2640,15 +2668,19 @@ const PurchaseOrderFormDrawer = ({
             </Typography>
           </Box>
           {unassignedGroup.rows.map(({ it, idx }) => {
-            const sku = String(it.skuCode || "").toUpperCase();
-            const carries = (o) =>
-              Boolean(sku) &&
-              (o.products || []).some(
-                (p) => String(p.skuCode || "").toUpperCase() === sku,
-              );
-            const options = [...activeVendors].sort(
-              (a, b) => Number(carries(b)) - Number(carries(a)),
-            );
+            // The item's PREVIOUS vendors only (placed POs / Vendor Master item list) — never the whole master.
+            const carries = () => true;
+            const options = (
+              approvedById.get(String(it.indentItemId))?.eligibleVendors || []
+            )
+              .filter((h) => activeVendorIds.has(String(h.vendorId)))
+              .map((h) => ({
+                ...(vendorById.get(String(h.vendorId)) || {
+                  _id: String(h.vendorId),
+                  name: h.vendorName,
+                }),
+                _basis: h.basis || [],
+              }));
             return (
               <Box
                 key={it.indentItemId}
@@ -2696,7 +2728,7 @@ const PurchaseOrderFormDrawer = ({
                   noOptionsText={
                     vendorsLoading
                       ? "Loading vendors…"
-                      : "No active vendor found"
+                      : "No eligible vendors found"
                   }
                   renderOption={(props, o) => (
                     <Box
@@ -2724,7 +2756,11 @@ const PurchaseOrderFormDrawer = ({
                               whiteSpace: "nowrap",
                             }}
                           >
-                            Has this item
+                            {o._basis?.includes("QUOTED")
+                              ? o._basis.length > 1
+                                ? "Quoted · Previous vendor"
+                                : "Quoted"
+                              : "Previous vendor"}
                           </Typography>
                         )}
                       </Box>
@@ -2738,7 +2774,7 @@ const PurchaseOrderFormDrawer = ({
                   renderInput={(params) => (
                     <TextField
                       {...params}
-                      placeholder="Select vendor from Vendor Master"
+                      placeholder="Select an eligible vendor"
                     />
                   )}
                 />
@@ -3112,9 +3148,11 @@ const PurchaseOrderFormDrawer = ({
                     isOptionEqualToValue={(o, v) => o._id === v._id}
                     onChange={(_e, v) => applyVendor(v)}
                     noOptionsText={
-                      noVendorForSku
-                        ? "No vendor found for selected SKU"
-                        : "No matching vendor"
+                      noItemsYet
+                        ? "Select the item(s) first"
+                        : noVendorForSku
+                          ? "No eligible vendors found"
+                          : "No matching vendor"
                     }
                     filterOptions={(opts, { inputValue }) => {
                       const q = inputValue.trim().toLowerCase();
@@ -3212,11 +3250,13 @@ const PurchaseOrderFormDrawer = ({
                           (fixedVendor
                             ? `${VENDOR_SOURCE_LABEL[fixedVendor.vendorSource]} — the PO must use this vendor`
                             : null) ||
-                          (noVendorForSku
-                            ? "No vendor found for selected SKU. Add vendor for this item."
-                            : skuFilteredVendors
-                              ? "Filtered to vendors whose catalog carries the selected SKU(s)."
-                              : " ")
+                          (noItemsYet
+                            ? "Select the item(s) first — only vendors that quoted for them or supplied them before are offered."
+                            : noVendorForSku
+                              ? "No eligible vendors found for the selected item(s) — none has quoted for them or supplied them before. Add the vendor for this item."
+                              : skuFilteredVendors
+                                ? "Only vendors that quoted for, or previously supplied, the selected item(s)."
+                                : " ")
                         }
                         InputProps={{
                           ...params.InputProps,
@@ -3324,7 +3364,7 @@ const PurchaseOrderFormDrawer = ({
             </Typography>
             {groupMode ? (
               <Typography variant="caption" color="text.secondary">
-                Delivery terms and remarks are set on each vendor&apos;s PO above
+                Delivery terms, remarks and T&amp;C are set on each vendor&apos;s PO above
               </Typography>
             ) : (
               <Button
@@ -3348,14 +3388,6 @@ const PurchaseOrderFormDrawer = ({
                 onChange={changePoDate}
               />
             </Grid>
-            {/* By vendor: each vendor PO's Terms & Conditions, to the right of the PO Date */}
-            {groupMode && poGroups.length > 0 && (
-              <Grid item xs={12} sm={9}>
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                  {poGroups.map((g) => renderGroupTerms(g))}
-                </Box>
-              </Grid>
-            )}
             {!groupMode && (
               <>
                 <Grid item xs={6} sm={2.4}>
@@ -3825,41 +3857,7 @@ const PurchaseOrderFormDrawer = ({
           ) : (
             <>
               {/* OTHER header row */}
-              <Box
-                sx={{
-                  display: { xs: "none", md: "grid" },
-                  gridTemplateColumns: OTHER_GRID,
-                  gap: 1,
-                  px: 1,
-                  mb: 0.5,
-                }}
-              >
-                {[
-                  "Item Name",
-                  "SKU",
-                  "Qty",
-                  "Unit",
-                  "Rate",
-                  "GST %",
-                  "Taxable",
-                  "Tax",
-                  "Total",
-                  "",
-                ].map((h, i) => (
-                  <Typography
-                    key={i}
-                    variant="caption"
-                    sx={{
-                      fontWeight: 700,
-                      color: "text.secondary",
-                      textTransform: "uppercase",
-                      fontSize: "0.62rem",
-                    }}
-                  >
-                    {h}
-                  </Typography>
-                ))}
-              </Box>
+              <OtherHeaderRow />
 
               <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
                 {items.map((it, idx) => {

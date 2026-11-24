@@ -1,13 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
   Grid, Typography, CircularProgress, Alert, Box,
 } from '@mui/material';
 import { Save, FileText } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { useQuoteComparativeMutation } from '../../../store/api/procurementApi';
+import { useQuoteComparativeMutation, useGetIndentItemVendorHistoryQuery } from '../../../store/api/procurementApi';
 import { useUploadOrderDocumentMutation } from '../../../store/api/dispatchControlApi';
-import { useGetVendorsQuery } from '../../../store/api/vendorApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import { istTodayStr } from '../../../utils/istDate';
 import StatusChip from '../components/StatusChip';
@@ -23,27 +22,28 @@ import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote, file
  * `itemQuotations[]` payload; the backend aggregates files into the legacy
  * `quotationDocuments[]` / `quotationUploaded` fields for older screens.
  *
- * Every quotation file names the vendor who sent it (Vendor Master) with its
- * quoted rate / delivery days — Step 1.3 then approves each item for one of
- * the vendors who quoted for it, not any vendor in the master.
+ * A quotation is just the uploaded file + its received date: no vendor is chosen
+ * here (vendor selection happens later, per item, in the PO workflow). A vendor tag /
+ * rate / delivery days saved on a file earlier are kept and re-sent unchanged.
  */
 const toNum = (v) => (v === '' || v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
-// A saved quotation file → the form's file shape (with its vendor tag). A file
-// saved before vendors were recorded is `legacy`: it stays valid without a
-// vendor (tagging it is optional) — only new uploads must name their vendor.
+// A saved quotation file → the form's file shape. A vendor tag saved earlier is
+// carried through untouched (not shown or edited here).
 // Each quotation carries its own Actual Date (received date). A file saved before
 // that existed shows its item's date (or the step's), so nothing displays blank.
 // Quoted rate / delivery days saved earlier are kept on the file and re-sent
 // unchanged — this form no longer edits them.
 const dateOnly = (v) => (v ? String(v).slice(0, 10) : '');
 const fileFromDoc = (d, fallbackDate = '') => ({
-  legacy: !d.vendorId,
   fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType, uploadedAt: d.uploadedAt,
   vendor: d.vendorId ? { _id: String(d.vendorId), name: d.vendorName || '' } : null,
   quotedRate: d.quotedRate ?? '',
   deliveryDays: d.deliveryDays ?? '',
   actualAt: dateOnly(d.actualAt) || fallbackDate,
 });
+// Item vendor sources (indent item .vendorSource): the vendor a "Quote Required? = No"
+// item is bought from is kept on the item as PO_PREPARATION.
+const NR_VENDOR_SOURCE = 'PO_PREPARATION';
 const ACCEPT = '.pdf,image/*,.xls,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
 // Default Actual Date = today in India (the UTC date is yesterday before 05:30 IST).
 const todayStr = () => istTodayStr();
@@ -80,8 +80,16 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
 
   const [uploadDoc] = useUploadOrderDocumentMutation();
   const [quoteComparative, { isLoading: saving }] = useQuoteComparativeMutation();
-  const { data: vendorsRes, isLoading: vendorsLoading } = useGetVendorsQuery({ limit: 500, sort: 'name' }, { skip: !open });
-  const vendorOptions = (vendorsRes?.data || []).filter((v) => v.isActive !== false);
+  // Quote Required? = No → the item's vendor comes from its purchase history only
+  // (never the whole Vendor Master); the server serves and re-checks that list.
+  const { data: historyRes, isFetching: historyLoading, isError: historyError } = useGetIndentItemVendorHistoryQuery(
+    indent?._id, { skip: !open || !indent?._id, refetchOnMountOrArgChange: true },
+  );
+  const historyByItem = useMemo(() => {
+    const map = {};
+    (historyRes?.data?.items || []).forEach((h) => { map[String(h.itemId)] = h.vendors || []; });
+    return map;
+  }, [historyRes]);
 
   useEffect(() => {
     if (!open) return;
@@ -114,6 +122,9 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
         qty: it.quantity,
         unit: it.unit || 'Pcs',
         statusDone: s?.statusDone || existing?.statusDone || 'YES',
+        // Vendor already chosen for a "Quote Required? = No" item; locked once the item is on a PO.
+        vendor: it.vendorId && it.vendorSource === NR_VENDOR_SOURCE ? { _id: String(it.vendorId), name: it.vendorName || '' } : null,
+        vendorLocked: it.procurementStatus === 'PO_CREATED',
         files,
         actualAt: dateOnly(s?.actualAt),
         remarks: s?.remarks || '',
@@ -169,11 +180,22 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
       enqueueSnackbar(`Upload at least one quotation file for "${missing.itemName}"`, { variant: 'warning' });
       return;
     }
-    // Who sent each quotation — Step 1.3 can only approve a vendor who quoted.
-    const untagged = rows.find((r) => r.statusDone === 'YES' && r.files.some((f) => !f.vendor?._id && !f.legacy));
-    if (untagged) {
-      enqueueSnackbar(`Select the vendor who sent each quotation for "${untagged.itemName}"`, { variant: 'warning' });
-      return;
+    // Quote Required? = No → the vendor is mandatory (and must be a previous vendor of the item).
+    for (const r of rows) {
+      if (r.statusDone !== 'QUOTE_NOT_REQUIRED' || !r.itemId || r.vendorLocked) continue;
+      const list = historyByItem[r.itemId];
+      if (list && list.length === 0) {
+        enqueueSnackbar(`No previous vendors found for "${r.itemName}" — set Quote Required to Yes and add quotations`, { variant: 'warning' });
+        return;
+      }
+      if (!r.vendor?._id) {
+        enqueueSnackbar(`Select the vendor for "${r.itemName}" (Quote Required = No)`, { variant: 'warning' });
+        return;
+      }
+      if (list && !list.some((h) => String(h.vendorId) === String(r.vendor._id))) {
+        enqueueSnackbar(`${r.vendor.name} has not supplied "${r.itemName}" before — select one of its previous vendors`, { variant: 'warning' });
+        return;
+      }
     }
     const badRate = rows.find((r) => r.files.some((f) => (f.quotedRate !== '' && toNum(f.quotedRate) === null) || toNum(f.quotedRate) < 0
       || (f.deliveryDays !== '' && (toNum(f.deliveryDays) === null || toNum(f.deliveryDays) < 0 || !Number.isInteger(toNum(f.deliveryDays))))));
@@ -202,6 +224,8 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
           skuCode: r.skuCode,
           itemName: r.itemName,
           statusDone: r.statusDone,
+          // Quote Required? = No: the item's vendor (checked against its purchase history by the server).
+          vendorId: r.statusDone === 'QUOTE_NOT_REQUIRED' ? (r.vendor?._id || null) : null,
           // Keep each file's original upload date (new uploads get stamped server-side).
           quotationDocuments: r.files.map((f) => ({
             fileName: f.fileName, fileUrl: f.fileUrl, fileType: f.fileType,
@@ -274,12 +298,12 @@ const QuoteComparativeDialog = ({ open, onClose, indent }) => {
           onRemoveFile={removeFile}
           onPatchRow={patchRow}
           onPatchFile={patchFile}
-          vendorOptions={vendorOptions}
-          vendorsLoading={vendorsLoading}
+          historyByItem={historyByItem}
+          historyLoading={historyLoading}
+          historyError={historyError}
         />
         <Typography variant="caption" sx={{ display: 'block', mt: 1, color: PFMS.sub }}>
-          Multiple files allowed per item · PDF, PNG, JPG, XLSX · max 10 MB each · name the vendor who sent each quotation
-          — Step 1.3 approves each item for one of these vendors.
+          Multiple files allowed per item · PDF, PNG, JPG, XLSX · max 10 MB each · the vendor is selected later, in the PO workflow.
         </Typography>
         {unlinkedLegacyDocs.length > 0 && (
           <Alert severity="info" sx={{ mt: 1.5 }}>

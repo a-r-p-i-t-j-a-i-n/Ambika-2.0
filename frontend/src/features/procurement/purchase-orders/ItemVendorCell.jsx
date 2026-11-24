@@ -4,14 +4,6 @@ import { VENDOR_SOURCE_LABEL } from './itemVendor';
 
 /** Vendor column cell for an approved-item row (Pending for PO). */
 const ItemVendorCell = ({ row }) => {
-  if (row.vendorState === 'MISSING') {
-    return (
-      <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>
-        <Typography variant="body2" fontWeight={700} sx={{ color: 'error.main' }} noWrap>Approved vendor missing</Typography>
-        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>Confirm from the approved quotation</Typography>
-      </Box>
-    );
-  }
   if (row.vendorState === 'SET') {
     return (
       <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>

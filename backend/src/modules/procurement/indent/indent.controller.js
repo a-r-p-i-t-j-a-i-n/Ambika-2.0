@@ -67,6 +67,11 @@ export const indentController = {
     res.json(ApiResponse.ok('Quote recorded', indent));
   }),
 
+  getItemVendorHistory: asyncHandler(async (req, res) => {
+    const data = await indentService.getItemVendorHistory(req.params.id);
+    res.json(ApiResponse.ok('Item vendor history', data));
+  }),
+
   quoteComparative: asyncHandler(async (req, res) => {
     const indent = await indentService.quoteComparative(req.params.id, req.body, req.user);
     res.json(ApiResponse.ok('Quote & comparative recorded', indent));
