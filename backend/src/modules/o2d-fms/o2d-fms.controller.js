@@ -2,6 +2,7 @@ import asyncHandler from '../../middleware/asyncHandler.js';
 import { ApiResponse, AppError } from '../../utils/apiResponse.js';
 import { o2dFmsService } from './o2d-fms.service.js';
 import { o2dFmsTasks } from './o2d-fms-tasks.js';
+import { o2dDashboard } from './o2d-dashboard.js';
 
 // Privileged = root or has act/manage. Assignees/buddies can act regardless (checked in the service).
 const isPriv = (req) => !!(req.userIsRoot || req.userPermissions?.has('o2dfms.act') || req.userPermissions?.has('o2dfms.manage'));
@@ -65,6 +66,19 @@ export const o2dFmsController = {
   dashboard: asyncHandler(async (req, res) => {
     const data = await o2dFmsService.getDashboard();
     res.json(ApiResponse.ok('O2D FMS dashboard', data));
+  }),
+
+  // O2D Dashboard, full view — every order (the route checks o2dfms.dashboardAll).
+  dashboardOrders: asyncHandler(async (_req, res) => {
+    res.json(ApiResponse.ok('O2D dashboard orders', await o2dDashboard.orders()));
+  }),
+
+  // The O2D Dashboard's KPI tiles (Delegation Suite Dashboard): the company's
+  // for MD / o2dfms.dashboardAll, otherwise the caller's own tasks.
+  dashboardSummary: asyncHandler(async (req, res) => {
+    const company = !!(req.userIsRoot || req.userPermissions?.has('o2dfms.dashboardAll'));
+    const tzOffset = Math.max(-840, Math.min(840, Number(req.query.tzOffset) || 0));
+    res.json(ApiResponse.ok('O2D dashboard summary', await o2dDashboard.summary(req.user, { company, tzOffset })));
   }),
 
   scores: asyncHandler(async (_req, res) => {
