@@ -262,6 +262,8 @@ const navSectionsSimple = [
             text: 'O2D',
             icon: <Truck size={19} />,
             children: [
+              // Everyone sees their own tasks; o2dfms.dashboardAll shows every order.
+              { text: 'O2D Dashboard',   icon: <LayoutDashboard size={19} />, path: '/o2d/dashboard' },
               { text: 'O2D FMS',         icon: <Workflow size={19} />, path: '/o2d-fms/steps' },
               { text: 'O2D Master Data', icon: <FileText size={19} />, path: '/o2d-fms/master-data' },
             ],
