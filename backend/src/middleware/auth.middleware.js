@@ -15,6 +15,8 @@ export const SESSION_GRANTABLE = new Set([
   'masters.deleteOperator', 'masters.deleteVendor', 'masters.deleteTransporter',
   // Recycle Bin switches.
   'recycleBin.view', 'recycleBin.viewAll', 'recycleBin.restore', 'recycleBin.purge', 'recycleBin.settings',
+  // O2D Dashboard → "Full dashboard — what MD sees".
+  'o2dfms.dashboardAll',
 ]);
 
 // …and the ones it may switch off for that session (Master Data → Edit, per

@@ -472,6 +472,7 @@ const PAGE_TITLES = {
   '/o2d-fms/transporters':   'Transporter Master',
   '/o2d-fms/processes':      'O2D FMS — Processes',
   '/o2d-fms/dashboard':      'O2D FMS — Management View',
+  '/o2d/dashboard':          'O2D Dashboard',
   '/o2d-fms/scores':         'MIS Scoring',
   '/o2d-fms/config':         'O2D FMS — Step Catalog',
   '/profile':                'My Profile',
@@ -574,7 +575,8 @@ const MainLayout = () => {
       taskChildren.push({ text: 'All Tasks', icon: <ClipboardList size={19} />, path: '/o2d-fms/all-tasks' });
     }
 
-    const fmsChildren = [];
+    // O2D Dashboard: everyone's own tasks; the whole company with o2dfms.dashboardAll.
+    const fmsChildren = [{ text: 'O2D Dashboard', icon: <LayoutDashboard size={19} />, path: '/o2d/dashboard' }];
     if (can('o2dfms.view') || isRoot) {
       fmsChildren.push({ text: 'Master FMS',   icon: <LayoutGrid size={19} />,        path: '/o2d-fms/master' });
       fmsChildren.push({ text: 'Master Data',  icon: <FileSpreadsheet size={19} />,   path: '/o2d-fms/master-data' });

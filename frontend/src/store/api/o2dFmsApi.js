@@ -32,6 +32,11 @@ export const o2dFmsApi = baseApi.injectEndpoints({
       query: () => '/o2d-fms/dashboard',
       providesTags: ['O2DDashboard'],
     }),
+    // O2D Dashboard, full view — every order (needs o2dfms.dashboardAll).
+    getO2dDashboardOrders: builder.query({
+      query: () => '/o2d-fms/dashboard/orders',
+      providesTags: ['O2DDashboard', 'O2DProcess'],
+    }),
     getFmsScores: builder.query({
       query: () => '/o2d-fms/scores',
       providesTags: ['O2DDashboard'],
@@ -295,6 +300,7 @@ export const {
   useGetAllTasksQuery,
   useGetO2dFmsTasksQuery,
   useGetFmsDashboardQuery,
+  useGetO2dDashboardOrdersQuery,
   useGetFmsScoresQuery,
   useGetMisScoresQuery,
   useGetDoerProfileQuery,

@@ -74,6 +74,15 @@ router.get('/fms-tasks', c.fmsTasks);
 router.get('/dashboard',
   requirePermission('o2dfms.view'), c.dashboard);
 
+// O2D Dashboard, full view: every order. MD, or anyone the MD switches it on
+// for (Suite → Employees → lock icon); the rest see their own tasks only.
+router.get('/dashboard/orders',
+  requirePermission('o2dfms.dashboardAll'), c.dashboardOrders);
+
+// Its KPI tiles only (the Delegation Suite's Dashboard): needs only a login —
+// people without the full view get their own tasks' tiles.
+router.get('/dashboard/summary', c.dashboardSummary);
+
 router.get('/scores',
   requirePermission('o2dfms.view'), c.scores);
 
