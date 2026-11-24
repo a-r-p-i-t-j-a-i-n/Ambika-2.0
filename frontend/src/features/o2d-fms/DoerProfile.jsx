@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import dayjs from 'dayjs';
 import { useGetDoerProfileQuery } from '../../store/api/o2dFmsApi';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
 
 const C = {
   ink: '#0b2545', brand: '#1d4ed8', brandDk: '#1e3a8a', success: '#0f766e',
@@ -49,10 +50,11 @@ const DoerProfile = () => {
   const { userId } = useParams();
   const navigate = useNavigate();
   const goBack = useSmartBack('/o2d-fms/scores');
-  const { data, isLoading } = useGetDoerProfileQuery(userId, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch } = useGetDoerProfileQuery(userId, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const p = data?.data;
 
   if (isLoading) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={520} /></Box>;
+  if (isError && !data) return <Box sx={{ p: 3 }}><LoadErrorNote title="Could not load this profile" error={error} onRetry={refetch} /></Box>;
   if (!p) return <Box sx={{ p: 3 }}><Typography>Doer not found.</Typography></Box>;
 
   const s = p.summary || {};
@@ -69,11 +71,8 @@ const DoerProfile = () => {
   const monthly = (p.monthly || []).map((m) => ({ ...m, label: dayjs(`${m.month}-01`).format('MMM YY'), delayHrs: +((m.avgDelayMins || 0) / 60).toFixed(1) }));
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
-      <Button startIcon={<ArrowLeft size={16} />} onClick={goBack} sx={{ mb: 1.5, fontWeight: 700 }}>
-        Back to MIS Scoring
-      </Button>
-
+    <O2dPage icon={Target} title="Doer Profile" subtitle={`${p.doer.name} — tasks, timeliness and MIS score.`}
+      onBack={goBack} backLabel="Back to MIS Scoring">
       {/* Header */}
       <Paper sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 3, border: `1px solid ${C.line}`, mb: 2 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={2}>
@@ -194,7 +193,7 @@ const DoerProfile = () => {
           </Table>
         </Box>
       </Paper>
-    </Box>
+    </O2dPage>
   );
 };
 

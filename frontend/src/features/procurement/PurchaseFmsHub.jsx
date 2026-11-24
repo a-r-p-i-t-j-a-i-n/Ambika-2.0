@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { lazyWithRetry } from "../../utils/lazyWithRetry";
 import AppLoader from "../../components/AppLoader";
+import PfmsStepSkeleton from "./components/PfmsStepSkeleton";
 import PurchaseFmsStepper from "./components/PurchaseFmsStepper";
 import { PFMS } from "./pfmsTheme";
 import {
@@ -36,7 +37,10 @@ import {
   useGetTallyEntryStatsQuery,
   useGetFinalPaymentStatsQuery,
   useGetFollowUpStatsQuery,
+  useGetStepQueueQuery,
+  useGetFinalPaymentsQuery,
 } from "../../store/api/procurementApi";
+import { STEP_QUEUES, opensOnQueue, waitingOf } from "./components/stepQueueView";
 // Quick Actions reuse the exact same creation dialogs each module's own list
 // page already uses — same form, same validation, same mutations, same
 // Draft/Direct behaviour. No separate creation logic exists here.
@@ -107,7 +111,7 @@ const FollowUpStep = () => {
     <StepWithQueue
       List={FollowUpList}
       ownTotal={data?.data?.total}
-      queue="FOLLOW_UP"
+      queue={STEP_QUEUES["follow-ups"].queue}
       listLabel="Follow-ups"
       queueLabel="Awaiting First Follow-up"
       title="Awaiting First Follow-up — Step 1.05"
@@ -123,12 +127,12 @@ const AdvancePaymentStep = () => {
     <StepWithQueue
       List={AdvancePaymentList}
       ownTotal={data?.data?.totalPayments}
-      queue="ADVANCE_PAYMENT"
+      queue={STEP_QUEUES["advance-payments"].queue}
       listLabel="Advance Payments"
       queueLabel="Awaiting Advance"
       title="Awaiting Advance Payment — Step 1.07"
       subtitle="Approved PIs whose advance is not fully paid — use Record Payment on a row. A PI sent to the MD waits for the MD's approval first"
-      preferQueue
+      preferQueue={STEP_QUEUES["advance-payments"].preferQueue}
       action={{ label: "Record Payment", icon: <Wallet size={14} />, Dialog: AdvancePaymentFormDialog, props: (r) => ({ pi: r.record }) }}
       gridProps={{ numberHeader: "PI Number", dateHeader: "PI Date", showAmount: false, extraColumns: awaitingAdvanceColumns, emptyText: "No approved PI is waiting for an advance payment" }}
     />
@@ -140,7 +144,7 @@ const InvoicesPaymentsStep = () => {
     <StepWithQueue
       List={VendorInvoiceList}
       ownTotal={data?.data?.total}
-      queue="VENDOR_INVOICE"
+      queue={STEP_QUEUES["invoices-payments"].queue}
       listLabel="Invoices & Vouchers"
       queueLabel="Awaiting Invoice"
       title="Awaiting Vendor Invoice — Step 1.10"
@@ -156,7 +160,7 @@ const TallyEntryStep = () => {
     <StepWithQueue
       List={TallyEntryList}
       ownTotal={data?.data?.total}
-      queue="TALLY_ENTRY"
+      queue={STEP_QUEUES["tally-entries"].queue}
       listLabel="Tally Entries"
       queueLabel="Awaiting Tally Entry"
       title="Awaiting Tally Entry — Step 1.12"
@@ -172,7 +176,7 @@ const FinalPaymentStep = () => {
     <StepWithQueue
       List={FinalPaymentList}
       ownTotal={data?.data?.total}
-      queue="FINAL_PAYMENT"
+      queue={STEP_QUEUES["final-payments"].queue}
       listLabel="Final Payments"
       queueLabel="Awaiting Payment"
       title="Awaiting Final Payment — Step 1.13"
@@ -220,49 +224,67 @@ const MD_APPROVAL_SLUG = "md-approvals";
 export const PURCHASE_FMS_STEPS = [
   {
     slug: "purchase-indents",
+    code: "1.01",
     label: "Purchase Indents",
     Component: IndentList,
   },
   {
     slug: "receive-quotes",
+    code: "1.02",
     label: "Receive Quote & Comparative",
     Component: QuoteComparativeStep,
   },
   {
     slug: "approved-quotations",
+    code: "1.03",
     label: "Approved Quotation",
     Component: QuotationApprovalStep,
   },
   {
     slug: "purchase-orders",
+    code: "1.04",
     label: "Purchase Orders",
     Component: PurchaseOrderList,
   },
-  { slug: "follow-ups", label: "Follow-ups", Component: FollowUpStep },
-  { slug: "pi-forms", label: "PI Forms", Component: ProformaInvoiceList },
+  { slug: "follow-ups", code: "1.05", label: "Follow-ups", Component: FollowUpStep },
+  { slug: "pi-forms", code: "1.06", label: "PI Forms", Component: ProformaInvoiceList },
   {
     slug: "advance-payments",
+    code: "1.07",
     label: "Advance Payments",
     Component: AdvancePaymentStep,
   },
-  { slug: "grn", label: "GRN & QC", Component: GrnQcStep },
+  // 1.08 GRN — the step also holds 1.09 Incoming QC.
+  { slug: "grn", code: "1.08", label: "GRN & QC", Component: GrnQcStep },
   {
     slug: "invoices-payments",
+    // 1.10 Vendor Invoice — the step also holds 1.11 Payment Voucher.
+    code: "1.10",
     label: "Vendor Invoices & Payments",
     Component: InvoicesPaymentsStep,
   },
-  { slug: "tally-entries", label: "Tally Entries", Component: TallyEntryStep },
+  { slug: "tally-entries", code: "1.12", label: "Tally Entries", Component: TallyEntryStep },
   {
     slug: "final-payments",
+    code: "1.13",
     label: "Final Payments",
     Component: FinalPaymentStep,
   },
 ];
 
-// Each step's own stats endpoint (already used by that step's KPI cards) —
-// fetched once here so the step rail can show a live total next to every
-// step, not just the active one. Lightweight aggregate queries, cached by
-// RTK Query, so this doesn't duplicate the row-level fetch each screen does.
+// Step-card figures: each card shows the list its step OPENS ON — the same
+// number as that step's page header and table, from the same API responses:
+//  · records steps → the step's own record total (as its list header shows it);
+//  · the quotation steps → ALL indents at the step (their lists open on "All";
+//    `quotationSteps[step].ALL` is the "All" tile of that list);
+//  · steps with an Awaiting list → the step's own rule (stepQueueView.js): on
+//    the Awaiting list when something waits and the step has no records yet
+//    (or prefers the queue, e.g. Advance Payments) → the waiting count; else
+//    its own records. Final Payments' own count is its list total (cancelled
+//    payments included), exactly as its header counts it.
+// Lightweight aggregate / limit-1 queries with the steps' own arguments, so
+// RTK Query shares them with the step screens. `hints` = the breakdown shown
+// on hover.
 const useStepCounts = () => {
   const { data: indentStats } = useGetIndentStatsQuery();
   const { data: poStats } = useGetPurchaseOrderStatsQuery();
@@ -273,25 +295,54 @@ const useStepCounts = () => {
   const { data: tallyStats } = useGetTallyEntryStatsQuery();
   const { data: finalStats } = useGetFinalPaymentStatsQuery();
   const { data: fuStats } = useGetFollowUpStatsQuery();
+  // The Awaiting summaries — the same { queue, limit: 1 } calls the steps make.
+  const { data: fuQueue } = useGetStepQueueQuery({ queue: STEP_QUEUES["follow-ups"].queue, limit: 1 });
+  const { data: advQueue } = useGetStepQueueQuery({ queue: STEP_QUEUES["advance-payments"].queue, limit: 1 });
+  const { data: grnQueue } = useGetStepQueueQuery({ queue: STEP_QUEUES.grn.queue, limit: 1 });
+  const { data: invQueue } = useGetStepQueueQuery({ queue: STEP_QUEUES["invoices-payments"].queue, limit: 1 });
+  const { data: tallyQueue } = useGetStepQueueQuery({ queue: STEP_QUEUES["tally-entries"].queue, limit: 1 });
+  const { data: finalQueue } = useGetStepQueueQuery({ queue: STEP_QUEUES["final-payments"].queue, limit: 1 });
+  // Final Payments' header count — the same call FinalPaymentList makes.
+  const { data: finalAll } = useGetFinalPaymentsQuery({ page: 1, limit: 1, sort: "-createdAt" });
 
-  return {
-    "purchase-indents": indentStats?.data?.total,
-    // The quotation steps count what is waiting there (pending) — their
-    // indents are already in the Purchase Indents total.
-    "receive-quotes": indentStats?.data?.quotationSteps?.QUOTE_COMPARATIVE?.PENDING,
-    "approved-quotations": indentStats?.data?.quotationSteps?.QUOTATION_APPROVAL?.PENDING,
-    "purchase-orders": poStats?.data?.total,
-    "follow-ups": fuStats?.data?.total,
-    "pi-forms": piStats?.data?.total,
-    "advance-payments": advanceStats?.data?.totalPayments,
-    grn: grnStats?.data?.total,
-    // Represents the unified Vendor Invoices & Payments step by invoice
-    // count — the list itself is invoice-rows-first (see VendorInvoiceList),
-    // with each invoice's voucher shown/managed inline.
-    "invoices-payments": invoiceStats?.data?.total,
-    "tally-entries": tallyStats?.data?.total,
-    "final-payments": finalStats?.data?.total,
+  const counts = {};
+  const hints = {};
+  const plain = (slug, n, noun) => {
+    counts[slug] = n;
+    if (n != null) hints[slug] = `${n} ${noun}`;
   };
+  // A step with an Awaiting list: `ownTotal` decides the open view (as the step
+  // does); `recordsCount` is what its records list shows.
+  const withQueue = (slug, { ownTotal, recordsCount = ownTotal, queueRes, noun, waitingNoun }) => {
+    const waiting = waitingOf(queueRes);
+    const onQueue = opensOnQueue({ waiting, ownTotal, preferQueue: STEP_QUEUES[slug].preferQueue });
+    counts[slug] = onQueue ? waiting : recordsCount;
+    if (counts[slug] != null) {
+      const own = recordsCount == null ? "" : `${recordsCount} ${noun}`;
+      const wait = waiting == null ? "" : `${waiting} ${waitingNoun}`;
+      hints[slug] = (onQueue ? [wait, own] : [own, wait]).filter(Boolean).join(" · ");
+    }
+  };
+  const quotes = (slug, stepKey) => {
+    const q = indentStats?.data?.quotationSteps?.[stepKey];
+    counts[slug] = q?.ALL;
+    if (q) hints[slug] = `${q.ALL} indents at this step · ${q.PENDING} pending`;
+  };
+
+  plain("purchase-indents", indentStats?.data?.total, "indents");
+  quotes("receive-quotes", "QUOTE_COMPARATIVE");
+  quotes("approved-quotations", "QUOTATION_APPROVAL");
+  plain("purchase-orders", poStats?.data?.total, "purchase orders");
+  withQueue("follow-ups", { ownTotal: fuStats?.data?.total, queueRes: fuQueue, noun: "follow-ups", waitingNoun: "awaiting first follow-up" });
+  plain("pi-forms", piStats?.data?.total, "PI forms");
+  withQueue("advance-payments", { ownTotal: advanceStats?.data?.totalPayments, queueRes: advQueue, noun: "advance payments recorded", waitingNoun: "awaiting advance" });
+  withQueue("grn", { ownTotal: grnStats?.data?.total, queueRes: grnQueue, noun: "GRNs", waitingNoun: "awaiting GRN" });
+  // The unified Vendor Invoices & Payments step, by invoice count — the list is
+  // invoice-rows-first (see VendorInvoiceList), each invoice's voucher inline.
+  withQueue("invoices-payments", { ownTotal: invoiceStats?.data?.total, queueRes: invQueue, noun: "invoices", waitingNoun: "awaiting invoice" });
+  withQueue("tally-entries", { ownTotal: tallyStats?.data?.total, queueRes: tallyQueue, noun: "Tally entries", waitingNoun: "awaiting Tally entry" });
+  withQueue("final-payments", { ownTotal: finalStats?.data?.total, recordsCount: finalAll?.meta?.total, queueRes: finalQueue, noun: "final payments", waitingNoun: "awaiting payment" });
+  return { counts, hints };
 };
 
 // ── Quick Actions — create a record from anywhere in Purchase FMS without
@@ -419,7 +470,7 @@ const PurchaseFmsHub = () => {
   // On a fresh load (refresh / bookmark) the user is restored a render after
   // the app mounts — decide MD access only once it is there.
   const userLoaded = useSelector((s) => Boolean(s.auth.user));
-  const counts = useStepCounts();
+  const { counts, hints: countHints } = useStepCounts();
   // Which Quick Action dialog is open, if any — null | 'indent' | 'po' | 'grn' | 'voucher'.
   const [openQuick, setOpenQuick] = useState(null);
 
@@ -554,6 +605,7 @@ const PurchaseFmsHub = () => {
           steps={visibleSteps}
           activeIndex={activeIndex}
           counts={counts}
+          hints={countHints}
           onStepClick={(slug) => navigate(`/purchase-fms/${slug}`)}
         />
       </Box>
@@ -562,7 +614,9 @@ const PurchaseFmsHub = () => {
           its own tab bar (StepWithQueue, GrnQcStep) can set --pfms-chrome to
           hub + tabs for the page under it. */}
       <Box style={{ "--pfms-chrome": `${chromeHeight}px`, "--pfms-hub-chrome": `${chromeHeight}px` }}>
-        <Suspense fallback={<AppLoader />}>
+        {/* Keyed by step: a NEW boundary per step, so a step switch shows the step
+            skeleton at once instead of keeping the previous step on screen. */}
+        <Suspense key={step} fallback={<PfmsStepSkeleton />}>
           <ActiveComponent />
         </Suspense>
       </Box>

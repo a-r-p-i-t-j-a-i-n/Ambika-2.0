@@ -5,7 +5,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableRow, ToggleButtonGroup, ToggleButton,
   Accordion, AccordionSummary, AccordionDetails, Checkbox, Collapse,
 } from '@mui/material';
-import { CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2, Truck, Boxes, ReceiptText, IndianRupee, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { CheckCircle2, Circle, AlertTriangle, Clock, SlidersHorizontal, Table as TableIcon, GitBranch, Columns3, LayoutGrid, ChevronDown, Plus, X, Link2, Truck, Boxes, ReceiptText, IndianRupee, ArrowRight, Eye, EyeOff, Workflow } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useGetProcessByIdQuery, usePlanOrderMutation, useGetConsignmentsQuery } from '../../store/api/o2dFmsApi';
 import { useGetScheduleQuery } from '../../store/api/dispatchControlApi';
@@ -19,6 +19,9 @@ import DispatchEntry from '../execution/DispatchEntry';
 import BackButton from '../../components/BackButton';
 import { O2D } from './o2dTheme';
 import { resolveFileUrl } from '../../utils/fileUrl';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
+import { useGoBack } from '../../hooks/useGoBack';
+import { primaryBtnSx, headerBtnSx } from '../ims/imsFluent';
 
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 
@@ -178,7 +181,7 @@ const PlanOrderDialog = ({ open, onClose, processId, steps, users, onSaved }) =>
                     <Stack key={ci} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                       <TextField size="small" value={text} fullWidth
                         onChange={(e) => { const c = [...r.checklist]; c[ci] = e.target.value; upd(i, { checklist: c }); }} />
-                      <IconButton size="small" onClick={() => upd(i, { checklist: r.checklist.filter((_, k) => k !== ci) })}><X size={14} /></IconButton>
+                      <IconButton aria-label="Remove checklist item" size="small" onClick={() => upd(i, { checklist: r.checklist.filter((_, k) => k !== ci) })}><X size={14} /></IconButton>
                     </Stack>
                   ))}
                   <Button size="small" startIcon={<Plus size={14} />} onClick={() => upd(i, { checklist: [...r.checklist, ''] })} sx={{ mt: 0.5 }}>Add item</Button>
@@ -632,7 +635,7 @@ const ConsignmentPickerDialog = ({ open, step, consignments = [], onPick, onClos
           </Typography>
         </Box>
       </Stack>
-      <IconButton onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
+      <IconButton aria-label="Close" onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
     </DialogTitle>
     <DialogContent dividers>
       <Stack spacing={1}>
@@ -690,7 +693,8 @@ const ProcessDetail = () => {
   const navigate = useNavigate();
   // Refetch on mount: the doer comes BACK here from a task / entry form, so the
   // tracker must show what they just recorded, not the cache from before.
-  const { data, isLoading, refetch } = useGetProcessByIdQuery(id, { refetchOnMountOrArgChange: true });
+  const goBack = useGoBack();
+  const { data, isLoading, isError, error, refetch } = useGetProcessByIdQuery(id, { refetchOnMountOrArgChange: true });
   const { can, isRoot } = usePermissions();
   const canManage = can('o2dfms.manage') || isRoot;
   const { data: usersRes } = useListAccessUsersQuery(undefined, { skip: !canManage });
@@ -764,25 +768,31 @@ const ProcessDetail = () => {
   }, {});
 
   return (
-    <Box sx={{ p: { xs: 1.5, md: 2 }, bgcolor: O2D.canvas, minHeight: '100vh' }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" gap={1}>
-        <BackButton label="Back" variant="text" color="primary" />
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+    <O2dPage
+      icon={Workflow}
+      title="Order Tracker"
+      subtitle={process ? `${process.soNumber || ''}${process.partyName ? ` · ${process.partyName}` : ''} — every step of this order, end to end.` : 'Every step of this order, end to end.'}
+      onBack={goBack}
+      actions={(
+        <>
           {process && (
-            <Button variant="contained" color="success" startIcon={<Truck size={16} />} onClick={() => setDispatchOpen(true)}>
+            <Button variant="contained" size="small" disableElevation startIcon={<Truck size={14} />} onClick={() => setDispatchOpen(true)} sx={primaryBtnSx('#15803d', '#166534')}>
               Record Dispatch
             </Button>
           )}
           {process && canManage && (
-            <Button variant="outlined" startIcon={<SlidersHorizontal size={16} />} onClick={() => setPlanOpen(true)}>
+            <Button variant="outlined" size="small" startIcon={<SlidersHorizontal size={14} />} onClick={() => setPlanOpen(true)} sx={headerBtnSx}>
               Update the plan
             </Button>
           )}
-        </Stack>
-      </Stack>
+        </>
+      )}
+    >
 
       {isLoading ? (
         <Skeleton variant="rounded" height={400} />
+      ) : isError && !data ? (
+        <LoadErrorNote title="Could not load this order" error={error} onRetry={refetch} />
       ) : !process ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>No O2D process found for this order.</Paper>
       ) : (
@@ -1094,7 +1104,7 @@ const ProcessDetail = () => {
         onClose={() => { setDispatchOpen(false); refetch(); }}
         presetSoNumber={process?.soNumber}
       />
-    </Box>
+    </O2dPage>
   );
 };
 

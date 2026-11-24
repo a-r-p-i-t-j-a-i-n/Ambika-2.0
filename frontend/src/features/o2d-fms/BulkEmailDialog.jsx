@@ -30,6 +30,9 @@ const WARN = '#b45309';
 const STATE = {
   pending: { color: BRAND, label: 'Ready' },
   blocked: { color: WARN, label: 'Needs attention' },
+  // A draft the server could not build — it is left out of "Send all", so it
+  // must not read "Ready" (display only; what is sent is unchanged).
+  unbuilt: { color: WARN, label: 'Could not prepare' },
   sending: { color: BRAND, label: 'Sending…' },
   SENT:    { color: OK,   label: 'Sent' },
   FAILED:  { color: BAD,  label: 'Failed' },
@@ -38,6 +41,7 @@ const STATE = {
 const stateOf = (d) => {
   if (d.status === 'SENT' || d.status === 'FAILED') return d.status;
   if (d.sending) return 'sending';
+  if (d.error) return 'unbuilt';
   if (!String(d.to || '').trim()) return 'blocked';
   return 'pending';
 };
@@ -186,7 +190,7 @@ export default function BulkEmailDialog({ open, targets = [], kind = 'schedule',
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.25, pb: 1.25 }}>
         {mode === 'detail' ? (
           <Tooltip arrow slotProps={O2D_TIP} title="Back to all emails">
-            <IconButton size="small" onClick={() => setMode('grid')} sx={{ border: `1px solid ${O2D.line}`, borderRadius: '8px' }}>
+            <IconButton aria-label="Back to all emails" size="small" onClick={() => setMode('grid')} sx={{ border: `1px solid ${O2D.line}`, borderRadius: '8px' }}>
               <ArrowLeft size={16} />
             </IconButton>
           </Tooltip>
@@ -211,7 +215,7 @@ export default function BulkEmailDialog({ open, targets = [], kind = 'schedule',
           <Chip size="small" icon={<CheckCircle2 size={13} />} label={`${sentCount} sent`}
             sx={{ height: 24, fontWeight: 800, fontSize: '0.68rem', bgcolor: alpha(OK, 0.12), color: OK }} />
         )}
-        <IconButton size="small" onClick={onClose} disabled={sendingAll}><X size={16} /></IconButton>
+        <IconButton aria-label="Close" size="small" onClick={onClose} disabled={sendingAll}><X size={16} /></IconButton>
       </DialogTitle>
       {sendingAll && <LinearProgress />}
       <Divider />
@@ -259,7 +263,7 @@ export default function BulkEmailDialog({ open, targets = [], kind = 'schedule',
                       )}
                     {item.status !== 'SENT' && !item.sending && (
                       <Tooltip arrow slotProps={O2D_TIP} title="Remove from this batch">
-                        <IconButton size="small" onClick={(e) => { e.stopPropagation(); removeAt(i); }} sx={{ p: 0.25, color: O2D.faint }}>
+                        <IconButton aria-label="Remove from this batch" size="small" onClick={(e) => { e.stopPropagation(); removeAt(i); }} sx={{ p: 0.25, color: O2D.faint }}>
                           <Trash2 size={12} />
                         </IconButton>
                       </Tooltip>
@@ -326,7 +330,7 @@ export default function BulkEmailDialog({ open, targets = [], kind = 'schedule',
                 <Box sx={{ flex: 1 }} />
                 <Tooltip arrow slotProps={O2D_TIP} title="Previous email">
                   <span>
-                    <IconButton size="small" disabled={active === 0} onClick={() => setActive((i) => Math.max(0, i - 1))}>
+                    <IconButton aria-label="Previous email" size="small" disabled={active === 0} onClick={() => setActive((i) => Math.max(0, i - 1))}>
                       <ChevronLeft size={16} />
                     </IconButton>
                   </span>
@@ -334,7 +338,7 @@ export default function BulkEmailDialog({ open, targets = [], kind = 'schedule',
                 <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: O2D.sub }}>{active + 1} / {drafts.length}</Typography>
                 <Tooltip arrow slotProps={O2D_TIP} title="Next email">
                   <span>
-                    <IconButton size="small" disabled={active >= drafts.length - 1} onClick={() => setActive((i) => Math.min(drafts.length - 1, i + 1))}>
+                    <IconButton aria-label="Next email" size="small" disabled={active >= drafts.length - 1} onClick={() => setActive((i) => Math.min(drafts.length - 1, i + 1))}>
                       <ChevronRight size={16} />
                     </IconButton>
                   </span>

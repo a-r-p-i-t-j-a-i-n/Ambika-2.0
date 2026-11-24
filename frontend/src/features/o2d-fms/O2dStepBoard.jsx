@@ -1,18 +1,21 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useTransition } from 'react';
 import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
-  Chip, TextField, Skeleton, InputAdornment, TablePagination, alpha, Collapse,
+  Chip, TextField, InputAdornment, TablePagination, alpha, Collapse,
   Button, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions,
-  Autocomplete, Checkbox, CircularProgress,
+  Autocomplete, Checkbox, CircularProgress, Link as MuiLink,
 } from '@mui/material';
 import {
   Search, Workflow, CheckCircle2, Clock, AlertTriangle, CircleDashed,
   Plus, Trash2, ArrowRight, ClipboardList, ExternalLink, User, CalendarClock, Pencil, Layers, Mail, Ban, RotateCcw,
+  Send,
 } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link as RouterLink } from 'react-router-dom';
 import { useSnackbar } from 'notistack';
 import { useGetProcessesQuery, useGetBoardConsignmentsQuery, useGetO2dDoerPlanQuery } from '../../store/api/o2dFmsApi';
 import { useDeleteOrderMutation } from '../../store/api/orderApi';
+import { FLUENT, primaryBtnSx, fluentTableSx } from '../ims/imsFluent';
+import { LoadErrorNote, CapNote, O2dPage, O2dStatusPill, CardStripSkeleton, TableSkeleton } from './components/O2dUi';
 import {
   useDeleteChallanMutation, useCancelChallanMutation, useRestoreChallanMutation,
 } from '../../store/api/dispatchControlApi';
@@ -22,6 +25,7 @@ import BoardRowEditDialog from './BoardRowEditDialog';
 import BulkEmailDialog from './BulkEmailDialog';
 import OrderEntryDrawer from '../orders/OrderEntryDrawer';
 import { O2D } from './o2dTheme';
+import { StepCard, stepTone, stepIcon, STEP_RAIL_SX, useStepRail } from './components/O2dStepCard';
 import { useHiddenSteps, useO2dRights, stepKey } from '../../utils/embed';
 
 // ── Ambika 2.0 step-first O2D board ─────────────────────────────────────────
@@ -52,14 +56,17 @@ const fmtDelay = (mins) => {
 
 const nameOf = (u) => (u && typeof u === 'object' ? u.name : null);
 
+// How many orders the board loads (unchanged); shown when the list reaches it.
+const BOARD_LIMIT = 300;
+
 // One visual state per step-row, in work-priority order (lower = more urgent).
 const stepState = (s) => {
   if (['DONE', 'DELAYED'].includes(s.status)) {
-    return { key: 'done', rank: 3, label: s.status === 'DELAYED' ? 'Done (late)' : 'Done', color: s.status === 'DELAYED' ? '#b45309' : '#15803d', bg: s.status === 'DELAYED' ? '#fffbeb' : '#ecfdf5', border: s.status === 'DELAYED' ? '#fde68a' : '#bbf7d0', Icon: CheckCircle2 };
+    return { key: 'done', rank: 3, tone: s.status === 'DELAYED' ? 'amber' : 'green', label: s.status === 'DELAYED' ? 'Completed (late)' : 'Completed', color: s.status === 'DELAYED' ? '#b45309' : '#15803d', bg: s.status === 'DELAYED' ? '#fffbeb' : '#ecfdf5', border: s.status === 'DELAYED' ? '#fde68a' : '#bbf7d0', Icon: CheckCircle2 };
   }
-  if (s.isOverdue) return { key: 'overdue', rank: 0, label: 'Overdue', color: '#dc2626', bg: '#fef2f2', border: '#fecaca', Icon: AlertTriangle };
-  if (s.status === 'IN_PROGRESS') return { key: 'progress', rank: 1, label: 'In progress', color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', Icon: Clock };
-  return { key: 'pending', rank: 2, label: 'Pending', color: '#64748b', bg: '#f8fafc', border: '#e2e8f0', Icon: CircleDashed };
+  if (s.isOverdue) return { key: 'overdue', rank: 0, tone: 'rose', label: 'Overdue', color: '#dc2626', bg: '#fef2f2', border: '#fecaca', Icon: AlertTriangle };
+  if (s.status === 'IN_PROGRESS') return { key: 'progress', rank: 1, tone: 'blue', label: 'In Progress', color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe', Icon: Clock };
+  return { key: 'pending', rank: 2, tone: 'grey', label: 'Pending', color: '#64748b', bg: '#f8fafc', border: '#e2e8f0', Icon: CircleDashed };
 };
 
 // Short "2/5" / "40%" tag for a quantity- or consignment-gated step mid-flight.
@@ -106,6 +113,8 @@ const stepKeysOf = (s) => (s?.actionLinks?.length
   : (s?.actionLink ? [s.actionLink] : (ACTION_FALLBACKS[s?.stepCode] || [])));
 
 const ctxOf = (p) => ({ soNumber: p.soNumber, orderId: p.salesOrderId, processId: p._id, intakeId: p.intakeId });
+// The Sales Order detail page — one path for the SO Number link and Order Entry.
+const orderPath = (p) => resolveEntityLink('ORDER_ENTRY', ctxOf(p))?.to;
 
 // Actions that should NOT appear as board links. 2.03 Check Inventory is a
 // physical job — the doer checks stock and marks the step done right here;
@@ -149,9 +158,13 @@ const rowDoneLinks = (p, s) => {
       // PDF-generator actions are the exception: their button must land on the
       // GENERATOR page itself (pre-scoped ?so=…) so the doer can get the PDF —
       // captured links often point back at the planning screen instead.
+      // Order Entry opens the Sales Order's own detail page — the same page the
+      // SO Number link opens — whatever link was captured when it was done.
       const candidates = ['DISPATCH_PLAN_PDF', 'CHALLAN_PDF'].includes(key)
         ? [resolveActionLink(key, ctx), ap?.link, resolveEntityLink(key, ctx)?.to].filter(Boolean)
-        : [ap?.link, resolveEntityLink(key, ctx)?.to, resolveActionLink(key, ctx)].filter(Boolean);
+        : key === 'ORDER_ENTRY'
+          ? [resolveEntityLink(key, ctx)?.to, ap?.link, resolveActionLink(key, ctx)].filter(Boolean)
+          : [ap?.link, resolveEntityLink(key, ctx)?.to, resolveActionLink(key, ctx)].filter(Boolean);
       const to = candidates.find((c) => !seen.has(c));
       if (!to) return null;
       seen.add(to);
@@ -167,12 +180,32 @@ const STATUS_OPTS = [
   { value: 'all',      label: 'All' },
   { value: 'open',     label: 'To do (not done)' },
   { value: 'overdue',  label: 'Overdue' },
-  { value: 'progress', label: 'In progress' },
+  { value: 'progress', label: 'In Progress' },
   { value: 'pending',  label: 'Pending' },
-  { value: 'done',     label: 'Done' },
+  { value: 'done',     label: 'Completed' },
 ];
 
 const fmtNum = (n) => Number(n || 0).toLocaleString('en-IN');
+
+// Step cards, icons, colours and rail: components/O2dStepCard.jsx (shared with
+// O2D Master Data).
+
+// ── Table text + row buttons — one scale for the whole register ─────────────
+// Values 0.8rem, captions ("by …", tags) 0.7rem, the IMS table sizes.
+const TXT = { fontSize: '0.8rem', color: O2D.body };
+const CAP = { fontSize: '0.7rem', color: O2D.sub };
+// Row action buttons: 28px, 8px corners. Pending = the brand primary; done =
+// the record link in pastel green; `tone` for Cancel (rose) / Restore (green).
+const rowBtnSx = (kind = 'do') => ({
+  height: 28, minWidth: 0, px: 1.1, borderRadius: '8px', boxShadow: 'none',
+  textTransform: 'none', fontWeight: 700, fontSize: '0.72rem', whiteSpace: 'nowrap',
+  '& .MuiButton-startIcon, & .MuiButton-endIcon': { ml: 0.4, mr: 0.4 },
+  ...(kind === 'do' && { bgcolor: O2D.brand, color: '#fff', '&:hover': { bgcolor: '#1e40af', boxShadow: 'none' } }),
+  ...(kind !== 'do' && (() => {
+    const t = FLUENT[kind === 'done' ? 'green' : kind];
+    return { color: t.accent, borderColor: t.border, bgcolor: t.bg, '&:hover': { borderColor: t.accent, bgcolor: t.tint } };
+  })()),
+});
 const fmtAmt = (n) => (n == null ? '—' : Number(n).toLocaleString('en-IN'));
 
 // The sheet's per-dispatch columns — shown on the dispatch step only, one table
@@ -321,16 +354,9 @@ const STEP_EXTRA_COLUMNS = {
   '2.13': [{ key: 'tbPayment', label: 'Bill Payment', min: 100 }],
 };
 
-const TONE_SX = {
-  green: { color: '#15803d', bgcolor: '#ecfdf5', border: '1px solid #bbf7d0' },
-  red:   { color: '#dc2626', bgcolor: '#fef2f2', border: '1px solid #fecaca' },
-  amber: { color: '#b45309', bgcolor: '#fffbeb', border: '1px solid #fde68a' },
-  grey:  { color: '#64748b', bgcolor: '#f8fafc', border: '1px solid #e2e8f0' },
-};
-const MiniChip = ({ label, tone = 'grey' }) => (
-  <Chip size="small" label={label}
-    sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', ...TONE_SX[tone], '& .MuiChip-label': { px: 1 } }} />
-);
+// The step-column chips speak the shared pill (red reads as the rose pastel).
+const MINI_TONE = { green: 'green', red: 'rose', amber: 'amber', grey: 'grey' };
+const MiniChip = ({ label, tone = 'grey' }) => <O2dStatusPill label={label} tone={MINI_TONE[tone] || 'grey'} />;
 
 // Attached S3 documents — one small chip per file, opening in a new tab.
 const DocLinks = ({ urls }) => (!urls?.length
@@ -338,24 +364,20 @@ const DocLinks = ({ urls }) => (!urls?.length
   : (
     <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap">
       {urls.map((u, i) => (
-        <Chip
-          key={u} size="small" clickable icon={<ExternalLink size={11} />}
+        <O2dStatusPill
+          key={u} tone="blue" clickable icon={ExternalLink}
           label={urls.length === 1 ? 'Open' : `${i + 1}`}
           onClick={() => window.open(u, '_blank', 'noopener')}
-          sx={{
-            height: 22, fontWeight: 700, fontSize: '0.7rem', color: O2D.brand,
-            bgcolor: alpha(O2D.brand, 0.08), '&:hover': { bgcolor: alpha(O2D.brand, 0.16) },
-            '& .MuiChip-icon': { color: O2D.brand, ml: 0.5 }, '& .MuiChip-label': { px: 0.75 },
-          }}
+          sx={{ cursor: 'pointer', '&:hover': { bgcolor: FLUENT.blue.border } }}
         />
       ))}
     </Stack>
   ));
 
-const extraDash = <Typography sx={{ fontSize: '0.75rem', color: '#7d8fb3' }}>—</Typography>;
+const extraDash = <Typography sx={{ ...TXT, color: O2D.faint }}>—</Typography>;
 const extraCellNode = (dc, key) => {
   if (!dc) return extraDash;
-  const txt = (v, fmt = (x) => x) => (v ? <Typography sx={{ fontSize: '0.78rem', color: O2D.body, whiteSpace: 'nowrap' }}>{fmt(v)}</Typography> : extraDash);
+  const txt = (v, fmt = (x) => x) => (v ? <Typography sx={{ ...TXT, whiteSpace: 'nowrap' }}>{fmt(v)}</Typography> : extraDash);
   switch (key) {
     case 'invDocs':  return <DocLinks urls={dc.invoice?.invoiceUrls} />;
     case 'ewayDocs': return <DocLinks urls={dc.invoice?.ewayBillUrls} />;
@@ -375,7 +397,7 @@ const extraCellNode = (dc, key) => {
     case 'fuStatus': {
       const st = dc.payment?.followUpStatus;
       if (!st) return extraDash;
-      return <MiniChip label={st === 'DONE' ? 'Done' : st === 'PENDING' ? 'Pending' : st}
+      return <MiniChip label={st === 'DONE' ? 'Completed' : st === 'PENDING' ? 'Pending' : st}
         tone={st === 'DONE' ? 'green' : st === 'PENDING' ? 'grey' : 'amber'} />;
     }
     case 'fuDate':   return txt(dc.payment?.followUpDate, fmtDT);
@@ -432,20 +454,22 @@ const O2dStepBoard = () => {
   // Delegation Suite → Employees → lock icon: Edit / Delete per step and the
   // New Sales Order button (no limits when Ambika 2.0 is used on its own).
   const rights = useO2dRights();
-  const [deleteChallan] = useDeleteChallanMutation();
+  const [deleteChallan, { isLoading: deletingChallan }] = useDeleteChallanMutation();
   const [cancelChallan] = useCancelChallanMutation();
   const [restoreChallan] = useRestoreChallanMutation();
   const [restoringId, setRestoringId] = useState(null);
   const [cancelRow, setCancelRow] = useState(null);   // { p, dc } pending cancel
   const [cancelReason, setCancelReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
-  const [deleteOrder, { isLoading: deleting }] = useDeleteOrderMutation();
+  const [deleteOrder, { isLoading: deletingOrder }] = useDeleteOrderMutation();
+  // Either delete in flight keeps the confirm dialog busy (no second click).
+  const deleting = deletingOrder || deletingChallan;
   const [confirmRow, setConfirmRow] = useState(null); // { p, dc } pending delete confirmation
   // New Sales Order opens over the board (same drawer as Sales Orders), so
   // Cancel leaves the user here and the sidebar keeps O2D FMS selected.
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [sortBy, setSortBy] = useState('recentFirst');
-  const { data, isLoading, refetch } = useGetProcessesQuery({ limit: 300, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch } = useGetProcessesQuery({ limit: BOARD_LIMIT, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const rows = useMemo(() => data?.data || [], [data]);
   // Steps the MD switched off for this employee in the Delegation Suite
   // (empty when Ambika 2.0 is used on its own).
@@ -494,6 +518,19 @@ const O2dStepBoard = () => {
   }, [rows, hiddenSteps]);
 
   const activeCode = stepCode && steps.some((s) => s.code === stepCode) ? stepCode : steps[0]?.code;
+  // Card click → the step change renders as a transition (the router keeps the
+  // old register on screen until the new one is ready). While it is pending the
+  // clicked card shows as selected and the register shows a skeleton — never the
+  // previous step's rows. isPending ends by itself when the new step commits.
+  const [switching, startSwitch] = useTransition();
+  const [switchTo, setSwitchTo] = useState(null);
+  const goStep = (code) => {
+    setSwitchTo(code);
+    startSwitch(() => navigate(`/o2d-fms/steps/${encodeURIComponent(code)}`));
+  };
+  const shownCode = switching && switchTo ? switchTo : activeCode;
+  // Rail: centres the selected card; card tooltips stay inside it (never over the sidebar).
+  const { railRef, tipProps: cardTipProps } = useStepRail(activeCode, steps.length);
   const activeStep = steps.find((s) => s.code === activeCode);
   // Edit = the pencil + Cancel dispatch; Delete = the bin — on this step's rows.
   const canEdit = rights.canEdit(activeCode);
@@ -540,24 +577,6 @@ const O2dStepBoard = () => {
     .filter((p) => p.soNumber && !p.isCompleted)
     .map((p) => ({ so: p.soNumber, label: `${p.soNumber}${p.partyName ? ` · ${p.partyName}` : ''}` })), [rows]);
 
-  // Per-step workload badge: orders where the step still needs action.
-  const openCounts = useMemo(() => {
-    const counts = {};
-    rows.forEach((p) => (p.steps || []).forEach((s) => {
-      if (!['DONE', 'DELAYED'].includes(s.status)) counts[s.stepCode] = (counts[s.stepCode] || 0) + 1;
-    }));
-    return counts;
-  }, [rows]);
-
-  // Overdue per step — turns that step's badge red (the loudest signal wins).
-  const overdueCounts = useMemo(() => {
-    const counts = {};
-    rows.forEach((p) => (p.steps || []).forEach((s) => {
-      if (stepState(s).key === 'overdue') counts[s.stepCode] = (counts[s.stepCode] || 0) + 1;
-    }));
-    return counts;
-  }, [rows]);
-
   const [search, setSearch] = useState('');
   // "All" by default — doers landing on a step must see every order on it,
   // done and pending alike (the sheet shows everything; filters are opt-in).
@@ -577,32 +596,58 @@ const O2dStepBoard = () => {
     [rows],
   );
 
-  // One row per order = that order's entry for the ACTIVE step.
-  const stepRows = useMemo(() => {
-    if (!activeCode) return [];
+  // Every step's rows under the CURRENT filters (SO, Party, Search, Show) — one
+  // row per order = that order's entry for the step. The selected step's table
+  // AND every step card read this same list, so a card's figure is always the
+  // number of orders its table lists (filters included).
+  const filteredByStep = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = [];
+    const perDcOf = new Map(steps.map((x) => [x.code, x.perDc]));
+    const out = new Map(steps.map((x) => [x.code, []]));
     rows.forEach((p) => {
       if (soFilter && p.soNumber !== soFilter) return;
       if (partyFilter && p.partyName !== partyFilter) return;
-      const s = (p.steps || []).find((x) => x.stepCode === activeCode);
-      if (!s) return;
-      const st = stepState(s);
-      if (status === 'open' && st.key === 'done') return;
-      if (!['all', 'open'].includes(status) && st.key !== status) return;
-      if (q) {
-        // On the dispatch step, DC number / L.R. no also match the search.
-        const dcText = isPerDcStep
-          ? (dcBySo.get(p.soNumber) || []).map((d) => `${d.dcNumber || ''} ${d.lrNo || ''}`).join(' ')
-          : '';
-        if (!`${p.soNumber || ''} ${p.poNumber || ''} ${p.partyName || ''} ${dcText}`.toLowerCase().includes(q)) return;
-      }
-      list.push({ p, s, st });
+      const seen = new Set();   // an order's FIRST entry for a step (as before)
+      (p.steps || []).forEach((s) => {
+        const list = out.get(s.stepCode);
+        if (!list || seen.has(s.stepCode)) return;
+        seen.add(s.stepCode);
+        const st = stepState(s);
+        if (status === 'open' && st.key === 'done') return;
+        if (!['all', 'open'].includes(status) && st.key !== status) return;
+        if (q) {
+          // On the per-challan steps, DC number / L.R. no also match the search.
+          const dcText = perDcOf.get(s.stepCode)
+            ? (dcBySo.get(p.soNumber) || []).map((d) => `${d.dcNumber || ''} ${d.lrNo || ''}`).join(' ')
+            : '';
+          if (!`${p.soNumber || ''} ${p.poNumber || ''} ${p.partyName || ''} ${dcText}`.toLowerCase().includes(q)) return;
+        }
+        list.push({ p, s, st });
+      });
     });
-    // Latest activity first by default — the chronological FMS register — but the
-    // doer can re-order it from the toolbar.
-    return sortRows(list, sortBy);
-  }, [rows, activeCode, search, status, soFilter, partyFilter, isPerDcStep, dcBySo, sortBy]);
+    return out;
+  }, [rows, steps, search, status, soFilter, partyFilter, dcBySo]);
+
+  // Card figures: orders listed (= the table), and of those how many are still
+  // open and how many overdue — counted from the same rows, nothing else.
+  const stepCounts = useMemo(() => {
+    const out = {};
+    filteredByStep.forEach((list, code) => {
+      out[code] = {
+        total: list.length,
+        open: list.filter(({ st }) => st.key !== 'done').length,
+        overdue: list.filter(({ st }) => st.key === 'overdue').length,
+      };
+    });
+    return out;
+  }, [filteredByStep]);
+
+  // The selected step's table — latest activity first by default (the
+  // chronological FMS register); the doer can re-order it from the toolbar.
+  const stepRows = useMemo(
+    () => (activeCode ? sortRows(filteredByStep.get(activeCode) || [], sortBy) : []),
+    [filteredByStep, activeCode, sortBy],
+  );
 
   // Dispatch step: expand each order into one row PER Delivery Challan (a split
   // order appears once per dispatch, like the sheet); orders not yet dispatched
@@ -772,47 +817,80 @@ const O2dStepBoard = () => {
   // wide sheet scrolls left-right, and the header row stays pinned while it
   // scrolls up-down — a row never loses its identity. Fixed widths make the
   // cumulative `left` offsets exact.
-  const FROZEN = isPerDcStep ? [{ w: 180 }, { w: 132 }, { w: 70 }] : [{ w: isEmailStep ? 222 : 180 }, { w: 132 }];
+  const FROZEN = isPerDcStep ? [{ w: 180 }, { w: 132 }, { w: 84 }] : [{ w: isEmailStep ? 222 : 180 }, { w: 132 }];
   const freezeSx = (i, head = false) => ({
-    position: 'sticky',
+    // Frozen only where there is room for them (1200px and up). Below that ~400px
+    // of frozen columns would cover over half the register, so they scroll with the row.
+    position: { xs: 'static', lg: 'sticky' },
     left: FROZEN.slice(0, i).reduce((a, c) => a + c.w, 0),
     width: FROZEN[i].w, minWidth: FROZEN[i].w, maxWidth: FROZEN[i].w,
     // Header cells must paint above frozen body cells; frozen body cells above
     // the scrolling ones — but below the sticky header (z 2) passing over them.
     zIndex: head ? 3 : 1,
-    ...(head && { bgcolor: O2D.surfaceAlt }),
+    ...(head && { bgcolor: '#f2f6fc' }),
     ...(i === FROZEN.length - 1 && {
-      borderRight: `1px solid ${O2D.line}`,
-      boxShadow: '4px 0 6px -3px rgba(15,23,42,0.14)',
+      borderRight: { lg: '1px solid #dfe7f2' },
+      boxShadow: { lg: '4px 0 6px -3px rgba(15,23,42,0.10)' },
     }),
   });
 
   return (
-    <Box sx={{ bgcolor: O2D.canvas, minHeight: '100vh' }}>
-      {/* Top bar — title + search, nothing else to hunt through */}
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
-        {/* ONE line on desktop — everything shrinks before anything wraps.
-            (Wrapping is allowed only on phone widths.) */}
-        <Stack direction="row" alignItems="center" spacing={1} useFlexGap
-          sx={{ flexWrap: { xs: 'wrap', md: 'nowrap' } }}>
-          <Box sx={{ p: 0.5, borderRadius: '6px', bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand, display: 'flex', flexShrink: 0 }}><Workflow size={16} /></Box>
-          <Box sx={{ minWidth: 0, mr: 'auto', flexShrink: 1 }}>
-            <Typography noWrap sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>O2D — Step Board</Typography>
-            <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub, display: { xs: 'none', xl: 'block' } }}>Pick a step, see every order on it, click a link to do the work.</Typography>
-          </Box>
+    <O2dPage
+      icon={Workflow}
+      title="O2D — Step Board"
+      subtitle="Pick a step, see every order on it, click a link to do the work."
+      actions={(
+        // Row 1, right: the two things that START work — same controls, same handlers.
+        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
+          <Autocomplete
+            size="small" options={quickOptions} value={null} blurOnSelect
+            sx={{
+              width: { xs: '100%', md: 150, lg: 178, xl: 205 }, minWidth: 140, flexShrink: 1,
+              // Same 40px / 8px / 0.8rem control as the filter bar below.
+              '& .MuiInputBase-root': { minHeight: 40, borderRadius: '8px', fontSize: '0.8rem', bgcolor: '#fff' },
+              '& .MuiInputLabel-root': { fontSize: '0.78rem' },
+            }}
+            getOptionLabel={(o) => o?.label || ''}
+            isOptionEqualToValue={() => false}
+            onChange={(_, opt) => { if (opt) navigate(`/challans?so=${encodeURIComponent(opt.so)}`); }}
+            renderInput={(params) => <TextField {...params} label="Quick dispatch" placeholder="SO / party…" />}
+          />
+          {rights.canAdd && (
+            <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />}
+              onClick={() => setNewOrderOpen(true)}
+              sx={{ ...primaryBtnSx(O2D.brand), flexShrink: 0, px: { md: 1.1, xl: 1.6 } }}>
+              <Box component="span" sx={{ display: { xs: 'none', xl: 'inline' } }}>New Sales Order</Box>
+              <Box component="span" sx={{ display: { xs: 'inline', xl: 'none' } }}>New Order</Box>
+            </Button>
+          )}
+        </Stack>
+      )}
+    >
+      {/* Row 2 — the filters as one toolbar. A grid, so they line up evenly at
+          1280px and stack two-up / one-up on tablets and phones instead of
+          squeezing the title (each control keeps its own value and handler). */}
+      <Paper elevation={0} data-testid="o2d-board-filters" sx={{ p: 1 }}>
+        <Box sx={{
+          display: 'grid', gap: 1,
+          // Every control the same: 40px, 8px corners, 0.8rem text, label on the border.
+          '& .MuiInputBase-root': { minHeight: 40, borderRadius: '8px', fontSize: '0.8rem', bgcolor: '#fff' },
+          '& .MuiInputLabel-root': { fontSize: '0.78rem' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))', lg: '1.15fr 1.15fr 1.4fr 0.95fr 0.8fr' },
+          '& > *': { width: '100% !important', minWidth: '0 !important' },
+        }}>
           {/* Pick one order / one party — the list below shows only that. */}
           <Autocomplete
             size="small" options={soOptions} value={soFilter} onChange={(_, v) => setSoFilter(v)}
             sx={{ width: { xs: '100%', md: 150, lg: 168, xl: 190 }, minWidth: 120, flexShrink: 1 }}
-            renderInput={(params) => <TextField {...params} label="SO Number" placeholder="All orders" />}
+            renderInput={(params) => <TextField {...params} label="SO Number" placeholder="All orders" InputLabelProps={{ ...params.InputLabelProps, shrink: true }} />}
           />
           <Autocomplete
             size="small" options={partyOptions} value={partyFilter} onChange={(_, v) => setPartyFilter(v)}
             sx={{ width: { xs: '100%', md: 150, lg: 175, xl: 210 }, minWidth: 120, flexShrink: 1 }}
-            renderInput={(params) => <TextField {...params} label="Party" placeholder="All parties" />}
+            renderInput={(params) => <TextField {...params} label="Party" placeholder="All parties" InputLabelProps={{ ...params.InputLabelProps, shrink: true }} />}
           />
           <TextField
-            size="small" placeholder="Search SO / PO…" value={search}
+            size="small" label="Search" placeholder="SO, PO, party, DC, LR…" value={search} InputLabelProps={{ shrink: true }}
             onChange={(e) => setSearch(e.target.value)}
             sx={{ width: { xs: '100%', md: 130, lg: 160, xl: 200 }, minWidth: 110, flexShrink: 1 }}
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} /></InputAdornment> }}
@@ -830,62 +908,40 @@ const O2dStepBoard = () => {
               variant trips DevTools' "Incorrect use of <label for>" check). */}
           <TextField
             select size="small" label="Show" id="o2d-stepboard-show" value={status}
-            onChange={(e) => setStatus(e.target.value)} sx={{ width: 104, flexShrink: 0 }}
+            onChange={(e) => setStatus(e.target.value)} sx={{ width: { xs: '100%', md: 104, xl: 140 }, flexShrink: 0 }}
             SelectProps={{ native: true }} InputLabelProps={{ shrink: true }}
           >
             {STATUS_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </TextField>
-          <Autocomplete
-            size="small" options={quickOptions} value={null} blurOnSelect
-            sx={{ width: { xs: '100%', md: 150, lg: 178, xl: 205 }, minWidth: 140, flexShrink: 1 }}
-            getOptionLabel={(o) => o?.label || ''}
-            isOptionEqualToValue={() => false}
-            onChange={(_, opt) => { if (opt) navigate(`/challans?so=${encodeURIComponent(opt.so)}`); }}
-            renderInput={(params) => <TextField {...params} label="Quick dispatch" placeholder="SO / party…" />}
-          />
-          {rights.canAdd && (
-            <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />}
-              onClick={() => setNewOrderOpen(true)}
-              sx={{
-                whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '6px',
-                bgcolor: O2D.brand, flexShrink: 0, px: { md: 1.1, xl: 1.6 },
-              }}>
-              <Box component="span" sx={{ display: { xs: 'none', xl: 'inline' } }}>New Sales Order</Box>
-              <Box component="span" sx={{ display: { xs: 'inline', xl: 'none' } }}>New Order</Box>
-            </Button>
-          )}
-        </Stack>
-      </Box>
-
-      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-        {/* ── Step rail — the whole flow, left to right ── */}
-        {isLoading ? <Skeleton variant="rounded" height={72} /> : (
-          <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', pb: 0.5 }}>
-            {steps.map((s) => {
-              const active = s.code === activeCode;
-              const open = openCounts[s.code] || 0;
+        </Box>
+      </Paper>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
+        {isError && <LoadErrorNote title="Could not load the orders" error={error} onRetry={refetch} compact={!!data} />}
+        <CapNote shown={rows.length} cap={BOARD_LIMIT} noun="orders" />
+        {/* ── Step rail — the whole flow, left to right, as compact IMS KPI
+            cards: the step's open count (unchanged), its state as a pastel
+            tone (rose = something overdue, blue = open work, teal = clear),
+            and the same click / keyboard navigation to the step. ── */}
+        {isLoading ? <CardStripSkeleton count={13} /> : (
+          <Box ref={railRef} data-testid="o2d-step-rail" role="group" aria-label="O2D steps" sx={STEP_RAIL_SX}>
+            {steps.map((s, idx) => {
+              const active = s.code === shownCode;
+              const { total = 0, open = 0, overdue: od = 0 } = stepCounts[s.code] || {};
               // Who does this step: the assigned main doer (Doer Assignment), else the SOP owner.
               const plan = planByStep.get(s.code);
               const who = plan?.doerNames || s.ownerName;
               return (
                 <Tooltip
-                  key={s.code} arrow placement="bottom"
-                  // Light card tooltip (matches the Master FMS tooltips) — a
-                  // dark bubble with blue text was unreadable.
-                  slotProps={{
-                    tooltip: {
-                      sx: {
-                        bgcolor: O2D.surface, color: O2D.brand, px: 1.25, py: 1, borderRadius: '8px',
-                        maxWidth: 300, border: `1px solid ${O2D.line}`, boxShadow: '0 8px 26px rgba(28,30,33,0.16)',
-                      },
-                    },
-                    arrow: { sx: { color: O2D.surface, '&::before': { border: `1px solid ${O2D.line}` } } },
-                  }}
+                  key={s.code} arrow placement="top" disableInteractive enterDelay={250}
+                  slotProps={cardTipProps}
                   title={(
-                    <Box>
+                    <Box data-testid="o2d-step-tip">
                       <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: O2D.brand }}>{s.code} · {s.name}</Typography>
+                      <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mt: 0.25 }}>
+                        {total} order{total === 1 ? '' : 's'} · {open} open{od ? ` · ${od} overdue` : ''}
+                      </Typography>
                       {who && (
-                        <Typography sx={{ fontSize: '0.7rem', color: O2D.sub, mt: 0.25 }}>
+                        <Typography sx={{ fontSize: '0.7rem', color: O2D.sub }}>
                           Who: {who}{plan?.buddyNames ? ` · Buddy: ${plan.buddyNames}` : ''}
                         </Typography>
                       )}
@@ -894,54 +950,18 @@ const O2dStepBoard = () => {
                     </Box>
                   )}
                 >
-                <Paper
-                  elevation={0} role="tab" tabIndex={0} aria-selected={active}
-                  onClick={() => navigate(`/o2d-fms/steps/${encodeURIComponent(s.code)}`)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/o2d-fms/steps/${encodeURIComponent(s.code)}`); } }}
-                  sx={{
-                    px: 1.5, py: 1, minWidth: 150, flexShrink: 0, cursor: 'pointer', borderRadius: '8px',
-                    border: `1.5px solid ${active ? O2D.brand : O2D.line}`,
-                    bgcolor: active ? alpha(O2D.brand, 0.06) : O2D.surface,
-                    transition: 'border-color .15s, background-color .15s, box-shadow .15s',
-                    '&:hover': {
-                      borderColor: O2D.brand,
-                      bgcolor: alpha(O2D.brand, 0.05),
-                      boxShadow: `0 2px 10px ${alpha(O2D.brand, 0.14)}`,
-                      '& .stepName, & .stepCode': { color: O2D.brand },
-                    },
-                    '&:focus-visible': { outline: `2px solid ${O2D.brand}`, outlineOffset: 1 },
-                  }}
-                >
-                  <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                    <Typography className="stepCode" sx={{ fontSize: '0.78rem', fontWeight: 800, color: active ? O2D.brand : O2D.ink, transition: 'color .15s' }}>{s.code}</Typography>
-                    {/* Pending-work badge — big, solid, and PULSING while work
-                        waits, so the eye lands on it; red when any is overdue. */}
-                    {(() => {
-                      const od = overdueCounts[s.code] || 0;
-                      const badgeColor = od > 0 ? '#dc2626' : O2D.brand;
-                      return (
-                        <Chip size="small" label={open}
-                          sx={{
-                            height: 26, minWidth: 32, fontWeight: 900, fontSize: '0.84rem',
-                            borderRadius: '999px',
-                            bgcolor: open > 0 ? badgeColor : '#f1f5f9',
-                            color: open > 0 ? '#fff' : O2D.sub,
-                            '& .MuiChip-label': { px: 1 },
-                            ...(open > 0 && {
-                              animation: 'o2dBadgePulse 1.6s ease-in-out infinite',
-                              '@keyframes o2dBadgePulse': {
-                                '0%, 100%': { transform: 'scale(1)', boxShadow: `0 0 0 0 ${alpha(badgeColor, 0.45)}` },
-                                '50%': { transform: 'scale(1.12)', boxShadow: `0 0 0 6px ${alpha(badgeColor, 0)}` },
-                              },
-                            }),
-                          }} />
-                      );
-                    })()}
-                  </Stack>
-                  <Typography noWrap className="stepName" sx={{ fontSize: '0.72rem', color: active ? O2D.brand : O2D.sub, fontWeight: active ? 700 : 500, mt: 0.25, maxWidth: 170, transition: 'color .15s' }}>
-                    {s.name}
-                  </Typography>
-                </Paper>
+                <StepCard
+                    data-step={s.code} data-active={active ? 'true' : undefined}
+                    testId={`o2d-step-card-${s.code}`}
+                    code={s.code} name={s.name}
+                    // Orders this step's table lists under the current filters.
+                    // Step number as the figure; the count in the red O2D alert badge.
+                    badge={total}
+                    tone={stepTone(idx)}
+                    icon={stepIcon(s.code)}
+                    active={active}
+                    onClick={() => goStep(s.code)}
+                />
                 </Tooltip>
               );
             })}
@@ -949,49 +969,56 @@ const O2dStepBoard = () => {
         )}
 
         {/* ── The selected step's orders — flat table, left to right ── */}
-        <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+        <Paper elevation={0} data-testid="o2d-board-register" sx={{ borderRadius: '10px', overflow: 'hidden', bgcolor: O2D.surface }}>
+          {switching ? (
+            <Box data-testid="o2d-board-switching">
+              <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.1, bgcolor: FLUENT.blue.bg, borderBottom: `1px solid ${FLUENT.blue.border}` }}>
+                <TableSkeleton rows={0} columns={4} sx={{ bgcolor: 'transparent', '& > div:first-of-type': { bgcolor: 'transparent', borderBottom: 0, px: 0, height: 30 } }} />
+              </Box>
+              <TableSkeleton rows={8} columns={7} />
+            </Box>
+          ) : (<>
           {activeStep && (
-            /* Step info bar — mirrors the sheet's header block: What · Who · When */
-            <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap
-              sx={{ px: 1.5, py: 1, borderBottom: `1px solid ${O2D.lineSoft}` }}>
-              <Typography sx={{ fontSize: '0.85rem', fontWeight: 800, color: O2D.ink }}>{activeStep.code} · {activeStep.name}</Typography>
+            /* Step info bar — the register's header band (the IMS ledger band):
+               What · Who · When on the left, the step's totals on the right. */
+            <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap data-testid="o2d-step-info"
+              sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.1, bgcolor: FLUENT.blue.bg, borderBottom: `1px solid ${FLUENT.blue.border}` }}>
+              <Box sx={{ width: 30, height: 30, borderRadius: '8px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: '#fff', color: FLUENT.blue.accent, border: `1px solid ${FLUENT.blue.border}` }}>
+                <Workflow size={15} />
+              </Box>
+              <Typography component="h2" sx={{ fontSize: '0.92rem', fontWeight: 800, color: FLUENT.blue.ink, mr: 0.5 }}>{activeStep.code} · {activeStep.name}</Typography>
               {(planByStep.get(activeStep.code)?.doerNames || activeStep.ownerName) && (
                 <Tooltip title="Main doers — any one of them can complete this step">
-                  <Chip size="small" icon={<User size={12} />} label={planByStep.get(activeStep.code)?.doerNames || activeStep.ownerName}
-                    sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: alpha(O2D.brand, 0.08), color: O2D.brand, '& .MuiChip-icon': { color: O2D.brand } }} />
+                  <span><O2dStatusPill tone="blue" icon={User} label={planByStep.get(activeStep.code)?.doerNames || activeStep.ownerName} /></span>
                 </Tooltip>
               )}
               {planByStep.get(activeStep.code)?.buddyNames && (
-                <Chip size="small" label={`Buddy: ${planByStep.get(activeStep.code).buddyNames}`}
-                  sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: '#f8fafc', color: O2D.sub, border: `1px solid ${O2D.line}` }} />
+                <O2dStatusPill tone="grey" label={`Buddy: ${planByStep.get(activeStep.code).buddyNames}`} />
               )}
-              {planByStep.get(activeStep.code)?.mandatory === false && (
-                <Chip size="small" label="Optional"
-                  sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }} />
-              )}
-              {activeStep.whenText && (
-                <Chip size="small" icon={<CalendarClock size={12} />} label={activeStep.whenText}
-                  sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: '#f8fafc', color: O2D.sub, border: `1px solid ${O2D.line}`, '& .MuiChip-icon': { color: O2D.sub } }} />
-              )}
-              <Typography sx={{ fontSize: '0.72rem', color: O2D.sub, ml: 'auto' }}>
-                <b>{stepRows.length}</b> order{stepRows.length === 1 ? '' : 's'}
-                {isPerDcStep && (() => { const n = displayRows.filter((r) => r.dc).length; return n > 0
-                  ? <Box component="span"> · <b>{n}</b> dispatch{n === 1 ? '' : 'es'}</Box> : null; })()}
-                {overdueOnStep > 0 && <Box component="span" sx={{ color: '#dc2626', fontWeight: 800 }}> · {overdueOnStep} overdue</Box>}
-              </Typography>
+              {planByStep.get(activeStep.code)?.mandatory === false && <O2dStatusPill tone="amber" label="Optional" />}
+              {activeStep.whenText && <O2dStatusPill tone="grey" icon={CalendarClock} label={activeStep.whenText} />}
+              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ ml: 'auto' }}>
+                <Typography sx={{ fontSize: '0.74rem', color: O2D.sub, whiteSpace: 'nowrap' }}>
+                  <b style={{ color: O2D.ink }}>{stepRows.length}</b> order{stepRows.length === 1 ? '' : 's'}
+                  {isPerDcStep && (() => { const n = displayRows.filter((r) => r.dc).length; return n > 0
+                    ? <Box component="span"> · <b style={{ color: O2D.ink }}>{n}</b> dispatch{n === 1 ? '' : 'es'}</Box> : null; })()}
+                </Typography>
+                {overdueOnStep > 0 && <O2dStatusPill tone="rose" icon={AlertTriangle} label={`${overdueOnStep} overdue`} />}
+              </Stack>
             </Stack>
           )}
-          <Box sx={{ overflow: 'auto', maxHeight: 'calc(100vh - 285px)' }}>
-            {isLoading ? <Skeleton variant="rounded" height={300} /> : (
-              <Table size="small" stickyHeader sx={{
-                minWidth: 1000,
-                '& td, & th': { borderColor: O2D.lineSoft },
-                '& tbody tr:hover': { bgcolor: O2D.surfaceAlt },
-                '& thead th': { bgcolor: O2D.surfaceAlt, fontWeight: 800, fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: O2D.sub, borderBottom: `1px solid ${O2D.line}` },
+          {/* Desktop: the register scrolls inside its panel under a sticky header.
+              Phone: the page scrolls (no box-in-a-box). */}
+          <Box sx={{ overflow: 'auto', maxHeight: { xs: 'none', md: 'max(360px, calc(100vh - 330px))' } }}>
+            {isLoading ? <TableSkeleton rows={8} columns={7} /> : (
+              <Table size="small" stickyHeader data-testid="o2d-board-table" sx={{
+                // The shared Fluent table (soft-blue header, airy rows, clear hover).
+                ...fluentTableSx(1000, { zebra: false }),
+                '& tbody td': { fontSize: '0.8rem', color: O2D.body, py: 1, verticalAlign: 'middle' },
                 // Frozen body cells need an opaque background (rows scroll under
                 // them) that still follows the row's hover tint.
                 '& tbody td.frozenCell': { bgcolor: O2D.surface },
-                '& tbody tr:hover td.frozenCell': { bgcolor: O2D.surfaceAlt },
+                '& tbody tr:hover td.frozenCell': { bgcolor: '#f1f6fe' },
               }}>
                 <TableHead>
                   <TableRow>
@@ -1012,7 +1039,7 @@ const O2dStepBoard = () => {
                       ) : 'Action'}
                     </TableCell>
                     <TableCell sx={freezeSx(1, true)}>SO Number</TableCell>
-                    {isPerDcStep && <TableCell align="center" sx={freezeSx(2, true)}>Split</TableCell>}
+                    {isPerDcStep && <TableCell align="center" sx={{ ...freezeSx(2, true), px: 0.75 }}>Split</TableCell>}
                     <TableCell sx={{ minWidth: 160 }}>Party</TableCell>
                     <TableCell sx={{ minWidth: 110 }}>PO Number</TableCell>
                     {extraCols.map((col) => (
@@ -1037,7 +1064,7 @@ const O2dStepBoard = () => {
                 <TableBody>
                   {stepRows.length === 0 ? (
                     <TableRow><TableCell colSpan={colCount} align="center" sx={{ py: 5, color: 'text.secondary' }}>
-                      {rows.length === 0 ? 'No orders yet.' : 'No orders match on this step.'}
+                      {rows.length === 0 ? (isError ? 'The orders could not be loaded — see the note above.' : 'No orders yet.') : 'No orders match on this step.'}
                     </TableCell></TableRow>
                   ) : paged.map((row) => {
                     const { p, s, st, dc, splitIndex, splitTotal } = row;
@@ -1067,15 +1094,16 @@ const O2dStepBoard = () => {
                       <TableRow
                         hover
                         sx={rowCancelled ? {
-                          // Faded red ground so a cancelled dispatch is obvious at a
-                          // glance without hiding it — the row stays as the record.
-                          bgcolor: alpha('#dc2626', 0.05),
-                          '& .frozenCell': { bgcolor: '#fdf2f2' },
-                          '&:hover': { bgcolor: alpha('#dc2626', 0.09) },
+                          // Neutral grey ground so a cancelled dispatch is obvious at a
+                          // glance without hiding it — the row stays as the record and
+                          // its "Cancelled" chip carries the meaning (no red wash).
+                          bgcolor: FLUENT.grey.bg,
+                          '& .frozenCell': { bgcolor: FLUENT.grey.tint },
+                          '&:hover': { bgcolor: FLUENT.grey.tint },
                         } : undefined}
                       >
                         <TableCell className="frozenCell" sx={freezeSx(0)}>
-                          <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" alignItems="center">
+                          <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap" alignItems="center">
                             {isEmailStep && (
                               <Checkbox
                                 size="small"
@@ -1095,14 +1123,11 @@ const O2dStepBoard = () => {
                                   size="small" disableElevation variant="contained"
                                   startIcon={<ClipboardList size={13} />}
                                   onClick={() => openTask(p)}
-                                  sx={{
-                                    textTransform: 'none', fontWeight: 700, fontSize: '0.72rem',
-                                    borderRadius: '6px', whiteSpace: 'nowrap', px: 1.1, py: 0.35, bgcolor: O2D.brand,
-                                  }}
+                                  sx={rowBtnSx('do')}
                                 >
                                   Do Task
                                 </Button>
-                              ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>
+                              ) : <Typography sx={{ ...TXT, color: O2D.faint }}>—</Typography>
                             ) : links.map((a) => {
                               const tipBy = dc ? dcState?.by : a.doneByName;
                               const tipAt = dc ? dcState?.at : a.doneAt;
@@ -1117,13 +1142,7 @@ const O2dStepBoard = () => {
                                   variant={rowDone ? 'outlined' : 'contained'}
                                   endIcon={rowDone ? <ExternalLink size={11} /> : <ArrowRight size={12} />}
                                   onClick={() => goRowAction(a, row, rowDone)}
-                                  sx={{
-                                    textTransform: 'none', fontWeight: 700, fontSize: '0.72rem',
-                                    borderRadius: '6px', whiteSpace: 'nowrap', px: 1.1, py: 0.35,
-                                    ...(rowDone
-                                      ? { color: '#15803d', borderColor: '#bbf7d0', bgcolor: '#f0fdf4', '&:hover': { borderColor: '#15803d', bgcolor: '#ecfdf5' } }
-                                      : { bgcolor: O2D.brand }),
-                                  }}
+                                  sx={rowBtnSx(rowDone ? 'done' : 'do')}
                                 >
                                   {a.label}
                                 </Button>
@@ -1133,30 +1152,45 @@ const O2dStepBoard = () => {
                           </Stack>
                         </TableCell>
                         <TableCell className="frozenCell" sx={freezeSx(1)}>
-                          <Typography sx={{ fontWeight: firstOfGroup ? 700 : 500, fontSize: '0.82rem', color: firstOfGroup ? 'inherit' : O2D.sub }}>
-                            {p.soNumber || '—'}
-                          </Typography>
+                          {p.salesOrderId && p.soNumber ? (
+                            // Opens the Sales Order's detail page — the same page as
+                            // the Order Entry link. A real link: Ctrl-click / new tab work.
+                            <Tooltip title="Open this sales order" arrow>
+                              <MuiLink
+                                component={RouterLink} to={orderPath(p)} underline="hover"
+                                data-testid="o2d-board-so-link"
+                                sx={{ ...TXT, fontWeight: firstOfGroup ? 700 : 600, color: firstOfGroup ? FLUENT.blue.accent : O2D.sub, fontVariantNumeric: 'tabular-nums', '&:hover': { color: FLUENT.blue.accent } }}
+                              >
+                                {p.soNumber}
+                              </MuiLink>
+                            </Tooltip>
+                          ) : (
+                            <Typography sx={{ ...TXT, fontWeight: firstOfGroup ? 700 : 500, color: firstOfGroup ? O2D.ink : O2D.sub, fontVariantNumeric: 'tabular-nums' }}>
+                              {p.soNumber || '—'}
+                            </Typography>
+                          )}
                         </TableCell>
                         {isPerDcStep && (
-                          <TableCell align="center" className="frozenCell" sx={freezeSx(2)}>
+                          <TableCell align="center" className="frozenCell" sx={{ ...freezeSx(2), px: 0.75 }}>
                             {splitTotal > 0 ? (
                               <Tooltip title={`${splitTotal} dispatch${splitTotal === 1 ? '' : 'es'} for this order — click for the full split view`} arrow>
-                                <Chip
-                                  size="small" icon={<Layers size={12} />} label={`${splitIndex}/${splitTotal}`}
+                                <O2dStatusPill
+                                  tone="blue" icon={Layers} label={`${splitIndex}/${splitTotal}`} clickable
+                                  aria-expanded={expandedKey === rowKey}
                                   onClick={() => setExpandedKey(expandedKey === rowKey ? null : rowKey)}
                                   sx={{
-                                    height: 22, fontWeight: 800, fontSize: '0.68rem', cursor: 'pointer',
-                                    bgcolor: expandedKey === rowKey ? O2D.brand : alpha(O2D.brand, 0.1),
-                                    color: expandedKey === rowKey ? '#fff' : O2D.brand,
-                                    '& .MuiChip-icon': { color: 'inherit' },
+                                    cursor: 'pointer', fontVariantNumeric: 'tabular-nums',
+                                    ...(expandedKey === rowKey && { bgcolor: FLUENT.blue.accent, color: '#fff', borderColor: FLUENT.blue.accent, '& .MuiChip-icon': { color: '#fff' } }),
                                   }}
                                 />
                               </Tooltip>
-                            ) : <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>}
+                            ) : <Typography sx={{ ...TXT, color: O2D.faint }}>—</Typography>}
                           </TableCell>
                         )}
-                        <TableCell><Typography noWrap sx={{ fontSize: '0.82rem' }}>{p.partyName || '—'}</Typography></TableCell>
-                        <TableCell><Typography sx={{ fontSize: '0.82rem' }}>{dc?.poNumber || p.poNumber || '—'}</Typography></TableCell>
+                        <TableCell sx={{ maxWidth: 240 }}>
+                          <Typography noWrap title={p.partyName || undefined} sx={{ ...TXT, color: O2D.ink, fontWeight: 600 }}>{p.partyName || '—'}</Typography>
+                        </TableCell>
+                        <TableCell><Typography sx={{ ...TXT, whiteSpace: 'nowrap' }}>{dc?.poNumber || p.poNumber || '—'}</Typography></TableCell>
                         {extraCols.map((col) => (
                           <TableCell key={col.key}>{extraCellNode(dc, col.key)}</TableCell>
                         ))}
@@ -1169,11 +1203,11 @@ const O2dStepBoard = () => {
                               <Tooltip title={byTip || (col.key === 'sku' && val !== '—' ? val : '')} arrow
                                 disableHoverListener={!byTip && !(col.key === 'sku' && val !== '—')}>
                                 <Typography noWrap sx={{
-                                  fontSize: '0.78rem',
+                                  ...TXT,
                                   maxWidth: col.key === 'sku' ? 220 : undefined,
                                   fontWeight: col.key === 'dcNumber' && val !== '—' ? 700 : 400,
                                   color: val === '—' ? O2D.faint
-                                    : isBal ? (dc.invoice.balance > 0 ? '#dc2626' : '#15803d')
+                                    : isBal ? (dc.invoice.balance > 0 ? FLUENT.orange.accent : '#15803d')
                                       : O2D.body,
                                 }}>{val}</Typography>
                               </Tooltip>
@@ -1190,7 +1224,7 @@ const O2dStepBoard = () => {
                           return (
                             <TableCell key={label}>
                               <Tooltip title={f?.filledByName ? `${f.filledByName} · ${fmtDT(f.filledAt)}` : ''} arrow disableHoverListener={!f?.filledByName}>
-                                <Typography sx={{ fontSize: '0.8rem', color: val === '—' ? O2D.faint : O2D.body }}>{val}</Typography>
+                                <Typography sx={{ ...TXT, color: val === '—' ? O2D.faint : O2D.body }}>{val}</Typography>
                               </Tooltip>
                             </TableCell>
                           );
@@ -1205,28 +1239,17 @@ const O2dStepBoard = () => {
                               : rowDone
                                 ? `Done${dcState?.by ? ` by ${dcState.by}` : ''}${dcState?.at ? ` · ${fmtDT(dcState.at)}` : ''}${dc.phaseNo ? ` · Phase ${dc.phaseNo}` : ''}${dc.remark ? ` · ${dc.remark}` : ''}`
                                 : `${dc.dcNumber} is still waiting on this step${dc.phaseNo ? ` · Phase ${dc.phaseNo}` : ''}`}>
-                            <Chip size="small"
-                              icon={rowCancelled ? <Ban size={14} /> : rowDone ? <CheckCircle2 size={14} /> : <CircleDashed size={14} />}
-                              label={rowCancelled ? 'Cancelled' : rowDone ? 'Done' : 'Pending'}
-                              sx={{
-                                height: 24, fontWeight: 700, borderRadius: '999px',
-                                color: rowCancelled ? '#b91c1c' : rowDone ? '#15803d' : '#64748b',
-                                bgcolor: rowCancelled ? '#fee2e2' : rowDone ? '#ecfdf5' : '#f8fafc',
-                                border: `1px solid ${rowCancelled ? '#fca5a5' : rowDone ? '#bbf7d0' : '#e2e8f0'}`,
-                                '& .MuiChip-icon': { color: 'inherit', ml: 0.75, mr: -0.25 }, '& .MuiChip-label': { px: 1 },
-                              }} />
+                            <span><O2dStatusPill
+                              tone={rowCancelled ? 'grey' : rowDone ? 'green' : 'grey'}
+                              icon={rowCancelled ? Ban : rowDone ? CheckCircle2 : CircleDashed}
+                              label={rowCancelled ? 'Cancelled' : rowDone ? 'Completed' : 'Pending'} /></span>
                             </Tooltip>
                             {(rowCancelled || rowDone) && dcState?.by && (
-                              <Typography sx={{ fontSize: '0.68rem', color: O2D.sub, mt: 0.25 }}>by <b>{dcState.by}</b></Typography>
+                              <Typography sx={{ ...CAP, mt: 0.25 }}>by <b>{dcState.by}</b></Typography>
                             )}
                           </>) : firstOfGroup && (<>
-                          <Chip size="small" icon={<Icon size={14} />} label={st.label}
-                            sx={{
-                              height: 24, fontWeight: 700, color: st.color, bgcolor: st.bg,
-                              border: `1px solid ${st.border}`, borderRadius: '999px',
-                              '& .MuiChip-icon': { color: st.color, ml: 0.75, mr: -0.25 }, '& .MuiChip-label': { px: 1 },
-                            }} />
-                          {tag && <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: O2D.brand, mt: 0.25 }}>{tag}</Typography>}
+                          <O2dStatusPill tone={st.tone} icon={Icon} label={st.label} />
+                          {tag && <Typography sx={{ ...CAP, fontWeight: 700, color: FLUENT.blue.accent, mt: 0.25 }}>{tag}</Typography>}
                           </>)}
                         </TableCell>
                         {isEmailStep && (
@@ -1241,10 +1264,7 @@ const O2dStepBoard = () => {
                                   : null);
                               if (!em) {
                                 return (
-                                  <Chip size="small" label="Not sent" sx={{
-                                    height: 22, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px',
-                                    color: '#64748b', bgcolor: '#f8fafc', border: '1px solid #e2e8f0',
-                                  }} />
+                                  <O2dStatusPill tone="grey" label="Not sent" />
                                 );
                               }
                               const ok = em.status === 'SENT';
@@ -1252,56 +1272,51 @@ const O2dStepBoard = () => {
                                 .filter(Boolean).join(' · ');
                               return (<>
                                 <Tooltip title={tip} arrow disableHoverListener={!tip}>
-                                  <Chip size="small" label={ok ? 'Sent' : 'Failed'} sx={{
-                                    height: 22, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px',
-                                    color: ok ? '#15803d' : '#dc2626',
-                                    bgcolor: ok ? '#ecfdf5' : '#fef2f2',
-                                    border: `1px solid ${ok ? '#bbf7d0' : '#fecaca'}`,
-                                  }} />
+                                  <span><O2dStatusPill tone={ok ? 'green' : 'rose'} label={ok ? 'Sent' : 'Failed'} /></span>
                                 </Tooltip>
-                                <Typography sx={{ fontSize: '0.68rem', color: O2D.sub, mt: 0.25, whiteSpace: 'nowrap' }}>{fmtDT(em.at)}</Typography>
+                                <Typography sx={{ ...CAP, mt: 0.25, whiteSpace: 'nowrap' }}>{fmtDT(em.at)}</Typography>
                               </>);
                             })()}
                           </TableCell>
                         )}
                         <TableCell>
                           {firstOfGroup && (
-                          <Typography sx={{ fontSize: '0.76rem', whiteSpace: 'nowrap', color: st.key === 'overdue' ? '#dc2626' : O2D.body, fontWeight: st.key === 'overdue' ? 700 : 400 }}>
+                          <Typography sx={{ ...TXT, whiteSpace: 'nowrap', color: st.key === 'overdue' ? FLUENT.rose.accent : O2D.body, fontWeight: st.key === 'overdue' ? 700 : 400 }}>
                             {fmtDT(s.planned)}
                           </Typography>
                           )}
                         </TableCell>
                         <TableCell>
                           {dc ? (rowDone ? (<>
-                            <Typography sx={{ fontSize: '0.76rem', whiteSpace: 'nowrap', fontWeight: 700, color: '#15803d' }}>
+                            <Typography sx={{ ...TXT, whiteSpace: 'nowrap', fontWeight: 700, color: FLUENT.green.accent }}>
                               {fmtDT(dcState?.at)}
                             </Typography>
                             {dcState?.by && (
-                              <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>by {dcState.by}</Typography>
+                              <Typography sx={CAP}>by {dcState.by}</Typography>
                             )}
-                          </>) : <Typography sx={{ fontSize: '0.76rem', color: O2D.faint }}>—</Typography>)
+                          </>) : <Typography sx={{ ...TXT, color: O2D.faint }}>—</Typography>)
                           : firstOfGroup && (<>
-                          <Typography sx={{ fontSize: '0.76rem', whiteSpace: 'nowrap', fontWeight: done ? 700 : 400, color: done ? (late ? '#b45309' : '#15803d') : O2D.faint }}>
+                          <Typography sx={{ ...TXT, whiteSpace: 'nowrap', fontWeight: done ? 700 : 400, color: done ? (late ? FLUENT.amber.accent : FLUENT.green.accent) : O2D.faint }}>
                             {fmtDT(s.actual)}
                           </Typography>
                           {done && doneBy && (
-                            <Typography sx={{ fontSize: '0.68rem', color: O2D.sub }}>by {doneBy}</Typography>
+                            <Typography sx={CAP}>by {doneBy}</Typography>
                           )}
                           </>)}
                         </TableCell>
                         <TableCell>
                           {firstOfGroup && (done ? (
                             (s.delayMins || 0) > 0
-                              ? <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: '#dc2626', whiteSpace: 'nowrap' }}>{fmtDelay(s.delayMins)}</Typography>
-                              : <Typography sx={{ fontSize: '0.74rem', fontWeight: 700, color: '#15803d', whiteSpace: 'nowrap' }}>On time</Typography>
-                          ) : <Typography sx={{ fontSize: '0.76rem', color: O2D.faint }}>—</Typography>)}
+                              ? <O2dStatusPill tone="amber" label={fmtDelay(s.delayMins)} />
+                              : <O2dStatusPill tone="green" label="On time" />
+                          ) : <Typography sx={{ ...TXT, color: O2D.faint }}>—</Typography>)}
                         </TableCell>
-                        <TableCell>{firstOfGroup && <Typography noWrap sx={{ fontSize: '0.78rem', color: O2D.body }}>{who}</Typography>}</TableCell>
+                        <TableCell sx={{ maxWidth: 200 }}>{firstOfGroup && <Typography noWrap title={who} sx={TXT}>{who}</Typography>}</TableCell>
                         {/* Quiet escape hatch to the full task page — checklist, proof,
                             comments and the formal submit still live there. */}
                         <TableCell align="center">
                           <Tooltip title={dc ? `Open task for ${dc.dcNumber} (checklist & submit)` : 'Open task page (checklist & submit)'} arrow>
-                            <IconButton size="small" onClick={() => openTask(p, dc)} sx={{ color: O2D.sub, '&:hover': { color: O2D.brand } }}>
+                            <IconButton size="small" aria-label={dc ? `Open task for ${dc.dcNumber}` : `Open task for ${p.soNumber || 'this order'}`} onClick={() => openTask(p, dc)} sx={{ color: O2D.sub, '&:hover': { color: O2D.brand } }}>
                               <ClipboardList size={15} />
                             </IconButton>
                           </Tooltip>
@@ -1312,7 +1327,7 @@ const O2dStepBoard = () => {
                             a static marker instead of a second button. */}
                         {isPerDcStep && canEdit && (
                           <TableCell align="center">
-                            {!dc ? <Typography sx={{ fontSize: '0.75rem', color: O2D.faint }}>—</Typography>
+                            {!dc ? <Typography sx={{ ...TXT, color: O2D.faint }}>—</Typography>
                               : rowCancelled ? (
                                 <Tooltip arrow title={`Cancelled${dcState?.by ? ` by ${dcState.by}` : ''}${dcState?.reason ? ` · ${dcState.reason}` : ''} — click to undo: the quantity counts as dispatched again and steps 2.06→2.13 return to their real state.`}>
                                   <span>
@@ -1321,11 +1336,7 @@ const O2dStepBoard = () => {
                                       disabled={restoringId === dc.dcId}
                                       startIcon={restoringId === dc.dcId ? <CircularProgress size={11} /> : <RotateCcw size={12} />}
                                       onClick={() => handleRestore(dc)}
-                                      sx={{
-                                        textTransform: 'none', fontWeight: 700, fontSize: '0.68rem', borderRadius: '6px',
-                                        px: 0.9, py: 0.15, minWidth: 0, color: '#15803d', borderColor: '#bbf7d0',
-                                        '&:hover': { borderColor: '#15803d', bgcolor: alpha('#15803d', 0.06) },
-                                      }}
+                                      sx={rowBtnSx('green')}
                                     >
                                       Restore
                                     </Button>
@@ -1337,11 +1348,7 @@ const O2dStepBoard = () => {
                                     size="small" variant="outlined"
                                     startIcon={<Ban size={12} />}
                                     onClick={() => { setCancelReason(''); setCancelRow({ p, dc }); }}
-                                    sx={{
-                                      textTransform: 'none', fontWeight: 700, fontSize: '0.68rem', borderRadius: '6px',
-                                      px: 0.9, py: 0.15, minWidth: 0, color: '#b91c1c', borderColor: '#fca5a5',
-                                      '&:hover': { borderColor: '#b91c1c', bgcolor: alpha('#dc2626', 0.06) },
-                                    }}
+                                    sx={rowBtnSx('rose')}
                                   >
                                     Cancel
                                   </Button>
@@ -1358,6 +1365,7 @@ const O2dStepBoard = () => {
                               <span>
                                 <IconButton
                                   size="small" disabled={!dc && !p.salesOrderId}
+                                  aria-label={dc ? `Edit ${dc.dcNumber}` : 'Edit this order'}
                                   onClick={() => setEditRow({ p, s, dc })}
                                   sx={{ color: O2D.brand, '&:hover': { bgcolor: alpha(O2D.brand, 0.08) } }}
                                 >
@@ -1378,6 +1386,7 @@ const O2dStepBoard = () => {
                               <span>
                                 <IconButton
                                   size="small" disabled={!dc && !p.salesOrderId}
+                                  aria-label={dc ? `Delete challan ${dc.dcNumber}` : 'Delete this order'}
                                   onClick={() => setConfirmRow({ p, dc })}
                                   sx={{ color: 'error.main', '&:hover': { bgcolor: alpha('#dc2626', 0.08) } }}
                                 >
@@ -1392,30 +1401,23 @@ const O2dStepBoard = () => {
                           plan progress + every Delivery Challan, sheet-style. ── */}
                       {isPerDcStep && expandedKey === rowKey && (
                         <TableRow>
-                          <TableCell colSpan={colCount} sx={{ p: 0, bgcolor: alpha(O2D.brand, 0.03), borderBottom: `2px solid ${alpha(O2D.brand, 0.25)}` }}>
+                          <TableCell colSpan={colCount} sx={{ p: 0, bgcolor: FLUENT.blue.bg, borderBottom: `2px solid ${FLUENT.blue.border}` }}>
                             <Collapse in appear>
                               <Box sx={{ px: 2, py: 1.5 }}>
                                 <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
-                                  <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: O2D.ink }}>
+                                  <Typography sx={{ fontSize: '0.84rem', fontWeight: 800, color: FLUENT.blue.ink }}>
                                     {p.soNumber} — dispatch split
                                   </Typography>
                                   {s.dispatchProgress && (<>
-                                    <Chip size="small" label={`Ordered ${fmtNum(s.dispatchProgress.orderedQty)}`}
-                                      sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: '#f1f5f9', color: O2D.sub }} />
-                                    <Chip size="small" label={`Dispatched ${fmtNum(s.dispatchProgress.dispatchedQty)} (${s.dispatchProgress.pct || 0}%)`}
-                                      sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand }} />
+                                    <O2dStatusPill tone="grey" label={`Ordered ${fmtNum(s.dispatchProgress.orderedQty)}`} />
+                                    <O2dStatusPill tone="blue" label={`Dispatched ${fmtNum(s.dispatchProgress.dispatchedQty)} (${s.dispatchProgress.pct || 0}%)`} />
                                     {s.dispatchProgress.phasesTotal > 0 && (
-                                      <Chip size="small" label={`Phases ${s.dispatchProgress.phasesDone}/${s.dispatchProgress.phasesTotal}`}
-                                        sx={{ height: 22, fontWeight: 700, fontSize: '0.7rem', bgcolor: '#ecfdf5', color: '#15803d' }} />
+                                      <O2dStatusPill tone="green" label={`Phases ${s.dispatchProgress.phasesDone}/${s.dispatchProgress.phasesTotal}`} />
                                     )}
                                   </>)}
                                 </Stack>
-                                <Table size="small" sx={{
-                                  bgcolor: O2D.surface, borderRadius: '6px', overflow: 'hidden',
-                                  border: `1px solid ${O2D.line}`,
-                                  '& td, & th': { borderColor: O2D.lineSoft, fontSize: '0.76rem' },
-                                  '& thead th': { bgcolor: O2D.surfaceAlt, fontWeight: 800, fontSize: '0.64rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: O2D.sub },
-                                }}>
+                                <Box sx={{ overflowX: 'auto', borderRadius: '8px', border: `1px solid ${FLUENT.blue.border}`, bgcolor: O2D.surface }}>
+                                <Table size="small" sx={{ ...fluentTableSx(900), '& tbody td': { fontSize: '0.78rem', color: O2D.body, py: 0.75 } }}>
                                   <TableHead>
                                     <TableRow>
                                       <TableCell>#</TableCell><TableCell>Phase</TableCell><TableCell>DC Number</TableCell>
@@ -1426,7 +1428,7 @@ const O2dStepBoard = () => {
                                   </TableHead>
                                   <TableBody>
                                     {(dcBySo.get(p.soNumber) || []).map((d, i) => (
-                                      <TableRow key={String(d.dcId)} sx={String(d.dcId) === String(dc?.dcId) ? { bgcolor: alpha(O2D.brand, 0.06) } : undefined}>
+                                      <TableRow key={String(d.dcId)} sx={String(d.dcId) === String(dc?.dcId) ? { bgcolor: FLUENT.blue.tint } : undefined}>
                                         <TableCell>{i + 1}</TableCell>
                                         <TableCell>{d.phaseNo || '—'}</TableCell>
                                         <TableCell sx={{ fontWeight: 700 }}>{d.dcNumber}</TableCell>
@@ -1442,6 +1444,7 @@ const O2dStepBoard = () => {
                                     ))}
                                   </TableBody>
                                 </Table>
+                                </Box>
                               </Box>
                             </Collapse>
                           </TableCell>
@@ -1464,16 +1467,16 @@ const O2dStepBoard = () => {
               spacing={1.25}
               sx={{
                 position: 'sticky', bottom: 0, zIndex: 4,
-                px: 1.75, py: 1.15,
-                bgcolor: alpha(O2D.brand, 0.06),
-                borderTop: `1px solid ${alpha(O2D.brand, 0.25)}`,
+                px: 1.75, py: 1,
+                bgcolor: FLUENT.blue.bg,
+                borderTop: `1px solid ${FLUENT.blue.border}`,
                 backdropFilter: 'blur(3px)',
               }}
             >
               <Chip
                 size="small"
                 label={selected.length}
-                sx={{ height: 24, minWidth: 30, fontWeight: 900, fontSize: '0.75rem', bgcolor: O2D.brand, color: '#fff' }}
+                sx={{ height: 22, minWidth: 28, fontWeight: 800, fontSize: '0.72rem', bgcolor: FLUENT.blue.accent, color: '#fff' }}
               />
               <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: O2D.ink }}>
                 {bulkKind === 'invoice'
@@ -1489,50 +1492,50 @@ const O2dStepBoard = () => {
                 size="small"
                 startIcon={<Mail size={15} />}
                 onClick={() => setBulkOpen(true)}
-                sx={{ fontWeight: 800, textTransform: 'none', borderRadius: '8px', boxShadow: 'none' }}
+                disableElevation sx={primaryBtnSx(O2D.brand)}
               >
                 Send {selected.length} email{selected.length === 1 ? '' : 's'}
               </Button>
             </Stack>
           )}
 
-          <TablePagination
-            component="div"
-            count={displayRows.length}
-            page={page}
-            onPageChange={(_, pg) => setPage(pg)}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(e) => setRowsPerPage(parseInt(e.target.value, 10))}
-            rowsPerPageOptions={[25, 50, 100]}
-            labelRowsPerPage="Orders per page:"
-          />
-        </Paper>
-
-        {/* ── Colour map — what every colour on this board means, always in
-            sight at the bottom of the screen. ── */}
-        <Paper elevation={0} sx={{
-          position: 'sticky', bottom: 8, zIndex: 4, borderRadius: '8px',
-          border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, px: 1.5, py: 0.75,
-          boxShadow: '0 -2px 12px rgba(15,23,42,0.08)',
-        }}>
-          <Stack direction="row" spacing={1.75} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Typography sx={{ fontSize: '0.64rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em', color: O2D.faint, flexShrink: 0 }}>
-              Colour map
-            </Typography>
-            {[
-              ['#1d4ed8', 'Blue button — work to do (opens the form)'],
-              ['#15803d', 'Green — done / on time (opens the record)'],
-              ['#b45309', 'Amber — done, but late'],
-              ['#2563eb', 'Blue chip — in progress'],
-              ['#64748b', 'Grey — pending, not started'],
-              ['#dc2626', 'Red — overdue / delay / amount outstanding'],
-            ].map(([c, label]) => (
-              <Stack key={label} direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
-                <Box sx={{ width: 10, height: 10, borderRadius: '3px', bgcolor: c }} />
-                <Typography sx={{ fontSize: '0.7rem', color: O2D.body, whiteSpace: 'nowrap' }}>{label}</Typography>
-              </Stack>
-            ))}
-          </Stack>
+          <Box data-testid="o2d-board-footer" sx={{
+            display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between',
+            columnGap: 2, rowGap: 0.5, pl: { xs: 1.25, md: 1.75 }, borderTop: `1px solid ${O2D.lineSoft}`, bgcolor: O2D.surface,
+          }}>
+            {/* Colour key — the same pastel tones the pills on this board use. */}
+            <Stack direction="row" columnGap={1.5} rowGap={0.5} alignItems="center" flexWrap="wrap" useFlexGap
+              data-testid="o2d-board-legend" sx={{ py: { xs: 1, md: 0.75 } }}>
+              <Typography sx={{ fontSize: '0.64rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: O2D.faint }}>
+                Colour key
+              </Typography>
+              {[
+                [FLUENT.blue.accent, 'Work to do · in progress'],
+                [FLUENT.green.accent, 'Completed on time'],
+                [FLUENT.amber.accent, 'Completed late'],
+                [FLUENT.orange.accent, 'Amount outstanding'],
+                [FLUENT.grey.accent, 'Pending · cancelled'],
+                [FLUENT.rose.accent, 'Overdue · failed'],
+              ].map(([c, label]) => (
+                <Stack key={label} direction="row" spacing={0.5} alignItems="center">
+                  <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: c, flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: '0.7rem', color: O2D.body, whiteSpace: 'nowrap' }}>{label}</Typography>
+                </Stack>
+              ))}
+            </Stack>
+            <TablePagination
+              component="div"
+              count={displayRows.length}
+              page={page}
+              onPageChange={(_, pg) => setPage(pg)}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(e) => setRowsPerPage(parseInt(e.target.value, 10))}
+              rowsPerPageOptions={[25, 50, 100]}
+              labelRowsPerPage="Rows per page:"
+              sx={{ border: 0, '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '0.74rem', color: O2D.sub } }}
+            />
+          </Box>
+          </>)}
         </Paper>
 
       <OrderEntryDrawer open={newOrderOpen} onClose={() => setNewOrderOpen(false)} />
@@ -1626,7 +1629,7 @@ const O2dStepBoard = () => {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </O2dPage>
   );
 };
 

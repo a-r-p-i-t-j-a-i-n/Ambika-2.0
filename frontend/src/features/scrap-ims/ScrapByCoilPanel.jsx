@@ -8,8 +8,9 @@ import { Disc3, Scissors, HelpCircle } from 'lucide-react';
 import dayjs from 'dayjs';
 import {
   Panel, TableScroll, EmptyNote, Th, YieldChip, SCRAP_ACCENT,
-  O2D, O2D_TIP, num, kg, imsTableSx,
+  O2D, O2D_TIP, num, kg,
 } from './scrapImsMeta';
+import { fluentTableSx } from '../ims/imsFluent';
 import { useGetScrapByCoilQuery } from '../../store/api/scrapImsApi';
 
 /**
@@ -77,7 +78,7 @@ const ScrapByCoilPanel = ({ filters = {}, limit = 25 }) => {
       )}
     >
       <TableScroll>
-        <Table size="small" sx={imsTableSx(1060)}>
+        <Table size="small" sx={fluentTableSx(1060)}>
           <TableHead>
             <TableRow>
               <TableCell align="center" sx={{ width: 58, whiteSpace: 'nowrap' }}>S.No.</TableCell>

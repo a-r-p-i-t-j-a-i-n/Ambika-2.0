@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
   Chip, Button, IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, MenuItem, Switch, FormControlLabel, Skeleton, Tooltip, alpha,
+  TextField, MenuItem, Switch, FormControlLabel, Skeleton, Tooltip, alpha, Alert
 } from '@mui/material';
 import { Plus, Pencil, Trash2, Settings2, ChevronUp, ChevronDown, Zap, GripVertical, Layers } from 'lucide-react';
 import {
@@ -11,6 +11,9 @@ import {
   useReorderStepDefinitionsMutation,
 } from '../../store/api/o2dFmsApi';
 import { FMS_CATALOGS, DEFAULT_FMS_KEY } from './fmsCatalogs';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
+import { primaryBtnSx } from '../ims/imsFluent';
+import { O2D } from './o2dTheme';
 
 const ROLES = ['PLANNER', 'SALES_EXEC', 'DISPATCH_SUPERVISOR', 'FINANCE', 'VIEWER', 'MD'];
 const PHASES = ['PRE_PRODUCTION', 'PLANNING', 'EXECUTION', 'POST_DISPATCH'];
@@ -31,7 +34,7 @@ const blank = {
 const StepDefinitionsConfig = () => {
   // Which FMS catalog we're viewing/editing (FMS 1.0 vs Current Sheet FMS).
   const [fmsKey, setFmsKey] = useState(DEFAULT_FMS_KEY);
-  const { data, isLoading } = useGetStepDefinitionsQuery(fmsKey);
+  const { data, isLoading, isError, error: loadError, refetch } = useGetStepDefinitionsQuery(fmsKey);
   const [createDef] = useCreateStepDefinitionMutation();
   const [updateDef] = useUpdateStepDefinitionMutation();
   const [deleteDef] = useDeleteStepDefinitionMutation();
@@ -94,22 +97,16 @@ const StepDefinitionsConfig = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
-        <Box>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Settings2 size={20} />
-            <Typography variant="h5" sx={{ fontWeight: 800 }}>O2D Step Catalog</Typography>
-          </Stack>
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-            Define the Who / What / How / When for every step. New orders use this catalog automatically.
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setForm({ ...blank, sequence: defs.length + 1 }); }}>
+    <O2dPage
+      icon={Settings2}
+      title="O2D Step Catalog"
+      subtitle="Define the Who / What / How / When for every step. New orders use this catalog automatically."
+      actions={(
+        <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />} onClick={() => { setForm({ ...blank, sequence: defs.length + 1 }); }} sx={primaryBtnSx(O2D.brand)}>
           Add step
         </Button>
-      </Stack>
-
+      )}
+    >
       {/* FMS catalog picker — click a card to view & edit that flow's steps. */}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
         {FMS_CATALOGS.map((fms) => {
@@ -139,8 +136,14 @@ const StepDefinitionsConfig = () => {
         })}
       </Stack>
 
+      {isError && <LoadErrorNote title="Could not load the step catalog" error={loadError} onRetry={refetch} compact={!!data} sx={{ mb: 1.5 }} />}
+      {/* A failed re-order is set outside the edit dialog, so say it on the page
+          too (it used to render only inside the closed dialog). */}
+      {!form && error && (
+        <Alert severity="error" onClose={() => setError('')} sx={{ mb: 1.5, borderRadius: '10px' }}>{error}</Alert>
+      )}
       <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-        {isLoading ? <Skeleton variant="rounded" height={300} /> : (
+        {isLoading ? <Skeleton variant="rounded" height={300} /> : isError && !data ? null : (
           <Table size="small">
             <TableHead>
               <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
@@ -169,8 +172,8 @@ const StepDefinitionsConfig = () => {
                     <Stack direction="row" alignItems="center" spacing={0.25}>
                       <Tooltip title="Drag to reorder"><Box sx={{ color: 'text.disabled', display: 'flex', cursor: 'grab' }}><GripVertical size={16} /></Box></Tooltip>
                       <Stack>
-                        <IconButton size="small" disabled={index === 0} onClick={() => move(index, -1)} sx={{ p: 0.2 }}><ChevronUp size={13} /></IconButton>
-                        <IconButton size="small" disabled={index === rows.length - 1} onClick={() => move(index, 1)} sx={{ p: 0.2 }}><ChevronDown size={13} /></IconButton>
+                        <IconButton aria-label="Move up" size="small" disabled={index === 0} onClick={() => move(index, -1)} sx={{ p: 0.2 }}><ChevronUp size={13} /></IconButton>
+                        <IconButton aria-label="Move down" size="small" disabled={index === rows.length - 1} onClick={() => move(index, 1)} sx={{ p: 0.2 }}><ChevronDown size={13} /></IconButton>
                       </Stack>
                       <Typography variant="caption" sx={{ fontWeight: 700 }}>{index + 1}</Typography>
                     </Stack>
@@ -192,8 +195,8 @@ const StepDefinitionsConfig = () => {
                   <TableCell><Chip size="small" label={dStep.phase?.replace('_', ' ')} variant="outlined" /></TableCell>
                   <TableCell><Chip size="small" label={dStep.isActive ? 'Active' : 'Off'} color={dStep.isActive ? 'success' : 'default'} /></TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Edit"><IconButton size="small" onClick={() => setForm(dStep)}><Pencil size={15} /></IconButton></Tooltip>
-                    <Tooltip title="Deactivate"><IconButton size="small" onClick={() => deleteDef(dStep._id)}><Trash2 size={15} /></IconButton></Tooltip>
+                    <Tooltip title="Edit"><IconButton aria-label="Edit" size="small" onClick={() => setForm(dStep)}><Pencil size={15} /></IconButton></Tooltip>
+                    <Tooltip title="Deactivate"><IconButton aria-label="Deactivate" size="small" onClick={() => deleteDef(dStep._id)}><Trash2 size={15} /></IconButton></Tooltip>
                   </TableCell>
                 </TableRow>
               ))}
@@ -259,7 +262,7 @@ const StepDefinitionsConfig = () => {
           <Button variant="contained" onClick={save}>Save</Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </O2dPage>
   );
 };
 

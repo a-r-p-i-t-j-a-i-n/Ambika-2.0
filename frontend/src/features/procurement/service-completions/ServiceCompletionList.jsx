@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import {
   Box, Typography, Paper, TextField, InputAdornment, MenuItem, Button,
-  Grid, Chip,
+  Chip,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { alpha } from '@mui/material/styles';
@@ -15,7 +15,7 @@ import {
   useCreateIncomingQcMutation,
 } from '../../../store/api/procurementApi';
 import PfmsKpiCard from '../components/PfmsKpiCard';
-import { pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx } from '../pfmsTheme';
+import { pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsKpiRowSx } from '../pfmsTheme';
 
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—');
 
@@ -107,12 +107,13 @@ const ServiceCompletionList = () => {
         <Typography sx={pfmsSubtitleSx}>History · This step was removed — internal-service indents now go straight to Incoming QC</Typography>
       </Box>
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<Wrench size={20} />} label="Total" value={stats.total} color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<Clock size={20} />} label="Pending" value={stats.pending} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<CheckCircle2 size={20} />} label="Completed" value={stats.completed} color="#16a34a" /></Grid>
-        <Grid item xs={12} sm={6} md={3}><PfmsKpiCard icon={<ClipboardCheck size={20} />} label="QC Pending" value={stats.qcPending} color="#0e7490" /></Grid>
-      </Grid>
+      {/* KPI row = the shared Purchase / O2D card strip (same cards). */}
+      <Box sx={pfmsKpiRowSx(4)}>
+        <PfmsKpiCard icon={<Wrench size={20} />} label="Total" value={stats.total} color="#2563eb" />
+        <PfmsKpiCard icon={<Clock size={20} />} label="Pending" value={stats.pending} color="#b45309" />
+        <PfmsKpiCard icon={<CheckCircle2 size={20} />} label="Completed" value={stats.completed} color="#16a34a" />
+        <PfmsKpiCard icon={<ClipboardCheck size={20} />} label="QC Pending" value={stats.qcPending} color="#0e7490" />
+      </Box>
 
       <Paper sx={{ ...pfmsCardSx, p: 1.5, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
         <TextField size="small" placeholder="Search service completions…" value={search} onChange={(e) => setSearch(e.target.value)}

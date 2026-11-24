@@ -2,12 +2,14 @@ import React, { useMemo, useState, useEffect } from 'react';
 import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
   Chip, LinearProgress, TextField, MenuItem, Skeleton, Button, InputAdornment,
-  TablePagination, alpha, Menu,
+  TablePagination, Menu,
 } from '@mui/material';
 import { Search, ArrowRight, Workflow, CheckCircle2, Clock, AlertTriangle, X, Plus, CalendarRange } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
 import { O2D } from './o2dTheme';
+import { LoadErrorNote, CapNote, O2dPage } from './components/O2dUi';
+import { primaryBtnSx } from '../ims/imsFluent';
 
 // Status pill styles — tinted background + matching text/icon colour per state.
 const STATUS_STYLES = {
@@ -65,7 +67,7 @@ const SORT_OPTS = [
 const ProcessList = () => {
   const navigate = useNavigate();
   // Load a wide set and filter entirely client-side so every filter composes.
-  const { data, isLoading } = useGetProcessesQuery({ limit: 300, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch } = useGetProcessesQuery({ limit: 300, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const rows = useMemo(() => data?.data || [], [data]);
 
   const [search, setSearch] = useState('');
@@ -146,28 +148,25 @@ const ProcessList = () => {
   };
 
   return (
-    <Box sx={{ bgcolor: O2D.canvas, minHeight: '100vh' }}>
-      {/* Flush top bar — title + search + New Sales Order, hard against the sidebar */}
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
-        <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap>
-          <Box sx={{ p: 0.5, borderRadius: '6px', bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand, display: 'flex', flexShrink: 0 }}><Workflow size={16} /></Box>
-          <Box sx={{ minWidth: 0, mr: 'auto' }}>
-            <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>FMS Tracker</Typography>
-            <Typography noWrap sx={{ fontSize: '0.72rem', color: O2D.sub }}>Every order's flow, end to end — filter to find what you need.</Typography>
-          </Box>
+    <O2dPage
+      icon={Workflow}
+      title="FMS Tracker"
+      subtitle="Every order's flow, end to end — filter to find what you need."
+      actions={(
+        <>
           <TextField
             size="small" placeholder="Search SO / PO / party…" value={search}
             onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: { xs: '100%', sm: 240 } }}
             InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} /></InputAdornment> }}
           />
           <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />}
-            onClick={() => navigate('/orders?new=1')} sx={{ whiteSpace: 'nowrap', fontWeight: 700, textTransform: 'none', borderRadius: '6px', bgcolor: O2D.brand, flexShrink: 0 }}>
+            onClick={() => navigate('/orders?new=1')} sx={primaryBtnSx(O2D.brand)}>
             New Sales Order
           </Button>
-        </Stack>
-      </Box>
-
-      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+        </>
+      )}
+    >
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
       {/* ── Filters — ONE line: status + date-range collapsed into dropdowns ── */}
       <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -228,9 +227,11 @@ const ProcessList = () => {
         </Stack>
       </Paper>
 
+      {isError && <LoadErrorNote title="Could not load the orders" error={error} onRetry={refetch} compact={!!data} />}
+      <CapNote shown={rows.length} cap={300} noun="orders" />
       <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
         <Box sx={{ overflowX: 'auto' }}>
-          {isLoading ? <Skeleton variant="rounded" height={300} /> : (
+          {isLoading ? <Skeleton variant="rounded" height={300} /> : isError && !data ? null : (
             <Table size="small" sx={{
               minWidth: 860,
               '& td, & th': { borderColor: O2D.lineSoft },
@@ -314,7 +315,7 @@ const ProcessList = () => {
         />
       </Paper>
       </Box>
-    </Box>
+    </O2dPage>
   );
 };
 

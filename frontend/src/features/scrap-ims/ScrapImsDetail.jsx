@@ -8,8 +8,9 @@ import dayjs from 'dayjs';
 import {
   ScrapShell, SCRAP_ACCENT, Panel, TableScroll, EmptyNote, Th, Help,
   LocationChip, DispositionChip, BatchStatusChip, kg, SCRAP_UOM, yieldBand,
-  O2D, num, imsTableSx,
+  O2D, num,
 } from './scrapImsMeta';
+import { fluentTableSx, headerBtnSx } from '../ims/imsFluent';
 import { useGetScrapRecordQuery } from '../../store/api/scrapImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -105,7 +106,7 @@ const ScrapImsDetail = () => {
       <Panel title="Circles produced from this coil"
         hint={uncut ? 'None — this coil was not cut.' : `${num(r.circles.length)} size${r.circles.length === 1 ? '' : 's'} came off this batch.`}>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(720)}>
+          <Table size="small" sx={fluentTableSx(720)}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -177,7 +178,7 @@ const ScrapImsDetail = () => {
             {r.coilSkuId && (
               <Button size="small" variant="outlined" endIcon={<ArrowUpRight size={14} />}
                 onClick={() => navigate(`/rm-ims/item/${r.coilSkuId}`)}
-                sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+                sx={headerBtnSx}>
                 Open the coil in Raw Material
               </Button>
             )}

@@ -40,7 +40,7 @@ const ScrapImsByCoil = () => {
   return (
     <ScrapShell
       icon={Disc3}
-      title="Scrap by physical coil"
+      title="Scrap by Coil"
       subtitle="Every coil actually received — how many times it was cut, how much scrap it left, and how much of it is still on the floor."
     >
       <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>

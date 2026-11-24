@@ -6,9 +6,10 @@ import {
 import { ScrollText, Recycle, ArrowDownToLine, ArrowUpFromLine, Scale } from 'lucide-react';
 import dayjs from 'dayjs';
 import {
-  ScrapShell, Panel, TableScroll, EmptyNote, Th, KpiTile, ScrapTxnChip, SCRAP_REASON_LABEL,
-  SCRAP_WAREHOUSE_OPTIONS, SCRAP_UOM, SCRAP_ACCENT, O2D, num, imsTableSx,
+  ScrapShell, Panel, TableScroll, EmptyNote, Th, KpiCard, KpiGrid, ScrapTxnChip, SCRAP_REASON_LABEL,
+  SCRAP_WAREHOUSE_OPTIONS, SCRAP_UOM, O2D, num,
 } from './scrapImsMeta';
+import { FLUENT, fluentTableSx } from '../ims/imsFluent';
 import { useGetScrapMovementsQuery, useGetScrapStockQuery } from '../../store/api/scrapImsApi';
 import { fmtEntered, unitLabel } from './scrapUom';
 import { FIELD } from '../ims/imsFieldHelp';
@@ -55,19 +56,27 @@ const ScrapImsMovements = () => {
   return (
     <ScrapShell
       icon={ScrollText}
-      title="Scrap movement"
+      title="Scrap Movement"
       subtitle="Every kilogram of scrap that entered or left the yard, and what it was for."
     >
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25 }}>
-        <KpiTile label="Scrap on hand" value={`${num(stock?.totalKg || 0)} kg`}
-          sub="Across every location" color={SCRAP_ACCENT} icon={Recycle} />
-        <KpiTile label="Total in" value={`${num(summary.inKg || 0)} kg`}
-          sub={`${summary.inCount || 0} movements`} color="#15803d" icon={ArrowDownToLine} />
-        <KpiTile label="Total out" value={`${num(summary.outKg || 0)} kg`}
-          sub={`${summary.outCount || 0} movements`} color="#b91c1c" icon={ArrowUpFromLine} />
-        <KpiTile label="Unit" value={SCRAP_UOM}
-          sub="Scrap is only ever weighed" color="#0f766e" icon={Scale} />
-      </Box>
+      {/* The In / Out cards drive the same Direction filter below; clicking the
+          active card again turns it off. */}
+      <KpiGrid>
+        <KpiCard label="Scrap on hand" value={`${num(stock?.totalKg || 0)} kg`}
+          sub="Across every location" tone={FLUENT.teal} icon={Recycle}
+          actionLabel="Show all" onClick={() => { setFilters({ warehouse: '', txnType: '', from: '', to: '', search: '' }); setSearchInput(''); setPage(0); }}
+          hint="Show every movement — clears all filters." />
+        <KpiCard label="Total in" value={`${num(summary.inKg || 0)} kg`}
+          sub={`${summary.inCount || 0} movements`} tone={FLUENT.green} icon={ArrowDownToLine}
+          actionLabel="Filter" active={filters.txnType === 'SCRAP_IN'} onClick={() => set('txnType', filters.txnType === 'SCRAP_IN' ? '' : 'SCRAP_IN')}
+          hint="Show only scrap coming in." />
+        <KpiCard label="Total out" value={`${num(summary.outKg || 0)} kg`}
+          sub={`${summary.outCount || 0} movements`} tone={FLUENT.orange} icon={ArrowUpFromLine}
+          actionLabel="Filter" active={filters.txnType === 'SCRAP_OUT'} onClick={() => set('txnType', filters.txnType === 'SCRAP_OUT' ? '' : 'SCRAP_OUT')}
+          hint="Show only scrap going out." />
+        <KpiCard label="Unit" value={SCRAP_UOM}
+          sub="Scrap is only ever weighed" tone={FLUENT.grey} icon={Scale} actionLabel={null} />
+      </KpiGrid>
 
       {/* Where the scrap physically sits. Worth its own strip: the in-house and
           job-work piles are not interchangeable. */}
@@ -109,8 +118,8 @@ const ScrapImsMovements = () => {
             onChange={(e) => set('to', e.target.value)} InputLabelProps={{ shrink: true }} />
         </Box>
 
-        <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-          <Table size="small" sx={imsTableSx(1120)}>
+        <TableScroll sx={{ mt: 1.25, mx: -1.5, maxWidth: 'none', borderTop: `1px solid ${FLUENT.blue.border}` }}>
+          <Table size="small" sx={fluentTableSx(1120)}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -134,7 +143,7 @@ const ScrapImsMovements = () => {
                   <TableCell sx={{ fontWeight: 600 }}>{m.movementNumber || '—'}</TableCell>
                   <TableCell><ScrapTxnChip txnType={m.txnType} /></TableCell>
                   <TableCell>{m.warehouse}</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, color: m.txnType === 'SCRAP_OUT' ? '#b91c1c' : '#15803d' }}>
+                  <TableCell align="right" sx={{ fontWeight: 700, color: m.txnType === 'SCRAP_OUT' ? '#c2410c' : '#15803d' }}>
                     {m.txnType === 'SCRAP_OUT' ? '−' : '+'}{num(m.quantity)}
                     {/* The figure as entered, when it was not in kg (e.g. 5 Quintal). */}
                     {!!m.enteredUom && m.enteredUom !== 'KG' && (

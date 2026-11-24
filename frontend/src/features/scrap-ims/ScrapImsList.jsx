@@ -7,12 +7,13 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Recycle, Search, Download, Eye, AlertTriangle, Disc3 } from 'lucide-react';
 import dayjs from 'dayjs';
 import {
-  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiTile, EmptyNote, Th,
+  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiCard, KpiGrid, EmptyNote, Th,
   LocationChip, BatchStatusChip, YieldChip, kg,
-  yieldBand, YIELD_GOOD_PCT, YIELD_HIGH_PCT,
+  YIELD_GOOD_PCT, YIELD_HIGH_PCT,
   LOCATION_TOKENS, DISPOSITION_TOKENS,
-  O2D, O2D_TIP, num, imsTableSx,
+  O2D, O2D_TIP, num,
 } from './scrapImsMeta';
+import { FLUENT, fluentTableSx, headerBtnSx } from '../ims/imsFluent';
 import { useGetScrapOverviewQuery } from '../../store/api/scrapImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -71,26 +72,38 @@ const ScrapImsList = () => {
   return (
     <ScrapShell
       icon={Recycle}
-      title="Scrap cut history"
-      subtitle="Every coil cut on record, one row each — what it produced and what was left. Scrap master data has them by coil SKU."
+      title="Scrap Cut History"
+      subtitle="Every coil cut on record, one row each — what it produced and what was left. Scrap Master Data has them by coil SKU."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!rows.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          sx={headerBtnSx}>
           Export
         </Button>
       )}
     >
       {/* Totals cover the whole filtered set, not the page below. */}
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Scrap" value={kg(s.scrapKg)} sub={`Across ${num(s.batchesCut)} cuts`} color={SCRAP_ACCENT} icon={Recycle} />
-        <KpiTile label="In-house" value={kg(s.inHouseScrapKg)} sub="PLG01 · physically held" color="#0f766e" icon={LOCATION_TOKENS.PLG01.icon} />
-        <KpiTile label="Job work" value={kg(s.jobWorkScrapKg)} sub="JW001 · not held" color="#7c3aed" icon={LOCATION_TOKENS.JW001.icon} />
-        <KpiTile label="Average yield" value={s.avgYield != null ? `${num(s.avgYield)}%` : '—'}
-          sub={`Per cut · ${YIELD_GOOD_PCT}–${YIELD_HIGH_PCT}% is normal`} color={yieldBand(s.avgYield)?.color || '#15803d'} icon={Recycle} />
+      {/* Every card is a filter shortcut — the same Where / Cut? filters below;
+          clicking the active card again turns it off. */}
+      <KpiGrid>
+        <KpiCard label="Scrap" value={kg(s.scrapKg)} sub={`Across ${num(s.batchesCut)} cuts`} tone={FLUENT.amber} icon={Recycle}
+          actionLabel="Show all" onClick={() => { setParams({}, { replace: true }); setSearch(''); setPage(0); }}
+          hint="Show every record — clears all filters." />
+        <KpiCard label="In-house" value={kg(s.inHouseScrapKg)} sub="PLG01 · physically held" tone={FLUENT.green} icon={LOCATION_TOKENS.PLG01.icon}
+          actionLabel="Filter" active={location === 'PLG01'} onClick={() => setParam('location', location === 'PLG01' ? 'ALL' : 'PLG01')}
+          hint="Show in-house cuts only." />
+        <KpiCard label="Job work" value={kg(s.jobWorkScrapKg)} sub="JW001 · not held" tone={FLUENT.lavender} icon={LOCATION_TOKENS.JW001.icon}
+          actionLabel="Filter" active={location === 'JW001'} onClick={() => setParam('location', location === 'JW001' ? 'ALL' : 'JW001')}
+          hint="Show job-work cuts only." />
+        <KpiCard label="Average yield" value={s.avgYield != null ? `${num(s.avgYield)}%` : '—'}
+          sub={`Per cut · ${YIELD_GOOD_PCT}–${YIELD_HIGH_PCT}% is normal`} tone={FLUENT.grey} icon={Recycle}
+          actionLabel="Filter" active={batchStatus === 'CUT'} onClick={() => setParam('batchStatus', batchStatus === 'CUT' ? 'ALL' : 'CUT')}
+          hint="Show the cut coils only — the ones yield is measured on." />
         {s.uncutBatches > 0 && (
-          <KpiTile label="Coils not cut" value={num(s.uncutBatches)} sub="Excluded from the scrap figure" color="#b45309" icon={AlertTriangle} />
+          <KpiCard label="Coils not cut" value={num(s.uncutBatches)} sub="Excluded from the scrap figure" tone={FLUENT.orange} icon={AlertTriangle}
+            actionLabel="Filter" active={batchStatus === 'UNCUT'} onClick={() => setParam('batchStatus', batchStatus === 'UNCUT' ? 'ALL' : 'UNCUT')}
+            hint="Show the coils recorded with no cut." />
         )}
-      </Stack>
+      </KpiGrid>
 
       <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -121,7 +134,7 @@ const ScrapImsList = () => {
 
       <Panel dense>
         <TableScroll>
-          <Table size="small" sx={imsTableSx(1180)}>
+          <Table size="small" sx={fluentTableSx(1180)}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 62, whiteSpace: 'nowrap' }}>S.No.</TableCell>

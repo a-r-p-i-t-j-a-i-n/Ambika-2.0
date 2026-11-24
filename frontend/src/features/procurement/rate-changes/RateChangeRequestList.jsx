@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Grid, Chip, Tooltip, Alert, Button,
+  Box, Typography, Paper, TextField, InputAdornment, MenuItem, Chip, Tooltip, Alert, Button,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Search, Scale, Clock, BadgeCheck, XCircle, AlertTriangle } from 'lucide-react';
@@ -9,7 +9,7 @@ import { serialColumn } from '../components/serialNumber';
 import { useDebouncedSearch } from '../components/useDebouncedSearch';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { rowActionsColumn, rowActionsGridProps, rowActionsGridSx } from '../components/rowActionsColumn';
-import { PFMS, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 import { fmtDate } from '../approvals/approvalMeta';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RateChangeStatusChip from './RateChangeStatusChip';
@@ -100,24 +100,17 @@ const RateChangeRequestList = ({ onOpen }) => {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <Grid container spacing={2}>
-        <Grid item xs={6} md={3}>
-          <PfmsKpiCard icon={<Scale size={20} />} label="All Requests" value={summary.total || 0} color="#2563eb"
-            active={!statusFilter} onClick={() => onStatusChange('')} />
-        </Grid>
-        <Grid item xs={6} md={3}>
-          <PfmsKpiCard icon={<Clock size={20} />} label="Pending" value={summary.PENDING || 0} color={RATE_STATUS.PENDING.color}
-            active={statusFilter === 'PENDING'} onClick={() => toggleStatus('PENDING')} />
-        </Grid>
-        <Grid item xs={6} md={3}>
-          <PfmsKpiCard icon={<BadgeCheck size={20} />} label="Approved" value={summary.APPROVED || 0} color={RATE_STATUS.APPROVED.color}
-            active={statusFilter === 'APPROVED'} onClick={() => toggleStatus('APPROVED')} />
-        </Grid>
-        <Grid item xs={6} md={3}>
-          <PfmsKpiCard icon={<XCircle size={20} />} label="Rejected" value={summary.REJECTED || 0} color={RATE_STATUS.REJECTED.color}
-            active={statusFilter === 'REJECTED'} onClick={() => toggleStatus('REJECTED')} />
-        </Grid>
-      </Grid>
+      {/* KPI row = the shared Purchase / O2D card strip (same cards, same clicks). */}
+      <Box sx={pfmsKpiRowSx(4)}>
+        <PfmsKpiCard icon={<Scale size={20} />} label="All Requests" value={summary.total || 0} color="#2563eb"
+          active={!statusFilter} onClick={() => onStatusChange('')} />
+        <PfmsKpiCard icon={<Clock size={20} />} label="Pending" value={summary.PENDING || 0} color={RATE_STATUS.PENDING.color}
+          active={statusFilter === 'PENDING'} onClick={() => toggleStatus('PENDING')} />
+        <PfmsKpiCard icon={<BadgeCheck size={20} />} label="Approved" value={summary.APPROVED || 0} color={RATE_STATUS.APPROVED.color}
+          active={statusFilter === 'APPROVED'} onClick={() => toggleStatus('APPROVED')} />
+        <PfmsKpiCard icon={<XCircle size={20} />} label="Rejected" value={summary.REJECTED || 0} color={RATE_STATUS.REJECTED.color}
+          active={statusFilter === 'REJECTED'} onClick={() => toggleStatus('REJECTED')} />
+      </Box>
 
       {payload.canApprove === false && (summary.PENDING || 0) > 0 && (
         <Alert severity="info" sx={{ borderRadius: '8px', py: 0.25 }}>

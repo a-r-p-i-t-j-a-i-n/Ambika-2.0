@@ -390,6 +390,7 @@ const PAGE_TITLES = {
   '/dashboard':              'Dispatch Intelligence Hub',
   '/dispatch-control-tower': 'Control Tower',
   '/orders':                 'Sales Orders',
+  '/order-intake':           'Order Intake',
   '/dispatch-planning':      'Dispatch Planning',
   '/dispatch-planning/calendar': 'Dispatch Calendar',
   '/dispatch-planning/plan-vs-actual': 'Plan vs Actual',
@@ -462,18 +463,26 @@ const PAGE_TITLES = {
   '/pricing/documents':      'Pricing Documents',
   '/pricing/analytics':      'Pricing Analytics',
   '/quotes':                 'Quotes',
+  '/split-fms/o2d':          'O2D Splits',
+  '/split-fms/purchase':     'Purchase Splits',
   '/split-fms':              'Split FMS',
-  // Listed before the bare '/o2d-fms' key — the title lookup is a first-match
-  // startsWith scan, so the more specific path must come first.
+  // The title lookup is a first-match startsWith scan, so every deeper path is
+  // listed before any path it starts with: '/o2d-fms/master-data' before
+  // '/o2d-fms/master', '/o2d-fms/processes' before '/o2d-fms/process', and the
+  // bare '/o2d-fms' (My Tasks) last — above them it titled every O2D page.
   '/o2d-fms/steps':          'O2D — Step Board',
-  '/o2d-fms':                'O2D FMS — My Tasks',
-  '/o2d-fms/master':         'O2D FMS — Master View',
   '/o2d-fms/master-data':    'O2D Master Data',
+  '/o2d-fms/master':         'O2D FMS — Master View',
+  '/o2d-fms/all-tasks':      'O2D FMS — All Tasks',
   '/o2d-fms/transporters':   'Transporter Master',
   '/o2d-fms/processes':      'O2D FMS — Processes',
+  '/o2d-fms/process':        'O2D FMS — Order Tracker',
+  '/o2d-fms/task':           'O2D FMS — Task',
   '/o2d-fms/dashboard':      'O2D FMS — Management View',
   '/o2d-fms/scores':         'MIS Scoring',
   '/o2d-fms/config':         'O2D FMS — Step Catalog',
+  '/o2d-fms/templates':      'O2D FMS — Task Templates',
+  '/o2d-fms':                'O2D FMS — My Tasks',
   '/profile':                'My Profile',
 
   // IMS families — deep paths listed before their base so startsWith resolves
@@ -500,14 +509,15 @@ const PAGE_TITLES = {
   '/rm-ims':                 'Raw Material — Dashboard',
   '/fg-ims/stock':           'Finished Goods — Stock & Master Data',
   '/fg-ims/item':            'Finished Goods — Item',
-  '/scrap-ims/records':      'Scrap — Master Data',
-  '/scrap-ims/history':      'Scrap — Cut History',
+  '/scrap-ims/records':      'Scrap — Scrap Master Data',
+  '/scrap-ims/history':      'Scrap — Scrap Cut History',
+  '/scrap-ims/by-coil':      'Scrap — Scrap by Coil',
   '/scrap-ims/sku':          'Scrap — Coil SKU',
   '/scrap-ims/scrap-in':     'Scrap — Scrap In',
   '/scrap-ims/scrap-out':    'Scrap — Scrap Out',
   '/scrap-ims/movements':    'Scrap — Scrap Movement',
   '/scrap-ims/record':       'Scrap — Batch',
-  '/scrap-ims':              'Scrap',
+  '/scrap-ims':              'Scrap — Dashboard',
   '/fg-ims/production-in':   'Finished Goods — Production In (DPR)',
   '/fg-ims/dispatch-out':    'Finished Goods — Dispatch Out',
   '/fg-ims/planning':        'Finished Goods — Production Plan',

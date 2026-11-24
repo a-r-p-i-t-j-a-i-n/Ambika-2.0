@@ -7,10 +7,11 @@ import { ArrowUpFromLine, Save, Info, AlertTriangle } from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import {
-  ScrapShell, Panel, StepHead, newRequestId,
+  ScrapShell, StepHead, FormSection, newRequestId,
   SCRAP_OUT_REASON_OPTIONS, SCRAP_WAREHOUSE_OPTIONS, DEFAULT_SCRAP_WAREHOUSE,
   O2D, STOCK_TOKENS, num, IMS_FORM_MAX, noSpinnerSx,
 } from './scrapImsMeta';
+import { FLUENT, FLUENT_DEPTH } from '../ims/imsFluent';
 import { SCRAP_QTY_UNITS, SCRAP_QTY_UNIT_OPTIONS, readScrapQuantity, stepFor, fmtEntered } from './scrapUom';
 import ScrapBuyerPicker from './ScrapBuyerPicker';
 import ScrapOutHistory from './ScrapOutHistory';
@@ -130,16 +131,16 @@ const ScrapImsStockOut = () => {
   return (
     <ScrapShell
       icon={ArrowUpFromLine}
-      title="Scrap Out — take scrap off the books"
-      subtitle="Record scrap that was sold, disposed of or moved out. On-hand goes down and the movement is logged against your name."
+      title="Scrap Out"
+      subtitle="Take scrap off the books — record scrap that was sold, disposed of or moved out. On-hand goes down and the movement is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
       {/* The form in its own column, so the sticky confirm bar (step 4) stops
           at the end of the form instead of floating over the history below. */}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, '& > *': { minWidth: 0 } }}>
-        <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+        <Paper elevation={0} sx={{ borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg }}>
           <Stack direction="row" spacing={1} alignItems="flex-start">
-            <Box sx={{ color: O2D.brand, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
+            <Box sx={{ color: FLUENT.blue.accent, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
             <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>
               This records the <b>quantity</b> that left, not what it fetched. There is no scrap rate anywhere in the
               source data, so scrap is not valued here — record the sale value in the sale document and put its number
@@ -149,9 +150,9 @@ const ScrapImsStockOut = () => {
         </Paper>
 
         {/* ── Step 1 ── */}
-        <Panel>
-          <StepHead n={1} title="Issue details" hint="When the scrap left, why, and from where." done={!!form.date} />
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
+        <FormSection step={1} done={!!form.date} fluent={FLUENT.lavender} title="Issue details"
+          hint="When the scrap left, why, and from where." testId="scrap-out-details">
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25 }}>
             <TextField
               size="small" type="date" label="Date issued" value={form.date}
               onChange={(e) => set('date', e.target.value)}
@@ -189,17 +190,18 @@ const ScrapImsStockOut = () => {
               />
             )}
           </Box>
-        </Panel>
+        </FormSection>
 
         {/* ── Step 2 ── */}
-        <Panel>
-          <StepHead
-            n={2}
-            title={isSale ? 'Buyer / sale details' : 'Who it went to'}
-            hint={isSale ? 'Who bought the scrap, and the sale paperwork.' : 'Optional — the site, contractor or person it went to.'}
-            done={isSale ? !!form.buyer : true}
-          />
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' }, gap: 1.25, mt: 1.25, alignItems: 'start' }}>
+        <FormSection
+          step={2}
+          done={isSale ? !!form.buyer : true}
+          fluent={FLUENT.teal}
+          title={isSale ? 'Buyer / sale details' : 'Who it went to'}
+          hint={isSale ? 'Who bought the scrap, and the sale paperwork.' : 'Optional — the site, contractor or person it went to.'}
+          testId="scrap-out-party"
+        >
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' }, gap: 1.25, alignItems: 'start' }}>
             {isSale ? (
               <ScrapBuyerPicker
                 value={form.buyer}
@@ -227,7 +229,7 @@ const ScrapImsStockOut = () => {
           </Box>
 
           {isSale && form.buyer && (
-            <Paper elevation={0} data-testid="selected-buyer" sx={{ mt: 1.25, px: 1.5, py: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+            <Paper elevation={0} data-testid="selected-buyer" sx={{ px: 1.5, py: 1, borderRadius: '8px', border: `1px solid ${FLUENT.teal.border}`, bgcolor: FLUENT.teal.bg }}>
               <Typography sx={{ fontSize: '0.78rem', fontWeight: 800, color: O2D.ink }}>
                 {form.buyer.name}{form.buyer.code ? <Box component="span" sx={{ fontWeight: 600, color: O2D.sub }}> · {form.buyer.code}</Box> : null}
               </Typography>
@@ -245,15 +247,14 @@ const ScrapImsStockOut = () => {
               </Box>
             </Paper>
           )}
-        </Panel>
+        </FormSection>
 
         {/* ── Step 3 ── */}
-        <Panel>
-          <StepHead n={3} title="How much is going out?" hint={stockFailed
-            // Never show a failed load as "0 kg on hand". (Issuing stays blocked, as before.)
-            ? `Could not load the scrap on hand — ${stockError?.data?.message || 'refresh the page to try again'}`
-            : `Available at ${form.warehouse}: ${num(onHand)} kg.`} done={hasQty && !blocked} />
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 120px', sm: '180px 130px 1fr' }, gap: 1.25, mt: 1.25, alignItems: 'start' }}>
+        <FormSection step={3} done={hasQty && !blocked} fluent={FLUENT.blue} title="How much is going out?" hint={stockFailed
+          // Never show a failed load as "0 kg on hand". (Issuing stays blocked, as before.)
+          ? `Could not load the scrap on hand — ${stockError?.data?.message || 'refresh the page to try again'}`
+          : `Available at ${form.warehouse}: ${num(onHand)} kg.`} testId="scrap-out-items">
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 120px', sm: '180px 130px 1fr' }, gap: 1.25, alignItems: 'start' }}>
             <TextField
               size="small" type="number" label="Quantity" value={form.quantity}
               onChange={(e) => set('quantity', e.target.value)}
@@ -281,7 +282,7 @@ const ScrapImsStockOut = () => {
             />
           </Box>
 
-          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>At {form.warehouse}:</Typography>
             <Chip size="small" label={`${num(onHand)} kg now`}
               sx={{ height: 22, fontWeight: 700, fontSize: '0.68rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
@@ -291,9 +292,9 @@ const ScrapImsStockOut = () => {
                 <Chip size="small" label={`${num(onHand - kg)} kg after`}
                   sx={{
                     height: 22, fontWeight: 800, fontSize: '0.68rem', borderRadius: '999px',
-                    bgcolor: over ? '#fee2e2' : O2D.surfaceAlt,
-                    border: `1px solid ${over ? '#fecaca' : O2D.line}`,
-                    color: over ? '#b91c1c' : O2D.body,
+                    bgcolor: over ? FLUENT.rose.tint : O2D.surfaceAlt,
+                    border: `1px solid ${over ? FLUENT.rose.border : O2D.line}`,
+                    color: over ? FLUENT.rose.accent : O2D.body,
                   }} />
               </>
             )}
@@ -303,7 +304,7 @@ const ScrapImsStockOut = () => {
             <Alert
               severity={form.allowNegative ? 'warning' : 'error'}
               icon={<AlertTriangle size={16} />}
-              sx={{ mt: 1.5, borderRadius: '8px', fontSize: '0.74rem', alignItems: 'flex-start' }}
+              sx={{ borderRadius: '8px', fontSize: '0.74rem', alignItems: 'flex-start' }}
             >
               <b>
                 {num(kg)} kg{form.uom !== 'KG' ? ` (${fmtEntered(form.quantity, form.uom)} ${unit.label})` : ''} is more than
@@ -315,14 +316,14 @@ const ScrapImsStockOut = () => {
                 : 'Either lower the quantity, or allow a negative balance below if the scrap really did leave and the recorded figure is behind.'}
             </Alert>
           )}
-        </Panel>
+        </FormSection>
 
         {/* ── Step 4 ── */}
         <Paper elevation={0} sx={{
-          position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '8px', px: 1.5, py: 1.15,
-          border: `1px solid ${ready ? STOCK_TOKENS.OK.border : O2D.line}`,
-          bgcolor: ready ? STOCK_TOKENS.OK.tint : O2D.surface,
-          boxShadow: '0 6px 20px rgba(28,30,33,0.08)',
+          position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '10px', px: 1.5, py: 1.15,
+          border: `1px solid ${ready ? STOCK_TOKENS.OK.border : FLUENT.grey.border}`,
+          bgcolor: ready ? STOCK_TOKENS.OK.tint : '#fff',
+          boxShadow: FLUENT_DEPTH.hover,
         }}>
           <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
             <StepHead n={4} title="Confirm and save"
@@ -343,7 +344,7 @@ const ScrapImsStockOut = () => {
               />
               {hasQty && (
                 <Chip size="small" label={`${num(kg)} kg out`}
-                  sx={{ height: 24, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c' }} />
+                  sx={{ height: 24, fontWeight: 700, fontSize: '0.7rem', borderRadius: '999px', bgcolor: '#ffedd5', border: '1px solid #fed7aa', color: '#c2410c' }} />
               )}
               <Button
                 variant="contained" disableElevation onClick={submit} disabled={isLoading || !ready}

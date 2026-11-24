@@ -176,7 +176,7 @@ const DocumentDrop = ({ value, valueName, onChange, uploading, error }) => {
       </Box>
       {value && (
         <Tooltip title="Open in new tab">
-          <IconButton
+          <IconButton aria-label="Open in new tab"
             size="small"
             onClick={(e) => { e.stopPropagation(); window.open(resolveAssetUrl(value), '_blank'); }}
           >
@@ -520,6 +520,15 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
   const isStep1Valid = Boolean(form.poNumber.trim() && form.party && form.orderDate);
   const isStep2Valid = validItems.length > 0;
   const canSubmit = isStep1Valid && isStep2Valid && !isSubmitting;
+  // What still keeps Submit disabled, read from the same checks above, so a
+  // disabled button always says why (display only — the rules are unchanged).
+  const missing = [
+    !form.poNumber.trim() && 'PO number',
+    !form.party && 'party',
+    !form.orderDate && 'order date',
+    !isStep2Valid && 'at least one SKU with a quantity',
+  ].filter(Boolean);
+  const missingNote = !isSubmitting && missing.length ? `Still needed: ${missing.join(', ')}` : '';
 
   // ── Validate + submit ────────────────────────────────────────────
   const handleSubmit = async () => {
@@ -628,10 +637,15 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
             </Typography>
           </Box>
         </Box>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <IconButton aria-label="Close" onClick={onClose} sx={{ display: { xs: 'inline-flex', sm: 'none' } }}>
+            <X size={18} />
+          </IconButton>
           <Button variant="outlined" onClick={onClose} startIcon={<X size={14} />} sx={{ display: { xs: 'none', sm: 'inline-flex' } }}>
             Cancel
           </Button>
+          <Tooltip title={missingNote}>
+          <span>
           <Button
             variant="contained"
             onClick={handleSubmit}
@@ -640,6 +654,8 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
           >
             {isEditMode ? 'Save Changes' : 'Submit Order'}
           </Button>
+          </span>
+          </Tooltip>
         </Stack>
       </Box>
 
@@ -1000,7 +1016,7 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
                   onChange={(e) => handleItemChange(idx, 'remark', e.target.value)}
                   placeholder="—"
                 />
-                <IconButton
+                <IconButton aria-label="Delete"
                   size="small"
                   onClick={() => removeItem(idx)}
                   disabled={items.length === 1}
@@ -1049,14 +1065,19 @@ const OrderEntryDrawer = ({ open, onClose, order = null, intake = null }) => {
             </Typography>
           </Box>
         </Stack>
-        <Button
-          variant="contained"
-          onClick={handleSubmit}
-          disabled={!canSubmit}
-          startIcon={isSubmitting ? <CircularProgress size={14} color="inherit" /> : <Save size={14} />}
-        >
-          {isEditMode ? 'Save Changes' : 'Submit Order'}
-        </Button>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+          {missingNote && (
+            <Typography variant="caption" data-testid="order-missing-note" sx={{ color: 'text.secondary', maxWidth: 260 }}>{missingNote}</Typography>
+          )}
+          <Button
+            variant="contained"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            startIcon={isSubmitting ? <CircularProgress size={14} color="inherit" /> : <Save size={14} />}
+          >
+            {isEditMode ? 'Save Changes' : 'Submit Order'}
+          </Button>
+        </Stack>
       </Box>
     </Dialog>
   );

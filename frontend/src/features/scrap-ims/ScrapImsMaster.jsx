@@ -9,10 +9,11 @@ import {
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import {
-  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiTile, EmptyNote,
-  yieldBand, YIELD_GOOD_PCT, YIELD_HIGH_PCT, YIELD_LOW_PCT, LOCATION_TOKENS,
-  kg, O2D, O2D_TIP, num, imsTableSx,
+  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiCard, KpiGrid, EmptyNote,
+  YIELD_GOOD_PCT, YIELD_HIGH_PCT, YIELD_LOW_PCT, LOCATION_TOKENS,
+  kg, O2D, O2D_TIP, num,
 } from './scrapImsMeta';
+import { FLUENT, fluentTableSx, headerBtnSx } from '../ims/imsFluent';
 import { OverallYield, CircleSkus } from './scrapMasterShared';
 import { DateSortField } from '../rm-ims/cuttingShared';
 import { SORTS } from '../rm-ims/cuttingFilters';
@@ -54,7 +55,7 @@ const COLS = {
 };
 const colSx = (k) => ({ width: COLS[k], minWidth: COLS[k] });
 const masterTableSx = (() => {
-  const base = imsTableSx(Object.values(COLS).reduce((s, w) => s + w, 0));
+  const base = fluentTableSx(Object.values(COLS).reduce((s, w) => s + w, 0));
   return {
     ...base,
     tableLayout: 'fixed',
@@ -153,29 +154,34 @@ const ScrapImsMaster = () => {
   return (
     <ScrapShell
       icon={Recycle}
-      title="Scrap master data"
+      title="Scrap Master Data"
       subtitle="Scrap by coil SKU — click a row for every cut of it, date by date."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!rows.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          sx={headerBtnSx}>
           Export
         </Button>
       )}
     >
       {/* ── Totals over every matching coil SKU, not the page ── */}
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap sx={{ opacity: stale ? 0.6 : 1 }}>
-        <KpiTile label="Coil SKUs" value={num(s.skus || 0)} sub={`${num(s.cuts || 0)} cuts`} color={O2D.brand} icon={Layers} />
-        <KpiTile label="Coil cut" value={kg(s.coilKg || 0)} sub="Total coil weight cut" color="#0f766e" icon={Scale} />
-        <KpiTile label="Circles produced" value={`${num(s.circlesPcs || 0)} pcs`} sub={kg(s.circlesKg || 0)} color="#4338ca" icon={CircleDashed} />
-        <KpiTile label="Total scrap" value={kg(s.scrapKg || 0)}
-          sub={`In-house ${kg(s.plantScrapKg || 0)} · Job work ${kg(s.jobWorkScrapKg || 0)}`} color={SCRAP_ACCENT} icon={Recycle} />
-        <Tooltip arrow slotProps={O2D_TIP} title={`Circles ${kg(s.circlesKg || 0)} ÷ coil cut ${kg(s.coilKg || 0)} × 100, over every matching cut. ${BAND_NOTE}`}>
-          <Box sx={{ display: 'flex', flex: '1 1 160px', minWidth: 155 }}>
-            <KpiTile label="Overall yield" value={s.yieldPct != null ? `${num(s.yieldPct)}%` : '—'}
-              sub="Circles ÷ coil cut" color={yieldBand(s.yieldPct)?.color || '#15803d'} icon={Recycle} />
-          </Box>
-        </Tooltip>
-      </Stack>
+      <Box sx={{ opacity: stale ? 0.6 : 1 }}>
+        <KpiGrid>
+          <KpiCard label="Coil SKUs" value={num(s.skus || 0)} sub={`${num(s.cuts || 0)} cuts`} tone={FLUENT.blue} icon={Layers}
+            actionLabel="Show all" onClick={reset} hint="Show every coil SKU — clears search, dates, location and sort." />
+          <KpiCard label="Coil cut" value={kg(s.coilKg || 0)} sub="Total coil weight cut" tone={FLUENT.teal} icon={Scale}
+            onClick={() => navigate('/scrap-ims/history?batchStatus=CUT')} hint="Open Scrap Cut History — every cut and its coil weight." />
+          <KpiCard label="Circles produced" value={`${num(s.circlesPcs || 0)} pcs`} sub={kg(s.circlesKg || 0)} tone={FLUENT.lavender} icon={CircleDashed}
+            onClick={() => navigate('/scrap-ims/history?batchStatus=CUT')} hint="Open Scrap Cut History — the circles each cut produced." />
+          <KpiCard label="Total scrap" value={kg(s.scrapKg || 0)}
+            sub={`In-house ${kg(s.plantScrapKg || 0)} · Job work ${kg(s.jobWorkScrapKg || 0)}`} tone={FLUENT.amber} icon={Recycle}
+            actionLabel="Rank" active={input.sort === 'scrap'} onClick={() => setNow('sort', input.sort === 'scrap' ? '' : 'scrap')}
+            hint="Rank the coil SKUs by scrap, most first." />
+          <KpiCard label="Overall yield" value={s.yieldPct != null ? `${num(s.yieldPct)}%` : '—'}
+            sub="Circles ÷ coil cut" tone={FLUENT.grey} icon={Recycle}
+            onClick={() => navigate('/scrap-ims/history?batchStatus=CUT')}
+            hint={`Circles ${kg(s.circlesKg || 0)} ÷ coil cut ${kg(s.coilKg || 0)} × 100, over every matching cut. ${BAND_NOTE} Opens Scrap Cut History.`} />
+        </KpiGrid>
+      </Box>
 
       {/* ── Search and filters, one line ── */}
       <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>

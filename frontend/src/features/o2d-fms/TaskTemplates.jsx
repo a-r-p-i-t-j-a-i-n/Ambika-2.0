@@ -17,6 +17,9 @@ import {
 } from '../../store/api/o2dFmsApi';
 import { useGetOrdersQuery } from '../../store/api/orderApi';
 import { useListAccessUsersQuery } from '../../store/api/accessControlApi';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
+import { primaryBtnSx } from '../ims/imsFluent';
+import { O2D } from './o2dTheme';
 
 const UNITS = ['MINUTES', 'HOURS', 'DAYS', 'WEEKS', 'MONTHS'];
 
@@ -214,7 +217,7 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
               <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                 <TextField size="small" value={text} fullWidth
                   onChange={(e) => { const c = [...row.checklist]; c[i] = e.target.value; set('checklist', c); }} />
-                <IconButton size="small" onClick={() => set('checklist', row.checklist.filter((_, j) => j !== i))}><X size={14} /></IconButton>
+                <IconButton aria-label="Remove checklist item" size="small" onClick={() => set('checklist', row.checklist.filter((_, j) => j !== i))}><X size={14} /></IconButton>
               </Stack>
             ))}
             <Button size="small" startIcon={<Plus size={14} />} onClick={() => set('checklist', [...row.checklist, ''])} sx={{ mt: 0.5 }}>Add item</Button>
@@ -233,7 +236,7 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
                     <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                       <TextField size="small" value={q} fullWidth placeholder="e.g. Stock physically verified?"
                         onChange={(e) => { const v = [...row.verifications]; v[i] = e.target.value; set('verifications', v); }} />
-                      <IconButton size="small" onClick={() => set('verifications', row.verifications.filter((_, j) => j !== i))}><X size={14} /></IconButton>
+                      <IconButton aria-label="Remove question" size="small" onClick={() => set('verifications', row.verifications.filter((_, j) => j !== i))}><X size={14} /></IconButton>
                     </Stack>
                   ))}
                   <Button size="small" startIcon={<Plus size={14} />} onClick={() => set('verifications', [...row.verifications, ''])} sx={{ mt: 0.5 }}>Add question</Button>
@@ -259,7 +262,7 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
                         <Switch size="small" checked={f.required}
                           onChange={(e) => { const v = [...row.formFields]; v[i] = { ...f, required: e.target.checked }; set('formFields', v); }} />
                       </Tooltip>
-                      <IconButton size="small" onClick={() => set('formFields', row.formFields.filter((_, j) => j !== i))}><X size={14} /></IconButton>
+                      <IconButton aria-label="Remove field" size="small" onClick={() => set('formFields', row.formFields.filter((_, j) => j !== i))}><X size={14} /></IconButton>
                     </Stack>
                   ))}
                   <Button size="small" startIcon={<Plus size={14} />}
@@ -276,7 +279,7 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
                     inputProps={{ min: 1 }}
                     onChange={(e) => set('proof', { ...row.proof, minCount: Math.max(1, Number(e.target.value) || 1) })} />
                   <Typography variant="caption">file(s) / photo(s) / voice note(s)</Typography>
-                  <IconButton size="small" onClick={() => set('proof', { required: false, minCount: 1 })}><X size={14} /></IconButton>
+                  <IconButton aria-label="Remove proof requirement" size="small" onClick={() => set('proof', { required: false, minCount: 1 })}><X size={14} /></IconButton>
                 </Stack>
               )}
 
@@ -286,7 +289,7 @@ const StepEditor = ({ row, onChange, users, advanced = true }) => {
                   <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
                     <ShieldCheck size={14} color="#0f766e" />
                     <Typography variant="caption" sx={{ fontWeight: 700 }}>Approval gate — step completes only after approval by:</Typography>
-                    <IconButton size="small" onClick={() => set('approval', { required: false, approverIds: [] })}><X size={14} /></IconButton>
+                    <IconButton aria-label="Remove approval requirement" size="small" onClick={() => set('approval', { required: false, approverIds: [] })}><X size={14} /></IconButton>
                   </Stack>
                   <Autocomplete
                     multiple size="small"
@@ -373,7 +376,7 @@ const CustomOrderPicker = ({ open, onClose, defs, onReady }) => {
 const TaskTemplates = () => {
   // Which FMS catalog the templates & step list belong to.
   const [fmsKey, setFmsKey] = useState(DEFAULT_FMS_KEY);
-  const { data: tplRes, isLoading } = useGetTaskTemplatesQuery(fmsKey);
+  const { data: tplRes, isLoading, isError, error: loadError, refetch } = useGetTaskTemplatesQuery(fmsKey);
   const { data: defRes } = useGetStepDefinitionsQuery(fmsKey);
   const { data: usersRes } = useListAccessUsersQuery();
   const [createTpl] = useCreateTaskTemplateMutation();
@@ -515,20 +518,14 @@ const TaskTemplates = () => {
   }
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
-        <Box>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <ClipboardList size={20} />
-            <Typography variant="h5" sx={{ fontWeight: 800 }}>Task & Checklist Templates</Typography>
-          </Stack>
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-            Define the tasks, checklists, lead times, doers & buddies for each step. The default template auto-applies to every new order.
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => setNewMenu(true)}>New</Button>
-      </Stack>
-
+    <O2dPage
+      icon={ClipboardList}
+      title="Task & Checklist Templates"
+      subtitle="Define the tasks, checklists, lead times, doers & buddies for each step. The default template auto-applies to every new order."
+      actions={(
+        <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />} onClick={() => setNewMenu(true)} sx={primaryBtnSx(O2D.brand)}>New</Button>
+      )}
+    >
       {/* FMS catalog picker — choose which flow these templates build on. */}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
         {FMS_CATALOGS.map((fms) => {
@@ -576,7 +573,8 @@ const TaskTemplates = () => {
         </Paper>
       )}
 
-      {isLoading ? <Skeleton variant="rounded" height={200} /> : (
+      {isError && <LoadErrorNote title="Could not load the templates" error={loadError} onRetry={refetch} compact={!!tplRes} sx={{ mb: 1.5 }} />}
+      {isLoading ? <Skeleton variant="rounded" height={200} /> : isError && !tplRes ? null : (
         <Stack spacing={1.5}>
           {templates.length === 0 && (
             <Paper sx={{ p: 4, textAlign: 'center', borderRadius: 3, color: 'text.secondary' }}>
@@ -605,8 +603,8 @@ const TaskTemplates = () => {
                     {settingId === tpl._id ? 'Setting…' : 'Use as default'}
                   </Button>
                 )}
-                <Tooltip title="Edit"><IconButton size="small" onClick={() => startEdit(tpl)}><Pencil size={16} /></IconButton></Tooltip>
-                <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => { setDeleteError(''); setDeleteTarget(tpl); }}><Trash2 size={16} /></IconButton></Tooltip>
+                <Tooltip title="Edit"><IconButton aria-label="Edit" size="small" onClick={() => startEdit(tpl)}><Pencil size={16} /></IconButton></Tooltip>
+                <Tooltip title="Delete"><IconButton aria-label="Delete" size="small" color="error" onClick={() => { setDeleteError(''); setDeleteTarget(tpl); }}><Trash2 size={16} /></IconButton></Tooltip>
               </Stack>
             </Paper>
           ))}
@@ -675,7 +673,7 @@ const TaskTemplates = () => {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </O2dPage>
   );
 };
 

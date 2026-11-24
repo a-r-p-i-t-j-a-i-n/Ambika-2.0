@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box } from '@mui/material';
+import { O2dStatusPill } from '../../o2d-fms/components/O2dUi';
 import {
   Check, Clock, X, Loader, Circle, Send, PauseCircle, AlertTriangle,
 } from 'lucide-react';
@@ -136,38 +136,27 @@ const prettify = (s) => String(s || '—')
   .replace(/_/g, ' ')
   .replace(/\w\S*/g, (t) => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
 
+// Purchase tones → the shared O2D pill tones (O2dStatusPill / FLUENT).
+const PILL_TONE = {
+  neutral: 'grey', amber: 'amber', blue: 'blue', indigo: 'lavender', green: 'green',
+  teal: 'teal', orange: 'orange', cyan: 'teal', red: 'rose', purple: 'lavender',
+};
+
+// Same status → label/tone map as before; drawn with the shared O2D status pill
+// (22px, pastel tint + matching border, fully rounded) so Purchase and O2D read
+// the same. Rendered as a <span> so it can sit inline in text.
 const StatusChip = ({ status, label, tone, showIcon = true }) => {
   const key = String(status || '').toUpperCase();
   const [mappedLabel, mappedTone] = STATUS[key] || [null, 'neutral'];
   const resolvedTone = tone || mappedTone;
-  const t = TONES[resolvedTone] || TONES.neutral;
   const text = label || mappedLabel || prettify(status);
   const Icon = TONE_ICONS[resolvedTone] || Circle;
   return (
-    <Box
-      component="span"
-      aria-label={text}
-      sx={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 0.5,
-        height: 22,
-        px: 0.85,
-        borderRadius: '6px',
-        bgcolor: t.bg,
-        color: t.fg,
-        fontSize: '0.68rem',
-        fontWeight: 700,
-        lineHeight: 1,
-        letterSpacing: '0.02em',
-        whiteSpace: 'nowrap',
-        verticalAlign: 'middle',
-      }}
-    >
-      {showIcon && <Icon size={12} strokeWidth={3} aria-hidden="true" style={{ flexShrink: 0 }} />}
-      {text}
-    </Box>
+    <O2dStatusPill
+      component="span" aria-label={text} label={text}
+      tone={PILL_TONE[resolvedTone] || 'grey'} icon={showIcon ? Icon : undefined}
+      sx={{ verticalAlign: 'middle' }}
+    />
   );
 };
 

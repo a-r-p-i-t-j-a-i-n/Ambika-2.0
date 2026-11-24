@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Chip, Tooltip } from '@mui/material';
 import {
   LayoutDashboard, Recycle, Factory, Truck, Scissors, AlertTriangle,
-  ArrowDownToLine, ArrowUpFromLine, ScrollText, Disc3, ListOrdered, ClipboardCheck,
+  PackagePlus, PackageMinus, History, Disc3, ListOrdered, ClipboardCheck,
 } from 'lucide-react';
 import { ImsShell, O2D, O2D_TIP, num } from '../ims/imsMeta';
 
@@ -21,10 +21,12 @@ export const SCRAP_ACCENT = '#b45309';
 // BALANCE — how much scrap is actually in the yard. They are different numbers
 // and the menu should not imply otherwise.
 export const SCRAP_NAV = [
-  { label: 'Overview', short: 'Overview', path: '/scrap-ims', icon: LayoutDashboard, exact: true },
-  { label: 'Scrap master data', short: 'Master data', path: '/scrap-ims/records', icon: Recycle },
+  // Labels and icons are the sidebar's, word for word (MainLayout → Scrap), as in
+  // Consumables & Packaging, Raw Material and Finished Goods.
+  { label: 'Dashboard', short: 'Dashboard', path: '/scrap-ims', icon: LayoutDashboard, exact: true },
+  { label: 'Scrap Master Data', short: 'Master', path: '/scrap-ims/records', icon: Recycle },
   // Every cut, one row each — the per-cut register master data groups by coil SKU.
-  { label: 'Cut history', short: 'History', path: '/scrap-ims/history', icon: ListOrdered },
+  { label: 'Scrap Cut History', short: 'Cuts', path: '/scrap-ims/history', icon: ListOrdered },
   /**
    * Scrap by the PHYSICAL coil it came off.
    *
@@ -37,10 +39,10 @@ export const SCRAP_NAV = [
    * Placed after the register because it reads the same records, grouped: the
    * register is one row per CUT, this is one row per COIL.
    */
-  { label: 'By physical coil', short: 'By coil', path: '/scrap-ims/by-coil', icon: Disc3 },
-  { label: 'Scrap In', short: 'In', path: '/scrap-ims/scrap-in', icon: ArrowDownToLine },
-  { label: 'Scrap Out', short: 'Out', path: '/scrap-ims/scrap-out', icon: ArrowUpFromLine },
-  { label: 'Scrap movement', short: 'Movement', path: '/scrap-ims/movements', icon: ScrollText },
+  { label: 'Scrap by Coil', short: 'By coil', path: '/scrap-ims/by-coil', icon: Disc3 },
+  { label: 'Scrap In', short: 'In', path: '/scrap-ims/scrap-in', icon: PackagePlus },
+  { label: 'Scrap Out', short: 'Out', path: '/scrap-ims/scrap-out', icon: PackageMinus },
+  { label: 'Scrap Movement', short: 'Movement', path: '/scrap-ims/movements', icon: History },
 ];
 
 // ── Where scrap is HELD ──────────────────────────────────────────────────────
@@ -272,7 +274,8 @@ export const kg = (v) => (v == null ? '—' : `${num(v)} kg`);
 // ── Scrap movement types ─────────────────────────────────────────────────────
 export const SCRAP_TXN_TOKENS = {
   SCRAP_IN: { label: 'In', color: '#15803d', bg: '#dcfce7', border: '#bbf7d0' },
-  SCRAP_OUT: { label: 'Out', color: '#b91c1c', bg: '#fee2e2', border: '#fecaca' },
+  // Orange, not red: scrap leaving the yard is normal, not an error (the shared IMS rule).
+  SCRAP_OUT: { label: 'Out', color: '#c2410c', bg: '#ffedd5', border: '#fed7aa' },
   // IMS → Stock Correction: the yard counted, the balance set to the count.
   ADJUST_IN: { label: 'Correction +', color: '#1d4ed8', bg: '#dbeafe', border: '#bfdbfe' },
   ADJUST_OUT: { label: 'Correction −', color: '#7c3aed', bg: '#ede9fe', border: '#ddd6fe' },

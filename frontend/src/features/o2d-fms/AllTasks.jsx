@@ -7,6 +7,7 @@ import {
 import { ListChecks, AlertTriangle, Search, ChevronLeft, ChevronRight, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGetAllTasksQuery } from '../../store/api/o2dFmsApi';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const isDueSoon = (d) => d && (new Date(d) - Date.now()) > 0 && (new Date(d) - Date.now()) < 24 * 3600 * 1000;
@@ -30,7 +31,7 @@ const STATUS_TONE = { DONE: '#0f766e', DELAYED: '#b45309', PENDING: '#475569', S
 
 const AllTasks = () => {
   const navigate = useNavigate();
-  const { data, isLoading } = useGetAllTasksQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch } = useGetAllTasksQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const tasks = data?.data || [];
 
   const [filterKey, setFilterKey] = useState('all'); // active stat-filter
@@ -73,17 +74,10 @@ const AllTasks = () => {
   const maxStatPage = Math.ceil(STAT_DEFS.length / STATS_PER_PAGE) - 1;
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2} flexWrap="wrap" gap={1}>
-        <Box>
-          <Typography variant="h5" sx={{ fontWeight: 800 }}>All Tasks</Typography>
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>Every doer's tasks across all orders — filter, search and track.</Typography>
-        </Box>
-      </Stack>
-
+    <O2dPage icon={ListChecks} title="All Tasks" subtitle="Every doer's tasks across all orders — filter, search and track.">
       {/* ── Single-line stat strip with ‹ › paging ── */}
       <Paper sx={{ p: 1, borderRadius: 3, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <IconButton size="small" disabled={statPage === 0} onClick={() => setStatPage((p) => Math.max(0, p - 1))}><ChevronLeft size={18} /></IconButton>
+        <IconButton aria-label="Scroll left" size="small" disabled={statPage === 0} onClick={() => setStatPage((p) => Math.max(0, p - 1))}><ChevronLeft size={18} /></IconButton>
         <Stack direction="row" spacing={1} sx={{ flex: 1, overflow: 'hidden' }}>
           {statWindow.map((s) => {
             const active = filterKey === s.key;
@@ -101,7 +95,7 @@ const AllTasks = () => {
             );
           })}
         </Stack>
-        <IconButton size="small" disabled={statPage >= maxStatPage} onClick={() => setStatPage((p) => Math.min(maxStatPage, p + 1))}><ChevronRight size={18} /></IconButton>
+        <IconButton aria-label="Scroll right" size="small" disabled={statPage >= maxStatPage} onClick={() => setStatPage((p) => Math.min(maxStatPage, p + 1))}><ChevronRight size={18} /></IconButton>
       </Paper>
 
       {/* ── Filters ── */}
@@ -120,7 +114,8 @@ const AllTasks = () => {
         </Stack>
       </Paper>
 
-      {isLoading ? <Skeleton variant="rounded" height={360} /> : (
+      {isError && <LoadErrorNote title="Could not load the tasks" error={error} onRetry={refetch} compact={!!data} />}
+      {isLoading ? <Skeleton variant="rounded" height={360} /> : isError && !data ? null : (
         <Paper sx={{ borderRadius: 3, overflowX: 'auto' }}>
           <Table size="small" sx={{ minWidth: 980 }}>
             <TableHead>
@@ -174,7 +169,7 @@ const AllTasks = () => {
             rowsPerPageOptions={[15, 30, 60]} />
         </Paper>
       )}
-    </Box>
+    </O2dPage>
   );
 };
 

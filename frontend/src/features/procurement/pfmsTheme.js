@@ -7,6 +7,7 @@
 // values and is deliberately NOT edited here; only the keys listed in
 // PFMS_SURFACES below are overridden for this module.
 import { O2D, STATUS_TOKENS } from '../o2d-fms/o2dTheme';
+import { STEP_RAIL_SX } from '../o2d-fms/components/O2dStepCard';
 
 // The cool-neutral surface set. Everything else (brand, body, band) falls
 // through to O2D unchanged.
@@ -77,19 +78,35 @@ const kpiCardsPerLine = (count) => ({
   lg: count <= 6 ? count : 4,
   xl: Math.min(count, 8), // ≥ 1400px: a 7-8 card row fits on one line
 });
-export const pfmsKpiRowSx = (count = 5) => {
-  const per = kpiCardsPerLine(count);
-  return {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: `${KPI_GAP_PX}px`,
-    width: '100%',
-    '& > *': { flex: `1 1 ${kpiBasis(per.xs)}`, minWidth: 0 },
-    '@media (min-width: 900px)': { '& > *': { flexBasis: kpiBasis(per.md) } },
-    '@media (min-width: 1200px)': { '& > *': { flexBasis: kpiBasis(per.lg) } },
-    '@media (min-width: 1400px)': { '& > *': { flexBasis: kpiBasis(per.xl) } },
-  };
-};
+// ── Purchase FMS card palette ───────────────────────────────────────────────
+// Eight very light pastels, each with a matching hairline border, a mid-tone
+// icon accent and a deeper label ink. Ordered warm / cool alternately so two
+// neighbouring cards never look alike. Selected ring = the accent at 25%.
+export const PFMS_CARD_PALETTE = [
+  { name: 'light blue',  bg: '#eef5ff', border: '#cbdcf6', accent: '#3b78d0', ink: '#1f4a86', ring: 'rgba(59,120,208,0.25)', focus: 'rgba(59,120,208,0.35)' },
+  { name: 'peach',       bg: '#fff3ec', border: '#f4d6c4', accent: '#d9774c', ink: '#8f4524', ring: 'rgba(217,119,76,0.25)', focus: 'rgba(217,119,76,0.35)' },
+  { name: 'mint',        bg: '#eefaf3', border: '#c7e8d4', accent: '#2f9a68', ink: '#1c6644', ring: 'rgba(47,154,104,0.25)', focus: 'rgba(47,154,104,0.35)' },
+  { name: 'lavender',    bg: '#f4f1fd', border: '#dbd3f3', accent: '#7766d0', ink: '#4a3c98', ring: 'rgba(119,102,208,0.25)', focus: 'rgba(119,102,208,0.35)' },
+  { name: 'soft yellow', bg: '#fffae6', border: '#efe0a4', accent: '#b98f12', ink: '#765c0c', ring: 'rgba(185,143,18,0.25)', focus: 'rgba(185,143,18,0.35)' },
+  { name: 'aqua',        bg: '#ecf9fc', border: '#c0e5ee', accent: '#2a9fb6', ink: '#176d7e', ring: 'rgba(42,159,182,0.25)', focus: 'rgba(42,159,182,0.35)' },
+  { name: 'blush pink',  bg: '#fdf0f4', border: '#f1d0dc', accent: '#cf6189', ink: '#8f3658', ring: 'rgba(207,97,137,0.25)', focus: 'rgba(207,97,137,0.35)' },
+  { name: 'light teal',  bg: '#edf8f6', border: '#c4e4de', accent: '#2e9185', ink: '#1b6159', ring: 'rgba(46,145,133,0.25)', focus: 'rgba(46,145,133,0.35)' },
+];
+// Colour the cards of a row / strip by position: card 1 light blue, card 2
+// peach … (cycles after 8). CSS variables only — the shared card reads them;
+// size, layout, clicks and selection are untouched.
+export const pfmsCardCycleSx = Object.fromEntries(PFMS_CARD_PALETTE.map((c, i) => [
+  `& > *:nth-of-type(${PFMS_CARD_PALETTE.length}n + ${i + 1})`,
+  { '--card-bg': c.bg, '--card-border': c.border, '--card-accent': c.accent, '--card-ink': c.ink, '--card-ring': c.ring, '--card-focus': c.focus },
+]));
+
+// The KPI row is the O2D card strip (STEP_RAIL_SX): every card 193 x 72, one
+// row that scrolls sideways when it does not fit — the O2D Step Board / Master
+// Data layout — each card in its own pastel. `count` is kept for the callers.
+// eslint-disable-next-line no-unused-vars
+export const pfmsKpiRowSx = (count = 5) => ({ ...STEP_RAIL_SX, width: '100%', ...pfmsCardCycleSx });
+// (The equal-columns layout this replaced: kpiCardsPerLine / kpiBasis.)
+void kpiCardsPerLine; void kpiBasis;
 
 // Coordinated light tones for KPI cards, one per KPI category. A card's
 // `color` picks its tone (see kpiToneFor); every tone is a soft pastel
@@ -119,6 +136,9 @@ const KPI_TONE_BY_COLOR = {
   '#64748b': 'neutral',
 };
 export const kpiToneFor = (color) => PFMS_KPI_TONES[KPI_TONE_BY_COLOR[String(color || '').toLowerCase()]] || null;
+// The category a KPI colour stands for (total / pending / done …) — PfmsKpiCard
+// maps it onto the shared O2D card palette.
+export const kpiCategoryFor = (color) => KPI_TONE_BY_COLOR[String(color || '').toLowerCase()] || null;
 // Number inputs in form tables (GRN Material Receipt, QC Inspection): no
 // up/down spinner, which crowds a narrow centred quantity.
 export const pfmsNoSpinSx = {

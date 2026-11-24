@@ -12,6 +12,9 @@ import {
 } from '../../store/api/transporterApi';
 import { usePermission } from '../../hooks/usePermission';
 import { useMasterRights } from '../../utils/embed';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
+import { primaryBtnSx } from '../ims/imsFluent';
+import { O2D } from './o2dTheme';
 
 const BRAND = '#1d4ed8';
 const BRAND_DK = '#1e3a8a';
@@ -34,7 +37,7 @@ const TransporterMaster = () => {
   const [search, setSearch] = useState('');
   const [dialog, setDialog] = useState(null); // { id?, draft }
 
-  const { data, isLoading } = useGetTransportersQuery({ limit: 1000, sort: 'name' });
+  const { data, isLoading, isError, error, refetch } = useGetTransportersQuery({ limit: 1000, sort: 'name' });
   const [createTransporter, { isLoading: creating }] = useCreateTransporterMutation();
   const [updateTransporter, { isLoading: updating }] = useUpdateTransporterMutation();
   const [deleteTransporter] = useDeleteTransporterMutation();
@@ -90,31 +93,24 @@ const TransporterMaster = () => {
     ...(canEdit || canDelete ? [{ field: '__actions', headerName: '', width: canEdit && canDelete ? 90 : 56, sortable: false, filterable: false, align: 'center', headerAlign: 'center',
       renderCell: (p) => (
         <>
-          {canEdit && <Tooltip title="Edit"><IconButton size="small" onClick={() => setDialog({ id: p.row._id, draft: fromDoc(p.row) })}><Pencil size={15} /></IconButton></Tooltip>}
-          {canDelete && <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => remove(p.row._id)}><Trash2 size={15} /></IconButton></Tooltip>}
+          {canEdit && <Tooltip title="Edit"><IconButton aria-label="Edit" size="small" onClick={() => setDialog({ id: p.row._id, draft: fromDoc(p.row) })}><Pencil size={15} /></IconButton></Tooltip>}
+          {canDelete && <Tooltip title="Delete"><IconButton aria-label="Delete" size="small" color="error" onClick={() => remove(p.row._id)}><Trash2 size={15} /></IconButton></Tooltip>}
         </>
       ) }] : []),
   ];
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
-      {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5} sx={{ mb: 2, px: 0.5, flexWrap: 'wrap', rowGap: 1 }}>
-        <Stack direction="row" spacing={1.25} alignItems="center">
-          <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.1), color: BRAND, border: `1px solid ${alpha(BRAND, 0.2)}` }}>
-            <Truck size={21} />
-          </Box>
-          <Box>
-            <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.35rem' }, fontWeight: 800, color: BRAND_DK, lineHeight: 1.1 }}>Transporter Master</Typography>
-            <Typography sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>Logistics partners used on dispatch, challan &amp; e-way.</Typography>
-          </Box>
-        </Stack>
-        <Stack direction="row" spacing={1.25} alignItems="center">
+    <O2dPage
+      icon={Truck}
+      title="Transporter Master"
+      subtitle="Logistics partners used on dispatch, challan & e-way."
+      actions={(
+        <>
           <Chip label={`${filtered.length} transporter${filtered.length === 1 ? '' : 's'}`} sx={{ fontWeight: 700, bgcolor: alpha(BRAND, 0.08), color: BRAND_DK }} />
-          <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => setDialog({ draft: emptyDraft() })}>Add Transporter</Button>
-        </Stack>
-      </Stack>
-
+          <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />} onClick={() => setDialog({ draft: emptyDraft() })} sx={primaryBtnSx(O2D.brand)}>Add Transporter</Button>
+        </>
+      )}
+    >
       <Paper sx={{ borderRadius: 2.5, overflow: 'hidden', border: `1px solid ${theme.palette.divider}` }}>
         <Stack direction="row" alignItems="center" sx={{ px: 1.5, py: 1, borderBottom: `1px solid ${theme.palette.divider}` }}>
           <TextField
@@ -124,6 +120,7 @@ const TransporterMaster = () => {
           />
         </Stack>
         <Box sx={{ px: 1.5, pb: 1.5 }}>
+          {isError && <LoadErrorNote title="Could not load the transporters" error={error} onRetry={refetch} compact={!!data} sx={{ mb: 1 }} />}
           <DataGrid
             rows={filtered} columns={columns} getRowId={(r) => r._id} loading={isLoading}
             autoHeight density="compact" disableRowSelectionOnClick
@@ -141,7 +138,7 @@ const TransporterMaster = () => {
               <Truck size={20} color={BRAND} />
               <Typography sx={{ fontWeight: 800 }}>{dialog?.id ? 'Edit Transporter' : 'Add Transporter'}</Typography>
             </Stack>
-            <IconButton size="small" onClick={() => setDialog(null)}><X size={18} /></IconButton>
+            <IconButton aria-label="Close" size="small" onClick={() => setDialog(null)}><X size={18} /></IconButton>
           </Stack>
         </DialogTitle>
         <DialogContent dividers>
@@ -168,7 +165,7 @@ const TransporterMaster = () => {
           <Button variant="contained" onClick={submit} disabled={saving}>{saving ? 'Saving…' : (dialog?.id ? 'Save' : 'Add Transporter')}</Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </O2dPage>
   );
 };
 

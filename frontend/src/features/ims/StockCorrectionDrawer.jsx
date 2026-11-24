@@ -8,8 +8,9 @@ import { useTheme } from '@mui/material/styles';
 import { ClipboardCheck, X, Search, Trash2, Save, ArrowRight } from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
 import {
-  O2D, O2D_TIP, STOCK_TOKENS, num, newRequestId, TableScroll, EmptyNote, imsTableSx,
+  O2D, O2D_TIP, STOCK_TOKENS, num, newRequestId, TableScroll, EmptyNote,
 } from './imsMeta';
+import { fluentTableSx } from './imsFluent';
 import { useGetStockCorrectionSkusQuery, useCorrectStockMutation } from '../../store/api/stockCorrectionApi';
 
 /**
@@ -319,7 +320,7 @@ const StockCorrectionDrawer = ({ open, onClose }) => {
 
         <Box sx={{ borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, overflow: 'hidden' }}>
           <TableScroll>
-            <Table size="small" sx={imsTableSx(700)}>
+            <Table size="small" sx={fluentTableSx(700)}>
               <TableHead>
                 <TableRow>
                   <TableCell align="center" sx={{ width: 50 }}>S.No.</TableCell>
@@ -341,7 +342,7 @@ const StockCorrectionDrawer = ({ open, onClose }) => {
                 {rows.map((r, i) => {
                   const line = lineOf(r);
                   const diff = line?.diff ?? null;
-                  const tone = diff == null || Math.abs(diff) <= 0.001 ? O2D.sub : diff > 0 ? STOCK_TOKENS.OK.color : STOCK_TOKENS.OUT_OF_STOCK.color;
+                  const tone = diff == null || Math.abs(diff) <= 0.001 ? O2D.sub : diff > 0 ? STOCK_TOKENS.OK.color : STOCK_TOKENS.REORDER.color; // counting less is a correction, not an error
                   const firstOfSku = i === 0 || rows[i - 1].sku.id !== r.sku.id;
                   const scrap = isScrap(r.sku);
                   return (
@@ -412,7 +413,7 @@ const StockCorrectionDrawer = ({ open, onClose }) => {
         <Button onClick={onClose} disabled={isLoading} sx={{ textTransform: 'none', fontWeight: 700, color: O2D.body }}>Cancel</Button>
         <Button variant="contained" disableElevation onClick={submit} disabled={!ready || isLoading}
           startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <Save size={15} />}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', bgcolor: O2D.brand }} data-testid="correction-save">
+          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '8px', bgcolor: O2D.brand }} data-testid="correction-save">
           Save correction
         </Button>
       </Stack>

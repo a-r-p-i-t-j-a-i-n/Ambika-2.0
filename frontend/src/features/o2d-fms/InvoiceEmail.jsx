@@ -14,6 +14,8 @@ import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
+import { FormSection } from '../ims/imsMeta';
+import { FLUENT } from '../ims/imsFluent';
 
 const inr = (n) => '₹ ' + (Number(n || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtD = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -199,7 +201,7 @@ const InvoiceEmail = () => {
       {/* Invoice number picker. When the task is scoped to a delivery challan, the
           list is restricted to THAT challan's own invoice so a different challan's
           invoice can never be picked/emailed by mistake. */}
-      <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+      <FormSection step={1} done={!!inv} fluent={FLUENT.lavender} title="Pick the invoice" testId="o2d-step-pick">
         {dcParam && (
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1.25 }}>
             <Box sx={{ p: 0.5, borderRadius: 1.5, bgcolor: alpha('#7c3aed', 0.12), color: '#7c3aed', display: 'flex' }}><Boxes size={14} /></Box>
@@ -226,18 +228,14 @@ const InvoiceEmail = () => {
             The selected invoice belongs to challan <b>{inv.dcNumber || '—'}</b>, not <b>{dcParam}</b>. Pick this challan's own invoice before sending.
           </Alert>
         )}
-      </Paper>
+      </FormSection>
 
       {inv && (
         <>
           {/* Full invoice details */}
-          <Paper sx={{ borderRadius: 3, overflow: 'hidden', mb: 2 }}>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ p: 2, bgcolor: alpha(theme.palette.primary.main, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
-              <FileText size={16} color={theme.palette.primary.main} />
-              <Typography sx={{ fontWeight: 800 }}>{inv.invoiceNo}</Typography>
-              <Chip size="small" label={inv.status} sx={{ fontWeight: 700, height: 20 }} />
-            </Stack>
-            <Box sx={{ p: 2.5 }}>
+          <FormSection step={2} fluent={FLUENT.blue} icon={FileText} title={`Invoice ${inv.invoiceNo}`} testId="o2d-step-details"
+            actions={<Chip size="small" label={inv.status} sx={{ fontWeight: 700, height: 20 }} />}>
+            <Box>
               <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
                 <Detail label="Invoice Date" value={fmtD(inv.invoiceDate)} />
                 <Detail label="Invoice Amount" value={inr(inv.invoiceAmount)} />
@@ -257,13 +255,10 @@ const InvoiceEmail = () => {
                 <AttachGroup icon={ClipboardList} label="PDIR" urls={inv.pdirUrls} theme={theme} />
               </Stack>
             </Box>
-          </Paper>
+          </FormSection>
 
           {/* Email composer */}
-          <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-            <Stack sx={{ p: 2, bgcolor: alpha(theme.palette.primary.main, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
-              <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: 'text.secondary' }}>EMAIL PREVIEW — sends to the client</Typography>
-            </Stack>
+          <FormSection step={3} fluent={FLUENT.teal} title="Email preview — sends to the client" testId="o2d-step-email">
             {/* Sent log — this session, or the last recorded send on the invoice. */}
             {(sentInfo || inv.emailToClient?.actual) && (
               <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2.5, py: 1, bgcolor: alpha(theme.palette.success.main, 0.08), borderBottom: `1px solid ${theme.palette.divider}` }}>
@@ -345,7 +340,7 @@ const InvoiceEmail = () => {
                       <Stack key={i} direction="row" alignItems="center" spacing={0.75} sx={{ py: 0.15, px: 0.5, borderRadius: 1, bgcolor: alpha(theme.palette.success.main, 0.06) }}>
                         <Paperclip size={12} color={theme.palette.success.dark} />
                         <Link href={resolveFileUrl(u.url)} target="_blank" rel="noopener" sx={{ fontSize: '0.78rem', flex: 1 }} noWrap>{u.fileName}</Link>
-                        <IconButton size="small" onClick={() => setUploads((x) => x.filter((_, j) => j !== i))}><X size={13} /></IconButton>
+                        <IconButton aria-label="Remove attachment" size="small" onClick={() => setUploads((x) => x.filter((_, j) => j !== i))}><X size={13} /></IconButton>
                       </Stack>
                     ))}
                   </Stack>
@@ -364,7 +359,7 @@ const InvoiceEmail = () => {
                 </Button>
               </Stack>
             </Stack>
-          </Paper>
+          </FormSection>
         </>
       )}
     </O2dStepShell>
