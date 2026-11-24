@@ -117,3 +117,65 @@ export const fixedVendorIds = (entries) => [...new Set(entries
   .map(({ indent, item }) => itemVendorState(indent, item))
   .filter((s) => s.state === ITEM_VENDOR_STATE.SET)
   .map((s) => String(s.vendorId)))];
+
+// ── Who quoted (Step 1.2 vendor-tagged quotation files) ─────────────────────
+// Each Step 1.2 item-wise quotation file can name the vendor who sent it (Vendor
+// Master) with its quoted rate / delivery days. Step 1.3 then approves the item
+// for one of THOSE vendors — not any vendor in the master. Files saved before
+// vendors were recorded name none; such an item keeps the Vendor Master choice.
+
+const numOrNull = (n) => (n === null || n === undefined || n === '' || !Number.isFinite(Number(n)) ? null : Number(n));
+
+/**
+ * Distinct vendors named on a list of quotation files, in first-seen order —
+ * [{ vendorId, vendorName, quotedRate, deliveryDays, files }] with the lowest
+ * quoted rate and shortest delivery seen for that vendor (null = not given).
+ */
+export const vendorsOnQuotationFiles = (docs) => {
+  const byId = new Map();
+  (docs || []).forEach((d) => {
+    if (!d?.vendorId) return;
+    const id = String(d.vendorId);
+    const rate = numOrNull(d.quotedRate);
+    const days = numOrNull(d.deliveryDays);
+    const cur = byId.get(id);
+    if (!cur) {
+      byId.set(id, { vendorId: id, vendorName: d.vendorName || '', quotedRate: rate, deliveryDays: days, files: 1 });
+      return;
+    }
+    cur.files += 1;
+    if (!cur.vendorName && d.vendorName) cur.vendorName = d.vendorName;
+    if (rate !== null && (cur.quotedRate === null || rate < cur.quotedRate)) cur.quotedRate = rate;
+    if (days !== null && (cur.deliveryDays === null || days < cur.deliveryDays)) cur.deliveryDays = days;
+  });
+  return [...byId.values()];
+};
+
+/** Vendors who quoted for the item at Step 1.2. */
+export const quotedVendorsOf = (indent, item) => vendorsOnQuotationFiles(
+  rowFor(indent?.quoteComparativeStep?.itemQuotations, item)?.quotationDocuments,
+);
+
+/** Vendors whose quotation was kept (approved) for the item at Step 1.3. */
+export const keptVendorsOf = (indent, item) => vendorsOnQuotationFiles(
+  rowFor(indent?.quotationApprovalStep?.itemApprovedQuotations, item)?.approvedQuotationDocuments,
+);
+
+/**
+ * Why `vendorId` cannot be the approved vendor of an item ('' = it can). Applies
+ * only once Step 1.2 recorded who quoted (`quoted` non-empty): the vendor must
+ * have quoted for this item and, when the kept (approved) files name vendors
+ * (`kept`), its quotation must be one of those kept.
+ */
+export const approvedVendorProblem = ({ quoted = [], kept = [], vendorId, vendorName = '', itemName = '' }) => {
+  if (!quoted.length || !vendorId) return '';
+  const who = vendorName ? `"${vendorName}"` : 'The selected vendor';
+  const names = (list) => list.map((v) => v.vendorName || 'vendor').join(', ');
+  if (!quoted.some((v) => sameId(v.vendorId, vendorId))) {
+    return `${who} did not quote for "${itemName}" — the approved vendor must be one who quoted: ${names(quoted)}`;
+  }
+  if (kept.length && !kept.some((v) => sameId(v.vendorId, vendorId))) {
+    return `${who}'s quotation for "${itemName}" was removed — keep its quotation, or approve a vendor whose quotation is kept: ${names(kept)}`;
+  }
+  return '';
+};

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { baseSchemaFields, baseSchemaOptions } from '../../../database/BaseSchema.js';
+import { PO_SUBMISSION_STATUS } from './poSubmission.js';
 
 const { Schema, model } = mongoose;
 
@@ -196,6 +197,13 @@ const vendorPurchaseOrderSchema = new Schema({
   approvalStatus: { type: String, enum: Object.values(PO_APPROVAL_STATUS), default: PO_APPROVAL_STATUS.DRAFT, index: true },
   releaseStatus:  { type: String, enum: Object.values(PO_RELEASE_STATUS), default: PO_RELEASE_STATUS.NOT_RELEASED, index: true },
   poStatus:       { type: String, enum: Object.values(PO_STATUS), default: PO_STATUS.DRAFT, index: true },
+  // Draft working copy vs submitted for approval (poSubmission.js). No default:
+  // a PO saved before this field existed was already in the approval queue, so a
+  // missing value reads as SUBMITTED.
+  submissionStatus: { type: String, enum: Object.values(PO_SUBMISSION_STATUS), index: true },
+  submittedAt:      { type: Date, default: null },
+  submittedById:    { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  submittedBy:      { type: String, trim: true, default: '' },
   approval: {
     decidedBy:   { type: String, trim: true, default: '' },
     decidedById: { type: Schema.Types.ObjectId, ref: 'User' },

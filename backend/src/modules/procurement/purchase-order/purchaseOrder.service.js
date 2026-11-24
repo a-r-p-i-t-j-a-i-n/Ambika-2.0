@@ -14,6 +14,7 @@ import PurchaseIndent, { INDENT_OVERALL_STATUS, ITEM_PROCUREMENT_STATUS, buildIt
 import {
   ITEM_VENDOR_SOURCE, ITEM_VENDOR_STATE, QUOTATION_PATH,
   itemVendorState, poVendorProblems, fixedVendorIds, usesApprovedVendorList,
+  quotedVendorsOf, keptVendorsOf, approvedVendorProblem,
 } from '../indent/itemVendor.js';
 import Party from '../../clients/party.model.js';
 import Vendor from '../../vendors/vendor.model.js';
@@ -31,6 +32,13 @@ import env from '../../../config/env.js';
 import { loadPdfCompany, loadPoTermsDefaults } from '../../pricing/company-pdf-assets.js';
 import { resolvePoTerms, defaultPoTerms, normalizePoTerms, pdfSafePoTerms, poTermsFormat } from './poTerms.js';
 import { resolvePoDelivery } from './poLeadTime.js';
+import {
+  PO_SUBMISSION_STATUS, SUBMITTED_FILTER, NOT_SUBMITTED_FILTER, NOT_SUBMITTED_APPROVE_MESSAGE,
+  submissionFieldsFor, createdNote, isPoSubmitted,
+} from './poSubmission.js';
+import { poApprovalBlock, canApprovePos, PO_APPROVE_FORBIDDEN } from './poApproval.js';
+import { isMdForDirectSave } from './poDirectSave.js';
+import { computeEffectivePermissions } from '../../../middleware/permission.middleware.js';
 import { rateChangeService } from '../rate-change/rateChange.service.js';
 import mongoose from 'mongoose';
 import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
@@ -1043,6 +1051,12 @@ export const purchaseOrderService = {
         const lineNo = Number(it.itemLineNo) || (i + 1);
         const display = buildItemDisplayNumber(indent.indentNumber, lineNo);
         const vs = itemVendorState(indent, it);
+        // Who quoted (Step 1.2) and, for the fixed vendor, its kept quotation's terms.
+        const quotedVendors = quotedVendorsOf(indent, it);
+        const keptQuote = vs.vendorId
+          ? keptVendorsOf(indent, it).find((q) => String(q.vendorId) === String(vs.vendorId))
+            || quotedVendors.find((q) => String(q.vendorId) === String(vs.vendorId))
+          : null;
         items.push({
           indentId: indent._id,
           indentNumber: indent.indentNumber,
@@ -1062,6 +1076,9 @@ export const purchaseOrderService = {
           vendorId: vs.vendorId,
           vendorName: vs.vendorName,
           vendorSource: vs.vendorSource,
+          quotedVendors,
+          quotedRate: keptQuote?.quotedRate ?? null,
+          quotedDeliveryDays: keptQuote?.deliveryDays ?? null,
         });
       });
     }
@@ -1127,6 +1144,14 @@ export const purchaseOrderService = {
       }
       if (required && current.state === ITEM_VENDOR_STATE.SET) {
         throw new AppError(`${ref} was approved for vendor "${current.vendorName}" at Step 1.3 — the approved vendor cannot be changed here`, 400);
+      }
+      // Confirming an approved quotation's vendor: one who quoted, if recorded.
+      if (required) {
+        const problem = approvedVendorProblem({
+          quoted: quotedVendorsOf(indent, item), kept: keptVendorsOf(indent, item),
+          vendorId: vendor._id, vendorName: vendor.name, itemName: item.itemName,
+        });
+        if (problem) throw new AppError(`${ref}: ${problem}`, 400);
       }
     }
 
@@ -1249,8 +1274,9 @@ export const purchaseOrderService = {
         approvalStatus: PO_APPROVAL_STATUS.DRAFT,
         releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
         poStatus: PO_STATUS.DRAFT,
+        ...submissionFieldsFor(data.saveMode, user),
         createdBy: user?._id,
-        activityTimeline: [{ action: 'CREATE', description: `PO created from ${indent.indentNumber} (draft ${draftNumber})`, actorId: user?._id }],
+        activityTimeline: [{ action: 'CREATE', description: `PO created from ${indent.indentNumber} (draft ${draftNumber}) — ${createdNote(data.saveMode)}`, actorId: user?._id }],
       }, session);
       // Link the indent (approved vendor or items + status roll-up) in the same
       // unit — a failure here fails the PO.
@@ -1385,8 +1411,9 @@ export const purchaseOrderService = {
         approvalStatus: PO_APPROVAL_STATUS.DRAFT,
         releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
         poStatus: PO_STATUS.DRAFT,
+        ...submissionFieldsFor(data.saveMode, user),
         createdBy: user?._id,
-        activityTimeline: [{ action: 'CREATE', description: `PO created from ${orderedIndents.map((i) => i.indentNumber).join(', ')} (draft ${draftNumber})`, actorId: user?._id }],
+        activityTimeline: [{ action: 'CREATE', description: `PO created from ${orderedIndents.map((i) => i.indentNumber).join(', ')} (draft ${draftNumber}) — ${createdNote(data.saveMode)}`, actorId: user?._id }],
       }, session);
       // Link every involved indent and recompute its status in the same unit — a
       // failure on any indent fails the PO.
@@ -1456,9 +1483,14 @@ export const purchaseOrderService = {
   },
 
   async getAll(query) {
+    // submissionStatus: a PO with no value is submitted (poSubmission.js), so
+    // SUBMITTED means "not NOT_SUBMITTED" rather than an equality match.
+    const { submissionStatus, ...rest } = query || {};
+    const submissionFilter = submissionStatus === PO_SUBMISSION_STATUS.NOT_SUBMITTED ? NOT_SUBMITTED_FILTER
+      : submissionStatus === PO_SUBMISSION_STATUS.SUBMITTED ? SUBMITTED_FILTER : {};
     const features = new ApiFeatures(
-      VendorPurchaseOrder.find({ isDeleted: { $ne: true } }),
-      query,
+      VendorPurchaseOrder.find({ isDeleted: { $ne: true }, ...submissionFilter }),
+      rest,
     )
       .filter()
       .search(['poNumber', 'draftNumber', 'indentNumber', 'vendorName'])
@@ -1495,11 +1527,20 @@ export const purchaseOrderService = {
           released:        { $sum: { $cond: [{ $eq: ['$releaseStatus', PO_RELEASE_STATUS.RELEASED] }, 1, 0] } },
           partialReceived: { $sum: { $cond: [{ $eq: ['$poStatus', PO_STATUS.PARTIAL_RECEIVED] }, 1, 0] } },
           fullyReceived:   { $sum: { $cond: [{ $eq: ['$poStatus', PO_STATUS.FULLY_RECEIVED] }, 1, 0] } },
+          // Drafts (not cancelled): kept back by the buyer vs waiting in PO Approval.
+          notSubmitted:    { $sum: { $cond: [{ $and: [
+            { $eq: ['$approvalStatus', PO_APPROVAL_STATUS.DRAFT] }, { $ne: ['$poStatus', PO_STATUS.CANCELLED] },
+            { $eq: ['$submissionStatus', PO_SUBMISSION_STATUS.NOT_SUBMITTED] },
+          ] }, 1, 0] } },
+          awaitingApproval: { $sum: { $cond: [{ $and: [
+            { $eq: ['$approvalStatus', PO_APPROVAL_STATUS.DRAFT] }, { $ne: ['$poStatus', PO_STATUS.CANCELLED] },
+            { $ne: ['$submissionStatus', PO_SUBMISSION_STATUS.NOT_SUBMITTED] },
+          ] }, 1, 0] } },
           totalValue:      { $sum: '$grandTotal' },
         },
       },
     ]);
-    return rows[0] || { total: 0, approved: 0, released: 0, partialReceived: 0, fullyReceived: 0, totalValue: 0 };
+    return rows[0] || { total: 0, approved: 0, released: 0, partialReceived: 0, fullyReceived: 0, notSubmitted: 0, awaitingApproval: 0, totalValue: 0 };
   },
 
   async update(id, data, user) {
@@ -1512,7 +1553,10 @@ export const purchaseOrderService = {
       if (!party) throw new AppError('Vendor not found', 404);
       Object.assign(po, { vendorId: party._id }, vendorSnapshot(party, data));
     }
-    const { vendorId: _v, items, ...rest } = data;
+    // `submit: true` — "Save & Submit for Approval" from the edit form: the edit
+    // and the submission land in the one conditional save below.
+    const { vendorId: _v, items, submit, ...rest } = data;
+    const submitting = submit === true && !isPoSubmitted(po);
     let newLines = null;
     Object.assign(po, rest); // applies poFormatType (if sent) before recompute
     // Any date change re-derives the delivery pair from the (possibly new) PO
@@ -1572,6 +1616,10 @@ export const purchaseOrderService = {
     po.poPdfFileName = '';
     po.updatedBy = user?._id;
     po.activityTimeline.push({ action: 'UPDATE', description: 'Draft PO updated', actorId: user?._id });
+    if (submitting) {
+      Object.assign(po, submissionFieldsFor('SUBMIT', user));
+      po.activityTimeline.push({ action: 'SUBMIT', description: 'Submitted for approval', actorId: user?._id });
+    }
     // Save only while the PO is still a draft: an approval / rejection / delete
     // that landed after this edit read the PO wins, instead of the edit changing
     // an approved PO underneath it.
@@ -1652,6 +1700,40 @@ export const purchaseOrderService = {
    * follow-up, PI, advance, GRN, invoice or voucher rests on it. Either way its
    * rate changes are withdrawn and the indent items it held are released.
    */
+  /**
+   * Submit a saved draft for approval (poSubmission.js). It moves into PO
+   * Approval as it is — nothing is approved, numbered or released here. Only a
+   * live, not-yet-submitted draft; submitting one that is already submitted is a
+   * no-op (a retried click). Conditional on the state read, so it cannot land on
+   * a PO that was deleted or cancelled in the meantime.
+   */
+  async submit(id, user) {
+    const po = await findOrThrow(id);
+    const ref = po.poNumber || po.draftNumber || '';
+    if (po.approvalStatus !== PO_APPROVAL_STATUS.DRAFT || po.poStatus === PO_STATUS.CANCELLED) {
+      throw new AppError(`PO ${ref} is ${po.poStatus === PO_STATUS.CANCELLED ? 'cancelled' : po.approvalStatus.toLowerCase()} — only a draft can be submitted for approval`.replace('  ', ' '), 400);
+    }
+    if (isPoSubmitted(po)) return po;
+    if (!(po.items || []).some((l) => Number(l.quantity) > 0)) {
+      throw new AppError(`PO ${ref} has no item with a quantity — edit the draft before submitting it`.replace('  ', ' '), 400);
+    }
+    const updated = await VendorPurchaseOrder.findOneAndUpdate(
+      {
+        _id: po._id, isDeleted: { $ne: true }, approvalStatus: PO_APPROVAL_STATUS.DRAFT,
+        poStatus: { $ne: PO_STATUS.CANCELLED }, ...NOT_SUBMITTED_FILTER,
+      },
+      {
+        $set: { ...submissionFieldsFor('SUBMIT', user), updatedBy: user?._id },
+        $push: { activityTimeline: { action: 'SUBMIT', description: 'Submitted for approval', actorId: user?._id, timestamp: new Date() } },
+      },
+      { new: true },
+    );
+    if (updated) return updated;
+    const now = await VendorPurchaseOrder.findOne({ _id: po._id, isDeleted: { $ne: true } });
+    if (now && now.approvalStatus === PO_APPROVAL_STATUS.DRAFT && isPoSubmitted(now)) return now;
+    throw new AppError(`PO ${ref} was just changed by someone else — refresh and try again`.replace('  ', ' '), 409);
+  },
+
   async remove(id, user, { reason } = {}) {
     const po = await findOrThrow(id);
     const draft = po.approvalStatus === PO_APPROVAL_STATUS.DRAFT;
@@ -1685,8 +1767,14 @@ export const purchaseOrderService = {
     return saved;
   },
 
-  async approve(id, data, user) {
+  // `permissions` — the caller's effective permission set (the route passes
+  // req.userPermissions, which includes Delegation Suite session grants); left
+  // out, it is computed from the user record. Either way the service itself
+  // enforces procurement.approve and maker-checker (poApproval.js).
+  async approve(id, data, user, { permissions } = {}) {
     const approved = data.decision !== 'REJECTED';
+    const perms = permissions || await computeEffectivePermissions(user);
+    if (!canApprovePos(perms)) throw new AppError(PO_APPROVE_FORBIDDEN, 403);
     const approval = {
       decidedBy: user?.name || '',
       decidedById: user?._id,
@@ -1705,17 +1793,39 @@ export const purchaseOrderService = {
     // approved rate change (Rate Change Approvals). The flip is conditional on
     // the PO being exactly as checked (updatedAt), so a draft edit landing in
     // between can't slip an unchecked rate through.
+    //
+    // Only a SUBMITTED draft can be decided (poSubmission.js): a draft the buyer
+    // saved but has not submitted is still their working copy. The flip filters
+    // on it too, so a draft can never be decided in the same instant it is
+    // saved back as not submitted.
+    //
+    // Maker-checker: whoever created, edited or submitted the PO cannot decide
+    // it (the MD excepted). The flip is conditional on the PO being exactly as
+    // checked (updatedAt) and on the creator / submitter not being this user,
+    // so an edit or a re-submission landing in between can't slip through.
     let checkedAt = null;
-    if (approved) {
-      const current = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
-      if (current?.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
-        await rateChangeService.assertPoRatesApproved(current);
-        checkedAt = current.updatedAt;
+    const current = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
+    if (current?.approvalStatus === PO_APPROVAL_STATUS.DRAFT && !isPoSubmitted(current)) {
+      throw new AppError(NOT_SUBMITTED_APPROVE_MESSAGE, 400);
+    }
+    const makerFilter = {};
+    if (current?.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
+      const block = poApprovalBlock(user, current, perms);
+      if (block) throw new AppError(block.message, block.status);
+      if (user?._id && !isMdForDirectSave(user)) {
+        makerFilter.createdBy = { $ne: user._id };
+        makerFilter.submittedById = { $ne: user._id };
       }
+      checkedAt = current.updatedAt;
+    }
+    if (approved && current?.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
+      await rateChangeService.assertPoRatesApproved(current);
     }
     const claimed = await VendorPurchaseOrder.findOneAndUpdate(
       {
         _id: id, isDeleted: { $ne: true }, approvalStatus: PO_APPROVAL_STATUS.DRAFT,
+        ...SUBMITTED_FILTER,
+        ...makerFilter,
         ...(checkedAt ? { updatedAt: checkedAt } : {}),
       },
       {
@@ -1729,8 +1839,13 @@ export const purchaseOrderService = {
       { new: true },
     );
     if (!claimed) {
-      const now = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).select('approvalStatus').lean();
+      const now = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).select('approvalStatus submissionStatus createdBy submittedById activityTimeline').lean();
       if (!now) throw new AppError('Purchase Order not found', 404);
+      if (now.approvalStatus === PO_APPROVAL_STATUS.DRAFT && !isPoSubmitted(now)) {
+        throw new AppError(NOT_SUBMITTED_APPROVE_MESSAGE, 400);
+      }
+      const lateBlock = now.approvalStatus === PO_APPROVAL_STATUS.DRAFT ? poApprovalBlock(user, now, perms) : null;
+      if (lateBlock) throw new AppError(lateBlock.message, lateBlock.status);
       if (now.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
         throw new AppError('This PO was changed while it was being approved — refresh and approve again', 409);
       }

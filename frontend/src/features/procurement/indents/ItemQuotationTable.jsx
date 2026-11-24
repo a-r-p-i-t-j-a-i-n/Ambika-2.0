@@ -14,9 +14,17 @@ import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
  *
  * Row shape: { itemId, skuCode, itemName, qty, unit, statusDone, files:[{fileName,fileUrl,fileType}], actualAt, remarks, vendor }
  *
- * Step 1.3 passes `vendorOptions` to add an Approved Vendor column (Vendor Master,
- * required for each approved item); `row.vendor` = { _id, name } | null.
+ * Step 1.3 passes `vendorOptions` to add an Approved Vendor column (required for
+ * each approved item); `row.vendor` = { _id, name } | null. It may be a function
+ * (row) → options, so each item offers only the vendors who quoted for it.
+ *
+ * Who quoted: in Step 1.2 `quoteVendorOptions` (Vendor Master) turns every file
+ * into a quotation line — Vendor *, Rate and Delivery days (file.vendor,
+ * file.quotedRate, file.deliveryDays), edited through `onPatchFile`. Step 1.3
+ * shows the same tags read-only, with the lowest rate among the kept quotations.
  */
+const fmtRate = (n) => `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+const hasNum = (n) => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
 const ItemQuotationTable = ({
   rows,
   qtyLabel = 'Qty',
@@ -30,8 +38,11 @@ const ItemQuotationTable = ({
   onUploadRow,
   onRemoveFile,
   onPatchRow,
-  vendorOptions = null, // Step 1.3: Vendor Master records → shows the Approved Vendor column
+  vendorOptions = null, // Step 1.3: options (or (row) → options) → shows the Approved Vendor column
   vendorsLoading = false,
+  vendorHint = null,    // Step 1.3: (row) → caption under the Approved Vendor select
+  quoteVendorOptions = null, // Step 1.2: Vendor Master records → tag each file with its vendor
+  onPatchFile,          // Step 1.2: (rowIdx, fileIdx, patch)
 }) => {
   const inputRefs = useRef([]);
 
@@ -43,12 +54,14 @@ const ItemQuotationTable = ({
     );
   }
 
-  const showVendor = Array.isArray(vendorOptions);
+  const showVendor = vendorOptions != null;
+  const optionsFor = (row) => (typeof vendorOptions === 'function' ? vendorOptions(row) : vendorOptions) || [];
+  const tagFiles = Array.isArray(quoteVendorOptions);
   const COLS = [
     '1.5fr 0.9fr 0.55fr 0.55fr',
     hideStatus ? '' : '1.2fr',
     showVendor ? '1.9fr' : '',
-    '2fr 1.15fr 1.3fr',
+    tagFiles ? '3.4fr 1.15fr 1.3fr' : '2fr 1.15fr 1.3fr',
   ].filter(Boolean).join(' ');
   const headers = ['Item Name', 'SKU', qtyLabel, 'Unit',
     ...(hideStatus ? [] : ['Status Done?']),
@@ -68,6 +81,9 @@ const ItemQuotationTable = ({
         {rows.map((row, idx) => {
           const uploading = uploadingIdx === idx;
           const needsFile = row.statusDone === yesValue;
+          // Lowest quoted rate among this row's files (Step 1.3 comparison).
+          const rates = (row.files || []).map((f) => f.quotedRate).filter(hasNum).map(Number);
+          const lowestRate = rates.length > 1 ? Math.min(...rates) : null;
           const statusLabel = statusOptions.find((o) => o.value === row.statusDone)?.label || 'Not Required';
           return (
             <Box
@@ -139,13 +155,23 @@ const ItemQuotationTable = ({
                   {needsFile ? (
                     <Autocomplete
                       size="small"
-                      options={vendorOptions}
+                      options={optionsFor(row)}
                       loading={vendorsLoading}
                       value={row.vendor || null}
                       onChange={(_e, v) => onPatchRow(idx, { vendor: v ? { _id: v._id, name: v.name } : null })}
                       getOptionLabel={(o) => o?.name || ''}
                       isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
-                      noOptionsText={vendorsLoading ? 'Loading vendors…' : 'No active vendors in the Vendor Master'}
+                      noOptionsText={vendorsLoading ? 'Loading vendors…' : 'No eligible vendor — keep at least one quotation'}
+                      renderOption={(props, o) => (
+                        <Box component="li" {...props} key={o._id} sx={{ display: 'block !important', py: 0.5 }}>
+                          <Typography variant="body2" fontWeight={700}>{o.name}</Typography>
+                          {(hasNum(o.quotedRate) || hasNum(o.deliveryDays)) && (
+                            <Typography variant="caption" color="text.secondary">
+                              {[hasNum(o.quotedRate) && `${fmtRate(o.quotedRate)} / ${row.unit || 'unit'}`, hasNum(o.deliveryDays) && `${o.deliveryDays} day(s)`].filter(Boolean).join(' · ')}
+                            </Typography>
+                          )}
+                        </Box>
+                      )}
                       renderInput={(params) => (
                         <TextField {...params} placeholder="Select vendor" error={!row.vendor}
                           inputProps={{ ...params.inputProps, 'data-testid': `approved-vendor-${idx}` }} />
@@ -156,6 +182,11 @@ const ItemQuotationTable = ({
                       Quote not required — vendor is chosen on Pending for PO.
                     </Typography>
                   )}
+                  {needsFile && vendorHint?.(row) ? (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }} data-testid={`approved-vendor-hint-${idx}`}>
+                      {vendorHint(row)}
+                    </Typography>
+                  ) : null}
                 </Box>
               )}
 
@@ -181,7 +212,8 @@ const ItemQuotationTable = ({
                 {row.files?.length > 0 && (
                   <Stack spacing={0.5} sx={{ mb: 0.75 }}>
                     {row.files.map((f, fi) => (
-                      <Box key={fi} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, p: 0.5, border: '1px solid', borderColor: 'divider', borderRadius: '8px', bgcolor: '#f8fafc' }}>
+                      <Box key={fi} data-testid={`quote-file-${idx}-${fi}`} sx={{ p: 0.5, border: '1px solid', borderColor: 'divider', borderRadius: '8px', bgcolor: '#f8fafc' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <FileText size={14} />
                         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                           <Typography variant="caption" sx={{ display: 'block' }} noWrap title={f.fileName}>{f.fileName || `File ${fi + 1}`}</Typography>
@@ -193,6 +225,57 @@ const ItemQuotationTable = ({
                         </Box>
                         <Tooltip title="View / Download"><IconButton size="small" href={fileHref(f.fileUrl)} target="_blank" rel="noopener"><ExternalLink size={13} /></IconButton></Tooltip>
                         <Tooltip title={noUpload ? 'Remove (reject this quotation)' : 'Remove file'}><IconButton size="small" color="error" onClick={() => onRemoveFile(idx, fi)}><X size={13} /></IconButton></Tooltip>
+                      </Box>
+                      {/* Step 1.2: who sent this quotation, and what they quoted */}
+                      {tagFiles && (
+                        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) 96px 78px' }, gap: 0.75, mt: 0.75 }}>
+                          <Autocomplete
+                            size="small"
+                            options={quoteVendorOptions}
+                            loading={vendorsLoading}
+                            value={f.vendor || null}
+                            onChange={(_e, v) => onPatchFile(idx, fi, { vendor: v ? { _id: v._id, name: v.name } : null })}
+                            getOptionLabel={(o) => o?.name || ''}
+                            isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
+                            noOptionsText={vendorsLoading ? 'Loading vendors…' : 'No active vendors in the Vendor Master'}
+                            renderInput={(params) => (
+                              <TextField {...params} placeholder={f.legacy ? 'Quoted by (vendor) — not recorded' : 'Quoted by (vendor) *'} error={needsFile && !f.vendor && !f.legacy}
+                                inputProps={{ ...params.inputProps, 'data-testid': `quote-vendor-${idx}-${fi}` }} />
+                            )}
+                          />
+                          <TextField size="small" placeholder="Rate ₹" value={f.quotedRate ?? ''} type="number"
+                            onChange={(e) => onPatchFile(idx, fi, { quotedRate: e.target.value })}
+                            inputProps={{ min: 0, step: 'any', 'data-testid': `quote-rate-${idx}-${fi}` }} />
+                          <TextField size="small" placeholder="Days" value={f.deliveryDays ?? ''} type="number"
+                            onChange={(e) => onPatchFile(idx, fi, { deliveryDays: e.target.value })}
+                            inputProps={{ min: 0, step: 1, 'data-testid': `quote-days-${idx}-${fi}` }} />
+                        </Box>
+                      )}
+                      {tagFiles && f.legacy && !f.vendor && (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }} data-testid={`quote-legacy-${idx}-${fi}`}>
+                          Older quotation — saved before vendors were recorded. Naming its vendor is optional.
+                        </Typography>
+                      )}
+                      {!tagFiles && !f.vendor?.name && (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25, pl: 2.5 }} data-testid={`quote-file-novendor-${idx}-${fi}`}>
+                          Vendor not recorded (older quotation)
+                        </Typography>
+                      )}
+                      {/* Step 1.3: the tags recorded in Step 1.2 (read-only) */}
+                      {!tagFiles && f.vendor?.name && (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.75, mt: 0.25, pl: 2.5 }} data-testid={`quote-file-vendor-${idx}-${fi}`}>
+                          <Typography variant="caption" fontWeight={700} color="text.primary">{f.vendor.name}</Typography>
+                          {hasNum(f.quotedRate) && (
+                            <Typography variant="caption" color="text.secondary">{fmtRate(f.quotedRate)} / {row.unit || 'unit'}</Typography>
+                          )}
+                          {hasNum(f.deliveryDays) && (
+                            <Typography variant="caption" color="text.secondary">{f.deliveryDays} day(s)</Typography>
+                          )}
+                          {lowestRate !== null && Number(f.quotedRate) === lowestRate && (
+                            <Typography variant="caption" sx={{ px: 0.75, borderRadius: '6px', bgcolor: '#dcfce7', color: '#15803d', fontWeight: 700 }}>Lowest</Typography>
+                          )}
+                        </Box>
+                      )}
                       </Box>
                     ))}
                   </Stack>

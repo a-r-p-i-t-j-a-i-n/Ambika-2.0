@@ -108,6 +108,7 @@ export const PERMISSIONS = Object.freeze({
   'o2dfms.act':                  { module: 'O2D FMS',        label: 'Complete a step (do the operation)',        risk: 'medium' },
   'o2dfms.manage':               { module: 'O2D FMS',        label: 'Reassign a step owner',                     risk: 'medium' },
   'o2dfms.config':               { module: 'O2D FMS',        label: 'Configure the step catalog (Who/What/When)',risk: 'high' },
+  'o2dfms.dashboardAll':         { module: 'O2D FMS',        label: 'See the whole O2D Dashboard (every order)', risk: 'medium' },
 
   // ── Recycle Bin (the Suite's Recycle Bin page; switched on per person in the Suite) ──
   'recycleBin.view':             { module: 'Recycle Bin',    label: 'Open the Recycle Bin (own deleted items)',  risk: 'medium' },

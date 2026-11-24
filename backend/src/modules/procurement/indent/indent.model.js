@@ -65,6 +65,24 @@ const fileSchema = new Schema({
   uploadedAt: { type: Date, default: null },
 }, { _id: false });
 
+// Step 1.2 / 1.3 item-wise quotation file — the file plus WHO sent it (Vendor
+// Master) and what they quoted. Step 1.3 approves the item for one of the
+// vendors who quoted (itemVendor.js). All vendor fields are optional: files
+// saved before vendors were recorded stay valid and name no vendor.
+const quotationFileSchema = new Schema({
+  fileName:     { type: String, default: '' },
+  fileUrl:      { type: String, default: '' },
+  fileType:     { type: String, default: '' },
+  uploadedAt:   { type: Date, default: null },
+  vendorId:     { type: Schema.Types.ObjectId, ref: 'Vendor', default: null },
+  vendorName:   { type: String, trim: true, default: '' },
+  quotedRate:   { type: Number, default: null, min: 0 }, // per unit, before GST
+  deliveryDays: { type: Number, default: null, min: 0 },
+  // Date this vendor's quotation was received (Step 1.2). Null on older files —
+  // readers fall back to the item's actualAt.
+  actualAt:     { type: Date, default: null },
+}, { _id: false });
+
 // ── Workflow sub-steps ──────────────────────────────────────────
 const quoteStepSchema = new Schema({
   plannedAt:          { type: Date, default: null },
@@ -113,8 +131,8 @@ const itemQuotationSchema = new Schema({
   // Per-item status — YES (quote received) requires ≥1 file; QUOTE_NOT_REQUIRED
   // makes the upload optional for this item.
   statusDone: { type: String, enum: ['YES', 'QUOTE_NOT_REQUIRED'], default: 'YES' },
-  // One or more quotation documents for this specific item.
-  quotationDocuments: { type: [fileSchema], default: [] },
+  // One or more quotation documents for this specific item (each naming its vendor).
+  quotationDocuments: { type: [quotationFileSchema], default: [] },
   actualAt:  { type: Date, default: null },
   remarks:   { type: String, trim: true, default: '' },
 }, { _id: false });
@@ -181,8 +199,9 @@ const itemApprovedQuotationSchema = new Schema({
   // file; QUOTATION_NOT_APPROVED / QUOTE_NOT_REQUIRED (item had no quote in Step
   // 1.2) make the upload optional for this item.
   statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED'], default: 'YES' },
-  // One or more approved quotation documents for this specific item.
-  approvedQuotationDocuments: { type: [fileSchema], default: [] },
+  // One or more approved quotation documents for this specific item (vendor tags
+  // copied from the matching Step 1.2 file, never taken from the client).
+  approvedQuotationDocuments: { type: [quotationFileSchema], default: [] },
   actualAt:  { type: Date, default: null },
   remarks:   { type: String, trim: true, default: '' },
 }, { _id: false });

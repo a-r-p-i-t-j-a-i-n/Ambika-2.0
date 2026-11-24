@@ -14,6 +14,9 @@ import {
   Paper,
   Tooltip,
   Chip,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import {
@@ -27,6 +30,7 @@ import {
   AlertTriangle,
   Eye,
   CheckCircle2,
+  Send,
 } from "lucide-react";
 import { useSnackbar } from "notistack";
 import { useSelector, useDispatch } from "react-redux";
@@ -79,6 +83,7 @@ import {
   assignedVendorsOf,
 } from "./itemVendor";
 import { isMdForDirectSave } from "./poDirectSave";
+import { awaitsSubmission } from "./poSubmission";
 import PoTermsDialog from "./PoTermsDialog";
 import {
   RATE_STATUS,
@@ -294,6 +299,10 @@ const PurchaseOrderFormDrawer = ({
   // format's default (Company Settings); the server stores the default then.
   const [terms, setTerms] = useState({ text: "", edited: false });
   const [termsOpen, setTermsOpen] = useState(false);
+  // By vendor: the vendor group whose own Terms & Conditions the dialog edits.
+  const [termsFor, setTermsFor] = useState(null);
+  // Review before Submit for Approval / Save PO Directly: { saveMode }.
+  const [review, setReview] = useState(null);
 
   // Draft PDF preview (no save) — holds the temporary blob URL.
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -1075,9 +1084,14 @@ const PurchaseOrderFormDrawer = ({
   const poGroups = vendorGroups.filter((g) => g.key);
   const unassignedGroup = vendorGroups.find((g) => !g.key) || null;
 
-  // A vendor's delivery / payment terms: its own once edited, else from the
-  // Vendor Master (default lead time → delivery date, credit period → payment terms).
+  // A vendor's PO details: its own once edited, else from the Vendor Master
+  // (default lead time → delivery date, credit period → payment terms). Delivery
+  // Terms, Remarks and Terms & Conditions start blank / at the default for EVERY
+  // vendor — nothing typed for one vendor's PO carries over to another's.
   const vendorTermsDefault = (v) => ({
+    deliveryTerms: "",
+    remarks: "",
+    terms: { text: "", edited: false },
     ...inheritVendorLead(
       { poDate: header.poDate, ...EMPTY_DELIVERY },
       vendorLeadDays(v),
@@ -1132,6 +1146,33 @@ const PurchaseOrderFormDrawer = ({
       ),
     );
   };
+  // By vendor: an item with no vendor fixed whose SKU only ONE active vendor
+  // carries starts on that vendor — as the single-vendor form auto-selected it.
+  // Once per item: after "Change vendor" the choice stays with the buyer.
+  const autoPickedRef = useRef(new Set());
+  useEffect(() => {
+    if (!open) {
+      autoPickedRef.current = new Set();
+      return;
+    }
+    if (!groupMode || vendorsLoading || !vendorOptions.length) return;
+    const active = vendorOptions.filter((v) => v.isActive !== false);
+    items.forEach((it) => {
+      if (!it.indentItemId || vendorKeyOf(it)) return;
+      const id = String(it.indentItemId);
+      const sku = String(it.skuCode || "").toUpperCase();
+      if (!sku || autoPickedRef.current.has(id)) return;
+      autoPickedRef.current.add(id);
+      const carriers = active.filter((v) =>
+        (v.products || []).some(
+          (p) => String(p.skuCode || "").toUpperCase() === sku,
+        ),
+      );
+      if (carriers.length === 1) pickItemVendor(it, String(carriers[0]._id));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, groupMode, items, vendorOptions, vendorsLoading]);
+
   // "Add vendor" for an item no vendor carries yet: the new vendor is picked for it.
   const [addVendorFor, setAddVendorFor] = useState(null);
 
@@ -1327,8 +1368,8 @@ const PurchaseOrderFormDrawer = ({
     ),
   });
 
-  // By vendor: one vendor's PO — its own vendor, delivery and payment terms and
-  // items; PO Date, Delivery Terms, Remarks and Terms & Conditions are shared.
+  // By vendor: one vendor's PO — its own vendor, delivery date, payment terms,
+  // Delivery Terms, Remarks, Terms & Conditions and items; only the PO Date is shared.
   const groupPayload = (g) => {
     const t = termsOfGroup(g);
     const v = g.vendor || {};
@@ -1343,12 +1384,12 @@ const PurchaseOrderFormDrawer = ({
       vendorAddress: v.location || v.address || "",
       vendorEmail: v.email || "",
       vendorPhone: v.phone || "",
-      deliveryTerms: header.deliveryTerms.trim(),
+      deliveryTerms: String(t.deliveryTerms || "").trim(),
       paymentTerms: String(t.paymentTerms || "").trim(),
       leadTimeDays: parseLeadDays(t.leadTime),
       creditPeriod: Number(t.creditPeriod) || 0,
-      remarks: header.remarks.trim(),
-      termsAndConditions: terms.edited ? terms.text : "",
+      remarks: String(t.remarks || "").trim(),
+      termsAndConditions: t.terms?.edited ? t.terms.text : "",
       items: g.rows
         .map(({ it }) => it)
         .filter((it) => it.itemName?.trim() && Number(it.quantity) > 0)
@@ -1423,7 +1464,7 @@ const PurchaseOrderFormDrawer = ({
 
   // By vendor: one PO per vendor, created one after another. A vendor whose PO is
   // refused keeps its items on the form (with the reason); created ones leave it.
-  const submitByVendor = async (saveMode) => {
+  const submitByVendor = async (saveMode, confirmed = false) => {
     const warn = (msg) => enqueueSnackbar(msg, { variant: "warning" });
     if (!selectedApprovedItems.length || !vendorGroups.length) {
       warn("Select at least one approved item");
@@ -1460,8 +1501,15 @@ const PurchaseOrderFormDrawer = ({
       warn(lookupBlock(blockedLine));
       return;
     }
+    // Submitting (or the MD's direct save) is reviewed first: every PO it raises.
+    if (saveMode !== "DRAFT" && !confirmed) {
+      setReview({ saveMode });
+      return;
+    }
+    setReview(null);
 
     const direct = saveMode === "DIRECT" && canDirectSave;
+    const sendMode = direct ? "DIRECT" : saveMode === "SUBMIT" ? "SUBMIT" : "DRAFT";
     const created = [];
     const failed = [];
     setPendingMode(saveMode);
@@ -1469,7 +1517,7 @@ const PurchaseOrderFormDrawer = ({
       try {
         const res = await createFromItems({
           ...groupPayload(g),
-          saveMode: direct ? "DIRECT" : "DRAFT",
+          saveMode: sendMode,
         }).unwrap();
         created.push({ g, po: res?.data });
       } catch (err) {
@@ -1490,10 +1538,13 @@ const PurchaseOrderFormDrawer = ({
       const approved = created.every(
         ({ po: saved }) => saved?.approvalStatus === "APPROVED",
       );
+      const what = created.length === 1 ? "PO" : `${created.length} POs`;
       enqueueSnackbar(
         approved
-          ? `${created.length === 1 ? "PO" : `${created.length} POs`} created — approved and ready to release: ${list}`
-          : `${created.length === 1 ? "PO" : `${created.length} POs`} saved as draft — waiting for PO Approval: ${list}`,
+          ? `${what} created — approved and ready to release: ${list}`
+          : sendMode === "DRAFT"
+            ? `${what} saved as draft — not yet submitted for approval: ${list}`
+            : `${what} submitted for approval — waiting in PO Approval: ${list}`,
         { variant: direct && !approved ? "warning" : "success" },
       );
       const rateChanges = created
@@ -1526,10 +1577,12 @@ const PurchaseOrderFormDrawer = ({
     }
   };
 
-  // saveMode: 'DRAFT' (default) | 'DIRECT' — only meaningful for a new PO.
-  const handleSubmit = async (saveMode = "DRAFT") => {
+  // saveMode: 'DRAFT' (default) | 'SUBMIT' (submit for approval) | 'DIRECT' (MD:
+  // create + approve). Editing: 'DRAFT' saves, 'SUBMIT' saves and submits a draft
+  // not yet submitted. Submit / Direct open the review first (`confirmed` after it).
+  const handleSubmit = async (saveMode = "DRAFT", { confirmed = false } = {}) => {
     if (groupMode) {
-      await submitByVendor(saveMode);
+      await submitByVendor(saveMode, confirmed);
       return;
     }
     if (!vendor?._id) {
@@ -1634,8 +1687,14 @@ const PurchaseOrderFormDrawer = ({
       }
     }
 
+    if (saveMode !== "DRAFT" && !confirmed) {
+      setReview({ saveMode });
+      return;
+    }
+    setReview(null);
     const payload = buildPayload();
     const direct = isCreate && saveMode === "DIRECT" && canDirectSave;
+    const sendMode = direct ? "DIRECT" : saveMode === "SUBMIT" ? "SUBMIT" : "DRAFT";
     // A direct save comes back APPROVED with its final number; if the server's
     // approval step didn't go through, the PO is still saved as a draft.
     const notifyCreated = (saved) => {
@@ -1649,9 +1708,14 @@ const PurchaseOrderFormDrawer = ({
           `PO ${poDisplayNumber(saved)} saved as draft — approve it from the PO detail`,
           { variant: "warning" },
         );
+      } else if (sendMode === "SUBMIT") {
+        enqueueSnackbar(
+          `PO ${poDisplayNumber(saved)} submitted for approval — it now waits in PO Approval`,
+          { variant: "success" },
+        );
       } else {
         enqueueSnackbar(
-          `PO ${poDisplayNumber(saved)} saved as draft — it now waits for approval in PO Approval`,
+          `PO ${poDisplayNumber(saved)} saved as draft — submit it for approval when it is ready`,
           { variant: "success" },
         );
       }
@@ -1662,20 +1726,26 @@ const PurchaseOrderFormDrawer = ({
       let created;
       if (isRevise) {
         // New draft PO from the cancelled one — source indents derived server-side.
-        const res = await revisePo({ id: reviseFrom._id, ...payload }).unwrap();
+        const res = await revisePo({ id: reviseFrom._id, ...payload, saveMode: sendMode === "SUBMIT" ? "SUBMIT" : "DRAFT" }).unwrap();
         enqueueSnackbar(
-          `Revised PO ${poDisplayNumber(res?.data)} saved as draft`,
+          sendMode === "SUBMIT"
+            ? `Revised PO ${poDisplayNumber(res?.data)} submitted for approval`
+            : `Revised PO ${poDisplayNumber(res?.data)} saved as draft`,
           { variant: "success" },
         );
         created = res?.data;
       } else if (isEdit) {
-        await updatePo({ id: po._id, ...payload }).unwrap();
-        enqueueSnackbar("Purchase order updated", { variant: "success" });
+        const submitting = sendMode === "SUBMIT" && awaitsSubmission(po);
+        await updatePo({ id: po._id, ...payload, ...(submitting ? { submit: true } : {}) }).unwrap();
+        enqueueSnackbar(
+          submitting ? "Purchase order updated and submitted for approval" : "Purchase order updated",
+          { variant: "success" },
+        );
       } else if (approvedItemMode) {
         // Item-wise: one vendor, hand-picked approved items (source indents derived).
         const res = await createFromItems({
           ...payload,
-          saveMode: direct ? "DIRECT" : "DRAFT",
+          saveMode: sendMode,
         }).unwrap();
         notifyCreated(res?.data);
         created = res?.data;
@@ -1683,7 +1753,7 @@ const PurchaseOrderFormDrawer = ({
         const res = await createPo({
           ...payload,
           indentId: indent._id,
-          saveMode: direct ? "DIRECT" : "DRAFT",
+          saveMode: sendMode,
         }).unwrap();
         notifyCreated(res?.data);
         created = res?.data;
@@ -1727,9 +1797,20 @@ const PurchaseOrderFormDrawer = ({
       !rc.needsReason && it.rateChangeRequestNumber
         ? RATE_STATUS[it.rateChangeStatus]
         : null;
+    // The vendor-rate lookup for this line (same messages as the single-vendor
+    // table): by vendor, each line asks its own vendor.
+    const lk = it.rateLookup;
+    const lkStatus = lk?.status;
+    const rowVendorName = groupMode
+      ? vendorById.get(vendorKeyOf(it))?.name ||
+        approvedById.get(String(it.indentItemId))?.vendorName ||
+        ""
+      : vendor?.name || "";
     return (
       <Box
         key={idx}
+        data-testid="po-line"
+        data-sku={it.skuCode || ""}
         sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}
       >
         <Box
@@ -1844,6 +1925,20 @@ const PurchaseOrderFormDrawer = ({
                   />
                 )
               )}
+              {isFirstRate(it) && (
+                <Chip
+                  size="small"
+                  label="New vendor rate"
+                  data-testid="po-rate-new"
+                  sx={{
+                    height: 18,
+                    fontSize: "0.6rem",
+                    fontWeight: 800,
+                    bgcolor: alpha("#2563eb", 0.1),
+                    color: "#1d4ed8",
+                  }}
+                />
+              )}
               {rcStatus && (
                 <Chip
                   size="small"
@@ -1914,9 +2009,15 @@ const PurchaseOrderFormDrawer = ({
                 rate: e.target.value,
                 manual: true,
                 rateEdited: true,
+                rateTyped: true,
               })
             }
-            inputProps={{ min: 0, step: 0.01, style: { textAlign: "right" } }}
+            inputProps={{
+              min: 0,
+              step: 0.01,
+              style: { textAlign: "right" },
+              "data-testid": "po-line-rate",
+            }}
             sx={NO_SPIN}
           />
           <Autocomplete
@@ -1937,6 +2038,7 @@ const PurchaseOrderFormDrawer = ({
               if (reason === "input") {
                 patch.manual = true;
                 patch.rateEdited = true;
+                patch.gstTyped = true;
               }
               setItem(idx, patch);
             }}
@@ -2007,7 +2109,67 @@ const PurchaseOrderFormDrawer = ({
             </span>
           </Tooltip>
         </Box>
-        {rateMissing && (
+        {lkStatus === LOOKUP.LOADING && (
+          <Typography
+            variant="caption"
+            data-testid="po-vendor-rate-loading"
+            sx={{ pl: { md: 1 }, color: "text.secondary", fontWeight: 600 }}
+          >
+            Fetching {rowVendorName || "the vendor"}'s rate…
+          </Typography>
+        )}
+        {lkStatus === LOOKUP.FOUND && (
+          <Typography
+            variant="caption"
+            data-testid="po-vendor-rate"
+            data-rate={lk.vendorRate}
+            sx={{ pl: { md: 1 }, color: "#0f766e", fontWeight: 700 }}
+          >
+            Vendor rate {fmtRate(lk.vendorRate)} / {lk.unit || it.unit} —
+            fetched from {rowVendorName || "the Vendor Master"}
+          </Typography>
+        )}
+        {(lkStatus === LOOKUP.NONE || lkStatus === LOOKUP.NO_RATE) && (
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5, pl: { md: 1 } }}>
+            <AlertTriangle size={13} color="#b45309" style={{ marginTop: 2, flexShrink: 0 }} />
+            <Typography
+              variant="caption"
+              data-testid="po-rate-missing"
+              sx={{ color: "#b45309", fontWeight: 600 }}
+            >
+              No vendor rate configured for this item. Enter the rate — it
+              becomes {rowVendorName || "the vendor"}'s first rate for it when
+              the PO is approved.
+            </Typography>
+          </Box>
+        )}
+        {(lkStatus === LOOKUP.UNIT_MISMATCH || lkStatus === LOOKUP.AMBIGUOUS) && (
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5, pl: { md: 1 } }}>
+            <AlertTriangle size={13} color="#b91c1c" style={{ marginTop: 2, flexShrink: 0 }} />
+            <Typography
+              variant="caption"
+              data-testid="po-rate-blocked"
+              sx={{ color: "#b91c1c", fontWeight: 600 }}
+            >
+              {lk.message}
+            </Typography>
+          </Box>
+        )}
+        {lkStatus === LOOKUP.ERROR && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, pl: { md: 1 } }}>
+            <Typography
+              variant="caption"
+              data-testid="po-rate-error"
+              sx={{ color: "#b91c1c", fontWeight: 600 }}
+            >
+              {lk.message}
+            </Typography>
+            <Button size="small" onClick={retryRates} sx={{ textTransform: "none", py: 0 }}>
+              Retry
+            </Button>
+          </Box>
+        )}
+        {rateMissing && !lkStatus && (
           <Box
             sx={{
               display: "flex",
@@ -2151,6 +2313,58 @@ const PurchaseOrderFormDrawer = ({
   // Saving several POs runs one request after another — stay busy until all are done.
   const busy = saving || previewing || Boolean(pendingMode);
   const manyPos = groupMode && poGroups.length > 1;
+  // One vendor PO's Terms & Conditions summary + its Edit T&C button. By vendor it
+  // sits at the bottom, beside the PO Date (the edit dialog is per vendor PO).
+  const renderGroupTerms = (g) => {
+    const t = termsOfGroup(g);
+    return (
+      <Box
+        key={g.key}
+        data-testid="po-group-terms"
+        sx={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 1,
+          border: "1px solid #e2e8f0",
+          borderRadius: "8px",
+          px: 1.5,
+          py: 0.75,
+          bgcolor: "#f8fafc",
+        }}
+      >
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, color: "text.secondary" }}>
+            Terms &amp; Conditions
+            {poGroups.length > 1 ? ` · ${g.vendor?.name || "Vendor"}` : ""} ·{" "}
+            {t.terms?.edited ? "edited for this PO" : `default ${PO_FORMAT_LABEL.OTHER} terms`}
+          </Typography>
+          <Typography
+            variant="body2"
+            data-testid="po-group-terms-text"
+            sx={{
+              whiteSpace: "pre-line",
+              color: PFMS.ink,
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {(t.terms?.edited ? t.terms.text : termsDefaults?.OTHER) || "—"}
+          </Typography>
+        </Box>
+        <Button
+          size="small"
+          startIcon={<FileText size={14} />}
+          onClick={() => setTermsFor(g.key)}
+          data-testid="po-group-edit-terms"
+          sx={{ flexShrink: 0 }}
+        >
+          Edit T&amp;C
+        </Button>
+      </Box>
+    );
+  };
   const renderVendorGroups = () => (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {poGroups.map((g, gi) => {
@@ -2317,6 +2531,36 @@ const PurchaseOrderFormDrawer = ({
                   }
                 />
               </Grid>
+              {/* This PO's own Delivery Terms / Remarks — never shared with another vendor's PO */}
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Delivery Terms"
+                  fullWidth
+                  size="small"
+                  value={t.deliveryTerms || ""}
+                  placeholder={`Delivery terms for ${v.name || "this vendor"}`}
+                  onChange={(e) =>
+                    setGroupTerms(g, (h) => ({
+                      ...h,
+                      deliveryTerms: e.target.value,
+                    }))
+                  }
+                  inputProps={{ maxLength: 300, "data-testid": "po-group-delivery-terms" }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  label="Remarks"
+                  fullWidth
+                  size="small"
+                  value={t.remarks || ""}
+                  helperText="Internal note — not printed on the PO PDF"
+                  onChange={(e) =>
+                    setGroupTerms(g, (h) => ({ ...h, remarks: e.target.value }))
+                  }
+                  inputProps={{ maxLength: 1000, "data-testid": "po-group-remarks" }}
+                />
+              </Grid>
             </Grid>
 
             <Box sx={{ px: 1, pt: 1.5, pb: 1.5 }}>
@@ -2408,6 +2652,8 @@ const PurchaseOrderFormDrawer = ({
             return (
               <Box
                 key={it.indentItemId}
+                data-testid="po-no-vendor-line"
+                data-sku={it.skuCode || ""}
                 sx={{
                   display: "grid",
                   gridTemplateColumns: {
@@ -3072,19 +3318,25 @@ const PurchaseOrderFormDrawer = ({
               }}
             >
               <ShoppingBag size={18} />{" "}
-              {groupMode && poGroups.length > 1
-                ? "PO Terms — for all POs"
+              {groupMode
+                ? `PO Date${poGroups.length > 1 ? " — for all POs" : ""}`
                 : "PO Terms"}
             </Typography>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<FileText size={15} />}
-              onClick={() => setTermsOpen(true)}
-              data-testid="po-edit-terms"
-            >
-              Edit Terms &amp; Conditions
-            </Button>
+            {groupMode ? (
+              <Typography variant="caption" color="text.secondary">
+                Delivery terms and remarks are set on each vendor&apos;s PO above
+              </Typography>
+            ) : (
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<FileText size={15} />}
+                onClick={() => setTermsOpen(true)}
+                data-testid="po-edit-terms"
+              >
+                Edit Terms &amp; Conditions
+              </Button>
+            )}
           </Box>
           <Grid container spacing={2}>
             {/* Lead Time and Expected Delivery Date fill each other (poLeadTime.js). */}
@@ -3096,6 +3348,14 @@ const PurchaseOrderFormDrawer = ({
                 onChange={changePoDate}
               />
             </Grid>
+            {/* By vendor: each vendor PO's Terms & Conditions, to the right of the PO Date */}
+            {groupMode && poGroups.length > 0 && (
+              <Grid item xs={12} sm={9}>
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                  {poGroups.map((g) => renderGroupTerms(g))}
+                </Box>
+              </Grid>
+            )}
             {!groupMode && (
               <>
                 <Grid item xs={6} sm={2.4}>
@@ -3156,7 +3416,9 @@ const PurchaseOrderFormDrawer = ({
                 </Grid>
               </>
             )}
-            <Grid item xs={12} sm={groupMode ? 4.5 : 6}>
+            {!groupMode && (
+            <>
+            <Grid item xs={12} sm={6}>
               <TextField
                 label="Delivery Terms"
                 fullWidth
@@ -3166,7 +3428,7 @@ const PurchaseOrderFormDrawer = ({
                 }
               />
             </Grid>
-            <Grid item xs={12} sm={groupMode ? 4.5 : 6}>
+            <Grid item xs={12} sm={6}>
               <TextField
                 label="Remarks"
                 fullWidth
@@ -3214,6 +3476,8 @@ const PurchaseOrderFormDrawer = ({
                 </Typography>
               </Box>
             </Grid>
+            </>
+            )}
           </Grid>
         </Paper>
 
@@ -4226,10 +4490,14 @@ const PurchaseOrderFormDrawer = ({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          // The hint text takes the spare width and shrinks; the buttons keep their
+          // natural width. When both cannot fit, the buttons drop to their own line.
+          flexWrap: "wrap",
+          gap: 1.5,
           bgcolor: "#fff",
         }}
       >
-        <Box>
+        <Box sx={{ flex: "1 1 260px", minWidth: 0 }}>
           <Typography variant="caption" color="text.secondary" display="block">
             {groupMode && poGroups.length > 1
               ? `${poGroups.length} POs · `
@@ -4244,8 +4512,8 @@ const PurchaseOrderFormDrawer = ({
               data-testid="po-save-mode-note"
             >
               {canDirectSave
-                ? "Draft stays editable and needs approval · Save PO Directly approves it now with the final PO number"
-                : "Only the MD can save a PO directly — save it as a draft; it stays a draft until approved in PO Approval"}
+                ? "Save as Draft keeps it with you · Submit sends it to PO Approval · Save PO Directly approves it now with the final PO number"
+                : "Save as Draft keeps it with you (not in PO Approval) · Submit for Approval sends it to PO Approval — approval stays a separate step"}
             </Typography>
           )}
           {rateChangeCount > 0 && (
@@ -4263,7 +4531,19 @@ const PurchaseOrderFormDrawer = ({
             </Typography>
           )}
         </Box>
-        <Box sx={{ display: "flex", gap: 1.5 }}>
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            gap: 1.5,
+            flex: "0 0 auto",
+            maxWidth: "100%",
+            ml: "auto",
+            // One line per label — a button may wrap onto the next row, its text never.
+            "& .MuiButton-root": { whiteSpace: "nowrap" },
+          }}
+        >
           <Button
             variant="outlined"
             onClick={() => onClose?.(false)}
@@ -4289,12 +4569,12 @@ const PurchaseOrderFormDrawer = ({
               Preview PDF
             </Button>
           )}
-          {isCreate ? (
+          {isCreate || isRevise ? (
             <>
-              <Tooltip title="Creates an editable draft PO with a temporary DRAFT number. It must be approved before release.">
+              <Tooltip title="Keeps an editable draft (temporary DRAFT number) with you — it is not sent to PO Approval until you submit it.">
                 <span>
                   <Button
-                    variant={canDirectSave ? "outlined" : "contained"}
+                    variant="outlined"
                     startIcon={
                       pendingMode === "DRAFT" ? (
                         <CircularProgress size={16} color="inherit" />
@@ -4311,7 +4591,28 @@ const PurchaseOrderFormDrawer = ({
                   </Button>
                 </span>
               </Tooltip>
-              {canDirectSave && (
+              <Tooltip title="Review, then send to PO Approval. Submitting does not approve the PO.">
+                <span>
+                  <Button
+                    variant={canDirectSave && !isRevise ? "outlined" : "contained"}
+                    startIcon={
+                      pendingMode === "SUBMIT" ? (
+                        <CircularProgress size={16} color="inherit" />
+                      ) : (
+                        <Send size={16} />
+                      )
+                    }
+                    onClick={() => handleSubmit("SUBMIT")}
+                    disabled={busy}
+                    data-testid="po-submit-for-approval"
+                  >
+                    {manyPos
+                      ? `Submit ${poGroups.length} POs for Approval`
+                      : "Submit for Approval"}
+                  </Button>
+                </span>
+              </Tooltip>
+              {canDirectSave && !isRevise && (
                 <Tooltip title="Creates the PO as approved with its final PO number — ready to release. No separate approval step (MD only).">
                   <span>
                     <Button
@@ -4336,20 +4637,39 @@ const PurchaseOrderFormDrawer = ({
               )}
             </>
           ) : (
-            <Button
-              variant="contained"
-              startIcon={
-                saving ? (
-                  <CircularProgress size={16} color="inherit" />
-                ) : (
-                  <Save size={16} />
-                )
-              }
-              onClick={() => handleSubmit()}
-              disabled={saving || previewing}
-            >
-              {isEdit ? "Save Changes" : "Save as Draft"}
-            </Button>
+            <>
+              <Button
+                variant={isEdit && awaitsSubmission(po) ? "outlined" : "contained"}
+                startIcon={
+                  saving && pendingMode !== "SUBMIT" ? (
+                    <CircularProgress size={16} color="inherit" />
+                  ) : (
+                    <Save size={16} />
+                  )
+                }
+                onClick={() => handleSubmit()}
+                disabled={saving || previewing}
+              >
+                {isEdit && awaitsSubmission(po) ? "Save Draft" : "Save Changes"}
+              </Button>
+              {isEdit && awaitsSubmission(po) && (
+                <Button
+                  variant="contained"
+                  startIcon={
+                    pendingMode === "SUBMIT" ? (
+                      <CircularProgress size={16} color="inherit" />
+                    ) : (
+                      <Send size={16} />
+                    )
+                  }
+                  onClick={() => handleSubmit("SUBMIT")}
+                  disabled={saving || previewing}
+                  data-testid="po-save-and-submit"
+                >
+                  Save &amp; Submit for Approval
+                </Button>
+              )}
+            </>
           )}
         </Box>
       </Box>
@@ -4370,6 +4690,88 @@ const PurchaseOrderFormDrawer = ({
         formatLabel={PO_FORMAT_LABEL[poFormatType]}
         note="Printed on this PO's PDF — preview, download and release. Kept when you save the PO."
       />
+      {/* By vendor: one vendor's own Terms & Conditions */}
+      {(() => {
+        const g = termsFor ? poGroups.find((x) => x.key === termsFor) : null;
+        const t = g ? termsOfGroup(g) : null;
+        const def = termsDefaults?.OTHER || "";
+        return (
+          <PoTermsDialog
+            open={Boolean(g)}
+            onClose={() => setTermsFor(null)}
+            onSave={(text) => {
+              if (g) setGroupTerms(g, (h) => ({ ...h, terms: { text, edited: text !== def } }));
+              setTermsFor(null);
+            }}
+            initialText={t?.terms?.edited ? t.terms.text : def}
+            defaultText={def}
+            formatLabel={PO_FORMAT_LABEL.OTHER}
+            subtitle={g?.vendor?.name || ""}
+            note="Printed on this vendor's PO only. The other vendors' POs keep their own terms."
+          />
+        );
+      })()}
+
+      {/* Review before Submit for Approval / Save PO Directly */}
+      {review && (() => {
+        const list = groupMode
+          ? poGroups.map((g) => ({ key: g.key, p: groupPayload(g), total: g.rows.reduce((s, { it }) => s + lineCalc(it).total, 0) }))
+          : [{ key: "one", p: buildPayload(), total: totals.grand }];
+        const direct = review.saveMode === "DIRECT";
+        const grand = list.reduce((s, x) => s + x.total, 0);
+        const verb = isEdit ? "saved and submitted" : direct ? "created and approved" : "submitted for approval";
+        return (
+          <Dialog open onClose={() => !busy && setReview(null)} maxWidth="md" fullWidth data-testid="po-review-dialog">
+            <DialogTitle sx={{ fontWeight: 800 }}>
+              Review {list.length === 1 ? "Purchase Order" : `${list.length} Purchase Orders`}
+            </DialogTitle>
+            <DialogContent dividers>
+              <Typography variant="body2" sx={{ mb: 1.5 }} data-testid="po-review-summary">
+                {list.length === 1 ? "1 PO" : `${list.length} POs — one per vendor —`} will be {verb}
+                {" · "}{fmtINR(grand)}
+                {direct
+                  ? ". Each gets its final PO number now."
+                  : ". Approval stays a separate step — submitting does not approve."}
+              </Typography>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
+                {list.map(({ key, p, total }, i) => (
+                  <Box key={key} data-testid="po-review-row" sx={{ border: "1px solid #e2e8f0", borderRadius: "10px", p: 1.5 }}>
+                    <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+                      <Typography fontWeight={800}>
+                        {list.length > 1 ? `PO ${i + 1} · ` : ""}{p.vendorName || "—"}
+                      </Typography>
+                      <Typography fontWeight={800} color="primary.dark">{fmtINR(total)}</Typography>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                      {p.items.map((it) => `${it.indentItemDisplayNumber || it.itemName} — ${it.itemName} × ${it.quantity} ${it.unit || ""}`.trim()).join(" · ")}
+                    </Typography>
+                    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 0.5, mt: 1 }}>
+                      <Typography variant="caption"><b>Expected delivery:</b> {p.expectedDeliveryDate || "—"}{p.leadTimeDays != null ? ` (${p.leadTimeDays} days)` : ""}</Typography>
+                      <Typography variant="caption"><b>Payment terms:</b> {p.paymentTerms || "—"}</Typography>
+                      <Typography variant="caption" data-testid="po-review-delivery-terms"><b>Delivery terms:</b> {p.deliveryTerms || "—"}</Typography>
+                      <Typography variant="caption" data-testid="po-review-remarks"><b>Remarks:</b> {p.remarks || "—"}</Typography>
+                      <Typography variant="caption"><b>T&amp;C:</b> {p.termsAndConditions ? "edited for this PO" : "default terms"}</Typography>
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
+            </DialogContent>
+            <DialogActions sx={{ p: 2, gap: 1 }}>
+              <Button onClick={() => setReview(null)} disabled={busy}>Back to edit</Button>
+              <Button
+                variant="contained"
+                color={direct ? "success" : "primary"}
+                startIcon={busy ? <CircularProgress size={16} color="inherit" /> : direct ? <CheckCircle2 size={16} /> : <Send size={16} />}
+                onClick={() => handleSubmit(review.saveMode, { confirmed: true })}
+                disabled={busy}
+                data-testid="po-review-confirm"
+              >
+                {direct ? "Confirm & Save Directly" : isEdit ? "Confirm & Submit" : `Confirm & Submit ${list.length === 1 ? "PO" : `${list.length} POs`}`}
+              </Button>
+            </DialogActions>
+          </Dialog>
+        );
+      })()}
 
       {/* Add a Vendor Master record (or product) for the selected approved item(s) */}
       {/* …or, by vendor, for the one item it was opened for (the new vendor is picked for it). */}

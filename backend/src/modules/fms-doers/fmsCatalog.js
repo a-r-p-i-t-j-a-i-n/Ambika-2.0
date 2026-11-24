@@ -22,6 +22,7 @@ import VendorInvoice from '../procurement/vendor-invoice/vendorInvoice.model.js'
 import VendorVoucher from '../procurement/voucher/voucher.model.js';
 import { vendorInvoiceService } from '../procurement/vendor-invoice/vendorInvoice.service.js';
 import { QUOTE_COMPARATIVE_PENDING, QUOTATION_APPROVAL_PENDING } from '../procurement/indent/quotationSteps.js';
+import { SUBMITTED_FILTER, NOT_SUBMITTED_FILTER } from '../procurement/purchase-order/poSubmission.js';
 
 const live = { isDeleted: { $ne: true } };
 
@@ -133,18 +134,27 @@ const PURCHASE_STEPS = [
   },
   {
     key: 'PO_CREATE', code: '1.4', label: 'Create PO',
-    description: 'Approved items awaiting a purchase order.',
+    description: 'Approved items awaiting a purchase order, and draft POs not yet submitted for approval.',
     permissions: [],
-    sources: [byFilter('INDENT', {
-      overallStatus: { $in: ['QUOTATION_APPROVED', 'PARTIAL_PO_CREATED'] },
-      requestType: { $ne: 'INTERNAL_SERVICE' },
-    })],
+    sources: [
+      byFilter('INDENT', {
+        overallStatus: { $in: ['QUOTATION_APPROVED', 'PARTIAL_PO_CREATED'] },
+        requestType: { $ne: 'INTERNAL_SERVICE' },
+      }),
+      // A draft the buyer saved but has not submitted (poSubmission.js) — the PO
+      // is still being prepared, so it stays on this step, not on PO Approval.
+      byFilter('PO', { approvalStatus: 'DRAFT', poStatus: { $ne: 'CANCELLED' }, ...NOT_SUBMITTED_FILTER }),
+    ],
   },
   {
     key: 'PO_APPROVAL', code: '1.4A', label: 'PO Approval',
-    description: 'Draft PO awaiting approval.',
+    description: 'Draft PO submitted and awaiting approval.',
+    // Approving is enforced on POST /:id/approve and in purchaseOrder.service
+    // approve() (procurement.approve + maker-checker, poApproval.js). Doer
+    // PLANNING stays confirm-to-assign (enforced: false here) so an admin can plan
+    // the step before granting the permission — the doer is warned on the task.
     permissions: [{ slug: 'procurement.approve', enforced: false }],
-    sources: [byFilter('PO', { approvalStatus: 'DRAFT', poStatus: { $ne: 'CANCELLED' } })],
+    sources: [byFilter('PO', { approvalStatus: 'DRAFT', poStatus: { $ne: 'CANCELLED' }, ...SUBMITTED_FILTER })],
   },
   {
     key: 'PO_RELEASE', code: '1.4B', label: 'Release PO',

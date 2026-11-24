@@ -23,10 +23,11 @@ import {
   useGetGrnsByPoQuery,
   useGeneratePurchaseOrderPdfMutation,
   useUpdatePurchaseOrderTermsMutation,
+  useSubmitPurchaseOrderMutation,
   useGetPoTermsDefaultsQuery,
 
 } from '../../../store/api/procurementApi';
-import { PoStatusChip, PoApprovalChip, PoReleaseChip, fmtDate, poDisplayNumber } from './poMeta';
+import { PoStatusChip, PoReleaseChip, fmtDate, poDisplayNumber } from './poMeta';
 import { PFMS, pfmsPageSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 import useRowNavigation, { rowNavigationTableSx } from '../common/useRowNavigation';
 import StatusChip from '../components/StatusChip';
@@ -48,6 +49,10 @@ import PurchaseOrderPiNotRequiredDialog from './PurchaseOrderPiNotRequiredDialog
 import PoTermsDialog from './PoTermsDialog';
 import { effectivePoTerms, PO_FORMAT_LABEL } from './poTerms';
 import { isMdForDirectSave } from './poDirectSave';
+import PoApprovalStateChip from './PoApprovalStateChip';
+import { awaitsSubmission } from './poSubmission';
+import { poApprovalBlockReason } from './poApproval';
+import { usePermissions } from '../../../hooks/usePermission';
 
 import { GrnStatusChip } from '../grn/grnMeta';
 import GrnFormDialog from '../grn/GrnFormDialog';
@@ -157,8 +162,11 @@ const PurchaseOrderDetail = () => {
   const [createFollowUp, { isLoading: startingFollowUp }] = useCreateFollowUpMutation();
 
   const [updateTerms, { isLoading: savingTerms }] = useUpdatePurchaseOrderTermsMutation();
+  const [submitPo, { isLoading: submittingPo }] = useSubmitPurchaseOrderMutation();
   const { data: termsDefaultsRes } = useGetPoTermsDefaultsQuery();
   const isMd = useSelector((s) => isMdForDirectSave(s.auth.user));
+  const authUser = useSelector((s) => s.auth.user);
+  const { can } = usePermissions();
   const [termsOpen, setTermsOpen] = useState(false);
 
   const [formOpen, setFormOpen] = useState(false);
@@ -359,9 +367,30 @@ const PurchaseOrderDetail = () => {
 
   // ── Guided "Next Action" (Issue 2 — no back-and-forth between PO/PI/GRN) ──
   const nextAction = (() => {
-    if (isDraft) {
+    // Saved as draft, not submitted: the buyer finishes it and submits it. It
+    // cannot be approved until then (the server refuses).
+    if (isDraft && awaitsSubmission(po)) {
       return {
-        tone: 'info', text: 'Approve or reject this draft to move it forward.',
+        tone: 'info', text: 'This PO is saved as a draft. Review it and submit it for approval — it is not in PO Approval yet.',
+        primary: {
+          label: 'Submit for Approval',
+          icon: submittingPo ? <CircularProgress size={14} color="inherit" /> : <Send size={16} />,
+          disabled: submittingPo,
+          onClick: async () => {
+            try {
+              await submitPo({ id: po._id }).unwrap();
+              enqueueSnackbar(`${poDisplayNumber(po)} submitted — it now waits in PO Approval`, { variant: 'success' });
+            } catch (err) { enqueueSnackbar(err?.data?.message || 'Failed to submit the PO', { variant: 'error' }); }
+          },
+        },
+      };
+    }
+    if (isDraft) {
+      // Only an approver who did not prepare it may decide (server enforces).
+      const blocked = poApprovalBlockReason(po, authUser, can);
+      if (blocked) return { tone: 'info', text: `Submitted for approval. ${blocked}` };
+      return {
+        tone: 'info', text: 'Submitted for approval — approve or reject this PO to move it forward.',
         primary: { label: 'Approve / Reject', icon: <CheckCircle2 size={16} />, onClick: () => setApprovalOpen(true) },
       };
     }
@@ -526,7 +555,7 @@ const PurchaseOrderDetail = () => {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: PFMS.ink }}>{poDisplayNumber(po)}</Typography>
             <PoStatusChip status={po.poStatus} />
-            <PoApprovalChip status={po.approvalStatus} />
+            <PoApprovalStateChip po={po} />
             <PoReleaseChip status={po.releaseStatus} />
           </Box>
           <Typography variant="body2" sx={{ color: PFMS.sub }}>
@@ -824,7 +853,8 @@ const PurchaseOrderDetail = () => {
 
         <SectionCard icon={<CheckCircle2 size={18} />} title="Approval">
           <FieldGrid>
-            <Field label="Status" value={<PoApprovalChip status={po.approvalStatus} />} />
+            <Field label="Status" value={<PoApprovalStateChip po={po} />} />
+            {po.submittedAt ? <Field label="Submitted" value={`${fmtDate(po.submittedAt)}${po.submittedBy ? ` · ${po.submittedBy}` : ''}`} /> : null}
             <Field label="Decided By" value={po.approval?.decidedBy} />
             <Field label="Decided At" value={fmtDate(po.approval?.decidedAt)} />
             {po.approval?.remarks ? <Field label="Remarks" value={po.approval.remarks} /> : null}

@@ -35,9 +35,12 @@ const approveIfDirect = async (req, po) => {
   }
 };
 
-const createdMessage = (po) => (po.approvalStatus === 'APPROVED'
-  ? `Purchase order ${po.poNumber} created and approved`
-  : 'Purchase order created');
+const createdMessage = (po) => {
+  if (po.approvalStatus === 'APPROVED') return `Purchase order ${po.poNumber} created and approved`;
+  return po.submissionStatus === 'NOT_SUBMITTED'
+    ? 'Purchase order saved as draft'
+    : 'Purchase order created and submitted for approval';
+};
 
 export const purchaseOrderController = {
   getAll: asyncHandler(async (req, res) => {
@@ -99,7 +102,13 @@ export const purchaseOrderController = {
 
   update: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.update(req.params.id, req.body, req.user);
-    res.json(ApiResponse.ok('Purchase order updated', po));
+    res.json(ApiResponse.ok(req.body.submit === true ? 'Purchase order updated and submitted for approval' : 'Purchase order updated', po));
+  }),
+
+  // Submit a saved draft for approval — it then waits in PO Approval. Never approves.
+  submit: asyncHandler(async (req, res) => {
+    const po = await purchaseOrderService.submit(req.params.id, req.user);
+    res.json(ApiResponse.ok('Purchase order submitted for approval', po));
   }),
 
   // Terms & Conditions only. An approved (unreleased) PO's terms are the MD's
@@ -122,7 +131,7 @@ export const purchaseOrderController = {
   }),
 
   approve: asyncHandler(async (req, res) => {
-    const po = await purchaseOrderService.approve(req.params.id, req.body, req.user);
+    const po = await purchaseOrderService.approve(req.params.id, req.body, req.user, { permissions: req.userPermissions });
     res.json(ApiResponse.ok(`Purchase order ${req.body.decision === 'REJECTED' ? 'rejected' : 'approved'}`, po));
   }),
 
