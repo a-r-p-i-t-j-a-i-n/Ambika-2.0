@@ -251,6 +251,10 @@ const api = async () => {
   });
   await ok('POST', `/procurement/indents/${ind._id}/quote-comparative`, { statusDone: 'QUOTE_NOT_REQUIRED' });
   const approved = await ok('GET', `/procurement/indents/${ind._id}`);
+  // The PO vendor must be eligible for each item: here it has supplied the SKU before (Vendor Master item list).
+  for (const it of approved.items) {
+    await Vendor.updateOne({ _id: vendor._id, 'products.skuId': { $ne: it.skuId } }, { $push: { products: { skuId: it.skuId, skuCode: it.skuCode, productName: it.itemName } } });
+  }
   const po = await ok('POST', '/procurement/purchase-orders/create-from-items', {
     vendorId: String(vendor._id), expectedDeliveryDate: new Date(Date.now() + 7 * 864e5).toISOString(),
     items: approved.items.map((it) => ({

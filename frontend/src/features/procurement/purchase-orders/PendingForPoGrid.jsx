@@ -18,9 +18,9 @@ import { itemVendorBlock } from './itemVendor';
  * is client-side over that already-loaded list.
  *
  * Vendor: each row shows the vendor its PO must use (approved quotation, or the
- * pick made here when no quotation was required). 'Select Vendor' fixes it for a
- * not-required item; 'Confirm Vendor' records the approved vendor of an older
- * approval — Create PO stays disabled until then.
+ * pick made here when no quotation was required). 'Select Vendor' fixes it (from the
+ * item's eligible vendors only — quoted for it or supplied it before) — optional: an item with no vendor can still go on a PO,
+ * whose own vendor field then takes one of those eligible vendors.
  */
 const PendingForPoGrid = ({ items = [], loading = false, onCreatePo }) => {
   const rowNav = useRowNavigation({ to: (r) => `/procurement/indents/${r.indentId}` });
@@ -63,12 +63,11 @@ const PendingForPoGrid = ({ items = [], loading = false, onCreatePo }) => {
         // A vendor fixed by the Step 1.3 approval is locked; otherwise it can be set here.
         const vendorAction = r.quotationPath === 'NOT_REQUIRED'
           ? (r.vendorState === 'SET' ? 'Change Vendor' : 'Select Vendor')
-          : (r.vendorState === 'MISSING' ? 'Confirm Vendor' : '');
+          : (r.vendorState === 'MISSING' ? 'Select Vendor' : '');
         return (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, justifyContent: 'flex-end', width: '100%' }}>
             {vendorAction ? (
-              <Button size="small" variant={r.vendorState === 'MISSING' ? 'contained' : 'text'}
-                color={r.vendorState === 'MISSING' ? 'warning' : 'primary'} startIcon={<Building2 size={14} />}
+              <Button size="small" variant="text" color="primary" startIcon={<Building2 size={14} />}
                 onClick={(e) => { e.stopPropagation(); setVendorRow(r); }}
                 sx={{ py: 0.25, fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap' }}>
                 {vendorAction}

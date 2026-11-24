@@ -192,6 +192,9 @@ const itemQuotation = Joi.object({
   itemName:  Joi.string().trim().max(300).allow('', null),
   statusDone: Joi.string().valid('YES', 'QUOTE_NOT_REQUIRED').default('YES'),
   quotationDocuments: Joi.array().items(quotationFile).default([]),
+  // Quote Required = No — the vendor the item is bought from (mandatory for such
+  // an item; the service checks it against the item's purchase history).
+  vendorId:  objectId.allow('', null),
   actualAt:  Joi.date().allow('', null),
   remarks:   Joi.string().trim().max(1000).allow('', null),
 });
@@ -239,7 +242,7 @@ const itemApprovedQuotation = Joi.object({
   skuId:     objectId.allow('', null),
   skuCode:   Joi.string().trim().max(60).allow('', null),
   itemName:  Joi.string().trim().max(300).allow('', null),
-  statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED').default('YES'),
+  statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED', 'ON_HOLD', 'PENDING').default('YES'),
   approvedQuotationDocuments: Joi.array().items(quotationFile).default([]),
   // Approved vendor (Vendor Master) — required by the service for each YES item.
   vendorId:  objectId.allow('', null),

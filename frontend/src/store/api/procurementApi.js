@@ -81,6 +81,11 @@ export const procurementApi = baseApi.injectEndpoints({
       query: ({ id, ...body }) => ({ url: `/procurement/indents/${id}/quote-comparative`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['Indent', 'IndentStats', { type: 'Indent', id }],
     }),
+    // Step 1.2 — previous vendors of each item (the only vendors a "Quote Required? = No" item can use)
+    getIndentItemVendorHistory: builder.query({
+      query: (id) => `/procurement/indents/${id}/item-vendor-history`,
+      providesTags: (_r, _e, id) => [{ type: 'Indent', id: `${id}-vendor-history` }, 'PurchaseOrder'],
+    }),
     approveQuotation: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/indents/${id}/approve-quotation`, method: 'POST', body }),
       invalidatesTags: (_r, _e, { id }) => ['Indent', 'IndentStats', { type: 'Indent', id }],
@@ -739,6 +744,7 @@ export const {
   useBulkRejectIndentsMutation,
   useReceiveQuoteMutation,
   useQuoteComparativeMutation,
+  useGetIndentItemVendorHistoryQuery,
   useApproveQuotationMutation,
   useGetPurchaseOrdersQuery,
   useGetPurchaseOrderStatsQuery,

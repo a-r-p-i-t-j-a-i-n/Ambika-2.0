@@ -93,11 +93,9 @@ export const poVendorProblems = (entries, vendorId, vendorsById = new Map(), { s
   for (const { indent, item, ref } of entries) {
     const label = itemLabel(item, ref);
     const s = itemVendorState(indent, item);
-    if (s.state === ITEM_VENDOR_STATE.MISSING) {
-      if (skipMissing) continue;
-      problems.push(`${label}: the approved quotation has no vendor recorded — confirm the approved vendor on Pending for PO before raising a PO`);
-      continue;
-    }
+    // MISSING (quoted item approved at Step 1.3 without a vendor) no longer blocks: the vendor
+    // is chosen on the PO itself, from the item's previous vendors (poVendorHistoryProblems).
+    // `skipMissing` is kept for callers that still pass it.
     if (s.state !== ITEM_VENDOR_STATE.SET) continue;
     const fixed = vendorsById.get(String(s.vendorId));
     if (!fixed || fixed.isDeleted) {
@@ -111,6 +109,32 @@ export const poVendorProblems = (entries, vendorId, vendorsById = new Map(), { s
   }
   return problems;
 };
+
+/**
+ * Items with no vendor fixed yet (MISSING / UNASSIGNED) take their vendor on the PO
+ * itself — but only an ELIGIBLE vendor: one who quoted for the item at Step 1.2 or has
+ * supplied it before (eligibleVendorsForItems in itemVendorHistory.js), never any
+ * Vendor Master record. `history` = Map(itemId → eligible vendors[]).
+ * Items whose vendor is already fixed are held to it by poVendorProblems instead.
+ * Returns [] when the vendor may supply every open item.
+ */
+export const poVendorHistoryProblems = (entries, vendorId, vendorName = '', history = new Map()) => {
+  const problems = [];
+  for (const { indent, item, ref } of entries) {
+    if (itemVendorState(indent, item).state === ITEM_VENDOR_STATE.SET) continue;
+    const label = itemLabel(item, ref);
+    const list = history.get(String(item?._id)) || [];
+    if (!list.length) {
+      problems.push(`${label}: No eligible vendors found — none has quoted for this item or supplied it before. Collect a quotation (Step 1.2) or add the SKU to a vendor's Vendor Master item list before raising a PO for it`);
+    } else if (!list.some((h) => sameId(h.vendorId, vendorId))) {
+      problems.push(`${label}: "${vendorName || 'this vendor'}" has neither quoted for nor previously supplied this item — choose one of: ${list.map((h) => h.vendorName).join(', ')}`);
+    }
+  }
+  return problems;
+};
+
+/** A JSL-format PO is always raised on Jindal Stainless Ltd (the PO form forces it; the server holds to it). */
+export const isJslVendorName = (name) => /jindal/i.test(String(name || ''));
 
 /** Distinct fixed vendor ids among the entries (for the Vendor-master lookup). */
 export const fixedVendorIds = (entries) => [...new Set(entries

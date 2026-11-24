@@ -15,13 +15,15 @@ import { AppError } from '../../../utils/apiResponse.js';
 import { generateIndentNumber } from '../../../utils/docNumberGenerator.js';
 import { assertPurchasable } from '../purchase-item-guard.js';
 import {
-  QUOTATION_FMS_STEPS, QUOTATION_STEP_STATES, DOWNSTREAM_OF_QUOTATION, quotationStepFilter, isDownstreamOfQuotation,
+  QUOTATION_FMS_STEPS, QUOTATION_STEP_STATES, quotationStepFilter, isDownstreamOfQuotation,
   quoteComparativePlannedAt, quotationStepDone,
 } from './quotationSteps.js';
+import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
 import {
-  ITEM_VENDOR_SOURCE, quotedVendorsOf, vendorsOnQuotationFiles, approvedVendorProblem,
-} from './itemVendor.js';
+  quotedItemIds, mergeApprovalRows, approvalProgress, statusAfterApproval, approvalVendorHistoryProblem,
+} from './approvalProgress.js';
 import { bindIndentItemsToSkuMaster } from './itemSku.js';
+import { vendorHistoryForItems, historyVendorProblem, eligibleVendorsForItems } from './itemVendorHistory.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 import { binDeleted } from '../recycleBin.js';
@@ -247,7 +249,8 @@ const buildItemQuotations = (items = []) => items.map((it) => {
 // by itemId/skuCode/itemName as submitted — no cross-item merging happens here).
 const buildItemApprovedQuotations = (items = []) => items.map((it) => {
   // Carried from Step 1.2: YES needs a file; QUOTATION_NOT_APPROVED / QUOTE_NOT_REQUIRED don't.
-  const statusDone = ['QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED'].includes(it.statusDone) ? it.statusDone : 'YES';
+  // ON_HOLD / PENDING are the item-wise partial-approval states (approvalProgress.js).
+  const statusDone = ['QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED', 'ON_HOLD', 'PENDING'].includes(it.statusDone) ? it.statusDone : 'YES';
   return {
     itemId: it.itemId || undefined,
     skuId: it.skuId || undefined,
@@ -266,22 +269,27 @@ const buildItemApprovedQuotations = (items = []) => items.map((it) => {
 });
 
 // Step 1.3 — the approved vendor of every quoted (YES) item in an item-wise
-// approval. Each must be an active Vendor Master record; the name is taken from
-// the master, never from the client. `built` is buildItemApprovedQuotations(raw).
-const resolveApprovedVendorPicks = async (indent, raw, built) => {
+// approval. Each must be an active Vendor Master record that is ELIGIBLE for the
+// item: it quoted for it at Step 1.2 OR has supplied its SKU before
+// (itemVendorHistory.js eligibleVendorsForItems — never the whole master); the name is
+// taken from the master, never from the client. A vendor already approved for the
+// item is kept as saved (no history re-check). `locked` = items already on a PO
+// (their approval no longer changes). `built` is buildItemApprovedQuotations(raw).
+const resolveApprovedVendorPicks = async (indent, raw, built, { locked = new Set() } = {}) => {
   const picks = [];
   built.forEach((iq, i) => {
     if (iq.statusDone !== 'YES' || !iq.itemId) return;
+    if (locked.has(String(iq.itemId))) return;
     const item = indent.items.id?.(iq.itemId);
     if (!item || !isItemApprovalEffective(indent, item)) return;
     const vendorId = raw[i]?.vendorId;
-    if (!vendorId) throw new AppError(`Select the approved vendor for "${item.itemName}"`, 400);
-    // Once Step 1.2 recorded who quoted, only those vendors are eligible.
+    // The vendor is optional at Step 1.3: an approved item without one proceeds to PO creation,
+    // where the PO's vendor is chosen from the item's previous vendors (and checked there).
+    if (!vendorId) return;
     picks.push({
       item,
       vendorId: String(vendorId),
-      quoted: quotedVendorsOf(indent, item),
-      kept: vendorsOnQuotationFiles(iq.approvedQuotationDocuments),
+      unchanged: item.vendorSource === ITEM_VENDOR_SOURCE.APPROVED_QUOTATION && String(item.vendorId || '') === String(vendorId),
     });
   });
   const ids = [...new Set(picks.map((p) => p.vendorId))];
@@ -289,16 +297,55 @@ const resolveApprovedVendorPicks = async (indent, raw, built) => {
     ? await Vendor.find({ _id: { $in: ids }, isDeleted: { $ne: true } }).select('name isActive').lean()
     : [];
   const byId = new Map(vendors.map((v) => [String(v._id), v]));
+  const fresh = picks.filter((p) => !p.unchanged);
+  const history = fresh.length ? await eligibleVendorsForItems(fresh.map((p) => ({ indent, item: p.item }))) : new Map();
   picks.forEach((p) => {
     const v = byId.get(p.vendorId);
     if (!v) throw new AppError(`The vendor selected for "${p.item.itemName}" was not found in the Vendor Master`, 400);
     if (v.isActive === false) throw new AppError(`Vendor "${v.name}" (selected for "${p.item.itemName}") is inactive in the Vendor Master`, 400);
-    const problem = approvedVendorProblem({
-      quoted: p.quoted, kept: p.kept, vendorId: p.vendorId, vendorName: v.name, itemName: p.item.itemName,
-    });
-    if (problem) throw new AppError(problem, 400);
+    if (!p.unchanged) {
+      const why = approvalVendorHistoryProblem({ history: history.get(String(p.item._id)) || [], vendorId: p.vendorId, itemName: p.item.itemName });
+      if (why) throw new AppError(why, 400);
+    }
     p.vendorName = v.name;
   });
+  return picks;
+};
+
+// Step 1.2 — the vendor of every item answered "Quote Required? = No". The buyer
+// already knows who supplies it, so the vendor is mandatory and must be one of
+// the item's previous vendors (itemVendorHistory.js) — checked here against the
+// stored purchase history, never trusting the client's list. An item already on
+// a PO keeps what it has (its vendor can no longer change). `raw` = the incoming
+// itemQuotations rows (they carry vendorId; buildItemQuotations drops it).
+// Returns [{ item, ref, vendorId, vendorName }] for the items whose vendor is set.
+const resolveNotRequiredVendorPicks = async (indent, raw, eligibleItemIds) => {
+  const rows = raw.filter((q) => q.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId && eligibleItemIds.has(String(q.itemId)));
+  const picks = [];
+  const open = [];
+  for (const q of rows) {
+    const item = indent.items.id?.(q.itemId);
+    if (!item) continue;
+    const vendorId = q.vendorId ? String(q.vendorId) : '';
+    if (item.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED) {
+      const same = vendorId && String(item.vendorId || '') === vendorId;
+      if (vendorId && !same) {
+        throw new AppError(`"${item.itemName}" is already on ${item.poNumber ? `PO ${item.poNumber}` : 'a PO'} — cancel that PO to change its vendor`, 400);
+      }
+      continue;
+    }
+    open.push({ item, vendorId });
+  }
+  if (!open.length) return picks;
+  const history = await vendorHistoryForItems(open.map((o) => o.item));
+  for (const { item, vendorId } of open) {
+    const list = history.get(String(item._id)) || [];
+    const problem = historyVendorProblem({ history: list, vendorId, itemName: item.itemName });
+    if (problem) throw new AppError(problem, 400);
+    const chosen = list.find((h) => String(h.vendorId) === vendorId);
+    const lineNo = num(item.itemLineNo) || (indent.items.findIndex((it) => String(it._id) === String(item._id)) + 1);
+    picks.push({ item, ref: buildItemDisplayNumber(indent.indentNumber, lineNo), vendorId, vendorName: chosen.vendorName });
+  }
   return picks;
 };
 
@@ -842,6 +889,25 @@ export const indentService = {
     return indent.save();
   },
 
+  // The vendors of each item. `vendors` = previous vendors only (purchase history + Vendor
+  // Master catalog) — what a Step 1.2 "Quote Required? = No" item can be assigned to.
+  // `eligibleVendors` = quoted at Step 1.2 OR previously supplied — what Step 1.3 and the PO
+  // accept. Items come from the stored indent, so the SKU is never taken from the client.
+  async getItemVendorHistory(id) {
+    const indent = await PurchaseIndent.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
+    if (!indent) throw new AppError('Indent not found', 404);
+    const items = (indent.items || []).filter((it) => isItemApprovalEffective(indent, it));
+    const history = await vendorHistoryForItems(items);
+    const eligible = await eligibleVendorsForItems(items.map((it) => ({ indent, item: it })));
+    return {
+      items: items.map((it) => ({
+        itemId: it._id, skuId: it.skuId || null, skuCode: it.skuCode || '', itemName: it.itemName || '',
+        vendors: (history.get(String(it._id)) || []).map((h) => ({ ...h, lastPoDate: h.lastPoDate || null })),
+        eligibleVendors: (eligible.get(String(it._id)) || []).map((h) => ({ ...h, lastPoDate: h.lastPoDate || null })),
+      })),
+    };
+  },
+
   // Step 1.2 — Receive Quote & Make Comparative (multi-vendor + legacy upload).
   async quoteComparative(id, data, user) {
     const indent = await findOrThrow(id);
@@ -851,8 +917,12 @@ export const indentService = {
 
     // Step 1.3 (Approved Quotation) already done? Then Step 1.2 edits must not
     // move the workflow backwards or discard that approval.
-    const step13Approved = indent.quotationApprovalStep?.statusDone === QUOTATION_APPROVAL_STATUS.YES
-      && !indent.quotationApprovalStep?.skipped;
+    // A partial Step 1.3 that already approved items (and so released them to PO) counts too:
+    // Step 1.2 can only be corrected, never moved back.
+    const step13Approved = (indent.quotationApprovalStep?.statusDone === QUOTATION_APPROVAL_STATUS.YES
+      && !indent.quotationApprovalStep?.skipped)
+      || (!!indent.quotationApprovalStep?.partial
+        && [INDENT_OVERALL_STATUS.QUOTATION_APPROVED, INDENT_OVERALL_STATUS.PARTIAL_PO_CREATED].includes(indent.overallStatus));
     if (step13Approved && data.statusDone !== 'YES') {
       throw new AppError('The quotation has already been approved (Step 1.3) — Step 1.2 cannot be changed to "Quote Not Required"', 400);
     }
@@ -887,6 +957,9 @@ export const indentService = {
       : [];
     // Who quoted: each file's vendor resolved against the Vendor Master.
     await tagQuotationVendors(indent, itemQuotations);
+    // "Quote Required? = No" items: the mandatory vendor, validated against the
+    // item's purchase history.
+    const notRequiredPicks = await resolveNotRequiredVendorPicks(indent, incomingItemQuotations, eligibleItemIds);
     const hasItemQuotations = itemQuotations.length > 0;
     // Aggregate all item-wise files so the legacy quotationDocuments[] field
     // stays populated for older screens.
@@ -964,6 +1037,37 @@ export const indentService = {
       updatedBy: user?._id,
       remarks: data.remarks || '',
     };
+
+    // Vendor for every "Quote Required? = No" item, held on the item itself (the
+    // same place — and PO_PREPARATION source — as the Pending-for-PO pick), so
+    // Step 1.3 and the PO use it with no further selection. An item whose quote
+    // is required again drops a vendor pre-selected this way.
+    const pickedAt = new Date();
+    notRequiredPicks.forEach((p) => {
+      const it = p.item;
+      if (String(it.vendorId || '') === p.vendorId && it.vendorSource === ITEM_VENDOR_SOURCE.PO_PREPARATION) return;
+      const was = it.vendorId && it.vendorName ? ` (was ${it.vendorName})` : '';
+      it.vendorId = p.vendorId;
+      it.vendorName = p.vendorName;
+      it.vendorSource = ITEM_VENDOR_SOURCE.PO_PREPARATION;
+      it.vendorSelectedAt = pickedAt;
+      it.vendorSelectedById = user?._id || null;
+      indent.activityTimeline.push({
+        action: 'ITEM_VENDOR',
+        description: `${p.ref}: vendor selected — ${p.vendorName} (quotation not required, from purchase history)${was}`,
+        actorId: user?._id,
+      });
+    });
+    incomingItemQuotations.forEach((q) => {
+      if (q.statusDone === 'QUOTE_NOT_REQUIRED' || !q.itemId) return;
+      const it = indent.items.id?.(q.itemId);
+      if (!it || it.vendorSource !== ITEM_VENDOR_SOURCE.PO_PREPARATION || it.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED) return;
+      it.vendorId = null;
+      it.vendorName = '';
+      it.vendorSource = '';
+      it.vendorSelectedAt = pickedAt;
+      it.vendorSelectedById = user?._id || null;
+    });
 
     // Keep the legacy quoteStep in sync so the quotation-approval guard and
     // existing views stay consistent.
@@ -1057,8 +1161,12 @@ export const indentService = {
       throw new AppError('Quotation can only be approved for an approved indent', 400);
     }
     // A PO was raised (or the service moved on): re-approving would reset the
-    // indent to QUOTATION_APPROVED and drop the approved vendors' PO links.
-    if (isDownstreamOfQuotation(indent)) {
+    // indent to QUOTATION_APPROVED and drop the approved vendors' PO links. A PARTIAL
+    // item-wise approval is the exception: it stays open for its remaining items even
+    // after POs were raised for the approved ones (those items stay locked below).
+    const resuming = !!indent.quotationApprovalStep?.partial && indent.overallStatus === INDENT_OVERALL_STATUS.PARTIAL_PO_CREATED;
+    const statusWhenRead = indent.overallStatus;
+    if (isDownstreamOfQuotation(indent) && !resuming) {
       throw new AppError(`The quotation for indent ${indent.indentNumber || ''} is already approved and the indent has moved on (${indent.overallStatus})`.replace('  ', ' '), 400);
     }
 
@@ -1098,7 +1206,43 @@ export const indentService = {
     const hasItemQuotations = itemApprovedQuotations.length > 0;
     // Aggregate all item-wise files so the legacy approvedQuotationDocuments[]
     // field stays populated for older screens / the PO flow.
-    const itemDocs = itemApprovedQuotations.flatMap((iq) => iq.approvedQuotationDocuments);
+    // ── Item-wise progress (approvalProgress.js) ──
+    // Each quoted item is decided on its own: APPROVED (YES + vendor), ON_HOLD or
+    // PENDING. Rows saved by an earlier submit are kept unless this request names the
+    // item; an item already on a PO keeps its approval untouched.
+    const itemWise = hasItemQuotations && !multiVendor;
+    const itemWiseKeyed = itemWise && itemApprovedQuotations.every((r) => r.itemId);
+    const isServiceIndent = indent.requestType === INDENT_REQUEST_TYPE.INTERNAL_SERVICE;
+    const lockedIds = new Set();
+    let incomingRows = itemApprovedQuotations;
+    if (itemWise) {
+      incomingRows.forEach((r, i) => {
+        if (['ON_HOLD', 'PENDING'].includes(r.statusDone) && !r.itemId) {
+          throw new AppError(`Item "${r.itemName || 'item'}": a hold / pending row needs its item`, 400);
+        }
+        const item = r.itemId ? indent.items.id?.(r.itemId) : null;
+        if (!item || item.procurementStatus !== ITEM_PROCUREMENT_STATUS.PO_CREATED) return;
+        if (!['YES', 'ON_HOLD', 'PENDING'].includes(r.statusDone)) return;
+        const sameVendor = r.statusDone === 'YES' && String(item.vendorId || '') === String(data.itemApprovedQuotations[i]?.vendorId || '');
+        if (!sameVendor) {
+          throw new AppError(`"${item.itemName}" is already on ${item.poNumber ? `PO ${item.poNumber}` : 'a PO'} — cancel that PO to change or hold it`, 400);
+        }
+        lockedIds.add(String(item._id));
+      });
+      const savedRows = (indent.quotationApprovalStep?.itemApprovedQuotations || []).map((r) => (r.toObject ? r.toObject() : r));
+      incomingRows = itemApprovedQuotations.filter((r) => !lockedIds.has(String(r.itemId)) || !savedRows.some((s) => String(s.itemId) === String(r.itemId)));
+      incomingRows = mergeApprovalRows(savedRows, incomingRows);
+    }
+    const quotedIds = itemWise ? quotedItemIds(indent, isItemApprovalEffective) : [];
+    const progress = approvalProgress(incomingRows, quotedIds);
+    // Complete = every quoted item approved. Older clients (rows without item ids) and
+    // indents with nothing to approve keep the original all-or-nothing behaviour.
+    const complete = !itemWise || !itemWiseKeyed || !quotedIds.length || progress.complete;
+    if (!complete && isServiceIndent) {
+      throw new AppError('An internal-service indent must be approved in full — select a vendor for every quoted item', 400);
+    }
+    const itemDocs = (itemWise ? incomingRows.filter((r) => !['ON_HOLD', 'PENDING'].includes(r.statusDone)) : itemApprovedQuotations)
+      .flatMap((iq) => iq.approvedQuotationDocuments);
 
     // Simple multi-file upload: collect all valid documents (fall back to the
     // single legacy upload if only that was sent).
@@ -1129,7 +1273,15 @@ export const indentService = {
     // Item-wise approval names the vendor each quoted item is approved for; the
     // PO for that item is held to it (itemVendor.js).
     const vendorPicks = hasItemQuotations && !multiVendor
-      ? await resolveApprovedVendorPicks(indent, data.itemApprovedQuotations, itemApprovedQuotations)
+      ? await resolveApprovedVendorPicks(indent, data.itemApprovedQuotations, itemApprovedQuotations, { locked: lockedIds })
+      : [];
+    // An item put on hold / left pending — or approved with its vendor cleared — gives up the vendor it was approved for (never one already on a PO).
+    const vendorClears = itemWise
+      ? itemApprovedQuotations
+        .filter((r, i) => r.itemId && !lockedIds.has(String(r.itemId))
+          && (['ON_HOLD', 'PENDING'].includes(r.statusDone) || (r.statusDone === 'YES' && !data.itemApprovedQuotations[i]?.vendorId)))
+        .map((r) => indent.items.id?.(r.itemId))
+        .filter((it) => it && it.vendorSource === ITEM_VENDOR_SOURCE.APPROVED_QUOTATION && it.procurementStatus !== ITEM_PROCUREMENT_STATUS.PO_CREATED)
       : [];
     const actualAt = data.actualAt ? new Date(data.actualAt) : new Date();
 
@@ -1142,10 +1294,12 @@ export const indentService = {
     const quotationApprovalStep = {
       stepNo: 'Step 1.3',
       stepName: 'Approved Quotation 1.03',
-      statusDone,
+      // A partial item-wise approval is NOT a completed step: no statusDone until every quoted item is approved.
+      statusDone: complete ? statusDone : null,
+      partial: !complete,
       approvedQuotation: mirrorDoc,
       approvedQuotationDocuments: multiVendor ? [] : legacyDocuments,
-      itemApprovedQuotations,
+      itemApprovedQuotations: itemWise ? incomingRows : itemApprovedQuotations,
       approvedVendors,
       actualAt,
       updatedBy: user?._id,
@@ -1153,10 +1307,25 @@ export const indentService = {
     };
     // Internal-service indents skip the PO/PI/GRN chain — an approved quotation
     // goes straight to SERVICE_PENDING (awaiting the service Incoming QC, Step 1.9).
-    const isService = indent.requestType === INDENT_REQUEST_TYPE.INTERNAL_SERVICE;
-    const overallStatus = statusDone === QUOTATION_APPROVAL_STATUS.YES
+    const isService = isServiceIndent;
+    let overallStatus = statusDone === QUOTATION_APPROVAL_STATUS.YES
       ? (isService ? INDENT_OVERALL_STATUS.SERVICE_PENDING : INDENT_OVERALL_STATUS.QUOTATION_APPROVED)
       : INDENT_OVERALL_STATUS.QUOTATION_NOT_APPROVED;
+    if (itemWise && itemWiseKeyed && !isService) {
+      // Material, item-wise: the indent follows its approved items. Approved + "Quote Not
+      // Required" items are PO-eligible; the status rolls up their PO progress and is never
+      // PO_READY while Step 1.3 still owes an item a decision. Nothing approved yet → still waiting.
+      const nrIds = (indent.quoteComparativeStep?.itemQuotations || [])
+        .filter((q) => q.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId).map((q) => String(q.itemId));
+      const eligible = new Set([...progress.approved, ...nrIds.filter((id) => {
+        const it = indent.items.id?.(id);
+        return it && isItemApprovalEffective(indent, it);
+      })]);
+      const poed = [...eligible].filter((id) => indent.items.id?.(id)?.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED).length;
+      overallStatus = progress.approved.length
+        ? statusAfterApproval({ partial: !complete, approvedItemCount: eligible.size, poedItemCount: poed })
+        : INDENT_OVERALL_STATUS.QUOTE_RECEIVED;
+    }
 
     // Timeline: how many Step 1.2 quotations were kept (approved) vs removed
     // (rejected). Step 1.3 reuses Step 1.2's files, so the difference is the
@@ -1173,7 +1342,9 @@ export const indentService = {
       : '';
     const timelineDesc = multiVendor
       ? `Step 1.3 — ${approvedVendors.length} approved vendor(s)`
-      : `Step 1.3 — ${approvedDocCount} quotation(s) approved (reused from Step 1.2)${rejectedDocCount ? `, ${rejectedDocCount} rejected` : ''}${vendorNote}`;
+      : (itemWise && itemWiseKeyed && !complete)
+        ? `Step 1.3 (partial) — ${progress.approved.length} approved, ${progress.onHold.length} on hold, ${progress.pending.length} pending${vendorNote}`
+        : `Step 1.3 — ${approvedDocCount} quotation(s) approved (reused from Step 1.2)${rejectedDocCount ? `, ${rejectedDocCount} rejected` : ''}${vendorNote}`;
 
     // Approved vendor onto each quoted item, in the same update as the approval.
     const now = new Date();
@@ -1189,6 +1360,16 @@ export const indentService = {
       });
       arrayFilters.push({ [`v${k}._id`]: p.item._id });
     });
+    vendorClears.forEach((it, k) => {
+      Object.assign(vendorSet, {
+        [`items.$[c${k}].vendorId`]: null,
+        [`items.$[c${k}].vendorName`]: '',
+        [`items.$[c${k}].vendorSource`]: '',
+        [`items.$[c${k}].vendorSelectedAt`]: null,
+        [`items.$[c${k}].vendorSelectedById`]: null,
+      });
+      arrayFilters.push({ [`c${k}._id`]: it._id });
+    });
 
     // Use $set so the whole sub-document is replaced at the DB level. This
     // overwrites any legacy shape (older docs stored `approvedQuotation` as a
@@ -1196,7 +1377,7 @@ export const indentService = {
     // Conditional on the state checked above, so a PO created in the meantime
     // is never overwritten.
     const updated = await PurchaseIndent.findOneAndUpdate(
-      { _id: id, isDeleted: { $ne: true }, overallStatus: { $nin: DOWNSTREAM_OF_QUOTATION } },
+      { _id: id, isDeleted: { $ne: true }, overallStatus: statusWhenRead },
       {
         $set: { quotationApprovalStep, overallStatus, updatedBy: user?._id, ...vendorSet },
         $push: {
@@ -1253,6 +1434,7 @@ export const indentService = {
         it.vendorSource = '';
         it.vendorSelectedAt = null;
         it.vendorSelectedById = null;
+        it.vendorFromPoId = null;
       }
     });
     indent.quotationApprovalStep = {

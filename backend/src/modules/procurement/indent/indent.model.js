@@ -198,7 +198,9 @@ const itemApprovedQuotationSchema = new Schema({
   // Per-item status — carried forward from Step 1.2. YES (approved) requires ≥1
   // file; QUOTATION_NOT_APPROVED / QUOTE_NOT_REQUIRED (item had no quote in Step
   // 1.2) make the upload optional for this item.
-  statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED'], default: 'YES' },
+  // ON_HOLD (kept pending on purpose) / PENDING (no decision yet) are the item-wise
+  // partial-approval states (approvalProgress.js) — neither is PO-eligible.
+  statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED', 'ON_HOLD', 'PENDING'], default: 'YES' },
   // One or more approved quotation documents for this specific item (vendor tags
   // copied from the matching Step 1.2 file, never taken from the client).
   approvedQuotationDocuments: { type: [quotationFileSchema], default: [] },
@@ -211,6 +213,10 @@ const quotationApprovalStepSchema = new Schema({
   stepNo:     { type: String, default: 'Step 1.3' },
   stepName:   { type: String, default: 'Approved Quotation 1.03' },
   statusDone: { type: String, enum: ['YES', 'QUOTATION_NOT_APPROVED'], default: null },
+  // Item-wise partial approval: some quoted items are approved, others are still
+  // pending / on hold. statusDone stays null and the step stays on its queue until
+  // every quoted item is approved (approvalProgress.js).
+  partial: { type: Boolean, default: false },
   // Set when Step 1.2 was marked QUOTE_NOT_REQUIRED — Step 1.3 is skipped and the
   // indent goes straight to PO/service eligibility without an approval upload.
   skipped:       { type: Boolean, default: false },
@@ -318,6 +324,9 @@ const indentItemSchema = new Schema({
   vendorSource:       { type: String, enum: ['', 'APPROVED_QUOTATION', 'PO_PREPARATION'], default: '' },
   vendorSelectedAt:   { type: Date, default: null },
   vendorSelectedById: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  // The PO that supplied this item's vendor (chosen on the PO form when none was fixed). Cleared with
+  // the vendor when that PO is cancelled / deleted, so the item reopens with its vendor still open.
+  vendorFromPoId:     { type: Schema.Types.ObjectId, ref: 'VendorPurchaseOrder', default: null },
 }, { _id: true });
 
 const indentSchema = new Schema({

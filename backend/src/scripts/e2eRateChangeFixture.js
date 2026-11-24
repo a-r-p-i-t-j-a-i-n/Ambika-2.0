@@ -31,6 +31,7 @@ import { assertE2ESafe, isEntry } from './e2eSafety.js';
 import User from '../modules/auth/auth.model.js';
 import Vendor from '../modules/vendors/vendor.model.js';
 import SKU from '../modules/skus/sku.model.js';
+import { quoteAndApprove } from './e2eQuotedIndent.js';
 import PricingHistory from '../modules/vendors/pricingHistory.model.js';
 import PurchaseIndent from '../modules/procurement/indent/indent.model.js';
 import VendorPurchaseOrder from '../modules/procurement/purchase-order/purchaseOrder.model.js';
@@ -161,14 +162,20 @@ const readyIndent = async (label, skuKeys, vendorId) => {
   const approved = await ok('MD', 'POST', `/procurement/indents/${ind._id}/approve`, {
     items: ind.items.map((it) => ({ _id: it._id, revisedQuantity: it.quantity, approvalStatus: 'APPROVED' })),
   });
-  await ok('BUYER', 'POST', `/procurement/indents/${ind._id}/quote-comparative`, {
-    statusDone: 'QUOTE_NOT_REQUIRED',
-    itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', quotationDocuments: [] })),
-  });
-  if (vendorId) {
-    for (const it of approved.items) {
-      await ok('BUYER', 'PATCH', `${PO}/approved-items/vendor`, { indentId: ind._id, indentItemId: it._id, vendorId: String(vendorId) });
-    }
+  // The vendor must be ELIGIBLE for every item. When its Vendor Master item list carries all the SKUs the
+  // item is "Quote Required = No" with that vendor (history); otherwise it goes through a quotation that names
+  // the vendor (quoted), then Step 1.3 approves the item for it.
+  const vdoc = vendorId ? await Vendor.findById(vendorId).select('name products').lean() : null;
+  const carried = (s) => (vdoc?.products || []).some((p) => String(p.skuId) === String(s._id) || p.skuCode === s.code);
+  if (vdoc && skus.every(carried)) {
+    await ok('BUYER', 'POST', `/procurement/indents/${ind._id}/quote-comparative`, {
+      statusDone: 'QUOTE_NOT_REQUIRED',
+      itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', vendorId: String(vendorId), quotationDocuments: [] })),
+    });
+  } else {
+    await quoteAndApprove((p, b) => ok('BUYER', 'POST', p, b), approved, {
+      quoteVendor: vdoc ? { id: vendorId, name: vdoc.name } : null, approveVendorId: vendorId || null, tag: `rc-${RUN}-${label}`,
+    });
   }
   return PurchaseIndent.findById(ind._id).lean();
 };

@@ -4,6 +4,7 @@ import {
 } from '@mui/material';
 import { Plus, FileText, X, ExternalLink } from 'lucide-react';
 import { fileHref } from './indentMeta';
+import { fmtDate } from '../purchase-orders/poMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import StatusChip from '../components/StatusChip';
 import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
@@ -12,21 +13,37 @@ import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
  * Step 1.2 — Receive Quote & Make Comparative, item-wise table.
  *
  * One card per indent item (Item Details · Qty · Unit); inside it one compact
- * line per vendor quotation (Quoted By · Quotation File · Actual Date · remove),
+ * line per uploaded quotation (Quotation File · Actual Date · remove),
  * with Quote Required? (Yes / No) ahead of the quotations and Remarks after them. The parent owns `rows` and the
  * upload mutation; this component is presentational + event wiring only.
  *
  * Row  : { itemId, skuCode, itemName, qty, unit, statusDone, remarks,
- *          files: [{ fileName, fileUrl, vendor, actualAt, legacy, ... }] }
- * A "quotation" is one uploaded file together with the vendor who sent it and
- * the date it was received (file.actualAt). Fields the form does not edit
- * (quoted rate / delivery days saved earlier) stay on the file untouched.
+ *          vendor, vendorLocked,
+ *          files: [{ fileName, fileUrl, actualAt, ... }] }
+ * Quote Required? = No → no quotation files; the item's vendor is picked from the
+ * item's previous vendors only (`historyByItem[itemId]`, served by the API from
+ * purchase history) and is mandatory. `vendorLocked` = the item is already on a PO.
+ * A "quotation" is one uploaded file together with the date it was received
+ * (file.actualAt). No vendor is chosen here — the vendor is picked later, per item,
+ * in the PO workflow. Fields the form does not edit (a vendor tag, quoted rate /
+ * delivery days saved earlier) stay on the file untouched.
  *
  * Step 1.3 keeps using the shared ItemQuotationTable.
  */
-const COLS = '28px minmax(0,1.5fr) 36px 44px 116px minmax(575px,3.6fr) minmax(130px,1fr)';
-const QUOTE_COLS = 'minmax(0,2fr) minmax(0,1fr) 184px 30px';
-const HEADERS = ['#', 'Item Details', 'Qty', 'Unit', 'Quote Required?', 'Vendor Quotations', 'Remarks'];
+const COLS = '28px minmax(0,1.5fr) 36px 44px 116px minmax(400px,3fr) minmax(130px,1fr)';
+const QUOTE_COLS = 'minmax(0,1fr) 184px 30px';
+const HEADERS = ['#', 'Item Details', 'Qty', 'Unit', 'Quote Required?', 'Quotations', 'Remarks'];
+
+// What a previous vendor has supplied before — shown under its name in the picker.
+const historyCaption = (h) => {
+  const parts = [];
+  if (h.location) parts.push(h.location);
+  if (h.poCount) {
+    parts.push(`${h.poCount} PO${h.poCount > 1 ? 's' : ''}${h.lastPoDate ? ` · last ${fmtDate(h.lastPoDate)}` : ''}${h.lastPoNumber ? ` (${h.lastPoNumber})` : ''}`);
+  }
+  if (h.inCatalog) parts.push('In Vendor Master item list');
+  return parts.join(' · ');
+};
 
 // Mobile caption shown above a cell once the header row is hidden.
 const MobileLabel = ({ children }) => (
@@ -45,8 +62,9 @@ const VendorQuotationTable = ({
   onRemoveFile,
   onPatchRow,
   onPatchFile,
-  vendorOptions = [],
-  vendorsLoading = false,
+  historyByItem = {},
+  historyLoading = false,
+  historyError = false,
 }) => {
   const inputRefs = useRef([]);
 
@@ -183,7 +201,7 @@ const VendorQuotationTable = ({
 
               {/* Vendor quotations */}
               <Box data-cell="wide" sx={{ minWidth: 0 }}>
-                <MobileLabel>Vendor Quotations{needsFile ? ' *' : ' (optional)'}</MobileLabel>
+                <MobileLabel>{needsFile ? 'Quotations *' : (row.itemId ? 'Vendor *' : 'Quotations (optional)')}</MobileLabel>
                 <input
                   ref={(el) => { inputRefs.current[idx] = el; }}
                   type="file"
@@ -202,25 +220,6 @@ const VendorQuotationTable = ({
                     {files.map((f, fi) => (
                       <Box key={f.fileUrl || fi} data-testid={`quote-file-${idx}-${fi}`}>
                         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr) 32px', sm: QUOTE_COLS }, columnGap: 1, rowGap: 0.75, alignItems: 'center' }}>
-                          <Autocomplete
-                            size="small"
-                            sx={{ gridColumn: { xs: '1 / -1', sm: 'auto' } }}
-                            options={vendorOptions}
-                            loading={vendorsLoading}
-                            value={f.vendor || null}
-                            onChange={(_e, v) => onPatchFile(idx, fi, { vendor: v ? { _id: v._id, name: v.name } : null })}
-                            getOptionLabel={(o) => o?.name || ''}
-                            isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
-                            noOptionsText={vendorsLoading ? 'Loading vendors…' : 'No active vendors in the Vendor Master'}
-                            renderInput={(params) => (
-                              <TextField
-                                {...params}
-                                placeholder={f.legacy ? 'Quoted by (vendor) — not recorded' : 'Quoted by (vendor) *'}
-                                error={needsFile && !f.vendor && !f.legacy}
-                                inputProps={{ ...params.inputProps, 'data-testid': `quote-vendor-${idx}-${fi}` }}
-                              />
-                            )}
-                          />
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, gridColumn: { xs: '1 / -1', sm: 'auto' } }}>
                             <FileText size={14} color={PFMS.sub} style={{ flexShrink: 0 }} />
                             <Typography noWrap title={f.fileName} sx={{ fontSize: '0.78rem', fontWeight: 600, color: PFMS.ink, minWidth: 0, flex: 1 }}>
@@ -245,11 +244,6 @@ const VendorQuotationTable = ({
                             </IconButton>
                           </Tooltip>
                         </Box>
-                        {f.legacy && !f.vendor && (
-                          <Typography variant="caption" sx={{ display: 'block', color: PFMS.sub, mt: 0.25 }} data-testid={`quote-legacy-${idx}-${fi}`}>
-                            Older quotation — saved before vendors were recorded. Naming its vendor is optional.
-                          </Typography>
-                        )}
                       </Box>
                     ))}
                   </Box>
@@ -263,6 +257,69 @@ const VendorQuotationTable = ({
                     {addButton}
                   </Box>
                 )}
+
+                {!needsFile && row.itemId && (() => {
+                  const history = historyByItem[row.itemId] || [];
+                  const loaded = Object.prototype.hasOwnProperty.call(historyByItem, row.itemId);
+                  const current = row.vendor || null;
+                  const inHistory = !current || history.some((h) => String(h.vendorId) === String(current._id));
+                  const empty = loaded && !historyLoading && history.length === 0;
+                  const stale = !!current && loaded && !inHistory && !row.vendorLocked;
+                  return (
+                    <Box sx={{ mb: 0.75 }} data-testid={`quote-nr-vendor-${idx}`}>
+                      <Autocomplete
+                        size="small"
+                        sx={{ maxWidth: 440 }}
+                        options={history}
+                        loading={historyLoading}
+                        disabled={row.vendorLocked || (!loaded && !historyError)}
+                        value={history.find((h) => current && String(h.vendorId) === String(current._id)) || current}
+                        onChange={(_e, h) => onPatchRow(idx, { vendor: h ? { _id: h.vendorId, name: h.vendorName } : null })}
+                        getOptionLabel={(o) => (o?.vendorName || o?.name || '') + (o?.vendorCode ? ` (${o.vendorCode})` : '')}
+                        isOptionEqualToValue={(o, v) => String(o.vendorId || o._id) === String(v.vendorId || v._id)}
+                        noOptionsText={historyLoading ? 'Loading previous vendors…' : 'No previous vendors found for this item'}
+                        renderOption={(props, o) => (
+                          <li {...props} key={o.vendorId} data-testid={`quote-nr-option-${idx}`}>
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography sx={{ fontSize: '0.84rem', fontWeight: 700, lineHeight: 1.3 }}>
+                                {o.vendorName}{o.vendorCode ? <Box component="span" sx={{ color: PFMS.sub, fontWeight: 600 }}>{` · ${o.vendorCode}`}</Box> : null}
+                              </Typography>
+                              <Typography sx={{ fontSize: '0.72rem', color: PFMS.sub, lineHeight: 1.3 }}>{historyCaption(o)}</Typography>
+                            </Box>
+                          </li>
+                        )}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            placeholder={empty ? 'No previous vendors found for this item' : 'Select vendor (previous suppliers) *'}
+                            error={!row.vendorLocked && (stale || (!current && loaded && !historyLoading))}
+                            inputProps={{ ...params.inputProps, 'data-testid': `quote-nr-vendor-input-${idx}` }}
+                          />
+                        )}
+                      />
+                      {empty && (
+                        <Typography variant="caption" sx={{ display: 'block', color: 'error.main', mt: 0.25 }} data-testid={`quote-nr-empty-${idx}`}>
+                          No previous vendors found for this item — set Quote Required to Yes and add quotations.
+                        </Typography>
+                      )}
+                      {historyError && !loaded && (
+                        <Typography variant="caption" sx={{ display: 'block', color: 'error.main', mt: 0.25 }} data-testid={`quote-nr-error-${idx}`}>
+                          Could not load this item&apos;s previous vendors — reopen the form.
+                        </Typography>
+                      )}
+                      {stale && (
+                        <Typography variant="caption" sx={{ display: 'block', color: 'error.main', mt: 0.25 }} data-testid={`quote-nr-stale-${idx}`}>
+                          {current.name} is not in this item&apos;s purchase history — select one of its previous vendors.
+                        </Typography>
+                      )}
+                      {row.vendorLocked && (
+                        <Typography variant="caption" sx={{ display: 'block', color: PFMS.sub, mt: 0.25 }}>
+                          Already on a PO — cancel the PO to change the vendor.
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                })()}
 
                 {!needsFile && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minHeight: 36 }}>

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import {
   ITEM_VENDOR_SOURCE, ITEM_VENDOR_STATE, QUOTATION_PATH,
-  itemQuotationPath, itemVendorState, poVendorProblems, fixedVendorIds, usesApprovedVendorList,
+  itemQuotationPath, itemVendorState, poVendorProblems, poVendorHistoryProblems, fixedVendorIds, usesApprovedVendorList, isJslVendorName,
 } from '../indent/itemVendor.js';
 
 const ID = (n) => `64c000000000000000000${String(n).padStart(3, '0')}`;
@@ -77,7 +77,7 @@ test('a vendor recorded under the other path never counts', () => {
   assert.equal(itemVendorState(skipped([approved]), approved).state, ITEM_VENDOR_STATE.UNASSIGNED);
 });
 
-test('PO vendor: same vendor passes, different vendor refused, missing approval refused', () => {
+test('PO vendor: same vendor passes, different vendor refused, an item approved without a vendor does not block', () => {
   const a = item(1, { vendorId: V1, vendorName: 'Alpha', vendorSource: ITEM_VENDOR_SOURCE.APPROVED_QUOTATION });
   const ind = quoted([a]);
   const entries = [{ indent: ind, item: a, ref: 'Ind-1.1/26-27' }];
@@ -87,10 +87,9 @@ test('PO vendor: same vendor passes, different vendor refused, missing approval 
   assert.match(wrong, /Ind-1\.1\/26-27 \(Item 1\): the approved quotation is "Alpha"/);
 
   const legacy = item(2);
-  const missing = poVendorProblems([{ indent: quoted([legacy]), item: legacy, ref: 'Ind-1.2/26-27' }], V1, master);
-  assert.equal(missing.length, 1);
-  assert.match(missing[0], /no vendor recorded — confirm the approved vendor on Pending for PO/);
-  // Editing a PO that already holds the item: not re-blocked.
+  // Step 1.3 no longer needs a vendor: the item reaches the PO, whose vendor is checked against the
+  // item's previous vendors (poVendorHistoryProblems) instead of being refused here.
+  assert.deepEqual(poVendorProblems([{ indent: quoted([legacy]), item: legacy, ref: 'Ind-1.2/26-27' }], V1, master), []);
   assert.deepEqual(poVendorProblems([{ indent: quoted([legacy]), item: legacy }], V1, master, { skipMissing: true }), []);
 });
 
@@ -135,4 +134,46 @@ test('multi-item indent: items fixed to different vendors cannot share one PO', 
 test('older vendor-grain approvals are recognised', () => {
   assert.equal(usesApprovedVendorList({ quotationApprovalStep: { approvedVendors: [{ vendorId: V1 }] } }), true);
   assert.equal(usesApprovedVendorList(quoted([item(1)])), false);
+});
+
+// ── Items with no vendor fixed take the PO's vendor from their previous vendors only ──
+const HIST = (...pairs) => pairs.map(([vendorId, vendorName]) => ({ vendorId, vendorName }));
+test('PO vendor history: an item with no vendor fixed accepts only a previous vendor', () => {
+  const open = item(1);
+  const ind = quoted([open]); // quoted + approved WITHOUT a vendor → MISSING
+  const entries = [{ indent: ind, item: open, ref: 'Ind-1.1/26-27' }];
+  const history = new Map([[open._id, HIST([V1, 'Alpha'])]]);
+  assert.deepEqual(poVendorHistoryProblems(entries, V1, 'Alpha', history), []);
+  const [why] = poVendorHistoryProblems(entries, V2, 'Beta', history);
+  assert.match(why, /"Beta" has neither quoted for nor previously supplied this item — choose one of: Alpha/);
+});
+test('PO vendor history: no eligible vendor at all → "No eligible vendors found" (never the whole Vendor Master)', () => {
+  const open = item(1);
+  const [why] = poVendorHistoryProblems([{ indent: quoted([open]), item: open, ref: 'Ind-1.1/26-27' }], V1, 'Alpha', new Map());
+  assert.match(why, /No eligible vendors found/);
+});
+test('PO vendor history: not-required items with no vendor are held to the same rule; items with a fixed vendor are left to poVendorProblems', () => {
+  const open = item(1);
+  const fixed = item(2, { vendorId: V1, vendorName: 'Alpha', vendorSource: ITEM_VENDOR_SOURCE.APPROVED_QUOTATION });
+  const ind = skipped([open]);
+  assert.equal(poVendorHistoryProblems([{ indent: ind, item: open, ref: 'r1' }], V2, 'Beta', new Map([[open._id, HIST([V1, 'Alpha'])]])).length, 1);
+  // a fixed item is not re-checked against history, even with an empty history
+  assert.deepEqual(poVendorHistoryProblems([{ indent: quoted([fixed]), item: fixed, ref: 'r2' }], V1, 'Alpha', new Map()), []);
+});
+test('PO vendor history: every open item on the PO must have the vendor in its history', () => {
+  const a = item(1); const b = item(2);
+  const ind = quoted([a, b]);
+  const history = new Map([[a._id, HIST([V1, 'Alpha'], [V2, 'Beta'])], [b._id, HIST([V2, 'Beta'])]]);
+  const entries = [{ indent: ind, item: a, ref: 'r1' }, { indent: ind, item: b, ref: 'r2' }];
+  assert.deepEqual(poVendorHistoryProblems(entries, V2, 'Beta', history), []);
+  const problems = poVendorHistoryProblems(entries, V1, 'Alpha', history);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /r2/);
+});
+test('JSL vendor: only a Jindal vendor can take a JSL-format PO (name match, any case / suffix)', () => {
+  assert.equal(isJslVendorName('Jindal Stainless Ltd'), true);
+  assert.equal(isJslVendorName('JINDAL STAINLESS (HISAR) LIMITED'), true);
+  assert.equal(isJslVendorName('Alpha Traders'), false);
+  assert.equal(isJslVendorName(''), false);
+  assert.equal(isJslVendorName(undefined), false);
 });

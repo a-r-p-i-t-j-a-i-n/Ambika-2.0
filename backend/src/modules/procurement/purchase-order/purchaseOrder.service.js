@@ -13,9 +13,11 @@ import GoodsReceiptNote from '../grn/grn.model.js';
 import PurchaseIndent, { INDENT_OVERALL_STATUS, ITEM_PROCUREMENT_STATUS, buildItemDisplayNumber, isItemApprovalEffective } from '../indent/indent.model.js';
 import {
   ITEM_VENDOR_SOURCE, ITEM_VENDOR_STATE, QUOTATION_PATH,
-  itemVendorState, poVendorProblems, fixedVendorIds, usesApprovedVendorList,
-  quotedVendorsOf, keptVendorsOf, approvedVendorProblem,
+  itemVendorState, poVendorProblems, poVendorHistoryProblems, fixedVendorIds, usesApprovedVendorList,
+  quotedVendorsOf, keptVendorsOf, isJslVendorName,
 } from '../indent/itemVendor.js';
+import { eligibleVendorsForItems } from '../indent/itemVendorHistory.js';
+import { lineIndentProblems, submitQuantityProblems } from './poLines.js';
 import Party from '../../clients/party.model.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { ApiFeatures } from '../../../utils/apiFeatures.js';
@@ -326,6 +328,17 @@ const itemRefOf = (indent, item) => {
  * indents (mongoose docs or lean). `opts.skipMissing` — see poVendorProblems.
  */
 const assertPoVendor = async (indents, lines, vendorId, opts = {}) => {
+  // `opts.checkEligibility` (default true) — an item with no vendor fixed takes the PO's vendor only if
+  // that vendor is ELIGIBLE for it: quoted for it at Step 1.2 or has supplied it before. Same rule for
+  // JSL and OTHER POs. `opts.poFormatType` 'JSL' also holds the PO to its fixed vendor (Jindal).
+  // `opts.ownPoId` — items whose vendor was written by THIS PO (vendorFromPoId) count as open again,
+  // so a draft's own vendor can still be changed.
+  const { checkEligibility = true, ownPoId = null, poFormatType = 'OTHER' } = opts;
+  const reopened = (item) => {
+    if (!ownPoId || !item?.vendorFromPoId || String(item.vendorFromPoId) !== String(ownPoId)) return item;
+    const plain = item.toObject ? item.toObject() : { ...item };
+    return { ...plain, vendorId: null, vendorName: '', vendorSource: '' };
+  };
   const indentById = new Map(indents.map((i) => [String(i._id), i]));
   const single = indents.length === 1 ? indents[0] : null;
   const entries = [];
@@ -346,13 +359,25 @@ const assertPoVendor = async (indents, lines, vendorId, opts = {}) => {
     const item = line.indentItemId
       ? (indent.items || []).find((it) => String(it._id) === String(line.indentItemId))
       : (indent.items || []).find((it) => line.skuCode && String(it.skuCode || '').toUpperCase() === String(line.skuCode).toUpperCase());
-    if (item) entries.push({ indent, item, ref: itemRefOf(indent, item) });
+    if (item) entries.push({ indent, item: reopened(item), ref: itemRefOf(indent, item) });
   }
   const ids = fixedVendorIds(entries);
   const fixed = ids.length
     ? await Vendor.find({ _id: { $in: ids } }).select('name isActive isDeleted').lean()
     : [];
   problems.push(...poVendorProblems(entries, vendorId, new Map(fixed.map((v) => [String(v._id), v])), opts));
+  const open = checkEligibility
+    ? entries.filter((e) => itemVendorState(e.indent, e.item).state !== ITEM_VENDOR_STATE.SET)
+    : [];
+  let vendor = null;
+  if (open.length || poFormatType === 'JSL') vendor = await Vendor.findOne({ _id: vendorId }).select('name').lean();
+  if (poFormatType === 'JSL' && !isJslVendorName(vendor?.name)) {
+    problems.push(`A JSL purchase order is always raised on Jindal Stainless Ltd — "${vendor?.name || 'this vendor'}" cannot be the vendor of a JSL PO. Use the Other format`);
+  }
+  if (open.length) {
+    const eligible = await eligibleVendorsForItems(open.map((e) => ({ indent: e.indent, item: e.item })));
+    problems.push(...poVendorHistoryProblems(open, vendorId, vendor?.name || '', eligible));
+  }
   if (problems.length) throw new AppError(problems.join('; '), 400);
 };
 
@@ -363,7 +388,7 @@ const rollupIndentStatus = (indent) => {
   const items = (indent.items || []).filter((it) => approved.has(String(it._id)));
   const poed = items.filter((it) => it.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED).length;
   if (poed === 0) indent.overallStatus = INDENT_OVERALL_STATUS.QUOTATION_APPROVED;
-  else if (poed === items.length) indent.overallStatus = INDENT_OVERALL_STATUS.PO_READY;
+  else if (poed === items.length && !indent.quotationApprovalStep?.partial) indent.overallStatus = INDENT_OVERALL_STATUS.PO_READY;
   else indent.overallStatus = INDENT_OVERALL_STATUS.PARTIAL_PO_CREATED;
 };
 
@@ -407,6 +432,18 @@ const linkIndentToPo = async (indent, vendorId, po, refNumber, user, session = n
     (indent.items || []).forEach((it) => {
       const hit = poItemIds.has(String(it._id)) || (poItemSkus.size && poItemSkus.has(String(it.skuCode || '').toUpperCase()));
       if (hit && it.procurementStatus !== ITEM_PROCUREMENT_STATUS.PO_CREATED) {
+        // An item with no vendor fixed yet takes the vendor this PO was raised on, so later screens
+        // (Indent detail, Pending for PO after a cancel) show it. A fixed vendor is never touched; the
+        // write is tagged with the PO so cancelling / deleting that PO gives the item its open vendor back.
+        const vs = itemVendorState(indent, it);
+        if (vs.state !== ITEM_VENDOR_STATE.SET && vendorId) {
+          it.vendorId = vendorId;
+          it.vendorName = po.vendorName || '';
+          it.vendorSource = vs.path === QUOTATION_PATH.REQUIRED ? ITEM_VENDOR_SOURCE.APPROVED_QUOTATION : ITEM_VENDOR_SOURCE.PO_PREPARATION;
+          it.vendorSelectedAt = new Date();
+          it.vendorSelectedById = user?._id || null;
+          it.vendorFromPoId = po._id;
+        }
         it.procurementStatus = ITEM_PROCUREMENT_STATUS.PO_CREATED;
         it.poId = po._id;
         it.poNumber = refNumber;
@@ -432,20 +469,55 @@ const linkIndentToPo = async (indent, vendorId, po, refNumber, user, session = n
 };
 
 /**
- * Every PO line that names an indent item must name one that is on its indent —
- * otherwise it could never be linked (and would dodge the vendor check).
+ * Every PO line that names an indent item must name one that is on its indent and is that
+ * item's SKU — otherwise it could never be linked (and would dodge the vendor check). With
+ * `requireItemId` (item-wise creation) every line must name its item (poLines.js).
  */
-const assertLinesOnIndents = (indents, lines) => {
-  const indentById = new Map(indents.map((i) => [String(i._id), i]));
-  const bad = lines.find((l) => {
-    if (!l.indentItemId) return false;
-    const indent = indentById.get(String(l.indentId || ''));
-    return !indent || !(indent.items || []).some((it) => String(it._id) === String(l.indentItemId));
-  });
-  if (bad) {
-    const where = bad.indentNumber ? `indent ${bad.indentNumber}` : 'its indent';
-    throw new AppError(`"${bad.itemName || 'An item'}" is not an item of ${where} — refresh and try again`, 400);
+const assertLinesOnIndents = (indents, lines, opts = {}) => {
+  const problems = lineIndentProblems(indents, lines, opts);
+  if (problems.length) throw new AppError(problems.join('; '), 400);
+};
+
+/**
+ * Only APPROVED items go on a PO. An item of an item-wise indent that Step 1.3 has not approved (on hold,
+ * pending, rejected, or never decided) is refused here, whatever the form offered — the API cannot be used to
+ * raise a PO for it. Indents approved per vendor (approvedVendors) are held to that list instead.
+ */
+const assertItemsApproved = (indents, lines) => {
+  const problems = [];
+  const single = indents.length === 1 ? indents[0] : null;
+  const byId = new Map(indents.map((i) => [String(i._id), i]));
+  const allowed = new Map();
+  for (const l of lines) {
+    if (!l.indentItemId) continue;
+    const indent = byId.get(String(l.indentId || '')) || single
+      || indents.find((ind) => (ind.items || []).some((it) => String(it._id) === String(l.indentItemId)));
+    if (!indent || usesApprovedVendorList(indent)) continue;
+    const key = String(indent._id);
+    if (!allowed.has(key)) allowed.set(key, approvedItemIdSet(indent));
+    if (!allowed.get(key).has(String(l.indentItemId))) {
+      problems.push(`"${l.itemName || l.skuCode || 'An item'}" is not approved for a PO yet (Step 1.3) — only approved items can be put on a Purchase Order`);
+    }
   }
+  if (problems.length) throw new AppError(problems.join('; '), 400);
+};
+
+/**
+ * Everything a draft must satisfy before it goes to PO Approval — ONE check shared by
+ * POST /:id/submit and PATCH /:id {submit:true}: positive quantities on every line, every
+ * indent-linked line on its own indent item (same SKU), and an eligible vendor for every
+ * item (quoted or previously supplied; the JSL vendor rule for a JSL PO). `po` = the PO
+ * as it will be saved (document or lean).
+ */
+const assertPoSubmittable = async (po) => {
+  const ref = po.poNumber || po.draftNumber || '';
+  const lines = (po.items || []).map((l) => (l.toObject ? l.toObject() : { ...l }));
+  const qty = submitQuantityProblems(lines);
+  if (qty.length) throw new AppError(`PO ${ref}: ${qty.join('; ')}`.replace('PO :', 'PO'), 400);
+  const indentIds = (po.indentIds?.length ? po.indentIds : [po.indentId]).filter(Boolean);
+  const indents = await PurchaseIndent.find({ _id: { $in: indentIds }, isDeleted: { $ne: true } }).lean();
+  assertLinesOnIndents(indents, lines);
+  await assertPoVendor(indents, lines, po.vendorId, { ownPoId: po._id, poFormatType: po.poFormatType });
 };
 
 /**
@@ -1082,6 +1154,21 @@ export const purchaseOrderService = {
         });
       });
     }
+    // Eligible vendors per item — quoted for it at Step 1.2 OR previously supplied it (placed POs +
+    // Vendor Master item lists): the only vendors a PO may use for an item with no vendor fixed yet.
+    // One batch lookup for the whole list.
+    const indentById = new Map(indents.map((ind) => [String(ind._id), ind]));
+    const eligible = await eligibleVendorsForItems(items.map((r) => ({
+      indent: indentById.get(String(r.indentId)),
+      item: { _id: r.indentItemId, skuId: r.skuId, skuCode: r.skuCode },
+    })));
+    items.forEach((r) => {
+      r.eligibleVendors = (eligible.get(String(r.indentItemId)) || []).map((h) => ({
+        vendorId: h.vendorId, vendorName: h.vendorName, vendorCode: h.vendorCode, location: h.location,
+        quoted: !!h.quoted, quotedRate: h.quotedRate ?? null, deliveryDays: h.deliveryDays ?? null, basis: h.basis || [],
+        poCount: h.poCount, lastPoNumber: h.lastPoNumber, lastPoDate: h.lastPoDate || null, inCatalog: h.inCatalog,
+      }));
+    });
     // Flag fixed vendors since deleted / deactivated in the Vendor Master — the
     // PO would be refused for them (assertPoVendor), so say so up front.
     const ids = [...new Set(items.filter((r) => r.vendorId).map((r) => String(r.vendorId)))];
@@ -1142,16 +1229,15 @@ export const purchaseOrderService = {
       if (current.state === ITEM_VENDOR_STATE.SET && String(current.vendorId) === String(vendor._id)) {
         return asRow(current); // retry / same pick — no change
       }
+      // Only an ELIGIBLE vendor: one who quoted for the item at Step 1.2 or has supplied it before
+      // (placed POs / Vendor Master item list) — never the whole master.
+      const eligible = (await eligibleVendorsForItems([{ indent, item }])).get(String(item._id)) || [];
+      if (!eligible.length) throw new AppError(`${ref}: No eligible vendors found — none has quoted for this item or supplied it before. Collect a quotation (Step 1.2) or add the SKU to a vendor's Vendor Master item list before choosing a vendor`, 400);
+      if (!eligible.some((h) => String(h.vendorId) === String(vendor._id))) {
+        throw new AppError(`${ref}: "${vendor.name}" has neither quoted for nor previously supplied this item — choose one of: ${eligible.map((h) => h.vendorName).join(', ')}`, 400);
+      }
       if (required && current.state === ITEM_VENDOR_STATE.SET) {
         throw new AppError(`${ref} was approved for vendor "${current.vendorName}" at Step 1.3 — the approved vendor cannot be changed here`, 400);
-      }
-      // Confirming an approved quotation's vendor: one who quoted, if recorded.
-      if (required) {
-        const problem = approvedVendorProblem({
-          quoted: quotedVendorsOf(indent, item), kept: keptVendorsOf(indent, item),
-          vendorId: vendor._id, vendorName: vendor.name, itemName: item.itemName,
-        });
-        if (problem) throw new AppError(`${ref}: ${problem}`, 400);
       }
     }
 
@@ -1225,12 +1311,14 @@ export const purchaseOrderService = {
       const { lines, totals } = computeLines(data.items, poFormatType);
       // A line of a SKU bought in a Purchase Unit must be in that unit or its stock unit.
       await assertPurchaseUnits(lines);
-      // Single-indent PO: every line belongs to this indent.
-      lines.forEach((l) => { l.indentId = indent._id; l.indentNumber = indent.indentNumber; });
+      // Single-indent PO: a line naming an indent item must name one of THIS indent (checked as sent),
+      // then every line is stamped with this indent.
       assertLinesOnIndents([indent], lines);
+      assertItemsApproved([indent], lines);
+      lines.forEach((l) => { l.indentId = indent._id; l.indentNumber = indent.indentNumber; });
       // The vendor must be the one fixed for the indent's items (approved quotation
       // / Pending-for-PO pick) — never silently substituted.
-      await assertPoVendor([indent], lines, party._id);
+      await assertPoVendor([indent], lines, party._id, { poFormatType });
       // Stamp the item-level display reference (Ind-50.1/26-27) from the indent.
       stampLineDisplayNumbers(lines, [indent]);
       // A rate that differs from the vendor's Vendor Master rate needs a reason
@@ -1295,7 +1383,7 @@ export const purchaseOrderService = {
    * several indents. The caller (form) groups items by vendor and submits one
    * vendor group at a time, each item tagged with its source indentId.
    */
-  async createMulti(data, user) {
+  async createMulti(data, user, { requireItemId = true } = {}) {
     const indentIds = [...new Set((data.indentIds || []).map(String))];
     if (!indentIds.length) throw new AppError('Select at least one approved indent', 400);
     if (!data.items?.length) throw new AppError('At least one item is required', 400);
@@ -1363,9 +1451,10 @@ export const purchaseOrderService = {
       lines.forEach((l) => {
         if (!l.indentNumber && l.indentId) l.indentNumber = indentById.get(String(l.indentId))?.indentNumber || '';
       });
-      assertLinesOnIndents(indents, lines);
-      // One PO = one vendor, and it must be the vendor fixed for every item on it.
-      await assertPoVendor(indents, lines, party._id);
+      assertLinesOnIndents(indents, lines, { requireItemId });
+      assertItemsApproved(indents, lines);
+      // One PO = one vendor, and it must be the vendor fixed (or an eligible vendor) for every item on it.
+      await assertPoVendor(indents, lines, party._id, { poFormatType });
       // Stamp each line's item-level display reference from its source indent item.
       stampLineDisplayNumbers(lines, indents);
 
@@ -1548,7 +1637,8 @@ export const purchaseOrderService = {
     if (po.approvalStatus !== PO_APPROVAL_STATUS.DRAFT) {
       throw new AppError('Only draft purchase orders can be edited', 400);
     }
-    if (data.vendorId && String(data.vendorId) !== String(po.vendorId)) {
+    const vendorChanged = !!data.vendorId && String(data.vendorId) !== String(po.vendorId);
+    if (vendorChanged) {
       const party = await resolveVendor(data.vendorId);
       if (!party) throw new AppError('Vendor not found', 404);
       Object.assign(po, { vendorId: party._id }, vendorSnapshot(party, data));
@@ -1597,7 +1687,12 @@ export const purchaseOrderService = {
       const indents = await PurchaseIndent.find({ _id: { $in: indentIds }, isDeleted: { $ne: true } }).lean();
       const previousLines = po.items.map((l) => (l.toObject ? l.toObject() : { ...l }));
       const rateLines = newLines || previousLines.map((l) => ({ ...l }));
-      await assertPoVendor(indents, rateLines, po.vendorId, { skipMissing: true });
+      // Lines naming an indent item must name one of this PO's indents (same SKU); a vendor change must
+      // land on an eligible vendor (quoted / previously supplied), JSL POs stay on Jindal.
+      assertLinesOnIndents(indents, rateLines);
+      await assertPoVendor(indents, rateLines, po.vendorId, {
+        skipMissing: true, checkEligibility: vendorChanged, ownPoId: po._id, poFormatType: po.poFormatType,
+      });
       // A rate that differs from the vendor's rate needs a reason and goes to
       // Rate Change Approvals; an open request the edit no longer stands behind
       // is withdrawn. A refusal here saves nothing.
@@ -1620,6 +1715,9 @@ export const purchaseOrderService = {
       Object.assign(po, submissionFieldsFor('SUBMIT', user));
       po.activityTimeline.push({ action: 'SUBMIT', description: 'Submitted for approval', actorId: user?._id });
     }
+    // "Save & Submit" runs exactly the checks of POST /:id/submit (assertPoSubmittable) on the PO as
+    // it will be saved — a draft can never reach PO Approval by this route with less.
+    if (submitting) await assertPoSubmittable(po);
     // Save only while the PO is still a draft: an approval / rejection / delete
     // that landed after this edit read the PO wins, instead of the edit changing
     // an approved PO underneath it.
@@ -1633,6 +1731,8 @@ export const purchaseOrderService = {
       }
       throw err;
     }
+    // The vendor this draft supplied to its indent items (chosen on the PO) follows a vendor change.
+    if (vendorChanged) await purchaseOrderService._restampItemVendors(saved);
     // The PO cannot be approved with an unapproved rate whatever happens here
     // (approve() re-checks the live rates and requests), so a failure to record
     // the request is reported rather than leaving a half-saved edit unnoticed.
@@ -1714,9 +1814,9 @@ export const purchaseOrderService = {
       throw new AppError(`PO ${ref} is ${po.poStatus === PO_STATUS.CANCELLED ? 'cancelled' : po.approvalStatus.toLowerCase()} — only a draft can be submitted for approval`.replace('  ', ' '), 400);
     }
     if (isPoSubmitted(po)) return po;
-    if (!(po.items || []).some((l) => Number(l.quantity) > 0)) {
-      throw new AppError(`PO ${ref} has no item with a quantity — edit the draft before submitting it`.replace('  ', ' '), 400);
-    }
+    // The same gate as PATCH /:id {submit:true}: quantities, indent lines, eligible vendors (poLines.js,
+    // assertPoVendor).
+    await assertPoSubmittable(po);
     const updated = await VendorPurchaseOrder.findOneAndUpdate(
       {
         _id: po._id, isDeleted: { $ne: true }, approvalStatus: PO_APPROVAL_STATUS.DRAFT,
@@ -2162,6 +2262,25 @@ export const purchaseOrderService = {
   },
 
   /**
+   * A draft PO's vendor changed: the indent items whose vendor this PO supplied (vendorFromPoId)
+   * follow it. Items with a vendor fixed earlier (Step 1.3 / Pending for PO) are never touched.
+   * Non-fatal — the PO edit already stands.
+   */
+  async _restampItemVendors(po) {
+    try {
+      await PurchaseIndent.updateMany(
+        { 'items.vendorFromPoId': po._id },
+        { $set: {
+          'items.$[it].vendorId': po.vendorId,
+          'items.$[it].vendorName': po.vendorName || '',
+          'items.$[it].vendorSelectedAt': new Date(),
+        } },
+        { arrayFilters: [{ 'it.vendorFromPoId': po._id }] },
+      );
+    } catch (err) { logger.error(`[po] item vendor re-stamp failed for ${po.draftNumber}: ${err.message}`); }
+  },
+
+  /**
    * Release every indent item / approved vendor this PO had committed, so the
    * freed items become selectable again and the indent status rolls back.
    * Used when a PO is cancelled or deleted. Non-fatal — the cancel / delete
@@ -2190,6 +2309,11 @@ export const purchaseOrderService = {
               it.procurementStatus = ITEM_PROCUREMENT_STATUS.PENDING;
               it.poId = null;
               it.poNumber = '';
+              // The vendor this PO supplied (chosen on the PO form) goes with it; a vendor fixed earlier stays.
+              if (it.vendorFromPoId && String(it.vendorFromPoId) === String(po._id)) {
+                it.vendorId = null; it.vendorName = ''; it.vendorSource = '';
+                it.vendorSelectedAt = null; it.vendorSelectedById = null; it.vendorFromPoId = null;
+              }
             }
           });
           rollupIndentStatus(indent);
@@ -2235,7 +2359,7 @@ export const purchaseOrderService = {
       poFormatType: data.poFormatType || src.poFormatType,
       indentIds,
       items,
-    }, user);
+    }, user, { requireItemId: false }); // a revision may carry the source PO's manual (non-indent) lines
 
     // Stamp the revision linkage onto the freshly-created draft. The cancelled
     // source may itself have been cancelled before ever being approved, in which
@@ -2272,7 +2396,7 @@ const indentsForRelink = async ({ poId, links }, session) => {
     if (problem) refuse(`Can't restore PO ${ref} — ${problem}`);
     indents.push(indent);
   }
-  return { ref, indents };
+  return { ref, indents, po };
 };
 
 registerRestoreHook('procurement.po.checkIndents', async (args, { session }) => {
@@ -2280,13 +2404,26 @@ registerRestoreHook('procurement.po.checkIndents', async (args, { session }) => 
 });
 
 registerRestoreHook('procurement.po.relinkIndents', async (args, { session, actor }) => {
-  const { ref, indents } = await indentsForRelink(args, session);
+  const { ref, indents, po } = await indentsForRelink(args, session);
   const user = asUser(actor);
   for (const indent of indents) {
     const avs = indent.quotationApprovalStep?.approvedVendors || [];
     if (avs.length) {
       indent.overallStatus = avs.every((av) => !!av.poId) ? INDENT_OVERALL_STATUS.PO_READY : INDENT_OVERALL_STATUS.PARTIAL_PO_CREATED;
     } else {
+      // The delete gave back the vendor this PO had written onto its items; the restored PO writes it
+      // again onto items whose vendor is still open (a vendor fixed meanwhile is never touched).
+      (indent.items || []).forEach((it) => {
+        if (String(it.poId) !== String(po._id) || !po.vendorId) return;
+        const vs = itemVendorState(indent, it);
+        if (vs.state === ITEM_VENDOR_STATE.SET) return;
+        it.vendorId = po.vendorId;
+        it.vendorName = po.vendorName || '';
+        it.vendorSource = vs.path === QUOTATION_PATH.REQUIRED ? ITEM_VENDOR_SOURCE.APPROVED_QUOTATION : ITEM_VENDOR_SOURCE.PO_PREPARATION;
+        it.vendorSelectedAt = new Date();
+        it.vendorSelectedById = user._id || null;
+        it.vendorFromPoId = po._id;
+      });
       rollupIndentStatus(indent);
     }
     indent.activityTimeline.push({ action: 'PO_RESTORED', description: `PO ${ref} restored from the Recycle Bin — items linked again`, actorId: user._id });

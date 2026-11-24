@@ -90,9 +90,14 @@ const ok = async (method, path, body) => {
 
 // Indent items must be SKU Master items (indent/itemSku.js): one upserted SKU
 // per item name, named exactly like the item so name-based checks still hold.
+// A "Quote Required? = No" item must name one of the item's PREVIOUS vendors
+// (indent/itemVendorHistory.js): every SKU here is put on the E2E-QUOTE vendor's
+// Vendor Master item list, which counts as purchase history.
+let nrVendorId = null;
 const skuItem = async (name, quantity) => {
   const code = `E2E-${name}`.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 60);
   const sku = await SKU.findOneAndUpdate({ code }, { $setOnInsert: { code, name, unit: 'PCS', itemType: 'CONSUMABLE' } }, { upsert: true, new: true }).lean();
+  await Vendor.updateOne({ code: 'E2E-QUOTE', 'products.skuId': { $ne: sku._id } }, { $push: { products: { skuId: sku._id, skuCode: sku.code, productName: name, rate: 0 } } });
   return { skuId: String(sku._id), skuCode: sku.code, itemName: sku.name, quantity, unit: 'Pcs' };
 };
 
@@ -121,6 +126,7 @@ const fresh = (id) => PurchaseIndent.findById(id).lean();
 
 const itemQuotes = (indent, files, statusFor = () => 'YES') => indent.items.map((it, i) => ({
   itemId: it._id, itemName: it.itemName, skuCode: it.skuCode, statusDone: statusFor(i),
+  ...(statusFor(i) === 'QUOTE_NOT_REQUIRED' ? { vendorId: String(nrVendorId) } : {}),
   quotationDocuments: statusFor(i) === 'YES' ? files(i) : [],
 }));
 
@@ -153,6 +159,7 @@ const api = async () => {
   // upserted here so --api keeps running on an existing DB without a reseed.
   await Vendor.updateOne({ code: 'E2E-QUOTE' }, { $set: { name: 'E2E Quote Vendor (master)', isActive: true, isDeleted: false } }, { upsert: true });
   const masterVendor = await Vendor.findOne({ code: 'E2E-QUOTE' }).lean();
+  nrVendorId = masterVendor._id;
 
   console.log('\n[A] Quotation Not Required');
   let a = await newApprovedIndent(['E2E Gasket']);
@@ -163,6 +170,9 @@ const api = async () => {
     statusDone: 'QUOTE_NOT_REQUIRED', itemQuotations: itemQuotes(a, () => [], () => 'QUOTE_NOT_REQUIRED'),
   });
   check('A: "Quote Not Required" accepted without any upload', aNr.status === 200, `${aNr.status} ${aNr.message}`);
+  // This scenario raises the PO for a legacy Party vendor ("existing quote-not-required
+  // path"), so drop the Step 1.2 vendor pick — the state of an item recorded before it existed.
+  await PurchaseIndent.updateOne({ _id: a._id }, { $unset: { 'items.$[].vendorId': '', 'items.$[].vendorName': '', 'items.$[].vendorSource': '', 'items.$[].vendorSelectedAt': '', 'items.$[].vendorSelectedById': '' } });
   a = await fresh(a._id);
   check('A: indent PO-ready (QUOTATION_APPROVED), Step 1.3 skipped', a.overallStatus === 'QUOTATION_APPROVED' && a.quotationApprovalStep?.skipped === true, a.overallStatus);
   check('A: Step 1.2 state = NOT_REQUIRED', await stateOf('QUOTE_COMPARATIVE', a._id) === 'NOT_REQUIRED');
@@ -173,7 +183,8 @@ const api = async () => {
   check('A: Step 1.3 approval refused (skipped)', aAq.status === 400, `${aAq.status} ${aAq.message}`);
   const picker = await ok('GET', '/procurement/purchase-orders/approved-items');
   check('A: item offered in the PO approved-item picker', (picker?.items || []).some((r) => String(r.indentId) === String(a._id)));
-  const aPo = await call('POST', '/procurement/purchase-orders', poBody(a, vendor._id));
+  // (an item with no vendor fixed takes a PO vendor from its PREVIOUS vendors only — the master vendor carries the SKU)
+  const aPo = await call('POST', '/procurement/purchase-orders', poBody(a, masterVendor._id));
   check('A: PO can be raised (existing quote-not-required path)', aPo.status === 201 || aPo.status === 200, `${aPo.status} ${aPo.message}`);
   a = await fresh(a._id);
   const aStatusAfterPo = a.overallStatus;

@@ -33,6 +33,7 @@ import Vendor from '../modules/vendors/vendor.model.js';
 import PurchaseIndent from '../modules/procurement/indent/indent.model.js';
 import VendorPurchaseOrder from '../modules/procurement/purchase-order/purchaseOrder.model.js';
 import SKU from '../modules/skus/sku.model.js';
+import { quoteAndApprove } from './e2eQuotedIndent.js';
 
 export const DB_NAME = 'ambika_e2e_poleadtime';
 export const E2E_URI = `mongodb://127.0.0.1:27017/${DB_NAME}`;
@@ -146,8 +147,9 @@ const storedPdfText = async (who, id) => {
   return pdfText(Buffer.from(await res.arrayBuffer()));
 };
 
-// A PO-ready indent (quotation not required). `vendorId` fixes its items' vendor;
-// without it the items are open to any vendor (the browser probe picks one).
+// A PO-ready indent. `vendorId` fixes its items' vendor (Quote Required = No, the vendor already carries the
+// SKU in its Vendor Master item list); without it the items went through a quotation and Step 1.3 left the
+// vendor open — eligible vendors are those carrying the SKU (the browser probe picks one).
 let seq = 0;
 const readyIndent = async (label, vendorId = null) => {
   seq += 1;
@@ -160,9 +162,13 @@ const readyIndent = async (label, vendorId = null) => {
   const approved = await ok('MD', 'POST', `/procurement/indents/${ind._id}/approve`, {
     items: ind.items.map((it) => ({ _id: it._id, revisedQuantity: it.quantity, approvalStatus: 'APPROVED' })),
   });
+  if (!vendorId) {
+    await quoteAndApprove((p, b) => ok('MD', 'POST', p, b), approved, { tag: `lt-${RUN}-${seq}` });
+    return PurchaseIndent.findById(ind._id).lean();
+  }
   await ok('MD', 'POST', `/procurement/indents/${ind._id}/quote-comparative`, {
     statusDone: 'QUOTE_NOT_REQUIRED',
-    itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', quotationDocuments: [] })),
+    itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', vendorId, quotationDocuments: [] })),
   });
   if (vendorId) {
     for (const it of approved.items) {

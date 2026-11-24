@@ -30,6 +30,7 @@ import Vendor from '../modules/vendors/vendor.model.js';
 import Party from '../modules/clients/party.model.js';
 import PurchaseIndent from '../modules/procurement/indent/indent.model.js';
 import VendorPurchaseOrder from '../modules/procurement/purchase-order/purchaseOrder.model.js';
+import { quoteAndApprove } from './e2eQuotedIndent.js';
 
 export const DB_NAME = 'ambika_e2e_skuvendorhist';
 export const E2E_URI = `mongodb://127.0.0.1:27017/${DB_NAME}`;
@@ -128,13 +129,21 @@ const ok = async (method, path, body) => {
   return r.data;
 };
 
-/** Indent → submit → approve → quotation not required → ready for PO. */
-const readyIndent = async (items) => {
+/**
+ * Indent → submit → approve → ready for PO. Without `vendor`: quotation not required. With `vendor` ({_id, name}):
+ * the items go through a quotation that names that vendor, so it is eligible for them (quoted OR previously
+ * supplied) without touching its Vendor Master item list.
+ */
+const readyIndent = async (items, vendor = null) => {
   const ind = await ok('POST', '/procurement/indents', { department: 'Stores', remarks: `sku-history ${RUN}`, items });
   await ok('POST', `/procurement/indents/${ind._id}/submit`, {});
   const appr = await ok('POST', `/procurement/indents/${ind._id}/approve`, {
     items: ind.items.map((it) => ({ _id: it._id, revisedQuantity: it.quantity, approvalStatus: 'APPROVED' })),
   });
+  if (vendor) {
+    await quoteAndApprove((p, b) => ok('POST', p, b), appr, { quoteVendor: { id: String(vendor._id), name: vendor.name }, tag: `sh-${RUN}` });
+    return ok('GET', `/procurement/indents/${ind._id}`);
+  }
   await ok('POST', `/procurement/indents/${ind._id}/quote-comparative`, { statusDone: 'QUOTE_NOT_REQUIRED' });
   return appr;
 };
@@ -205,7 +214,7 @@ const api = async () => {
   const i1 = await readyIndent([
     { skuId: String(sku.BOLT._id), itemName: 'x', quantity: 10, unit: 'Pcs' },
     { skuId: String(sku.NUT._id), itemName: 'x', quantity: 6, unit: 'Pcs' },
-  ]);
+  ], vA);
   check('indent reached QUOTATION_APPROVED', (await PurchaseIndent.findById(i1._id).lean()).overallStatus === 'QUOTATION_APPROVED');
   const po1 = await call('POST', '/procurement/purchase-orders/create-from-items', poBody(i1, String(vA._id)));
   check('PO for Vendor A (2 SKU lines) created', [200, 201].includes(po1.status), `${po1.status} ${po1.message}`);
@@ -213,7 +222,7 @@ const api = async () => {
   check('PO lines carry the SKU Master name + code + id', p1 && p1.items.length === 2
     && p1.items.every((l) => [SKUS.BOLT.code, SKUS.NUT.code].includes(l.skuCode) && l.skuId)
     && p1.items.find((l) => l.skuCode === SKUS.BOLT.code)?.itemName === SKUS.BOLT.name, JSON.stringify(p1?.items.map((l) => [l.itemName, l.skuCode])));
-  const i2 = await readyIndent([{ skuId: String(sku.WASHER._id), itemName: 'x', quantity: 3, unit: 'KGS' }]);
+  const i2 = await readyIndent([{ skuId: String(sku.WASHER._id), itemName: 'x', quantity: 3, unit: 'KGS' }], vB);
   const po2 = await call('POST', '/procurement/purchase-orders/create-from-items', poBody(i2, String(vB._id)));
   check('PO for Vendor B created', [200, 201].includes(po2.status), `${po2.status} ${po2.message}`);
 

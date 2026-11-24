@@ -118,9 +118,13 @@ const readyIndent = async (label, vendorId) => {
   const approved = await ok('MD', 'POST', `/procurement/indents/${ind._id}/approve`, {
     items: ind.items.map((it) => ({ _id: it._id, revisedQuantity: it.quantity, approvalStatus: 'APPROVED' })),
   });
+  // Quote Required = No names a vendor from the item's history: the SKU goes on the vendor's Vendor Master item list.
+  for (const it of approved.items) {
+    await Vendor.updateOne({ _id: vendorId, 'products.skuId': { $ne: it.skuId } }, { $push: { products: { skuId: it.skuId, skuCode: it.skuCode, productName: it.itemName } } });
+  }
   await ok('MD', 'POST', `/procurement/indents/${ind._id}/quote-comparative`, {
     statusDone: 'QUOTE_NOT_REQUIRED',
-    itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', quotationDocuments: [] })),
+    itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', vendorId, quotationDocuments: [] })),
   });
   for (const it of approved.items) {
     await ok('MD', 'PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: ind._id, indentItemId: it._id, vendorId });
