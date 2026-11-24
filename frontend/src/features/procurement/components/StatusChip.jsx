@@ -111,6 +111,7 @@ const STATUS = {
   PART_PAYMENT:          ['Part Payment', 'orange'],
   PARTIAL_PASS:          ['Partial Pass', 'orange'],
   SHORT:                 ['Short', 'orange'],
+  ON_HOLD:               ['On Hold', 'orange'],
 
   // ── Cyan (ready for GRN) ──
   READY_FOR_GRN:         ['Ready For GRN', 'cyan'],

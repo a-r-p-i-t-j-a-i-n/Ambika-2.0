@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Typography, Stack, Button, IconButton, Chip, alpha, useTheme,
   TextField, MenuItem, Dialog, DialogTitle, DialogContent, Divider, Tooltip,
@@ -112,13 +112,29 @@ const delayDaysFor = ({ plannedDate, actualDate, pendingQty, today }) => {
  * dispatch phase across all orders. Each day cell shows small pills (party ·
  * qty); click a day to see the full plan for that date. Built for the MD to
  * grasp "what's planned when" at a glance. Read-only.
+ *
+ * `compact` — the O2D Dashboard's "Dispatch calendar" panel: just the month
+ * grid (party + total per card, SKU lines in the day dialog), its month driven
+ * by the panel (`month`: { year, month }), `selectedDate` ('YYYY-MM-DD') ringed,
+ * and `onDayClick(dateKey)` told when a day with dispatches is opened.
+ * The full page opens on `?month=YYYY-MM` when given (the panel's ⤢ button).
  */
-const DispatchCalendar = () => {
+const DispatchCalendar = ({ compact = false, month = null, selectedDate = null, onDayClick } = {}) => {
   const theme = useTheme();
   const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const [searchParams] = useSearchParams();
 
-  const [cursor, setCursor] = useState(dayjs().startOf('month'));
+  const [pageCursor, setCursor] = useState(() => {
+    const asked = dayjs(`${searchParams.get('month') || ''}-01`);
+    return asked.isValid() ? asked.startOf('month') : dayjs().startOf('month');
+  });
+  const panelYear = month?.year;
+  const panelMonth = month?.month;
+  const cursor = useMemo(
+    () => (compact && panelYear != null ? dayjs(new Date(panelYear, panelMonth, 1)) : pageCursor),
+    [compact, panelYear, panelMonth, pageCursor],
+  );
   const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'list'
   const [partyFilter, setPartyFilter] = useState([]);
   const [contentFilter, setContentFilter] = useState('all');
@@ -367,6 +383,9 @@ const DispatchCalendar = () => {
   }, [events, cursor]);
 
   const today = dayjs();
+  // In the narrow dashboard panel the seven days must share the width, even if
+  // a party name has to be cut short.
+  const weekCols = compact ? 'repeat(7, minmax(0, 1fr))' : 'repeat(7, 1fr)';
   const dayEvents = openDay ? (eventsByDate.get(openDay) || []) : [];
   const dayGroups = openDay ? (groupedByDate.get(openDay) || []) : [];
   const dayScheduledQty = dayEvents
@@ -427,8 +446,9 @@ const DispatchCalendar = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 1, sm: 1.5 }, minHeight: '100vh', bgcolor: O2D.canvas }}>
+    <Box sx={compact ? {} : { p: { xs: 1, sm: 1.5 }, minHeight: '100vh', bgcolor: O2D.canvas }}>
       {/* ── Header (clean, no background) ── */}
+      {!compact && (
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5}
         sx={{ mb: 1.25, px: 0.5 }}>
         <Stack direction="row" spacing={1.25} alignItems="center">
@@ -456,8 +476,10 @@ const DispatchCalendar = () => {
           ))}
         </Stack>
       </Stack>
+      )}
 
       <Paper elevation={0} sx={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${GRID}`, bgcolor: O2D.surface }}>
+        {!compact && (<>
         {/* ── Toolbar: month nav · filters · legend ── */}
         <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: { xs: 1.25, sm: 1.5 }, py: 0.75, flexWrap: { xs: 'wrap', md: 'nowrap' }, rowGap: 0.75, borderBottom: `1px solid ${GRID}` }}>
           <Stack direction="row" alignItems="center" spacing={0.5}>
@@ -615,10 +637,11 @@ const DispatchCalendar = () => {
             One card = one party's day · orders &amp; items merged
           </Typography>
         </Stack>
+        </>)}
 
         {isLoading ? (
           <Box sx={{ p: 2 }}><Skeleton variant="rounded" height={460} /></Box>
-        ) : viewMode === 'list' ? (
+        ) : viewMode === 'list' && !compact ? (
           /* ── List view — same filters, read top-to-bottom by date ── */
           <Box sx={{ p: { xs: 1, sm: 1.5 } }}>
             {monthGroups.length === 0 ? (
@@ -750,9 +773,9 @@ const DispatchCalendar = () => {
           </Box>
         ) : (
           <Box sx={{ overflowX: 'auto' }}>
-            <Box sx={{ minWidth: 700 }}>
+            <Box sx={{ minWidth: compact ? 0 : 700 }}>
               {/* Weekday header */}
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', borderBottom: `1px solid ${GRID}`, bgcolor: O2D.surfaceAlt }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: weekCols, borderBottom: `1px solid ${GRID}`, bgcolor: O2D.surfaceAlt }}>
                 {WEEKDAYS.map((w) => (
                   <Typography key={w} sx={{ py: 0.5, textAlign: 'center', fontWeight: 800, fontSize: '0.66rem', color: BRAND_DK, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     {w}
@@ -761,7 +784,7 @@ const DispatchCalendar = () => {
               </Box>
 
               {/* Day grid */}
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: weekCols }}>
                 {gridDays.map((day) => {
                   const key = day.format('YYYY-MM-DD');
                   const inMonth = day.isSame(cursor, 'month');
@@ -769,7 +792,7 @@ const DispatchCalendar = () => {
                   if (!inMonth) {
                     return (
                       <Box key={key} sx={{
-                        minHeight: { xs: 72, md: 88 },
+                        minHeight: compact ? 60 : { xs: 72, md: 88 },
                         borderRight: `1px solid ${GRID}`, borderBottom: `1px solid ${GRID}`,
                         bgcolor: O2D.surfaceAlt,
                       }} />
@@ -782,14 +805,15 @@ const DispatchCalendar = () => {
                   return (
                     <Box
                       key={key}
-                      onClick={() => groups.length && setOpenDay(key)}
+                      onClick={() => { if (groups.length) { setOpenDay(key); onDayClick?.(key); } }}
                       sx={{
                         // Rows grow to fit the item lines, but a day never shows more
                         // than 2 dispatches (the rest collapse to "+N more"), so the
                         // month still reads as a calendar instead of a long scroll.
-                        minHeight: { xs: 72, md: 88 }, p: 0.5,
+                        minHeight: compact ? 60 : { xs: 72, md: 88 }, p: 0.5,
                         borderRight: `1px solid ${GRID}`,
                         borderBottom: `1px solid ${GRID}`,
+                        boxShadow: selectedDate === key ? `inset 0 0 0 2px ${BRAND}` : 'none',
                         bgcolor: isToday ? alpha(BRAND, 0.06) : (inMonth ? O2D.surface : O2D.surfaceAlt),
                         cursor: groups.length ? 'pointer' : 'default',
                         transition: 'background .15s',
@@ -831,16 +855,20 @@ const DispatchCalendar = () => {
                                   <Typography noWrap sx={{ fontSize: '0.6rem', fontWeight: 800, color: O2D.ink, flex: 1, minWidth: 0, lineHeight: 1.3 }}>
                                     {shortParty(g.partyName)}
                                   </Typography>
+                                  {/* Compact panel: the card colour already tells the status. */}
+                                  {!compact && (
                                   <Typography sx={{ fontSize: '0.46rem', fontWeight: 900, color: m.color, flexShrink: 0 }}>
                                     {isActual ? 'ACT' : 'SCH'}
                                   </Typography>
-                                  {g.orderCount > 1 && (
+                                  )}
+                                  {!compact && g.orderCount > 1 && (
                                     <Typography sx={{ fontSize: '0.46rem', fontWeight: 800, color: O2D.faint, flexShrink: 0 }}>
                                       ×{g.orderCount}
                                     </Typography>
                                   )}
                                 </Stack>
-                                {rows.map((sk, i) => (
+                                {/* Compact (dashboard panel): party + total only — the day dialog lists the SKUs. */}
+                                {!compact && rows.map((sk, i) => (
                                   <Stack key={i} direction="row" alignItems="center" spacing={0.5}>
                                     <Typography noWrap sx={{ fontSize: '0.54rem', color: O2D.body, flex: 1, minWidth: 0, lineHeight: 1.35 }}>
                                       {sk.skuName}
@@ -853,7 +881,7 @@ const DispatchCalendar = () => {
                                 <Stack direction="row" alignItems="center" spacing={0.5}
                                   sx={{ mt: 0.2, pt: 0.2, borderTop: `1px solid ${alpha(m.color, 0.22)}` }}>
                                   <Typography sx={{ fontSize: '0.44rem', fontWeight: 800, color: O2D.faint, textTransform: 'uppercase', letterSpacing: '0.05em', flex: 1 }}>
-                                    Total
+                                    {compact ? '' : 'Total'}
                                   </Typography>
                                   <Typography sx={{ fontSize: '0.56rem', fontWeight: 900, color: m.color, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
                                     {num(g.totalQty)} pcs

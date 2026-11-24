@@ -12,14 +12,18 @@
  *
  * --api creates fresh indents on every run (names carry a run tag), so it can be
  * re-run without reseeding. Checks:
- *   R  Quotation required: 1.3 refuses a missing / inactive / unknown / non-master
- *      vendor; the approved vendor lands on the item; the PO must use it (other
+ *   R  Quotation required: 1.3 refuses an inactive / unknown / non-master / ineligible
+ *      vendor (eligible = quoted at Step 1.2 OR previously supplied the SKU); the vendor is
+ *      OPTIONAL at 1.3; the approved vendor lands on the item; the PO must use it (other
  *      vendor refused, retry refused, draft edit to another vendor refused).
- *   L  Quotation approved before vendors were recorded: PO blocked until the
- *      approved vendor is confirmed on Pending for PO; confirm is one-time.
+ *   L  Item approved with no vendor (MISSING): the PO / Pending-for-PO confirm accept only an
+ *      eligible vendor; confirm is one-time.
  *   N  Quotation not required: no Step 1.3; vendor picked / changed / cleared on
- *      Pending for PO; the PO must use it; locked while on a PO, free after cancel;
- *      an unpicked item keeps the PO form's free vendor choice.
+ *      Pending for PO (eligible vendors only); the PO must use it; locked while on a PO, free
+ *      after cancel; an unpicked item takes an eligible vendor on the PO, which is then saved
+ *      on the item (and given back when that PO is cancelled).
+ *   V  Union rule: a quoted-only vendor and a history-only vendor are each eligible; the vendor
+ *      chosen on the PO persists on the item and is released with the PO.
  *   M  Mixed multi-line indent: different approved vendors per line, one PO per
  *      vendor, multi-indent PO, indent status roll-up.
  *   S  Status / auth / master-data rejections; concurrent picks stay consistent.
@@ -110,11 +114,19 @@ const ok = async (method, path, body) => {
 
 // Indent items must be SKU Master items (indent/itemSku.js): one upserted SKU
 // per item name, named exactly like the item so name-based checks still hold.
+// A "Quote Required? = No" item must name one of the item's PREVIOUS vendors at
+// Step 1.2 (indent/itemVendorHistory.js): every SKU is put on VS Alpha's Vendor
+// Master item list (counts as history; rate 0 = no vendor rate to fetch).
 const skuItem = async (name, quantity) => {
   const code = `E2E-${name}`.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 60);
   const sku = await SKU.findOneAndUpdate({ code }, { $setOnInsert: { code, name, unit: 'PCS', itemType: 'CONSUMABLE' } }, { upsert: true, new: true }).lean();
+  await Vendor.updateOne({ code: 'VS-ALPHA', 'products.skuId': { $ne: sku._id } }, { $push: { products: { skuId: sku._id, skuCode: sku.code, productName: name, rate: 0 } } });
   return { skuId: String(sku._id), skuCode: sku.code, itemName: sku.name, quantity, unit: 'Pcs' };
 };
+
+// Beta has supplied this item before (Vendor Master item list) → Beta is eligible for it. Without this call
+// only Alpha is (every SKU is on Alpha's list); Beta is neither quoted nor in the history.
+const giveBeta = (item) => Vendor.updateOne({ code: 'VS-BETA', 'products.skuId': { $ne: item.skuId } }, { $push: { products: { skuId: item.skuId, skuCode: item.skuCode, productName: item.itemName, rate: 0 } } });
 
 const newApprovedIndent = async (names) => {
   const ind = await ok('POST', '/procurement/indents', {
@@ -127,11 +139,28 @@ const newApprovedIndent = async (names) => {
   });
 };
 // Step 1.2 — per item 'YES' (with a file) or 'QUOTE_NOT_REQUIRED'.
-const quote = (indent, statuses) => {
+// Step 1.2 now makes the vendor of a "Quote Not Required" item mandatory (a previous
+// vendor of the item — here VS Alpha). This oracle tests the Pending-for-PO pick that
+// older / flat-payload records still use, so after a successful save the Step 1.2
+// pick is dropped again — the state of an item recorded before that existed.
+let nrVendorId = '';
+const NO_PICK = { 'items.$[].vendorId': '', 'items.$[].vendorName': '', 'items.$[].vendorSource': '', 'items.$[].vendorSelectedAt': '', 'items.$[].vendorSelectedById': '' };
+const quote = async (indent, statuses) => {
   const items = indent.items.map((it, i) => ({
     itemId: it._id, itemName: it.itemName, statusDone: statuses[i],
+    ...(statuses[i] === 'QUOTE_NOT_REQUIRED' ? { vendorId: nrVendorId } : {}),
     quotationDocuments: statuses[i] === 'YES' ? [doc(`vs-${RUN}-${i}`)] : [],
   }));
+  const res = await quoteCall(indent, statuses, items);
+  if (res.status === 200 && statuses.includes('QUOTE_NOT_REQUIRED')) {
+    await PurchaseIndent.updateOne({ _id: indent._id }, {
+      $unset: NO_PICK,
+      $pull: { activityTimeline: { action: 'ITEM_VENDOR', description: /from purchase history/ } }, // its audit line too
+    });
+  }
+  return res;
+};
+const quoteCall = (indent, statuses, items) => {
   return call('POST', `/procurement/indents/${indent._id}/quote-comparative`, {
     statusDone: statuses.every((s) => s === 'QUOTE_NOT_REQUIRED') ? 'QUOTE_NOT_REQUIRED' : 'YES', itemQuotations: items,
   });
@@ -166,6 +195,7 @@ const api = async () => {
   token = login.data?.token || login.data?.accessToken || '';
   if (!token) throw new Error(`login failed: ${login.status} ${login.message} — run --seed first`);
   const [alpha, beta, gamma] = await Promise.all(VENDORS.map((v) => Vendor.findOne({ code: v.code }).lean()));
+  nrVendorId = String(alpha._id);
   const party = await Party.findOne({ name: PARTY_NAME }).lean();
   const A = String(alpha._id);
   const B = String(beta._id);
@@ -177,15 +207,17 @@ const api = async () => {
   const r = await newApprovedIndent(['R Steel Coil']);
   const [rItem] = r.items;
   check('R1 Step 1.2 "Yes" with a file accepted', (await quote(r, ['YES'])).status === 200);
-  const rNo = await approve(r, ['YES'], [undefined]);
-  check('R2 Step 1.3 without an approved vendor refused', rNo.status === 400 && /Select the approved vendor/.test(rNo.message), `${rNo.status} ${rNo.message}`);
   const rInactive = await approve(r, ['YES'], [G]);
   check('R3 inactive Vendor-Master vendor refused', rInactive.status === 400 && /inactive/.test(rInactive.message), `${rInactive.status} ${rInactive.message}`);
   const rUnknown = await approve(r, ['YES'], [String(new mongoose.Types.ObjectId())]);
   check('R4 unknown vendor id refused', rUnknown.status === 400 && /not found in the Vendor Master/.test(rUnknown.message), `${rUnknown.status} ${rUnknown.message}`);
   const rParty = await approve(r, ['YES'], [String(party._id)]);
   check('R5 Party (customer master) id refused — Vendor Master only', rParty.status === 400, `${rParty.status} ${rParty.message}`);
+  const rIneligible = await approve(r, ['YES'], [B]);
+  check('R5b a vendor that neither quoted for the item nor ever supplied it refused', rIneligible.status === 400 && /neither quoted for nor previously supplied/.test(rIneligible.message), `${rIneligible.status} ${rIneligible.message}`);
   check('R6 refused approvals left the indent unapproved', (await fresh(r._id)).overallStatus === 'QUOTE_RECEIVED');
+  const rNo = await approve(r, ['YES'], [undefined]);
+  check('R2 Step 1.3 without a vendor is accepted — the vendor is optional and chosen on the PO', rNo.status === 200 && (await rowOf(rItem))?.vendorState === 'MISSING' && !(await itemNow(r, rItem)).vendorId, `${rNo.status} ${rNo.message}`);
   const rOk = await approve(r, ['YES'], [A]);
   check('R7 Step 1.3 with an active vendor accepted', rOk.status === 200, `${rOk.status} ${rOk.message}`);
   const rSaved = await itemNow(r, rItem);
@@ -200,6 +232,7 @@ const api = async () => {
   check('R12 refused PO created nothing', await VendorPurchaseOrder.countDocuments({ indentIds: r._id }) === 0);
   const rClear = await setVendor(r, rItem, null);
   check('R13 approved vendor cannot be cleared on Pending for PO', rClear.status === 400, `${rClear.status} ${rClear.message}`);
+  await giveBeta(rItem); // Beta eligible → the refusal below is the 'cannot be changed' rule, not eligibility
   const rChange = await setVendor(r, rItem, B);
   check('R14 approved vendor cannot be changed on Pending for PO', rChange.status === 400 && /cannot be changed/.test(rChange.message), `${rChange.status} ${rChange.message}`);
   const rPo = await poFromItems([[r, rItem]], A);
@@ -224,15 +257,18 @@ const api = async () => {
   await PurchaseIndent.updateOne({ _id: l._id }, { $unset: UNSET_VENDOR }); // as recorded before this feature
   const lRow = await rowOf(lItem);
   check('L1 Pending for PO row: vendor MISSING', lRow?.vendorState === 'MISSING' && !lRow?.vendorId, JSON.stringify(lRow));
-  const lPo = await poFromItems([[l, lItem]], A);
-  check('L2 PO refused until the approved vendor is confirmed', lPo.status === 400 && /no vendor recorded/.test(lPo.message), `${lPo.status} ${lPo.message}`);
+  const lPo = await poFromItems([[l, lItem]], B);
+  check('L2 an item with no vendor fixed refuses a PO vendor that neither quoted nor supplied it (400)', lPo.status === 400 && /neither quoted for nor previously supplied/.test(lPo.message), `${lPo.status} ${lPo.message}`);
   const lPoOld = await call('POST', '/procurement/purchase-orders', {
-    indentId: l._id, vendorId: A, expectedDeliveryDate: new Date(Date.now() + 7 * 864e5).toISOString(),
+    indentId: l._id, vendorId: B, expectedDeliveryDate: new Date(Date.now() + 7 * 864e5).toISOString(),
     items: [{ indentItemId: lItem._id, itemName: lItem.itemName, quantity: lItem.approvedQuantity, unit: lItem.unit, rate: 10, gstRate: 18 }],
   });
-  check('L3 single-indent PO endpoint refuses it too', lPoOld.status === 400 && /no vendor recorded/.test(lPoOld.message), `${lPoOld.status} ${lPoOld.message}`);
+  check('L3 single-indent PO endpoint refuses it too', lPoOld.status === 400 && /neither quoted for nor previously supplied/.test(lPoOld.message), `${lPoOld.status} ${lPoOld.message}`);
   check('L4 confirm with an inactive vendor refused', (await setVendor(l, lItem, G)).status === 400);
   check('L5 confirm with a Party id refused', (await setVendor(l, lItem, String(party._id))).status === 400);
+  const lIneligible = await setVendor(l, lItem, B);
+  check('L5b confirm with an ineligible vendor refused (neither quoted nor supplied)', lIneligible.status === 400 && /neither quoted for nor previously supplied/.test(lIneligible.message), `${lIneligible.status} ${lIneligible.message}`);
+  await giveBeta(lItem); // Beta supplied it before → eligible now
   const lConfirm = await setVendor(l, lItem, B);
   const lSaved = await itemNow(l, lItem);
   check('L6 approved vendor confirmed (APPROVED_QUOTATION)', lConfirm.status === 200 && String(lSaved.vendorId) === B && lSaved.vendorSource === 'APPROVED_QUOTATION', `${lConfirm.status} ${lConfirm.message}`);
@@ -257,6 +293,9 @@ const api = async () => {
   check('N4 inactive vendor refused', (await setVendor(n, n1, G)).status === 400);
   const nPick = await setVendor(n, n1, A);
   check('N5 vendor selected (PO_PREPARATION)', nPick.status === 200 && nPick.data?.vendorState === 'SET' && (await itemNow(n, n1)).vendorSource === 'PO_PREPARATION', `${nPick.status} ${nPick.message}`);
+  const nIneligible = await setVendor(n, n1, B);
+  check('N5b a vendor outside the item\'s eligible vendors refused', nIneligible.status === 400 && /neither quoted for nor previously supplied/.test(nIneligible.message), `${nIneligible.status} ${nIneligible.message}`);
+  await giveBeta(n1);
   const nChange = await setVendor(n, n1, B);
   check('N6 vendor changed before any PO', nChange.status === 200 && String((await itemNow(n, n1)).vendorId) === B);
   check('N7 change audited (from → to)', (await vendorTimeline(n)).some((t) => t.description.includes(`changed from ${alpha.name} to ${beta.name}`)));
@@ -270,17 +309,25 @@ const api = async () => {
   const nPo = await poFromItems([[n, n1]], B);
   check('N11 PO inherits the picked vendor', [200, 201].includes(nPo.status) && String(nPo.data?.vendorId) === B, `${nPo.status} ${nPo.message}`);
   check('N12 vendor locked while the item is on the PO', (await setVendor(n, n1, A)).status === 400);
-  const nFree = await poFromItems([[n, n2]], String(party._id));
-  check('N13 unpicked item keeps the free vendor choice (legacy Party vendor too)', [200, 201].includes(nFree.status) && String(nFree.data?.vendorId) === String(party._id), `${nFree.status} ${nFree.message}`);
+  const nParty = await poFromItems([[n, n2]], String(party._id));
+  check('N13a unpicked item: a legacy Party vendor (no history) is refused — eligible Vendor Master vendors only', nParty.status === 400 && /neither quoted for nor previously supplied/.test(nParty.message), `${nParty.status} ${nParty.message}`);
+  const nFree = await poFromItems([[n, n2]], A);
+  check('N13 unpicked item takes an eligible vendor on the PO', [200, 201].includes(nFree.status) && String(nFree.data?.vendorId) === A, `${nFree.status} ${nFree.message}`);
   check('N14 indent rolled up to PO_READY', (await fresh(n._id)).overallStatus === 'PO_READY');
   check('N15 PO cancel accepted', (await call('POST', `/procurement/purchase-orders/${nPo.data._id}/cancel`, { remarks: 'e2e' })).status === 200);
   check('N16 cancelled PO frees the item — its vendor pick is kept', String((await itemNow(n, n1)).vendorId) === B && (await rowOf(n1))?.vendorState === 'SET');
   check('N17 vendor changeable again after the cancel', (await setVendor(n, n1, A)).status === 200);
+  const n2OnPo = await itemNow(n, n2);
+  check('N18 the vendor chosen on the PO is saved on the item (PO_PREPARATION, tied to that PO)', String(n2OnPo.vendorId) === A && n2OnPo.vendorSource === 'PO_PREPARATION' && String(n2OnPo.vendorFromPoId) === String(nFree.data._id), JSON.stringify({ v: n2OnPo.vendorId, s: n2OnPo.vendorSource, p: n2OnPo.vendorFromPoId }));
+  check('N19 cancelling that PO gives the item its open vendor back', (await call('POST', `/procurement/purchase-orders/${nFree.data._id}/cancel`, { remarks: 'e2e' })).status === 200
+    && !(await itemNow(n, n2)).vendorId && (await rowOf(n2))?.vendorState === 'UNASSIGNED');
 
   // ── M: mixed multi-line indent ──
   console.log('\nM  Mixed indent — different vendors per line');
   const m = await newApprovedIndent(['M Bolt', 'M Nut', 'M Washer']);
   const [m1, m2, m3] = m.items;
+  // Step 1.3 approves a vendor from the item's PREVIOUS vendors only: M Nut is also on Beta's Vendor Master item list.
+  await Vendor.updateOne({ code: 'VS-BETA', 'products.skuId': { $ne: m2.skuId } }, { $push: { products: { skuId: m2.skuId, skuCode: m2.skuCode, productName: m2.itemName, rate: 0 } } });
   await quote(m, ['YES', 'YES', 'QUOTE_NOT_REQUIRED']);
   const mOk = await approve(m, ['YES', 'YES', 'QUOTE_NOT_REQUIRED'], [A, B, undefined]);
   check('M1 Step 1.3 with a vendor per quoted line (not-required line needs none)', mOk.status === 200, `${mOk.status} ${mOk.message}`);
@@ -299,6 +346,31 @@ const api = async () => {
   check('M7 multi-indent PO (picked + unpicked lines, same vendor)', [200, 201].includes(mMulti.status) && mMulti.data?.indentIds?.length === 2, `${mMulti.status} ${mMulti.message}`);
   check('M8 indent PO_READY after every line is on a PO', (await fresh(m._id)).overallStatus === 'PO_READY');
 
+  // ── V: union rule + vendor persisted from the PO ──
+  console.log('\nV  Quoted-only and history-only vendors; the PO vendor persists on the item');
+  const v = await newApprovedIndent(['V Quoted', 'V History']);
+  const [v1, v2] = v.items;
+  const vq = await call('POST', `/procurement/indents/${v._id}/quote-comparative`, { statusDone: 'YES', itemQuotations: [
+    { itemId: v1._id, itemName: v1.itemName, statusDone: 'YES', quotationDocuments: [{ ...doc(`vs-${RUN}-0`), vendorId: B, quotedRate: 80, deliveryDays: 3 }] },
+    { itemId: v2._id, itemName: v2.itemName, statusDone: 'YES', quotationDocuments: [doc(`vs-${RUN}-1`)] },
+  ] });
+  check('V1 Step 1.2 with a vendor-tagged quotation accepted', vq.status === 200, `${vq.status} ${vq.message}`);
+  check('V2 Step 1.3 for both items with no vendor accepted (optional)', (await approve(v, ['YES', 'YES'], [undefined, undefined])).status === 200);
+  const vRows = [await rowOf(v1), await rowOf(v2)];
+  const el = (row) => new Map((row?.eligibleVendors || []).map((x) => [String(x.vendorId), x.basis.join('+')]));
+  check('V3 Pending for PO eligible vendors: item 1 = Beta (QUOTED only) + Alpha (history); item 2 = Alpha only — Beta never offered for it',
+    el(vRows[0]).get(B) === 'QUOTED' && el(vRows[0]).has(A) && el(vRows[1]).has(A) && !el(vRows[1]).has(B),
+    JSON.stringify(vRows.map((x) => x?.eligibleVendors?.map((e) => [e.vendorName, e.basis]))));
+  const vBoth = await poFromItems([[v, v1], [v, v2]], B);
+  check('V4 one PO for both items on Beta refused: Beta never supplied item 2 and did not quote for it', vBoth.status === 400 && /neither quoted for nor previously supplied/.test(vBoth.message), `${vBoth.status} ${vBoth.message}`);
+  const vPoB = await poFromItems([[v, v1]], B);
+  check('V5 PO on the quoted-only vendor accepted', [200, 201].includes(vPoB.status) && String(vPoB.data?.vendorId) === B, `${vPoB.status} ${vPoB.message}`);
+  const v1Saved = await itemNow(v, v1);
+  check('V6 the vendor chosen on the PO is saved on the item (APPROVED_QUOTATION — it is a quoted item)', String(v1Saved.vendorId) === B && v1Saved.vendorSource === 'APPROVED_QUOTATION' && String(v1Saved.vendorFromPoId) === String(vPoB.data?._id), JSON.stringify({ v: v1Saved.vendorId, s: v1Saved.vendorSource, p: v1Saved.vendorFromPoId }));
+  const vPoA = await poFromItems([[v, v2]], A);
+  check('V7 PO on the history-only vendor (no quotation from it) accepted', [200, 201].includes(vPoA.status) && String(vPoA.data?.vendorId) === A, `${vPoA.status} ${vPoA.message}`);
+  check('V8 cancelling the PO releases the vendor it supplied', (await call('POST', `/procurement/purchase-orders/${vPoB.data._id}/cancel`, { remarks: 'e2e' })).status === 200 && !(await itemNow(v, v1)).vendorId && (await rowOf(v1))?.vendorState === 'MISSING');
+
   // ── S: status / auth / concurrency ──
   console.log('\nS  Status, permission and concurrency rules');
   const s = await newApprovedIndent(['S Pending Quote', 'S Rejected']);
@@ -309,6 +381,7 @@ const api = async () => {
   check('S4 malformed vendor id refused by validation', (await setVendor(n, n1, 'not-an-id')).status === 422);
   const c = await newApprovedIndent(['C Race']);
   await quote(c, ['QUOTE_NOT_REQUIRED']);
+  await giveBeta(c.items[0]);
   const race = await Promise.all([setVendor(c, c.items[0], A), setVendor(c, c.items[0], B), setVendor(c, c.items[0], A)]);
   const okCount = race.filter((x) => x.status === 200).length;
   const cItem = await itemNow(c, c.items[0]);
@@ -347,10 +420,13 @@ const api = async () => {
     items: dPoDoc.items.map((it) => ({ indentId: it.indentId, indentItemId: it.indentItemId, itemName: it.itemName, quantity: it.quantity, unit: it.unit, rate: 120, gstRate: 18 })),
   });
   check('E4 legacy draft PO stays editable (no vendor recorded on its item)', dEdit.status === 200, `${dEdit.status} ${dEdit.message}`);
-  const partyPo = await VendorPurchaseOrder.findById(nFree.data._id).lean();
-  check('E5 Party-vendor PO keeps its saved vendor', String(partyPo.vendorId) === String(party._id) && partyPo.vendorName === PARTY_NAME);
-  const nItem2 = await itemNow(n, n2);
-  check('E6 free-choice PO did not stamp a vendor onto its item', !nItem2.vendorId && !nItem2.vendorSource);
+  // A draft PO saved on a legacy Party vendor before the eligibility rule (written straight to the DB) stays editable.
+  const partyPoDoc = await VendorPurchaseOrder.create({ draftNumber: `VS-PARTY-${RUN}`, poStatus: 'DRAFT', approvalStatus: 'DRAFT', indentId: leg._id, indentIds: [leg._id], indentNumber: legacyNo, vendorId: party._id, vendorName: PARTY_NAME, items: [{ itemName: 'E party line', quantity: 1, rate: 5, unit: 'Pcs' }] });
+  const partyEdit = await call('PATCH', `/procurement/purchase-orders/${partyPoDoc._id}`, { remarks: 'edited by e2e' });
+  const partyPo = await VendorPurchaseOrder.findById(partyPoDoc._id).lean();
+  check('E5 legacy Party-vendor draft PO keeps its saved vendor through an edit', partyEdit.status === 200 && String(partyPo.vendorId) === String(party._id) && partyPo.vendorName === PARTY_NAME, `${partyEdit.status} ${partyEdit.message}`);
+  const partyEditVendor = await call('PATCH', `/procurement/purchase-orders/${partyPoDoc._id}`, { vendorId: B });
+  check('E6 …but moving it to a vendor with no purchase history is refused', partyEditVendor.status === 400, `${partyEditVendor.status} ${partyEditVendor.message}`);
 
   // ── X: concurrency ──
   console.log('\nX  Concurrency — PO creation is atomic; draft edits are guarded');
@@ -362,7 +438,7 @@ const api = async () => {
     if (txns) check(label, ok, detail);
     else console.log(`  SKIP  ${label} — standalone mongod has no transactions (${ok ? 'no race seen this run' : `race seen: ${detail}`})`);
   };
-  const quoteNotRequired = async (name) => { const ind = await newApprovedIndent([name]); await quote(ind, ['QUOTE_NOT_REQUIRED']); return ind; };
+  const quoteNotRequired = async (name) => { const ind = await newApprovedIndent([name]); await quote(ind, ['QUOTE_NOT_REQUIRED']); await giveBeta(ind.items[0]); return ind; };
   const activePos = (ind) => VendorPurchaseOrder.find({ indentIds: ind._id, isDeleted: { $ne: true }, poStatus: { $ne: 'CANCELLED' } }).lean();
   const bad = { A: [], B: [], C: [], link: [], codes: new Set() };
   for (let t = 0; t < TRIALS; t += 1) {
@@ -386,6 +462,7 @@ const api = async () => {
     if (bPos.length === 1 && String(bItem.poId) !== String(bPos[0]._id)) bad.link.push(`B item→${bItem.poId}`);
     // C — PO on the approved vendor while Step 1.3 is re-approved for another.
     const c = await newApprovedIndent(['XC Race']);
+    await giveBeta(c.items[0]);
     await quote(c, ['YES']);
     await approve(c, ['YES'], [A]);
     const [cPo, cRe] = await Promise.all([poFromItems([[c, c.items[0]]], A), pause(jitter).then(() => approve(c, ['YES'], [B]))]);

@@ -12,9 +12,10 @@
  *
  * --api makes fresh indents each run (names carry a run tag) — re-runnable.
  *   Q  Step 1.2 records who quoted (vendor per quotation file, name from the
- *      Vendor Master); Step 1.3 only approves a vendor who quoted AND whose
- *      quotation was kept; tags on kept files come from Step 1.2; legacy
- *      quotations with no vendor keep the Vendor Master choice.
+ *      Vendor Master); Step 1.3 approves only an ELIGIBLE vendor: one who quoted for
+ *      the item (even if its file was not kept) OR previously supplied its SKU;
+ *      tags on kept files come from Step 1.2; legacy untagged quotations rely on
+ *      purchase history (no Vendor Master fallback).
  *   P  Items awarded to different vendors → one PO per vendor with only its
  *      items, all linked to the indent; duplicate / wrong-vendor POs refused.
  *   T  Each PO keeps its own Delivery Terms, Remarks and T&C.
@@ -142,6 +143,12 @@ const approveQ = (indent, keep, vendorIds) => call('MD', 'POST', `/procurement/i
   })),
 });
 const fresh = (id) => PurchaseIndent.findById(id).lean();
+// Previous-supply history for a vendor: the indent's SKUs go on its Vendor Master item list.
+const giveHistory = async (vendorId, indent) => {
+  for (const it of indent.items) {
+    await Vendor.updateOne({ _id: vendorId }, { $push: { products: { skuId: it.skuId, skuCode: it.skuCode, productName: it.itemName, rate: 100 } } });
+  }
+};
 const poNow = (id) => VendorPurchaseOrder.findById(id).lean();
 const approvedRows = async () => (await ok('BUYER', 'GET', '/procurement/purchase-orders/approved-items')).items;
 const line = (indent, it, extra = {}) => ({
@@ -194,9 +201,19 @@ const api = async () => {
     && String(docA[1].vendorId) === Z.id && docA[1].quotedRate === 120, JSON.stringify(docA));
   check('Q6 vendor name comes from the Vendor Master, not the client', docA[0].vendorName === X.name, docA[0].vendorName);
   const notQuoted = await approveQ(ind, [[fA1, fA2], [fB1, fB2], [fC1]], [Y.id, Y.id, X.id]);
-  check('Q7 Step 1.3 refuses a vendor who did not quote for the item (400)', notQuoted.status === 400 && notQuoted.message.includes(`"${Y.name}" did not quote for`), `${notQuoted.status} ${notQuoted.message}`);
-  const removed = await approveQ(ind, [[fA1], [fB1, fB2], [fC1]], [Z.id, Y.id, X.id]);
-  check('Q8 Step 1.3 refuses a vendor whose quotation was removed (400)', removed.status === 400 && /was removed/.test(removed.message), `${removed.status} ${removed.message}`);
+  check('Q7 Step 1.3 refuses a vendor who neither quoted for the item nor ever supplied it (400)', notQuoted.status === 400 && /neither quoted for nor previously supplied/.test(notQuoted.message), `${notQuoted.status} ${notQuoted.message}`);
+  // Union rule: a vendor who QUOTED stays eligible even when its file is not kept at Step 1.3.
+  const qr = await approvedIndent(['Removed'], 'QR');
+  const qrA = file('qr-z', Z.id, 70, 5); const qrB = file('qr-x', X.id, 75, 6);
+  await quote('BUYER', qr, [[qrA, qrB]]);
+  const removed = await approveQ(qr, [[qrB]], [Z.id]);
+  check('Q8 Step 1.3 accepts a vendor who quoted although its quotation file was not kept (union rule)', removed.status === 200, `${removed.status} ${removed.message}`);
+  // …and a vendor who only supplied the SKU before (no quotation from it) is eligible too.
+  const qh = await approvedIndent(['History'], 'QH');
+  await quote('BUYER', qh, [[file('qh-x', X.id, 60, 4)]]);
+  await giveHistory(Y.id, qh);
+  const histOnly = await approveQ(qh, [[file('qh-x', X.id, 60, 4)]], [Y.id]);
+  check('Q8b Step 1.3 accepts a previously-supplied vendor that sent no quotation (union rule)', histOnly.status === 200, `${histOnly.status} ${histOnly.message}`);
   check('Q9 refused approvals left the indent at QUOTE_RECEIVED', (await fresh(ind._id)).overallStatus === 'QUOTE_RECEIVED');
   // The client tries to re-tag the kept file — the server copies Step 1.2's tag.
   const spoof = { ...fB1, vendorId: Z.id, quotedRate: 1 };
@@ -214,8 +231,11 @@ const api = async () => {
   const leg = await approvedIndent(['Legacy'], 'QL');
   const lf = file('ql', null);
   await quote('BUYER', leg, [[lf]]);
+  const legNo = await approveQ(leg, [[lf]], [Z.id]);
+  check('Q14a quotations with no vendor recorded + no purchase history → no vendor is eligible (400, no Vendor Master fallback)', legNo.status === 400 && /No eligible vendors found/.test(legNo.message), `${legNo.status} ${legNo.message}`);
+  await giveHistory(Z.id, leg);
   const legOk = await approveQ(leg, [[lf]], [Z.id]);
-  check('Q14 quotations with no vendor recorded → any active vendor (legacy)', legOk.status === 200, `${legOk.status} ${legOk.message}`);
+  check('Q14 …with purchase history the vendor is eligible (legacy untagged quotation)', legOk.status === 200, `${legOk.status} ${legOk.message}`);
 
   // ── P: one PO per vendor ──
   console.log('\nP  Different vendors → separate POs');
@@ -434,9 +454,11 @@ const api = async () => {
   check('L2 re-saving Step 1.2 with the old untagged files is accepted (no vendor forced)', resave.status === 200, `${resave.status} ${resave.message}`);
   const keepOld = (await fresh(lg._id)).quoteComparativeStep.itemQuotations.map((q) => q.quotationDocuments);
   check('L3 …the old files stay untagged and keep their original upload date', keepOld.every((ds) => ds.every((d) => !d.vendorId)) && new Date(keepOld[0][0].uploadedAt).toISOString().startsWith('2026-09-01'));
+  await giveHistory(Z.id, { items: [lg.items[0]] }); await giveHistory(Y.id, { items: [lg.items[1]] });
   const lgAp = await approveQ(lg, keepOld.map((ds) => ds.map((d) => ({ fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType }))), [Z.id, Y.id]);
-  check('L4 Step 1.3 on legacy quotations: any active vendor (intentional fallback)', lgAp.status === 200, `${lgAp.status} ${lgAp.message}`);
+  check('L4 Step 1.3 on legacy quotations: a vendor with purchase history', lgAp.status === 200, `${lgAp.status} ${lgAp.message}`);
   const lgInactive = await legacyIndent(['Old C'], 'LGI');
+  await giveHistory(W.id, lgInactive);
   const lgW = await approveQ(lgInactive, [lgInactive.quoteComparativeStep.itemQuotations[0].quotationDocuments], [W.id]);
   check('L5 …but still only ACTIVE Vendor-Master vendors (inactive refused, 400)', lgW.status === 400 && /inactive/.test(lgW.message), `${lgW.status} ${lgW.message}`);
   const lgRows = (await approvedRows()).filter((r) => String(r.indentId) === String(lg._id));
@@ -451,15 +473,16 @@ const api = async () => {
   check('L8 adding a vendor-tagged quotation next to an old one is accepted', (await quote('BUYER', mx, [[oldF, newF]])).status === 200);
   const mxZ = await approveQ(mx, [[oldF, newF]], [Z.id]);
   const mxX = await approveQ(mx, [[oldF, newF]], [X.id]);
-  check('L9 mixed: once a quotation names a vendor, only vendors who quoted count (Z refused, X accepted)', mxZ.status === 400 && /did not quote/.test(mxZ.message) && mxX.status === 200, `${mxZ.status} ${mxZ.message} / ${mxX.status}`);
+  check('L9 mixed: a vendor with neither a quote nor history is refused (Z), the quoted vendor is accepted (X)', mxZ.status === 400 && /neither quoted for nor previously supplied/.test(mxZ.message) && mxX.status === 200, `${mxZ.status} ${mxZ.message} / ${mxX.status}`);
   // Pre item-wise record: one flat quotation file on a single-item indent.
   const fl = await approvedIndent(['Flat'], 'LFL');
   await PurchaseIndent.collection.updateOne({ _id: new mongoose.Types.ObjectId(String(fl._id)) }, { $set: {
     overallStatus: 'QUOTE_RECEIVED', 'quoteStep.status': 'RECEIVED',
     quoteComparativeStep: { statusDone: 'YES', quotationDocuments: [{ fileName: 'flat.pdf', fileUrl: `https://example.invalid/e2e/povaward/${RUN}/flat.pdf`, fileType: 'application/pdf' }], itemQuotations: [], vendors: [] },
   } });
+  await giveHistory(Y.id, fl);
   const flAp = await approveQ(await fresh(fl._id), [[{ fileName: 'flat.pdf', fileUrl: `https://example.invalid/e2e/povaward/${RUN}/flat.pdf`, fileType: 'application/pdf' }]], [Y.id]);
-  check('L10 pre item-wise (flat) quotation: approved for any active vendor', flAp.status === 200, `${flAp.status} ${flAp.message}`);
+  check('L10 pre item-wise (flat) quotation: approved for a vendor with purchase history', flAp.status === 200, `${flAp.status} ${flAp.message}`);
 
   // ── F: downstream unchanged ──
   console.log('\nF  Downstream: release → follow-up → PI → advance → GRN + QC');
@@ -508,6 +531,8 @@ const prepUi = async () => {
     [file('ui-shaft-y', Y.id, 50, 10), file('ui-shaft-x', X.id, 55, 6)],
     [file('ui-bush-x', X.id, 30, 5)],
   ]);
+  // Zinc never quoted for UI Bush but supplied it before → eligible through purchase history (the union rule).
+  await giveHistory(Z.id, { items: [q13.items[2]] });
   // 3. Maker-checker: a PO prepared + submitted by the MAKER (who holds procurement.approve).
   const mk = await awardedIndent(['UI Maker Item'], [Z.id], 'UIMK');
   const makerPo = await ok('MAKER', 'POST', '/procurement/purchase-orders/create-from-items', {

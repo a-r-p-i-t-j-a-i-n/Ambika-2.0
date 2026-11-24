@@ -298,7 +298,7 @@ const IndentList = () => {
     }
     // Approved Quotation (Step 1.3) — hidden once the step was skipped via
     // "Quote Not Required" (which moves the indent straight to QUOTATION_APPROVED).
-    if (['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus) && !r.quotationApprovalStep?.skipped) {
+    if ((['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus) || r.quotationApprovalStep?.partial) && !r.quotationApprovalStep?.skipped) {
       a.push({ key: 'approveQuote', label: 'Approved Quotation 1.03', icon: <FileCheck2 size={16} />, fn: () => onApproveQuotation(r) });
     }
     // PO-ready material indents can raise a Vendor PO directly (covers both the
