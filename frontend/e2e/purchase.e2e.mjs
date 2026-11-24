@@ -159,6 +159,11 @@ const run = async () => {
     } else {
       await d.locator('input[type="file"]').first().setInputFiles(DOC);
       check(`${key}: the vendor quotation file uploads`, await waitText(/e2e-quotation\.pdf|Add file/i, 15000));
+      // Each quotation names the vendor who sent it (Step 1.3 approves one of them).
+      const qv = d.locator('[data-testid="quote-vendor-0-0"]');
+      await qv.click();
+      await qv.fill(SUPPLIER);
+      await page.getByRole('option', { name: SUPPLIER }).first().click();
     }
     await d.getByRole('button', { name: /^Submit$/ }).click();
     check(`${key}: Step 1.2 recorded (${quote})`, await toast(/Quote & comparative recorded/));
@@ -169,6 +174,7 @@ const run = async () => {
       check(`${key}: indent shows "Quote Received"`, await waitText(/Quote Received/));
       await btn(/^Approved Quotation 1\.03$/).click();
       await page.waitForTimeout(800);
+      check(`${key}: Step 1.3 offers the vendor who quoted, already selected`, await dialog().locator('[data-testid="approved-vendor-0"]').inputValue() === SUPPLIER);
       await dialog().getByRole('button', { name: /^Submit$/ }).click();
       check(`${key}: Step 1.3 quotation approved`, await toast(/Quotation approval recorded/));
       await fresh();
@@ -178,14 +184,20 @@ const run = async () => {
     await btn(/^Create Vendor PO$/).click();
     await page.waitForTimeout(2500);
     d = dialog();
-    const vendorVal = await d.getByLabel(/Vendor \*/).first().inputValue().catch(() => '');
-    check(`${key}: PO form preselects the approved item and the only supplier for this SKU`, vendorVal.includes(SUPPLIER), vendorVal);
+    // The form groups items by vendor (one PO per vendor): the approved item sits
+    // on the only supplier for this SKU — that vendor's card, nothing left without a vendor.
+    const groups = d.locator('[data-testid="po-vendor-group"]');
+    const vendorVal = (await groups.count()) === 1 ? flat(await groups.first().innerText()) : '';
+    check(`${key}: PO form preselects the approved item and the only supplier for this SKU`,
+      vendorVal.includes(SUPPLIER) && /JSL204-07|Cu 0\.70/.test(vendorVal) && (await d.locator('[data-testid="po-no-vendor-group"]').count()) === 0, vendorVal.slice(0, 200));
     // Expected Delivery Date became mandatory on the PO form (79e4f4f); this
     // spec never filled it, so it stopped at this step even at HEAD 3310fe7.
     await typeDate(/Expected Delivery/, d);
     await shot(`${key}-po-form`);
-    await d.getByRole('button', { name: /^Save as Draft$/ }).click();
-    check(`${key}: PO saved as draft`, await toast(/saved as draft/i));
+    // Submit for Approval (reviewed first) — a draft that is only saved cannot be approved.
+    await d.getByRole('button', { name: /^Submit (\d+ POs )?for Approval$/ }).click();
+    await page.locator('[data-testid="po-review-confirm"]').click();
+    check(`${key}: PO submitted for approval`, await toast(/submitted for approval — waiting in PO Approval/i));
     const po0 = ((await apiGet('/procurement/purchase-orders?limit=20&sort=-createdAt'))?.data || [])[0];
     await go(`/procurement/purchase-orders/${po0._id}`);
     await waitText(/Approve \/ Reject/);
@@ -196,8 +208,9 @@ const run = async () => {
     await fresh();
     await btn(/^Release to Supplier$/).click();
     await page.waitForTimeout(600);
-    await dialog().getByRole('button', { name: /^Confirm Release$/ }).click();
-    check(`${key}: PO released to the supplier`, await toast(/PO released/));
+    // The release dialog's action is labelled "Release PO" (it was "Confirm Release").
+    await dialog().getByRole('button', { name: /^(Confirm Release|Release PO)$/ }).click();
+    check(`${key}: PO released to the supplier`, await toast(/PO released|PO-\d+\/\d{2}-\d{2} released/));
     await fresh();
     let po = (await apiGet(`/procurement/purchase-orders/${po0._id}`))?.data;
     check(`${key}: ${po?.poNumber} — supplier, SKU, qty, Released to Vendor`, po?.vendorName === SUPPLIER && po?.items?.[0]?.skuCode === 'JSL204-07' && po?.items?.[0]?.quantity === qty && po?.poStatus === 'RELEASED_TO_VENDOR',
@@ -245,7 +258,8 @@ const run = async () => {
       await dialog().getByLabel(/Payment Status/).first().click();
       await page.getByRole('option', { name: 'Full Payment' }).click();
       await page.waitForTimeout(300);
-      await dialog().getByLabel(/Reference Number/).first().fill('E2E-UTR-UI-001');
+      // The reference field is now labelled "Transaction / UTR Reference".
+      await dialog().getByLabel(/Reference Number|Transaction \/ UTR Reference/).first().fill('E2E-UTR-UI-001');
       await dialog().getByRole('button', { name: /^Record Payment$/ }).click();
       check(`${key}: full advance payment recorded`, await toast(/Payment .* recorded/));
       await go(`/procurement/purchase-orders/${po0._id}`);

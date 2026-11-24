@@ -20,6 +20,17 @@ const uploadedFile = Joi.object({
   uploadedAt: Joi.date().optional(),
 });
 
+// Step 1.2 / 1.3 item-wise quotation file + who quoted (all optional — older
+// clients send files only). The service takes the vendor name from the Vendor
+// Master, and Step 1.3 copies the tags from the Step 1.2 file, not from here.
+const quotationFile = uploadedFile.keys({
+  vendorId:     objectId.allow('', null),
+  vendorName:   Joi.string().trim().max(200).allow('', null),
+  quotedRate:   Joi.number().min(0).allow('', null),
+  deliveryDays: Joi.number().integer().min(0).max(3650).allow('', null),
+  actualAt:     Joi.date().allow('', null),
+});
+
 // ── Indent line item ─────────────────────────────────────────
 const indentItem = Joi.object({
   _id:              Joi.string().optional(),
@@ -180,7 +191,7 @@ const itemQuotation = Joi.object({
   skuCode:   Joi.string().trim().max(60).allow('', null),
   itemName:  Joi.string().trim().max(300).allow('', null),
   statusDone: Joi.string().valid('YES', 'QUOTE_NOT_REQUIRED').default('YES'),
-  quotationDocuments: Joi.array().items(uploadedFile).default([]),
+  quotationDocuments: Joi.array().items(quotationFile).default([]),
   actualAt:  Joi.date().allow('', null),
   remarks:   Joi.string().trim().max(1000).allow('', null),
 });
@@ -229,7 +240,7 @@ const itemApprovedQuotation = Joi.object({
   skuCode:   Joi.string().trim().max(60).allow('', null),
   itemName:  Joi.string().trim().max(300).allow('', null),
   statusDone: Joi.string().valid('YES', 'QUOTATION_NOT_APPROVED', 'QUOTE_NOT_REQUIRED').default('YES'),
-  approvedQuotationDocuments: Joi.array().items(uploadedFile).default([]),
+  approvedQuotationDocuments: Joi.array().items(quotationFile).default([]),
   // Approved vendor (Vendor Master) — required by the service for each YES item.
   vendorId:  objectId.allow('', null),
   actualAt:  Joi.date().allow('', null),

@@ -29,7 +29,11 @@ import InventoryMovement from '../modules/inventory/inventoryMovement.model.js';
 import InventoryStock from '../modules/inventory/inventoryStock.model.js';
 import IncomingQC from '../modules/procurement/incoming-qc/incomingQc.model.js';
 
-export const E2E_URI = 'mongodb://127.0.0.1:27017/ambika_e2e_purchase';
+// E2E_PURCHASE_URI: run the suite on another local scratch DB (its name must start
+// with ambika_e2e_purchase) without touching the shared one; the e2e guard still applies.
+export const E2E_URI = process.env.E2E_PURCHASE_URI || 'mongodb://127.0.0.1:27017/ambika_e2e_purchase';
+const DB_NAME = new URL(E2E_URI).pathname.slice(1);
+if (!/^ambika_e2e_purchase/.test(DB_NAME)) throw new Error(`E2E_PURCHASE_URI must name an ambika_e2e_purchase* scratch DB, got ${DB_NAME}`);
 // Local scratch DB, S3 off, email off — or stop before anything connects.
 // Only when RUN as a script: unit tests import pure data from some fixtures.
 if (isEntry(import.meta.url)) assertE2ESafe(E2E_URI, 'e2ePurchaseFixture.js');
@@ -38,7 +42,7 @@ export const SUPPLIER = 'E2E UI Coil Supplier';
 
 const connect = async () => {
   await mongoose.connect(E2E_URI, { serverSelectionTimeoutMS: 5000 });
-  if (mongoose.connection.name !== 'ambika_e2e_purchase') throw new Error(`unexpected database ${mongoose.connection.name}`);
+  if (mongoose.connection.name !== DB_NAME) throw new Error(`unexpected database ${mongoose.connection.name}`);
 };
 
 const results = [];

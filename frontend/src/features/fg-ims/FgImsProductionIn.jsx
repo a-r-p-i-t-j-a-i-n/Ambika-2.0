@@ -8,11 +8,12 @@ import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import { enqueueSnackbar } from 'notistack';
 import {
-  FgShell, Panel, TableScroll, EmptyNote, Th, ItemMultiPicker, StepHead, IntroNote,
+  FgShell, TableScroll, EmptyNote, Th, ItemMultiPicker, FormSection, IntroNote,
   QtyField, BalanceDelta, ConfirmBar, SuccessNote, SummaryChip,
-  O2D, O2D_TIP, STOCK_TOKENS, num, imsTableSx, IMS_FORM_MAX, emptyCellSx,
+  O2D, O2D_TIP, STOCK_TOKENS, num, IMS_FORM_MAX, emptyCellSx,
   FG_ACCENT, FG_ACCENT_DARK, SHIFT_LABEL, useFgProductionMasters, newRequestId,
 } from './fgImsMeta';
+import { FLUENT, fluentTableSx } from '../ims/imsFluent';
 import { useGetFgOverviewQuery, useFgProduceMutation } from '../../store/api/fgImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -106,12 +107,12 @@ const FgImsProductionIn = () => {
   return (
     <FgShell
       icon={Factory}
-      title="Production In — Daily Production Report"
-      subtitle="Record finished goods completed on the line. Stock goes up and the movement is logged against your name."
+      title="Production In (DPR)"
+      subtitle="Daily Production Report — record finished goods completed on the line. Stock goes up and the movement is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
       {/* What this screen does and does not do — stated up front. */}
-      <IntroNote accent={FG_ACCENT} icon={Info}>
+      <IntroNote fluent accent={FG_ACCENT} icon={Info}>
         Everything recorded here <b>adds to finished-goods stock</b> and is logged against your name. Production entries
         are the Daily Production Report; use Opening stock only for balances that existed before IMS, and Correction
         only to make the system match a physical count.
@@ -141,14 +142,9 @@ const FgImsProductionIn = () => {
       )}
 
       {/* ── Step 1 — the production header ── */}
-      <Panel>
-        {/* Where shift / line / supervisor come from is said once, here, rather
-            than as a helper line under all three fields — three extra lines of
-            prose that pushed the table a whole row further down the page. */}
-        <StepHead n={1} title="Production details"
-          hint="When it was made, and why. Shift, line and supervisor come from the DPR floor masters."
-          done={!!date} accent={FG_ACCENT} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
+      <FormSection step={1} done={!!date} fluent={FLUENT.lavender} title="Production details"
+          hint="When it was made, and why. Shift, line and supervisor come from the DPR floor masters." testId="fg-in-details">
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25 }}>
           <TextField label="Production date" type="date" size="small" value={date} onChange={(e) => setDate(e.target.value)}
             InputLabelProps={{ shrink: true }} inputProps={{ max: dayjs().format('YYYY-MM-DD') }} />
           <TextField select label="Reason" size="small" value={reason} onChange={(e) => setReason(e.target.value)}>
@@ -207,12 +203,11 @@ const FgImsProductionIn = () => {
             />
           </>}
         </Box>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 2 — the lines ── */}
-      <Panel>
-        <StepHead n={2} title="What was produced?" hint="Tick the finished goods that came off the line, add them, then type each quantity."
-          done={lines.length > 0} accent={FG_ACCENT} />
+      <FormSection step={2} done={lines.length > 0} fluent={FLUENT.blue} title="What was produced?"
+          hint="Tick the finished goods that came off the line, add them, then type each quantity." testId="fg-in-items">
         {/* Multi-select: tick several items and add them in one go — the same
             picker the Consumables Stock In screen uses. */}
         <ItemMultiPicker
@@ -225,8 +220,8 @@ const FgImsProductionIn = () => {
           emptyHint="No finished goods match that search."
         />
 
-        <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-          <Table size="small" sx={imsTableSx(940)}>
+        <TableScroll sx={{ mx: { xs: -1.75, md: -2.25 }, mb: { xs: -1.75, md: -2.25 }, maxWidth: 'none', borderTop: `1px solid ${FLUENT.blue.border}` }}>
+          <Table size="small" sx={fluentTableSx(940, { zebra: false })}>
             <TableHead>
               <TableRow>
                 {/* `width: '100%'` on the name column is the whole column-sizing
@@ -295,12 +290,12 @@ const FgImsProductionIn = () => {
             </TableBody>
           </Table>
         </TableScroll>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 3 — confirm. The summary sits next to the button so the planner
           sees exactly what they are committing before they click. ── */}
       <ConfirmBar
-        n={3} title="Confirm and save" done={valid} accent={FG_ACCENT}
+        fluent testId="fg-entry-savebar" n={3} title="Confirm and save" done={valid} accent={FG_ACCENT}
         hint={valid ? 'Everything looks right.' : 'Add at least one finished good with a quantity above zero.'}
       >
         <SummaryChip label={`${num(lines.length)} Finished Good${lines.length === 1 ? '' : 's'}`} />

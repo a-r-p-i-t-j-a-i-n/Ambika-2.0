@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
-  Grid, MenuItem, Typography, CircularProgress, Divider, Alert,
+  Grid, MenuItem, Typography, CircularProgress, Divider, Alert, Box,
 } from '@mui/material';
 import { Save } from 'lucide-react';
 import { useSnackbar } from 'notistack';
@@ -21,9 +21,40 @@ import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } fro
  * remaining files (same URLs, no re-upload) are submitted as the approved
  * quotation via `itemApprovedQuotations[]`. Requires Step 1.2 done.
  *
- * Each quoted item also names its Approved Vendor (Vendor Master). It is saved on
- * the indent item and the Purchase Order for that item must use it.
+ * Each quoted item also names its Approved Vendor. It is saved on the indent
+ * item and the Purchase Order for that item must use it. When Step 1.2 recorded
+ * who sent each quotation, the choice is limited to the vendors whose quotation
+ * is kept (the server enforces the same); older quotations that name no vendor
+ * keep the full Vendor Master list.
  */
+// Vendors named on the kept files → Approved Vendor options (lowest rate first seen).
+const keptVendorOptions = (files) => {
+  const byId = new Map();
+  (files || []).forEach((f) => {
+    if (!f.vendor?._id) return;
+    const id = String(f.vendor._id);
+    const rate = f.quotedRate === '' || f.quotedRate == null ? null : Number(f.quotedRate);
+    const days = f.deliveryDays === '' || f.deliveryDays == null ? null : Number(f.deliveryDays);
+    const cur = byId.get(id);
+    if (!cur) { byId.set(id, { _id: id, name: f.vendor.name, quotedRate: rate, deliveryDays: days }); return; }
+    if (rate != null && (cur.quotedRate == null || rate < cur.quotedRate)) cur.quotedRate = rate;
+    if (days != null && (cur.deliveryDays == null || days < cur.deliveryDays)) cur.deliveryDays = days;
+  });
+  return [...byId.values()];
+};
+// Keep the pick only while its quotation is kept; one kept vendor is picked for you.
+const reconcileVendor = (row) => {
+  const kept = keptVendorOptions(row.files);
+  if (!kept.length) return row;
+  if (row.vendor && kept.some((v) => v._id === String(row.vendor._id))) return row;
+  return { ...row, vendor: kept.length === 1 ? { _id: kept[0]._id, name: kept[0].name } : null };
+};
+const fileFromDoc = (d) => ({
+  fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType, uploadedAt: d.uploadedAt,
+  vendor: d.vendorId ? { _id: String(d.vendorId), name: d.vendorName || '' } : null,
+  quotedRate: d.quotedRate ?? '',
+  deliveryDays: d.deliveryDays ?? '',
+});
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 // Carry each item's Step 1.2 status forward into Step 1.3. Items that had a quote
@@ -89,10 +120,12 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           ? s12.quotationDocuments                         // first open: reuse Step 1.2 files
           : step12FlatDocs);                                // legacy flat fallback (single-item only)
       // Reuse the original file references verbatim — same URL, no new upload.
+      // Vendor tags always come from Step 1.2's copy of the file.
+      const step12ByUrl = new Map((s12?.quotationDocuments || []).map((d) => [d.fileUrl, d]));
       const files = sourceDocs
         .filter((d) => d?.fileUrl)
-        .map((d) => ({ fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType, uploadedAt: d.uploadedAt }));
-      return {
+        .map((d) => fileFromDoc(step12ByUrl.get(d.fileUrl) || d));
+      return reconcileVendor({
         itemId: it._id && it._id !== 'legacy' ? it._id : undefined,
         skuId: it.skuId || undefined,
         skuCode: it.skuCode || '',
@@ -107,15 +140,46 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
         remarks: s?.remarks || '',
         // Approved vendor already recorded for this item (re-edit before any PO).
         vendor: it.vendorSource === 'APPROVED_QUOTATION' && it.vendorId ? { _id: String(it.vendorId), name: it.vendorName } : null,
-      };
+      });
     }));
   }, [open, indent]);
 
   const patchRow = (idx, patch) => setRows((cur) => cur.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
 
   const removeFile = (idx, fileIdx) => setRows((cur) => cur.map((r, i) => (i === idx
-    ? { ...r, files: r.files.filter((_, fi) => fi !== fileIdx) }
+    ? reconcileVendor({ ...r, files: r.files.filter((_, fi) => fi !== fileIdx) })
     : r)));
+
+  // Approved Vendor options per item: the vendors whose kept quotation names them;
+  // an item whose quotations name no vendor (older record) → Vendor Master.
+  const vendorOptionsFor = (row) => {
+    const kept = keptVendorOptions(row.files);
+    return kept.length ? kept : vendorOptions;
+  };
+  // Legacy fallback (intentional): quotations saved before vendors were recorded
+  // name no vendor, so the item keeps the Vendor Master choice (the server
+  // applies the same rule). Once any kept quotation names a vendor, only those count.
+  const untaggedKept = (row) => (row.files || []).filter((f) => !f.vendor?._id).length;
+  const vendorHint = (row) => {
+    const kept = keptVendorOptions(row.files);
+    const older = untaggedKept(row);
+    if (kept.length) {
+      return `Only vendors whose quotation is kept (${kept.length})${older ? ` · ${older} older quotation${older === 1 ? '' : 's'} name no vendor` : ''}`;
+    }
+    return 'Older quotation — no vendor was recorded, so any active vendor can be selected';
+  };
+  const legacyRows = rows.filter((r) => r.statusDone === 'YES' && r.itemId && r.files.length && !keptVendorOptions(r.files).length);
+  // Award summary: one PO per vendor will follow.
+  const awards = (() => {
+    const byVendor = new Map();
+    rows.filter((r) => r.statusDone === 'YES' && r.vendor?._id).forEach((r) => {
+      const k = String(r.vendor._id);
+      if (!byVendor.has(k)) byVendor.set(k, { name: r.vendor.name, items: [] });
+      byVendor.get(k).items.push(r.itemDisplayNumber || r.itemName);
+    });
+    return [...byVendor.values()];
+  })();
+  const pendingVendor = rows.filter((r) => r.statusDone === 'YES' && r.itemId && !r.vendor?._id).length;
 
   const handleSubmit = async () => {
     // Each carried-YES item must keep ≥1 quotation to be approved; "Quote Not
@@ -159,7 +223,7 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
 
   return (
     <Dialog open={open} onClose={() => onClose?.(false)} maxWidth="lg" fullWidth>
-      <DialogTitle sx={{ fontWeight: 800 }}>Approved Quotation 1.03</DialogTitle>
+      <DialogTitle sx={{ fontWeight: 800 }}>Approved Quotation 1.03 — Vendor Selection</DialogTitle>
       <DialogContent dividers>
         <Grid container spacing={2} sx={{ mb: 1 }}>
           <Grid item xs={12} sm={6}>
@@ -178,8 +242,15 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           Status carried from Receive Quote (Step 1.2): YES
         </Typography>
         <Typography sx={{ fontWeight: 700, mb: 1 }}>
-          Approved Quotation — Select from Step 1.2
+          Approve the quotation and select the vendor for each item
         </Typography>
+        {legacyRows.length > 0 && (
+          <Alert severity="info" sx={{ mb: 1.5 }} data-testid="legacy-vendor-note">
+            {legacyRows.length === 1 ? '1 item has' : `${legacyRows.length} items have`} quotations saved before vendors were recorded
+            ({legacyRows.map((r) => r.itemDisplayNumber || r.itemName).join(', ')}). For {legacyRows.length === 1 ? 'it' : 'them'} any active vendor
+            can be selected; to limit the choice to the vendors who quoted, name the vendor on each quotation in Receive Quote (Step 1.2).
+          </Alert>
+        )}
         <ItemQuotationTable
           rows={rows}
           qtyLabel="Approved Qty"
@@ -189,9 +260,27 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           noUpload
           onRemoveFile={removeFile}
           onPatchRow={patchRow}
-          vendorOptions={vendorOptions}
+          vendorOptions={vendorOptionsFor}
+          vendorHint={vendorHint}
           vendorsLoading={vendorsLoading}
         />
+        <Box data-testid="vendor-award-summary" sx={{ mt: 1.5, p: 1.25, borderRadius: '10px', border: '1px solid', borderColor: 'divider', bgcolor: '#f8fafc' }}>
+          <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase' }}>
+            Vendor award · {awards.length} PO{awards.length === 1 ? '' : 's'} will be raised
+          </Typography>
+          {awards.length ? awards.map((a) => (
+            <Typography key={a.name} variant="body2" sx={{ mt: 0.5 }} data-testid="vendor-award-row">
+              <b>{a.name}</b> — {a.items.length} item{a.items.length === 1 ? '' : 's'}: {a.items.join(', ')}
+            </Typography>
+          )) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>No vendor selected yet.</Typography>
+          )}
+          {pendingVendor > 0 && (
+            <Typography variant="body2" sx={{ mt: 0.5, color: '#b45309', fontWeight: 600 }} data-testid="vendor-award-pending">
+              {pendingVendor} item{pendingVendor === 1 ? '' : 's'} still need{pendingVendor === 1 ? 's' : ''} a vendor
+            </Typography>
+          )}
+        </Box>
         {vendorsError && (
           <Alert severity="error" sx={{ mt: 1 }} action={<Button size="small" onClick={() => refetchVendors()}>Retry</Button>}>
             Could not load the Vendor Master — the approved vendor cannot be selected.
@@ -199,7 +288,7 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
         )}
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
           Quotations from Step 1.2 are loaded automatically. Remove the ones not approved — the remaining quotation(s) are saved as the approved quotation. No re-upload needed.
-          Select the vendor whose quotation is approved for each item — its Purchase Order will use that vendor.
+          Select the vendor whose quotation is approved for each item — only vendors who quoted in Step 1.2 are offered, and each vendor gets its own Purchase Order.
         </Typography>
 
         <Divider sx={{ my: 1.5 }} />

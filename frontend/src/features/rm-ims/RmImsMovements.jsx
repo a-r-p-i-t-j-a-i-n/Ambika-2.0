@@ -10,7 +10,7 @@ import {
   RmShell, Panel, TableScroll, RmKpiCard, RmKpiGrid, MoveChip, EmptyNote, Th, KindChip,
   O2D, moveToken, txnLabel, num,
 } from './rmImsMeta';
-import { FLUENT, FLUENT_DEPTH, rmTableSx } from './rmFluent';
+import { FLUENT, FLUENT_DEPTH, rmTableSx, headerBtnSx } from './rmFluent';
 
 // Who recorded it — initials in a soft lavender badge, the name beside it.
 const initialsOf = (name = '') => name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
@@ -180,7 +180,7 @@ const RmImsMovements = () => {
       subtitle="Every coil and circle that came in or went out — stock in, stock out, cutting and QC. Newest first."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!rows.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          sx={headerBtnSx}>
           Export page
         </Button>
       )}

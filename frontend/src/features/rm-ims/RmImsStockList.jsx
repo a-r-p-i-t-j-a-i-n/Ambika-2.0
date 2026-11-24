@@ -11,7 +11,7 @@ import {
   KindChip, AvailMeter, availBand, uomOf,
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr,
 } from './rmImsMeta';
-import { FLUENT, rmTableSx } from './rmFluent';
+import { FLUENT, rmTableSx, statusRowSx, headerBtnSx } from './rmFluent';
 import QtyRangeFilter from '../ims/QtyRangeFilter';
 import { NO_QTY_RANGE, matchesQtyRange } from '../ims/qtyRange';
 import { useGetRmOverviewQuery } from '../../store/api/rmImsApi';
@@ -275,7 +275,7 @@ const RmImsStockList = () => {
       subtitle="Every coil and circle — what's on hand, what's committed, and when to buy more."
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!filtered.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          sx={headerBtnSx}>
           Export
         </Button>
       )}
@@ -400,13 +400,10 @@ const RmImsStockList = () => {
                 </TableCell></TableRow>
               )}
               {paged.map((r, i) => {
-                const t = stockToken(r.status);
-                const critical = r.status === 'OUT_OF_STOCK' || r.status === 'REORDER';
                 const band = availBand(r.availablePct);
                 return (
-                  <TableRow key={r.skuId} hover sx={{
-                    ...(critical ? { bgcolor: t.tint, borderLeft: `3px solid ${t.color}` } : { borderLeft: '3px solid transparent' }),
-                  }}>
+                  // Problem rows carry a soft pastel wash and a muted left edge.
+                  <TableRow key={r.skuId} hover data-status={r.status} sx={{ ...statusRowSx(r.status) }}>
                     {/* Derived from the page offset, not the array index, so page 2
                         continues at 26 rather than restarting at 1. Purely
                         presentational — it feeds no filter, sort or calculation. */}
@@ -468,7 +465,7 @@ const RmImsStockList = () => {
                     <TableCell align="center"><AvailMeter pct={r.availablePct} /></TableCell>
                     <TableCell align="center" sx={{
                       fontVariantNumeric: 'tabular-nums', fontWeight: 700,
-                      color: band && band.color === '#b91c1c' ? STOCK_TOKENS.OUT_OF_STOCK.color : O2D.body,
+                      color: band?.critical ? STOCK_TOKENS.REORDER.color : O2D.body,
                     }}>
                       {r.daysCover == null ? '—' : `${num(r.daysCover)}d`}
                     </TableCell>

@@ -11,7 +11,7 @@ import {
   RmShell, Panel, TableScroll, RmKpiCard, RmKpiGrid, StatusChip, EmptyNote, Th, KindChip, uomOf,
   O2D, O2D_TIP, STOCK_TOKENS, STOCK_ORDER, stockToken, num, inr,
 } from './rmImsMeta';
-import { FLUENT, rmTableSx } from './rmFluent';
+import { FLUENT, rmTableSx, statusEdgeSx, statusInk, headerBtnSx } from './rmFluent';
 import { useGetRmReorderQuery } from '../../store/api/rmImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
 
@@ -145,11 +145,11 @@ const RmImsReorder = () => {
       actions={rows.length > 0 && (
         <Stack direction="row" spacing={0.75}>
           <Button size="small" variant="outlined" startIcon={copied ? <Check size={14} /> : <Copy size={14} />} onClick={copyList}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: copied ? STOCK_TOKENS.OK.color : O2D.body }}>
+            sx={{ ...headerBtnSx, color: copied ? STOCK_TOKENS.OK.color : O2D.body }}>
             {copied ? 'Copied' : 'Copy as text'}
           </Button>
           <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv}
-            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+            sx={headerBtnSx}>
             Export
           </Button>
         </Stack>
@@ -232,11 +232,10 @@ const RmImsReorder = () => {
                 </TableCell></TableRow>
               )}
               {paged.map((r, i) => {
-                const t = stockToken(r.status);
                 return (
                   // Coloured left edge only — on this screen every row is a
                   // problem, so tinting them all would carry no signal.
-                  <TableRow key={r.skuId} hover sx={{ borderLeft: `3px solid ${t.color}` }}>
+                  <TableRow key={r.skuId} hover data-status={r.status} sx={{ ...statusEdgeSx(r.status) }}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{page * rowsPerPage + i + 1}</TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       <Typography sx={{ fontSize: '0.73rem', color: O2D.body, fontFamily: 'ui-monospace, monospace' }}>{r.skuCode}</Typography>
@@ -247,7 +246,7 @@ const RmImsReorder = () => {
                     </TableCell>
                     <TableCell><KindChip kind={r.kind} /></TableCell>
                     <TableCell sx={{ minWidth: 260, maxWidth: 320 }}>
-                      <Typography sx={{ fontSize: '0.73rem', color: t.color, fontWeight: 600 }}>{reasonFor(r)}</Typography>
+                      <Typography sx={{ fontSize: '0.73rem', color: statusInk(r.status), fontWeight: 600 }}>{reasonFor(r)}</Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: O2D.ink }}>{num(r.onHand)}</TableCell>
                     <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', color: r.inTransit ? O2D.body : O2D.faint }}>

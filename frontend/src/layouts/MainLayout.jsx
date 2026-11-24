@@ -499,7 +499,7 @@ const PAGE_TITLES = {
   '/rm-ims/reorder':         'Raw Material — Buying List',
   '/rm-ims/movements':       'Raw Material — Movement History',
   '/rm-ims':                 'Raw Material — Dashboard',
-  '/fg-ims/stock':           'Finished Goods — Stock & Master',
+  '/fg-ims/stock':           'Finished Goods — Stock & Master Data',
   '/fg-ims/item':            'Finished Goods — Item',
   '/scrap-ims/records':      'Scrap — Master Data',
   '/scrap-ims/history':      'Scrap — Cut History',
@@ -512,8 +512,8 @@ const PAGE_TITLES = {
   '/fg-ims/production-in':   'Finished Goods — Production In (DPR)',
   '/fg-ims/dispatch-out':    'Finished Goods — Dispatch Out',
   '/fg-ims/planning':        'Finished Goods — Production Plan',
-  '/fg-ims/movements':       'Finished Goods — Movements',
-  '/fg-ims':                 'Finished Goods IMS',
+  '/fg-ims/movements':       'Finished Goods — Movement History',
+  '/fg-ims':                 'Finished Goods — Dashboard',
 };
 
 const MainLayout = () => {
