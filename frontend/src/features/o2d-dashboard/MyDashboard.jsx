@@ -18,7 +18,7 @@ import {
 import { CHIP_TONE, GROUP_COLOR, SKU_COLORS, STAT_BG, T, WIDE } from './dashTheme';
 import { fmtDateShort, fmtDateTime } from './format';
 import {
-  Bars, DashCard, DashHeader, DashPage, Donut, FilterBar, GhostButton, Insights, KpiTile, MiniSelect,
+  Bars, DashCard, DashHeader, DashPage, Donut, FilterBar, Insights, KpiTile, MiniSelect,
   OverviewItem, SplitRow, StatBox, ToneChip,
 } from './components/DashUi';
 import { CalendarGrid, CalendarNav } from './components/MonthCalendar';
@@ -117,7 +117,6 @@ const MyDashboard = ({ switcher }) => {
   const header = (
     <DashHeader title="O2D" subtitle="Order to Dispatch · my tasks">
       {switcher}
-      <GhostButton onClick={reset}>Show all tasks</GhostButton>
     </DashHeader>
   );
 

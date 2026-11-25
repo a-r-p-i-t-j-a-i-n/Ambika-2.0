@@ -262,6 +262,8 @@ const navSectionsSimple = [
             text: 'O2D',
             icon: <Truck size={19} />,
             children: [
+              // Everyone sees their own tasks; o2dfms.dashboardAll shows every order.
+              { text: 'O2D Dashboard',   icon: <LayoutDashboard size={19} />, path: '/o2d/dashboard' },
               { text: 'O2D FMS',         icon: <Workflow size={19} />, path: '/o2d-fms/steps' },
               { text: 'O2D Master Data', icon: <FileText size={19} />, path: '/o2d-fms/master-data' },
             ],
@@ -273,6 +275,8 @@ const navSectionsSimple = [
               // Also owns the /procurement record pages (indent, PO, PI, GRN…
               // detail) the step lists open; Master Data and Vendor Details keep
               // their own /procurement paths (the longer match wins).
+              // Everyone sees their own Purchase tasks; fms.manageDoers the whole company.
+              { text: 'Purchase Dashboard', icon: <LayoutDashboard size={19} />, path: '/purchase/dashboard' },
               { text: 'Purchase FMS',   icon: <Workflow size={19} />, path: '/purchase-fms', match: ['/procurement'] },
               // PO rate change requests (Requests / History). Open to every
               // Purchase FMS user like the lists; only approvers get Approve /
@@ -480,6 +484,7 @@ const PAGE_TITLES = {
   '/o2d-fms/task':           'O2D FMS — Task',
   '/o2d-fms/dashboard':      'O2D FMS — Management View',
   '/o2d/dashboard':          'O2D Dashboard',
+  '/purchase/dashboard':     'Purchase Dashboard',
   '/o2d-fms/scores':         'MIS Scoring',
   '/o2d-fms/config':         'O2D FMS — Step Catalog',
   '/o2d-fms/templates':      'O2D FMS — Task Templates',
