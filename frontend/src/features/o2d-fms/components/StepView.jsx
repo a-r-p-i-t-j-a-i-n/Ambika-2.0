@@ -279,13 +279,13 @@ const ActionCell = ({ state, onDoTask, onView, ctaLabel }) => {
           </Box>
           {viewTo && (
             <Tooltip arrow slotProps={O2D_TIP} title={`Open the ${meta?.viewLabel || meta?.label || 'record'}`}>
-              <IconButton size="small" onClick={() => onView(viewTo)} sx={{ color: '#15803d' }}>
+              <IconButton aria-label="Open in a new tab" size="small" onClick={() => onView(viewTo)} sx={{ color: '#15803d' }}>
                 <ExternalLink size={13} />
               </IconButton>
             </Tooltip>
           )}
           <Tooltip arrow slotProps={O2D_TIP} title="Open the task again (re-do or re-check the checklist)">
-            <IconButton size="small" onClick={onDoTask} sx={{ color: O2D.brand }}>
+            <IconButton aria-label="Open the task again (re-do or re-check the checklist)" size="small" onClick={onDoTask} sx={{ color: O2D.brand }}>
               <ListChecks size={13} />
             </IconButton>
           </Tooltip>
@@ -617,7 +617,7 @@ const StepView = ({
           </Typography>
         </Stack>
         <Stack direction="row" alignItems="center" spacing={0.5} sx={{ px: 1, py: 0.9 }}>
-          <IconButton size="small" onClick={() => railRef.current?.scrollBy({ left: -340, behavior: 'smooth' })}
+          <IconButton aria-label="Scroll left" size="small" onClick={() => railRef.current?.scrollBy({ left: -340, behavior: 'smooth' })}
             sx={{ flexShrink: 0, border: `1px solid ${O2D.line}` }}>
             <ChevronLeft size={15} />
           </IconButton>
@@ -639,7 +639,7 @@ const StepView = ({
               />
             ))}
           </Box>
-          <IconButton size="small" onClick={() => railRef.current?.scrollBy({ left: 340, behavior: 'smooth' })}
+          <IconButton aria-label="Scroll right" size="small" onClick={() => railRef.current?.scrollBy({ left: 340, behavior: 'smooth' })}
             sx={{ flexShrink: 0, border: `1px solid ${O2D.line}` }}>
             <ChevronRight size={15} />
           </IconButton>

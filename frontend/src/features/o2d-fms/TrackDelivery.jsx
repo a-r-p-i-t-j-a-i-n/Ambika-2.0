@@ -11,6 +11,8 @@ import { useGetChallansQuery } from '../../store/api/dispatchControlApi';
 import { useTrackDeliveryMutation } from '../../store/api/o2dFulfillmentApi';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
+import { FormSection } from '../ims/imsMeta';
+import { FLUENT } from '../ims/imsFluent';
 
 /** Step 2.9 — Track delivery: pick a challan, update delivery status & dates. */
 const TrackDelivery = () => {
@@ -78,7 +80,7 @@ const TrackDelivery = () => {
 
   return (
     <O2dStepShell icon={Truck} step="Step 2.9" title="Track Delivery" subtitle="Update the delivery status of a dispatch." gate={gate}>
-      <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+      <FormSection step={1} done={!!dc} fluent={FLUENT.lavender} title="Pick the dispatch" testId="o2d-step-pick">
         <Autocomplete
           options={challans}
           value={dc}
@@ -94,10 +96,10 @@ const TrackDelivery = () => {
             <Chip size="small" label={`Current: ${dc.deliveryStatus || dc.status}`} />
           </Stack>
         )}
-      </Paper>
+      </FormSection>
 
       {dc && (
-        <Paper sx={{ p: 2.5, borderRadius: 3 }}>
+        <FormSection step={2} fluent={FLUENT.blue} title="Delivery status" testId="o2d-step-details">
           <Stack spacing={2}>
             <TextField select label="Status" value={status} onChange={(e) => setStatus(e.target.value)} size="small" sx={{ maxWidth: 240 }}>
               <MenuItem value="Delivered">Delivered</MenuItem>
@@ -117,7 +119,7 @@ const TrackDelivery = () => {
               </Button>
             </Stack>
           </Stack>
-        </Paper>
+        </FormSection>
       )}
     </O2dStepShell>
   );

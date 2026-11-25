@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
-  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Grid, Autocomplete, Alert,
+  Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Autocomplete, Alert,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -25,7 +25,7 @@ import VoucherFormDialog from './VoucherFormDialog';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import PurchaseFmsStepper from '../components/PurchaseFmsStepper';
 import { PURCHASE_FMS_STEPS } from '../PurchaseFmsHub';
-import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET } from '../pfmsTheme';
+import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RowQuickViewDialog from '../common/RowQuickViewDialog';
@@ -178,13 +178,14 @@ const VoucherList = () => {
         onStepClick={(slug) => navigate(`/purchase-fms/${slug}`)}
       />
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<FileStack size={20} />} label="Total"          value={stats.total}         color="#2563eb" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Send size={20} />}      label="Posted"         value={stats.posted}        color="#0ea5e9" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Coins size={20} />}     label="Partially Paid" value={stats.partiallyPaid} color="#b45309" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<CheckCheck size={20} />} label="Fully Paid"     value={stats.fullyPaid}     color="#16a34a" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><PfmsKpiCard icon={<Wallet size={20} />}    label="Outstanding"    value={fmtINR(stats.outstanding)} color="#dc2626" /></Grid>
-      </Grid>
+      {/* KPI row = the shared Purchase / O2D card strip (same cards). */}
+      <Box sx={pfmsKpiRowSx(5)}>
+        <PfmsKpiCard icon={<FileStack size={20} />} label="Total"          value={stats.total}         color="#2563eb" />
+        <PfmsKpiCard icon={<Send size={20} />}      label="Posted"         value={stats.posted}        color="#0ea5e9" />
+        <PfmsKpiCard icon={<Coins size={20} />}     label="Partially Paid" value={stats.partiallyPaid} color="#b45309" />
+        <PfmsKpiCard icon={<CheckCheck size={20} />} label="Fully Paid"     value={stats.fullyPaid}     color="#16a34a" />
+        <PfmsKpiCard icon={<Wallet size={20} />}    label="Outstanding"    value={fmtINR(stats.outstanding)} color="#dc2626" />
+      </Box>
 
       {partPaidOnly && (
         <Alert severity="info" data-testid="vo-part-paid-filter"

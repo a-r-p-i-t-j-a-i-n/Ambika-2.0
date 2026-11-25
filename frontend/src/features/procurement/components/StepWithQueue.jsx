@@ -1,10 +1,11 @@
 import React, { Suspense } from 'react';
 import { Box, Tabs, Tab } from '@mui/material';
 import { useSearchParams } from 'react-router-dom';
-import AppLoader from '../../../components/AppLoader';
+import PfmsStepSkeleton from './PfmsStepSkeleton';
 import { useGetStepQueueQuery } from '../../../store/api/procurementApi';
 import StepQueuePanel from './StepQueuePanel';
 import { pfmsStepTabsSx, pfmsUnderStepTabsStyle } from '../pfmsTheme';
+import { AWAITING_VIEW, opensOnQueue, waitingOf } from './stepQueueView';
 
 /**
  * A Purchase FMS step screen with its "Awaiting" tab: the step's own records
@@ -14,18 +15,18 @@ import { pfmsStepTabsSx, pfmsUnderStepTabsStyle } from '../pfmsTheme';
  * waiting, so a fresh step never opens on an empty table. It switches back by
  * itself once the first record exists.
  */
-const AWAITING_VIEW = 'awaiting';
 
 const StepWithQueue = (props) => {
   const { List, queue, listLabel, queueLabel, ownTotal, preferQueue = false, ...panel } = props;
   const [params, setParams] = useSearchParams();
   const { data: summary } = useGetStepQueueQuery({ queue, limit: 1 });
-  const waiting = summary?.data?.unfilteredTotal;
+  const waiting = waitingOf(summary);
 
   const explicit = params.get('view');
   // `preferQueue` (actionable work, e.g. payments to make): open on the queue
   // whenever something is waiting, even when the step already has records.
-  const view = explicit === AWAITING_VIEW || (!explicit && waiting > 0 && (preferQueue || ownTotal === 0)) ? AWAITING_VIEW : 'records';
+  // (The rule lives in stepQueueView.js — the hub's step cards use the same one.)
+  const view = explicit === AWAITING_VIEW || (!explicit && opensOnQueue({ waiting, ownTotal, preferQueue })) ? AWAITING_VIEW : 'records';
   const setView = (_e, v) => setParams({ view: v }, { replace: true });
 
   return (
@@ -39,7 +40,7 @@ const StepWithQueue = (props) => {
       <Box style={pfmsUnderStepTabsStyle}>
         {view === AWAITING_VIEW
           ? <StepQueuePanel queue={queue} total={waiting} {...panel} />
-          : <Suspense fallback={<AppLoader />}><List /></Suspense>}
+          : <Suspense key={view} fallback={<PfmsStepSkeleton />}><List /></Suspense>}
       </Box>
     </Box>
   );

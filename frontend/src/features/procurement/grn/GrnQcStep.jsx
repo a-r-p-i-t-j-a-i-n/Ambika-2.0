@@ -3,10 +3,11 @@ import { Box, Tabs, Tab } from '@mui/material';
 import { useSearchParams } from 'react-router-dom';
 import { PackageCheck } from 'lucide-react';
 import { lazyWithRetry } from '../../../utils/lazyWithRetry';
-import AppLoader from '../../../components/AppLoader';
+import PfmsStepSkeleton from '../components/PfmsStepSkeleton';
 import { useGetGrnStatsQuery, useGetStepQueueQuery } from '../../../store/api/procurementApi';
 import StepQueuePanel from '../components/StepQueuePanel';
 import { pfmsStepTabsSx, pfmsUnderStepTabsStyle } from '../pfmsTheme';
+import { opensOnQueue, waitingOf, STEP_QUEUES } from '../components/stepQueueView';
 
 const GrnList = lazyWithRetry(() => import('./GrnList'));
 const IncomingQCList = lazyWithRetry(() => import('../incoming-qc/IncomingQCList'));
@@ -29,14 +30,15 @@ const VIEWS = ['grn', 'qc', 'awaiting-grn', 'awaiting-qc'];
 const GrnQcStep = () => {
   const [params, setParams] = useSearchParams();
   const { data: grnStats } = useGetGrnStatsQuery();
-  const { data: grnQueue } = useGetStepQueueQuery({ queue: 'GRN', limit: 1 });
+  const { data: grnQueue } = useGetStepQueueQuery({ queue: STEP_QUEUES.grn.queue, limit: 1 });
   const { data: qcQueue } = useGetStepQueueQuery({ queue: 'INCOMING_QC', limit: 1 });
-  const awaitingGrn = grnQueue?.data?.unfilteredTotal;
+  const awaitingGrn = waitingOf(grnQueue);
   const awaitingQc = qcQueue?.data?.unfilteredTotal;
 
   const requested = params.get('view');
   const view = VIEWS.includes(requested) ? requested
-    : (grnStats?.data?.total === 0 && awaitingGrn > 0 ? 'awaiting-grn' : 'grn');
+    // Same open rule as every Purchase FMS step (stepQueueView.js) — and as the hub's step card.
+    : (opensOnQueue({ waiting: awaitingGrn, ownTotal: grnStats?.data?.total }) ? 'awaiting-grn' : 'grn');
   // Always explicit — a bare URL may open on Awaiting GRN (see above).
   const setView = (_e, v) => setParams({ view: v }, { replace: true });
   const count = (n) => (n === undefined ? '' : ` (${n})`);
@@ -66,7 +68,7 @@ const GrnQcStep = () => {
             gridProps={{ numberHeader: 'GRN / Indent No', dateHeader: 'Received', showAmount: false, emptyText: 'Nothing is waiting for QC' }} />
         )}
         {(view === 'grn' || view === 'qc') && (
-          <Suspense fallback={<AppLoader />}>
+          <Suspense key={view} fallback={<PfmsStepSkeleton />}>
             {view === 'qc' ? <IncomingQCList /> : <GrnList />}
           </Suspense>
         )}

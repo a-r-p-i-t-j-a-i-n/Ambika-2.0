@@ -16,8 +16,12 @@ export const PRIORITY = { DELAYED: 5, IN_PROGRESS: 4, PLANNED: 3, DISPATCHED: 2,
 export const groupDayByParty = (list = []) => {
   const groups = new Map();
   list.forEach((e) => {
-    const g = groups.get(e.partyName) || {
-      id: `${e.dateKey}__${e.partyName}`,
+    // `groupKey` (optional) splits one party's day into separate cards — e.g. the
+    // Purchase Item Delivery Calendar keeps a vendor's scheduled and delivered
+    // lines apart. Without it (Dispatch, Production Plan) grouping is by party.
+    const gk = e.groupKey || e.partyName;
+    const g = groups.get(gk) || {
+      id: `${e.dateKey}__${gk}`,
       dateKey: e.dateKey,
       date: e.date,
       partyName: e.partyName,
@@ -59,7 +63,7 @@ export const groupDayByParty = (list = []) => {
       cur.usedQty += Number(sk.usedQty || 0);
       g.skuMap.set(k, cur);
     });
-    groups.set(e.partyName, g);
+    groups.set(gk, g);
   });
 
   return [...groups.values()].map((g) => {

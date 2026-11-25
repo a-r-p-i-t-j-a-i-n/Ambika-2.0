@@ -55,7 +55,7 @@ export const FmsGateDialog = ({ gate, open, onClose }) => {
           <Box sx={{ width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha('#b45309', 0.12), color: '#b45309' }}><Lock size={18} /></Box>
           <Typography sx={{ fontWeight: 800 }}>Complete the previous step first</Typography>
         </Stack>
-        {onClose && <IconButton onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>}
+        {onClose && <IconButton aria-label="Close" onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>}
       </DialogTitle>
       <DialogContent dividers>
         <Typography variant="body2" sx={{ mb: 1.5 }}>

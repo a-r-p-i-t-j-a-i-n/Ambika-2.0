@@ -84,7 +84,7 @@ const OrderUpdateModal = ({ open, onClose, order }) => {
           <Typography variant="h6" fontWeight={700}>Update Order Workflow</Typography>
           <Typography variant="caption" color="text.secondary">SO: {order.soNumber} | {order.partyName}</Typography>
         </Box>
-        <IconButton onClick={onClose} size="small">
+        <IconButton aria-label="Close" onClick={onClose} size="small">
           <X size={20} />
         </IconButton>
       </Box>

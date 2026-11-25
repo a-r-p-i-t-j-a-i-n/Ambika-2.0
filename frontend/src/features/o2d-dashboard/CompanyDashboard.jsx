@@ -4,7 +4,7 @@
  * The client's design (ui html/O2D-V2-Dashboard), on live orders: KPI tiles,
  * Delay analytics, Stage analysis, Quick Overview, Dispatch calendar and the
  * orders table. Every panel narrows the same view — a tile, a donut slice, a
- * bar or a calendar day filters the whole page, and "Show all orders" clears it.
+ * bar or a calendar day filters the whole page, and the table's Clear resets it.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, Typography } from '@mui/material';
@@ -19,7 +19,7 @@ import {
 import { GROUP_COLOR, GROUP_LABEL, SKU_COLORS, STAT_BG, T, WIDE } from './dashTheme';
 import { fmtDate, fmtDateShort, fmtMoney, fmtNum } from './format';
 import {
-  Bars, DashCard, DashHeader, DashPage, Donut, FilterBar, GhostButton, Insights, KpiTile, MiniDate, MiniSelect,
+  Bars, DashCard, DashHeader, DashPage, Donut, FilterBar, Insights, KpiTile, MiniDate, MiniSelect,
   OverviewItem, Person, ProgressCell, SplitRow, StatBox, ToneChip,
 } from './components/DashUi';
 import { CalendarNav } from './components/MonthCalendar';
@@ -179,7 +179,6 @@ const CompanyDashboard = ({ switcher, onDenied }) => {
     <DashPage>
       <DashHeader title="O2D" subtitle="Order to Dispatch · whole company">
         {switcher}
-        <GhostButton onClick={reset}>Show all orders</GhostButton>
       </DashHeader>
 
       {/* ── KPI tiles ── */}

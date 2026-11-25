@@ -18,6 +18,7 @@ import OrderEntryDrawer from './OrderEntryDrawer';
 import CancelOrderDialog from './components/CancelOrderDialog';
 import { resolveFileUrl } from '../../utils/fileUrl';
 import { useSmartBack } from '../../hooks/useSmartBack';
+import { FLUENT } from '../ims/imsFluent';
 
 // Neutrals follow the client's WARM palette (o2dTheme); status hues stay saturated.
 const C = {
@@ -58,7 +59,7 @@ const StatusBadge = ({ value }) => {
 const heroBtn = {
   fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0, minWidth: 0,
   px: 1.25, py: 0.4, fontSize: '0.75rem', boxShadow: 'none', textTransform: 'none',
-  borderRadius: '6px', color: C.body, background: C.surface,
+  height: 32, borderRadius: '8px', color: C.body, background: C.surface,
   border: `1px solid ${C.line}`,
   '& .MuiButton-startIcon': { mr: 0.5 },
   '&:hover': { background: C.surfaceAlt, borderColor: C.line },
@@ -247,21 +248,21 @@ const OrderDetails = () => {
         px: { xs: 1.5, md: 2 }, pt: 1.25, pb: 1.25,
         position: 'sticky', top: 0, zIndex: 5,
       }}>
-        {/* One line, always. The SO number and the action buttons never wrap or
-            shrink; the party name absorbs the slack and ellipsises instead — so a
-            14" screen keeps the identity and every action on a single tidy row. */}
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.25, flexWrap: 'nowrap' }}>
+        {/* One line from a desktop width: the SO number and the actions never
+            shrink; the party name absorbs the slack and ellipsises. Below that the
+            actions wrap onto their own line instead of running off a phone. */}
+        <Stack direction="row" alignItems="center" spacing={1} useFlexGap sx={{ mb: 1.25, flexWrap: { xs: 'wrap', md: 'nowrap' }, rowGap: 0.75 }}>
           {/* Back = where the user actually came from (Step Board, task page…);
               /orders only as the deep-link fallback. */}
-          <IconButton size="small" onClick={goBack}
-            sx={{ color: C.body, border: `1px solid ${C.line}`, borderRadius: '6px', flexShrink: 0 }}>
+          <IconButton aria-label="Back" size="small" onClick={goBack}
+            sx={{ color: C.body, border: `1px solid ${C.line}`, borderRadius: '8px', flexShrink: 0 }}>
             <ArrowLeft size={15} />
           </IconButton>
           <Typography sx={{ fontSize: { xs: '1rem', md: '1.15rem' }, fontWeight: 800, color: C.ink, whiteSpace: 'nowrap', flexShrink: 0 }}>
             {order.soNumber}
           </Typography>
           <Box sx={{ flexShrink: 0 }}><StatusBadge value={order.status} /></Box>
-          <Typography noWrap sx={{ fontSize: '0.8rem', color: C.slate, flex: 1, minWidth: 0 }}>
+          <Typography noWrap sx={{ fontSize: '0.8rem', color: C.slate, flex: { xs: '1 1 140px', md: 1 }, minWidth: 0 }}>
             · {order.partyName}
           </Typography>
           {/* A cancelled order is read-only: no planning / dispatching until it's
@@ -305,11 +306,13 @@ const OrderDetails = () => {
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Kpi label="Ordered"    value={fmt(ordered)} />
           <Kpi label="Planned"    value={fmt(planned)} />
-          <Kpi label="Dispatched" value={fmt(actual)} color="#7ee0c8" />
-          <Kpi label="Balance"    value={fmt(balance)} color={balance > 0 ? '#ffd9a0' : '#7ee0c8'} />
+          {/* Readable inks on the light card (these were pale tints made for a dark
+              background): teal = dispatched / clear, amber = balance still open. */}
+          <Kpi label="Dispatched" value={fmt(actual)} color={FLUENT.teal.accent} />
+          <Kpi label="Balance"    value={fmt(balance)} color={balance > 0 ? FLUENT.amber.accent : FLUENT.teal.accent} />
           <Kpi label="Fulfilment" value={`${fulfilment}%`} sub="of order qty" />
           <Kpi label="Adherence"  value={`${adherence}%`} sub="actual vs plan" />
-          <Kpi label="Risks"      value={lacking.length} color={lacking.length ? '#ffb4b4' : '#7ee0c8'} />
+          <Kpi label="Risks"      value={lacking.length} color={lacking.length ? FLUENT.rose.accent : FLUENT.teal.accent} />
         </Stack>
       </Box>
 
@@ -378,11 +381,13 @@ const OrderDetails = () => {
 
         {/* ── What's Lacking ─────────────────────────────────── */}
         {lacking.length > 0 && (
+          // Amber, not red: these are open items (e.g. pieces still to dispatch),
+          // not errors. Cancelled orders keep their red notice above.
           <Paper sx={{ p: 2, borderRadius: 3, mb: 2,
-            border: `1px solid ${alpha(C.error, 0.25)}`, bgcolor: alpha(C.error, 0.035) }}>
+            border: `1px solid ${FLUENT.amber.border}`, bgcolor: FLUENT.amber.bg }}>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-              <AlertTriangle size={16} color={C.error} />
-              <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: C.error }}>
+              <AlertTriangle size={16} color={FLUENT.amber.accent} />
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: FLUENT.amber.ink }}>
                 What's Lacking ({lacking.length})
               </Typography>
             </Stack>

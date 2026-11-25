@@ -19,27 +19,14 @@ import {
   downloadDispatchCalendarPdf, downloadDispatchListPdf,
 } from '../../utils/printDispatchCalendar';
 import { groupDayByParty } from '../../utils/dispatchCalendarGrouping';
+import { CalendarLegend, CalendarMonthGrid } from './CalendarGrid';
 import { O2D } from '../o2d-fms/o2dTheme';
 
 dayjs.extend(isoWeek);
 
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
 
-// Client names eat a lot of width in a calendar cell. Drop the legal suffixes
-// (Pvt / Ltd / Limited / Technologies…) and, if it's still long, keep just the
-// first word — "Elin Electronics Limited." → "Elin", "Epack Durable Ltd" → "Epack Durable".
-const shortParty = (name) => {
-  const raw = String(name || '—').trim();
-  const cleaned = raw
-    .replace(/\b(pvt|private|ltd|limited|llp|inc|co|company|technologies|industries|enterprises|works)\b\.?/gi, '')
-    .replace(/[.,]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const words = cleaned.split(' ').filter(Boolean);
-  if (!words.length) return raw;
-  const two = words.slice(0, 2).join(' ');
-  return two.length > 14 ? words[0] : two;
-};
+// (Party names are shortened by shortParty in calendarGridUtils.js, used by the shared grid.)
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -618,25 +605,11 @@ const DispatchCalendar = ({ compact = false, month = null, selectedDate = null, 
         </Stack>
 
         {/* Legend */}
-        <Stack direction="row" spacing={1.75} sx={{ px: { xs: 1.25, sm: 1.75 }, py: 0.5, flexWrap: 'wrap', rowGap: 0.4, borderBottom: `1px solid ${GRID}`, bgcolor: O2D.surfaceAlt }}>
-          {Object.entries(EVENT_TYPE).map(([k, v]) => (
-            <Stack key={k} direction="row" spacing={0.5} alignItems="center">
-              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: v.color }} />
-              <Typography sx={{ fontSize: '0.64rem', fontWeight: 800, color: 'text.secondary' }}>{v.label}</Typography>
-            </Stack>
-          ))}
-          <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
-          {Object.entries(STATUS).map(([k, v]) => (
-            <Stack key={k} direction="row" spacing={0.5} alignItems="center">
-              <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: v.color }} />
-              <Typography sx={{ fontSize: '0.64rem', fontWeight: 700, color: 'text.secondary' }}>{v.label}</Typography>
-            </Stack>
-          ))}
-          <Box sx={{ flex: 1 }} />
-          <Typography sx={{ fontSize: '0.64rem', color: O2D.faint, whiteSpace: 'nowrap' }}>
-            One card = one party's day · orders &amp; items merged
-          </Typography>
-        </Stack>
+        <CalendarLegend
+          types={Object.values(EVENT_TYPE)}
+          statuses={Object.values(STATUS)}
+          note="One card = one party's day · orders & items merged"
+        />
         </>)}
 
         {isLoading ? (
@@ -772,143 +745,18 @@ const DispatchCalendar = ({ compact = false, month = null, selectedDate = null, 
             })}
           </Box>
         ) : (
-          <Box sx={{ overflowX: 'auto' }}>
-            <Box sx={{ minWidth: compact ? 0 : 700 }}>
-              {/* Weekday header */}
-              <Box sx={{ display: 'grid', gridTemplateColumns: weekCols, borderBottom: `1px solid ${GRID}`, bgcolor: O2D.surfaceAlt }}>
-                {WEEKDAYS.map((w) => (
-                  <Typography key={w} sx={{ py: 0.5, textAlign: 'center', fontWeight: 800, fontSize: '0.66rem', color: BRAND_DK, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                    {w}
-                  </Typography>
-                ))}
-              </Box>
-
-              {/* Day grid */}
-              <Box sx={{ display: 'grid', gridTemplateColumns: weekCols }}>
-                {gridDays.map((day) => {
-                  const key = day.format('YYYY-MM-DD');
-                  const inMonth = day.isSame(cursor, 'month');
-                  // Prev/next-month cells → blank (only the selected month is shown).
-                  if (!inMonth) {
-                    return (
-                      <Box key={key} sx={{
-                        minHeight: compact ? 60 : { xs: 72, md: 88 },
-                        borderRight: `1px solid ${GRID}`, borderBottom: `1px solid ${GRID}`,
-                        bgcolor: O2D.surfaceAlt,
-                      }} />
-                    );
-                  }
-                  const groups = groupedByDate.get(key) || [];
-                  const isToday = day.isSame(today, 'day');
-                  const shown = groups.slice(0, 2);
-                  const more = groups.length - shown.length;
-                  return (
-                    <Box
-                      key={key}
-                      onClick={() => { if (groups.length) { setOpenDay(key); onDayClick?.(key); } }}
-                      sx={{
-                        // Rows grow to fit the item lines, but a day never shows more
-                        // than 2 dispatches (the rest collapse to "+N more"), so the
-                        // month still reads as a calendar instead of a long scroll.
-                        minHeight: compact ? 60 : { xs: 72, md: 88 }, p: 0.5,
-                        borderRight: `1px solid ${GRID}`,
-                        borderBottom: `1px solid ${GRID}`,
-                        boxShadow: selectedDate === key ? `inset 0 0 0 2px ${BRAND}` : 'none',
-                        bgcolor: isToday ? alpha(BRAND, 0.06) : (inMonth ? O2D.surface : O2D.surfaceAlt),
-                        cursor: groups.length ? 'pointer' : 'default',
-                        transition: 'background .15s',
-                        '&:hover': groups.length ? { bgcolor: alpha(BRAND, 0.07) } : {},
-                      }}
-                    >
-                      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.4 }}>
-                        <Box sx={{
-                          width: 19, height: 19, borderRadius: '50%', display: 'grid', placeItems: 'center',
-                          fontSize: '0.68rem', fontWeight: 800,
-                          bgcolor: isToday ? BRAND : 'transparent',
-                          color: isToday ? '#fff' : (inMonth ? 'text.primary' : '#94a3b8'),
-                        }}>
-                          {day.date()}
-                        </Box>
-                        {groups.length > 1 && (
-                          <Box sx={{
-                            width: 15, height: 15, borderRadius: '50%', display: 'grid', placeItems: 'center',
-                            fontSize: '0.54rem', fontWeight: 900, bgcolor: STATUS.IN_PROGRESS.color, color: '#fff',
-                          }}>{groups.length}</Box>
-                        )}
-                      </Stack>
-
-                      {/* One card PER PARTY (orders merged), with each item merged into a
-                          single line and a party total. No SO number — the client reads
-                          this day-wise as "who + what + how much". */}
-                      <Stack spacing={0.4}>
-                        {shown.map((g) => {
-                          const m = eventMeta(g);
-                          const isActual = g.eventType === 'actual';
-                          const rows = (g.skus || []).filter((sk) => (isActual ? sk.actualQty : sk.plannedQty) > 0);
-                          return (
-                            <Tooltip key={g.id} title={`${g.partyName} · ${g.orderCount} order${g.orderCount > 1 ? 's' : ''} · ${num(g.totalQty)} pcs · ${isActual ? 'Actual' : 'Scheduled'}`} disableInteractive>
-                              <Box sx={{
-                                borderLeft: `3px solid ${m.color}`, bgcolor: alpha(m.color, 0.07),
-                                borderRadius: '3px', px: 0.5, py: 0.3,
-                              }}>
-                                <Stack direction="row" alignItems="center" spacing={0.5}>
-                                  <Typography noWrap sx={{ fontSize: '0.6rem', fontWeight: 800, color: O2D.ink, flex: 1, minWidth: 0, lineHeight: 1.3 }}>
-                                    {shortParty(g.partyName)}
-                                  </Typography>
-                                  {/* Compact panel: the card colour already tells the status. */}
-                                  {!compact && (
-                                  <Typography sx={{ fontSize: '0.46rem', fontWeight: 900, color: m.color, flexShrink: 0 }}>
-                                    {isActual ? 'ACT' : 'SCH'}
-                                  </Typography>
-                                  )}
-                                  {!compact && g.orderCount > 1 && (
-                                    <Typography sx={{ fontSize: '0.46rem', fontWeight: 800, color: O2D.faint, flexShrink: 0 }}>
-                                      ×{g.orderCount}
-                                    </Typography>
-                                  )}
-                                </Stack>
-                                {/* Compact (dashboard panel): party + total only — the day dialog lists the SKUs. */}
-                                {!compact && rows.map((sk, i) => (
-                                  <Stack key={i} direction="row" alignItems="center" spacing={0.5}>
-                                    <Typography noWrap sx={{ fontSize: '0.54rem', color: O2D.body, flex: 1, minWidth: 0, lineHeight: 1.35 }}>
-                                      {sk.skuName}
-                                    </Typography>
-                                    <Typography sx={{ fontSize: '0.54rem', fontWeight: 800, color: O2D.ink, flexShrink: 0, fontVariantNumeric: 'tabular-nums', lineHeight: 1.35 }}>
-                                      {num(isActual ? sk.actualQty : sk.plannedQty)}
-                                    </Typography>
-                                  </Stack>
-                                ))}
-                                <Stack direction="row" alignItems="center" spacing={0.5}
-                                  sx={{ mt: 0.2, pt: 0.2, borderTop: `1px solid ${alpha(m.color, 0.22)}` }}>
-                                  <Typography sx={{ fontSize: '0.44rem', fontWeight: 800, color: O2D.faint, textTransform: 'uppercase', letterSpacing: '0.05em', flex: 1 }}>
-                                    {compact ? '' : 'Total'}
-                                  </Typography>
-                                  <Typography sx={{ fontSize: '0.56rem', fontWeight: 900, color: m.color, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                                    {num(g.totalQty)} pcs
-                                  </Typography>
-                                </Stack>
-                              </Box>
-                            </Tooltip>
-                          );
-                        })}
-                        {more > 0 && (
-                          <Box onClick={(ev) => { ev.stopPropagation(); setOpenDay(key); }}
-                            sx={{ mt: 0.1, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 0.25,
-                              px: 0.6, py: 0.15, borderRadius: '4px', cursor: 'pointer',
-                              bgcolor: alpha(BRAND, 0.1), color: BRAND, '&:hover': { bgcolor: alpha(BRAND, 0.2) } }}>
-                            <Typography sx={{ fontSize: '0.54rem', fontWeight: 800, lineHeight: 1.3 }}>
-                              +{more} more {more === 1 ? 'party' : 'parties'}
-                            </Typography>
-                            <MoreIcon size={9} />
-                          </Box>
-                        )}
-                      </Stack>
-                    </Box>
-                  );
-                })}
-              </Box>
-            </Box>
-          </Box>
+          <CalendarMonthGrid
+            gridDays={gridDays}
+            cursor={cursor}
+            today={today}
+            groupedByDate={groupedByDate}
+            selectedDate={selectedDate}
+            compact={compact}
+            weekCols={weekCols}
+            metaOf={eventMeta}
+            onOpenDay={setOpenDay}
+            onDayClick={onDayClick}
+          />
         )}
       </Paper>
 

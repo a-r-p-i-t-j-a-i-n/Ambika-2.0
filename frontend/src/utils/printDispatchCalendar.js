@@ -267,7 +267,11 @@ function buildCalendarSheet({
   // options object at the call site, and a collision meant the calendar cells
   // printed the list's full sentence.
   emptyCellText = 'No dispatch',
+  // Extra / renamed card types, e.g. { delivered: { short: 'DEL', color } } for
+  // the Item Delivery Calendar. Without it the Dispatch types apply unchanged.
+  types = null,
 } = {}) {
+  const TYPES = types ? { ...TYPE, ...types } : TYPE;
   const monthStart = dayjs(month).startOf('month');
   const monthLabel = monthStart.format('MMMM YYYY');
   const visibleEvents = events
@@ -387,7 +391,7 @@ function buildCalendarSheet({
     const inMonth = day.isSame(monthStart, 'month');
     const plan = groups.length ? planCell(groups.length, budget) : { cards: 0, lines: 0, compact: false };
     const chips = groups.slice(0, plan.cards).map((g) => {
-      const type = TYPE[g.eventType] || TYPE.scheduled;
+      const type = TYPES[g.eventType] || TYPES.scheduled;
       const usage = usageMode ? usageOfGroup(g) : null;
       const colour = g.isDelayed ? '#be123c' : (usage ? usage.color : type.color);
       const tagText = usage ? usage.short : type.short;

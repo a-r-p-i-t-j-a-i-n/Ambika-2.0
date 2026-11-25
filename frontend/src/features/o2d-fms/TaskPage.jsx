@@ -4,13 +4,14 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, History, CheckCircle2, ListChecks, RefreshCw, UserCog, Paperclip,
-  MessageSquare, FileEdit, Truck, Workflow, ArrowRight, Check, User, Clock, ExternalLink, Link2,
-} from 'lucide-react';
+  MessageSquare, FileEdit, Truck, Workflow, ArrowRight, Check, User, Clock, ExternalLink, Link2, ClipboardList } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useGetProcessByIdQuery, useGetConsignmentsQuery } from '../../store/api/o2dFmsApi';
 import { usePermissions } from '../../hooks/usePermission';
 import StepDetailCard from './components/StepDetailCard';
 import { O2D, O2D_TIP, tokenOf, isDone, timingOf } from './o2dTheme';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
+import { headerBtnSx } from '../ims/imsFluent';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const dOnly = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—');
@@ -100,7 +101,7 @@ const TaskPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const entryDone = searchParams.get('entryDone') === '1'; // returned from a connected form
-  const { data, isLoading, refetch, isFetching } = useGetProcessByIdQuery(processId, { pollingInterval: 30_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch, isFetching } = useGetProcessByIdQuery(processId, { pollingInterval: 30_000, skipPollingIfUnfocused: true });
   const { can, isRoot } = usePermissions();
 
   const process = data?.data;
@@ -226,37 +227,33 @@ const TaskPage = () => {
   const linkedOrderId = process ? (process.salesOrderId?._id || process.salesOrderId) : null;
 
   return (
-    <Box sx={{ bgcolor: O2D.canvas, minHeight: '100vh' }}>
-      {/* ── Slim top bar — Back · identity · Order flow · Refresh ─────────── */}
-      <Box sx={{
-        position: 'sticky', top: 0, zIndex: 5, bgcolor: alpha('#ffffff', 0.9), backdropFilter: 'blur(6px)',
-        borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2.5 }, py: 1,
-      }}>
-        <Stack direction="row" alignItems="center" spacing={1.25} sx={{ flexWrap: 'nowrap' }}>
-          <Button startIcon={<ArrowLeft size={15} />} onClick={() => navigate(-1)}
-            sx={{ flexShrink: 0, fontWeight: 700, color: O2D.body, textTransform: 'none' }}>Back</Button>
+    <O2dPage
+      icon={ClipboardList}
+      title={step ? `Task ${step.stepCode}${step.name ? ` — ${step.name}` : ''}` : 'Task'}
+      subtitle={process ? `${process.soNumber} · ${process.partyName}${process.poNumber ? ` · PO ${process.poNumber}` : ''}` : undefined}
+      onBack={() => navigate(-1)}
+      actions={(
+        <>
           {process && (
-            <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '0.85rem', color: O2D.sub }}>
-              <b style={{ color: O2D.ink }}>{process.soNumber}</b> · {process.partyName}{process.poNumber ? ` · PO ${process.poNumber}` : ''}
-            </Typography>
-          )}
-          {process && (
-            <Button variant="text" size="small" startIcon={<Workflow size={14} />}
+            <Button variant="outlined" size="small" startIcon={<Workflow size={14} />}
               // Back to the Step Board, not the per-order process page — the
               // board is where a doer actually works, and it lands on this step.
               onClick={() => navigate(`/o2d-fms/steps/${encodeURIComponent(stepCode || '')}`)}
-              sx={{ fontWeight: 700, whiteSpace: 'nowrap', textTransform: 'none', color: O2D.brand, flexShrink: 0 }}>
+              sx={headerBtnSx}>
               Order flow
             </Button>
           )}
-          <Button size="small" startIcon={<RefreshCw size={13} />} onClick={() => refetch()} disabled={isFetching}
-            sx={{ textTransform: 'none', color: O2D.sub, flexShrink: 0 }}>Refresh</Button>
-        </Stack>
-      </Box>
-
-      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: { xs: 1.25, md: 1.75 } }}>
+          <Button variant="outlined" size="small" startIcon={<RefreshCw size={13} />} onClick={() => refetch()} disabled={isFetching} sx={headerBtnSx}>
+            Refresh
+          </Button>
+        </>
+      )}
+    >
+      <Box sx={{ minWidth: 0 }}>
         {isLoading ? (
           <Skeleton variant="rounded" height={480} sx={{ borderRadius: 1.5 }} />
+        ) : isError && !data ? (
+          <LoadErrorNote title="Could not load this task" error={error} onRetry={refetch} />
         ) : !process || !step ? (
           <Paper sx={{ p: 5, textAlign: 'center', borderRadius: 1.5, color: O2D.sub, border: `1px solid ${O2D.line}` }} elevation={0}>
             This task could not be found. It may have been removed or re-planned.
@@ -444,7 +441,7 @@ const TaskPage = () => {
           </Stack>
         )}
       </Box>
-    </Box>
+    </O2dPage>
   );
 };
 

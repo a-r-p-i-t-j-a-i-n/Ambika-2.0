@@ -6,10 +6,11 @@ import { ArrowDownToLine, Save, Info } from 'lucide-react';
 import { enqueueSnackbar } from 'notistack';
 import dayjs from 'dayjs';
 import {
-  ScrapShell, Panel, StepHead, newRequestId,
+  ScrapShell, StepHead, FormSection, newRequestId,
   SCRAP_IN_REASON_OPTIONS, SCRAP_WAREHOUSE_OPTIONS, DEFAULT_SCRAP_WAREHOUSE, SCRAP_UOM,
   O2D, STOCK_TOKENS, num, IMS_FORM_MAX, noSpinnerSx,
 } from './scrapImsMeta';
+import { FLUENT, FLUENT_DEPTH } from '../ims/imsFluent';
 import { useGetScrapStockQuery, useScrapInMutation } from '../../store/api/scrapImsApi';
 
 /**
@@ -91,13 +92,13 @@ const ScrapImsStockIn = () => {
   return (
     <ScrapShell
       icon={ArrowDownToLine}
-      title="Scrap In — bring scrap into the yard"
-      subtitle="For scrap that arrived some way other than a cut recorded here. On-hand goes up and the movement is logged against your name."
+      title="Scrap In"
+      subtitle="Bring scrap into the yard — for scrap that arrived some way other than a cut recorded here. On-hand goes up and the movement is logged against your name."
       maxWidth={IMS_FORM_MAX}
     >
-      <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+      <Paper elevation={0} sx={{ borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">
-          <Box sx={{ color: O2D.brand, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
+          <Box sx={{ color: FLUENT.blue.accent, display: 'flex', pt: 0.15 }}><Info size={15} /></Box>
           <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>
             Do <b>not</b> use this for offcuts from an in-house cut. Cutting a coil at PLG01 already adds its scrap
             to stock automatically, so entering it here as well would count the same metal twice. This screen is for
@@ -107,9 +108,9 @@ const ScrapImsStockIn = () => {
       </Paper>
 
       {/* ── Step 1 ── */}
-      <Panel>
-        <StepHead n={1} title="Entry details" hint="When the scrap came in, and why." done={!!form.date} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25, mt: 1.25 }}>
+      <FormSection step={1} done={!!form.date} fluent={FLUENT.lavender} title="Entry details"
+        hint="When the scrap came in, and why." testId="scrap-in-details">
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1.25 }}>
           <TextField
             size="small" type="date" label="Date received" value={form.date}
             onChange={(e) => set('date', e.target.value)}
@@ -164,12 +165,12 @@ const ScrapImsStockIn = () => {
             FormHelperTextProps={{ sx: { fontSize: '0.66rem', color: O2D.sub, mx: 0 } }}
           />
         </Box>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 2 ── */}
-      <Panel>
-        <StepHead n={2} title="How much came in?" hint={`Scrap is weighed, never counted — the figure is in ${SCRAP_UOM}.`} done={hasQty} />
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '220px 1fr' }, gap: 1.25, mt: 1.25, alignItems: 'start' }}>
+      <FormSection step={2} done={hasQty} fluent={FLUENT.blue} title="How much came in?"
+        hint={`Scrap is weighed, never counted — the figure is in ${SCRAP_UOM}.`} testId="scrap-in-items">
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '220px 1fr' }, gap: 1.25, alignItems: 'start' }}>
           <TextField
             size="small" type="number" label={`Quantity (${SCRAP_UOM})`} value={form.quantityKg}
             onChange={(e) => set('quantityKg', e.target.value)}
@@ -190,7 +191,7 @@ const ScrapImsStockIn = () => {
         </Box>
 
         {/* The one number that tells the operator whether they got it right. */}
-        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
           <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>At {form.warehouse}:</Typography>
           <Chip size="small" label={`${num(onHand)} kg now`}
             sx={{ height: 22, fontWeight: 700, fontSize: '0.68rem', borderRadius: '999px', bgcolor: O2D.surfaceAlt, border: `1px solid ${O2D.line}`, color: O2D.body }} />
@@ -202,14 +203,14 @@ const ScrapImsStockIn = () => {
             </>
           )}
         </Stack>
-      </Panel>
+      </FormSection>
 
       {/* ── Step 3 ── */}
       <Paper elevation={0} sx={{
-        position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '8px', px: 1.5, py: 1.15,
-        border: `1px solid ${ready ? STOCK_TOKENS.OK.border : O2D.line}`,
-        bgcolor: ready ? STOCK_TOKENS.OK.tint : O2D.surface,
-        boxShadow: '0 6px 20px rgba(28,30,33,0.08)',
+        position: 'sticky', bottom: 12, zIndex: 4, borderRadius: '10px', px: 1.5, py: 1.15,
+        border: `1px solid ${ready ? STOCK_TOKENS.OK.border : FLUENT.grey.border}`,
+        bgcolor: ready ? STOCK_TOKENS.OK.tint : '#fff',
+        boxShadow: FLUENT_DEPTH.hover,
       }}>
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
           <StepHead n={3} title="Confirm and save"

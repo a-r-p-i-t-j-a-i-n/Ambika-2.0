@@ -12,6 +12,8 @@ import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
+import { FormSection } from '../ims/imsMeta';
+import { FLUENT } from '../ims/imsFluent';
 
 /** Steps 2.12 (Receive transport bill) + 2.13 (Transport bill payment status). */
 const TransportBill = () => {
@@ -91,7 +93,7 @@ const TransportBill = () => {
 
   return (
     <O2dStepShell icon={FileSpreadsheet} step={shell.step} title={shell.title} subtitle={shell.subtitle} gate={gate}>
-      <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+      <FormSection step={1} done={!!dc} fluent={FLUENT.lavender} title="Pick the dispatch" testId="o2d-step-pick">
         <Autocomplete
           options={challans}
           value={dc}
@@ -104,17 +106,19 @@ const TransportBill = () => {
           <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap' }} useFlexGap>
             <Chip size="small" label={`Party: ${dc.partyName || '—'}`} />
             <Chip size="small" label={`Transporter: ${dc.transporterName || '—'}`} />
-            <Chip size="small" label={`LR: ${dc.invoiceNo || dc.lrNo || '—'}`} />
+            {/* Each chip shows what its label says: the L.R. number under "LR"
+                (it used to show the invoice number first), the invoice beside it. */}
+            <Chip size="small" label={`LR: ${dc.lrNo || '—'}`} />
+            {dc.invoiceNo && <Chip size="small" label={`Invoice: ${dc.invoiceNo}`} />}
           </Stack>
         )}
-      </Paper>
+      </FormSection>
 
       {dc && (
         <Stack spacing={2}>
           {/* 2.12 */}
           {showReceive && (
-          <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.warning.main}` }}>
-            <Typography sx={{ fontWeight: 800, mb: 1.5 }}>2.12 · Receive Transportation Bill</Typography>
+          <FormSection step={2} fluent={FLUENT.blue} title="2.12 · Receive Transportation Bill" testId="o2d-step-receive">
             <Stack spacing={2}>
               <TextField select label="Status" value={rcvStatus} onChange={(e) => setRcvStatus(e.target.value)} size="small" sx={{ maxWidth: 220 }}>
                 <MenuItem value="Done">Done</MenuItem>
@@ -141,13 +145,12 @@ const TransportBill = () => {
                 </Button>
               </Stack>
             </Stack>
-          </Paper>
+          </FormSection>
           )}
 
           {/* 2.13 */}
           {showStatus && (
-          <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.success.main}` }}>
-            <Typography sx={{ fontWeight: 800, mb: 1.5 }}>2.13 · Transport Bill Payment Status</Typography>
+          <FormSection step={showReceive ? 3 : 2} fluent={FLUENT.teal} title="2.13 · Transport Bill Payment Status" testId="o2d-step-status">
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <TextField select label="Status" value={payState} onChange={(e) => setPayState(e.target.value)} size="small" sx={{ minWidth: 200 }} helperText="“Yes” = transporter paid.">
                 {['Yes', 'No', 'Cancelled'].map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
@@ -156,7 +159,7 @@ const TransportBill = () => {
                 Save Payment Status
               </Button>
             </Stack>
-          </Paper>
+          </FormSection>
           )}
         </Stack>
       )}

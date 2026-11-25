@@ -152,6 +152,7 @@ const FmsAllTasks          = lazyWithRetry(() => import('./features/o2d-fms/AllT
 const FmsMasterBoard       = lazyWithRetry(() => import('./features/o2d-fms/MasterFms'));
 const O2dMasterData        = lazyWithRetry(() => import('./features/o2d-fms/O2dMasterData'));
 const O2dDashboard         = lazyWithRetry(() => import('./features/o2d-dashboard/O2dDashboard'));
+const PurchaseDashboard    = lazyWithRetry(() => import('./features/purchase-dashboard/PurchaseDashboard'));
 const TransporterMaster    = lazyWithRetry(() => import('./features/o2d-fms/TransporterMaster'));
 const OrderIntakeList      = lazyWithRetry(() => import('./features/order-intake/OrderIntakeList'));
 const NotFound             = lazyWithRetry(() => import('./components/NotFound'));
@@ -195,6 +196,9 @@ function App() {
             <Route path="/o2d/transport-bill" element={<RequirePermission slug="o2dfms.view" fallback="inline"><TransportBill /></RequirePermission>} />
             {/* O2D Dashboard — everyone signed in sees their own tasks; o2dfms.dashboardAll the whole company */}
             <Route path="/o2d/dashboard" element={<O2dDashboard />} />
+            {/* Purchase Dashboard — the O2D Dashboard for Purchase FMS: everyone sees their own
+                Purchase tasks; fms.manageDoers (MD / doer managers) the whole company */}
+            <Route path="/purchase/dashboard" element={<PurchaseDashboard />} />
 
             {/* IMS — Packaging & Consumables inventory */}
             <Route path="/ims" element={<ImsDashboard />} />
