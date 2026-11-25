@@ -65,7 +65,8 @@ export const STEP_TIMING = {
         // "Quote Not Required" skips Step 1.3 but stamps actualAt / updatedBy of
         // the Step 1.2 user on it — nobody performed it, so it is never shown.
         skipped: (d) => !!d.quotationApprovalStep?.skipped,
-        done: (d) => !!d.quotationApprovalStep?.actualAt || QUOTATION_APPROVAL_DONE.has(d.overallStatus),
+        // A partial approval (items still pending / on hold) is not done yet.
+        done: (d) => !d.quotationApprovalStep?.partial && (!!d.quotationApprovalStep?.actualAt || QUOTATION_APPROVAL_DONE.has(d.overallStatus)),
         // 1 working day after Step 1.2's actual date — none until 1.2 is done.
         planned: quotationApprovalPlannedAt,
         actual: (d) => d.quotationApprovalStep?.actualAt,

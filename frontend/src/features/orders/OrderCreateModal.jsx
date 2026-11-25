@@ -309,7 +309,7 @@ const OrderCreateModal = ({ open, onClose }) => {
                     />
                   </TableCell>
                   <TableCell sx={{ p: 0.5 }}>
-                    <IconButton size="small" onClick={() => removeItem(index)} disabled={items.length === 1}
+                    <IconButton aria-label="Delete" size="small" onClick={() => removeItem(index)} disabled={items.length === 1}
                       sx={{ color: '#94a3b8', '&:hover': { color: BRAND.error } }}>
                       <Trash2 size={14} />
                     </IconButton>

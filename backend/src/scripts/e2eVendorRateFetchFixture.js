@@ -23,6 +23,7 @@ import mongoose from 'mongoose';
 import { assertE2ESafe, isEntry } from './e2eSafety.js';
 import Vendor from '../modules/vendors/vendor.model.js';
 import SKU from '../modules/skus/sku.model.js';
+import { quoteAndApprove } from './e2eQuotedIndent.js';
 import PurchaseIndent from '../modules/procurement/indent/indent.model.js';
 import VendorPurchaseOrder from '../modules/procurement/purchase-order/purchaseOrder.model.js';
 import RateChangeRequest from '../modules/procurement/rate-change/rateChange.model.js';
@@ -137,7 +138,7 @@ const login = async () => {
 
 /** A PO-ready indent (quotation not required) with NO vendor fixed: the doer picks the vendor on the PO form. */
 let seq = 0;
-export const readyIndent = async (label, skuKeys, { itemName = {}, vendorId = null } = {}) => {
+export const readyIndent = async (label, skuKeys, { itemName = {}, vendorId = null, quoteVendorId = null } = {}) => {
   const skus = await Promise.all(skuKeys.map((k) => SKU.findOne({ code: SKUS[k].code }).lean()));
   const ind = await ok('BUYER', 'POST', '/procurement/indents', {
     department: 'Stores', remarks: `vendor-rate-fetch ${RUN} ${label}`,
@@ -147,14 +148,22 @@ export const readyIndent = async (label, skuKeys, { itemName = {}, vendorId = nu
   const approved = await ok('MD', 'POST', `/procurement/indents/${ind._id}/approve`, {
     items: ind.items.map((it) => ({ _id: it._id, revisedQuantity: it.quantity, approvalStatus: 'APPROVED' })),
   });
-  await ok('BUYER', 'POST', `/procurement/indents/${ind._id}/quote-comparative`, {
-    statusDone: 'QUOTE_NOT_REQUIRED',
-    itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', quotationDocuments: [] })),
-  });
-  if (vendorId) {
-    for (const it of approved.items) {
-      await ok('BUYER', 'PATCH', `${PO}/approved-items/vendor`, { indentId: ind._id, indentItemId: it._id, vendorId: String(vendorId) });
-    }
+  // Quote Required = No needs a vendor that already carries every SKU (history); otherwise the items go through a
+  // quotation (Step 1.3 leaves the vendor open, or fixes it to `vendorId`). A vendor named on the quotation
+  // (`quoteVendorId`, default `vendorId`) is eligible for the item even without a catalog row for it.
+  const vdoc = vendorId ? await Vendor.findById(vendorId).select('name products').lean() : null;
+  const carried = (s) => (vdoc?.products || []).some((p) => String(p.skuId) === String(s._id) || p.skuCode === s.code);
+  if (vdoc && skus.every(carried)) {
+    await ok('BUYER', 'POST', `/procurement/indents/${ind._id}/quote-comparative`, {
+      statusDone: 'QUOTE_NOT_REQUIRED',
+      itemQuotations: approved.items.map((it) => ({ itemId: it._id, itemName: it.itemName, statusDone: 'QUOTE_NOT_REQUIRED', vendorId: String(vendorId), quotationDocuments: [] })),
+    });
+  } else {
+    const qv = quoteVendorId || vendorId;
+    const qdoc = qv ? await Vendor.findById(qv).select('name').lean() : null;
+    await quoteAndApprove((p, b) => ok('BUYER', 'POST', p, b), approved, {
+      quoteVendor: qdoc ? { id: qv, name: qdoc.name } : null, approveVendorId: vendorId || null, tag: `vrf-${RUN}-${label}`,
+    });
   }
   return PurchaseIndent.findById(ind._id).lean();
 };
@@ -378,9 +387,9 @@ const prepUi = async () => {
   const v1 = await Vendor.findOne({ code: VENDORS.V1.code }).lean();
   const main = await readyIndent('ui-main', ['A', 'BOX', 'KG']);   // V1 and V2 both carry all three
   const wrong = await readyIndent('ui-wrong', ['WRONG']);          // V1 prices it per Pcs only; the line is BOX
-  const none = await readyIndent('ui-none', ['NONE']);             // no vendor carries it
+  const none = await readyIndent('ui-none', ['NONE'], { quoteVendorId: String(v1._id) }); // no vendor carries it (V1 quoted for it, so it is eligible, with no catalog rate)
   const zero = await readyIndent('ui-zero', ['ZERO']);             // V1 carries it at rate 0
-  const loose = await readyIndent('ui-loose', ['LOOSE']);          // V1 only has "VF Bolt M10 Long" (no SKU code)
+  const loose = await readyIndent('ui-loose', ['LOOSE'], { quoteVendorId: String(v1._id) }); // V1 only has "VF Bolt M10 Long" (no SKU code)
   for (const it of loose.items) {
     await ok('BUYER', 'PATCH', `${PO}/approved-items/vendor`, { indentId: String(loose._id), indentItemId: String(it._id), vendorId: String(v1._id) });
   }

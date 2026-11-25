@@ -10,10 +10,11 @@ import {
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import {
-  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiTile, EmptyNote, LocationChip,
+  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiCard, KpiGrid, EmptyNote, LocationChip,
   yieldBand, YIELD_GOOD_PCT, YIELD_HIGH_PCT, YIELD_LOW_PCT, LOCATION_TOKENS,
-  kg, O2D, O2D_TIP, num, imsTableSx,
+  kg, O2D, O2D_TIP, num,
 } from './scrapImsMeta';
+import { FLUENT, fluentTableSx, headerBtnSx } from '../ims/imsFluent';
 import { OverallYield, CircleSkus } from './scrapMasterShared';
 import { DateSortField } from '../rm-ims/cuttingShared';
 import { SORTS } from '../rm-ims/cuttingFilters';
@@ -47,7 +48,7 @@ const CUTTING = {
   PARTIAL_WAIT: { label: 'Partial cut', color: '#b45309', tip: 'Only the coil weight is entered for a partial cut — its circles, scrap and yield come with the coil\'s full cut.' },
   PARTIAL_OLD: { label: 'Partial cut', color: '#b45309', tip: 'Part of the coil, with its circles entered at the time (recorded before partial cuts waited for the full cut).' },
   CUT: { label: 'Cut', color: '#1d4ed8', tip: 'Cut — the cutting type was not recorded (an imported or older entry).' },
-  UNCUT: { label: 'Not cut', color: '#b91c1c', tip: 'On the client\'s sheet, but this coil was never cut — not scrap, and left out of every figure.' },
+  UNCUT: { label: 'Not cut', color: '#b45309', tip: 'On the client\'s sheet, but this coil was never cut — not scrap, and left out of every figure.' },
   CORRECTION: { label: 'Correction', color: '#7c3aed', tip: 'A stock correction of this SKU\'s scrap — the change it made. Not a cut: no coil, circles or yield.' },
 };
 const cuttingOf = (r) => {
@@ -85,7 +86,7 @@ const COLS = {
 };
 const colSx = (k) => ({ width: COLS[k], minWidth: COLS[k] });
 const sheetSx = (() => {
-  const base = imsTableSx(Object.values(COLS).reduce((s, w) => s + w, 0));
+  const base = fluentTableSx(Object.values(COLS).reduce((s, w) => s + w, 0));
   return {
     ...base,
     tableLayout: 'fixed',
@@ -262,29 +263,30 @@ const ScrapImsSkuDetail = () => {
       title={`Coil SKU ${code}`}
       subtitle={`${s.coilSkuName ? `${s.coilSkuName} — ` : ''}every cut of this coil SKU, date by date.`}
       onBack={back}
-      backLabel="Back to Scrap master data"
+      backLabel="Back to Scrap Master Data"
       actions={(
         <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={exportCsv} disabled={!all.length}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
+          sx={headerBtnSx}>
           Export
         </Button>
       )}
     >
       {/* ── What this coil SKU has given — the same figures as its row ── */}
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap sx={{ opacity: stale ? 0.6 : 1 }}>
-        <KpiTile label="Cuts" value={num(s.cuts || 0)} sub={cutsSub} color={O2D.brand} icon={Layers} />
-        <KpiTile label="Coil cut" value={kg(s.coilKg || 0)}
-          sub={s.pendingKg > 0.005 ? `+ ${kg(s.pendingKg)} waiting for its full cut` : 'Total coil weight cut'} color="#0f766e" icon={Scale} />
-        <KpiTile label="Circles produced" value={`${num(s.circlesPcs || 0)} pcs`} sub={kg(s.circlesKg || 0)} color="#4338ca" icon={CircleDashed} />
-        <KpiTile label="Scrap generated" value={kg(s.scrapKg || 0)}
-          sub={`In-house ${kg(s.plantScrapKg || 0)} · Job work ${kg(s.jobWorkScrapKg || 0)}`} color={SCRAP_ACCENT} icon={Recycle} />
-        <Tooltip arrow slotProps={O2D_TIP} title={`Circles ${kg(s.circlesKg || 0)} ÷ coil cut ${kg(s.coilKg || 0)} × 100. ${BAND_NOTE}`}>
-          <Box sx={{ display: 'flex', flex: '1 1 160px', minWidth: 155 }}>
-            <KpiTile label="Overall yield" value={s.yieldPct != null ? `${num(s.yieldPct)}%` : '—'}
-              sub="Circles ÷ coil cut" color={yieldBand(s.yieldPct)?.color || '#15803d'} icon={Recycle} />
-          </Box>
-        </Tooltip>
-      </Stack>
+      {/* Summary figures for this one coil SKU — the same look as every IMS
+          card row; they describe the page rather than filter it. */}
+      <Box sx={{ opacity: stale ? 0.6 : 1 }}>
+        <KpiGrid>
+          <KpiCard label="Cuts" value={num(s.cuts || 0)} sub={cutsSub} tone={FLUENT.blue} icon={Layers} actionLabel={null} />
+          <KpiCard label="Coil cut" value={kg(s.coilKg || 0)}
+            sub={s.pendingKg > 0.005 ? `+ ${kg(s.pendingKg)} waiting for its full cut` : 'Total coil weight cut'} tone={FLUENT.teal} icon={Scale} actionLabel={null} />
+          <KpiCard label="Circles produced" value={`${num(s.circlesPcs || 0)} pcs`} sub={kg(s.circlesKg || 0)} tone={FLUENT.lavender} icon={CircleDashed} actionLabel={null} />
+          <KpiCard label="Scrap generated" value={kg(s.scrapKg || 0)}
+            sub={`In-house ${kg(s.plantScrapKg || 0)} · Job work ${kg(s.jobWorkScrapKg || 0)}`} tone={FLUENT.amber} icon={Recycle} actionLabel={null} />
+          <KpiCard label="Overall yield" value={s.yieldPct != null ? `${num(s.yieldPct)}%` : '—'}
+            sub="Circles ÷ coil cut" tone={FLUENT.grey} icon={Recycle} actionLabel={null}
+            hint={`Circles ${kg(s.circlesKg || 0)} ÷ coil cut ${kg(s.coilKg || 0)} × 100. ${BAND_NOTE}`} />
+        </KpiGrid>
+      </Box>
 
       {/* ── Search and filters, one line — the monthly yield and the circle
           sizes are a click away here, not spread over the page ── */}

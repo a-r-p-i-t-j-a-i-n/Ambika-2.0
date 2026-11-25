@@ -4,18 +4,19 @@ import {
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import {
-  Recycle, Factory, Truck, Scissors, AlertTriangle, ArrowRight, TrendingUp, ClipboardCheck, Warehouse,
+  Recycle, Factory, Truck, Scissors, AlertTriangle, TrendingUp, ClipboardCheck, Warehouse, History,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip,
 } from 'recharts';
 import dayjs from 'dayjs';
 import {
-  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiTile, EmptyNote, Th,
+  ScrapShell, SCRAP_ACCENT, Panel, TableScroll, KpiCard, KpiGrid, DashboardAlert, EmptyNote, Th,
   LocationChip, DispositionChip, YieldChip, kg,
-  yieldBand, YIELD_GOOD_PCT, YIELD_HIGH_PCT,
-  O2D, num, imsTableSx,
+  YIELD_GOOD_PCT, YIELD_HIGH_PCT,
+  O2D, num,
 } from './scrapImsMeta';
+import { FLUENT, fluentTableSx, headerBtnSx, primaryBtnSx } from '../ims/imsFluent';
 import ScrapByCoilPanel from './ScrapByCoilPanel';
 import { useGetScrapDashboardQuery, useGetScrapStockQuery } from '../../store/api/scrapImsApi';
 import { FIELD } from '../ims/imsFieldHelp';
@@ -39,7 +40,7 @@ const ScrapImsDashboard = () => {
 
   if (isLoading || !d) {
     return (
-      <ScrapShell icon={Recycle} title="Scrap" subtitle="Loading the scrap position…">
+      <ScrapShell icon={Recycle} title="Dashboard" subtitle="Scrap — loading the scrap position…">
         <Skeleton variant="rounded" height={340} />
       </ScrapShell>
     );
@@ -51,19 +52,37 @@ const ScrapImsDashboard = () => {
   return (
     <ScrapShell
       icon={Recycle}
-      title="Scrap"
-      subtitle="What each coil cut left behind — how much, where, and whether it was checked."
+      title="Dashboard"
+      subtitle="Scrap — what each coil cut left behind: how much, where, and whether it was checked."
+      actionsInline
       actions={(
-        <Button size="small" variant="outlined" endIcon={<ArrowRight size={14} />} onClick={() => navigate('/scrap-ims/records')}
-          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: '6px', borderColor: O2D.line, color: O2D.body }}>
-          Scrap master data
-        </Button>
+        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
+          {/* The one exception on this page — coils on the sheet that were never
+              cut — as a clickable alert, the way the other IMS dashboards show theirs. */}
+          <DashboardAlert
+            count={s.uncutBatches || 0}
+            label={`coil${s.uncutBatches === 1 ? '' : 's'} recorded with no cut`}
+            okLabel="Every recorded coil was cut"
+            detail={s.uncutBatches
+              ? 'Flagged and left out of every scrap figure. Opens Scrap Cut History showing them.'
+              : 'No coil on record is missing its cut.'}
+            onClick={() => navigate('/scrap-ims/history?batchStatus=UNCUT')}
+            onOkClick={() => navigate('/scrap-ims/history')}
+          />
+          <Button size="small" variant="outlined" startIcon={<Recycle size={14} />} onClick={() => navigate('/scrap-ims/records')} sx={headerBtnSx}>
+            Scrap Master Data
+          </Button>
+          <Button size="small" variant="contained" disableElevation startIcon={<History size={14} />}
+            onClick={() => navigate('/scrap-ims/movements')} sx={primaryBtnSx(SCRAP_ACCENT)}>
+            Scrap Movement
+          </Button>
+        </Stack>
       )}
     >
       {/* The one thing a reader must understand before reading any number. */}
-      <Paper elevation={0} sx={{ borderRadius: '8px', px: 1.5, py: 1, border: `1px solid ${O2D.line}`, bgcolor: O2D.surfaceAlt }}>
+      <Paper elevation={0} sx={{ borderRadius: '10px', px: 1.75, py: 1.1, border: `1px solid ${FLUENT.blue.border}`, bgcolor: FLUENT.blue.bg }}>
         <Stack direction="row" spacing={1} alignItems="flex-start">
-          <Box sx={{ color: SCRAP_ACCENT, display: 'flex', pt: 0.15 }}><Recycle size={15} /></Box>
+          <Box sx={{ color: FLUENT.blue.accent, display: 'flex', pt: 0.15 }}><Recycle size={15} /></Box>
           <Typography sx={{ fontSize: '0.73rem', color: O2D.body }}>
             These figures are the <b>production record</b> — how much every cut left behind, and at what yield.
             They are <b>not the scrap balance</b>: only <b>in-house</b> cutting leaves scrap Ambika physically
@@ -77,26 +96,30 @@ const ScrapImsDashboard = () => {
         </Stack>
       </Paper>
 
-      {/* ── KPIs. Every one of these counts CUT batches only. ── */}
-      <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
-        <KpiTile label="Scrap generated" value={kg(s.scrapKg)} sub={`Across ${num(s.batchesCut)} cuts`}
-          color={SCRAP_ACCENT} icon={Recycle} />
+      {/* ── KPIs. Every one of these counts CUT batches only; every card opens
+          the screen that explains it. (Coils not cut: the alert in the header.) ── */}
+      <KpiGrid>
+        <KpiCard label="Scrap generated" value={kg(s.scrapKg)} sub={`Across ${num(s.batchesCut)} cuts`}
+          tone={FLUENT.amber} icon={Recycle} onClick={() => navigate('/scrap-ims/history')}
+          hint="Open Scrap Cut History — every cut and the scrap it left." />
         {/* The balance, not the production total. Deliberately next to it, so
             nobody has to wonder why the two differ. */}
-        <KpiTile label="Scrap in stock" value={kg(stock?.totalKg || 0)} sub="On hand now · in-house + manual"
-          color="#0f766e" icon={Warehouse} onClick={() => navigate('/scrap-ims/movements')} />
-        <KpiTile label="In-house (PLG01)" value={kg(s.inHouseScrapKg)} sub={`${num(plant.batches)} cuts · physically held`}
-          color="#0f766e" icon={Factory} onClick={() => navigate('/scrap-ims/records?location=PLG01')} />
-        <KpiTile label="Job work (JW001)" value={kg(s.jobWorkScrapKg)} sub={`${num(jobWork.batches)} cuts · not held`}
-          color="#7c3aed" icon={Truck} onClick={() => navigate('/scrap-ims/records?location=JW001')} />
-        <KpiTile label="Coil cut" value={kg(s.coilKg)} sub="Weight into the machine" color={O2D.brand} icon={Scissors} />
-        <KpiTile label="Average yield" value={`${num(s.avgYield)}%`} sub={`Per cut · ${YIELD_GOOD_PCT}–${YIELD_HIGH_PCT}% is normal`}
-          color={yieldBand(s.avgYield)?.color || "#15803d"} icon={TrendingUp} />
-        {s.uncutBatches > 0 && (
-          <KpiTile label="Coils not cut" value={num(s.uncutBatches)} sub="Flagged — not counted as scrap"
-            color="#b45309" icon={AlertTriangle} onClick={() => navigate('/scrap-ims/history?batchStatus=UNCUT')} />
-        )}
-      </Stack>
+        <KpiCard label="Scrap in stock" value={kg(stock?.totalKg || 0)} sub="On hand now · in-house + manual"
+          tone={FLUENT.teal} icon={Warehouse} onClick={() => navigate('/scrap-ims/movements')}
+          hint="Open Scrap Movement — the balance and every movement behind it." />
+        <KpiCard label="In-house (PLG01)" value={kg(s.inHouseScrapKg)} sub={`${num(plant.batches)} cuts · physically held`}
+          tone={FLUENT.green} icon={Factory} onClick={() => navigate('/scrap-ims/records?location=PLG01')}
+          hint="Open Scrap Master Data showing in-house cuts only." />
+        <KpiCard label="Job work (JW001)" value={kg(s.jobWorkScrapKg)} sub={`${num(jobWork.batches)} cuts · not held`}
+          tone={FLUENT.lavender} icon={Truck} onClick={() => navigate('/scrap-ims/records?location=JW001')}
+          hint="Open Scrap Master Data showing job-work cuts only." />
+        <KpiCard label="Coil cut" value={kg(s.coilKg)} sub="Weight into the machine"
+          tone={FLUENT.blue} icon={Scissors} onClick={() => navigate('/scrap-ims/records')}
+          hint="Open Scrap Master Data — coil weight cut, by coil SKU." />
+        <KpiCard label="Average yield" value={`${num(s.avgYield)}%`} sub={`Per cut · ${YIELD_GOOD_PCT}–${YIELD_HIGH_PCT}% is normal`}
+          tone={FLUENT.grey} icon={TrendingUp} onClick={() => navigate('/scrap-ims/history?batchStatus=CUT')}
+          hint="Open Scrap Cut History showing the cut coils — the yield of each one." />
+      </KpiGrid>
 
       {/* ── Where it came from ── */}
       <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.25} sx={{ alignItems: 'stretch' }}>
@@ -187,7 +210,7 @@ const ScrapImsDashboard = () => {
       <Panel title="Scrap by coil grade (SKU)"
         hint="Which GRADE of metal loses the most, and how well it cuts — every cut on record, including those that name no physical coil. For one particular coil, see the table above.">
         <TableScroll>
-          <Table size="small" sx={imsTableSx(820)}>
+          <Table size="small" sx={fluentTableSx(820)}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -234,7 +257,7 @@ const ScrapImsDashboard = () => {
           icon={AlertTriangle}
         >
           <TableScroll>
-            <Table size="small" sx={imsTableSx(760)}>
+            <Table size="small" sx={fluentTableSx(760)}>
               <TableHead>
                 <TableRow>
                   <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -248,7 +271,7 @@ const ScrapImsDashboard = () => {
               </TableHead>
               <TableBody>
                 {d.uncut.map((u, i) => (
-                  <TableRow key={u._id} hover sx={{ bgcolor: '#fffbeb' }}>
+                  <TableRow key={u._id} hover sx={{ bgcolor: FLUENT.amber.bg }}>
                     <TableCell align="center" sx={{ width: 64, fontVariantNumeric: 'tabular-nums', color: O2D.sub }}>{i + 1}</TableCell>
                     <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.72rem' }}>{u.batchNo}</TableCell>
                     <TableCell sx={{ fontSize: '0.73rem', whiteSpace: 'nowrap' }}>{u.scrapDate ? dayjs(u.scrapDate).format('DD MMM YYYY') : '—'}</TableCell>
@@ -274,7 +297,7 @@ const ScrapImsDashboard = () => {
         )}
       >
         <TableScroll>
-          <Table size="small" sx={imsTableSx(940)}>
+          <Table size="small" sx={fluentTableSx(940)}>
             <TableHead>
               <TableRow>
                 <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>

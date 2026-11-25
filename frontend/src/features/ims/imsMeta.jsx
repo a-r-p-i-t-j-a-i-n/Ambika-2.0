@@ -230,7 +230,9 @@ export const ImsNav = ({ items = IMS_NAV, accent = O2D.brand }) => {
 // the actions share one row — title + description on the left, every action on
 // the right in a single row; the description shortens with "…" (full text on
 // hover) rather than pushing the actions down. Below lg it wraps as before.
-export const ImsShell = ({ icon: Icon, title, subtitle, actions, children, nav = true, navItems, maxWidth, onBack, backLabel = 'Back', accent = O2D.brand, actionsInline = false }) => (
+// `contentSx` (opt-in) styles the content column — the O2D screens use it to give
+// their panels and tables the Fluent look in one place. Omitted, nothing changes.
+export const ImsShell = ({ icon: Icon, title, subtitle, actions, children, nav = true, navItems, maxWidth, onBack, backLabel = 'Back', accent = O2D.brand, actionsInline = false, contentSx }) => (
   <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas }}>
     <Box sx={{ position: 'sticky', top: 0, zIndex: 6, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}` }}>
       <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" useFlexGap
@@ -283,6 +285,7 @@ export const ImsShell = ({ icon: Icon, title, subtitle, actions, children, nav =
       display: 'flex', flexDirection: 'column', gap: 1.25,
       minWidth: 0, '& > *': { minWidth: 0 },
       ...(maxWidth ? { maxWidth, mx: 'auto', width: '100%' } : null),
+      ...contentSx,
     }}>
       {children}
     </Box>

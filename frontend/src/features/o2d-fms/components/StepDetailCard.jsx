@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { enqueueSnackbar } from 'notistack';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Box, Stack, Typography,
   Chip, TextField, Button, Divider, Alert, IconButton, alpha, Autocomplete,
@@ -272,6 +273,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const [buddySel, setBuddySel] = useState([]);    // selected buddy ids (reassign)
   const [comment, setComment] = useState('');
   const [error, setError] = useState('');
+  // Every failure also lands in this one message at the end of the card, which
+  // can be far below the control that failed — so it is announced as it
+  // happens too. (Display only: what sets the message is unchanged.)
+  useEffect(() => { if (error) enqueueSnackbar(error, { variant: 'error' }); }, [error]);
 
   const [uploading, setUploading] = useState(false);
   const fileInputRef = React.useRef(null);
@@ -776,7 +781,10 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
   const markDoneBtn = (!stepDone && canAct && !isSkipped) ? (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       {skipControl}
-      <Tooltip title={gatedBlocked ? (qtyGatedBlocked ? 'It also completes automatically once all phases are dispatched — or mark it done now.' : 'It also completes automatically once every consignment is done — or mark it done now.') : ''}>
+      {/* When Mark Done is disabled, the tooltip says what is still missing (the
+          same list that disables it); the auto-complete hint only when it can be clicked. */}
+      <Tooltip title={checklistBlocks ? `Finish first: ${blockers.join(' · ')}`
+        : gatedBlocked ? (qtyGatedBlocked ? 'It also completes automatically once all phases are dispatched — or mark it done now.' : 'It also completes automatically once every consignment is done — or mark it done now.') : ''}>
         <span>
           {/* Always available once the checklist / proofs are met — the auto-complete
               gate no longer disables the button; the user stays in control. */}
@@ -1290,7 +1298,7 @@ const StepDetailCard = ({ open, onClose, processId, step, orderLabel, canAct: ca
             <Stack direction="row" spacing={1}>
               <TextField size="small" placeholder="Add a comment…" value={comment} onChange={(e) => setComment(e.target.value)} fullWidth
                 onKeyDown={(e) => { if (e.key === 'Enter') handleComment(); }} />
-              <IconButton onClick={handleComment} disabled={commenting}><Send size={16} /></IconButton>
+              <IconButton aria-label="Send" onClick={handleComment} disabled={commenting}><Send size={16} /></IconButton>
             </Stack>
           )}
 

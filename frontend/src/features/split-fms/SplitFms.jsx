@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useGetBoardConsignmentsQuery, useGetProcessesQuery } from '../../store/api/o2dFmsApi';
 import { pageSx, fieldSx, ghostBtnSx, TYPE, NAVY, BRAND, DANGER, O2D } from '../../components/pageKit';
+import { FLUENT_DEPTH, headerBtnSx } from '../ims/imsFluent';
 
 /**
  * Split FMS — an order is dispatched in parts; each actual dispatch (one
@@ -24,7 +25,7 @@ const STEPS = [
   { code: '2.07', name: 'Invoice & E-way Bill',   icon: FileText,     color: '#7c3aed' },
   { code: '2.08', name: 'Email Invoice',          icon: Mail,         color: '#0e7490' },
   { code: '2.09', name: 'Track Delivery',         icon: MapPin,       color: '#c2410c' },
-  { code: '2.10', name: 'Payment Follow-up',      icon: Clock,        color: '#be123c' },
+  { code: '2.10', name: 'Payment Follow-up',      icon: Clock,        color: '#4d7c0f' }, // a category colour — not red, which reads as an error
   { code: '2.11', name: 'Payment & Tally',        icon: CheckCircle2, color: '#15803d' },
   { code: '2.12', name: 'Transport Bill',         icon: Receipt,      color: '#4338ca' },
   { code: '2.13', name: 'Transport Bill Payment', icon: Wallet,       color: '#b45309' },
@@ -227,11 +228,13 @@ const STEP_COLUMNS = {
   ],
 };
 
-const cardSx = { bgcolor: '#fff', border: `1px solid ${O2D.line}`, borderRadius: '16px', boxShadow: '0 1px 2px rgba(15,23,42,0.04)' };
+// Panels in the IMS Fluent look: hairline border, 10px corners, Fluent depth.
+const cardSx = { bgcolor: '#fff', border: `1px solid ${O2D.line}`, borderRadius: '10px', boxShadow: FLUENT_DEPTH.rest };
 const labelSx = { fontSize: '0.78rem', fontWeight: 700, color: NAVY, mb: 0.75 };
+// The Fluent table header (same values as the shared fluentTableSx header).
 const headSx = {
-  bgcolor: '#f8fafc', color: O2D.sub, fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.06em', whiteSpace: 'nowrap', py: 1.5, borderBottom: `1px solid ${O2D.line}`,
+  bgcolor: '#f2f6fc', color: '#3b4a63', fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase',
+  letterSpacing: '0.04em', whiteSpace: 'nowrap', py: 1.1, borderBottom: '1px solid #dfe7f2',
 };
 const cellSx = { fontSize: '0.84rem', color: '#334155', whiteSpace: 'nowrap', py: 1.6, borderBottom: `1px solid ${O2D.lineSoft}` };
 const PAGE = 25;
@@ -334,7 +337,7 @@ const SplitDrawer = ({ group, active, onPick, onClose, stepBySo }) => {
                         {r.state.by ? ` · Done by ${r.state.by}` : ''}{r.assignedTo ? ` · Assigned to ${r.assignedTo}` : ''}
                       </Typography>
                     </Box>
-                    <IconButton size="small" title={`Open step ${st.code} in O2D FMS`} onClick={() => navigate(`/o2d-fms/steps/${st.code}`)} sx={{ alignSelf: 'center' }}>
+                    <IconButton aria-label="Open in a new tab" size="small" title={`Open step ${st.code} in O2D FMS`} onClick={() => navigate(`/o2d-fms/steps/${st.code}`)} sx={{ alignSelf: 'center' }}>
                       <ExternalLink size={14} />
                     </IconButton>
                   </Stack>
@@ -351,28 +354,30 @@ const SplitDrawer = ({ group, active, onPick, onClose, stepBySo }) => {
 const Header = ({ tab, onExport }) => {
   const navigate = useNavigate();
   return (
-    <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} spacing={2}>
-      <Stack direction="row" spacing={1.75} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
-        <Box sx={{ width: 46, height: 46, borderRadius: '12px', display: 'grid', placeItems: 'center', bgcolor: BRAND, color: '#fff', flexShrink: 0, boxShadow: `0 6px 14px ${alpha(BRAND, 0.25)}` }}>
-          <GitBranch size={22} />
+    // The IMS header proportions: 30px tinted icon, 1rem title, 0.72rem subtitle;
+    // the switch and Export sit on the right at the 32px button height.
+    <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} spacing={1.25}>
+      <Stack direction="row" spacing={1.25} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
+        <Box sx={{ width: 30, height: 30, borderRadius: '6px', display: 'grid', placeItems: 'center', bgcolor: alpha(BRAND, 0.1), color: BRAND, flexShrink: 0 }}>
+          <GitBranch size={16} />
         </Box>
         <Box sx={{ minWidth: 0 }}>
-          <Typography component="h1" sx={{ fontSize: '1.4rem', fontWeight: 800, color: NAVY, lineHeight: 1.2 }}>Split FMS</Typography>
-          <Typography sx={{ fontSize: '0.86rem', color: O2D.sub }}>Every dispatch of an order is a split. Pick a step to see all splits on it.</Typography>
+          <Typography component="h1" sx={{ fontSize: '1rem', fontWeight: 800, color: O2D.ink, lineHeight: 1.2 }}>Split FMS</Typography>
+          <Typography sx={{ fontSize: '0.72rem', color: O2D.sub }}>Every dispatch of an order is a split. Pick a step to see all splits on it.</Typography>
         </Box>
       </Stack>
-      <Stack direction="row" spacing={1.25} alignItems="center">
-        <Box sx={{ display: 'flex', p: 0.5, borderRadius: '10px', bgcolor: '#eef2f7' }}>
+      <Stack direction="row" spacing={0.75} alignItems="center">
+        <Box sx={{ display: 'flex', p: 0.25, height: 32, boxSizing: 'border-box', borderRadius: '8px', bgcolor: '#eef2f7' }}>
           {[['o2d', 'O2D'], ['purchase', 'Purchase']].map(([v, l]) => (
             <Box key={v} component="button" type="button" onClick={() => navigate(`/split-fms/${v}`)} aria-pressed={tab === v}
-              sx={{ border: 0, cursor: 'pointer', font: 'inherit', px: 2, py: 0.75, borderRadius: '8px', fontSize: '0.86rem', fontWeight: 700,
+              sx={{ border: 0, cursor: 'pointer', font: 'inherit', px: 1.5, py: 0, borderRadius: '6px', fontSize: '0.78rem', fontWeight: 700,
                 bgcolor: tab === v ? '#fff' : 'transparent', color: tab === v ? BRAND : O2D.sub, boxShadow: tab === v ? '0 1px 3px rgba(15,23,42,0.12)' : 'none' }}>
               {l}
             </Box>
           ))}
         </Box>
         {onExport && (
-          <Button variant="outlined" startIcon={<Download size={16} />} onClick={onExport} sx={{ ...ghostBtnSx, height: 40 }}>Export</Button>
+          <Button variant="outlined" startIcon={<Download size={14} />} onClick={onExport} sx={headerBtnSx}>Export</Button>
         )}
       </Stack>
     </Stack>
@@ -525,7 +530,7 @@ const O2dSplits = () => {
           <Box sx={{ px: 1, py: 0.25, borderRadius: '6px', bgcolor: alpha(BRAND, 0.08), color: BRAND, fontSize: '0.78rem', fontWeight: 700, whiteSpace: 'nowrap' }}>Step {code}</Box>
           <Typography sx={{ fontSize: '0.84rem', color: O2D.sub, whiteSpace: 'nowrap' }}>{rows.length} split{rows.length === 1 ? '' : 's'}</Typography>
           <Box sx={{ flex: 1 }} />
-          <Button variant="outlined" startIcon={<Columns2 size={16} />} onClick={(e) => setColsEl(e.currentTarget)} sx={{ ...ghostBtnSx, height: 40 }}>Columns</Button>
+          <Button variant="outlined" startIcon={<Columns2 size={14} />} onClick={(e) => setColsEl(e.currentTarget)} sx={headerBtnSx}>Columns</Button>
           <Menu anchorEl={colsEl} open={!!colsEl} onClose={() => setColsEl(null)} PaperProps={{ sx: { maxHeight: 380 } }}>
             {columns.map((c) => (
               <MenuItem key={c.label} dense onClick={() => toggleCol(c.label)}>

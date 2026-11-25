@@ -11,6 +11,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useGetProcessesQuery } from '../../store/api/o2dFmsApi';
 import { O2D } from './o2dTheme';
+import { LoadErrorNote, CapNote, O2dPage } from './components/O2dUi';
 
 const fmtD = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
@@ -412,7 +413,7 @@ const TimelineView = ({ rows, navigate }) => {
 // ── Master FMS — every order's flow on one screen ────────────────────────────
 const MasterFms = () => {
   const navigate = useNavigate();
-  const { data, isLoading } = useGetProcessesQuery({ limit: 200, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch } = useGetProcessesQuery({ limit: 200, sort: '-createdAt', view: 'list' }, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const all = data?.data || [];
 
   const [view, setView] = useState('pipeline');   // pipeline | matrix | cards
@@ -442,18 +443,11 @@ const MasterFms = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2} flexWrap="wrap" gap={1}>
-        <Box>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <LayoutGrid size={20} />
-            <Typography variant="h5" sx={{ fontWeight: 800 }}>Master FMS</Typography>
-          </Stack>
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-            Every order's full flow on one screen — pick the view that suits you.
-          </Typography>
-        </Box>
-        {/* Legend */}
+    <O2dPage
+      icon={LayoutGrid}
+      title="Master FMS"
+      subtitle="Every order's full flow on one screen — pick the view that suits you."
+      actions={(
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
           {[['#0f766e', 'Done'], ['#1d4ed8', 'In progress'], ['#be123c', 'Overdue'], ['#cbd5e1', 'Waiting']].map(([c, l]) => (
             <Stack key={l} direction="row" spacing={0.5} alignItems="center">
@@ -462,12 +456,15 @@ const MasterFms = () => {
             </Stack>
           ))}
         </Stack>
-      </Stack>
-
+      )}
+    >
       {/* Controls */}
-      <Paper sx={{ p: 1.25, borderRadius: 3, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', justifyContent: 'space-between' }}>
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-          <ToggleButtonGroup size="small" value={view} exclusive onChange={(_, v) => v && setView(v)}>
+      <Paper sx={{ p: 1.25, borderRadius: 3, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
+        {/* minWidth/maxWidth let the view switch scroll in place on a phone
+            instead of pushing the whole page sideways. */}
+        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ minWidth: 0, maxWidth: '100%' }}>
+          <ToggleButtonGroup size="small" value={view} exclusive onChange={(_, v) => v && setView(v)}
+            sx={{ maxWidth: '100%', overflowX: 'auto', flexShrink: 1 }}>
             <ToggleButton value="pipeline" sx={{ gap: 0.5, textTransform: 'none' }}><Rows3 size={15} />Pipeline</ToggleButton>
             <ToggleButton value="matrix" sx={{ gap: 0.5, textTransform: 'none' }}><Grid3X3 size={15} />Matrix</ToggleButton>
             <ToggleButton value="kanban" sx={{ gap: 0.5, textTransform: 'none' }}><Kanban size={15} />Stage board</ToggleButton>
@@ -486,9 +483,11 @@ const MasterFms = () => {
           InputProps={{ startAdornment: <InputAdornment position="start"><Search size={15} /></InputAdornment> }} />
       </Paper>
 
+      {isError && <LoadErrorNote title="Could not load the orders" error={error} onRetry={refetch} compact={!!data} />}
+      <CapNote shown={all.length} cap={200} noun="orders" />
       {isLoading ? (
         <Skeleton variant="rounded" height={420} />
-      ) : filtered.length === 0 ? (
+      ) : isError && !data ? null : filtered.length === 0 ? (
         <Paper sx={{ p: 5, textAlign: 'center', borderRadius: 3, color: 'text.secondary' }}>
           <Workflow size={32} style={{ opacity: 0.4 }} />
           <Typography sx={{ mt: 1 }}>No orders match this view.</Typography>
@@ -514,7 +513,7 @@ const MasterFms = () => {
           </Paper>
         </>
       )}
-    </Box>
+    </O2dPage>
   );
 };
 

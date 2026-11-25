@@ -1,7 +1,7 @@
 import React from 'react';
 import { Button, IconButton, Tooltip } from '@mui/material';
 import { ArrowLeft } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useGoBack } from '../hooks/useGoBack';
 
 /**
  * Reusable "Back" control. Goes to the PREVIOUS page in history (navigate(-1));
@@ -15,13 +15,7 @@ import { useNavigate } from 'react-router-dom';
  *   color     — MUI colour ('inherit' works well on dark hero backgrounds)
  */
 const BackButton = ({ to = '/dashboard', label = 'Back', iconOnly = false, color = 'inherit', variant = 'outlined', sx }) => {
-  const navigate = useNavigate();
-  const goBack = () => {
-    // window.history.state.idx > 0 means there IS a previous entry to go back to.
-    const canGoBack = typeof window !== 'undefined' && window.history.state && window.history.state.idx > 0;
-    if (canGoBack) navigate(-1);
-    else navigate(to);
-  };
+  const goBack = useGoBack(to);
 
   if (iconOnly) {
     return (

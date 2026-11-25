@@ -17,6 +17,8 @@ import {
 } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 import { useGetFmsDashboardQuery } from '../../store/api/o2dFmsApi';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
+import { FLUENT } from '../ims/imsFluent';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const hrs = (mins) => (mins >= 60 ? `${(mins / 60).toFixed(1)} h` : `${Math.round(mins || 0)} m`);
@@ -203,7 +205,7 @@ const ChartPanel = ({ title, views, defaultViewKey }) => {
 const STATS_PER_PAGE = 6;
 
 const FmsDashboard = () => {
-  const { data, isLoading } = useGetFmsDashboardQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch } = useGetFmsDashboardQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const navigate = useNavigate();
   const d = data?.data || {};
   const totals = d.totals || { total: 0, completed: 0, inProgress: 0 };
@@ -254,7 +256,7 @@ const FmsDashboard = () => {
     { label: 'Invoiced', value: num(o.invoiced), icon: FileText, color: '#0369a1', sub: 'invoice raised' },
     { label: 'Delivered (POD)', value: num(o.delivered), icon: CheckCircle2, color: '#0f766e', sub: 'proof of delivery' },
     { label: 'Payment received', value: num(o.paid), icon: Wallet, color: '#0f766e', sub: 'fully paid' },
-    { label: 'Awaiting payment', value: num(o.awaitingPayment), icon: IndianRupee, color: '#be123c', sub: 'delivered, unpaid' },
+    { label: 'Awaiting payment', value: num(o.awaitingPayment), icon: IndianRupee, color: FLUENT.orange.accent, sub: 'delivered, unpaid' },
     // ── FMS process health ──
     { label: 'Total processes', value: totals.total, icon: Layers, color: '#1d4ed8' },
     { label: 'In progress', value: totals.inProgress, icon: Activity, color: '#0369a1' },
@@ -363,17 +365,14 @@ const FmsDashboard = () => {
   ];
 
   if (isLoading) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={520} /></Box>;
+  if (isError && !data) return <Box sx={{ p: 3 }}><LoadErrorNote title="Could not load the dashboard" error={error} onRetry={refetch} /></Box>;
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Typography variant="h5" sx={{ fontWeight: 800 }}>O2D FMS — Management View</Typography>
-      <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
-        Live order operations, stage-by-stage progress, and where things are stuck. Updates every minute.
-      </Typography>
-
+    <O2dPage icon={Gauge} title="Management View"
+      subtitle="Live order operations, stage-by-stage progress, and where things are stuck. Updates every minute.">
       {/* ── Paged stat cards ── */}
       <Stack direction="row" alignItems="stretch" spacing={1.25} sx={{ mb: 2 }}>
-        <IconButton onClick={() => setStatPage((p) => Math.max(0, p - 1))} disabled={statPage === 0}
+        <IconButton aria-label="Scroll left" onClick={() => setStatPage((p) => Math.max(0, p - 1))} disabled={statPage === 0}
           sx={{ alignSelf: 'center', border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
           <ChevronLeft size={18} />
         </IconButton>
@@ -386,7 +385,7 @@ const FmsDashboard = () => {
             ))}
           </Grid>
         </Box>
-        <IconButton onClick={() => setStatPage((p) => Math.min(maxStatPage, p + 1))} disabled={statPage >= maxStatPage}
+        <IconButton aria-label="Scroll right" onClick={() => setStatPage((p) => Math.min(maxStatPage, p + 1))} disabled={statPage >= maxStatPage}
           sx={{ alignSelf: 'center', border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
           <ChevronRight size={18} />
         </IconButton>
@@ -421,7 +420,7 @@ const FmsDashboard = () => {
         <Stack direction="row" spacing={1} alignItems="center" mb={1}>
           <AlertTriangle size={18} color="#be123c" />
           <Typography sx={{ fontWeight: 700 }}>Overdue steps</Typography>
-          <Chip size="small" label={overdueList.length} color="error" />
+          <Chip size="small" label={overdueList.length} color={overdueList.length ? 'error' : 'default'} />
         </Stack>
         <Divider sx={{ mb: 1 }} />
         {overdueList.length === 0 ? (
@@ -451,7 +450,7 @@ const FmsDashboard = () => {
           </Table>
         )}
       </Paper>
-    </Box>
+    </O2dPage>
   );
 };
 

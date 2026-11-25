@@ -3,7 +3,7 @@ import { serialColumn } from '../components/serialNumber';
 import { stepTimingColumns } from '../components/stepTimingColumns';
 import {
   Box, Typography, Paper, TextField, InputAdornment, Button, MenuItem, Menu, ListItemText,
-  Chip, Pagination, Select, Checkbox, Divider,
+  Pagination, Select, Checkbox, Divider,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -28,7 +28,7 @@ import AdaptiveFilterBar from '../components/AdaptiveFilterBar';
 import PfmsKpiCard from '../components/PfmsKpiCard';
 import { listEmptyLabel } from '../components/useKpiFilter';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from '../pfmsTheme';
-import { TONES } from '../components/StatusChip';
+import { O2dStatusPill } from '../../o2d-fms/components/O2dUi';
 import IndentFormDrawer from './IndentFormDrawer';
 import IndentApprovalDialog from './IndentApprovalDialog';
 import QuoteComparativeDialog from './QuoteComparativeDialog';
@@ -298,7 +298,7 @@ const IndentList = () => {
     }
     // Approved Quotation (Step 1.3) — hidden once the step was skipped via
     // "Quote Not Required" (which moves the indent straight to QUOTATION_APPROVED).
-    if (['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus) && !r.quotationApprovalStep?.skipped) {
+    if ((['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus) || r.quotationApprovalStep?.partial) && !r.quotationApprovalStep?.skipped) {
       a.push({ key: 'approveQuote', label: 'Approved Quotation 1.03', icon: <FileCheck2 size={16} />, fn: () => onApproveQuotation(r) });
     }
     // PO-ready material indents can raise a Vendor PO directly (covers both the
@@ -325,8 +325,8 @@ const IndentList = () => {
       renderCell: (p) => <Typography variant="body2" color="text.secondary">{fmtDate(p.value)}</Typography> },
     { field: 'requestType', headerName: 'Type', width: 112, sortable: false,
       renderCell: (p) => (p.value === 'INTERNAL_SERVICE'
-        ? <Chip size="small" label="Service" sx={{ bgcolor: TONES.teal.bg, color: TONES.teal.fg, fontWeight: 700 }} />
-        : <Chip size="small" label="Material" sx={{ bgcolor: TONES.blue.bg, color: TONES.blue.fg, fontWeight: 700 }} />) },
+        ? <O2dStatusPill tone="teal" label="Service" />
+        : <O2dStatusPill tone="blue" label="Material" />) },
     { field: 'products', headerName: 'Products', flex: 1, minWidth: 240, sortable: false,
       valueGetter: (_v, row) => itemsSummary(row),
       renderCell: (p) => {

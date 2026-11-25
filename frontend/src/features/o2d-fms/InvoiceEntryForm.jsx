@@ -13,9 +13,12 @@ import { useCreateSalesInvoiceMutation, useGetSalesInvoicesQuery, useUpdateSales
 import { useUploadFileMutation } from '../../store/api/o2dFmsApi';
 import { resolveFileUrl } from '../../utils/fileUrl';
 import { useReturnToTask } from './useReturnToTask';
-import { useFmsGate, FmsGateBanner, FmsGateDialog } from './FmsGate';
+import { useFmsGate } from './FmsGate';
+import O2dStepShell from './components/O2dStepShell';
 import { O2D } from './o2dTheme';
 import BackButton from '../../components/BackButton';
+import { FormSection } from '../ims/imsMeta';
+import { FLUENT } from '../ims/imsFluent';
 
 const TRANSPORT_TYPES = ['Freight Paid', 'To Pay', 'Party Vehicle'];
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.xlsx,.xls,.doc,.docx';
@@ -66,8 +69,8 @@ const UploadField = ({ label, max, files, onChange, folder = 'invoices', readOnl
               <Paperclip size={13} color={theme.palette.success.dark} />
               <Link href={resolveFileUrl(f.url)} target="_blank" rel="noopener" underline="hover"
                 sx={{ flex: 1, fontSize: '0.78rem', color: 'text.primary', cursor: 'pointer' }} noWrap>{f.fileName}</Link>
-              <Tooltip title="Preview"><IconButton size="small" onClick={() => window.open(resolveFileUrl(f.url), '_blank', 'noopener')}><Eye size={13} /></IconButton></Tooltip>
-              {!readOnly && <Tooltip title="Remove"><IconButton size="small" onClick={() => onChange(files.filter((_, j) => j !== i))}><X size={13} /></IconButton></Tooltip>}
+              <Tooltip title="Preview"><IconButton aria-label="Preview" size="small" onClick={() => window.open(resolveFileUrl(f.url), '_blank', 'noopener')}><Eye size={13} /></IconButton></Tooltip>
+              {!readOnly && <Tooltip title="Remove"><IconButton aria-label="Remove" size="small" onClick={() => onChange(files.filter((_, j) => j !== i))}><X size={13} /></IconButton></Tooltip>}
             </Stack>
           ))}
         </Stack>
@@ -84,7 +87,6 @@ const UploadField = ({ label, max, files, onChange, folder = 'invoices', readOnl
  * Route: /o2d/invoice-entry
  */
 const InvoiceEntryForm = () => {
-  const theme = useTheme();
   const { data: challansRes } = useGetChallansQuery({ limit: 300, sort: '-dcDate' });
   const challans = useMemo(() => challansRes?.data || [], [challansRes]);
 
@@ -100,7 +102,6 @@ const InvoiceEntryForm = () => {
   const [searchParams] = useSearchParams();
   const soParam = searchParams.get('so') || '';
   const dcParam = searchParams.get('dc') || '';
-  const [gateOpen, setGateOpen] = useState(false);
 
   const [dc, setDc] = useState(null);
   // An already-saved invoice for the selected challan → view/edit instead of re-create.
@@ -316,24 +317,10 @@ const InvoiceEntryForm = () => {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: O2D.canvas }}>
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 5, bgcolor: O2D.surface, borderBottom: `1px solid ${O2D.line}`, px: { xs: 1.5, md: 2 }, py: 1 }}>
-        <Stack direction="row" spacing={1.25} alignItems="center">
-          <BackButton iconOnly sx={{ color: O2D.body, border: `1px solid ${O2D.line}`, borderRadius: '6px', flexShrink: 0 }} />
-          <Box sx={{ width: 30, height: 30, borderRadius: '6px', display: 'grid', placeItems: 'center', flexShrink: 0, bgcolor: alpha(O2D.brand, 0.1), color: O2D.brand }}>
-            <ReceiptText size={16} />
-          </Box>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ color: O2D.ink, fontSize: { xs: '1rem', md: '1.1rem' }, fontWeight: 800, lineHeight: 1.2 }}>Create Invoice &amp; Eway Bill</Typography>
-            <Typography noWrap sx={{ color: O2D.sub, fontSize: '0.72rem' }}>Step 2.7 — record the tax invoice &amp; e-way bill for a dispatch.</Typography>
-          </Box>
-        </Stack>
-      </Box>
-
-      <Box sx={{ px: { xs: 1.25, md: 1.75 }, py: 1.5, pb: 6, maxWidth: 1180, mx: 'auto' }}>
-        {gate.blocked && <FmsGateBanner gate={gate.gate} onOpen={() => setGateOpen(true)} />}
+    <O2dStepShell icon={ReceiptText} step="Step 2.7" title="Create Invoice & Eway Bill"
+      subtitle="Record the tax invoice & e-way bill for a dispatch." maxWidth={1180} gate={gate}>
         {/* Challan picker + auto-filled context */}
-        <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+        <FormSection step={1} done={!!dc} fluent={FLUENT.lavender} title="Pick the delivery challan" testId="o2d-step-pick">
           <Autocomplete
             options={challans}
             value={dc}
@@ -350,7 +337,7 @@ const InvoiceEntryForm = () => {
               <Chip size="small" label={`Qty: ${dc.totalQuantityPcs ?? '—'} pcs`} />
             </Stack>
           )}
-        </Paper>
+        </FormSection>
 
         {/* Already-invoiced challan → show saved details, locked, with an Edit action. */}
         {existingId && (
@@ -371,7 +358,7 @@ const InvoiceEntryForm = () => {
         )}
 
         {/* Form fields */}
-        <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
+        <FormSection step={2} fluent={FLUENT.blue} title="Invoice & e-way details" testId="o2d-step-details">
           <Stack spacing={2}>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField select label="Status" value={form.status} onChange={set('status')} size="small" sx={{ minWidth: 160 }} disabled={locked}>
@@ -443,20 +430,16 @@ const InvoiceEntryForm = () => {
             </Stack>
             <TextField label="Remarks (if any)" value={form.remarks} onChange={set('remarks')} size="small" fullWidth multiline minRows={2} disabled={locked} />
           </Stack>
-        </Paper>
+        </FormSection>
 
         {/* Attachments */}
-        <Paper elevation={0} sx={{ p: 2, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
-            <FileCheck2 size={18} color={theme.palette.primary.main} />
-            <Typography sx={{ fontWeight: 800 }}>Attachments</Typography>
-          </Stack>
+        <FormSection step={3} fluent={FLUENT.teal} title="Attachments" testId="o2d-step-attachments">
           <Stack spacing={1.5}>
             <UploadField label="Invoice" max={5} files={invoiceFiles} onChange={setInvoiceFiles} readOnly={locked} />
             <UploadField label="Eway Bill" max={5} files={ewayFiles} onChange={setEwayFiles} readOnly={locked} />
             <UploadField label="PDIR" max={10} files={pdirFiles} onChange={setPdirFiles} readOnly={locked} />
           </Stack>
-        </Paper>
+        </FormSection>
 
         <Divider sx={{ mb: 2 }} />
         <Stack direction="row" spacing={1.5} justifyContent="flex-end">
@@ -476,9 +459,7 @@ const InvoiceEntryForm = () => {
             </>
           )}
         </Stack>
-      </Box>
-      <FmsGateDialog gate={gate.gate} open={gateOpen} onClose={() => setGateOpen(false)} />
-    </Box>
+    </O2dStepShell>
   );
 };
 

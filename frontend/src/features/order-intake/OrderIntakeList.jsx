@@ -21,6 +21,9 @@ import { resolveFileUrl } from '../../utils/fileUrl';
 import VoiceRecorder from '../../components/VoiceRecorder';
 import OrderEntryDrawer from '../orders/OrderEntryDrawer';
 import { useOpenFmsTask } from '../o2d-fms/useOpenFmsTask';
+import { LoadErrorNote, CapNote, O2dPage } from '../o2d-fms/components/O2dUi';
+import { primaryBtnSx } from '../ims/imsFluent';
+import { O2D } from '../o2d-fms/o2dTheme';
 
 const CHANNELS = [
   { value: 'PHONE', label: 'Phone call', icon: Phone },
@@ -38,7 +41,7 @@ const blankForm = { partyId: null, channel: 'PHONE', contactName: '', items: [],
 const OrderIntakeList = () => {
   const navigate = useNavigate();
   const { isRoot } = usePermissions();
-  const { data, isLoading } = useGetOrderIntakesQuery({ limit: 100, sort: '-createdAt' });
+  const { data, isLoading, isError, error: loadError, refetch } = useGetOrderIntakesQuery({ limit: 100, sort: '-createdAt' });
   const { data: partiesRes } = useGetPartiesQuery({ limit: 300 });
   const [createIntake, { isLoading: creating }] = useCreateOrderIntakeMutation();
   const openFmsTask = useOpenFmsTask();
@@ -138,20 +141,14 @@ const OrderIntakeList = () => {
   }, [searchParams, allIntakes]);
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2} flexWrap="wrap" gap={1}>
-        <Box>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <PhoneCall size={20} />
-            <Typography variant="h5" sx={{ fontWeight: 800 }}>Order Intake</Typography>
-          </Stack>
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-            Log an order the moment a client calls / emails / messages — it starts the FMS instantly.
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => { setForm({ ...blankForm }); setError(''); }}>Log order</Button>
-      </Stack>
-
+    <O2dPage
+      icon={PhoneCall}
+      title="Order Intake"
+      subtitle="Log an order the moment a client calls / emails / messages — it starts the FMS instantly."
+      actions={(
+        <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />} onClick={() => { setForm({ ...blankForm }); setError(''); }} sx={primaryBtnSx(O2D.brand)}>Log order</Button>
+      )}
+    >
       {/* ── Status filter ── */}
       {!isLoading && allIntakes.length > 0 && (
         <Paper sx={{ p: 1.25, borderRadius: 3, mb: 2 }}>
@@ -165,8 +162,10 @@ const OrderIntakeList = () => {
       )}
 
       {/* overflowX lets the table scroll sideways on small screens instead of clipping the action buttons */}
+      {isError && <LoadErrorNote title="Could not load the order intakes" error={loadError} onRetry={refetch} compact={!!data} sx={{ mb: 1.5 }} />}
+      <CapNote shown={allIntakes.length} cap={100} noun="order intakes" sx={{ mb: 1.5 }} />
       <Paper sx={{ borderRadius: 3, overflowX: 'auto' }}>
-        {isLoading ? <Skeleton variant="rounded" height={300} /> : (
+        {isLoading ? <Skeleton variant="rounded" height={300} /> : isError && !data ? null : (
           <Table size="small" sx={{ minWidth: 880 }}>
             <TableHead>
               <TableRow sx={{ bgcolor: alpha('#1d4ed8', 0.06) }}>
@@ -199,7 +198,7 @@ const OrderIntakeList = () => {
                               sx={{ whiteSpace: 'nowrap', minWidth: 0, px: 1.25, py: 0.4, fontSize: '0.72rem', borderRadius: 1.5, boxShadow: 'none' }}>
                               Convert to SO
                             </Button>
-                            <Tooltip title="Cancel this intake"><IconButton size="small" onClick={() => cancelIntake(it._id)}><Ban size={15} /></IconButton></Tooltip>
+                            <Tooltip title="Cancel this intake"><IconButton aria-label="Cancel this intake" size="small" onClick={() => cancelIntake(it._id)}><Ban size={15} /></IconButton></Tooltip>
                           </>
                         )}
                         {it.intakeStatus === 'CONVERTED' && it.linkedSalesOrderId && (
@@ -214,7 +213,7 @@ const OrderIntakeList = () => {
                         )}
                         {isRoot && (
                           <Tooltip title="Delete (MD only)">
-                            <IconButton size="small" color="error" onClick={() => { setDeleteError(''); setDeleteTarget(it); }}>
+                            <IconButton aria-label="Delete (MD only)" size="small" color="error" onClick={() => { setDeleteError(''); setDeleteTarget(it); }}>
                               <Trash2 size={15} />
                             </IconButton>
                           </Tooltip>
@@ -234,7 +233,7 @@ const OrderIntakeList = () => {
         <DialogTitle sx={{ pr: 6 }}>
           Log an order
           <Typography variant="caption" color="text.secondary" display="block">Just the essentials — it starts the FMS right away. You can convert to a full Sales Order later.</Typography>
-          <IconButton onClick={() => setForm(null)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
+          <IconButton aria-label="Close" onClick={() => setForm(null)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
         </DialogTitle>
         <DialogContent dividers>
           {form && (
@@ -263,7 +262,7 @@ const OrderIntakeList = () => {
                   <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                     <TextField size="small" placeholder="Item / SKU" value={it.skuName} onChange={(e) => setItem(i, 'skuName', e.target.value)} sx={{ flex: 1 }} />
                     <TextField size="small" type="number" placeholder="Qty" value={it.qty} onChange={(e) => setItem(i, 'qty', e.target.value)} sx={{ width: 90 }} />
-                    <IconButton size="small" onClick={() => delItem(i)}><X size={14} /></IconButton>
+                    <IconButton aria-label="Remove item" size="small" onClick={() => delItem(i)}><X size={14} /></IconButton>
                   </Stack>
                 ))}
               </Box>
@@ -303,7 +302,7 @@ const OrderIntakeList = () => {
                     sx={{ bgcolor: alpha(STATUS_TONE[detail.intakeStatus] || '#64748b', 0.12), color: STATUS_TONE[detail.intakeStatus] || '#64748b', fontWeight: 700 }} />
                 </Stack>
                 <Typography variant="caption" color="text.secondary" display="block">{detail.partyName || detail.partyId?.name}</Typography>
-                <IconButton onClick={() => setDetail(null)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
+                <IconButton aria-label="Close" onClick={() => setDetail(null)} sx={{ position: 'absolute', right: 8, top: 8 }}><X size={18} /></IconButton>
               </DialogTitle>
               <DialogContent dividers>
                 <Stack spacing={2}>
@@ -446,7 +445,7 @@ const OrderIntakeList = () => {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </O2dPage>
   );
 };
 

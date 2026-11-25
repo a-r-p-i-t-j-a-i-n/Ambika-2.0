@@ -17,6 +17,8 @@ import { useUploadFileMutation, useAddStepAttachmentsMutation, useAddStepComment
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
 import { printDispatchPlanByDate } from '../../utils/printDispatchPlan';
+import { FLUENT } from '../ims/imsFluent';
+import { FormSection } from '../ims/imsMeta';
 
 const num = (n) => (Number(n || 0)).toLocaleString('en-IN');
 const fmtDate = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
@@ -231,7 +233,7 @@ const DispatchScheduleEmail = () => {
       )}
 
       {/* Order picker */}
-      <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+      <FormSection step={1} done={!!order} fluent={FLUENT.lavender} title="Pick the order" testId="o2d-step-pick">
         <Autocomplete
           options={orders}
           loading={loadingOrders}
@@ -241,7 +243,7 @@ const DispatchScheduleEmail = () => {
           isOptionEqualToValue={(a, b) => a._id === b._id}
           renderInput={(p) => <TextField {...p} label="Select Sales Order / PO" placeholder="Search SO / PO / party…" size="small" />}
         />
-      </Paper>
+      </FormSection>
 
       {order && loadingSched && <Skeleton variant="rounded" height={240} sx={{ borderRadius: 3, mb: 2 }} />}
 
@@ -257,17 +259,15 @@ const DispatchScheduleEmail = () => {
 
       {/* Email composer — leads the screen; the plan opens on demand via "View plan". */}
       {order && (
-        <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}
-            sx={{ p: 2, bgcolor: alpha(theme.palette.primary.main, 0.05), borderBottom: `1px solid ${theme.palette.divider}` }}>
-            <Typography sx={{ fontWeight: 800, fontSize: '0.85rem', color: 'text.secondary' }}>EMAIL PREVIEW — sends the dispatch schedule to the client</Typography>
+        <FormSection step={2} fluent={FLUENT.blue} title="Email preview — sends the dispatch schedule to the client" testId="o2d-step-email"
+          actions={(
             <Button size="small" variant={showPlan ? 'contained' : 'outlined'} disableElevation
               startIcon={showPlan ? <EyeOff size={14} /> : <Eye size={14} />}
               onClick={() => setShowPlan((v) => !v)} disabled={!hasPlan}
               sx={{ fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>
               {showPlan ? 'Hide plan' : 'View plan'}
             </Button>
-          </Stack>
+          )}>
 
           {/* On-demand dispatch plan — hidden until the doer clicks "View plan". */}
           <Collapse in={showPlan && hasPlan} unmountOnExit>
@@ -340,8 +340,13 @@ const DispatchScheduleEmail = () => {
               </Stack>
               {/* The dispatch-plan PDF is built on the server and attached automatically. */}
               <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" useFlexGap>
-                <Chip icon={<CheckCircle2 size={13} />} color="success" variant="outlined"
-                  label="Dispatch Plan PDF — auto-attached" sx={{ fontWeight: 700 }} />
+                {/* Only claims an attachment when there is a plan to attach. */}
+                {hasPlan ? (
+                  <Chip icon={<CheckCircle2 size={13} />} color="success" variant="outlined"
+                    label="Dispatch Plan PDF — auto-attached" sx={{ fontWeight: 700 }} />
+                ) : (
+                  <Chip variant="outlined" label="No dispatch plan yet — nothing to attach" sx={{ fontWeight: 700, color: FLUENT.amber.accent, borderColor: FLUENT.amber.border, bgcolor: FLUENT.amber.bg }} />
+                )}
                 <Button size="small" variant="text" startIcon={<FileText size={13} />} onClick={openPlanPdf} disabled={!hasPlan} sx={{ textTransform: 'none' }}>
                   Preview
                 </Button>
@@ -367,7 +372,7 @@ const DispatchScheduleEmail = () => {
               </Button>
             </Stack>
           </Stack>
-        </Paper>
+        </FormSection>
       )}
     </O2dStepShell>
   );

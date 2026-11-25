@@ -7,8 +7,9 @@ import { History } from 'lucide-react';
 import dayjs from 'dayjs';
 import {
   Panel, TableScroll, EmptyNote, Th, emptyCellSx,
-  SCRAP_OUT_REASON_OPTIONS, SCRAP_WAREHOUSE_OPTIONS, O2D, O2D_TIP, num, imsTableSx, numCell,
+  SCRAP_OUT_REASON_OPTIONS, SCRAP_WAREHOUSE_OPTIONS, O2D, O2D_TIP, num, numCell,
 } from './scrapImsMeta';
+import { fluentTableSx } from '../ims/imsFluent';
 import { fmtEntered, unitLabel } from './scrapUom';
 import { useGetScrapOutHistoryQuery } from '../../store/api/scrapImsApi';
 
@@ -143,8 +144,8 @@ const ScrapOutHistory = ({ refreshKey = 0 }) => {
           onChange={(e) => set('to', e.target.value)} InputLabelProps={{ shrink: true }} />
       </Box>
 
-      <TableScroll sx={{ mt: 1.25, mx: -1.5, borderTop: `1px solid ${O2D.lineSoft}` }}>
-        <Table size="small" sx={imsTableSx(1100)} data-testid="scrap-out-history">
+      <TableScroll sx={{ mt: 1.25, mx: -1.5, maxWidth: 'none', borderTop: `1px solid ${O2D.lineSoft}` }}>
+        <Table size="small" sx={fluentTableSx(1100)} data-testid="scrap-out-history">
           <TableHead>
             <TableRow>
               <TableCell align="center" sx={{ width: 64, whiteSpace: 'nowrap' }}>S.No.</TableCell>
@@ -169,7 +170,7 @@ const ScrapOutHistory = ({ refreshKey = 0 }) => {
                   <Typography sx={{ fontSize: '0.74rem', fontWeight: 600 }}>{r.date ? dayjs(r.date).format('DD-MM-YYYY') : dash}</Typography>
                   {!!r.movementNumber && <Typography sx={caption}>{r.movementNumber}</Typography>}
                 </TableCell>
-                <TableCell sx={{ ...numCell, fontWeight: 700, color: '#b91c1c', whiteSpace: 'nowrap' }} data-testid="scrap-out-history-weight">
+                <TableCell sx={{ ...numCell, fontWeight: 700, color: '#c2410c', whiteSpace: 'nowrap' }} data-testid="scrap-out-history-weight">
                   {soldWeight(r)}
                 </TableCell>
                 <TableCell>

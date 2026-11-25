@@ -67,7 +67,7 @@ const CancelOrderDialog = ({ open, onClose, order, mode = 'cancel' }) => {
             </Typography>
           </Box>
         </Stack>
-        <IconButton onClick={onClose} size="small" sx={{ position: 'absolute', right: 8, top: 8 }}><X size={17} /></IconButton>
+        <IconButton aria-label="Close" onClick={onClose} size="small" sx={{ position: 'absolute', right: 8, top: 8 }}><X size={17} /></IconButton>
       </DialogTitle>
 
       <DialogContent dividers sx={{ py: 2 }}>

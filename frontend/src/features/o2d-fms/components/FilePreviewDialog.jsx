@@ -48,16 +48,16 @@ const FilePreviewDialog = ({ open, onClose, name, url }) => {
           {name || 'Attachment'}
         </Typography>
         <Tooltip title="Open in new tab" arrow>
-          <IconButton size="small" component="a" href={src} target="_blank" rel="noopener noreferrer" sx={{ color: O2D.body }}>
+          <IconButton aria-label="Open in new tab" size="small" component="a" href={src} target="_blank" rel="noopener noreferrer" sx={{ color: O2D.body }}>
             <ExternalLink size={16} />
           </IconButton>
         </Tooltip>
         <Tooltip title="Download" arrow>
-          <IconButton size="small" component="a" href={src} download={name || true} sx={{ color: O2D.body }}>
+          <IconButton aria-label="Download" size="small" component="a" href={src} download={name || true} sx={{ color: O2D.body }}>
             <Download size={16} />
           </IconButton>
         </Tooltip>
-        <IconButton size="small" onClick={onClose} sx={{ color: O2D.body }}><X size={17} /></IconButton>
+        <IconButton aria-label="Close preview" size="small" onClick={onClose} sx={{ color: O2D.body }}><X size={17} /></IconButton>
       </Stack>
 
       {/* Body */}

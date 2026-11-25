@@ -72,7 +72,8 @@ const STEPS = {
     subtitle: 'Review the received quotations and approve them before a purchase order is raised',
     stateOf: (r) => {
       if (r.quotationApprovalStep?.skipped) return 'NOT_REQUIRED';
-      if (['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus)) return 'PENDING';
+      // A partial approval (some items still pending / on hold) is still waiting on this step.
+      if (['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'].includes(r.overallStatus) || r.quotationApprovalStep?.partial) return 'PENDING';
       return 'DONE';
     },
     chip: {

@@ -13,6 +13,8 @@ import OrderDetailDrawer from './OrderDetailDrawer';
 import TableSkeleton from '../../components/TableSkeleton';
 import dayjs from 'dayjs';
 import { O2D } from '../o2d-fms/o2dTheme';
+import { LoadErrorNote, O2dPage } from '../o2d-fms/components/O2dUi';
+import { FLUENT, primaryBtnSx } from '../ims/imsFluent';
 
 const BRAND = { primary: '#2563eb', success: '#059669', warning: '#d97706', error: '#dc2626', wip: '#7c3aed' };
 
@@ -94,7 +96,9 @@ const OrdersList = () => {
 
   const { can, isRoot } = usePermissions();
   const canDelete = isRoot || can('orders.delete');
-  const [deleteOrder, { isLoading: deleting }] = useDeleteOrderMutation();
+  const [deleteOrder, { isLoading: deleting, error: deleteError, originalArgs: deletedId }] = useDeleteOrderMutation();
+  // The failure of THIS dialog's delete, shown inside it (it used to be dropped).
+  const deleteFailed = !!deleteError && deletedId === deleteTarget?._id;
 
   const confirmDelete = async () => {
     try { await deleteOrder(deleteTarget._id).unwrap(); setDeleteTarget(null); }
@@ -112,7 +116,7 @@ const OrdersList = () => {
     sort: '-orderDate',
   };
 
-  const { data, isLoading } = useGetOrdersQuery(queryParams);
+  const { data, isLoading, isError, error, refetch } = useGetOrdersQuery(queryParams);
 
   // Deep-link support: ?edit=<orderId> (the O2D Step Board's Edit column) opens
   // the edit drawer for that order once the list loads. Tracked per param value
@@ -140,6 +144,7 @@ const OrdersList = () => {
   const handleDrawerClose = () => { setIsCreateOpen(false); setEditOrder(null); };
 
   if (isLoading && !data) return <TableSkeleton columns={8} />;
+  if (isError && !data) return <Box sx={{ p: 3 }}><LoadErrorNote title="Could not load the sales orders" error={error} onRetry={refetch} /></Box>;
 
   const columns = [
     { field: 'soNumber', headerName: 'SO #', width: 118,
@@ -184,11 +189,11 @@ const OrdersList = () => {
     { field: 'actions', headerName: '', width: canDelete ? 112 : 88, sortable: false, align: 'center',
       renderCell: (p) => (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
-          <Tooltip title="Edit Order"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleEditOrder(p.row); }} sx={{ color: BRAND.primary }}><Edit3 size={14} /></IconButton></Tooltip>
-          <Tooltip title="Edit Workflow"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleUpdateClick(p.row); }} sx={{ color: BRAND.wip }}><ListChecks size={14} /></IconButton></Tooltip>
-          <Tooltip title="View Details"><IconButton size="small" onClick={(e) => { e.stopPropagation(); handleViewDetail(p.row); }} sx={{ color: '#94a3b8' }}><Eye size={14} /></IconButton></Tooltip>
+          <Tooltip title="Edit Order"><IconButton aria-label="Edit Order" size="small" onClick={(e) => { e.stopPropagation(); handleEditOrder(p.row); }} sx={{ color: BRAND.primary }}><Edit3 size={14} /></IconButton></Tooltip>
+          <Tooltip title="Edit Workflow"><IconButton aria-label="Edit Workflow" size="small" onClick={(e) => { e.stopPropagation(); handleUpdateClick(p.row); }} sx={{ color: BRAND.wip }}><ListChecks size={14} /></IconButton></Tooltip>
+          <Tooltip title="View Details"><IconButton aria-label="View Details" size="small" onClick={(e) => { e.stopPropagation(); handleViewDetail(p.row); }} sx={{ color: '#94a3b8' }}><Eye size={14} /></IconButton></Tooltip>
           {canDelete && (
-            <Tooltip title="Delete Order (MD only)"><IconButton size="small" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p.row); }} sx={{ color: BRAND.error }}><Trash2 size={14} /></IconButton></Tooltip>
+            <Tooltip title="Delete Order (MD only)"><IconButton aria-label="Delete Order (MD only)" size="small" onClick={(e) => { e.stopPropagation(); setDeleteTarget(p.row); }} sx={{ color: BRAND.error }}><Trash2 size={14} /></IconButton></Tooltip>
           )}
         </Box>
       )
@@ -196,25 +201,16 @@ const OrdersList = () => {
   ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, p: { xs: 1.5, sm: 2 }, minHeight: '100vh', bgcolor: O2D.canvas }}>
-      
-      {/* ── Header ─────────────────────────────────────────── */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 2 }}>
-        <Box>
-          <Typography sx={{ fontSize: { xs: '1.15rem', sm: '1.25rem' }, fontWeight: 700, color: '#0b2545', letterSpacing: '-0.015em', lineHeight: 1.25 }}>Sales Orders</Typography>
-          <Typography sx={{ fontSize: '0.8125rem', color: 'text.secondary', fontWeight: 500, mt: 0.25 }}>Order booking, tracking & dispatch pipeline</Typography>
-        </Box>
-        <Button 
-          variant="contained" 
-          startIcon={<Plus size={16} />}
-          onClick={handleNewOrder}
-          fullWidth={false}
-          sx={{ width: { xs: '100%', sm: 'auto' } }}
-        >
+    <O2dPage
+      icon={ShoppingCart}
+      title="Sales Orders"
+      subtitle="Order booking, tracking & dispatch pipeline"
+      actions={(
+        <Button variant="contained" size="small" disableElevation startIcon={<Plus size={14} />} onClick={handleNewOrder} sx={primaryBtnSx(O2D.brand)}>
           New Order
         </Button>
-      </Box>
-
+      )}
+    >
       {/* ── Stat Cards ─────────────────────────────────────── */}
       <Box sx={{ 
         display: 'grid', 
@@ -313,15 +309,20 @@ const OrdersList = () => {
             This deletes <b>{deleteTarget?.soNumber}</b> ({deleteTarget?.partyName}) and its O2D FMS process.
             Both move to the Recycle Bin, where they can be restored.
           </DialogContentText>
+          {deleteFailed && (
+            <Typography role="alert" sx={{ mt: 1.5, fontSize: '0.8rem', fontWeight: 700, color: FLUENT.rose.accent }}>
+              {deleteError?.data?.message || 'Could not delete this order. Please try again.'}
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
           <Button color="error" variant="contained" onClick={confirmDelete} disabled={deleting} startIcon={<Trash2 size={16} />}>
-            Delete
+            {deleting ? 'Deleting…' : 'Delete'}
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </O2dPage>
   );
 };
 

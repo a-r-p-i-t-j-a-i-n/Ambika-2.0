@@ -43,7 +43,8 @@ router.post('/:id/submit',             validate(mongoIdParamSchema, 'params'), c
 router.post('/:id/approve',            validate(mongoIdParamSchema, 'params'), validate(approveIndentSchema), c.approve);
 router.post('/:id/reject',             validate(mongoIdParamSchema, 'params'), validate(rejectIndentSchema), c.reject);
 router.post('/:id/receive-quote',      validate(mongoIdParamSchema, 'params'), validate(receiveQuoteSchema), c.receiveQuote);
-router.post('/:id/quote-comparative',  validate(mongoIdParamSchema, 'params'), validate(quoteComparativeSchema), c.quoteComparative);
+router.get('/:id/item-vendor-history', validate(mongoIdParamSchema, 'params'), c.getItemVendorHistory);
+router.post('/:id/quote-comparative', validate(mongoIdParamSchema, 'params'), validate(quoteComparativeSchema), c.quoteComparative);
 router.post('/:id/approve-quotation',  validate(mongoIdParamSchema, 'params'), validate(approveQuotationSchema), c.approveQuotation);
 
 export default router;

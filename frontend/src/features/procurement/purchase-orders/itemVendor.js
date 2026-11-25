@@ -3,7 +3,7 @@
  * come from GET /procurement/purchase-orders/approved-items, which already says
  * the item's quotation path and whether its vendor is fixed:
  *   vendorState SET        — the PO must use vendorId (approved quotation / Pending-for-PO pick)
- *   vendorState MISSING    — quotation required, approved before vendors were recorded → confirm first
+ *   vendorState MISSING    — quotation required, approved WITHOUT a vendor (Step 1.3 vendor is optional) → the PO form (or Select Vendor here) takes one of the item's eligible vendors (quoted for it, or supplied it before)
  *   vendorState UNASSIGNED — quotation not required, vendor still open (PO form decides)
  */
 
@@ -12,9 +12,8 @@ export const VENDOR_SOURCE_LABEL = {
   PO_PREPARATION: 'Selected on Pending for PO',
 };
 
-/** Why no PO can be raised for this row yet ('' = it can). */
+/** Why no PO can be raised for this row yet ('' = it can). A missing vendor is NOT a block — it is chosen on the PO. */
 export const itemVendorBlock = (row) => {
-  if (row?.vendorState === 'MISSING') return 'Approved vendor missing — confirm it before raising a PO';
   if (row?.vendorUnavailable) return `Vendor "${row.vendorName}" is inactive or removed in the Vendor Master`;
   return '';
 };

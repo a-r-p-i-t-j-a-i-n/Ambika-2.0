@@ -22,7 +22,14 @@ export const QUOTATION_STEP_STATES = ['PENDING', 'DONE', 'NOT_REQUIRED'];
 
 // Doer-task sources (fmsCatalog) — unchanged values, now shared with the lists.
 export const QUOTE_COMPARATIVE_PENDING = { overallStatus: 'QUOTE_PENDING' };
-export const QUOTATION_APPROVAL_PENDING = { overallStatus: { $in: ['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'] } };
+// A PARTIAL approval (some quoted items still pending / on hold) keeps the indent on this queue
+// even though its approved items already moved on to PO creation.
+export const QUOTATION_APPROVAL_PENDING = {
+  $or: [
+    { overallStatus: { $in: ['QUOTE_RECEIVED', 'QUOTE_NOT_REQUIRED'] } },
+    { 'quotationApprovalStep.partial': true },
+  ],
+};
 
 // Step 1.2 answered "Quote Not Required" — the current item-wise field, the
 // Step 1.3 skip it causes, or the older quoteStep / receive-quote shapes.

@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
-  Grid, MenuItem, Typography, CircularProgress, Divider, Alert, Box,
+  Grid, MenuItem, Typography, CircularProgress, Divider, Alert, Box, Switch, Checkbox, FormControlLabel,
 } from '@mui/material';
 import { Save } from 'lucide-react';
 import { useSnackbar } from 'notistack';
-import { useApproveQuotationMutation } from '../../../store/api/procurementApi';
-import { useGetVendorsQuery } from '../../../store/api/vendorApi';
+import { useApproveQuotationMutation, useGetIndentItemVendorHistoryQuery } from '../../../store/api/procurementApi';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
-import ItemQuotationTable from './ItemQuotationTable';
+import ApprovedVendorTable from './ApprovedVendorTable';
+import StatusChip from '../components/StatusChip';
+import { PFMS } from '../pfmsTheme';
+import { fmtDate } from '../purchase-orders/poMeta';
 import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } from './indentMeta';
 
 /**
@@ -21,34 +23,17 @@ import { itemRef, matchItemRow, legacyFallbackDocs, isItemEligibleForQuote } fro
  * remaining files (same URLs, no re-upload) are submitted as the approved
  * quotation via `itemApprovedQuotations[]`. Requires Step 1.2 done.
  *
- * Each quoted item also names its Approved Vendor. It is saved on the indent
- * item and the Purchase Order for that item must use it. When Step 1.2 recorded
- * who sent each quotation, the choice is limited to the vendors whose quotation
- * is kept (the server enforces the same); older quotations that name no vendor
- * keep the full Vendor Master list.
+ * Each quoted item is decided on its own and can be submitted independently:
+ *   Approved   goes on to Purchase Orders. Its vendor is OPTIONAL here: one chosen (from the
+ *              item's ELIGIBLE vendors — quoted at Step 1.2 OR previously supplied) is saved
+ *              and used by the PO; otherwise the PO's vendor is chosen on the PO form, from
+ *              the same eligible vendors
+ *   On Hold    "Hold / Keep Pending" — kept on Step 1.3 for later, never in a PO
+ *   Pending    an item left unticked in Select Items mode (or saved as pending earlier)
+ * "Select Items" mode: each quoted row gets a checkbox in place of its serial number and ONLY
+ * the ticked items are approved; unticked ones are saved as pending and never reach a PO.
+ * The step is complete once every quoted item is approved.
  */
-// Vendors named on the kept files → Approved Vendor options (lowest rate first seen).
-const keptVendorOptions = (files) => {
-  const byId = new Map();
-  (files || []).forEach((f) => {
-    if (!f.vendor?._id) return;
-    const id = String(f.vendor._id);
-    const rate = f.quotedRate === '' || f.quotedRate == null ? null : Number(f.quotedRate);
-    const days = f.deliveryDays === '' || f.deliveryDays == null ? null : Number(f.deliveryDays);
-    const cur = byId.get(id);
-    if (!cur) { byId.set(id, { _id: id, name: f.vendor.name, quotedRate: rate, deliveryDays: days }); return; }
-    if (rate != null && (cur.quotedRate == null || rate < cur.quotedRate)) cur.quotedRate = rate;
-    if (days != null && (cur.deliveryDays == null || days < cur.deliveryDays)) cur.deliveryDays = days;
-  });
-  return [...byId.values()];
-};
-// Keep the pick only while its quotation is kept; one kept vendor is picked for you.
-const reconcileVendor = (row) => {
-  const kept = keptVendorOptions(row.files);
-  if (!kept.length) return row;
-  if (row.vendor && kept.some((v) => v._id === String(row.vendor._id))) return row;
-  return { ...row, vendor: kept.length === 1 ? { _id: kept[0]._id, name: kept[0].name } : null };
-};
 const fileFromDoc = (d) => ({
   fileName: d.fileName, fileUrl: d.fileUrl, fileType: d.fileType, uploadedAt: d.uploadedAt,
   vendor: d.vendorId ? { _id: String(d.vendorId), name: d.vendorName || '' } : null,
@@ -56,6 +41,25 @@ const fileFromDoc = (d) => ({
   deliveryDays: d.deliveryDays ?? '',
 });
 const todayStr = () => new Date().toISOString().slice(0, 10);
+
+// Item vendor sources (indent item .vendorSource). A "Quote Required? = No" item keeps
+// the vendor chosen in Step 1.2 / Pending for PO as PO_PREPARATION; a quoted item keeps
+// the vendor approved here as APPROVED_QUOTATION.
+const SOURCE_APPROVED = 'APPROVED_QUOTATION';
+
+// Why an eligible vendor is offered — shown under its name in the picker: it quoted for the item
+// (Step 1.2) and/or has supplied it before (placed PO / Vendor Master item list).
+const eligibleCaption = (h) => {
+  const parts = [];
+  if (h.quoted) parts.push('Quoted');
+  if (h.poCount || h.inCatalog) parts.push('Previous vendor');
+  if (h.location) parts.push(h.location);
+  if (h.poCount) {
+    parts.push(`${h.poCount} PO${h.poCount > 1 ? 's' : ''}${h.lastPoDate ? ` · last ${fmtDate(h.lastPoDate)}` : ''}${h.lastPoNumber ? ` (${h.lastPoNumber})` : ''}`);
+  }
+  if (h.inCatalog) parts.push('In Vendor Master item list');
+  return parts.join(' · ');
+};
 
 // Carry each item's Step 1.2 status forward into Step 1.3. Items that had a quote
 // (YES) need an approved-quotation; items marked "Quote Not Required" in Step 1.2
@@ -79,18 +83,40 @@ const itemsOf = (indent) => {
   return [];
 };
 
+// Where an item stands (the summary counts and the Submit payload both read this):
+//   NO_QUOTE  Quote Required = No — nothing to approve here
+//   APPROVED  goes on to PO — a vendor is optional here
+//   ON_HOLD   "Hold / Keep Pending"
+//   PENDING   left unticked in Select Items mode (saved as pending, kept for later)
+// With Select Items OFF every quoted item that is not on hold is approved (as always); with it ON
+// only the ticked ones are.
+const decisionOf = (r, selectMode = false) => {
+  if (r.statusDone !== 'YES') return 'NO_QUOTE';
+  if (r.locked) return 'APPROVED';
+  if (r.hold) return 'ON_HOLD';
+  if (selectMode && !r.selected) return 'PENDING';
+  return 'APPROVED';
+};
+
 const QuotationApprovalDialog = ({ open, onClose, indent }) => {
   const { enqueueSnackbar } = useSnackbar();
 
   const [actualAt, setActualAt] = useState(todayStr());
   const [remarks, setRemarks] = useState('');
-  const [rows, setRows] = useState([]); // [{ itemId, skuId, skuCode, itemName, qty, unit, statusDone, files, actualAt, remarks }]
+  const [rows, setRows] = useState([]); // [{ itemId, skuId, skuCode, itemName, qty, unit, statusDone, files, actualAt, remarks, vendor, hold, locked, selected }]
+  const [selectMode, setSelectMode] = useState(false); // Select Items: only ticked items are approved
 
   const [approveQuotation, { isLoading: saving }] = useApproveQuotationMutation();
-  const { data: vendorsRes, isLoading: vendorsLoading, isError: vendorsError, refetch: refetchVendors } = useGetVendorsQuery(
-    { limit: 500, sort: 'name' }, { skip: !open },
+  // The vendors an item may be approved for: its ELIGIBLE vendors — quoted at Step 1.2 OR previously
+  // supplied (purchase history + Vendor Master item list). Served — and re-checked on save — by the API.
+  const { data: historyRes, isError: historyError, refetch: refetchHistory } = useGetIndentItemVendorHistoryQuery(
+    indent?._id, { skip: !open || !indent?._id, refetchOnMountOrArgChange: true },
   );
-  const vendorOptions = (vendorsRes?.data || []).filter((v) => v.isActive !== false);
+  const historyByItem = useMemo(() => {
+    const map = {};
+    (historyRes?.data?.items || []).forEach((h) => { map[String(h.itemId)] = h.eligibleVendors || h.vendors || []; });
+    return map;
+  }, [historyRes]);
 
   useEffect(() => {
     if (!open) return;
@@ -100,7 +126,8 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
 
     // Step 1.3 reuses the quotations uploaded in Step 1.2 — the user never
     // re-uploads. On first open, load each item's Step 1.2 documents; on re-edit,
-    // restore the previously-kept approved selection so prior removals persist.
+    // restore the previously-saved selection (vendor, hold, kept files, date, remarks)
+    // so nothing already recorded is lost.
     // Matching is strictly itemId-first (matchItemRow) so a skuCode/itemName
     // collision between two lines never pulls in the wrong item's files.
     const step12 = indent?.quoteComparativeStep;
@@ -111,11 +138,12 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
     // indent, never spread across multiple items.
     const step12FlatDocs = legacyFallbackDocs(step12Items, indentItems, step12?.quotationDocuments, step12?.quotationUploaded);
 
-    setRows(indentItems.map((it, i) => {
+    const built = indentItems.map((it, i) => {
       const s = matchItemRow(saved, it);
       const s12 = matchItemRow(step12Items, it);
-      const sourceDocs = s?.approvedQuotationDocuments?.length
-        ? s.approvedQuotationDocuments                     // re-edit: prior approved selection
+      const heldOrPending = ['ON_HOLD', 'PENDING'].includes(s?.statusDone);
+      const sourceDocs = s?.approvedQuotationDocuments?.length || heldOrPending
+        ? (s.approvedQuotationDocuments || [])             // re-edit: prior kept selection (a held item may keep none)
         : (s12?.quotationDocuments?.length
           ? s12.quotationDocuments                         // first open: reuse Step 1.2 files
           : step12FlatDocs);                                // legacy flat fallback (single-item only)
@@ -125,7 +153,14 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
       const files = sourceDocs
         .filter((d) => d?.fileUrl)
         .map((d) => fileFromDoc(step12ByUrl.get(d.fileUrl) || d));
-      return reconcileVendor({
+      const statusDone = carriedItemStatus(step12, it);
+      // Vendor already recorded on the item. Quoted item -> the approved vendor (re-edit
+      // before any PO). No-quote item -> the vendor chosen earlier (Step 1.2 history pick or
+      // Pending for PO), shown read-only: Step 1.3 never saves a vendor for it.
+      const hold = statusDone === 'YES' && s?.statusDone === 'ON_HOLD';
+      const recorded = it.vendorId && !hold && (statusDone === 'YES' ? it.vendorSource === SOURCE_APPROVED : true)
+        ? { _id: String(it.vendorId), name: it.vendorName || '' } : null;
+      return {
         itemId: it._id && it._id !== 'legacy' ? it._id : undefined,
         skuId: it.skuId || undefined,
         skuCode: it.skuCode || '',
@@ -134,87 +169,136 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
         qty: it.approvedQuantity || it.quantity,
         unit: it.unit || 'Pcs',
         // Status is carried from Step 1.2 — never chosen here.
-        statusDone: carriedItemStatus(step12, it),
+        statusDone,
         files,
         actualAt: s?.actualAt ? s.actualAt.slice(0, 10) : '',
         remarks: s?.remarks || '',
-        // Approved vendor already recorded for this item (re-edit before any PO).
-        vendor: it.vendorSource === 'APPROVED_QUOTATION' && it.vendorId ? { _id: String(it.vendorId), name: it.vendorName } : null,
-      });
-    }));
+        vendor: recorded,
+        // A vendor saved earlier stays selectable even if it has no purchase history (kept as recorded).
+        savedVendor: statusDone === 'YES' ? recorded : null,
+        hold,
+        // Already on a PO: its approval and vendor can no longer change.
+        locked: statusDone === 'YES' && it.procurementStatus === 'PO_CREATED',
+        poNumber: it.poNumber || '',
+        // Select Items: ticked = already approved (saved YES row, or on a PO).
+        selected: statusDone === 'YES' && (it.procurementStatus === 'PO_CREATED' || s?.statusDone === 'YES'),
+        savedPending: statusDone === 'YES' && s?.statusDone === 'PENDING',
+      };
+    });
+    setRows(built);
+    // Reopening a partial step (items saved as pending) comes back in Select Items mode with the
+    // already-approved items ticked.
+    setSelectMode(built.some((r) => r.savedPending));
   }, [open, indent]);
 
+  // A saved vendor whose name was not stored with the item is named from its purchase history.
+  const namedRows = rows.map((r) => {
+    if (!r.vendor?._id || r.vendor.name) return r;
+    const m = (historyByItem[String(r.itemId)] || []).find((h) => String(h.vendorId) === String(r.vendor._id));
+    return m ? { ...r, vendor: { ...r.vendor, name: m.vendorName } } : r;
+  });
+
   const patchRow = (idx, patch) => setRows((cur) => cur.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  // Hold / Keep Pending: the item leaves the vendor decision (its vendor choice is cleared)
+  // and stays on Step 1.3; Resume puts it back to Pending.
+  const setHold = (idx, hold) => setRows((cur) => cur.map((r, i) => (i === idx ? { ...r, hold, ...(hold ? { vendor: null, selected: false } : {}) } : r)));
 
   const removeFile = (idx, fileIdx) => setRows((cur) => cur.map((r, i) => (i === idx
-    ? reconcileVendor({ ...r, files: r.files.filter((_, fi) => fi !== fileIdx) })
+    ? { ...r, files: r.files.filter((_, fi) => fi !== fileIdx) }
     : r)));
 
-  // Approved Vendor options per item: the vendors whose kept quotation names them;
-  // an item whose quotations name no vendor (older record) → Vendor Master.
+  // Select Items — a quoted row can be ticked unless it is held or already on a PO.
+  const canSelect = (r) => r.statusDone === 'YES' && !!r.itemId && !r.hold && !r.locked;
+  const selectRow = (idx, selected) => setRows((cur) => cur.map((r, i) => (i === idx && canSelect(r) ? { ...r, selected } : r)));
+  const selectable = rows.filter(canSelect);
+  const selectedCount = selectable.filter((r) => r.selected).length;
+  const allSelected = selectable.length > 0 && selectedCount === selectable.length;
+  const selectAll = (on) => setRows((cur) => cur.map((r) => (canSelect(r) ? { ...r, selected: on } : r)));
+
+  // Approved Vendor options per item: its ELIGIBLE vendors only — quoted for it at Step 1.2 OR
+  // previously supplied (never the whole Vendor Master). A vendor already saved for the item is
+  // always kept selectable so a saved selection never disappears.
   const vendorOptionsFor = (row) => {
-    const kept = keptVendorOptions(row.files);
-    return kept.length ? kept : vendorOptions;
-  };
-  // Legacy fallback (intentional): quotations saved before vendors were recorded
-  // name no vendor, so the item keeps the Vendor Master choice (the server
-  // applies the same rule). Once any kept quotation names a vendor, only those count.
-  const untaggedKept = (row) => (row.files || []).filter((f) => !f.vendor?._id).length;
-  const vendorHint = (row) => {
-    const kept = keptVendorOptions(row.files);
-    const older = untaggedKept(row);
-    if (kept.length) {
-      return `Only vendors whose quotation is kept (${kept.length})${older ? ` · ${older} older quotation${older === 1 ? '' : 's'} name no vendor` : ''}`;
+    let opts = (historyByItem[String(row.itemId)] || []).map((h) => ({
+      _id: String(h.vendorId), name: h.vendorName, caption: eligibleCaption(h),
+      quotedRate: h.quoted ? h.quotedRate : null, deliveryDays: h.quoted ? h.deliveryDays : null,
+    }));
+    if (row.savedVendor?._id && !opts.some((o) => o._id === String(row.savedVendor._id))) {
+      opts = [{ _id: String(row.savedVendor._id), name: row.savedVendor.name, caption: 'Previously approved' }, ...opts];
     }
-    return 'Older quotation — no vendor was recorded, so any active vendor can be selected';
+    return opts;
   };
-  const legacyRows = rows.filter((r) => r.statusDone === 'YES' && r.itemId && r.files.length && !keptVendorOptions(r.files).length);
-  // Award summary: one PO per vendor will follow.
+  // Whether an item's vendors are still loading, or loaded and empty (→ "No Eligible Vendors Found").
+  const vendorStateFor = (row) => {
+    const loaded = Object.prototype.hasOwnProperty.call(historyByItem, String(row.itemId));
+    return {
+      loading: !loaded && !historyError,
+      failed: !loaded && historyError,
+      noHistory: loaded && !(historyByItem[String(row.itemId)] || []).length && !row.savedVendor?._id,
+    };
+  };
+
+  // Award summary: one PO per vendor will follow (approved items only).
   const awards = (() => {
     const byVendor = new Map();
-    rows.filter((r) => r.statusDone === 'YES' && r.vendor?._id).forEach((r) => {
+    namedRows.filter((r) => decisionOf(r, selectMode) === 'APPROVED' && r.vendor?._id).forEach((r) => {
       const k = String(r.vendor._id);
       if (!byVendor.has(k)) byVendor.set(k, { name: r.vendor.name, items: [] });
       byVendor.get(k).items.push(r.itemDisplayNumber || r.itemName);
     });
     return [...byVendor.values()];
   })();
-  const pendingVendor = rows.filter((r) => r.statusDone === 'YES' && r.itemId && !r.vendor?._id).length;
+  // Header summary - counted from the item rows themselves; the four chips partition the items:
+  //   Approved  quoted items going on to PO (every quoted item that is not on hold; ticked ones in Select Items)
+  //   Pending   quoted items left unticked in Select Items mode / saved as pending earlier (kept for later)
+  //   On Hold   quoted items kept pending on purpose ("Hold / Keep Pending")
+  //   No Quote  Quote Required = No (nothing to approve here)
+  const decide = (r) => decisionOf(r, selectMode);
+  const counts = namedRows.reduce((c, r) => { c[decide(r)] += 1; return c; }, { APPROVED: 0, PENDING: 0, ON_HOLD: 0, NO_QUOTE: 0 });
+  const stillOpen = counts.PENDING + counts.ON_HOLD;
+  // Selected = items ticked in Select Items mode (0 when the mode is off), on-PO ones included.
+  const selectedTotal = selectMode ? namedRows.filter((r) => r.statusDone === 'YES' && r.itemId && !r.hold && (r.locked || r.selected)).length : 0;
+  const newlyApproved = namedRows.filter((r) => decide(r) === 'APPROVED' && r.statusDone === 'YES' && !r.locked).length;
 
   const handleSubmit = async () => {
-    // Each carried-YES item must keep ≥1 quotation to be approved; "Quote Not
-    // Required" items have nothing to approve and are exempt.
-    const missing = rows.find((r) => r.statusDone === 'YES' && r.files.length === 0);
+    const decided = rows.map((r) => ({ r, d: decide(r) }));
+    // An item going forward must keep ≥1 quotation; held / pending items may keep none.
+    const missing = decided.find(({ r, d }) => d === 'APPROVED' && r.statusDone === 'YES' && r.files.length === 0);
     if (missing) {
-      enqueueSnackbar(`Keep at least one approved quotation for "${missing.itemName}"`, { variant: 'warning' });
+      enqueueSnackbar(`Keep at least one approved quotation for "${missing.r.itemName}"`, { variant: 'warning' });
       return;
     }
-    const noVendor = rows.find((r) => r.statusDone === 'YES' && r.itemId && !r.vendor?._id);
-    if (noVendor) {
-      enqueueSnackbar(`Select the approved vendor for "${noVendor.itemName}"`, { variant: 'warning' });
+    if (selectMode && newlyApproved === 0) {
+      enqueueSnackbar('Select at least one item to approve', { variant: 'warning' });
       return;
     }
-    // statusDone is NOT sent — Step 1.3 carries it from Step 1.2 (the backend
-    // derives it). The kept documents reuse Step 1.2's file references verbatim
-    // (same URL + uploadedAt) so nothing is uploaded or stored twice.
+    if (counts.APPROVED === 0 && counts.ON_HOLD === 0) {
+      enqueueSnackbar('Nothing to submit — every quoted item is on hold', { variant: 'warning' });
+      return;
+    }
+    // statusDone is NOT carried as the step status — the backend derives it (complete only
+    // when every quoted item is approved). The kept documents reuse Step 1.2's file references
+    // verbatim (same URL + uploadedAt) so nothing is uploaded or stored twice.
     try {
       await approveQuotation({
         id: indent._id,
-        itemApprovedQuotations: rows.map((r) => ({
+        itemApprovedQuotations: decided.map(({ r, d }) => ({
           itemId: r.itemId,
           skuId: r.skuId,
           skuCode: r.skuCode,
           itemName: r.itemName,
-          statusDone: r.statusDone,
+          statusDone: d === 'ON_HOLD' ? 'ON_HOLD' : d === 'PENDING' ? 'PENDING' : r.statusDone,
           approvedQuotationDocuments: r.files.map((f) => ({ fileName: f.fileName, fileUrl: f.fileUrl, fileType: f.fileType, uploadedAt: f.uploadedAt })),
-          vendorId: r.statusDone === 'YES' ? (r.vendor?._id || null) : null,
+          vendorId: d === 'APPROVED' && r.statusDone === 'YES' ? (r.vendor?._id || null) : null,
           actualAt: r.actualAt || actualAt,
           remarks: r.remarks?.trim() || '',
         })),
         actualAt,
         remarks: remarks.trim(),
       }).unwrap();
-      enqueueSnackbar('Quotation approval recorded', { variant: 'success' });
+      enqueueSnackbar(stillOpen
+        ? `Quotation approval recorded — ${stillOpen} item${stillOpen === 1 ? '' : 's'} still open on Step 1.3`
+        : 'Quotation approval recorded', { variant: 'success' });
       onClose?.(true);
     } catch (err) {
       enqueueSnackbar(err?.data?.message || 'Failed to save', { variant: 'error' });
@@ -237,32 +321,53 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
         </Grid>
 
         <Divider sx={{ my: 1.5 }} />
-        {/* Status is carried from Step 1.2 — the user is not asked to pick it again. */}
-        <Typography variant="body2" sx={{ mb: 1.5, p: 1.25, borderRadius: '8px', bgcolor: '#eff6ff', color: '#1d4ed8', fontWeight: 600 }}>
-          Status carried from Receive Quote (Step 1.2): YES
-        </Typography>
-        <Typography sx={{ fontWeight: 700, mb: 1 }}>
-          Approve the quotation and select the vendor for each item
-        </Typography>
-        {legacyRows.length > 0 && (
-          <Alert severity="info" sx={{ mb: 1.5 }} data-testid="legacy-vendor-note">
-            {legacyRows.length === 1 ? '1 item has' : `${legacyRows.length} items have`} quotations saved before vendors were recorded
-            ({legacyRows.map((r) => r.itemDisplayNumber || r.itemName).join(', ')}). For {legacyRows.length === 1 ? 'it' : 'them'} any active vendor
-            can be selected; to limit the choice to the vendors who quoted, name the vendor on each quotation in Receive Quote (Step 1.2).
-          </Alert>
-        )}
-        <ItemQuotationTable
-          rows={rows}
-          qtyLabel="Approved Qty"
-          uploadLabel="Quotation (from Step 1.2)"
+        {/* Status is carried from Step 1.2 per item - this strip counts the items by state. */}
+        {/* Select Items: tick the items to approve now — the rest stay pending on Step 1.3. */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 1 }} data-testid="select-items-bar">
+          <FormControlLabel
+            sx={{ m: 0 }}
+            control={<Switch size="small" checked={selectMode} onChange={(e) => setSelectMode(e.target.checked)} inputProps={{ 'data-testid': 'select-items-toggle' }} />}
+            label={<Typography sx={{ fontWeight: 700, fontSize: '0.84rem' }}>Select Items</Typography>}
+          />
+          {selectMode && (
+            <>
+              <FormControlLabel
+                sx={{ m: 0 }}
+                control={<Checkbox size="small" checked={allSelected} indeterminate={selectedCount > 0 && !allSelected} disabled={!selectable.length}
+                  onChange={(e) => selectAll(e.target.checked)} inputProps={{ 'data-testid': 'select-all' }} />}
+                label={<Typography sx={{ fontSize: '0.82rem' }}>Select all eligible</Typography>}
+              />
+              <Typography sx={{ fontSize: '0.8rem', color: PFMS.sub, fontWeight: 600 }} data-testid="select-count">
+                {selectedCount} of {selectable.length} selected
+              </Typography>
+              <Typography sx={{ fontSize: '0.74rem', color: PFMS.sub }}>Only ticked items are approved; unticked items stay pending.</Typography>
+            </>
+          )}
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1.5 }} data-testid="approval-summary"
+          data-total={namedRows.length} data-selected={selectedTotal} data-approved={counts.APPROVED} data-pending={counts.PENDING}
+          data-hold={counts.ON_HOLD} data-noquote={counts.NO_QUOTE}>
+          <Typography sx={{ fontWeight: 800, fontSize: '0.86rem', color: PFMS.ink, mr: 0.5 }}>
+            Approve the quotation and select the vendor for each item
+          </Typography>
+          <StatusChip status="NOT_STARTED" tone="neutral" showIcon={false} label={`${namedRows.length} Item${namedRows.length === 1 ? '' : 's'}`} />
+          {selectMode && <StatusChip status="NOT_STARTED" tone="neutral" showIcon={false} label={`${selectedTotal} Selected`} />}
+          <StatusChip status="DONE" tone="green" label={`${counts.APPROVED} Approved`} />
+          <StatusChip status="PENDING" tone={counts.PENDING ? 'amber' : 'neutral'} label={`${counts.PENDING} Pending`} />
+          <StatusChip status="ON_HOLD" tone={counts.ON_HOLD ? 'orange' : 'neutral'} label={`${counts.ON_HOLD} On Hold`} />
+          <StatusChip status="NOT_STARTED" tone="neutral" showIcon={false} label={`${counts.NO_QUOTE} No Quote`} />
+        </Box>
+        <ApprovedVendorTable
+          rows={namedRows}
           yesValue="YES"
-          hideStatus
-          noUpload
+          decisionOf={decide}
+          selectMode={selectMode}
+          onSelect={selectRow}
           onRemoveFile={removeFile}
           onPatchRow={patchRow}
+          onHold={setHold}
           vendorOptions={vendorOptionsFor}
-          vendorHint={vendorHint}
-          vendorsLoading={vendorsLoading}
+          vendorState={vendorStateFor}
         />
         <Box data-testid="vendor-award-summary" sx={{ mt: 1.5, p: 1.25, borderRadius: '10px', border: '1px solid', borderColor: 'divider', bgcolor: '#f8fafc' }}>
           <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase' }}>
@@ -275,20 +380,20 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           )) : (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>No vendor selected yet.</Typography>
           )}
-          {pendingVendor > 0 && (
+          {stillOpen > 0 && (
             <Typography variant="body2" sx={{ mt: 0.5, color: '#b45309', fontWeight: 600 }} data-testid="vendor-award-pending">
-              {pendingVendor} item{pendingVendor === 1 ? '' : 's'} still need{pendingVendor === 1 ? 's' : ''} a vendor
+              {stillOpen} item{stillOpen === 1 ? '' : 's'} stay{stillOpen === 1 ? 's' : ''} pending on Step 1.3 — not in any PO until approved
             </Typography>
           )}
         </Box>
-        {vendorsError && (
-          <Alert severity="error" sx={{ mt: 1 }} action={<Button size="small" onClick={() => refetchVendors()}>Retry</Button>}>
-            Could not load the Vendor Master — the approved vendor cannot be selected.
+        {historyError && (
+          <Alert severity="error" sx={{ mt: 1 }} action={<Button size="small" onClick={() => refetchHistory()}>Retry</Button>}>
+            Could not load the items&apos; eligible vendors — a vendor cannot be selected until they load.
           </Alert>
         )}
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
           Quotations from Step 1.2 are loaded automatically. Remove the ones not approved — the remaining quotation(s) are saved as the approved quotation. No re-upload needed.
-          Select the vendor whose quotation is approved for each item — only vendors who quoted in Step 1.2 are offered, and each vendor gets its own Purchase Order.
+          The vendor is optional here — if none is chosen it is chosen on the Purchase Order. Vendors offered are the ones who quoted for the item or have supplied it before. Use Select Items to approve only some items now; items on hold or left unticked stay pending and can be completed later. Only approved items go to Purchase Orders.
         </Typography>
 
         <Divider sx={{ my: 1.5 }} />

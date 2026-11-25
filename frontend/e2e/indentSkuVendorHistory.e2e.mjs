@@ -181,7 +181,8 @@ await go(`/procurement/vendors/${vB._id}`);
 await page.getByTestId('vendor-po-row').first().waitFor({ timeout: 15000 });
 const rowsB = await page.getByTestId('vendor-po-row').evaluateAll((rs) => rs.map((r) => r.dataset.po));
 const aNumbers = (posA.data || []).map((p) => p.poNumber || p.draftNumber);
-check('Vendor B page lists only B\'s POs', rowsB.length === (posB.data || []).length && rowsB.every((n) => !aNumbers.includes(n)), rowsB.join(', '));
+// Every --api run adds a PO per vendor, so the history can outgrow its first page (10 rows).
+check('Vendor B page lists only B\'s POs', rowsB.length === Math.min(10, (posB.data || []).length) && rowsB.every((n) => !aNumbers.includes(n)), rowsB.join(', '));
 
 check('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 await browser.close();

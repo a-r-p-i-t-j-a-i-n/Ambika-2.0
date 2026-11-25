@@ -8,6 +8,7 @@ import { ClipboardList, AlertTriangle, Inbox, Search, ArrowUpDown } from 'lucide
 import { useNavigate } from 'react-router-dom';
 import { useGetMyTasksQuery } from '../../store/api/o2dFmsApi';
 import { O2D } from './o2dTheme';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const num = (n) => Number(n || 0).toLocaleString('en-IN');
@@ -55,7 +56,7 @@ const statusChip = (t) => {
 
 const MyTasksWorkspace = () => {
   // Poll so updates made by the MD (re-plan / reassign) appear without a manual refresh.
-  const { data, isLoading } = useGetMyTasksQuery(undefined, { pollingInterval: 30_000, skipPollingIfUnfocused: true, refetchOnMountOrArgChange: true });
+  const { data, isLoading, isError, error, refetch } = useGetMyTasksQuery(undefined, { pollingInterval: 30_000, skipPollingIfUnfocused: true, refetchOnMountOrArgChange: true });
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
@@ -109,20 +110,17 @@ const MyTasksWorkspace = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 1.5, md: 2 }, bgcolor: O2D.canvas, minHeight: '100vh' }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2} flexWrap="wrap" gap={1}>
-        <Box>
-          <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: O2D.ink }}>My Tasks</Typography>
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-            Everything assigned to you — what to do, for which order, and by when.
-          </Typography>
-        </Box>
+    <O2dPage
+      icon={ClipboardList}
+      title="My Tasks"
+      subtitle="Everything assigned to you — what to do, for which order, and by when."
+      actions={(
         <Stack direction="row" spacing={1}>
           <Chip label={`${counts.actionable} to do`} color="primary" variant="outlined" />
           {counts.overdue > 0 && <Chip icon={<AlertTriangle size={14} />} label={`${counts.overdue} overdue`} color="error" />}
         </Stack>
-      </Stack>
-
+      )}
+    >
       {!isLoading && tasks.length > 0 && (
         <Paper elevation={0} sx={{ p: 1, borderRadius: '8px', mb: 1.5, border: `1px solid ${O2D.line}`, bgcolor: O2D.surface, display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', justifyContent: 'space-between' }}>
           <ToggleButtonGroup size="small" value={filter} exclusive onChange={(_, v) => v && setFilter(v)} sx={{ flexWrap: 'wrap' }}>
@@ -153,9 +151,10 @@ const MyTasksWorkspace = () => {
         </Typography>
       )}
 
+      {isError && <LoadErrorNote title="Could not load your tasks" error={error} onRetry={refetch} compact={!!data} />}
       {isLoading ? (
         <Skeleton variant="rounded" height={360} />
-      ) : tasks.length === 0 ? (
+      ) : isError && !data ? null : tasks.length === 0 ? (
         <Paper elevation={0} sx={{ p: 6, textAlign: 'center', borderRadius: '8px', border: `1px solid ${O2D.line}`, bgcolor: O2D.surface }}>
           <Inbox size={40} style={{ opacity: 0.4 }} />
           <Typography variant="h6" sx={{ mt: 1 }}>You're all caught up</Typography>
@@ -249,7 +248,7 @@ const MyTasksWorkspace = () => {
           />
         </Paper>
       )}
-    </Box>
+    </O2dPage>
   );
 };
 

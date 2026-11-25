@@ -11,6 +11,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip as ReTooltip, ResponsiveContainer, CartesianGrid, Cell, LabelList,
 } from 'recharts';
 import { useGetMisScoresQuery } from '../../store/api/o2dFmsApi';
+import { LoadErrorNote, O2dPage } from './components/O2dUi';
 
 const C = {
   ink: '#0b2545', brand: '#1d4ed8', brandDk: '#1e3a8a', success: '#0f766e',
@@ -43,7 +44,7 @@ const Panel = ({ title, subtitle, children, height = 300 }) => (
 
 const MisScoring = () => {
   const navigate = useNavigate();
-  const { data, isLoading } = useGetMisScoresQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
+  const { data, isLoading, isError, error, refetch } = useGetMisScoresQuery(undefined, { pollingInterval: 60_000, skipPollingIfUnfocused: true });
   const doers = useMemo(() => data?.data?.doers || [], [data]);
   const totals = data?.data?.totals || {};
 
@@ -60,22 +61,11 @@ const MisScoring = () => {
   const delayData = useMemo(() => doers.map((d) => ({ name: short(d.name), avgDelay: Math.round((d.avgDelayMins || 0) / 6) / 10 })), [doers]); // hours, 1dp
 
   if (isLoading) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={520} /></Box>;
+  if (isError && !data) return <Box sx={{ p: 3 }}><LoadErrorNote title="Could not load the scores" error={error} onRetry={refetch} /></Box>;
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: '100vh' }}>
-      {/* Header */}
-      <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 0.5 }}>
-        <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(C.brand, 0.1), color: C.brand, border: `1px solid ${alpha(C.brand, 0.2)}` }}>
-          <Target size={21} />
-        </Box>
-        <Box>
-          <Typography sx={{ fontSize: { xs: '1.2rem', sm: '1.4rem' }, fontWeight: 800, color: C.brandDk, lineHeight: 1.1 }}>MIS Scoring</Typography>
-          <Typography sx={{ color: C.slate, fontSize: '0.8rem' }}>
-            KRA / KPI accountability for every doer — the MIS score is a penalty total (0 = perfect, the more negative the worse).
-          </Typography>
-        </Box>
-      </Stack>
-
+    <O2dPage icon={Target} title="MIS Scoring"
+      subtitle="KRA / KPI accountability for every doer — the MIS score is a penalty total (0 = perfect, the more negative the worse).">
       {doers.length === 0 ? (
         <Paper sx={{ p: 6, mt: 2, textAlign: 'center', borderRadius: 3, color: C.slate, border: `1px solid ${C.line}` }}>
           No assigned steps yet — MIS scores appear once doers are assigned and start working.
@@ -210,7 +200,7 @@ const MisScoring = () => {
           </Paper>
         </>
       )}
-    </Box>
+    </O2dPage>
   );
 };
 

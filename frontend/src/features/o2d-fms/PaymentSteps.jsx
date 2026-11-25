@@ -11,6 +11,8 @@ import { useGetSalesInvoicesQuery } from '../../store/api/salesInvoiceApi';
 import { usePaymentFollowUpMutation, usePaymentReceiptMutation } from '../../store/api/o2dFulfillmentApi';
 import { useReturnToTask } from './useReturnToTask';
 import { useFmsGate } from './FmsGate';
+import { FormSection } from '../ims/imsMeta';
+import { FLUENT } from '../ims/imsFluent';
 
 const YNC = ['Yes', 'No', 'Cancelled'];
 
@@ -25,7 +27,7 @@ const PaymentSteps = () => {
   const showFollowUp = !part || part === 'followup';
   const showReceipt = !part || part === 'receipt';
   const shell = part === 'followup'
-    ? { step: 'Step 2.10', title: 'Follow up for Payment', subtitle: 'Chase the payment from the client.' }
+    ? { step: 'Step 2.10', title: 'Payment Follow-up', subtitle: 'Chase the payment from the client.' }
     : part === 'receipt'
       ? { step: 'Step 2.11', title: 'Receive Payment & Tally Entry', subtitle: 'Record the payment received and the Tally entry.' }
       : { step: 'Steps 2.10 – 2.11', title: 'Payment Follow-up & Receipt', subtitle: 'Chase the payment, then record what was received.' };
@@ -100,7 +102,7 @@ const PaymentSteps = () => {
 
   return (
     <O2dStepShell icon={IndianRupee} step={shell.step} title={shell.title} subtitle={shell.subtitle} gate={gate}>
-      <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
+      <FormSection step={1} done={!!inv} fluent={FLUENT.lavender} title="Pick the invoice" testId="o2d-step-pick">
         {/* Scope banner — when the task sent us here for ONE challan, say so, and
             restrict the picker to that challan's own invoice. Without this the
             doer could not tell which consignment they were recording against. */}
@@ -142,17 +144,13 @@ const PaymentSteps = () => {
             <Chip size="small" label={`Amount: ₹${(inv.invoiceAmount || 0).toLocaleString('en-IN')}`} />
           </Stack>
         )}
-      </Paper>
+      </FormSection>
 
       {inv && (
         <Stack spacing={2}>
           {/* 2.10 */}
           {showFollowUp && (
-          <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.info.main}` }}>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
-              <PhoneCall size={18} color={theme.palette.info.main} />
-              <Typography sx={{ fontWeight: 800 }}>2.10 · Follow up for Payment</Typography>
-            </Stack>
+          <FormSection step={2} fluent={FLUENT.blue} icon={PhoneCall} title="2.10 · Payment Follow-up" testId="o2d-step-followup">
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <TextField select label="Status" value={fuStatus} onChange={(e) => setFuStatus(e.target.value)} size="small" sx={{ minWidth: 200 }} helperText="“Yes” means payment received / done.">
                 {YNC.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
@@ -161,16 +159,12 @@ const PaymentSteps = () => {
                 Save Follow-up
               </Button>
             </Stack>
-          </Paper>
+          </FormSection>
           )}
 
           {/* 2.11 */}
           {showReceipt && (
-          <Paper sx={{ p: 2.5, borderRadius: 3, borderLeft: `4px solid ${theme.palette.success.main}` }}>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
-              <BadgeCheck size={18} color={theme.palette.success.main} />
-              <Typography sx={{ fontWeight: 800 }}>2.11 · Receive Payment & Tally Entry</Typography>
-            </Stack>
+          <FormSection step={showFollowUp ? 3 : 2} fluent={FLUENT.teal} title="2.11 · Receive Payment & Tally Entry" testId="o2d-step-receipt">
             <Stack spacing={2}>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                 <TextField select label="Status" value={rcStatus} onChange={(e) => setRcStatus(e.target.value)} size="small" sx={{ minWidth: 160 }}>
@@ -191,7 +185,7 @@ const PaymentSteps = () => {
                 </Button>
               </Stack>
             </Stack>
-          </Paper>
+          </FormSection>
           )}
         </Stack>
       )}
