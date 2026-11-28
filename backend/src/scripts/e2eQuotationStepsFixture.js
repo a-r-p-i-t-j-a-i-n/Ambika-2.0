@@ -282,8 +282,11 @@ const api = async () => {
     statusDone: 'YES', itemQuotations: itemQuotes(d, (i) => [doc(`D-item${i + 1}`)], (i) => (i === 0 ? 'YES' : 'QUOTE_NOT_REQUIRED')),
   });
   d = await fresh(d._id);
-  check('D: still needs Step 1.3 (pending), not skipped', dQ.status === 200 && d.overallStatus === 'QUOTE_RECEIVED'
-    && await stateOf('QUOTATION_APPROVAL', d._id) === 'PENDING', `${dQ.status} ${d.overallStatus}`);
+  // The quoted item still needs Step 1.3 (pending, not skipped); the not-required item needs no quotation and is released to
+  // PO creation at once — so the indent is PO-ready (QUOTATION_APPROVED) with Step 1.3 open as a partial step.
+  check('D: still needs Step 1.3 for the quoted item (pending, not skipped), the no-quote item is already PO-ready',
+    dQ.status === 200 && d.overallStatus === 'QUOTATION_APPROVED' && d.quotationApprovalStep?.partial === true && !d.quotationApprovalStep?.skipped
+    && await stateOf('QUOTATION_APPROVAL', d._id) === 'PENDING', `${dQ.status} ${d.overallStatus} ${JSON.stringify(d.quotationApprovalStep)}`);
   check('D: the not-required item carries no files', d.quoteComparativeStep.itemQuotations[1].quotationDocuments.length === 0);
 
   console.log('\n[E] Concurrent Step 1.2 submits');

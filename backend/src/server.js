@@ -11,6 +11,7 @@ import { startO2DEscalationJob } from './jobs/o2d-fms.escalation.job.js';
 import { startFmsDoerSyncJob } from './jobs/fms-doer.sync.job.js';
 import { startO2dDelegationSync } from './modules/o2d-fms/o2d-delegation.js';
 import { verifyInvoiceNumberIndex } from './modules/procurement/vendor-invoice/invoiceNumberIndexGuard.js';
+import { ensureNewVendorRuleStart } from './modules/procurement/approvers/newVendorRule.js';
 
 const startServer = async () => {
   // Connect to MongoDB
@@ -20,6 +21,9 @@ const startServer = async () => {
   await seedAccessControl();
   // Seed pricing baseline + CompanySettings singleton. Idempotent.
   await seedPricing();
+  // Purchase Approval: stamp the day the new-vendor rule went live (once) — vendors
+  // created before it are never "new" (procurement/approvers/newVendorRule.js).
+  await ensureNewVendorRuleStart();
 
   // Vendor invoice numbering safeguard: confirm the unique index from the
   // database itself (read-only — never creates or syncs indexes). Never throws;

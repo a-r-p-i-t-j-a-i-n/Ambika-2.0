@@ -14,7 +14,7 @@
  * (vendor + SKU + name + unit) changes the previous answer, the rate it filled
  * and any edit made on top of it are dropped before the new answer arrives.
  */
-import { sameRate } from '../rate-changes/rateChangeMeta.js';
+import { sameRate, fmtRate } from '../rate-changes/rateChangeMeta.js';
 
 const upper = (s) => String(s || '').trim().toUpperCase();
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -104,6 +104,8 @@ export const applyAnswer = (it, key, answer, res) => {
     ...it.rateLookup, status: answer.status, message: answer.message,
     vendorRate: res?.found ? Number(res.rate) : null, unit: res?.unit || '',
     candidates: res?.candidates || [],
+    // Another unit, one priced row: the unit may be changed — it goes to Purchase Approval.
+    unitChange: res?.unitChange || null,
   };
   if (answer.status === LOOKUP.ERROR) return { ...it, rateLookup: look };
   if (answer.status !== LOOKUP.FOUND) {
@@ -132,11 +134,23 @@ export const awaitsRate = (it, vendorId) => {
   return it.rateLookup?.key !== key || it.rateLookup?.status === LOOKUP.LOADING;
 };
 
-/** Why this row cannot be saved as it stands ('' = it can): the vendor prices it in another unit / twice. */
+/**
+ * Why this row cannot be saved as it stands ('' = it can): the vendor prices it twice, or in other units and
+ * no single priced row can be changed. A line in another unit than the vendor's ONE priced row is not blocked —
+ * it is a unit change (rateChangeOf), which needs a reason and goes to Purchase Approval.
+ */
 export const lookupBlock = (it) => {
   if (it.fromQuotation) return '';
-  const s = it.rateLookup?.status;
-  return s === LOOKUP.UNIT_MISMATCH || s === LOOKUP.AMBIGUOUS ? (it.rateLookup.message || '') : '';
+  const lk = it.rateLookup;
+  if (lk?.status === LOOKUP.AMBIGUOUS) return lk.message || '';
+  if (lk?.status === LOOKUP.UNIT_MISMATCH && !lk.unitChange) return lk.message || '';
+  return '';
+};
+
+/** True while the row's lookup says "blocked" (shown in red) — a changeable unit is not. */
+export const isLookupBlocked = (it) => {
+  const lk = it?.rateLookup;
+  return lk?.status === LOOKUP.AMBIGUOUS || (lk?.status === LOOKUP.UNIT_MISMATCH && !lk.unitChange);
 };
 
 /**
@@ -146,6 +160,16 @@ export const lookupBlock = (it) => {
  * its saved rate needs nothing more.
  */
 export const rateChangeOf = (it) => {
+  // The line is in another unit than the vendor's one priced row: a UNIT change (the vendor's rate per ITS unit
+  // says nothing about this line, so a rate must be typed). Needs a reason, like a changed rate.
+  const uc = it.rateLookup?.status === LOOKUP.UNIT_MISMATCH ? it.rateLookup.unitChange : null;
+  if (uc) {
+    const base = { unitChange: true, fetched: Number(uc.rate), fetchedUnit: uc.unit };
+    if (it.rate === '' || it.rate == null || !(Number(it.rate) > 0)) return { changed: false, needsReason: false, ...base };
+    if (it.quotationRate != null && sameRate(it.rate, it.quotationRate)) return { changed: false, needsReason: false, ...base };
+    const covered = ['PENDING', 'APPROVED'].includes(it.rateChangeStatus) && sameRate(it.rate, it.savedRate) && sameUnitText(it.unit, it.savedUnit);
+    return { changed: true, covered, needsReason: !covered, ...base };
+  }
   const fetched = it.autoRate;
   if (fetched == null || it.rate === '' || it.rate == null) return { changed: false, needsReason: false };
   if (it.quotationRate != null && sameRate(it.rate, it.quotationRate)) return { changed: false, needsReason: false, fetched: Number(fetched) };
@@ -153,6 +177,14 @@ export const rateChangeOf = (it) => {
   const covered = changed && ['PENDING', 'APPROVED'].includes(it.rateChangeStatus) && sameRate(it.rate, it.savedRate);
   return { changed, covered, needsReason: changed && !covered, fetched: Number(fetched) };
 };
+
+const sameUnitText = (a, b) => norm(a) !== '' && norm(a) === norm(b);
+
+/** What the doer reads under a line whose UNIT differs from the vendor's price. */
+export const unitChangeHint = (it, rc) => (
+  `Vendor price ${fmtRate(rc.fetched)} / ${rc.fetchedUnit || '—'} → ${fmtRate(it.rate)} / ${it.unit || '—'}. A unit change goes to Purchase Approval `
+  + "(the MD or the purchase approver) — the PO can be approved, and the vendor's unit and price change, only once it is approved."
+);
 
 /** A line with no vendor rate to compare against, but a rate entered: the vendor's FIRST rate for the item. */
 export const isFirstRate = (it) => {

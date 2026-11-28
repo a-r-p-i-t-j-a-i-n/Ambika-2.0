@@ -20,10 +20,11 @@ import {
 } from './quotationSteps.js';
 import { ITEM_VENDOR_SOURCE } from './itemVendor.js';
 import {
-  quotedItemIds, mergeApprovalRows, approvalProgress, statusAfterApproval, approvalVendorHistoryProblem,
+  quotedItemIds, mergeApprovalRows, approvalProgress, statusAfterApproval,
 } from './approvalProgress.js';
 import { bindIndentItemsToSkuMaster } from './itemSku.js';
 import { vendorHistoryForItems, historyVendorProblem, eligibleVendorsForItems } from './itemVendorHistory.js';
+import { splitByQuoteNeed } from './approvalProgress.js';
 import Vendor from '../../vendors/vendor.model.js';
 import { laterStepsOf, assertNothingAfter, deleteReason } from '../laterSteps.js';
 import { binDeleted } from '../recycleBin.js';
@@ -269,11 +270,11 @@ const buildItemApprovedQuotations = (items = []) => items.map((it) => {
 });
 
 // Step 1.3 — the approved vendor of every quoted (YES) item in an item-wise
-// approval. Each must be an active Vendor Master record that is ELIGIBLE for the
-// item: it quoted for it at Step 1.2 OR has supplied its SKU before
-// (itemVendorHistory.js eligibleVendorsForItems — never the whole master); the name is
-// taken from the master, never from the client. A vendor already approved for the
-// item is kept as saved (no history re-check). `locked` = items already on a PO
+// approval. Two ways to choose, as on the PO: a PREVIOUS vendor (quoted for the item at
+// Step 1.2 / supplied it before — the dialog lists them first) or ANY other active
+// Vendor Master vendor ("Add New Vendor", including one created from the dialog). So the
+// server asks only that the vendor is an active, non-deleted Vendor Master record; its
+// name is taken from the master, never from the client. `locked` = items already on a PO
 // (their approval no longer changes). `built` is buildItemApprovedQuotations(raw).
 const resolveApprovedVendorPicks = async (indent, raw, built, { locked = new Set() } = {}) => {
   const picks = [];
@@ -297,16 +298,10 @@ const resolveApprovedVendorPicks = async (indent, raw, built, { locked = new Set
     ? await Vendor.find({ _id: { $in: ids }, isDeleted: { $ne: true } }).select('name isActive').lean()
     : [];
   const byId = new Map(vendors.map((v) => [String(v._id), v]));
-  const fresh = picks.filter((p) => !p.unchanged);
-  const history = fresh.length ? await eligibleVendorsForItems(fresh.map((p) => ({ indent, item: p.item }))) : new Map();
   picks.forEach((p) => {
     const v = byId.get(p.vendorId);
     if (!v) throw new AppError(`The vendor selected for "${p.item.itemName}" was not found in the Vendor Master`, 400);
     if (v.isActive === false) throw new AppError(`Vendor "${v.name}" (selected for "${p.item.itemName}") is inactive in the Vendor Master`, 400);
-    if (!p.unchanged) {
-      const why = approvalVendorHistoryProblem({ history: history.get(String(p.item._id)) || [], vendorId: p.vendorId, itemName: p.item.itemName });
-      if (why) throw new AppError(why, 400);
-    }
     p.vendorName = v.name;
   });
   return picks;
@@ -919,9 +914,15 @@ export const indentService = {
     // move the workflow backwards or discard that approval.
     // A partial Step 1.3 that already approved items (and so released them to PO) counts too:
     // Step 1.2 can only be corrected, never moved back.
+    // A step that is only OPEN for its quoted items — opened by Step 1.2 itself when some items need no quotation — has
+    // approved nothing yet and may still be reshaped here; once an item was approved there or any item is on a PO, it may
+    // only be corrected.
+    const step13Rows = indent.quotationApprovalStep?.itemApprovedQuotations || [];
+    const step13HoldsDecisions = step13Rows.some((r) => r.statusDone === 'YES')
+      || (indent.items || []).some((it) => it.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED);
     const step13Approved = (indent.quotationApprovalStep?.statusDone === QUOTATION_APPROVAL_STATUS.YES
       && !indent.quotationApprovalStep?.skipped)
-      || (!!indent.quotationApprovalStep?.partial
+      || (!!indent.quotationApprovalStep?.partial && step13HoldsDecisions
         && [INDENT_OVERALL_STATUS.QUOTATION_APPROVED, INDENT_OVERALL_STATUS.PARTIAL_PO_CREATED].includes(indent.overallStatus));
     if (step13Approved && data.statusDone !== 'YES') {
       throw new AppError('The quotation has already been approved (Step 1.3) — Step 1.2 cannot be changed to "Quote Not Required"', 400);
@@ -952,6 +953,17 @@ export const indentService = {
     const incomingItemQuotations = Array.isArray(data.itemQuotations)
       ? data.itemQuotations.filter((q) => !q.itemId || eligibleItemIds.has(String(q.itemId)))
       : [];
+    // An item already on a PO cannot change between "quote required" and "not required" any more.
+    const savedQuotePath = new Map((indent.quoteComparativeStep?.itemQuotations || []).filter((q) => q.itemId).map((q) => [String(q.itemId), q.statusDone]));
+    const pathChanged = incomingItemQuotations.find((q) => {
+      const it = q.itemId ? indent.items.id?.(q.itemId) : null;
+      return it && it.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED
+        && savedQuotePath.has(String(q.itemId)) && savedQuotePath.get(String(q.itemId)) !== q.statusDone;
+    });
+    if (pathChanged) {
+      const it = indent.items.id(pathChanged.itemId);
+      throw new AppError(`"${it.itemName}" is already on ${it.poNumber ? `PO ${it.poNumber}` : 'a PO'} — cancel that PO before changing whether it needs a quotation`, 400);
+    }
     const itemQuotations = incomingItemQuotations.length
       ? buildItemQuotations(incomingItemQuotations)
       : [];
@@ -961,6 +973,11 @@ export const indentService = {
     // item's purchase history.
     const notRequiredPicks = await resolveNotRequiredVendorPicks(indent, incomingItemQuotations, eligibleItemIds);
     const hasItemQuotations = itemQuotations.length > 0;
+    // Quote path of the items: "no quotation" items are released to PO now, quoted ones wait for Step 1.3.
+    // Material indents only (an internal-service indent is approved in full), item-wise only.
+    const split = splitByQuoteNeed([...eligibleItemIds], incomingItemQuotations);
+    const releaseNotRequired = split.mixed && hasItemQuotations && !multiVendor
+      && indent.requestType !== INDENT_REQUEST_TYPE.INTERNAL_SERVICE;
     // Aggregate all item-wise files so the legacy quotationDocuments[] field
     // stays populated for older screens.
     const itemDocs = itemQuotations.flatMap((iq) => iq.quotationDocuments);
@@ -1097,8 +1114,34 @@ export const indentService = {
         description: `Step 1.2 updated after quotation approval — workflow status kept at ${indent.overallStatus}`,
         actorId: user?._id,
       });
+    } else if (data.statusDone === 'YES' && releaseNotRequired) {
+      // MIXED indent: the items answered "Quote Required? = No" (vendor picked above) have no quotation to approve, so they
+      // go STRAIGHT to PO creation (Pending for PO); only the quoted items wait for Step 1.3. The step is opened as a
+      // PARTIAL one — it stays on the Step 1.3 queue, and the status rolls up as the items get their POs.
+      const prev = indent.quotationApprovalStep?.toObject?.() || indent.quotationApprovalStep || {};
+      indent.quotationApprovalStep = {
+        ...(prev.skipped ? {} : prev),
+        stepNo: 'Step 1.3',
+        stepName: 'Approved Quotation 1.03',
+        statusDone: null,
+        partial: true,
+        skipped: false,
+        skippedReason: '',
+        updatedBy: user?._id,
+      };
+      indent.overallStatus = INDENT_OVERALL_STATUS.QUOTATION_APPROVED;
+      indent.activityTimeline.push({
+        action: 'QUOTE_COMPARATIVE',
+        description: `Step 1.2 — ${split.notRequired.length} item${split.notRequired.length === 1 ? '' : 's'} need no quotation and moved straight to PO creation; ${split.quoted.length} quoted item${split.quoted.length === 1 ? '' : 's'} wait for Approved Quotation (Step 1.3)`,
+        actorId: user?._id,
+      });
     } else if (data.statusDone === 'YES') {
       indent.overallStatus = INDENT_OVERALL_STATUS.QUOTE_RECEIVED;
+      // Every item needs a quotation again (an earlier "no quotation" split is gone): the open Step 1.3 is a plain pending one.
+      if (indent.quotationApprovalStep?.partial && !indent.quotationApprovalStep?.skipped) {
+        const prev = indent.quotationApprovalStep?.toObject?.() || indent.quotationApprovalStep;
+        indent.quotationApprovalStep = { ...prev, partial: false, updatedBy: user?._id };
+      }
       // If Step 1.3 was previously skipped (Step 1.2 had been "Quote Not Required"),
       // a quote is now required again — reopen the Approved Quotation step. Clearing
       // the skip + statusDone drops PO eligibility until the approval is completed.
@@ -1322,7 +1365,7 @@ export const indentService = {
         return it && isItemApprovalEffective(indent, it);
       })]);
       const poed = [...eligible].filter((id) => indent.items.id?.(id)?.procurementStatus === ITEM_PROCUREMENT_STATUS.PO_CREATED).length;
-      overallStatus = progress.approved.length
+      overallStatus = eligible.size
         ? statusAfterApproval({ partial: !complete, approvedItemCount: eligible.size, poedItemCount: poed })
         : INDENT_OVERALL_STATUS.QUOTE_RECEIVED;
     }

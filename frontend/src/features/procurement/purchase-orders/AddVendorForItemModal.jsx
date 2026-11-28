@@ -16,7 +16,7 @@ import { useCreateVendorMutation, useAddVendorProductMutation } from '../../../s
  * pricing history server-side) and the vendor is handed back to the PO form so it
  * can be auto-selected and the rows auto-filled.
  */
-const AddVendorForItemModal = ({ open, onClose, items = [], vendorOptions = [], onAdded }) => {
+const AddVendorForItemModal = ({ open, onClose, items = [], vendorOptions = [], onAdded, startNew = false }) => {
   const { enqueueSnackbar } = useSnackbar();
 
   const [createNew, setCreateNew] = useState(false);
@@ -30,7 +30,7 @@ const AddVendorForItemModal = ({ open, onClose, items = [], vendorOptions = [], 
 
   useEffect(() => {
     if (!open) return;
-    setCreateNew(false);
+    setCreateNew(startNew);
     setVendor(null);
     setNewVendor({ name: '', gstNo: '', phone: '', email: '' });
     setRows((items || []).map((it) => ({
@@ -43,7 +43,7 @@ const AddVendorForItemModal = ({ open, onClose, items = [], vendorOptions = [], 
       hsn: '',
       notes: '',
     })));
-  }, [open, items]);
+  }, [open, items, startNew]);
 
   const patchRow = (idx, patch) => setRows((cur) => cur.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
 

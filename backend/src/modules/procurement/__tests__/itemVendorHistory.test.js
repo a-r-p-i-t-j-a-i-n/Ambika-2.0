@@ -154,3 +154,21 @@ test('eligibleVendorProblem: eligible passes; unrelated is refused naming the el
   assert.match(eligibleVendorProblem({ eligible: [], vendorId: A, itemName: 'Nut' }), /No eligible vendors found for "Nut"/);
   assert.match(eligibleVendorProblem({ eligible, vendorId: '', itemName: 'Nut' }), /Select the vendor/);
 });
+
+// "Select Previous Vendor" at PO creation = purchase history only (previousVendorsForItems → vendorHistoryForItems poOnly,
+// which hands matchHistory NO catalog vendors): a vendor that only lists the SKU on its Vendor Master item list is not a
+// previous vendor, a quotation's vendor tag is not read at all, and the purchase reference is carried for display.
+test('previous vendors (PO history only): catalog-only vendors never list; the purchase reference is carried', () => {
+  const pos = [
+    { vendorId: A, poNumber: 'PO-1', poDate: '2026-10-01', items: [{ skuId: S1, rate: 5 }] },
+    { vendorId: B, poNumber: 'PO-2', poDate: '2026-11-01', items: [{ skuId: S1, rate: 6 }] },
+  ];
+  const withCatalog = matchHistory([item1], pos, [{ _id: C, products: [{ skuId: S1 }] }], VENDORS).get('i1');
+  const poOnly = matchHistory([item1], pos, [], VENDORS).get('i1');
+  assert.deepEqual(withCatalog.map((h) => h.vendorName), ['Beta Supplies', 'Alpha Traders', 'Gamma Steel']);
+  assert.deepEqual(poOnly.map((h) => h.vendorName), ['Beta Supplies', 'Alpha Traders']);
+  assert.ok(poOnly.every((h) => h.poCount > 0 && h.lastPoNumber && h.lastPoDate && h.lastRate > 0));
+  assert.equal(poOnly[0].lastPoNumber, 'PO-2');
+  // an item with no purchase at all has no previous vendor, whatever the master says
+  assert.deepEqual(matchHistory([{ _id: 'i9', skuId: S2, skuCode: 'X-9' }], pos, [], VENDORS).get('i9'), []);
+});

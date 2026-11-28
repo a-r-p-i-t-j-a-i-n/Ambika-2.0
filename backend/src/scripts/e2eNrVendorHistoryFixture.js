@@ -241,8 +241,10 @@ const api = async () => {
   console.log('\nP  Step 1.3 / Pending for PO / PO use the selected vendor');
   const pRow = await rowOf(s1, 0);
   check('P1 Pending for PO row: NOT_REQUIRED / SET / Alpha', pRow?.quotationPath === 'NOT_REQUIRED' && pRow?.vendorState === 'SET' && String(pRow?.vendorId) === A && pRow?.vendorSource === 'PO_PREPARATION', JSON.stringify(pRow));
-  const pWrong = await poFromItems([[s1, s1Now.items[0]]], B);
-  check('P2 PO with another vendor refused', pWrong.status === 400 && pWrong.message.includes(`"${v['NV-ALPHA'].name}"`), `${pWrong.status} ${pWrong.message}`);
+  // new rule (2026-11-28): the "No" pick is a PRESELECTION — a PO on another ACTIVE vendor is allowed (covered by e2eVendorPickFixture X4);
+  // an INACTIVE vendor is still refused.
+  const pWrong = await poFromItems([[s1, s1Now.items[0]]], G);
+  check('P2 PO with an INACTIVE vendor (Gamma) refused', pWrong.status === 400 && /inactive in the Vendor Master/.test(pWrong.message), `${pWrong.status} ${pWrong.message}`);
   const pPo = await poFromItems([[s1, s1Now.items[0]]], A);
   check('P3 PO with the selected vendor created, vendor inherited', [200, 201].includes(pPo.status) && String(pPo.data?.vendorId) === A, `${pPo.status} ${pPo.message}`);
   const afterPo = await quote(s1, [NR(D)]);

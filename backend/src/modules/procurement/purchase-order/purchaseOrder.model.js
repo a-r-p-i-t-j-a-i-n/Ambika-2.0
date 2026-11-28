@@ -204,6 +204,16 @@ const vendorPurchaseOrderSchema = new Schema({
   submittedAt:      { type: Date, default: null },
   submittedById:    { type: Schema.Types.ObjectId, ref: 'User', default: null },
   submittedBy:      { type: String, trim: true, default: '' },
+  // New-vendor rule (approvers/newVendorRule.js), stamped when the draft is saved /
+  // submitted. No defaults: a PO saved before the rule has none. isRequired = the
+  // PO may only be decided by the MD or the purchase approver (poApproval.js);
+  // vendorCreatedAt = the Vendor Master record's creation date it was judged on.
+  newVendorApproval: {
+    isRequired:      { type: Boolean },
+    reason:          { type: String, trim: true },
+    vendorCreatedAt: { type: Date },
+    evaluatedAt:     { type: Date },
+  },
   approval: {
     decidedBy:   { type: String, trim: true, default: '' },
     decidedById: { type: Schema.Types.ObjectId, ref: 'User' },

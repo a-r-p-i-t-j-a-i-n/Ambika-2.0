@@ -213,9 +213,9 @@ const api = async () => {
   check('R4 unknown vendor id refused', rUnknown.status === 400 && /not found in the Vendor Master/.test(rUnknown.message), `${rUnknown.status} ${rUnknown.message}`);
   const rParty = await approve(r, ['YES'], [String(party._id)]);
   check('R5 Party (customer master) id refused — Vendor Master only', rParty.status === 400, `${rParty.status} ${rParty.message}`);
-  const rIneligible = await approve(r, ['YES'], [B]);
-  check('R5b a vendor that neither quoted for the item nor ever supplied it refused', rIneligible.status === 400 && /neither quoted for nor previously supplied/.test(rIneligible.message), `${rIneligible.status} ${rIneligible.message}`);
   check('R6 refused approvals left the indent unapproved', (await fresh(r._id)).overallStatus === 'QUOTE_RECEIVED');
+  const rIneligible = await approve(r, ['YES'], [B]);
+  check('R5b a vendor that neither quoted for the item nor ever supplied it is accepted at Step 1.3 ("Add New Vendor": any active Vendor Master vendor)', rIneligible.status === 200, `${rIneligible.status} ${rIneligible.message}`);
   const rNo = await approve(r, ['YES'], [undefined]);
   check('R2 Step 1.3 without a vendor is accepted — the vendor is optional and chosen on the PO', rNo.status === 200 && (await rowOf(rItem))?.vendorState === 'MISSING' && !(await itemNow(r, rItem)).vendorId, `${rNo.status} ${rNo.message}`);
   const rOk = await approve(r, ['YES'], [A]);
@@ -257,21 +257,21 @@ const api = async () => {
   await PurchaseIndent.updateOne({ _id: l._id }, { $unset: UNSET_VENDOR }); // as recorded before this feature
   const lRow = await rowOf(lItem);
   check('L1 Pending for PO row: vendor MISSING', lRow?.vendorState === 'MISSING' && !lRow?.vendorId, JSON.stringify(lRow));
-  const lPo = await poFromItems([[l, lItem]], B);
-  check('L2 an item with no vendor fixed refuses a PO vendor that neither quoted nor supplied it (400)', lPo.status === 400 && /neither quoted for nor previously supplied/.test(lPo.message), `${lPo.status} ${lPo.message}`);
+  check('L1b the row lists NO previous vendor (Beta never supplied it) — and none is selected', Array.isArray(lRow?.previousVendors) && lRow.previousVendors.length === 0 && !lRow.vendorId, JSON.stringify(lRow?.previousVendors));
+  // new rule (2026-11-28): the PO vendor of an item with no vendor fixed may be ANY active Vendor Master vendor (no history needed); an inactive one is refused.
+  const lPo = await poFromItems([[l, lItem]], G);
+  check('L2 an item with no vendor fixed refuses an INACTIVE PO vendor (400)', lPo.status === 400 && /inactive in the Vendor Master/.test(lPo.message), `${lPo.status} ${lPo.message}`);
   const lPoOld = await call('POST', '/procurement/purchase-orders', {
-    indentId: l._id, vendorId: B, expectedDeliveryDate: new Date(Date.now() + 7 * 864e5).toISOString(),
+    indentId: l._id, vendorId: G, expectedDeliveryDate: new Date(Date.now() + 7 * 864e5).toISOString(),
     items: [{ indentItemId: lItem._id, itemName: lItem.itemName, quantity: lItem.approvedQuantity, unit: lItem.unit, rate: 10, gstRate: 18 }],
   });
-  check('L3 single-indent PO endpoint refuses it too', lPoOld.status === 400 && /neither quoted for nor previously supplied/.test(lPoOld.message), `${lPoOld.status} ${lPoOld.message}`);
+  check('L3 single-indent PO endpoint refuses it too', lPoOld.status === 400 && /inactive in the Vendor Master/.test(lPoOld.message), `${lPoOld.status} ${lPoOld.message}`);
   check('L4 confirm with an inactive vendor refused', (await setVendor(l, lItem, G)).status === 400);
   check('L5 confirm with a Party id refused', (await setVendor(l, lItem, String(party._id))).status === 400);
-  const lIneligible = await setVendor(l, lItem, B);
-  check('L5b confirm with an ineligible vendor refused (neither quoted nor supplied)', lIneligible.status === 400 && /neither quoted for nor previously supplied/.test(lIneligible.message), `${lIneligible.status} ${lIneligible.message}`);
-  await giveBeta(lItem); // Beta supplied it before → eligible now
+  // new rule: Beta never supplied this item and is not in its history — confirming it is still allowed (any active Vendor Master vendor).
   const lConfirm = await setVendor(l, lItem, B);
   const lSaved = await itemNow(l, lItem);
-  check('L6 approved vendor confirmed (APPROVED_QUOTATION)', lConfirm.status === 200 && String(lSaved.vendorId) === B && lSaved.vendorSource === 'APPROVED_QUOTATION', `${lConfirm.status} ${lConfirm.message}`);
+  check('L6 approved vendor confirmed with NO purchase history (APPROVED_QUOTATION)', lConfirm.status === 200 && String(lSaved.vendorId) === B && lSaved.vendorSource === 'APPROVED_QUOTATION', `${lConfirm.status} ${lConfirm.message}`);
   check('L7 confirmation audited', (await vendorTimeline(l)).some((t) => /approved vendor confirmed/.test(t.description)));
   const lAgain = await setVendor(l, lItem, B);
   check('L8 repeated confirm is a no-op (no extra audit entry)', lAgain.status === 200 && (await vendorTimeline(l)).length === 1, `${lAgain.status}`);
@@ -294,7 +294,7 @@ const api = async () => {
   const nPick = await setVendor(n, n1, A);
   check('N5 vendor selected (PO_PREPARATION)', nPick.status === 200 && nPick.data?.vendorState === 'SET' && (await itemNow(n, n1)).vendorSource === 'PO_PREPARATION', `${nPick.status} ${nPick.message}`);
   const nIneligible = await setVendor(n, n1, B);
-  check('N5b a vendor outside the item\'s eligible vendors refused', nIneligible.status === 400 && /neither quoted for nor previously supplied/.test(nIneligible.message), `${nIneligible.status} ${nIneligible.message}`);
+  check('N5b a vendor with NO history for the item (Beta) is accepted — any active Vendor Master vendor (new rule 2026-11-28)', nIneligible.status === 200 && String((await itemNow(n, n1)).vendorId) === B, `${nIneligible.status} ${nIneligible.message}`);
   await giveBeta(n1);
   const nChange = await setVendor(n, n1, B);
   check('N6 vendor changed before any PO', nChange.status === 200 && String((await itemNow(n, n1)).vendorId) === B);
@@ -304,13 +304,19 @@ const api = async () => {
   await setVendor(n, n1, B);
   const nRow = await rowOf(n1);
   check('N9 Pending for PO row shows the picked vendor', nRow?.vendorState === 'SET' && nRow?.vendorName === beta.name && nRow?.vendorSource === 'PO_PREPARATION');
+  // new rule: a Quote Required = No pick is a PRESELECTION — the PO may use another vendor and the item then follows the PO (audited).
   const nWrong = await poFromItems([[n, n1]], A);
-  check('N10 PO with another vendor refused', nWrong.status === 400 && nWrong.message.includes(`vendor selected on Pending for PO is "${beta.name}"`), `${nWrong.status} ${nWrong.message}`);
+  const nWrongItem = await itemNow(n, n1);
+  check('N10 PO with another vendor is ACCEPTED (preselection changed): the item follows the PO vendor, tagged with the PO, and the change is audited',
+    [200, 201].includes(nWrong.status) && String(nWrongItem.vendorId) === A && String(nWrongItem.vendorFromPoId) === String(nWrong.data?._id)
+    && (await vendorTimeline(n)).some((t) => t.description.includes(`vendor changed from ${beta.name} to ${alpha.name} on PO`)), `${nWrong.status} ${nWrong.message} ${JSON.stringify({ v: nWrongItem.vendorId, f: nWrongItem.vendorFromPoId })}`);
+  await call('POST', `/procurement/purchase-orders/${nWrong.data?._id}/cancel`, { remarks: 'e2e' });
+  await setVendor(n, n1, B); // a cancel gives back a PO-written vendor, so the pick is made again for the checks below
   const nPo = await poFromItems([[n, n1]], B);
   check('N11 PO inherits the picked vendor', [200, 201].includes(nPo.status) && String(nPo.data?.vendorId) === B, `${nPo.status} ${nPo.message}`);
   check('N12 vendor locked while the item is on the PO', (await setVendor(n, n1, A)).status === 400);
   const nParty = await poFromItems([[n, n2]], String(party._id));
-  check('N13a unpicked item: a legacy Party vendor (no history) is refused — eligible Vendor Master vendors only', nParty.status === 400 && /neither quoted for nor previously supplied/.test(nParty.message), `${nParty.status} ${nParty.message}`);
+  check('N13a unpicked item: a legacy Party vendor is refused — Vendor Master vendors only', nParty.status === 400 && /active vendor from the Vendor Master/.test(nParty.message), `${nParty.status} ${nParty.message}`);
   const nFree = await poFromItems([[n, n2]], A);
   check('N13 unpicked item takes an eligible vendor on the PO', [200, 201].includes(nFree.status) && String(nFree.data?.vendorId) === A, `${nFree.status} ${nFree.message}`);
   check('N14 indent rolled up to PO_READY', (await fresh(n._id)).overallStatus === 'PO_READY');
@@ -357,12 +363,13 @@ const api = async () => {
   check('V1 Step 1.2 with a vendor-tagged quotation accepted', vq.status === 200, `${vq.status} ${vq.message}`);
   check('V2 Step 1.3 for both items with no vendor accepted (optional)', (await approve(v, ['YES', 'YES'], [undefined, undefined])).status === 200);
   const vRows = [await rowOf(v1), await rowOf(v2)];
-  const el = (row) => new Map((row?.eligibleVendors || []).map((x) => [String(x.vendorId), x.basis.join('+')]));
-  check('V3 Pending for PO eligible vendors: item 1 = Beta (QUOTED only) + Alpha (history); item 2 = Alpha only — Beta never offered for it',
-    el(vRows[0]).get(B) === 'QUOTED' && el(vRows[0]).has(A) && el(vRows[1]).has(A) && !el(vRows[1]).has(B),
-    JSON.stringify(vRows.map((x) => x?.eligibleVendors?.map((e) => [e.vendorName, e.basis]))));
-  const vBoth = await poFromItems([[v, v1], [v, v2]], B);
-  check('V4 one PO for both items on Beta refused: Beta never supplied item 2 and did not quote for it', vBoth.status === 400 && /neither quoted for nor previously supplied/.test(vBoth.message), `${vBoth.status} ${vBoth.message}`);
+  // new rule (2026-11-28): a row lists PREVIOUS vendors (placed POs only) and carries who QUOTED as a hint — a quotation never selects or lists a vendor.
+  const prevIds = (row) => new Set((row?.previousVendors || []).map((x) => String(x.vendorId)));
+  check('V3 Pending for PO: item 1 shows Beta as QUOTED (hint) but Beta is not a previous vendor (it never supplied it); neither row has a vendor selected',
+    (vRows[0]?.quotedVendors || []).some((q) => String(q.vendorId) === B) && !prevIds(vRows[0]).has(B) && !prevIds(vRows[1]).has(B) && !vRows[0]?.vendorId && !vRows[1]?.vendorId,
+    JSON.stringify(vRows.map((x) => ({ q: x?.quotedVendors?.map((e) => e.vendorName), p: x?.previousVendors?.map((e) => e.vendorName), v: x?.vendorId }))));
+  const vBoth = await poFromItems([[v, v1], [v, v2]], G);
+  check('V4 one PO for both items on an INACTIVE vendor refused', vBoth.status === 400 && /inactive in the Vendor Master/.test(vBoth.message), `${vBoth.status} ${vBoth.message}`);
   const vPoB = await poFromItems([[v, v1]], B);
   check('V5 PO on the quoted-only vendor accepted', [200, 201].includes(vPoB.status) && String(vPoB.data?.vendorId) === B, `${vPoB.status} ${vPoB.message}`);
   const v1Saved = await itemNow(v, v1);

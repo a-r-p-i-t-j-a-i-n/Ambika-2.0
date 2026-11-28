@@ -492,12 +492,16 @@ const api = async () => {
   po = await poNow(poBox._id);
   check('V7 approved: BOX row 260, the PCS-priced rows untouched, totals still 873.6', r.status === 200 && (await vendorRow(V1, SKUS.BOX.code, 'BOX')).rate === 260
     && po.grandTotal === 873.6 && po.items[0].taxAmount === 93.6, `${r.status} ${r.message}`);
+  // A unit the vendor does not price is never matched across units. With exactly one priced row it is a UNIT change
+  // (dual-approver rules — see e2eDualApprovalFixture.js): it needs a reason and goes to Purchase Approval.
   ind = await readyIndent('V8', ['BOX'], V1);
+  r = await createPo('BUYER', ind, V1, () => ({ unit: 'PCS', rate: 11 }));
+  check('V8 a PCS line for a BOX-priced item with no reason is refused (400) — it is a unit change that needs one', r.status === 400 && /reason/i.test(r.message) && /unit/i.test(r.message), `${r.status} ${r.message}`);
   r = await createPo('BUYER', ind, V1, () => ({ unit: 'PCS', rate: 11, rateChangeReason: 'per piece' }));
-  check('V8 a changed rate in a unit the vendor does not price (PCS vs BOX) is refused (400)', r.status === 400 && /per BOX/.test(r.message), `${r.status} ${r.message}`);
-  r = await createPo('BUYER', ind, V1, () => ({ unit: 'PCS', rate: 260 }));
-  check('V9 …and so is the BOX rate carried onto a PCS line unchanged: no vendor rate exists in PCS, nothing is matched across units (400, no request)',
-    r.status === 400 && /per BOX/.test(r.message), `${r.status} ${r.message}`);
+  const rqUnit = r.data && (await reqsOf(r.data._id))[0];
+  check('V9 …with a reason it becomes a PENDING unit change (BOX 250 → PCS 11) — nothing matched across units, vendor row untouched',
+    r.status === 201 && rqUnit?.changeType === 'RATE_UNIT' && rqUnit.existingVendorUnit === 'BOX' && rqUnit.requestedUnit === 'PCS' && rqUnit.existingVendorRate === 260
+    && (await vendorRow(V1, SKUS.BOX.code, 'BOX')).rate === 260, `${r.status} ${r.message} ${JSON.stringify(rqUnit)}`);
 
   // ── Q: security / validation ──
   console.log('\nQ  Validation and security');

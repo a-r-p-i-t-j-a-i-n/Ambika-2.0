@@ -299,6 +299,10 @@ const IndentDetail = () => {
   // Step 1.3 saved for some items only (the rest pending / on hold): still open — the
   // indent may already be PO-eligible for its approved items.
   const quotationPartial = !!indent.quotationApprovalStep?.partial;
+  // …but opened by Step 1.2 itself (some items need no quotation) and nothing quoted decided yet: the no-quote items are
+  // already open for a PO while the quoted ones wait for their approval.
+  const quotationNothingApproved = quotationPartial
+    && !(indent.quotationApprovalStep?.itemApprovedQuotations || []).some((r) => r.statusDone === 'YES');
   // Step 1.3 was skipped because Step 1.2 was marked "Quote Not Required".
   const quoteSkipped = !!indent.quotationApprovalStep?.skipped;
   const isService = indent.requestType === 'INTERNAL_SERVICE';
@@ -330,10 +334,12 @@ const IndentDetail = () => {
         primary: { label: 'Receive Quote / Comparative', icon: <FileText size={16} />, onClick: () => setComparativeOpen(true) } };
     }
     if ((step12Done || quotationPartial) && !quotationDone && !quoteSkipped) {
-      return { tone: 'info', title: quotationPartial ? 'Step 1.3 is partly done — some items are still pending' : 'Next: Approve the Quotation (Step 1.3)',
-        desc: quotationPartial
-          ? 'Approved items can go to a Purchase Order. Select a vendor for the remaining items (or keep them on hold) to finish this step.'
-          : 'Mark the approved quotation for each item.',
+      return { tone: 'info', title: quotationPartial && !quotationNothingApproved ? 'Step 1.3 is partly done — some items are still pending' : 'Next: Approve the Quotation (Step 1.3)',
+        desc: quotationNothingApproved
+          ? 'Items that need no quotation can already go to a Purchase Order (Pending for PO). Mark the approved quotation for the quoted items.'
+          : quotationPartial
+            ? 'Approved items can go to a Purchase Order. Select a vendor for the remaining items (or keep them on hold) to finish this step.'
+            : 'Mark the approved quotation for each item.',
         primary: { label: 'Approved Quotation 1.03', icon: <FileCheck2 size={16} />, onClick: () => setQuotationOpen(true) } };
     }
     if (canStartServiceQc(indent)) {

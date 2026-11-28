@@ -49,6 +49,7 @@ export const USERS = {
 const VENDORS = [
   { code: 'PD-ALPHA', name: 'PD Alpha Traders', isActive: true },
   { code: 'PD-BETA', name: 'PD Beta Supplies', isActive: true },
+  { code: 'PD-OFF', name: 'PD Inactive Vendor', isActive: false }, // refused as a PO vendor (new rule 2026-11-28: any ACTIVE vendor is fine)
 ];
 const RUN = Date.now().toString(36);
 const MD_ONLY = 'Only the MD can save a PO directly — save it as a draft and submit it for approval';
@@ -271,9 +272,11 @@ const api = async () => {
   // ── V: vendor / validation rules not bypassed by a direct save ──
   console.log('\nV  Vendor + validation rules on an MD direct save');
   const v = await readyIndent('V1', A);
-  const wrongVendor = await fromItems('MD', v, B, 'DIRECT');
-  check('V1 MD DIRECT with a vendor other than the fixed one refused (400)', wrongVendor.status === 400 && /vendor/i.test(wrongVendor.message), `${wrongVendor.status} ${wrongVendor.message}`);
-  const wrongSingle = await single('MD', v, B, 'DIRECT');
+  // The item's vendor (A) is a Quote Required = No PRESELECTION, so another ACTIVE vendor would be accepted; an INACTIVE one is still refused.
+  const off = String((await Vendor.findOne({ code: 'PD-OFF' }).lean())._id);
+  const wrongVendor = await fromItems('MD', v, off, 'DIRECT');
+  check('V1 MD DIRECT with an INACTIVE vendor refused (400)', wrongVendor.status === 400 && /inactive in the Vendor Master/i.test(wrongVendor.message), `${wrongVendor.status} ${wrongVendor.message}`);
+  const wrongSingle = await single('MD', v, off, 'DIRECT');
   check('V2 same on the single-indent route', wrongSingle.status === 400, `${wrongSingle.status} ${wrongSingle.message}`);
   const noDate = await call('MD', 'POST', '/procurement/purchase-orders/create-from-items', { vendorId: A, items: v.items.map((it) => line(v, it)), saveMode: 'DIRECT' });
   check('V3 MD DIRECT without Expected Delivery Date → 422', noDate.status === 422, `${noDate.status} ${noDate.message}`);

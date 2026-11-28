@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isValidRate, sameRate, matchVendorRate, lookupVendorRate, lookupMessage, evaluateLineRate, LINE_RATE, unsendableReason,
-  rateDiff, selfApprovalBlock, isSelfApproval, otherLineAmounts, poTotals,
+  rateDiff, selfApprovalBlock, isSelfApproval, otherLineAmounts, poTotals, unitChangeRow, changeTypeOf, changeText,
 } from '../rateChange.rules.js';
 
 const P = (o) => ({ _id: o.id || 'p', skuCode: '', productName: '', unit: 'Pcs', rate: 0, ...o });
@@ -65,15 +65,57 @@ test('evaluateLineRate: same SKU, different vendors, different rates — each li
   assert.equal(evaluateLineRate({ line, products: vendorB }).state, LINE_RATE.MATCHES);
 });
 
-test('evaluateLineRate: a unit the vendor does not price is a problem whatever rate the line carries', () => {
+test('evaluateLineRate: a unit the vendor does not price is never a match — with one priced row it is a UNIT change that needs approval', () => {
   const rows = [P({ skuCode: 'B', unit: 'BOX', rate: 250 })];
   // The line happening to carry the other unit's rate is no excuse (the old form fetched it unit-blind).
   const same = evaluateLineRate({ line: { skuCode: 'B', unit: 'PCS', rate: 250 }, products: rows });
-  assert.equal(same.state, LINE_RATE.UNIT_MISMATCH);
+  assert.equal(same.state, LINE_RATE.UNIT_CHANGED);
   const ev = evaluateLineRate({ line: { skuCode: 'B', unit: 'PCS', rate: 10 }, products: rows });
-  assert.equal(ev.state, LINE_RATE.UNIT_MISMATCH);
-  assert.match(unsendableReason(ev, { skuCode: 'B', itemName: 'Bolt box', unit: 'PCS' }, 'Acme'), /prices "Bolt box" per BOX.*PO line is in PCS/);
+  assert.equal(ev.state, LINE_RATE.UNIT_CHANGED);
+  assert.equal(ev.vendorRate, 250);
+  assert.equal(ev.vendorUnit, 'BOX');
+  assert.equal(ev.product._id, 'p');
+  // An approvable unit change is not "unsendable": it goes to Purchase Approval.
+  assert.equal(unsendableReason(ev, { skuCode: 'B', itemName: 'Bolt box', unit: 'PCS' }, 'Acme'), '');
   assert.equal(unsendableReason({ state: LINE_RATE.CHANGED }, {}), '');
+});
+
+test('evaluateLineRate: a unit the vendor does not price stays a Vendor Master problem when no single priced row can be changed', () => {
+  const line = { skuCode: 'B', itemName: 'Bolt box', unit: 'PCS', rate: 10 };
+  // Two rows in other units — which one would the change apply to?
+  const two = evaluateLineRate({ line, products: [P({ id: 1, skuCode: 'B', unit: 'BOX', rate: 250 }), P({ id: 2, skuCode: 'B', unit: 'KGS', rate: 40 })] });
+  assert.equal(two.state, LINE_RATE.UNIT_MISMATCH);
+  assert.match(unsendableReason(two, line, 'Acme'), /prices "Bolt box" per BOX \/ KGS.*PO line is in PCS/);
+  // The one row has no rate — nothing to change from.
+  assert.equal(evaluateLineRate({ line, products: [P({ skuCode: 'B', unit: 'BOX', rate: 0 })] }).state, LINE_RATE.UNIT_MISMATCH);
+});
+
+test('unitChangeRow: exactly one priced row in another unit, nothing else', () => {
+  const row = P({ id: 'r', skuCode: 'B', unit: 'BOX', rate: 250 });
+  assert.equal(unitChangeRow({ problem: 'UNIT_MISMATCH', candidates: [row] }), row);
+  assert.equal(unitChangeRow({ problem: 'UNIT_MISMATCH', candidates: [row, P({ id: 's', unit: 'KGS', rate: 4 })] }), null);
+  assert.equal(unitChangeRow({ problem: 'UNIT_MISMATCH', candidates: [P({ unit: 'BOX', rate: 0 })] }), null);
+  assert.equal(unitChangeRow({ problem: 'AMBIGUOUS', candidates: [row] }), null);
+  assert.equal(unitChangeRow(null), null);
+});
+
+test('changeTypeOf / changeText: rate, unit, or both — in words', () => {
+  const base = { existingRate: 100, existingUnit: 'Kgs', requestedRate: 100, requestedUnit: 'Kgs' };
+  assert.equal(changeTypeOf({ ...base, requestedRate: 120 }), 'RATE');
+  assert.equal(changeTypeOf({ ...base, requestedUnit: 'KGS' }), 'RATE'); // same unit, any spelling
+  assert.equal(changeTypeOf({ ...base, requestedUnit: 'Pcs' }), 'UNIT');
+  assert.equal(changeTypeOf({ ...base, requestedUnit: 'Pcs', requestedRate: 5 }), 'RATE_UNIT');
+  assert.equal(changeTypeOf({ existingRate: 100, requestedRate: 90, requestedUnit: 'Pcs' }), 'RATE'); // no unit on the vendor row
+  assert.match(changeText({ ...base, requestedUnit: 'Pcs', requestedRate: 5, changeType: 'RATE_UNIT' }), /₹100\.00 \/ Kgs → ₹5\.00 \/ Pcs/);
+  assert.match(changeText({ ...base, requestedRate: 120, changeType: 'RATE' }), /^₹100\.00 → ₹120\.00$/);
+});
+
+test('lookupMessage: a changeable unit is explained as an approval, not a block', () => {
+  const rows = [P({ skuCode: 'B', unit: 'BOX', rate: 250 })];
+  const lk = lookupVendorRate(rows, { skuCode: 'B', unit: 'PCS' });
+  const msg = lookupMessage(lk, { itemName: 'Bolt box', unit: 'PCS' }, 'Acme');
+  assert.match(msg, /prices "Bolt box" per BOX \(₹250\.00\).*changing the unit needs approval/);
+  assert.doesNotMatch(msg, /correct the unit in the Vendor Master/);
 });
 
 test('evaluateLineRate: several different rates in the line unit are ambiguous even when the line carries one', () => {

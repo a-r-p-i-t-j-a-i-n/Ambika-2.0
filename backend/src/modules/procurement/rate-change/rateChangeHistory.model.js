@@ -45,6 +45,10 @@ const rateChangeHistorySchema = new Schema({
   unit:     { type: String, trim: true, default: '' },
   currency: { type: String, trim: true, default: 'INR' },
 
+  changeType:   { type: String, enum: ['RATE', 'UNIT', 'RATE_UNIT'], default: 'RATE' },
+  previousUnit: { type: String, trim: true, default: '' }, // the vendor's unit before
+  newUnit:      { type: String, trim: true, default: '' }, // the requested / applied unit
+
   previousRate:  { type: Number, default: null }, // vendor rate before (REQUESTED: when raised)
   newRate:       { type: Number, default: null }, // the requested / applied rate
   requestedRate: { type: Number, default: null },

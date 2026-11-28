@@ -6,6 +6,7 @@ import { Router } from 'express';
 import { protect } from '../../../middleware/auth.middleware.js';
 import { attachUserPermissions, requirePermission } from '../../../middleware/permission.middleware.js';
 import { PO_APPROVE_PERMISSION } from './poApproval.js';
+import { requirePermissionOrDesignated } from '../approvers/purchaseApprovers.js';
 import validate from '../../../middleware/validate.js';
 import { purchaseOrderController as c } from './purchaseOrder.controller.js';
 import {
@@ -71,11 +72,12 @@ router.post('/:id/pdf', validate(mongoIdParamSchema, 'params'), c.generatePdf);
 router.patch('/:id/terms', validate(mongoIdParamSchema, 'params'), validate(updatePoTermsSchema), c.updateTerms);
 // Draft → submitted for approval (poSubmission.js). Approval stays a separate step.
 router.post('/:id/submit', validate(mongoIdParamSchema, 'params'), c.submit);
-// Approve / reject: procurement.approve (MD always) — the service re-checks it and
-// refuses the PO's own makers (maker-checker, poApproval.js).
+// Approve / reject: procurement.approve (MD always) — or the designated purchase
+// approver, who can decide a NEW-vendor PO. The service re-checks exactly which
+// of the two the PO needs and refuses the PO's own makers (poApproval.js).
 router.post('/:id/approve',
   attachUserPermissions,
-  requirePermission(PO_APPROVE_PERMISSION),
+  requirePermissionOrDesignated(PO_APPROVE_PERMISSION),
   validate(mongoIdParamSchema, 'params'),
   validate(approvePoSchema),
   c.approve);

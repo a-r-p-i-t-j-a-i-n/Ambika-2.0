@@ -21,6 +21,9 @@ const ROOT_PERMISSION = '*';
 export const PO_MAKER_ACTIONS = ['CREATE', 'UPDATE', 'UPDATE_TERMS', 'SUBMIT', 'REVISE'];
 
 export const PO_APPROVE_FORBIDDEN = 'You do not have permission to approve or reject purchase orders (procurement.approve)';
+// A PO for a NEW vendor (approvers/newVendorRule.js) is decided by the MD or the
+// purchase approver only — the procurement.approve permission does not reach it.
+export const NEW_VENDOR_APPROVE_FORBIDDEN = 'This PO is for a new vendor — only the MD or the purchase approver can approve or reject it';
 export const PO_MAKER_CHECKER_MESSAGE = 'You prepared this PO (created, edited or submitted it) — another approver has to approve or reject it';
 
 const idOf = (v) => (v && typeof v === 'object' && v._id ? String(v._id) : (v ? String(v) : ''));
@@ -42,9 +45,17 @@ export const canApprovePos = (permissions) => Boolean(permissions
 /**
  * Why `user` (holding `permissions`) may not approve / reject `po` ('' = they may).
  * Returns { status, message } for the refusal.
+ *   newVendor   the PO needs the new-vendor approval (poNeedsNewVendorApproval)
+ *   designated  `user` is the MD or the purchase approver (isDesignatedApprover)
+ * A new-vendor PO is decided by a designated approver ONLY; every other PO by
+ * anyone holding procurement.approve, as before. Maker-checker applies to both.
  */
-export const poApprovalBlock = (user, po, permissions) => {
-  if (!canApprovePos(permissions)) return { status: 403, message: PO_APPROVE_FORBIDDEN };
+export const poApprovalBlock = (user, po, permissions, { newVendor = false, designated = false } = {}) => {
+  if (newVendor) {
+    if (!designated) return { status: 403, message: NEW_VENDOR_APPROVE_FORBIDDEN };
+  } else if (!canApprovePos(permissions)) {
+    return { status: 403, message: PO_APPROVE_FORBIDDEN };
+  }
   if (user?._id && !isMdForDirectSave(user) && poMakerIds(po).has(String(user._id))) {
     return { status: 403, message: PO_MAKER_CHECKER_MESSAGE };
   }

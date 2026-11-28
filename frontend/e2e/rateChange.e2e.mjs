@@ -214,7 +214,8 @@ console.log('\n[APPROVER] Decide');
   // Requests tab + status filter.
   await page.locator('[data-testid="rc-tab-requests"]').click();
   await page.locator('.MuiDataGrid-row').first().waitFor({ timeout: 15000 });
-  await page.getByRole('button', { name: /^\s*\d+\s*Rejected\s*$/ }).click();
+  // The KPI card's accessible name is its aria-label ("Rejected: 3"); older builds read "3 Rejected".
+  await page.getByRole('button', { name: /^\s*(\d+\s*Rejected|Rejected:\s*\d+)\s*$/ }).click();
   await page.waitForTimeout(1500);
   // The Status column is past the sideways scroll (not rendered) — the row class carries it.
   const statuses = await page.locator('.MuiDataGrid-row').evaluateAll((els) => els.map((e) => (e.className.match(/rc-row-(\w+)/) || [])[1]?.toUpperCase()));

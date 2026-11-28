@@ -428,10 +428,12 @@ console.log('\n[UI] Purchase Approval is its own simple page');
     !/Manage the complete purchase workflow/.test(body) && (await page.getByRole('heading', { name: 'Purchase FMS', exact: true }).count()) === 0
     && steps === 0 && (await page.locator('[data-testid="pfms-quick-actions"]').count()) === 0
     && (await main.getByRole('button', { name: /Quick Actions|MD Approval/ }).count()) === 0, `steps ${steps}`);
-  const cards = await Promise.all(['All Requests', 'Pending', 'Approved', 'Rejected'].map((n) => main.getByRole('button', { name: new RegExp(`^\\s*\\d+\\s*${n}\\s*$`) }).count()));
+  const cards = await Promise.all(['All Requests', 'Pending', 'Approved', 'Rejected'].map((n) => main.getByRole('button', { name: new RegExp(`^\\s*(\\d+\\s*${n}|${n}:\\s*\\d+)\\s*$`) }).count()));
   check('UI3 the four summary cards: All Requests, Pending, Approved, Rejected', cards.every((c) => c === 1), cards.join(','));
   const tabs = await page.getByRole('tab').allInnerTexts();
-  check('UI4 tabs: Requests and Rate Change History only', tabs.join('|') === 'Requests|Rate Change History', tabs.join('|'));
+  // Requests (rate / unit changes, with its pending count), New Vendor POs, and the history — the page's three tabs.
+  const tabNames = tabs.map((t) => t.split('\n')[0].trim());
+  check('UI4 tabs: Requests, New Vendor POs and Rate Change History', tabNames.join('|') === 'Requests|New Vendor POs|Rate Change History', tabNames.join('|'));
   const labels = await main.locator('label').allInnerTexts();
   check('UI5 filters: one Search + one Status, no Vendor / SKU code / Requested by / More',
     (await page.locator('#rc-search').isVisible()) && (await page.locator('#rc-status').count()) === 1

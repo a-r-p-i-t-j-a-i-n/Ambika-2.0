@@ -11,6 +11,9 @@ const NotificationSchema = new Schema({
   title:  { type: String, required: true },
   body:   { type: String, default: '' },
   link:   { type: String, default: null }, // in-app route, e.g. /o2d-fms/process/:id
+  // What the notification is about (e.g. "rate-change:<id>", "po-approval:<id>").
+  // Lets a decision settle every approver's copy at once (settleByRef).
+  refKey: { type: String, default: null, index: true },
   read:   { type: Boolean, default: false },
   readAt: { type: Date, default: null },
 }, baseSchemaOptions);

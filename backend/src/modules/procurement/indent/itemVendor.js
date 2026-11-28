@@ -14,6 +14,18 @@
  *                 vendor on Pending for PO (vendorSource PO_PREPARATION); with
  *                 none selected, the PO form's own Vendor field decides.
  *
+ * Quotation upload, quotation approval and vendor selection are separate things: a
+ * quotation (or a vendor named on its file) never selects a vendor. A vendor is
+ * selected only by an explicit act — Step 1.3 approval WITH a vendor, a Quote
+ * Required = No pick, Pending for PO, or the vendor chosen on the PO itself.
+ *
+ * How firmly a recorded vendor holds the PO:
+ *   · approved with the quotation (APPROVED_QUOTATION) → LOCKED, the PO must use it;
+ *   · picked on a Quote Required = No item (PO_PREPARATION) → a PRESELECTION the PO
+ *     starts from; the user may change it on the PO (the change is audited).
+ * Any other item takes ANY active Vendor Master vendor on the PO — "Select Previous
+ * Vendor" and "Add New Vendor" are two ways to choose it, not two eligibility rules.
+ *
  * Indents approved the older vendor-grain way (Step 1.3 approvedVendors[]) keep
  * that path: the PO vendor must be one of those approved vendors.
  *
@@ -81,65 +93,66 @@ export const itemVendorState = (indent, item) => {
 const itemLabel = (item, ref) => `${ref || 'Item'}${item?.itemName ? ` (${item.itemName})` : ''}`;
 
 /**
- * Problems that stop `vendorId` from supplying the given indent items on one PO.
- * `entries` = [{ indent, item, ref }] (ref = item display number for messages);
- * `vendorsById` = Map(id → Vendor-master doc) for the fixed vendors involved, so
- * a fixed vendor since deleted or deactivated in the master is reported.
- * Returns [] when the PO may be raised. `skipMissing` — editing a PO that already
- * holds the items: a legacy item with no approved vendor stays editable there.
+ * Whether the item's vendor is LOCKED: it was approved together with the quotation (Step 1.3,
+ * vendorSource APPROVED_QUOTATION), so the PO must use it. A vendor picked on a Quote Required = No
+ * item (PO_PREPARATION) is only a preselection — the PO may be raised on another vendor — and an
+ * item with no vendor recorded is open.
  */
-export const poVendorProblems = (entries, vendorId, vendorsById = new Map(), { skipMissing = false } = {}) => {
+export const itemVendorLocked = (indent, item) => {
+  const s = itemVendorState(indent, item);
+  return s.state === ITEM_VENDOR_STATE.SET && s.vendorSource === ITEM_VENDOR_SOURCE.APPROVED_QUOTATION;
+};
+
+/**
+ * Problems that stop `vendorId` from supplying the given indent items on one PO, for the items whose
+ * vendor is LOCKED by their approved quotation (itemVendorLocked). `entries` = [{ indent, item, ref }]
+ * (ref = item display number for messages); `vendorsById` = Map(id → Vendor-master doc) for the locked
+ * vendors involved, so one since deleted or deactivated in the master is reported. Open items and
+ * Quote Required = No preselections are not held here — poPickedVendorProblems checks the vendor chosen
+ * for them. Returns [] when the PO may be raised. `skipMissing` is kept for callers that still pass it.
+ */
+export const poVendorProblems = (entries, vendorId, vendorsById = new Map()) => {
   const problems = [];
   for (const { indent, item, ref } of entries) {
+    if (!itemVendorLocked(indent, item)) continue;
     const label = itemLabel(item, ref);
     const s = itemVendorState(indent, item);
-    // MISSING (quoted item approved at Step 1.3 without a vendor) no longer blocks: the vendor
-    // is chosen on the PO itself, from the item's previous vendors (poVendorHistoryProblems).
-    // `skipMissing` is kept for callers that still pass it.
-    if (s.state !== ITEM_VENDOR_STATE.SET) continue;
     const fixed = vendorsById.get(String(s.vendorId));
     if (!fixed || fixed.isDeleted) {
       problems.push(`${label}: vendor "${s.vendorName}" no longer exists in the Vendor Master`);
     } else if (fixed.isActive === false) {
-      problems.push(`${label}: vendor "${s.vendorName}" is inactive in the Vendor Master — reactivate it${s.path === QUOTATION_PATH.NOT_REQUIRED ? ' or select another vendor on Pending for PO' : ''}`);
+      problems.push(`${label}: vendor "${s.vendorName}" is inactive in the Vendor Master — reactivate it`);
     } else if (!sameId(s.vendorId, vendorId)) {
-      const why = s.vendorSource === ITEM_VENDOR_SOURCE.APPROVED_QUOTATION ? 'approved quotation' : 'vendor selected on Pending for PO';
-      problems.push(`${label}: the ${why} is "${s.vendorName}" — this PO's vendor must be the same`);
+      problems.push(`${label}: the approved quotation is "${s.vendorName}" — this PO's vendor must be the same`);
     }
   }
   return problems;
 };
 
 /**
- * Items with no vendor fixed yet (MISSING / UNASSIGNED) take their vendor on the PO
- * itself — but only an ELIGIBLE vendor: one who quoted for the item at Step 1.2 or has
- * supplied it before (eligibleVendorsForItems in itemVendorHistory.js), never any
- * Vendor Master record. `history` = Map(itemId → eligible vendors[]).
- * Items whose vendor is already fixed are held to it by poVendorProblems instead.
- * Returns [] when the vendor may supply every open item.
+ * The vendor chosen on the PO for every item whose vendor is not locked by an approved quotation (no
+ * vendor yet, or a Quote Required = No preselection being changed): ANY active Vendor Master vendor.
+ * It is never limited to quoted or previous vendors — "Add New Vendor" must work for an item with no
+ * purchase history. `vendor` = the PO vendor's Vendor Master record, or null / undefined when it is not
+ * one (unknown id, or a legacy Party). Returns [] when the vendor may supply every open item.
  */
-export const poVendorHistoryProblems = (entries, vendorId, vendorName = '', history = new Map()) => {
-  const problems = [];
-  for (const { indent, item, ref } of entries) {
-    if (itemVendorState(indent, item).state === ITEM_VENDOR_STATE.SET) continue;
-    const label = itemLabel(item, ref);
-    const list = history.get(String(item?._id)) || [];
-    if (!list.length) {
-      problems.push(`${label}: No eligible vendors found — none has quoted for this item or supplied it before. Collect a quotation (Step 1.2) or add the SKU to a vendor's Vendor Master item list before raising a PO for it`);
-    } else if (!list.some((h) => sameId(h.vendorId, vendorId))) {
-      problems.push(`${label}: "${vendorName || 'this vendor'}" has neither quoted for nor previously supplied this item — choose one of: ${list.map((h) => h.vendorName).join(', ')}`);
-    }
-  }
-  return problems;
+export const poPickedVendorProblems = (entries, vendor) => {
+  const open = entries.filter(({ indent, item }) => !itemVendorLocked(indent, item));
+  if (!open.length) return [];
+  const first = itemLabel(open[0].item, open[0].ref);
+  const label = open.length > 1 ? `${first} and ${open.length - 1} more item${open.length > 2 ? 's' : ''}` : first;
+  if (!vendor || vendor.isDeleted) return [`${label}: the PO vendor must be an active vendor from the Vendor Master`];
+  if (vendor.isActive === false) return [`${label}: vendor "${vendor.name || ''}" is inactive in the Vendor Master — choose an active vendor`];
+  return [];
 };
 
 /** A JSL-format PO is always raised on Jindal Stainless Ltd (the PO form forces it; the server holds to it). */
 export const isJslVendorName = (name) => /jindal/i.test(String(name || ''));
 
-/** Distinct fixed vendor ids among the entries (for the Vendor-master lookup). */
+/** Distinct LOCKED vendor ids among the entries (for the Vendor-master lookup poVendorProblems needs). */
 export const fixedVendorIds = (entries) => [...new Set(entries
   .map(({ indent, item }) => itemVendorState(indent, item))
-  .filter((s) => s.state === ITEM_VENDOR_STATE.SET)
+  .filter((s) => s.state === ITEM_VENDOR_STATE.SET && s.vendorSource === ITEM_VENDOR_SOURCE.APPROVED_QUOTATION)
   .map((s) => String(s.vendorId)))];
 
 // ── Who quoted (Step 1.2 vendor-tagged quotation files) ─────────────────────

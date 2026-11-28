@@ -84,7 +84,9 @@ export const procurementApi = baseApi.injectEndpoints({
     // Step 1.2 — previous vendors of each item (the only vendors a "Quote Required? = No" item can use)
     getIndentItemVendorHistory: builder.query({
       query: (id) => `/procurement/indents/${id}/item-vendor-history`,
-      providesTags: (_r, _e, id) => [{ type: 'Indent', id: `${id}-vendor-history` }, 'PurchaseOrder'],
+      // 'Vendor' too: the list includes the vendors whose Vendor Master item list carries the item, so adding or
+      // editing a vendor (createVendor / updateVendor / addVendorProduct) must refresh a list already on screen.
+      providesTags: (_r, _e, id) => [{ type: 'Indent', id: `${id}-vendor-history` }, 'PurchaseOrder', 'Vendor'],
     }),
     approveQuotation: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/indents/${id}/approve-quotation`, method: 'POST', body }),
@@ -707,6 +709,16 @@ export const procurementApi = baseApi.injectEndpoints({
       query: (params = {}) => ({ url: '/procurement/rate-changes/history', params }),
       providesTags: [{ type: 'RateChange', id: 'HISTORY' }],
     }),
+    // New-vendor POs in Purchase Approval (read-only list / detail). The decision itself is the PO's own
+    // approve / reject (useApprovePurchaseOrderMutation), which invalidates 'RateChange' too.
+    getPoApprovals: builder.query({
+      query: (params = {}) => ({ url: '/procurement/rate-changes/po-approvals', params }),
+      providesTags: [{ type: 'RateChange', id: 'PO_LIST' }],
+    }),
+    getPoApproval: builder.query({
+      query: (id) => `/procurement/rate-changes/po-approvals/${id}`,
+      providesTags: (_r, _e, id) => [{ type: 'RateChange', id: `PO_${id}` }],
+    }),
     approveRateChange: builder.mutation({
       query: ({ id, ...body }) => ({ url: `/procurement/rate-changes/${id}/approve`, method: 'POST', body }),
       invalidatesTags: ['RateChange', 'PurchaseOrder', 'PurchaseOrderStats', 'Vendor', 'Pricing'],
@@ -730,6 +742,8 @@ export const {
   useGetRateChangesQuery,
   useGetRateChangeQuery,
   useGetRateChangeHistoryQuery,
+  useGetPoApprovalsQuery,
+  useGetPoApprovalQuery,
   useApproveRateChangeMutation,
   useRejectRateChangeMutation,
   useGetIndentStatsQuery,

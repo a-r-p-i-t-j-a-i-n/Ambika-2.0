@@ -6,6 +6,8 @@ import {
 import { Save } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useApproveQuotationMutation, useGetIndentItemVendorHistoryQuery } from '../../../store/api/procurementApi';
+import { useGetVendorsQuery } from '../../../store/api/vendorApi';
+import AddVendorForItemModal from '../purchase-orders/AddVendorForItemModal';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import ApprovedVendorTable from './ApprovedVendorTable';
 import StatusChip from '../components/StatusChip';
@@ -105,6 +107,18 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
   const [remarks, setRemarks] = useState('');
   const [rows, setRows] = useState([]); // [{ itemId, skuId, skuCode, itemName, qty, unit, statusDone, files, actualAt, remarks, vendor, hold, locked, selected }]
   const [selectMode, setSelectMode] = useState(false); // Select Items: only ticked items are approved
+  // Items answered "Quote Required? = No" at Step 1.2 have nothing to approve: they went straight to PO creation (Pending for PO)
+  // and are not rows of this step — only named in a note.
+  const [releasedNoQuote, setReleasedNoQuote] = useState([]);
+  // "Create new vendor" for one item (opens the create-vendor modal on that row).
+  const [createFor, setCreateFor] = useState(null); // { row, idx }
+  // The Vendor Master list: "Add New Vendor" offers any active vendor (a vendor need not have quoted or supplied the item).
+  const { data: vendorsRes, isLoading: vendorsLoading } = useGetVendorsQuery({ limit: 500, sort: 'name' }, { skip: !open });
+  const vendorList = useMemo(() => vendorsRes?.data || [], [vendorsRes]);
+  // A stable list for the modal (it re-initialises whenever its items change identity).
+  const createItems = useMemo(() => (createFor
+    ? [{ itemName: createFor.row.itemName, skuCode: createFor.row.skuCode, skuId: createFor.row.skuId, unit: createFor.row.unit }]
+    : []), [createFor]);
 
   const [approveQuotation, { isLoading: saving }] = useApproveQuotationMutation();
   // The vendors an item may be approved for: its ELIGIBLE vendors — quoted at Step 1.2 OR previously
@@ -185,10 +199,15 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
         savedPending: statusDone === 'YES' && s?.statusDone === 'PENDING',
       };
     });
-    setRows(built);
+    // This step is for the QUOTED items. The "Quote Not Required" ones are already in Pending for PO — listed in a note, not
+    // as rows (an indent with no quoted item at all, an older record, keeps showing every row as before).
+    const quotedRows = built.filter((r) => r.statusDone !== 'QUOTE_NOT_REQUIRED');
+    const shown = quotedRows.length ? quotedRows : built;
+    setReleasedNoQuote(quotedRows.length ? built.filter((r) => r.statusDone === 'QUOTE_NOT_REQUIRED') : []);
+    setRows(shown);
     // Reopening a partial step (items saved as pending) comes back in Select Items mode with the
     // already-approved items ticked.
-    setSelectMode(built.some((r) => r.savedPending));
+    setSelectMode(shown.some((r) => r.savedPending));
   }, [open, indent]);
 
   // A saved vendor whose name was not stored with the item is named from its purchase history.
@@ -355,8 +374,14 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           <StatusChip status="DONE" tone="green" label={`${counts.APPROVED} Approved`} />
           <StatusChip status="PENDING" tone={counts.PENDING ? 'amber' : 'neutral'} label={`${counts.PENDING} Pending`} />
           <StatusChip status="ON_HOLD" tone={counts.ON_HOLD ? 'orange' : 'neutral'} label={`${counts.ON_HOLD} On Hold`} />
-          <StatusChip status="NOT_STARTED" tone="neutral" showIcon={false} label={`${counts.NO_QUOTE} No Quote`} />
+          {counts.NO_QUOTE > 0 && <StatusChip status="NOT_STARTED" tone="neutral" showIcon={false} label={`${counts.NO_QUOTE} No Quote`} />}
         </Box>
+        {releasedNoQuote.length > 0 && (
+          <Alert severity="info" icon={false} data-testid="nr-released-note" data-count={releasedNoQuote.length} sx={{ mb: 1.5, py: 0.25, borderRadius: '8px', fontSize: '0.78rem' }}>
+            <b>{releasedNoQuote.length} item{releasedNoQuote.length === 1 ? '' : 's'} need no quotation</b> and {releasedNoQuote.length === 1 ? 'is' : 'are'} already in Pending for PO:{' '}
+            {releasedNoQuote.map((r) => `${r.itemName}${r.vendor?.name ? ` (${r.vendor.name})` : ''}`).join(', ')}.
+          </Alert>
+        )}
         <ApprovedVendorTable
           rows={namedRows}
           yesValue="YES"
@@ -368,6 +393,9 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           onHold={setHold}
           vendorOptions={vendorOptionsFor}
           vendorState={vendorStateFor}
+          vendors={vendorList}
+          vendorsLoading={vendorsLoading}
+          onCreateVendor={(row, idx) => setCreateFor({ row, idx })}
         />
         <Box data-testid="vendor-award-summary" sx={{ mt: 1.5, p: 1.25, borderRadius: '10px', border: '1px solid', borderColor: 'divider', bgcolor: '#f8fafc' }}>
           <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', textTransform: 'uppercase' }}>
@@ -388,12 +416,12 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
         </Box>
         {historyError && (
           <Alert severity="error" sx={{ mt: 1 }} action={<Button size="small" onClick={() => refetchHistory()}>Retry</Button>}>
-            Could not load the items&apos; eligible vendors — a vendor cannot be selected until they load.
+            Could not load the items&apos; previous vendors — use Add New Vendor, or retry.
           </Alert>
         )}
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
           Quotations from Step 1.2 are loaded automatically. Remove the ones not approved — the remaining quotation(s) are saved as the approved quotation. No re-upload needed.
-          The vendor is optional here — if none is chosen it is chosen on the Purchase Order. Vendors offered are the ones who quoted for the item or have supplied it before. Use Select Items to approve only some items now; items on hold or left unticked stay pending and can be completed later. Only approved items go to Purchase Orders.
+          The vendor is optional here — if none is chosen it is chosen on the Purchase Order. Choose a previous vendor (one that quoted for the item or supplied it before), or add any active vendor — or create a new one — with Add New Vendor. Use Select Items to approve only some items now; items left unticked stay pending and can be completed later. Only approved items go to Purchase Orders.
         </Typography>
 
         <Divider sx={{ my: 1.5 }} />
@@ -413,6 +441,17 @@ const QuotationApprovalDialog = ({ open, onClose, indent }) => {
           Submit
         </Button>
       </DialogActions>
+      <AddVendorForItemModal
+        open={Boolean(createFor)}
+        startNew
+        onClose={() => setCreateFor(null)}
+        items={createItems}
+        vendorOptions={vendorList}
+        onAdded={(added) => {
+          // The new vendor (its rate for this item is on its Vendor Master item list now) becomes the item's vendor.
+          if (createFor && added?._id) patchRow(createFor.idx, { vendor: { _id: String(added._id), name: added.name } });
+        }}
+      />
     </Dialog>
   );
 };

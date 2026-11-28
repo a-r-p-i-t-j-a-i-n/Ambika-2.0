@@ -11,7 +11,10 @@
  * Only a vendor that is still an active, non-deleted Vendor Master record can be
  * selected (a PO that names a legacy Party id has no Vendor record, so it never
  * lists). The SKU is matched by id, else by code, the same way PO lines are
- * traced elsewhere.
+ * traced elsewhere. A catalog product typed in as a NAME only (no SKU id, no code —
+ * what a vendor added by hand used to get) is the item when its name equals the
+ * item's name (case / spacing ignored), as the PO rate lookup matches it; a product
+ * linked to a SKU is decided by that SKU alone.
  *
  * `matchHistory` / `historyVendorProblem` are pure; `vendorHistoryForItems` reads
  * the DB once for any number of items.
@@ -28,12 +31,32 @@ export const PURCHASED_PO_STATUSES = [
 
 const idOf = (v) => (v ? String(v) : '');
 const codeOf = (v) => String(v || '').trim().toUpperCase();
+const normName = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 /** Whether a PO line / catalog product (`row`) is the same SKU as the indent `item`. */
 export const sameSku = (row, item) => {
   if (row?.skuId && item?.skuId) return idOf(row.skuId) === idOf(item.skuId);
   const code = codeOf(item?.skuCode);
   return !!code && codeOf(row?.skuCode) === code;
+};
+
+/**
+ * Whether a Vendor Master catalog product is the indent `item`: the same SKU, or — for a product
+ * with NO SKU link at all (no id, no code) — the same name.
+ */
+export const sameCatalogProduct = (product, item) => {
+  if (sameSku(product, item)) return true;
+  if (product?.skuId || codeOf(product?.skuCode)) return false;
+  const name = normName(product?.productName);
+  return !!name && name === normName(item?.itemName);
+};
+
+const escapeRegex = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, (ch) => `\\${ch}`);
+/** Case-insensitive, whitespace-tolerant exact-name matcher for a set of item names (null = nothing to match). */
+const namePattern = (names) => {
+  const parts = [...new Set(names.map(normName).filter(Boolean))]
+    .map((n) => n.split(' ').map(escapeRegex).join('\\s+'));
+  return parts.length ? new RegExp(`^\\s*(?:${parts.join('|')})\\s*$`, 'i') : null;
 };
 
 const keyOf = (item) => idOf(item?._id);
@@ -79,7 +102,7 @@ export const matchHistory = (items, pos, catalogVendors, vendors) => {
     for (const v of catalogVendors || []) {
       const vid = idOf(v._id);
       if (!selectable.has(vid)) continue;
-      if (!(v.products || []).some((p) => sameSku(p, item))) continue;
+      if (!(v.products || []).some((p) => sameCatalogProduct(p, item))) continue;
       entry(vid).inCatalog = true;
     }
     const list = [...byVendor.values()].map((e) => ({
@@ -100,8 +123,10 @@ export const matchHistory = (items, pos, catalogVendors, vendors) => {
 /**
  * Previous vendors for each of `items` (indent items carrying _id / skuId /
  * skuCode) → Map(itemId → vendors[]). One PO query + one Vendor query in total.
+ * `poOnly` — purchase history only: vendors with a placed PO line for the SKU; a
+ * vendor that merely lists the SKU on its Vendor Master item list is left out.
  */
-export const vendorHistoryForItems = async (items) => {
+export const vendorHistoryForItems = async (items, { poOnly = false } = {}) => {
   const list = (items || []).filter((it) => it && (it.skuId || codeOf(it.skuCode)));
   if (!list.length) return new Map((items || []).map((it) => [keyOf(it), []]));
   const skuIds = [...new Set(list.map((it) => idOf(it.skuId)).filter(Boolean))];
@@ -110,6 +135,9 @@ export const vendorHistoryForItems = async (items) => {
     ...(skuIds.length ? [{ skuId: { $in: skuIds } }] : []),
     ...(skuCodes.length ? [{ skuCode: { $in: skuCodes } }] : []),
   ];
+  // Catalog products with no SKU link at all match by name (sameCatalogProduct) — fetch those too.
+  const nameRe = namePattern(list.map((it) => it.itemName));
+  const catalogHit = [...lineHit, ...(nameRe ? [{ productName: nameRe, skuId: null, skuCode: { $in: [null, ''] } }] : [])];
 
   const [pos, catalogVendors] = await Promise.all([
     VendorPurchaseOrder.find({
@@ -117,11 +145,11 @@ export const vendorHistoryForItems = async (items) => {
       poStatus: { $in: PURCHASED_PO_STATUSES },
       items: { $elemMatch: { $or: lineHit } },
     }).select('vendorId poNumber poDate items.skuId items.skuCode items.rate').lean(),
-    Vendor.find({
+    poOnly ? [] : Vendor.find({
       isDeleted: { $ne: true },
       isActive: { $ne: false },
-      products: { $elemMatch: { $or: lineHit } },
-    }).select('name code location products.skuId products.skuCode').lean(),
+      products: { $elemMatch: { $or: catalogHit } },
+    }).select('name code location products.skuId products.skuCode products.productName').lean(),
   ]);
 
   // Selectable vendors = active Vendor Master records among every candidate.
@@ -131,6 +159,16 @@ export const vendorHistoryForItems = async (items) => {
     : [];
   return matchHistory(items, pos, catalogVendors, vendors);
 };
+
+/**
+ * "Select Previous Vendor" at PO creation — the vendors that really supplied each item before:
+ * a placed PO (approved onward, never a draft or a cancelled PO) with a line for the item's SKU,
+ * on an active Vendor Master vendor. Latest purchase first, each carrying its purchase reference
+ * (lastPoNumber / lastPoDate / lastRate / poCount). Nothing else counts — not a quotation file's
+ * vendor tag, not a Vendor Master item list. Any other active vendor is chosen with "Add New Vendor".
+ * Returns Map(itemId → vendors[]).
+ */
+export const previousVendorsForItems = (items) => vendorHistoryForItems(items, { poOnly: true });
 
 /**
  * Why `vendorId` cannot be pre-selected for an item ('' = it can). `history` is

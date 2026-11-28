@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   LOOKUP, lookupKeyOf, lookupParams, answerOf, startLookup, applyAnswer, awaitsRate, lookupBlock,
-  rateChangeOf, isFirstRate, newRowId, resetLookup,
+  rateChangeOf, isFirstRate, newRowId, resetLookup, isLookupBlocked, unitChangeHint,
 } from '../poRateLookup.js';
 
 const row = (o = {}) => ({ itemName: 'Gloves', skuCode: 'G-1', skuId: 's1', unit: 'BOX', rate: '', gstRate: 18, hsn: '', ...o });
@@ -179,4 +179,59 @@ test('a failed lookup keeps the row as it is and says so', () => {
   const failed = applyAnswer(started, key, answerOf(null, { status: 500 }), null);
   assert.equal(failed.rateLookup.status, LOOKUP.ERROR);
   assert.equal(failed.rate, 12);
+});
+
+// ── Unit change: a line in another unit than the vendor's ONE priced row goes to approval ──────────────────
+const UNIT_MISMATCH_ONE = {
+  found: false, problem: 'UNIT_MISMATCH', message: 'V1 prices "Gloves" per Kgs (₹100.00), but this line is in BOX — changing the unit needs approval',
+  unitChange: { vendorProductId: 'p1', rate: 100, unit: 'Kgs' },
+};
+
+test('unit change: one priced row in another unit is NOT blocked — it needs a rate and a reason', () => {
+  const r = run(row(), 'k1', UNIT_MISMATCH_ONE);
+  assert.equal(r.rateLookup.status, LOOKUP.UNIT_MISMATCH);
+  assert.deepEqual(r.rateLookup.unitChange, { vendorProductId: 'p1', rate: 100, unit: 'Kgs' });
+  assert.equal(lookupBlock(r), '');
+  assert.equal(isLookupBlocked(r), false);
+  // nothing is fetched across units: the vendor's per-Kgs rate is never put on the BOX line
+  assert.equal(r.rate, '');
+  assert.equal(r.autoRate, undefined);
+  // no rate typed yet → nothing to approve yet
+  assert.deepEqual([rateChangeOf(r).changed, rateChangeOf(r).needsReason, rateChangeOf(r).unitChange], [false, false, true]);
+  // a rate for the new unit → a unit change that needs a reason
+  const typed = { ...r, rate: 12 };
+  const rc = rateChangeOf(typed);
+  assert.deepEqual([rc.changed, rc.needsReason, rc.unitChange, rc.fetched, rc.fetchedUnit], [true, true, true, 100, 'Kgs']);
+  assert.match(unitChangeHint(typed, rc), /Vendor price ₹100\.00 \/ Kgs → ₹12\.00 \/ BOX\. A unit change goes to Purchase Approval/);
+});
+
+test('unit change: the SAME number in the new unit is still a change (a price per Kgs is not a price per BOX)', () => {
+  const r = { ...run(row(), 'k1', UNIT_MISMATCH_ONE), rate: 100 };
+  assert.equal(rateChangeOf(r).needsReason, true);
+});
+
+test('unit change: a request already pending / approved at this rate AND unit needs no new reason', () => {
+  const r = { ...run(row(), 'k1', UNIT_MISMATCH_ONE), rate: 12, savedRate: 12, savedUnit: 'BOX', rateChangeStatus: 'PENDING' };
+  assert.deepEqual([rateChangeOf(r).covered, rateChangeOf(r).needsReason], [true, false]);
+  // another unit or rate than the saved one → a fresh reason
+  assert.equal(rateChangeOf({ ...r, unit: 'Pcs' }).needsReason, true);
+  assert.equal(rateChangeOf({ ...r, rate: 13 }).needsReason, true);
+  assert.equal(rateChangeOf({ ...r, rateChangeStatus: 'REJECTED' }).needsReason, true);
+});
+
+test('unit change: a rate approved in the item\'s quotation is not a doer\'s change', () => {
+  const r = { ...run(row({ quotationRate: 12 }), 'k1', UNIT_MISMATCH_ONE), rate: 12 };
+  assert.equal(rateChangeOf(r).needsReason, false);
+});
+
+test('unit problems the server cannot offer as a change (several rows / no rate) still block, ambiguity always blocks', () => {
+  const noRow = { found: false, problem: 'UNIT_MISMATCH', message: 'V1 prices "Gloves" per Kgs / Box, but the PO line is in PCS', unitChange: null };
+  const r = run(row(), 'k1', noRow);
+  assert.match(lookupBlock(r), /per Kgs \/ Box/);
+  assert.equal(isLookupBlocked(r), true);
+  assert.equal(rateChangeOf({ ...r, rate: 5 }).needsReason, false); // blocked first, never a request
+  const amb = run(row(), 'k1', { found: false, problem: 'AMBIGUOUS', message: 'two rates', unitChange: { rate: 1, unit: 'x' } });
+  assert.equal(isLookupBlocked(amb), true);
+  assert.match(lookupBlock(amb), /two rates/);
+  assert.equal(isLookupBlocked(run(row(), 'k1', FOUND)), false);
 });
