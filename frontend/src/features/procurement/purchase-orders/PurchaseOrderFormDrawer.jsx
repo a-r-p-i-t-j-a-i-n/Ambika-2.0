@@ -59,6 +59,7 @@ import { PFMS, pfmsCardSx } from "../pfmsTheme";
 import DateInputDDMMYYYY from "../components/DateInputDDMMYYYY";
 import PurchaseOrderPdfPreview from "./PurchaseOrderPdfPreview";
 import AddVendorForItemModal from "./AddVendorForItemModal";
+import ItemVendorPicker from "./ItemVendorPicker";
 import { norm, matchVendorProduct } from "./vendorRateMatch";
 import {
   LOOKUP,
@@ -70,6 +71,8 @@ import {
   applyAnswer,
   awaitsRate,
   lookupBlock,
+  isLookupBlocked,
+  unitChangeHint,
   rateChangeOf,
   isFirstRate,
   resetLookup,
@@ -81,6 +84,8 @@ import {
   fixedVendorOf,
   itemVendorBlock,
   assignedVendorsOf,
+  isLockedRow,
+  isPreselectedRow,
 } from "./itemVendor";
 import { isMdForDirectSave } from "./poDirectSave";
 import { awaitsSubmission } from "./poSubmission";
@@ -139,6 +144,9 @@ const rateSourceOf = (it) => {
   if (it.autoRate != null) return "VENDOR_MASTER";
   return it.rateSource || "";
 };
+
+// "2 rate changes" — or "2 rate/unit changes" when a unit change is among them (Purchase Approval decides both).
+const changeNoun = (n, unitChanges = 0) => `${n} ${unitChanges > 0 ? "rate/unit" : "rate"} change${n === 1 ? "" : "s"}`;
 
 // Rate Change Approvals: a rate that differs from the rate fetched from the
 // vendor's Vendor Master (poRateLookup.js — rateChangeOf) needs a reason; saving
@@ -562,6 +570,7 @@ const PurchaseOrderFormDrawer = ({
                     // The vendor rate the line was saved against, and its rate change request.
                     autoRate: it.fetchedRate ?? undefined,
                     savedRate: it.rate,
+                    savedUnit: it.unit,
                     rateChangeStatus: it.rateChangeStatus || "",
                     rateChangeRequestNumber: it.rateChangeRequestNumber || "",
                   },
@@ -974,14 +983,20 @@ const PurchaseOrderFormDrawer = ({
       new Map(selectedApprovedItems.map((o) => [String(o.indentItemId), o])),
     [selectedApprovedItems],
   );
-  const isFixedItem = (row) => {
-    const o = approvedById.get(String(row.indentItemId));
-    return o?.vendorState === "SET" && Boolean(o.vendorId);
-  };
+  // Approved with the quotation (Step 1.3): the PO must use that vendor.
+  const isLockedItem = (row) => isLockedRow(approvedById.get(String(row.indentItemId)));
+  // A vendor picked earlier on a Quote Required = No item: the form starts from it, the user may change it.
+  const isPreselectedItem = (row) => isPreselectedRow(approvedById.get(String(row.indentItemId)));
+  // The vendor an item is grouped under (= the vendor of its PO). Only an EXPLICIT choice ever gives an item a
+  // vendor: the one approved with its quotation, the user's own pick on this form (even "none yet" after
+  // Change vendor), or the Quote Required = No preselection. Never inferred from a quotation or the history.
   const vendorKeyOf = (row) => {
-    const o = approvedById.get(String(row.indentItemId));
-    if (o?.vendorState === "SET" && o.vendorId) return String(o.vendorId);
-    return itemVendorPicks[String(row.indentItemId)] || "";
+    const id = String(row.indentItemId);
+    const o = approvedById.get(id);
+    if (isLockedRow(o)) return String(o.vendorId);
+    if (Object.prototype.hasOwnProperty.call(itemVendorPicks, id)) return itemVendorPicks[id] || "";
+    if (isPreselectedRow(o)) return String(o.vendorId);
+    return "";
   };
   // The vendor whose rate a row fetches: its own by vendor, else the PO's vendor.
   const rateVendorOf = (row) =>
@@ -1196,34 +1211,11 @@ const PurchaseOrderFormDrawer = ({
       ),
     );
   };
-  // By vendor: an item with no vendor fixed whose SKU only ONE active vendor
-  // carries starts on that vendor — as the single-vendor form auto-selected it.
-  // Once per item: after "Change vendor" the choice stays with the buyer.
-  const autoPickedRef = useRef(new Set());
-  useEffect(() => {
-    if (!open) {
-      autoPickedRef.current = new Set();
-      return;
-    }
-    if (!groupMode || vendorsLoading || !vendorOptions.length) return;
-    const active = new Set(
-      vendorOptions.filter((v) => v.isActive !== false).map((v) => String(v._id)),
-    );
-    items.forEach((it) => {
-      if (!it.indentItemId || vendorKeyOf(it)) return;
-      const id = String(it.indentItemId);
-      if (autoPickedRef.current.has(id)) return;
-      autoPickedRef.current.add(id);
-      // the item's eligible vendors only (quoted / previously supplied); exactly one (still active) → start on it
-      const carriers = (approvedById.get(id)?.eligibleVendors || []).filter((h) =>
-        active.has(String(h.vendorId)),
-      );
-      if (carriers.length === 1) pickItemVendor(it, String(carriers[0].vendorId));
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, groupMode, items, vendorOptions, vendorsLoading]);
+  // NO automatic vendor: an item with no vendor chosen stays under "No vendor yet" until the user picks one —
+  // even when it has exactly one previous vendor or a quotation names one. (The form used to start such an
+  // item on its only eligible vendor, which made an unselected vendor look selected.)
 
-  // "Add vendor" for an item no vendor carries yet: the new vendor is picked for it.
+  // "Create vendor & rate" for an item: the created / completed vendor is picked for it.
   const [addVendorFor, setAddVendorFor] = useState(null);
 
   // Switching format keeps the selected approved items and just remaps the rows to
@@ -1253,65 +1245,9 @@ const PurchaseOrderFormDrawer = ({
     setTermsOpen(false);
   };
 
-  // Vendor filter (New PO item-picker): JSL is exempt (always Jindal); `null` = no restriction
-  // (JSL, or every selected item already has its vendor fixed).
-  // Vendors that have PREVIOUSLY supplied every selected item that has no vendor fixed (placed POs /
-  // Vendor Master item list — row.eligibleVendors from the server). Never the whole Vendor Master.
-  // Items whose vendor is already fixed are held to it (fixedVendor), so they add no restriction.
-  const eligibleAcrossItems = useMemo(() => {
-    if (!approvedItemMode) return null;
-    const open = selectedApprovedItems.filter(
-      (o) => !(o.vendorState === "SET" && o.vendorId),
-    );
-    if (!open.length) return selectedApprovedItems.length ? null : [];
-    const meta = new Map();
-    let ids = null;
-    open.forEach((o) => {
-      const list = o.eligibleVendors || [];
-      list.forEach((h) => meta.set(String(h.vendorId), h));
-      const here = new Set(list.map((h) => String(h.vendorId)));
-      ids = ids ? new Set([...ids].filter((x) => here.has(x))) : here;
-    });
-    return [...(ids || [])].map(
-      (id) =>
-        vendorById.get(id) || { _id: id, name: meta.get(id)?.vendorName || "" },
-    );
-  }, [approvedItemMode, selectedApprovedItems, vendorById]);
-  // JSL is held to Jindal (below) instead of offering a choice, but Jindal must be eligible too.
-  const skuFilteredVendors = isJsl ? null : eligibleAcrossItems;
-
-  const vendorOptionsFiltered = skuFilteredVendors || vendorOptions;
-  // No Vendor Master record carries the selected SKU(s) → prompt to add one.
-  const noVendorForSku =
-    skuFilteredVendors !== null && skuFilteredVendors.length === 0;
-  const noItemsYet = approvedItemMode && !isJsl && selectedApprovedItems.length === 0;
-
-  const [addVendorOpen, setAddVendorOpen] = useState(false);
-
-  // Auto-select when exactly one vendor matches; drop a vendor that no longer
-  // covers the selected SKUs once the item selection changes.
-  useEffect(() => {
-    if (isJsl || groupMode || !skuFilteredVendors || fixedVendor) return;
-    if (skuFilteredVendors.length === 1) {
-      if (vendor?._id !== skuFilteredVendors[0]._id)
-        applyVendor(skuFilteredVendors[0]);
-    } else if (
-      vendor?._id &&
-      !skuFilteredVendors.some((v) => v._id === vendor._id)
-    ) {
-      setVendor(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [skuFilteredVendors]);
-
-  // Why the selected items can't go on this PO's vendor ('' = they can).
+  // Why the selected items can't go on this PO's vendor ('' = they can). Only a vendor approved WITH the
+  // quotation holds the PO (fixedVendor); a Quote Required = No preselection does not. JSL is always Jindal.
   const vendorConflict = (() => {
-    if (isJsl && eligibleAcrossItems && selectedApprovedItems.length) {
-      const jsl = findJslVendor(vendorOptions);
-      if (jsl && !eligibleAcrossItems.some((v) => String(v._id) === String(jsl._id))) {
-        return `${JSL_VENDOR_NAME} has neither quoted for nor previously supplied the selected item(s) — a JSL PO is always ${JSL_VENDOR_NAME}. Use the Other format, or add the SKU to its Vendor Master item list.`;
-      }
-    }
     if (!fixedVendor) return "";
     if (fixedVendor.conflict)
       return `The selected items are fixed to different vendors (${fixedVendor.vendors.join(", ")}) — raise one PO per vendor.`;
@@ -1321,11 +1257,6 @@ const PurchaseOrderFormDrawer = ({
     }
     return "";
   })();
-
-  // After adding a vendor for the selected item(s): select it and auto-fill rates.
-  const handleVendorAdded = (added) => {
-    if (added?._id) applyVendor(added);
-  };
 
   const totals = useMemo(() => {
     if (isJsl) {
@@ -1365,6 +1296,9 @@ const PurchaseOrderFormDrawer = ({
   const rateChangeCount = isJsl
     ? 0
     : validItems.filter((it) => rateChangeOf(it).needsReason).length;
+  const unitChangeCount = isJsl
+    ? 0
+    : validItems.filter((it) => { const c = rateChangeOf(it); return c.needsReason && c.unitChange; }).length;
 
   // One OTHER line as the server takes it.
   const otherLinePayload = (it) => ({
@@ -1473,7 +1407,7 @@ const PurchaseOrderFormDrawer = ({
         !String(it.rateChangeReason || "").trim(),
     );
     if (noReason)
-      return `Give a reason for changing the rate of "${noReason.itemName}" — it goes to Rate Change Approvals`;
+      return `Give a reason for changing the ${rateChangeOf(noReason).unitChange ? "unit" : "rate"} of "${noReason.itemName}" — it goes to ${rateChangeOf(noReason).unitChange ? "Purchase Approval" : "Rate Change Approvals"}`;
     const badQty = rows.find(
       (it) => Number(it.quantity) > Number(it.approvedQuantity || 0),
     );
@@ -1609,9 +1543,12 @@ const PurchaseOrderFormDrawer = ({
       const rateChanges = created
         .flatMap(({ g }) => g.rows)
         .filter(({ it }) => rateChangeOf(it).needsReason).length;
+      const unitChanges = created
+        .flatMap(({ g }) => g.rows)
+        .filter(({ it }) => { const c = rateChangeOf(it); return c.needsReason && c.unitChange; }).length;
       if (rateChanges && !approved) {
         enqueueSnackbar(
-          `${rateChanges} rate change${rateChanges === 1 ? "" : "s"} sent to Rate Change Approvals`,
+          `${changeNoun(rateChanges, unitChanges)} sent to Rate Change Approvals`,
           { variant: "info" },
         );
       }
@@ -1726,7 +1663,7 @@ const PurchaseOrderFormDrawer = ({
       );
       if (noReason) {
         enqueueSnackbar(
-          `Give a reason for changing the rate of "${noReason.itemName}" — it goes to Rate Change Approvals`,
+          `Give a reason for changing the ${rateChangeOf(noReason).unitChange ? "unit" : "rate"} of "${noReason.itemName}" — it goes to ${rateChangeOf(noReason).unitChange ? "Purchase Approval" : "Rate Change Approvals"}`,
           { variant: "warning" },
         );
         return;
@@ -1819,7 +1756,7 @@ const PurchaseOrderFormDrawer = ({
       }
       if (rateChangeCount > 0 && !(created?.approvalStatus === "APPROVED")) {
         enqueueSnackbar(
-          `${rateChangeCount} rate change${rateChangeCount === 1 ? "" : "s"} sent to Rate Change Approvals`,
+          `${changeNoun(rateChangeCount, unitChangeCount)} sent to Rate Change Approvals`,
           { variant: "info" },
         );
       }
@@ -2202,7 +2139,7 @@ const PurchaseOrderFormDrawer = ({
             </Typography>
           </Box>
         )}
-        {(lkStatus === LOOKUP.UNIT_MISMATCH || lkStatus === LOOKUP.AMBIGUOUS) && (
+        {isLookupBlocked(it) && (
           <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5, pl: { md: 1 } }}>
             <AlertTriangle size={13} color="#b91c1c" style={{ marginTop: 2, flexShrink: 0 }} />
             <Typography
@@ -2213,6 +2150,15 @@ const PurchaseOrderFormDrawer = ({
               {lk.message}
             </Typography>
           </Box>
+        )}
+        {lkStatus === LOOKUP.UNIT_MISMATCH && lk?.unitChange && !rc.needsReason && (
+          <Typography
+            variant="caption"
+            data-testid="po-unit-change-note"
+            sx={{ pl: { md: 1 }, color: "#b45309", fontWeight: 600 }}
+          >
+            {lk.message}
+          </Typography>
         )}
         {lkStatus === LOOKUP.ERROR && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, pl: { md: 1 } }}>
@@ -2262,20 +2208,26 @@ const PurchaseOrderFormDrawer = ({
               data-testid="po-rate-change-hint"
               sx={{ color: "#b91c1c", fontWeight: 600, flex: "1 1 50%" }}
             >
-              Vendor rate {fmtRate(rc.fetched)} → {fmtRate(it.rate)} (
-              {fmtDiff(
-                Number(it.rate) - rc.fetched,
-                rc.fetched > 0
-                  ? ((Number(it.rate) - rc.fetched) / rc.fetched) * 100
-                  : null,
+              {rc.unitChange ? (
+                unitChangeHint(it, rc)
+              ) : (
+                <>
+                  Vendor rate {fmtRate(rc.fetched)} → {fmtRate(it.rate)} (
+                  {fmtDiff(
+                    Number(it.rate) - rc.fetched,
+                    rc.fetched > 0
+                      ? ((Number(it.rate) - rc.fetched) / rc.fetched) * 100
+                      : null,
+                  )}
+                  ). Goes to Rate Change Approvals — the PO can be approved, and the
+                  vendor's rate changes, only once it is approved.
+                </>
               )}
-              ). Goes to Rate Change Approvals — the PO can be approved, and the
-              vendor's rate changes, only once it is approved.
             </Typography>
             <TextField
               size="small"
               required
-              label="Reason for rate change"
+              label={rc.unitChange ? "Reason for unit change" : "Reason for rate change"}
               value={it.rateChangeReason || ""}
               onChange={(e) =>
                 setItem(idx, { rateChangeReason: e.target.value })
@@ -2332,9 +2284,6 @@ const PurchaseOrderFormDrawer = ({
 
   // By vendor: one card per vendor (= one PO) — the vendor, its delivery and
   // payment terms, its items and total — then the items that still need a vendor.
-  const activeVendorIds = new Set(
-    vendorOptions.filter((v) => v.isActive !== false).map((v) => String(v._id)),
-  );
   // Saving several POs runs one request after another — stay busy until all are done.
   const busy = saving || previewing || Boolean(pendingMode);
   const manyPos = groupMode && poGroups.length > 1;
@@ -2595,10 +2544,12 @@ const PurchaseOrderFormDrawer = ({
                   renderOtherRow(
                     it,
                     idx,
-                    isFixedItem(it) ? (
+                    isLockedItem(it) ? (
+                      // Approved with the quotation at Step 1.3 — the PO must use this vendor.
                       <Typography
                         variant="caption"
                         sx={{ color: "#0f766e", fontWeight: 600 }}
+                        data-testid="po-vendor-locked"
                       >
                         {VENDOR_SOURCE_LABEL[
                           approvedById.get(String(it.indentItemId))
@@ -2606,20 +2557,33 @@ const PurchaseOrderFormDrawer = ({
                         ] || "Vendor fixed"}
                       </Typography>
                     ) : (
-                      <Button
-                        size="small"
-                        onClick={() => pickItemVendor(it, "")}
-                        sx={{
-                          minWidth: 0,
-                          py: 0,
-                          px: 0.5,
-                          fontSize: "0.68rem",
-                          fontWeight: 700,
-                          textTransform: "none",
-                        }}
-                      >
-                        Change vendor
-                      </Button>
+                      <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                        {isPreselectedItem(it) ? (
+                          // Picked earlier (Quote Required = No): kept unless the user changes it.
+                          <Typography
+                            variant="caption"
+                            sx={{ color: "#0f766e", fontWeight: 600 }}
+                            data-testid="po-vendor-preselected"
+                          >
+                            {VENDOR_SOURCE_LABEL.PO_PREPARATION}
+                          </Typography>
+                        ) : null}
+                        <Button
+                          size="small"
+                          onClick={() => pickItemVendor(it, "")}
+                          data-testid="po-change-vendor"
+                          sx={{
+                            minWidth: 0,
+                            py: 0,
+                            px: 0.5,
+                            fontSize: "0.68rem",
+                            fontWeight: 700,
+                            textTransform: "none",
+                          }}
+                        >
+                          Change vendor
+                        </Button>
+                      </Box>
                     ),
                   ),
                 )}
@@ -2668,19 +2632,7 @@ const PurchaseOrderFormDrawer = ({
             </Typography>
           </Box>
           {unassignedGroup.rows.map(({ it, idx }) => {
-            // The item's PREVIOUS vendors only (placed POs / Vendor Master item list) — never the whole master.
-            const carries = () => true;
-            const options = (
-              approvedById.get(String(it.indentItemId))?.eligibleVendors || []
-            )
-              .filter((h) => activeVendorIds.has(String(h.vendorId)))
-              .map((h) => ({
-                ...(vendorById.get(String(h.vendorId)) || {
-                  _id: String(h.vendorId),
-                  name: h.vendorName,
-                }),
-                _basis: h.basis || [],
-              }));
+            const approvedRow = approvedById.get(String(it.indentItemId)) || it;
             return (
               <Box
                 key={it.indentItemId}
@@ -2690,10 +2642,10 @@ const PurchaseOrderFormDrawer = ({
                   display: "grid",
                   gridTemplateColumns: {
                     xs: "1fr",
-                    md: "minmax(0, 1fr) 340px auto 36px",
+                    md: "minmax(0, 1fr) minmax(300px, 400px) 36px",
                   },
                   gap: 1.5,
-                  alignItems: "center",
+                  alignItems: "start",
                   px: 2,
                   py: 1.25,
                   borderTop: `1px solid ${alpha("#f59e0b", 0.25)}`,
@@ -2713,83 +2665,19 @@ const PurchaseOrderFormDrawer = ({
                       .join(" · ")}
                   </Typography>
                 </Box>
-                <Autocomplete
-                  size="small"
-                  options={options}
-                  value={null}
+                {/* Two ways to choose the vendor — nothing is picked for the user: Select Previous Vendor
+                    (placed-PO history of this item) or Add New Vendor (any active Vendor Master vendor). */}
+                <ItemVendorPicker
+                  row={approvedRow}
+                  vendors={vendorOptions}
                   loading={vendorsLoading}
-                  onChange={(_e, o) => {
+                  value={null}
+                  onChange={(o) => {
                     if (o) pickItemVendor(it, String(o._id));
                   }}
-                  getOptionLabel={(o) => o?.name || ""}
-                  isOptionEqualToValue={(o, val) =>
-                    String(o._id) === String(val._id)
-                  }
-                  noOptionsText={
-                    vendorsLoading
-                      ? "Loading vendors…"
-                      : "No eligible vendors found"
-                  }
-                  renderOption={(props, o) => (
-                    <Box
-                      component="li"
-                      {...props}
-                      key={o._id}
-                      sx={{ display: "block !important", py: 0.75 }}
-                    >
-                      <Box
-                        sx={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 1,
-                        }}
-                      >
-                        <Typography variant="body2" fontWeight={700}>
-                          {o.name}
-                        </Typography>
-                        {carries(o) && (
-                          <Typography
-                            variant="caption"
-                            sx={{
-                              color: "#0f766e",
-                              fontWeight: 700,
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {o._basis?.includes("QUOTED")
-                              ? o._basis.length > 1
-                                ? "Quoted · Previous vendor"
-                                : "Quoted"
-                              : "Previous vendor"}
-                          </Typography>
-                        )}
-                      </Box>
-                      <Typography variant="caption" color="text.secondary">
-                        {[o.gstNo && `GST: ${o.gstNo}`, o.phone, o.email]
-                          .filter(Boolean)
-                          .join(" · ") || "—"}
-                      </Typography>
-                    </Box>
-                  )}
-                  renderInput={(params) => (
-                    <TextField
-                      {...params}
-                      placeholder="Select an eligible vendor"
-                    />
-                  )}
+                  onCreateVendor={() => setAddVendorFor(approvedRow)}
+                  testId="po-vendor-pick"
                 />
-                <Button
-                  size="small"
-                  startIcon={<Plus size={14} />}
-                  sx={{ textTransform: "none", whiteSpace: "nowrap" }}
-                  onClick={() =>
-                    setAddVendorFor(
-                      approvedById.get(String(it.indentItemId)) || it,
-                    )
-                  }
-                >
-                  Add vendor
-                </Button>
                 <Tooltip title="Remove from this PO">
                   <IconButton
                     size="small"
@@ -3138,22 +3026,14 @@ const PurchaseOrderFormDrawer = ({
                   </TextField>
                 ) : (
                   <Autocomplete
-                    options={
-                      fixedVendor ? vendorOptions : vendorOptionsFiltered
-                    }
+                    options={vendorOptions}
                     loading={vendorsLoading}
                     value={vendor}
                     disabled={!!fixedVendor && !fixedVendor.conflict}
                     getOptionLabel={(o) => o?.name || ""}
                     isOptionEqualToValue={(o, v) => o._id === v._id}
                     onChange={(_e, v) => applyVendor(v)}
-                    noOptionsText={
-                      noItemsYet
-                        ? "Select the item(s) first"
-                        : noVendorForSku
-                          ? "No eligible vendors found"
-                          : "No matching vendor"
-                    }
+                    noOptionsText="No matching vendor"
                     filterOptions={(opts, { inputValue }) => {
                       const q = inputValue.trim().toLowerCase();
                       if (!q) return opts;
@@ -3242,21 +3122,13 @@ const PurchaseOrderFormDrawer = ({
                         {...params}
                         label="Vendor *"
                         placeholder="Select from Vendor Master"
-                        error={
-                          !!vendorConflict || (!fixedVendor && noVendorForSku)
-                        }
+                        error={!!vendorConflict}
                         helperText={
                           vendorConflict ||
                           (fixedVendor
                             ? `${VENDOR_SOURCE_LABEL[fixedVendor.vendorSource]} — the PO must use this vendor`
                             : null) ||
-                          (noItemsYet
-                            ? "Select the item(s) first — only vendors that quoted for them or supplied them before are offered."
-                            : noVendorForSku
-                              ? "No eligible vendors found for the selected item(s) — none has quoted for them or supplied them before. Add the vendor for this item."
-                              : skuFilteredVendors
-                                ? "Only vendors that quoted for, or previously supplied, the selected item(s)."
-                                : " ")
+                          " "
                         }
                         InputProps={{
                           ...params.InputProps,
@@ -3273,19 +3145,6 @@ const PurchaseOrderFormDrawer = ({
                     )}
                   />
                 )}
-                {approvedItemMode &&
-                  !isJsl &&
-                  selectedApprovedItems.length > 0 &&
-                  !fixedVendor && (
-                    <Button
-                      size="small"
-                      startIcon={<Plus size={15} />}
-                      onClick={() => setAddVendorOpen(true)}
-                      sx={{ mt: 0.5, textTransform: "none" }}
-                    >
-                      Add Vendor for this Item
-                    </Button>
-                  )}
               </Grid>
             )}
           </Grid>
@@ -4282,8 +4141,7 @@ const PurchaseOrderFormDrawer = ({
                           </Typography>
                         </Box>
                       )}
-                      {(lkStatus === LOOKUP.UNIT_MISMATCH ||
-                        lkStatus === LOOKUP.AMBIGUOUS) && (
+                      {isLookupBlocked(it) && (
                         <Box
                           sx={{
                             display: "flex",
@@ -4305,6 +4163,15 @@ const PurchaseOrderFormDrawer = ({
                             {lk.message}
                           </Typography>
                         </Box>
+                      )}
+                      {lkStatus === LOOKUP.UNIT_MISMATCH && lk?.unitChange && !rc.needsReason && (
+                        <Typography
+                          variant="caption"
+                          data-testid="po-unit-change-note"
+                          sx={{ pl: { md: 1 }, color: "#b45309", fontWeight: 600 }}
+                        >
+                          {lk.message}
+                        </Typography>
                       )}
                       {lkStatus === LOOKUP.ERROR && (
                         <Box
@@ -4350,24 +4217,30 @@ const PurchaseOrderFormDrawer = ({
                               flex: "1 1 50%",
                             }}
                           >
-                            Vendor rate {fmtRate(rc.fetched)} →{" "}
-                            {fmtRate(it.rate)} (
-                            {fmtDiff(
-                              Number(it.rate) - rc.fetched,
-                              rc.fetched > 0
-                                ? ((Number(it.rate) - rc.fetched) /
-                                    rc.fetched) *
-                                    100
-                                : null,
+                            {rc.unitChange ? (
+                              unitChangeHint(it, rc)
+                            ) : (
+                              <>
+                                Vendor rate {fmtRate(rc.fetched)} →{" "}
+                                {fmtRate(it.rate)} (
+                                {fmtDiff(
+                                  Number(it.rate) - rc.fetched,
+                                  rc.fetched > 0
+                                    ? ((Number(it.rate) - rc.fetched) /
+                                        rc.fetched) *
+                                        100
+                                    : null,
+                                )}
+                                ). Goes to Rate Change Approvals — the PO can be
+                                approved, and the vendor's rate changes, only once
+                                it is approved.
+                              </>
                             )}
-                            ). Goes to Rate Change Approvals — the PO can be
-                            approved, and the vendor's rate changes, only once
-                            it is approved.
                           </Typography>
                           <TextField
                             size="small"
                             required
-                            label="Reason for rate change"
+                            label={rc.unitChange ? "Reason for unit change" : "Reason for rate change"}
                             value={it.rateChangeReason || ""}
                             onChange={(e) =>
                               setItem(idx, { rateChangeReason: e.target.value })
@@ -4521,7 +4394,7 @@ const PurchaseOrderFormDrawer = ({
               display="block"
               data-testid="po-rate-change-note"
             >
-              {rateChangeCount} rate change{rateChangeCount === 1 ? "" : "s"}{" "}
+              {changeNoun(rateChangeCount, unitChangeCount)}{" "}
               will go to Rate Change Approvals
               {isCreate && canDirectSave
                 ? " (Save PO Directly approves them now)"
@@ -4771,20 +4644,16 @@ const PurchaseOrderFormDrawer = ({
         );
       })()}
 
-      {/* Add a Vendor Master record (or product) for the selected approved item(s) */}
-      {/* …or, by vendor, for the one item it was opened for (the new vendor is picked for it). */}
+      {/* "Create vendor & rate" under Add New Vendor: create a Vendor Master record (or add the item and its
+          rate to one) for the one item it was opened for; the vendor is then picked for that item. */}
       <AddVendorForItemModal
-        open={addVendorOpen || Boolean(addVendorFor)}
-        onClose={() => {
-          setAddVendorOpen(false);
-          setAddVendorFor(null);
-        }}
-        items={addVendorFor ? [addVendorFor] : selectedApprovedItems}
+        open={Boolean(addVendorFor)}
+        onClose={() => setAddVendorFor(null)}
+        items={addVendorFor ? [addVendorFor] : []}
         vendorOptions={vendorOptions}
         onAdded={(added) => {
           if (addVendorFor && added?._id)
             pickItemVendor(addVendorFor, String(added._id));
-          else handleVendorAdded(added);
         }}
       />
     </Dialog>

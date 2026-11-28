@@ -143,14 +143,20 @@ const api = async () => {
   // ── V: previous vendors only ──
   console.log('\nV  Vendor history rule at Step 1.3');
   const v = await quotedIndent(['NOHIST', 'HIST', 'CODE']);
-  let r = await approve(v, [R(v, 0, 'HOLD'), R(v, 1, 'APPROVE', O), R(v, 2, 'APPROVE', A)]);
-  check('V1 a vendor who never supplied the item is refused (and the allowed ones are named)', r.status === 400 && /neither quoted for nor previously supplied/.test(r.message) && /NV Alpha Traders/.test(r.message), `${r.status} ${r.message}`);
-  r = await approve(v, [R(v, 0, 'APPROVE', A), R(v, 1, 'HOLD'), R(v, 2, 'HOLD')]);
-  check('V2 an item with no previous vendor refuses any vendor — "No Previous Vendors Found" (no Vendor Master fallback)', r.status === 400 && /No eligible vendors found/.test(r.message), `${r.status} ${r.message}`);
+  // Step 1.3 takes ANY active Vendor Master vendor ("Add New Vendor"): a previous / quoted vendor is only the first option offered.
+  // Tried on a throwaway indent so the rest of this run starts from the same state as before.
+  const vAny = await quotedIndent(['NOHIST', 'HIST']);
+  let r = await approve(vAny, [R(vAny, 0, 'APPROVE', O), R(vAny, 1, 'APPROVE', A)]);
+  let anyNow = await fresh(vAny._id);
+  check('V1 a vendor who never supplied the item is accepted at Step 1.3 ("Add New Vendor" — any active vendor)', r.status === 200 && String(anyNow.items[0].vendorId) === O && String(anyNow.items[1].vendorId) === A, `${r.status} ${r.message}`);
+  r = await approve(vAny, [R(vAny, 0, 'APPROVE', A), R(vAny, 1, 'APPROVE', A)]);
+  anyNow = await fresh(vAny._id);
+  check('V2 …including an item with NO previous vendor at all (no history needed), re-approved before any PO', r.status === 200 && String(anyNow.items[0].vendorId) === A, `${r.status} ${r.message}`);
   r = await approve(v, [R(v, 0, 'HOLD'), R(v, 1, 'APPROVE', G), R(v, 2, 'HOLD')]);
   check('V3 an inactive vendor is refused', r.status === 400, `${r.status} ${r.message}`);
-  r = await approve(v, [R(v, 0, 'HOLD'), R(v, 1, 'APPROVE', B), R(v, 2, 'HOLD')]);
-  check('V4 a vendor with only a DRAFT PO for the item is not "previous"', r.status === 400 && /neither quoted for nor previously supplied/.test(r.message), `${r.status} ${r.message}`);
+  const hist4 = await call('GET', `/procurement/indents/${v._id}/item-vendor-history`);
+  const offered4 = (hist4.data?.items?.[1]?.eligibleVendors || []).map((x) => String(x.vendorId));
+  check('V4 a vendor with only a DRAFT PO for the item is not listed as a previous vendor', hist4.status === 200 && !offered4.includes(B), JSON.stringify(offered4));
   const untouched = await fresh(v._id);
   check('V5 every refusal left the indent untouched (no partial write)', untouched.overallStatus === 'QUOTE_RECEIVED' && !untouched.quotationApprovalStep?.itemApprovedQuotations?.length && untouched.items.every((it) => !it.vendorId));
 
@@ -192,8 +198,8 @@ const api = async () => {
   check('R1 changing the vendor of an item already on a PO is refused', r.status === 400 && /already on/.test(r.message), `${r.status} ${r.message}`);
   r = await approve(ind, [R(ind, 2, 'HOLD')]);
   check('R2 putting an item that is already on a PO on hold is refused', r.status === 400 && /already on/.test(r.message), `${r.status} ${r.message}`);
-  r = await approve(ind, [R(ind, 0, 'APPROVE', A)]);
-  check('R3 the held item still cannot take a vendor with no history (Alpha)', r.status === 400 && /No eligible vendors found/.test(r.message), `${r.status} ${r.message}`);
+  const hist3 = await call('GET', `/procurement/indents/${ind._id}/item-vendor-history`);
+  check('R3 the held item has no previous vendor yet (Alpha is not offered as one)', hist3.status === 200 && !(hist3.data?.items?.[0]?.eligibleVendors || []).some((x) => String(x.vendorId) === A), JSON.stringify(hist3.data?.items?.[0]?.eligibleVendors));
   // The vendor later supplies the SKU (Vendor Master item list — what the PO form does) → history now exists.
   const nohist = await skuDoc('NOHIST');
   await Vendor.updateOne({ code: 'NV-DELTA' }, { $addToSet: { products: { skuId: nohist._id, skuCode: nohist.code, productName: nohist.name, rate: 50 } } });
@@ -258,13 +264,16 @@ const api = async () => {
     sp.length === 2 && sp.every((x) => x.vendorState === 'MISSING') && !sp.some((x) => String(x.indentItemId) === String(si.items[0]._id)), JSON.stringify(sp.map((x) => [x.indentItemId, x.vendorState])));
   const hist1 = sp.find((x) => String(x.indentItemId) === String(si.items[1]._id));
   const hist2 = sp.find((x) => String(x.indentItemId) === String(si.items[2]._id));
-  check('S4 each row carries its ELIGIBLE vendors only — untagged quotes, so = previous vendors (HIST: Alpha+Delta · CODE: Alpha) — never the whole master',
-    JSON.stringify(hist1.eligibleVendors.map((h) => h.vendorName).sort()) === JSON.stringify(['NV Alpha Traders', 'NV Delta Catalog'])
-    && JSON.stringify(hist2.eligibleVendors.map((h) => h.vendorName)) === JSON.stringify(['NV Alpha Traders']), JSON.stringify([hist1.eligibleVendors, hist2.eligibleVendors]));
-  po = await poFromItems([[si, si.items[1]], [si, si.items[2]]], B);
-  check('S5 PO with a vendor that never supplied the items (Beta) is refused', po.status === 400 && /neither quoted for nor previously supplied/.test(po.message), `${po.status} ${po.message}`);
+  // new rule (2026-11-28): each row carries its PREVIOUS vendors = placed-PO history only (a Vendor Master item list such as Delta's is NOT history);
+  // the PO vendor itself may be any active Vendor Master vendor.
+  check('S4 each row carries its PREVIOUS vendors (placed POs only) — HIST: Alpha · CODE: Alpha; Delta (item list only) is not a previous vendor',
+    JSON.stringify(hist1.previousVendors.map((h) => h.vendorName)) === JSON.stringify(['NV Alpha Traders'])
+    && JSON.stringify(hist2.previousVendors.map((h) => h.vendorName)) === JSON.stringify(['NV Alpha Traders']), JSON.stringify([hist1.previousVendors, hist2.previousVendors]));
+  po = await poFromItems([[si, si.items[1]], [si, si.items[2]]], G);
+  check('S5 PO with an INACTIVE vendor (Gamma) is refused', po.status === 400 && /inactive in the Vendor Master/.test(po.message), `${po.status} ${po.message}`);
   po = await poFromItems([[si, si.items[1]], [si, si.items[2]]], D, 90);
-  check('S6 PO with Delta is refused — Delta supplied item 2 but not item 3 (every item must have the vendor in its history)', po.status === 400 && /neither quoted for nor previously supplied/.test(po.message), `${po.status} ${po.message}`);
+  check('S6 PO with Delta is ACCEPTED — Delta supplied neither item by PO (Add New Vendor: any active vendor); cancelled again so the flow below is unchanged', (po.status === 201 || po.status === 200)
+    && (await call('POST', `/procurement/purchase-orders/${po.data?._id}/cancel`, { remarks: 'e2e' })).status === 200, `${po.status} ${po.message}`);
   po = await poFromItems([[si, si.items[1]], [si, si.items[2]]], A);
   check('S7 PO with Alpha (previous vendor of both) is created — one PO for the vendor group', po.status === 201 || po.status === 200, `${po.status} ${po.message}`);
   si = await fresh(s._id);
@@ -272,8 +281,8 @@ const api = async () => {
   po = await poFromItems([[si, si.items[1]]], A);
   check('S9 a second PO for an item already on a PO is refused (no duplicate)', po.status >= 400, `${po.status} ${po.message}`);
   let poId = ((await activePos(si._id))[0] || {})._id;
-  r = await call('PATCH', `/procurement/purchase-orders/${poId}`, { vendorId: D });
-  check('S10 editing the draft to a vendor that has not supplied every item is refused', r.status === 400 && /neither quoted for nor previously supplied/.test(r.message), `${r.status} ${r.message}`);
+  r = await call('PATCH', `/procurement/purchase-orders/${poId}`, { vendorId: G });
+  check('S10 editing the draft to an INACTIVE vendor is refused (any ACTIVE vendor is fine — new rule 2026-11-28)', r.status === 400 && /inactive in the Vendor Master/.test(r.message), `${r.status} ${r.message}`);
   r = await call('POST', `/procurement/purchase-orders/${poId}/submit`, {});
   check('S11 a valid-vendor draft submits for approval', r.status === 200, `${r.status} ${r.message}`);
 
@@ -283,8 +292,10 @@ const api = async () => {
   si = await fresh(s._id);
   check('S13 step complete (statusDone YES), indent still PARTIAL_PO_CREATED, items 2+3 keep their PO link', si.quotationApprovalStep.statusDone === 'YES' && si.overallStatus === 'PARTIAL_PO_CREATED'
     && si.items[1].procurementStatus === 'PO_CREATED' && si.items[2].procurementStatus === 'PO_CREATED' && si.items[0].procurementStatus !== 'PO_CREATED');
-  po = await poFromItems([[si, si.items[0]]], A);
-  check('S14 item 1 has no previous vendor → "No Previous Vendors Found" (the Vendor Master is not a fallback)', po.status === 400 && /No eligible vendors found/.test(po.message), `${po.status} ${po.message}`);
+  // new rule: item 1 has no previous vendor (empty "Select Previous Vendor" list), but "Add New Vendor" still lets any ACTIVE vendor take it
+  const s14row = (await pickerRows(si)).find((x) => String(x.indentItemId) === String(si.items[0]._id));
+  po = await poFromItems([[si, si.items[0]]], G);
+  check('S14 item 1 has NO previous vendor (empty list) and an INACTIVE vendor is still refused', Array.isArray(s14row?.previousVendors) && s14row.previousVendors.length === 0 && po.status === 400 && /inactive in the Vendor Master/.test(po.message), `${po.status} ${po.message}`);
   const nohist2 = await skuDoc('NOHIST');
   await Vendor.updateOne({ code: 'NV-DELTA' }, { $addToSet: { products: { skuId: nohist2._id, skuCode: nohist2.code, productName: nohist2.name, rate: 50 } } });
   po = await poFromItems([[si, si.items[0]]], D, 50);
@@ -300,8 +311,8 @@ const api = async () => {
   r = await approve(t, [R(t, 0, 'YES-NO-VENDOR')]);
   let ti = await fresh(t._id);
   check('S17 single quoted item approved without a vendor → complete step, PO-eligible, vendor not selected', r.status === 200 && ti.quotationApprovalStep.statusDone === 'YES' && (await pickerRows(ti))[0]?.vendorState === 'MISSING');
-  r = await call('PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: t._id, indentItemId: ti.items[0]._id, vendorId: B });
-  check('S18 Select Vendor with a non-previous vendor (Beta) is refused', r.status === 400 && /neither quoted for nor previously supplied/.test(r.message), `${r.status} ${r.message}`);
+  r = await call('PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: t._id, indentItemId: ti.items[0]._id, vendorId: G });
+  check('S18 Select Vendor with an INACTIVE vendor (Gamma) is refused (any active vendor is fine — new rule 2026-11-28)', r.status === 400 && /inactive in the Vendor Master/.test(r.message), `${r.status} ${r.message}`);
   r = await call('PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: t._id, indentItemId: ti.items[0]._id, vendorId: D });
   check('S19 Select Vendor with a previous vendor (Delta) is saved', r.status === 200, `${r.status} ${r.message}`);
   po = await poFromItems([[ti, ti.items[0]]], A);

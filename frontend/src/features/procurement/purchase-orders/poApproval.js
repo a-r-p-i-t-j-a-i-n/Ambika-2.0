@@ -3,7 +3,10 @@
  * purchase-order/poApproval.js. The server enforces it (route + service); this
  * only decides whether Approve / Reject is offered and what the screen says.
  *
- *   Permission     procurement.approve (the MD's root role always has it).
+ *   Permission     procurement.approve (the MD's root role always has it) — except a PO for a NEW
+ *                  vendor (po.newVendorApproval.isRequired), which only the MD or the purchase
+ *                  approver may decide: they do it in Purchase Approval (the server knows who the
+ *                  purchase approver is; this screen only points there).
  *   Maker-checker  whoever created, edited or submitted the PO cannot decide it;
  *                  the MD is exempt (as with "Save PO Directly").
  */
@@ -27,6 +30,9 @@ export const poMakerIds = (po) => {
  * Why `user` may not decide `po` ('' = they may). `can` = usePermissions().can.
  */
 export const poApprovalBlockReason = (po, user, can) => {
+  if (po?.newVendorApproval?.isRequired === true && !isMdForDirectSave(user)) {
+    return 'This is a new-vendor PO — the MD or the purchase approver decides it in Purchase Approval (New Vendor POs).';
+  }
   if (!can?.(PO_APPROVE_PERMISSION)) return 'Waiting for an approver — you do not have PO approval permission.';
   if (user?._id && !isMdForDirectSave(user) && poMakerIds(po).has(String(user._id))) {
     return 'Waiting for another approver — you prepared this PO, so you cannot approve or reject it yourself.';

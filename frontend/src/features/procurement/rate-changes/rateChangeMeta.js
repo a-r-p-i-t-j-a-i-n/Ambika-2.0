@@ -51,3 +51,23 @@ export const diffColor = (amount) => (amount > 0 ? '#b91c1c' : amount < 0 ? '#15
 /** The same "same price" rule as the server (4 decimals). */
 export const sameRate = (a, b) => a != null && b != null && a !== '' && b !== ''
   && Math.round(Number(a) * 10000) === Math.round(Number(b) * 10000);
+
+/** What a request changes: the rate, the unit the vendor prices in, or both (older requests have no changeType = RATE). */
+export const CHANGE_TYPE = {
+  RATE:      { label: 'Rate change',        short: 'Rate' },
+  UNIT:      { label: 'Unit change',        short: 'Unit' },
+  RATE_UNIT: { label: 'Rate & unit change', short: 'Rate + unit' },
+};
+export const changeTypeOf = (r) => (CHANGE_TYPE[r?.changeType] ? r.changeType : 'RATE');
+export const isUnitChange = (r) => changeTypeOf(r) !== 'RATE';
+export const changeLabel = (r) => CHANGE_TYPE[changeTypeOf(r)].label;
+export const changeShort = (r) => CHANGE_TYPE[changeTypeOf(r)].short;
+
+/** "₹100.00 / Kgs" — a rate with its unit (the unit is left out when there is none). */
+export const fmtPrice = (rate, unit) => `${fmtRate(rate)}${unit ? ` / ${unit}` : ''}`;
+/** The vendor's price before and the requested price, for a request row / panel. */
+export const existingPriceOf = (r) => (isUnitChange(r) ? fmtPrice(r.existingVendorRate, r.existingVendorUnit) : fmtRate(r.existingVendorRate));
+export const requestedPriceOf = (r) => (isUnitChange(r) ? fmtPrice(r.requestedRate, r.requestedUnit || r.unit) : fmtRate(r.requestedRate));
+
+/** The Purchase Approval page's tab / deep-link params for new-vendor POs. */
+export const NEW_VENDOR_TAB = 'new-vendor';

@@ -78,8 +78,38 @@ export const LINE_RATE = {
   MATCHES:       'MATCHES',       // the line uses the vendor's rate
   QUOTATION:     'QUOTATION',     // the rate approved in the item's quotation (Step 1.3)
   CHANGED:       'CHANGED',       // the line's rate differs from the vendor's → needs approval
-  UNIT_MISMATCH: 'UNIT_MISMATCH', // changed, but the vendor prices this item in another unit
+  UNIT_CHANGED:  'UNIT_CHANGED',  // the line is in another unit than the vendor's one row → needs approval
+  UNIT_MISMATCH: 'UNIT_MISMATCH', // the vendor prices this item in another unit and no single row can be changed
   AMBIGUOUS:     'AMBIGUOUS',     // changed, and the vendor has several rates for it in this unit
+};
+
+/**
+ * The one catalog row a line's UNIT change can be approved against: the vendor
+ * has exactly ONE row for the item, with a rate, and it is in another unit
+ * (`lk` = a matchVendorRate / lookupVendorRate result). Anything murkier — several
+ * rows in other units, a row with no rate — stays a Vendor Master fix (null).
+ */
+export const unitChangeRow = (lk) => {
+  if (lk?.problem !== 'UNIT_MISMATCH') return null;
+  const rows = lk.candidates || [];
+  if (rows.length !== 1 || !(Number(rows[0].rate) > 0)) return null;
+  return rows[0];
+};
+
+/** What a change touches: the rate, the unit, or both (see RateChangeRequest.changeType). */
+export const changeTypeOf = ({ existingRate, existingUnit, requestedRate, requestedUnit } = {}) => {
+  const unitChanged = Boolean(String(existingUnit || '').trim()) && !sameUnit(existingUnit, requestedUnit);
+  if (!unitChanged) return 'RATE';
+  return sameRate(existingRate, requestedRate) ? 'UNIT' : 'RATE_UNIT';
+};
+
+/** "₹100 / Kgs → ₹5 / Pcs" — a request's change as one readable line. */
+export const changeText = ({ existingRate, existingUnit, requestedRate, requestedUnit, changeType } = {}) => {
+  const per = (u) => (u ? ` / ${u}` : '');
+  if (changeType && changeType !== 'RATE') {
+    return `${inr(existingRate)}${per(existingUnit)} → ${inr(requestedRate)}${per(requestedUnit)}`;
+  }
+  return `${inr(existingRate)} → ${inr(requestedRate)}`;
 };
 
 /**
@@ -101,7 +131,13 @@ export const evaluateLineRate = ({ line = {}, products = [], quotationRate = nul
   // Another unit / several different rates: never matched to the line, even when
   // the line happens to carry one of those rates — the doer fixes the unit or the
   // Vendor Master first (unsendableReason says how).
-  if (!found) return { state: LINE_RATE[problem], product: null, vendorRate: null, candidates };
+  if (!found) {
+    // One row, in another unit: the doer may change the unit — it goes to approval
+    // like a rate change (the vendor's row follows the approved unit + rate).
+    const row = unitChangeRow({ problem, candidates });
+    if (row) return { state: LINE_RATE.UNIT_CHANGED, product: row, vendorRate: Number(row.rate), vendorUnit: row.unit || '', candidates };
+    return { state: LINE_RATE[problem], product: null, vendorRate: null, candidates };
+  }
   const vendorRate = Number(product.rate) || 0;
   return {
     state: sameRate(rate, vendorRate) ? LINE_RATE.MATCHES : LINE_RATE.CHANGED,
@@ -130,6 +166,11 @@ export const unsendableReason = (evaluation, line = {}, vendorName = 'the vendor
 export const lookupMessage = (lk, line = {}, vendorName = 'This vendor') => {
   if (!lk || lk.found) return '';
   const item = line.itemName || line.skuCode || 'this item';
+  const row = unitChangeRow(lk);
+  if (row) {
+    return `${vendorName} prices "${item}" per ${row.unit || 'another unit'} (${inr(row.rate)}), but this line is in ${line.unit || 'no unit'} — `
+      + 'changing the unit needs approval (Purchase Approval); enter the rate for the new unit and a reason';
+  }
   if (lk.problem === 'UNIT_MISMATCH' || lk.problem === 'AMBIGUOUS') {
     return unsendableReason({ state: LINE_RATE[lk.problem], candidates: lk.candidates }, line, vendorName);
   }

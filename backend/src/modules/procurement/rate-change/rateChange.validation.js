@@ -53,3 +53,11 @@ export const approveRateChangeSchema = Joi.object({
 export const rejectRateChangeSchema = Joi.object({
   reason: Joi.string().trim().min(REJECTION_REASON_MIN).max(500).required().label('Rejection reason'),
 });
+
+// Purchase Approval → New Vendor POs (approvers/newVendorPoApproval.js): list filter.
+export const listPoApprovalsSchema = Joi.object({
+  page:  Joi.number().integer().min(1),
+  limit: Joi.number().integer().min(1).max(200),
+  status: Joi.string().valid('PENDING', 'APPROVED', 'REJECTED').allow(''),
+  search: Joi.string().trim().max(120).allow(''),
+});

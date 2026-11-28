@@ -2,10 +2,11 @@ import React from 'react';
 import {
   Box, Typography, IconButton, TextField, Tooltip, Autocomplete, Button, Checkbox,
 } from '@mui/material';
-import { FileText, X, ExternalLink, PauseCircle, PlayCircle } from 'lucide-react';
+import { FileText, X, ExternalLink, PlayCircle } from 'lucide-react';
 import { fileHref } from './indentMeta';
 import DateInputDDMMYYYY from '../components/DateInputDDMMYYYY';
 import StatusChip from '../components/StatusChip';
+import ItemVendorPicker from '../purchase-orders/ItemVendorPicker';
 import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
 
 /**
@@ -20,7 +21,7 @@ import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
  *                 is chosen on the PO). "On PO-…" and read-only once a PO exists.
  *   Pending       an item left unticked in Select Items mode, or saved as pending earlier
  *                 (shown here as pending, kept for later; its vendor picker is disabled).
- *   On Hold       "Hold / Keep Pending" — stays on Step 1.3 for later; Resume undoes it.
+ *   On Hold       an item held earlier (there is no Hold button any more) — stays on Step 1.3 for later; Resume undoes it.
  *   No Quote      Quote Required = No: `No Quote · Vendor: <name>`; the vendor
  *                 shown is the one already chosen (Step 1.2 / Pending for PO).
  *
@@ -50,12 +51,15 @@ const ApprovedVendorTable = ({
   yesValue = 'YES',
   onRemoveFile,
   onPatchRow,
-  onHold,               // (rowIdx, boolean) — Hold / Keep Pending, Resume
+  onHold,               // (rowIdx, boolean) — Resume (takes an item that was held earlier off hold)
   selectMode = false,   // Select Items mode: serial → checkbox on quoted rows
   onSelect,             // (rowIdx, boolean) — tick / untick a quoted row
   decisionOf,           // (row) → 'APPROVED' | 'PENDING' | 'ON_HOLD' | 'NO_QUOTE'
-  vendorOptions,        // (row) → [{ _id, name, caption?, quotedRate?, deliveryDays? }] — eligible vendors (quoted or previously supplied)
+  vendorOptions,        // (row) → [{ _id, name, caption?, quotedRate?, deliveryDays? }] — PREVIOUS vendors (quoted for the item or supplied it before)
   vendorState,          // (row) → { loading, failed, noHistory }
+  vendors = [],         // the Vendor Master list — "Add New Vendor" offers any active one
+  vendorsLoading = false,
+  onCreateVendor,       // (row, rowIdx) → opens "create a new vendor" for the item
 }) => {
   if (!rows.length) {
     return (
@@ -246,42 +250,25 @@ const ApprovedVendorTable = ({
                       ) : (
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }} data-testid={`approved-vendor-state-${idx}`}
                           data-state={row.vendor?._id ? 'selected' : (vs.noHistory ? 'nohistory' : 'none')}>
-                          {vs.noHistory ? (
-                            <Box sx={{ display: 'inline-flex', alignItems: 'center', px: 1, py: 0.6, borderRadius: '6px', border: `1px solid ${PFMS.line}`, bgcolor: PFMS.surfaceAlt, fontSize: '0.78rem', fontWeight: 700, color: PFMS.sub }}
-                              data-testid={`approved-no-history-${idx}`}>
-                              No Eligible Vendors Found
-                            </Box>
-                          ) : (
-                            <Autocomplete
-                              size="small"
-                              sx={{ flex: '1 1 210px', maxWidth: 320 }}
-                              options={vendorOptions(row) || []}
-                              loading={!!vs.loading}
+                          {/* Two ways to choose the vendor (the same picker as the PO / Pending for PO): a PREVIOUS vendor — quoted
+                              for the item or supplied it before — or ANY other active vendor ("Add New Vendor"), or create one here. */}
+                          <Box sx={{ flex: '1 1 270px', maxWidth: 380, minWidth: 0 }}>
+                            <ItemVendorPicker
+                              row={row}
+                              vendors={vendors}
+                              loading={!!vs.loading || vendorsLoading}
+                              value={row.vendor?._id ? { _id: String(row.vendor._id), name: row.vendor.name } : null}
+                              onChange={(v) => onPatchRow(idx, { vendor: v ? { _id: v._id, name: v.name } : null })}
+                              onCreateVendor={onCreateVendor ? () => onCreateVendor(row, idx) : undefined}
+                              createLabel="Create new vendor"
+                              previousOptions={vendorOptions(row) || []}
+                              previousCaption={(o) => [o.caption, hasNum(o.quotedRate) && `${fmtRate(o.quotedRate)} / ${row.unit || 'unit'}`, hasNum(o.deliveryDays) && `${o.deliveryDays} day(s)`].filter(Boolean).join(' · ')}
+                              noPreviousText={vs.failed ? 'Could not load the previous vendors — use Add New Vendor.' : 'No previous vendor has quoted for or supplied this item — use Add New Vendor.'}
                               disabled={decision === 'PENDING'}
-                              value={row.vendor || null}
-                              onChange={(_e, v) => onPatchRow(idx, { vendor: v ? { _id: v._id, name: v.name } : null })}
-                              getOptionLabel={(o) => o?.name || ''}
-                              isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
-                              noOptionsText={vs.loading ? 'Loading eligible vendors…' : (vs.failed ? 'Could not load eligible vendors' : 'No eligible vendors found — none has quoted for this item or supplied it before')}
-                              renderOption={(props, o) => (
-                                <Box component="li" {...props} key={o._id} sx={{ display: 'block !important', py: 0.5 }}>
-                                  <Typography variant="body2" fontWeight={700}>{o.name}</Typography>
-                                  {(o.caption || hasNum(o.quotedRate) || hasNum(o.deliveryDays)) && (
-                                    <Typography variant="caption" color="text.secondary">
-                                      {[o.caption, hasNum(o.quotedRate) && `${fmtRate(o.quotedRate)} / ${row.unit || 'unit'}`, hasNum(o.deliveryDays) && `${o.deliveryDays} day(s)`].filter(Boolean).join(' · ')}
-                                    </Typography>
-                                  )}
-                                </Box>
-                              )}
-                              renderInput={(params) => (
-                                <TextField
-                                  {...params}
-                                  placeholder="Select Vendor (optional)"
-                                  inputProps={{ ...params.inputProps, 'data-testid': `approved-vendor-${idx}` }}
-                                />
-                              )}
+                              testId={`approved-vendor-pick-${idx}`}
+                              inputTestId={`approved-vendor-${idx}`}
                             />
-                          )}
+                          </Box>
                           {decision === 'PENDING'
                             ? <StatusChip status="PENDING" tone="amber" label="Pending" />
                             : <StatusChip status="DONE" tone="green" label="Approved" />}
@@ -290,10 +277,6 @@ const ApprovedVendorTable = ({
                               Vendor not selected — chosen on the PO
                             </Typography>
                           )}
-                          <Button size="small" variant="outlined" color="inherit" startIcon={<PauseCircle size={14} />} onClick={() => onHold(idx, true)}
-                            data-testid={`approved-hold-${idx}`} sx={{ textTransform: 'none', fontWeight: 700, color: PFMS.sub, borderColor: PFMS.line, whiteSpace: 'nowrap' }}>
-                            Hold / Keep Pending
-                          </Button>
                         </Box>
                       )
                     ) : (

@@ -3,6 +3,7 @@ import { purchaseOrderService } from './purchaseOrder.service.js';
 import { isMdForDirectSave, DIRECT_SAVE_MD_ONLY } from './poDirectSave.js';
 import { attachStepTiming } from '../stepTiming.js';
 import { rateChangeService } from '../rate-change/rateChange.service.js';
+import { newVendorPoApprovalService } from '../approvers/newVendorPoApproval.js';
 import { loadPoTermsDefaults } from '../../pricing/company-pdf-assets.js';
 import { ApiResponse, AppError } from '../../../utils/apiResponse.js';
 import { logger } from '../../../utils/logger.js';
@@ -74,6 +75,8 @@ export const purchaseOrderController = {
     assertDirectSaveAllowed(req);
     const draft = await purchaseOrderService.createFromItems(req.body, req.user);
     const po = await approveIfDirect(req, draft);
+    // A submitted PO for a NEW vendor is announced to the MD and the purchase approver.
+    await newVendorPoApprovalService.notifyApprovers(po, req.user);
     res.status(201).json(ApiResponse.created(createdMessage(po), po));
   }),
 
@@ -81,6 +84,7 @@ export const purchaseOrderController = {
     assertDirectSaveAllowed(req);
     const draft = await purchaseOrderService.create(req.body, req.user);
     const po = await approveIfDirect(req, draft);
+    await newVendorPoApprovalService.notifyApprovers(po, req.user);
     res.status(201).json(ApiResponse.created(createdMessage(po), po));
   }),
 
@@ -102,12 +106,14 @@ export const purchaseOrderController = {
 
   update: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.update(req.params.id, req.body, req.user);
+    await newVendorPoApprovalService.notifyApprovers(po, req.user);
     res.json(ApiResponse.ok(req.body.submit === true ? 'Purchase order updated and submitted for approval' : 'Purchase order updated', po));
   }),
 
   // Submit a saved draft for approval — it then waits in PO Approval. Never approves.
   submit: asyncHandler(async (req, res) => {
     const po = await purchaseOrderService.submit(req.params.id, req.user);
+    await newVendorPoApprovalService.notifyApprovers(po, req.user);
     res.json(ApiResponse.ok('Purchase order submitted for approval', po));
   }),
 
@@ -168,6 +174,7 @@ export const purchaseOrderController = {
       throw new AppError('A revised PO is always saved as a draft — approve it in PO Approval', 400);
     }
     const po = await purchaseOrderService.revise(req.params.id, req.body, req.user);
+    await newVendorPoApprovalService.notifyApprovers(po, req.user);
     res.status(201).json(ApiResponse.created('Revised purchase order created', po));
   }),
 };

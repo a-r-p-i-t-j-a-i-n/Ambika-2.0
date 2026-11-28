@@ -26,6 +26,21 @@ export const APPROVAL_ROW_STATUS = {
 
 const idOf = (v) => (v ? String(v) : '');
 
+/**
+ * Step 1.2 split of an indent's items (`eligibleIds` = the items effective-approved at Step 1.1):
+ *   notRequired  answered "Quote Required? = No" — their vendor is picked at Step 1.2, they have no quotation to
+ *                approve, so they go STRAIGHT to PO creation
+ *   quoted       everything else — waits for Step 1.3
+ *   mixed        both exist: the indent releases its no-quote items to PO now AND stays open on Step 1.3
+ */
+export const splitByQuoteNeed = (eligibleIds = [], itemQuotations = []) => {
+  const nr = new Set((itemQuotations || []).filter((q) => q?.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId).map((q) => idOf(q.itemId)));
+  const ids = (eligibleIds || []).map(idOf).filter(Boolean);
+  const notRequired = ids.filter((id) => nr.has(id));
+  const quoted = ids.filter((id) => !nr.has(id));
+  return { notRequired, quoted, mixed: notRequired.length > 0 && quoted.length > 0 };
+};
+
 /** Quoted-path items still owing a Step 1.3 decision: effective-approved at Step 1.1 and not "Quote Not Required" at Step 1.2. */
 export const quotedItemIds = (indent, isItemApprovalEffective) => {
   const nr = new Set((indent?.quoteComparativeStep?.itemQuotations || [])

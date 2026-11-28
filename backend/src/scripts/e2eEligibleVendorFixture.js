@@ -56,6 +56,7 @@ const VENDORS = [
   { code: 'EV-U', name: 'EV Unrelated', isActive: true },
   { code: 'EV-B', name: 'EV Both', isActive: true },
   { code: 'EV-JIN', name: 'Jindal Stainless Ltd', isActive: true },
+  { code: 'EV-OFF', name: 'EV Inactive Vendor', isActive: false }, // new rule 2026-11-28: the PO takes any ACTIVE vendor — an inactive one is the refused case
 ];
 const SKUS = {
   S1: { code: 'EV-S1', name: 'EV Gasket' },
@@ -189,8 +190,11 @@ const api = async () => {
   await loginAs('MD');
   // A brand-new quoted-only vendor every run, so it provably has no purchase history (earlier runs' approved POs would give one).
   await Vendor.updateOne({ code: `EV-Q-${RUN}` }, { $set: { name: `EV Quoted Only ${RUN}`, isActive: true, isDeleted: false } }, { upsert: true });
+  // An EXISTING vendor (Vendor Master record from before the new-vendor rule): this fixture is about eligible vendors, not about
+  // the new-vendor approval (see e2eDualApprovalFixture.js), so the PO of this vendor stays an ordinary PO.
+  await Vendor.collection.updateOne({ code: `EV-Q-${RUN}`.toUpperCase() }, { $set: { createdAt: new Date('2020-01-01T00:00:00Z') } });
   const Q = await vendorId(`EV-Q-${RUN}`); const H = await vendorId('EV-H'); const U = await vendorId('EV-U');
-  const B = await vendorId('EV-B'); const JIN = await vendorId('EV-JIN');
+  const B = await vendorId('EV-B'); const JIN = await vendorId('EV-JIN'); const OFF = await vendorId('EV-OFF');
   // Known starting point: H and B supply S1/S2 by item list (history); Q and U never did.
   for (const k of ['S1', 'S2', 'S3', 'S4', 'JSL']) for (const v of ['EV-H', 'EV-U', 'EV-B', 'EV-JIN']) await takeOffItemList(v, k);
   await putOnItemList('EV-H', 'S2'); await putOnItemList('EV-B', 'S1'); await putOnItemList('EV-H', 'S4');
@@ -208,21 +212,22 @@ const api = async () => {
   check('E3 item 0: the "history only" list (Step 1.2 NR dropdown) still lists previous vendors only — Both yes, this run quoted-only vendor and Unrelated no', histNames0.includes('EV Both') && !histNames0.includes(`EV Quoted Only ${RUN}`) && !histNames0.includes('EV Unrelated'), JSON.stringify(histNames0));
   check('E4 item 1: previously supplied vendor H is eligible without any quotation; Q (quoted item 0 only) is not', (h1.eligibleVendors || []).some((v) => String(v.vendorId) === H && !v.quoted) && !(h1.eligibleVendors || []).some((v) => String(v.vendorId) === Q), JSON.stringify(h1.eligibleVendors));
   const bad1 = await approve13(e1, [row(e1, 0, 'APPROVE', U), row(e1, 1, 'APPROVE')]);
-  check('E5 Step 1.3: unrelated vendor refused (400, names the eligible vendors)', bad1.status === 400 && /neither quoted for nor previously supplied/.test(bad1.message) && /EV Quoted Only/.test(bad1.message), `${bad1.status} ${bad1.message}`);
-  const bad2 = await approve13(e1, [row(e1, 0, 'APPROVE', Q), row(e1, 1, 'APPROVE', Q)]);
-  check('E6 Step 1.3: a vendor that quoted for ANOTHER item only is refused for this one', bad2.status === 400 && /neither quoted for nor previously supplied/.test(bad2.message), `${bad2.status} ${bad2.message}`);
+  check('E5 Step 1.3: an unrelated ACTIVE vendor is accepted ("Add New Vendor" — it need not have quoted or supplied the item)', bad1.status === 200, `${bad1.status} ${bad1.message}`);
+  const bad2 = await approve13(e1, [row(e1, 0, 'APPROVE', OFF), row(e1, 1, 'APPROVE', Q)]);
+  check('E6 Step 1.3: an INACTIVE vendor is still refused (400)', bad2.status === 400 && /inactive/i.test(bad2.message), `${bad2.status} ${bad2.message}`);
   const good1 = await approve13(e1, [row(e1, 0, 'APPROVE', Q), row(e1, 1, 'APPROVE', H)]);
   const e1b = await fresh(e1._id);
   check('E7 Step 1.3: quoted-only vendor Q (item 0) and history-only vendor H (item 1) are both accepted and saved on the items',
     good1.status < 400 && String(itemOf(e1b, 0).vendorId) === Q && String(itemOf(e1b, 1).vendorId) === H && itemOf(e1b, 0).vendorSource === 'APPROVED_QUOTATION', `${good1.status} ${good1.message}`);
   const r0 = await pickerRow(e1b, 0);
-  check('E8 PO picker row: fixed vendor Q shown, eligible list carries the basis', r0?.vendorState === 'SET' && String(r0.vendorId) === Q && Array.isArray(r0.eligibleVendors) && r0.eligibleVendors.some((v) => String(v.vendorId) === Q && v.basis.includes('QUOTED')), JSON.stringify(r0 && { s: r0.vendorState, e: r0.eligibleVendors }));
+  // new rule (2026-11-28): the PO picker row lists PREVIOUS vendors (placed POs only) — a vendor that merely quoted is not one.
+  check('E8 PO picker row: fixed vendor Q shown; previousVendors = purchase history only (quoted-only Q is not in it)', r0?.vendorState === 'SET' && String(r0.vendorId) === Q && Array.isArray(r0.previousVendors) && !r0.previousVendors.some((v) => String(v.vendorId) === Q) && r0.eligibleVendors === undefined, JSON.stringify(r0 && { s: r0.vendorState, p: r0.previousVendors }));
   const wrongFixed = await createPo(H, [line(e1b, 0)]);
   check('E9 a PO for an item whose vendor is fixed (Q) on another vendor is refused', wrongFixed.status === 400 && /must be the same/.test(wrongFixed.message), `${wrongFixed.status} ${wrongFixed.message}`);
 
   const e2 = await readyIndent(['S1', 'S2'], [Q, null]);   // approved WITHOUT a vendor
-  const setU = await call('PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: e2._id, indentItemId: e2.items[0]._id, vendorId: U });
-  check('E10 Pending for PO "Select Vendor": unrelated vendor refused', setU.status === 400 && /neither quoted for nor previously supplied/.test(setU.message), `${setU.status} ${setU.message}`);
+  const setU = await call('PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: e2._id, indentItemId: e2.items[0]._id, vendorId: OFF });
+  check('E10 Pending for PO "Select Vendor": an INACTIVE vendor is refused (any active vendor is fine now)', setU.status === 400 && /inactive in the Vendor Master/.test(setU.message), `${setU.status} ${setU.message}`);
   const setQ = await call('PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: e2._id, indentItemId: e2.items[0]._id, vendorId: Q });
   check('E11 Pending for PO "Select Vendor": quoted-only vendor accepted', setQ.status === 200 && String(setQ.data?.vendorId) === Q, `${setQ.status} ${setQ.message}`);
   const setH = await call('PATCH', '/procurement/purchase-orders/approved-items/vendor', { indentId: e2._id, indentItemId: e2.items[1]._id, vendorId: H });
@@ -232,12 +237,13 @@ const api = async () => {
   console.log('\nP  PO create — vendor chosen on the PO');
   const p1 = await readyIndent(['S1', 'S2', 'S3'], [Q, null, null]);  // all approved with no vendor
   check('P0 approved without a vendor → items are open (MISSING)', (await pickerRow(p1, 0))?.vendorState === 'MISSING');
-  const pU = await createPo(U, [line(p1, 0)]);
-  check('P1 PO on an unrelated vendor refused', pU.status === 400 && /neither quoted for nor previously supplied/.test(pU.message), `${pU.status} ${pU.message}`);
-  const pNone = await createPo(H, [line(p1, 2)]);
-  check('P2 item with NO eligible vendor at all (no quote, no history) refused: "No eligible vendors found"', pNone.status === 400 && /No eligible vendors found/.test(pNone.message), `${pNone.status} ${pNone.message}`);
-  const pMix = await createPo(Q, [line(p1, 0), line(p1, 1)]);
-  check('P3 one PO needs a vendor eligible for EVERY item on it (Q quoted S1 only → refused with S2)', pMix.status === 400 && /EV Washer|Washer/.test(pMix.message), `${pMix.status} ${pMix.message}`);
+  // new rule (2026-11-28): the PO takes ANY ACTIVE Vendor Master vendor — quoted / previously supplied is no longer required.
+  const pU = await createPo(OFF, [line(p1, 0)]);
+  check('P1 PO on an INACTIVE vendor refused', pU.status === 400 && /inactive in the Vendor Master/.test(pU.message), `${pU.status} ${pU.message}`);
+  const pNone = await createPo(H, [line(p1, 2)], { saveMode: 'DRAFT' });
+  check('P2 item with NO quote and NO history: an active vendor (Add New Vendor) takes the PO', pNone.status === 201, `${pNone.status} ${pNone.message}`);
+  const pMix = await createPo(OFF, [line(p1, 0), line(p1, 1)]);
+  check('P3 an inactive vendor cannot take a PO of several items either', pMix.status === 400 && /inactive in the Vendor Master/.test(pMix.message), `${pMix.status} ${pMix.message}`);
   const pQ = await createPo(Q, [line(p1, 0)], { saveMode: 'DRAFT' });
   check('P4 quoted-only vendor (no purchase history) can take the PO', pQ.status === 201, `${pQ.status} ${pQ.message}`);
   const p1b = await fresh(p1._id);
@@ -249,8 +255,8 @@ const api = async () => {
   const pH = await createPo(H, [line(p1, 1)], { saveMode: 'DRAFT' });
   check('P8 previously-supplied vendor (no quotation) can take the PO', pH.status === 201, `${pH.status} ${pH.message}`);
   // Draft vendor change follows to the item; the new vendor must be eligible.
-  const chgBad = await call('PATCH', `/procurement/purchase-orders/${pH.data._id}`, { vendorId: U });
-  check('P9 editing a draft onto an unrelated vendor is refused', chgBad.status === 400, `${chgBad.status} ${chgBad.message}`);
+  const chgBad = await call('PATCH', `/procurement/purchase-orders/${pH.data._id}`, { vendorId: OFF });
+  check('P9 editing a draft onto an INACTIVE vendor is refused', chgBad.status === 400 && /inactive in the Vendor Master/.test(chgBad.message), `${chgBad.status} ${chgBad.message}`);
   await putOnItemList('EV-B', 'S2');
   const chgOk = await call('PATCH', `/procurement/purchase-orders/${pH.data._id}`, { vendorId: B });
   const p1c = await fresh(p1._id);
@@ -313,16 +319,13 @@ const api = async () => {
   console.log('\nJ  JSL and non-JSL, same rule');
   const j1 = await readyIndent(['JSL'], [null], []);   // open
   const jl = (extra = {}) => ({ ...line(j1, 0), grade: '304', width: '1250', finish: '2B', baseRate: 100, unit: 'Kgs', ...extra });
-  const jNoHist = await createPo(JIN, [jl()], { poFormatType: 'JSL' });
-  check('J1 JSL PO on Jindal WITHOUT quote or history for the item is refused (no JSL exemption)', jNoHist.status === 400 && /No eligible vendors found|neither quoted for nor previously supplied/.test(jNoHist.message), `${jNoHist.status} ${jNoHist.message}`);
-  await putOnItemList('EV-H', 'JSL');
+  // new rule (2026-11-28): no quote / history is needed — a JSL PO is simply always Jindal; any other vendor is refused.
   const jOther = await createPo(H, [jl()], { poFormatType: 'JSL' });
-  check('J2 JSL PO on an eligible but non-Jindal vendor is refused: a JSL PO is always raised on Jindal', jOther.status === 400 && /always raised on Jindal/.test(jOther.message), `${jOther.status} ${jOther.message}`);
-  const jNonJsl = await createPo(U, [jl()], { poFormatType: 'OTHER' });
-  check('J3 the same unrelated vendor is refused on the OTHER format too', jNonJsl.status === 400 && /neither quoted for nor previously supplied/.test(jNonJsl.message), `${jNonJsl.status} ${jNonJsl.message}`);
-  await putOnItemList('EV-JIN', 'JSL');
+  check('J1 JSL PO on a non-Jindal vendor is refused: a JSL PO is always raised on Jindal', jOther.status === 400 && /always raised on Jindal/.test(jOther.message), `${jOther.status} ${jOther.message}`);
+  const jNonJsl = await createPo(OFF, [jl()], { poFormatType: 'OTHER' });
+  check('J2 an INACTIVE vendor is refused on the OTHER format', jNonJsl.status === 400 && /inactive in the Vendor Master/.test(jNonJsl.message), `${jNonJsl.status} ${jNonJsl.message}`);
   const jOk = await createPo(JIN, [jl()], { poFormatType: 'JSL', saveMode: 'DRAFT' });
-  check('J4 JSL PO on Jindal once it supplies the item is accepted', jOk.status === 201, `${jOk.status} ${jOk.message}`);
+  check('J4 JSL PO on Jindal is accepted WITHOUT any quote or purchase history for the item', jOk.status === 201, `${jOk.status} ${jOk.message}`);
   // submit gate also holds JSL: break the vendor in the DB, both endpoints refuse
   await VendorPurchaseOrder.updateOne({ _id: jOk.data._id }, { $set: { vendorId: H, vendorName: 'EV History Only' } });
   const jSub = await call('POST', `/procurement/purchase-orders/${jOk.data._id}/submit`, {});
@@ -362,7 +365,7 @@ const api = async () => {
   // repair the item ids, then break the vendor
   await VendorPurchaseOrder.updateOne({ _id: dB._id }, { $set: { 'items.0.indentItemId': s1.items[1]._id } });
   await VendorPurchaseOrder.updateOne({ _id: dC._id }, { $set: { 'items.0.indentItemId': s1.items[2]._id } });
-  verdict(await same('S6 a vendor that is neither quoted nor previously supplied', (id) => VendorPurchaseOrder.updateOne({ _id: id }, { $set: { vendorId: U, vendorName: 'EV Unrelated' } })), /neither quoted for nor previously supplied/);
+  verdict(await same('S6 a vendor that is inactive in the Vendor Master', (id) => VendorPurchaseOrder.updateOne({ _id: id }, { $set: { vendorId: OFF, vendorName: 'EV Inactive Vendor' } })), /inactive in the Vendor Master/);
   // valid drafts: both endpoints accept
   await VendorPurchaseOrder.updateOne({ _id: dB._id }, { $set: { vendorId: H, vendorName: 'EV History Only' } });
   await VendorPurchaseOrder.updateOne({ _id: dC._id }, { $set: { vendorId: H, vendorName: 'EV History Only' } });

@@ -13,10 +13,10 @@ import GoodsReceiptNote from '../grn/grn.model.js';
 import PurchaseIndent, { INDENT_OVERALL_STATUS, ITEM_PROCUREMENT_STATUS, buildItemDisplayNumber, isItemApprovalEffective } from '../indent/indent.model.js';
 import {
   ITEM_VENDOR_SOURCE, ITEM_VENDOR_STATE, QUOTATION_PATH,
-  itemVendorState, poVendorProblems, poVendorHistoryProblems, fixedVendorIds, usesApprovedVendorList,
+  itemVendorState, itemVendorLocked, poVendorProblems, poPickedVendorProblems, fixedVendorIds, usesApprovedVendorList,
   quotedVendorsOf, keptVendorsOf, isJslVendorName,
 } from '../indent/itemVendor.js';
-import { eligibleVendorsForItems } from '../indent/itemVendorHistory.js';
+import { previousVendorsForItems } from '../indent/itemVendorHistory.js';
 import { lineIndentProblems, submitQuantityProblems } from './poLines.js';
 import Party from '../../clients/party.model.js';
 import Vendor from '../../vendors/vendor.model.js';
@@ -38,10 +38,14 @@ import {
   PO_SUBMISSION_STATUS, SUBMITTED_FILTER, NOT_SUBMITTED_FILTER, NOT_SUBMITTED_APPROVE_MESSAGE,
   submissionFieldsFor, createdNote, isPoSubmitted,
 } from './poSubmission.js';
-import { poApprovalBlock, canApprovePos, PO_APPROVE_FORBIDDEN } from './poApproval.js';
+import { poApprovalBlock, canApprovePos, PO_APPROVE_FORBIDDEN, NEW_VENDOR_APPROVE_FORBIDDEN } from './poApproval.js';
 import { isMdForDirectSave } from './poDirectSave.js';
 import { computeEffectivePermissions } from '../../../middleware/permission.middleware.js';
 import { rateChangeService } from '../rate-change/rateChange.service.js';
+import { evaluateNewVendor, newVendorStamp, poNeedsNewVendorApproval } from '../approvers/newVendorRule.js';
+import { isDesignatedApprover } from '../approvers/purchaseApprovers.js';
+import { newVendorPoApprovalService, poApprovalRefKey } from '../approvers/newVendorPoApproval.js';
+import { notificationsService } from '../../notifications/notification.service.js';
 import mongoose from 'mongoose';
 import { registerRestoreHook, binPlan } from '../../recycle-bin/recycleBin.restore.js';
 import { binDeleted, indentLinksOf, relinkIndentToPo, asUser, refuse, inr } from '../recycleBin.js';
@@ -238,7 +242,9 @@ const approvedItemIdSet = (indent) => {
     .filter((q) => q.statusDone === 'QUOTE_NOT_REQUIRED' && q.itemId)
     .map((q) => String(q.itemId));
   let set;
-  if (iaq.length) {
+  // A Step 1.3 that is open for its quoted items (partial) with no decision saved yet approves NO quoted item —
+  // only the "Quote Not Required" ones (added below) are PO-eligible then.
+  if (iaq.length || indent.quotationApprovalStep?.partial) {
     set = new Set(
       iaq.filter((q) => ['YES', 'QUOTE_NOT_REQUIRED'].includes(q.statusDone) && q.itemId).map((q) => String(q.itemId)),
     );
@@ -319,18 +325,19 @@ const itemRefOf = (indent, item) => {
 };
 
 /**
- * Refuse a PO whose vendor differs from the vendor fixed for any of its indent
- * items — the approved-quotation vendor, or the one picked on Pending for PO —
- * or that carries a quotation-required item with no approved vendor recorded
- * (itemVendor.js). Indents approved per vendor (Step 1.3 approvedVendors[]) are
- * held to that list instead. Lines are matched to indent items by indentItemId,
- * falling back to skuCode for older payloads. `indents` are the PO's source
- * indents (mongoose docs or lean). `opts.skipMissing` — see poVendorProblems.
+ * Refuse a PO whose vendor cannot supply its indent items (itemVendor.js):
+ *  - an item whose vendor was approved WITH its quotation (Step 1.3) is LOCKED to that vendor;
+ *  - every other item — no vendor chosen yet, or a Quote Required = No preselection — takes the vendor
+ *    the user chose on the PO, which must be an ACTIVE Vendor Master vendor. It is never limited to quoted
+ *    or previous vendors: "Select Previous Vendor" and "Add New Vendor" are both just a choice of vendor.
+ * Indents approved per vendor (Step 1.3 approvedVendors[]) are held to that list instead. Lines are matched
+ * to indent items by indentItemId, falling back to skuCode for older payloads. `indents` are the PO's
+ * source indents (mongoose docs or lean).
  */
 const assertPoVendor = async (indents, lines, vendorId, opts = {}) => {
-  // `opts.checkEligibility` (default true) — an item with no vendor fixed takes the PO's vendor only if
-  // that vendor is ELIGIBLE for it: quoted for it at Step 1.2 or has supplied it before. Same rule for
-  // JSL and OTHER POs. `opts.poFormatType` 'JSL' also holds the PO to its fixed vendor (Jindal).
+  // `opts.checkEligibility` (default true) — check the vendor chosen for the open items is an active Vendor
+  // Master vendor (off when a draft edit leaves its saved vendor alone). Same rule for JSL and OTHER POs.
+  // `opts.poFormatType` 'JSL' also holds the PO to its fixed vendor (Jindal).
   // `opts.ownPoId` — items whose vendor was written by THIS PO (vendorFromPoId) count as open again,
   // so a draft's own vendor can still be changed.
   const { checkEligibility = true, ownPoId = null, poFormatType = 'OTHER' } = opts;
@@ -365,19 +372,16 @@ const assertPoVendor = async (indents, lines, vendorId, opts = {}) => {
   const fixed = ids.length
     ? await Vendor.find({ _id: { $in: ids } }).select('name isActive isDeleted').lean()
     : [];
-  problems.push(...poVendorProblems(entries, vendorId, new Map(fixed.map((v) => [String(v._id), v])), opts));
-  const open = checkEligibility
-    ? entries.filter((e) => itemVendorState(e.indent, e.item).state !== ITEM_VENDOR_STATE.SET)
-    : [];
+  problems.push(...poVendorProblems(entries, vendorId, new Map(fixed.map((v) => [String(v._id), v]))));
+  // The vendor chosen for the items that are not locked: any active Vendor Master vendor. (A legacy Party id
+  // is not a Vendor Master vendor, so it is refused here exactly as before.)
+  const open = checkEligibility ? entries.filter((e) => !itemVendorLocked(e.indent, e.item)) : [];
   let vendor = null;
-  if (open.length || poFormatType === 'JSL') vendor = await Vendor.findOne({ _id: vendorId }).select('name').lean();
+  if (open.length || poFormatType === 'JSL') vendor = await Vendor.findOne({ _id: vendorId }).select('name isActive isDeleted').lean();
   if (poFormatType === 'JSL' && !isJslVendorName(vendor?.name)) {
     problems.push(`A JSL purchase order is always raised on Jindal Stainless Ltd — "${vendor?.name || 'this vendor'}" cannot be the vendor of a JSL PO. Use the Other format`);
   }
-  if (open.length) {
-    const eligible = await eligibleVendorsForItems(open.map((e) => ({ indent: e.indent, item: e.item })));
-    problems.push(...poVendorHistoryProblems(open, vendorId, vendor?.name || '', eligible));
-  }
+  problems.push(...poPickedVendorProblems(open, vendor));
   if (problems.length) throw new AppError(problems.join('; '), 400);
 };
 
@@ -433,10 +437,21 @@ const linkIndentToPo = async (indent, vendorId, po, refNumber, user, session = n
       const hit = poItemIds.has(String(it._id)) || (poItemSkus.size && poItemSkus.has(String(it.skuCode || '').toUpperCase()));
       if (hit && it.procurementStatus !== ITEM_PROCUREMENT_STATUS.PO_CREATED) {
         // An item with no vendor fixed yet takes the vendor this PO was raised on, so later screens
-        // (Indent detail, Pending for PO after a cancel) show it. A fixed vendor is never touched; the
-        // write is tagged with the PO so cancelling / deleting that PO gives the item its open vendor back.
+        // (Indent detail, Pending for PO after a cancel) show it. A vendor approved with the quotation is
+        // never touched, nor is a Quote Required = No preselection the PO keeps. A preselection the user
+        // CHANGED on the PO (a different vendor) gives way to the PO's vendor, and the change is audited.
+        // Every write is tagged with the PO so cancelling / deleting that PO gives the item its open vendor back.
         const vs = itemVendorState(indent, it);
-        if (vs.state !== ITEM_VENDOR_STATE.SET && vendorId) {
+        const changedPreselection = vs.state === ITEM_VENDOR_STATE.SET && !itemVendorLocked(indent, it)
+          && !!vendorId && String(vs.vendorId) !== String(vendorId);
+        if ((vs.state !== ITEM_VENDOR_STATE.SET || changedPreselection) && vendorId) {
+          if (changedPreselection) {
+            indent.activityTimeline.push({
+              action: 'ITEM_VENDOR',
+              description: `${itemRefOf(indent, it)}: vendor changed from ${vs.vendorName} to ${po.vendorName || 'the PO vendor'} on PO ${refNumber} (quotation not required)`,
+              actorId: user?._id,
+            });
+          }
           it.vendorId = vendorId;
           it.vendorName = po.vendorName || '';
           it.vendorSource = vs.path === QUOTATION_PATH.REQUIRED ? ITEM_VENDOR_SOURCE.APPROVED_QUOTATION : ITEM_VENDOR_SOURCE.PO_PREPARATION;
@@ -1154,19 +1169,15 @@ export const purchaseOrderService = {
         });
       });
     }
-    // Eligible vendors per item — quoted for it at Step 1.2 OR previously supplied it (placed POs +
-    // Vendor Master item lists): the only vendors a PO may use for an item with no vendor fixed yet.
-    // One batch lookup for the whole list.
-    const indentById = new Map(indents.map((ind) => [String(ind._id), ind]));
-    const eligible = await eligibleVendorsForItems(items.map((r) => ({
-      indent: indentById.get(String(r.indentId)),
-      item: { _id: r.indentItemId, skuId: r.skuId, skuCode: r.skuCode },
-    })));
+    // "Select Previous Vendor" — the active vendors that really supplied each item before (a placed PO line for
+    // its SKU), latest first, with the purchase reference. NOT a quotation's vendor tag and NOT a Vendor Master
+    // item list. Nothing here selects a vendor: the user picks one (or "Add New Vendor" from the whole active
+    // Vendor Master). One batch lookup for the whole list.
+    const previous = await previousVendorsForItems(items.map((r) => ({ _id: r.indentItemId, skuId: r.skuId, skuCode: r.skuCode })));
     items.forEach((r) => {
-      r.eligibleVendors = (eligible.get(String(r.indentItemId)) || []).map((h) => ({
+      r.previousVendors = (previous.get(String(r.indentItemId)) || []).map((h) => ({
         vendorId: h.vendorId, vendorName: h.vendorName, vendorCode: h.vendorCode, location: h.location,
-        quoted: !!h.quoted, quotedRate: h.quotedRate ?? null, deliveryDays: h.deliveryDays ?? null, basis: h.basis || [],
-        poCount: h.poCount, lastPoNumber: h.lastPoNumber, lastPoDate: h.lastPoDate || null, inCatalog: h.inCatalog,
+        poCount: h.poCount, lastPoNumber: h.lastPoNumber, lastPoDate: h.lastPoDate || null, lastRate: h.lastRate ?? null,
       }));
     });
     // Flag fixed vendors since deleted / deactivated in the Vendor Master — the
@@ -1183,7 +1194,7 @@ export const purchaseOrderService = {
   /**
    * Pending for PO — fix the vendor for one approved, not-yet-PO'd indent item.
    *  - Quotation NOT required: pick, change or clear (vendorId null) the vendor
-   *    the PO must use (vendorSource PO_PREPARATION).
+   *    the PO starts from (vendorSource PO_PREPARATION).
    *  - Quotation required: only CONFIRM the approved vendor of a quotation that
    *    was approved before vendors were recorded. A vendor already set by the
    *    Step 1.3 approval is never overwritten here (same vendor = no-op).
@@ -1229,13 +1240,8 @@ export const purchaseOrderService = {
       if (current.state === ITEM_VENDOR_STATE.SET && String(current.vendorId) === String(vendor._id)) {
         return asRow(current); // retry / same pick — no change
       }
-      // Only an ELIGIBLE vendor: one who quoted for the item at Step 1.2 or has supplied it before
-      // (placed POs / Vendor Master item list) — never the whole master.
-      const eligible = (await eligibleVendorsForItems([{ indent, item }])).get(String(item._id)) || [];
-      if (!eligible.length) throw new AppError(`${ref}: No eligible vendors found — none has quoted for this item or supplied it before. Collect a quotation (Step 1.2) or add the SKU to a vendor's Vendor Master item list before choosing a vendor`, 400);
-      if (!eligible.some((h) => String(h.vendorId) === String(vendor._id))) {
-        throw new AppError(`${ref}: "${vendor.name}" has neither quoted for nor previously supplied this item — choose one of: ${eligible.map((h) => h.vendorName).join(', ')}`, 400);
-      }
+      // Any ACTIVE Vendor Master vendor (checked above): a previous vendor of the item or a new one — the
+      // same rule as the vendor chosen on the PO itself (assertPoVendor).
       if (required && current.state === ITEM_VENDOR_STATE.SET) {
         throw new AppError(`${ref} was approved for vendor "${current.vendorName}" at Step 1.3 — the approved vendor cannot be changed here`, 400);
       }
@@ -1363,6 +1369,7 @@ export const purchaseOrderService = {
         releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
         poStatus: PO_STATUS.DRAFT,
         ...submissionFieldsFor(data.saveMode, user),
+        newVendorApproval: newVendorStamp(await evaluateNewVendor(party._id, { session })),
         createdBy: user?._id,
         activityTimeline: [{ action: 'CREATE', description: `PO created from ${indent.indentNumber} (draft ${draftNumber}) — ${createdNote(data.saveMode)}`, actorId: user?._id }],
       }, session);
@@ -1501,6 +1508,7 @@ export const purchaseOrderService = {
         releaseStatus: PO_RELEASE_STATUS.NOT_RELEASED,
         poStatus: PO_STATUS.DRAFT,
         ...submissionFieldsFor(data.saveMode, user),
+        newVendorApproval: newVendorStamp(await evaluateNewVendor(party._id, { session })),
         createdBy: user?._id,
         activityTimeline: [{ action: 'CREATE', description: `PO created from ${orderedIndents.map((i) => i.indentNumber).join(', ')} (draft ${draftNumber}) — ${createdNote(data.saveMode)}`, actorId: user?._id }],
       }, session);
@@ -1688,10 +1696,10 @@ export const purchaseOrderService = {
       const previousLines = po.items.map((l) => (l.toObject ? l.toObject() : { ...l }));
       const rateLines = newLines || previousLines.map((l) => ({ ...l }));
       // Lines naming an indent item must name one of this PO's indents (same SKU); a vendor change must
-      // land on an eligible vendor (quoted / previously supplied), JSL POs stay on Jindal.
+      // land on an active Vendor Master vendor, JSL POs stay on Jindal.
       assertLinesOnIndents(indents, rateLines);
       await assertPoVendor(indents, rateLines, po.vendorId, {
-        skipMissing: true, checkEligibility: vendorChanged, ownPoId: po._id, poFormatType: po.poFormatType,
+        checkEligibility: vendorChanged, ownPoId: po._id, poFormatType: po.poFormatType,
       });
       // A rate that differs from the vendor's rate needs a reason and goes to
       // Rate Change Approvals; an open request the edit no longer stands behind
@@ -1704,6 +1712,8 @@ export const purchaseOrderService = {
       });
       po.items = rateLines;
     }
+    // The new-vendor rule is judged again on the vendor this draft now goes to.
+    po.newVendorApproval = newVendorStamp(await evaluateNewVendor(po.vendorId));
     // Terms sent blank go back to the format's (current) default.
     if ('termsAndConditions' in data) po.termsAndConditions = await termsToStore(data.termsAndConditions, po.poFormatType);
     // Drop a PDF stored by an earlier preview so the next one shows this edit.
@@ -1817,13 +1827,14 @@ export const purchaseOrderService = {
     // The same gate as PATCH /:id {submit:true}: quantities, indent lines, eligible vendors (poLines.js,
     // assertPoVendor).
     await assertPoSubmittable(po);
+    const newVendorApproval = newVendorStamp(await evaluateNewVendor(po.vendorId));
     const updated = await VendorPurchaseOrder.findOneAndUpdate(
       {
         _id: po._id, isDeleted: { $ne: true }, approvalStatus: PO_APPROVAL_STATUS.DRAFT,
         poStatus: { $ne: PO_STATUS.CANCELLED }, ...NOT_SUBMITTED_FILTER,
       },
       {
-        $set: { ...submissionFieldsFor('SUBMIT', user), updatedBy: user?._id },
+        $set: { ...submissionFieldsFor('SUBMIT', user), newVendorApproval, updatedBy: user?._id },
         $push: { activityTimeline: { action: 'SUBMIT', description: 'Submitted for approval', actorId: user?._id, timestamp: new Date() } },
       },
       { new: true },
@@ -1851,6 +1862,7 @@ export const purchaseOrderService = {
     po.activityTimeline.push({ action: 'DELETE', description: why ? `Purchase order deleted. Reason: ${why}` : 'Purchase order deleted', actorId: user?._id });
     const saved = await po.save();
     await rateChangeService.withdrawForPo(po._id, `PO ${po.poNumber || po.draftNumber || ''} was deleted`.trim(), user);
+    await notificationsService.settleByRef(poApprovalRefKey(po._id));
     await purchaseOrderService._releaseIndentLinks(po, user, 'deleted');
     // Pending rate changes stay withdrawn on restore (send them again if needed).
     await binDeleted('purchaseOrder', VendorPurchaseOrder, po, {
@@ -1874,7 +1886,18 @@ export const purchaseOrderService = {
   async approve(id, data, user, { permissions } = {}) {
     const approved = data.decision !== 'REJECTED';
     const perms = permissions || await computeEffectivePermissions(user);
-    if (!canApprovePos(perms)) throw new AppError(PO_APPROVE_FORBIDDEN, 403);
+    // Who may decide depends on the PO: any procurement.approve holder, except a
+    // PO for a NEW vendor (approvers/newVendorRule.js), which only the MD or the
+    // purchase approver may decide. Either of those two is enough — one decision.
+    const designated = isDesignatedApprover(user);
+    let checkedAt = null;
+    const current = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
+    const newVendor = !current ? false
+      : current.approvalStatus === PO_APPROVAL_STATUS.DRAFT ? await poNeedsNewVendorApproval(current)
+        : current.newVendorApproval?.isRequired === true;
+    if (newVendor ? !designated : !canApprovePos(perms)) {
+      throw new AppError(newVendor ? NEW_VENDOR_APPROVE_FORBIDDEN : PO_APPROVE_FORBIDDEN, 403);
+    }
     const approval = {
       decidedBy: user?.name || '',
       decidedById: user?._id,
@@ -1903,14 +1926,12 @@ export const purchaseOrderService = {
     // it (the MD excepted). The flip is conditional on the PO being exactly as
     // checked (updatedAt) and on the creator / submitter not being this user,
     // so an edit or a re-submission landing in between can't slip through.
-    let checkedAt = null;
-    const current = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).lean();
     if (current?.approvalStatus === PO_APPROVAL_STATUS.DRAFT && !isPoSubmitted(current)) {
       throw new AppError(NOT_SUBMITTED_APPROVE_MESSAGE, 400);
     }
     const makerFilter = {};
     if (current?.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
-      const block = poApprovalBlock(user, current, perms);
+      const block = poApprovalBlock(user, current, perms, { newVendor, designated });
       if (block) throw new AppError(block.message, block.status);
       if (user?._id && !isMdForDirectSave(user)) {
         makerFilter.createdBy = { $ne: user._id };
@@ -1939,17 +1960,21 @@ export const purchaseOrderService = {
       { new: true },
     );
     if (!claimed) {
-      const now = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).select('approvalStatus submissionStatus createdBy submittedById activityTimeline').lean();
+      const now = await VendorPurchaseOrder.findOne({ _id: id, isDeleted: { $ne: true } }).select('approvalStatus submissionStatus createdBy submittedById activityTimeline approval poNumber draftNumber').lean();
       if (!now) throw new AppError('Purchase Order not found', 404);
       if (now.approvalStatus === PO_APPROVAL_STATUS.DRAFT && !isPoSubmitted(now)) {
         throw new AppError(NOT_SUBMITTED_APPROVE_MESSAGE, 400);
       }
-      const lateBlock = now.approvalStatus === PO_APPROVAL_STATUS.DRAFT ? poApprovalBlock(user, now, perms) : null;
+      const lateBlock = now.approvalStatus === PO_APPROVAL_STATUS.DRAFT ? poApprovalBlock(user, now, perms, { newVendor, designated }) : null;
       if (lateBlock) throw new AppError(lateBlock.message, lateBlock.status);
       if (now.approvalStatus === PO_APPROVAL_STATUS.DRAFT) {
         throw new AppError('This PO was changed while it was being approved — refresh and approve again', 409);
       }
-      throw new AppError('Only draft purchase orders can be approved/rejected', 400);
+      // Already decided — by someone else a moment ago (the other approver), or earlier. Name them, change nothing.
+      const decided = now.approvalStatus === PO_APPROVAL_STATUS.APPROVED ? 'approved' : String(now.approvalStatus || '').toLowerCase();
+      const by = now.approval?.decidedBy ? ` by ${now.approval.decidedBy}` : '';
+      const at = now.approval?.decidedAt ? ` on ${fmtDate(now.approval.decidedAt)}` : '';
+      throw new AppError(`PO ${now.poNumber || now.draftNumber || ''} was already ${decided}${by}${at} — only a draft PO can be approved or rejected, nothing was changed`.replace('PO  ', 'PO '), 400);
     }
 
     // The final PO number is minted here, on approval — not at draft creation —
@@ -1964,6 +1989,11 @@ export const purchaseOrderService = {
       actorId: user?._id,
     });
     const saved = await claimed.save();
+
+    // Decided: the approvers' "awaiting approval" notifications are settled for
+    // both of them at once, and (new-vendor POs) the preparer is told who decided.
+    await notificationsService.settleByRef(poApprovalRefKey(saved._id));
+    if (newVendor) await newVendorPoApprovalService.notifyDecision(saved, approved, user);
 
     if (approved) {
       try { await syncIndentPoNumber(saved, user); }

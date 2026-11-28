@@ -45,8 +45,15 @@ const rateChangeRequestSchema = new Schema({
   skuId:    { type: Schema.Types.ObjectId, ref: 'SKU', default: null },
   skuCode:  { type: String, trim: true, uppercase: true, default: '' },
   itemName: { type: String, trim: true, default: '' },
-  unit:     { type: String, trim: true, default: '' }, // the PO line's unit (= the vendor rate's unit)
+  unit:     { type: String, trim: true, default: '' }, // the PO line's unit (= the REQUESTED unit)
   currency: { type: String, trim: true, default: 'INR' },
+
+  // What is being changed: the rate in the vendor's own unit (RATE), the unit the
+  // vendor prices the item in (UNIT — same number, another unit), or both
+  // (RATE_UNIT). Requests saved before units were approvable have none = RATE.
+  changeType:         { type: String, enum: ['RATE', 'UNIT', 'RATE_UNIT'], default: 'RATE' },
+  existingVendorUnit: { type: String, trim: true, default: '' }, // the Vendor Master row's unit when raised
+  requestedUnit:      { type: String, trim: true, default: '' }, // = unit
 
   // Rates.
   existingVendorRate: { type: Number, default: null }, // Vendor Master rate when the request was raised

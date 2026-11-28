@@ -5,18 +5,22 @@ import {
   Box, Paper, Stack, Typography, alpha, useTheme, ToggleButtonGroup, ToggleButton,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, InputAdornment, Chip,
   Button, Dialog, DialogTitle, DialogContent, DialogActions, Grid, IconButton, Divider, Tooltip,
-  DialogContentText, CircularProgress,
+  DialogContentText, CircularProgress, Autocomplete,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Store, Table as TableIcon, Rows3, Search, Package, Plus, X, Trash2, IndianRupee, Pencil } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useGetVendorsQuery, useCreateVendorMutation, useDeleteVendorMutation } from '../../../store/api/vendorApi';
+import { useGetSkuLookupQuery } from '../../../store/api/skuApi';
 import { usePermission } from '../../../hooks/usePermission';
 import { useMasterRights } from '../../../utils/embed';
 import { PFMS, pfmsPageSx, pfmsTitleSx, pfmsSubtitleSx, pfmsCardSx, pfmsTableHeadSx } from '../pfmsTheme';
 
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
-const emptyRow = () => ({ productName: '', skuCode: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' });
+const emptyRow = () => ({ skuId: '', productName: '', skuCode: '', unit: 'Pcs', rate: '', gstRate: '', notes: '' });
+// Vendors supply purchasable materials only — Finished Goods are sell-side (same rule as the vendor's Add Product dialog).
+const FG_BLOCKED = new Set(['FINISHED_GOOD', 'FG', 'SALE_PRODUCT', 'READY_STOCK_PRODUCT']);
+const isPurchasableSku = (sku) => !FG_BLOCKED.has(String(sku?.itemType || '').toUpperCase());
 const emptyVendor = () => ({
   name: '', contactPerson: '', phone: '', email: '', address: '', gstNo: '', panNo: '',
   gstRate: '', tdsRate: '', creditPeriodDays: '', leadTimeDays: '', toEmails: '', ccEmails: '', bccEmails: '',
@@ -49,6 +53,9 @@ const VendorMaster = () => {
   const [deleteVendor, { isLoading: deleting }] = useDeleteVendorMutation();
   const [deleteTarget, setDeleteTarget] = useState(null); // vendor pending confirmation
   const vendors = useMemo(() => data?.data || [], [data]);
+  // SKU master for the Supplied Products dropdown (loaded only while the Add Vendor dialog is open).
+  const { data: skuRes, isLoading: skusLoading } = useGetSkuLookupQuery({ limit: 2000 }, { skip: !draft });
+  const skuOptions = useMemo(() => (skuRes?.data || []).filter(isPurchasableSku), [skuRes]);
   // Inside the Delegation Suite, its lock icon can switch Edit off and Delete
   // on for this person (Vendor Details); delete needs masters.deleteVendor.
   const rights = useMasterRights('vendorDetails');
@@ -68,6 +75,7 @@ const VendorMaster = () => {
 
   const setField = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
   const setRow = (i, k, v) => setDraft((d) => ({ ...d, products: d.products.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)) }));
+  const patchRow = (i, patch) => setDraft((d) => ({ ...d, products: d.products.map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }));
   const addRow = () => setDraft((d) => ({ ...d, products: [...d.products, emptyRow()] }));
   const removeRow = (i) => setDraft((d) => ({ ...d, products: d.products.filter((_, idx) => idx !== i) }));
 
@@ -84,7 +92,7 @@ const VendorMaster = () => {
       toEmails: splitEmails(draft.toEmails), ccEmails: splitEmails(draft.ccEmails), bccEmails: splitEmails(draft.bccEmails),
       products: draft.products
         .filter((r) => r.productName.trim())
-        .map((r) => ({ productName: r.productName.trim(), skuCode: (r.skuCode || '').trim(), unit: r.unit || 'Pcs', rate: Number(r.rate || 0), gstRate: Number(r.gstRate || 0), notes: (r.notes || '').trim() })),
+        .map((r) => ({ skuId: r.skuId || undefined, productName: r.productName.trim(), skuCode: (r.skuCode || '').trim(), unit: r.unit || 'Pcs', rate: Number(r.rate || 0), gstRate: Number(r.gstRate || 0), notes: (r.notes || '').trim() })),
     };
     try {
       const res = await createVendor(payload).unwrap();
@@ -290,8 +298,44 @@ const VendorMaster = () => {
               <Stack spacing={1}>
                 {draft.products.map((r, i) => (
                   <Grid container spacing={1} key={i} alignItems="center">
-                    <Grid item xs={12} sm={3.5}><TextField fullWidth size="small" placeholder="Product name" value={r.productName} onChange={(e) => setRow(i, 'productName', e.target.value)} /></Grid>
-                    <Grid item xs={6} sm={2}><TextField fullWidth size="small" placeholder="SKU code" value={r.skuCode} onChange={(e) => setRow(i, 'skuCode', e.target.value)} /></Grid>
+                    <Grid item xs={12} sm={3.5}>
+                      {/* Pick the product from the SKU master: it fills the SKU code and unit (both stay editable). A name typed
+                          by hand is still accepted, but then it is not linked to a SKU. A SKU already on another row is greyed out. */}
+                      <Autocomplete
+                        size="small"
+                        freeSolo
+                        options={skuOptions}
+                        loading={skusLoading}
+                        value={r.productName}
+                        getOptionLabel={(o) => (typeof o === 'string' ? o : o.name || '')}
+                        getOptionDisabled={(o) => draft.products.some((x, idx) => idx !== i && x.skuId && String(x.skuId) === String(o._id))}
+                        isOptionEqualToValue={(o, v) => (typeof v === 'string' ? o.name === v : o._id === v._id)}
+                        onInputChange={(_e, v, reason) => {
+                          // A typed / cleared name is no longer the picked SKU — drop the link and the code it filled.
+                          if (reason === 'input') patchRow(i, { productName: v, skuId: '', skuCode: '' });
+                          if (reason === 'clear') patchRow(i, { productName: '', skuId: '', skuCode: '' });
+                        }}
+                        onChange={(_e, val) => {
+                          if (val && typeof val === 'object') {
+                            patchRow(i, { productName: val.name, skuCode: val.code || '', skuId: val._id || '', unit: val.unit || r.unit });
+                          }
+                        }}
+                        renderOption={(props, o) => (
+                          <li {...props} key={o._id}>
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography noWrap sx={{ fontSize: '0.85rem', fontWeight: 600 }}>{o.name}</Typography>
+                              <Typography noWrap sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>{[o.code, o.unit].filter(Boolean).join(' · ')}</Typography>
+                            </Box>
+                          </li>
+                        )}
+                        renderInput={(params) => (
+                          <TextField {...params} fullWidth placeholder="Select product"
+                            inputProps={{ ...params.inputProps, 'data-testid': 'vendor-product-name' }}
+                            InputProps={{ ...params.InputProps, endAdornment: (<>{skusLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
+                        )}
+                      />
+                    </Grid>
+                    <Grid item xs={6} sm={2}><TextField fullWidth size="small" placeholder="SKU code" value={r.skuCode} onChange={(e) => patchRow(i, { skuCode: e.target.value, skuId: '' })} /></Grid>
                     <Grid item xs={6} sm={1.5}><TextField fullWidth size="small" placeholder="Unit" value={r.unit} onChange={(e) => setRow(i, 'unit', e.target.value)} /></Grid>
                     <Grid item xs={4} sm={1.5}><TextField fullWidth size="small" type="number" placeholder="Rate" value={r.rate} onChange={(e) => setRow(i, 'rate', e.target.value)} InputProps={{ startAdornment: <IndianRupee size={12} style={{ marginRight: 3 }} /> }} /></Grid>
                     <Grid item xs={4} sm={1.5}><TextField fullWidth size="small" type="number" placeholder="GST %" value={r.gstRate} onChange={(e) => setRow(i, 'gstRate', e.target.value)} /></Grid>

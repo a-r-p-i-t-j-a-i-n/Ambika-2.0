@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Autocomplete,
+  Dialog, DialogTitle, DialogContent, DialogActions, Button,
   Typography, CircularProgress, Alert, Box,
 } from '@mui/material';
 import { Save } from 'lucide-react';
 import { useSnackbar } from 'notistack';
 import { useSetItemVendorMutation } from '../../../store/api/procurementApi';
+import { useGetVendorsQuery } from '../../../store/api/vendorApi';
 import StatusChip from '../components/StatusChip';
-import { fmtDate } from './poMeta';
+import ItemVendorPicker from './ItemVendorPicker';
 
 /**
  * Pending for PO — fix the vendor that will supply one approved indent item.
@@ -15,23 +16,18 @@ import { fmtDate } from './poMeta';
  *    auto-fills and locks to it). Steps 1.2/1.3 are never opened.
  *  - Quotation required, approved before vendors were recorded: confirm the vendor
  *    from the approved quotation (one-time — afterwards it is locked).
- * Vendors offered are the item's ELIGIBLE vendors only (row.eligibleVendors: quoted for it at Step 1.2
- * OR supplied it before — placed POs / Vendor Master item list) — never the whole Vendor Master; the server re-checks the vendor
- * and the item's workflow state. Mount it with key = the row's item id
- * so the selection starts from that row's saved vendor.
+ * Two ways to choose, same as on the PO form (ItemVendorPicker): Select Previous Vendor (row.previousVendors —
+ * the vendors that supplied the item before, placed POs) or Add New Vendor (any active Vendor Master vendor,
+ * history or not). Nothing is selected for the user; the server re-checks the vendor and the item's workflow
+ * state. Mount it with key = the row's item id so the selection starts from that row's saved vendor.
  */
 const ItemVendorDialog = ({ open, onClose, row }) => {
   const { enqueueSnackbar } = useSnackbar();
   const confirmMode = row?.quotationPath === 'REQUIRED';
   const [vendor, setVendor] = useState(() => (row?.vendorId ? { _id: String(row.vendorId), name: row.vendorName } : null));
 
-  const options = useMemo(() => (row?.eligibleVendors || []).map((h) => ({
-    _id: String(h.vendorId), name: h.vendorName,
-    caption: [h.quoted ? `Quoted${h.quotedRate != null ? ` ₹${h.quotedRate}/${row?.unit || 'unit'}` : ''}${h.deliveryDays != null ? ` · ${h.deliveryDays} day(s)` : ''}` : '', h.location, h.poCount ? `${h.poCount} PO${h.poCount > 1 ? 's' : ''}${h.lastPoDate ? ` · last ${fmtDate(h.lastPoDate)}` : ''}${h.lastPoNumber ? ` (${h.lastPoNumber})` : ''}` : '', h.inCatalog ? 'In Vendor Master item list' : '']
-      .filter(Boolean).join(' · '),
-  })), [row]);
-  const isLoading = false;
-  const noHistory = options.length === 0;
+  const { data: vendorsRes, isLoading: vendorsLoading } = useGetVendorsQuery({ limit: 500, sort: 'name' }, { skip: !open });
+  const vendors = useMemo(() => vendorsRes?.data || [], [vendorsRes]);
   const [saveVendor, { isLoading: saving }] = useSetItemVendorMutation();
 
   const save = async (vendorId) => {
@@ -65,32 +61,10 @@ const ItemVendorDialog = ({ open, onClose, row }) => {
           {confirmMode
             ? 'The vendor is optional until the PO. One chosen here is saved with the approval and used by the PO.'
             : 'No quotation was required for this item. The vendor chosen here is used for its Purchase Order and can be changed until a PO is raised.'}
-          {' '}Only vendors that quoted for this item or have supplied it before are offered.
+          {' '}Choose a vendor that supplied this item before, or add any active vendor from the Vendor Master.
         </Alert>
 
-        {noHistory ? (
-          <Alert severity="warning" data-testid="item-vendor-no-history">No eligible vendors found for this item — none has quoted for it or supplied it before.</Alert>
-        ) : (
-          <Autocomplete
-            options={options}
-            loading={isLoading}
-            value={vendor}
-            onChange={(_e, v) => setVendor(v)}
-            getOptionLabel={(o) => o?.name || ''}
-            isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
-            noOptionsText="No eligible vendors found"
-            renderOption={(props, o) => (
-              <Box component="li" {...props} key={o._id} sx={{ display: 'block !important', py: 0.75 }}>
-                <Typography variant="body2" fontWeight={700}>{o.name}</Typography>
-                <Typography variant="caption" color="text.secondary">{o.caption || '—'}</Typography>
-              </Box>
-            )}
-            renderInput={(params) => (
-              <TextField {...params} label="Vendor *" placeholder="Select an eligible vendor"
-                InputProps={{ ...params.InputProps, endAdornment: (<>{isLoading ? <CircularProgress size={14} /> : null}{params.InputProps.endAdornment}</>) }} />
-            )}
-          />
-        )}
+        <ItemVendorPicker row={row} vendors={vendors} loading={vendorsLoading} value={vendor} onChange={setVendor} testId="item-vendor-pick" />
       </DialogContent>
       <DialogActions sx={{ p: 2, gap: 1 }}>
         {!confirmMode && row?.vendorId ? (

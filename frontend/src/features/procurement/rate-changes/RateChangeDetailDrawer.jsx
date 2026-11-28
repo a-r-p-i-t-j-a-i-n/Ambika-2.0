@@ -13,7 +13,7 @@ import {
 import { PFMS, pfmsTableHeadSx } from '../pfmsTheme';
 import { fmtDate, fmtTime } from '../approvals/approvalMeta';
 import RateChangeStatusChip from './RateChangeStatusChip';
-import { RATE_EVENT, fmtRate, fmtDiff, diffColor } from './rateChangeMeta';
+import { RATE_EVENT, fmtRate, fmtDiff, diffColor, fmtPrice, isUnitChange, changeLabel, existingPriceOf, requestedPriceOf } from './rateChangeMeta';
 
 const Field = ({ label, value, testId }) => (
   <Box sx={{ minWidth: 0 }}>
@@ -51,6 +51,7 @@ const RateChangeDetailDrawer = ({ id, onClose, onViewHistory }) => {
   // (Remounted per request via `key`, so these start clean for each one.)
 
   const pending = r?.status === 'PENDING';
+  const unitChange = isUnitChange(r);
   const stale = pending && r?.stale;
   const canAct = pending && r?.canApprove;
   const approveBlocked = canAct && (r?.approveBlock || r?.poIneligible);
@@ -89,7 +90,7 @@ const RateChangeDetailDrawer = ({ id, onClose, onViewHistory }) => {
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }} data-testid="rate-change-drawer">
         <Box sx={{ px: 2.5, py: 2, display: 'flex', alignItems: 'flex-start', gap: 1.5, borderBottom: `1px solid ${PFMS.line}` }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: PFMS.sub }}>Rate Change Request</Typography>
+            <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: PFMS.sub }} data-testid="rc-kind">{r ? `${changeLabel(r)} Request` : 'Rate Change Request'}</Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 0.25 }}>
               <Typography sx={{ fontSize: '1.1rem', fontWeight: 800, color: PFMS.ink }} data-testid="rc-number">{r?.requestNumber || '…'}</Typography>
               {r && <RateChangeStatusChip status={r.status} />}
@@ -103,16 +104,16 @@ const RateChangeDetailDrawer = ({ id, onClose, onViewHistory }) => {
             <>
               <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {r.status === 'APPROVED' && (
-                  <Alert severity="success">Approved by {r.decidedByName} on {when(r.decidedAt)}{r.selfApproved ? ' (MD, own request)' : ''} — {fmtRate(r.requestedRate)} is the vendor rate and applies on {r.poRef}.</Alert>
+                  <Alert severity="success">Approved by {r.decidedByName} on {when(r.decidedAt)}{r.selfApproved ? ' (MD, own request)' : ''} — {requestedPriceOf(r)} is the vendor {unitChange ? 'price' : 'rate'} and applies on {r.poRef}.</Alert>
                 )}
                 {r.status === 'REJECTED' && (
-                  <Alert severity="error" data-testid="rc-rejected-note">Rejected by {r.decidedByName} on {when(r.decidedAt)}: {r.rejectionReason}. The vendor rate was not changed.</Alert>
+                  <Alert severity="error" data-testid="rc-rejected-note">Rejected by {r.decidedByName} on {when(r.decidedAt)}: {r.rejectionReason}. The vendor {unitChange ? 'price and unit were' : 'rate was'} not changed.</Alert>
                 )}
                 {r.status === 'WITHDRAWN' && (
                   <Alert severity="info">Withdrawn {when(r.decidedAt)}: {r.withdrawnReason}</Alert>
                 )}
                 {pending && (
-                  <Alert severity="warning">The PO stays a draft and {r.vendorName}'s rate stays {fmtRate(r.currentVendorRate)} until this is decided.</Alert>
+                  <Alert severity="warning">The PO stays a draft and {r.vendorName}'s {unitChange ? 'price' : 'rate'} stays {unitChange ? fmtPrice(r.currentVendorRate, r.currentVendorUnit || r.existingVendorUnit) : fmtRate(r.currentVendorRate)} until this is decided. Either the MD or the purchase approver can decide it — the first decision stands.</Alert>
                 )}
                 {stale && (
                   <Alert severity="error" icon={<AlertTriangle size={18} />} data-testid="rc-stale">
@@ -130,11 +131,14 @@ const RateChangeDetailDrawer = ({ id, onClose, onViewHistory }) => {
 
               <Section title="Rates">
                 <Grid container spacing={2}>
-                  <Grid item xs={6} sm={3}><Field label="Vendor rate (when raised)" value={fmtRate(r.existingVendorRate)} testId="rc-existing" /></Grid>
+                  <Grid item xs={6} sm={3}><Field label={unitChange ? 'Vendor price (when raised)' : 'Vendor rate (when raised)'} value={existingPriceOf(r)} testId="rc-existing" /></Grid>
                   <Grid item xs={6} sm={3}><Field label="Original PO rate" value={fmtRate(r.originalPoRate)} /></Grid>
-                  <Grid item xs={6} sm={3}><Field label="Requested rate" value={<span style={{ color: PFMS.ink, fontWeight: 800 }}>{fmtRate(r.requestedRate)}</span>} testId="rc-requested" /></Grid>
+                  <Grid item xs={6} sm={3}><Field label={unitChange ? 'Requested price' : 'Requested rate'} value={<span style={{ color: PFMS.ink, fontWeight: 800 }}>{requestedPriceOf(r)}</span>} testId="rc-requested" /></Grid>
                   <Grid item xs={6} sm={3}><Field label="Difference" value={<span style={{ color: diffColor(r.diffAmount) }}>{fmtDiff(r.diffAmount, r.diffPercent)}</span>} testId="rc-diff" /></Grid>
                   <Grid item xs={6} sm={3}><Field label="Vendor rate now" value={fmtRate(r.currentVendorRate)} testId="rc-current" /></Grid>
+                  {unitChange && (
+                    <Grid item xs={6} sm={3}><Field label="Unit change" value={<span style={{ color: '#7c3aed', fontWeight: 800 }}>{r.existingVendorUnit || '—'} → {r.requestedUnit || r.unit || '—'}</span>} testId="rc-unit-change" /></Grid>
+                  )}
                   <Grid item xs={6} sm={3}><Field label="Unit / currency" value={`${r.unit || '—'} · ${r.currency || 'INR'}`} /></Grid>
                   <Grid item xs={6} sm={3}><Field label="GST" value={`${r.gstRate ?? 0}%`} /></Grid>
                   <Grid item xs={6} sm={3}><Field label="Line impact" value={r.lineImpact == null ? '—' : `${fmtDiff(r.lineImpact, null)} on ${r.quantity} ${r.unit}`} /></Grid>
@@ -268,7 +272,9 @@ const RateChangeDetailDrawer = ({ id, onClose, onViewHistory }) => {
         <DialogTitle sx={{ fontWeight: 800 }}>Reject {r?.requestNumber}</DialogTitle>
         <DialogContent>
           <Typography sx={{ fontSize: '0.82rem', color: PFMS.sub, mb: 1.5 }}>
-            {r?.vendorName}'s rate stays {fmtRate(r?.currentVendorRate)}. If the PO is still a draft at {fmtRate(r?.requestedRate)}, its line goes back to the vendor rate.
+            {unitChange
+              ? `${r?.vendorName}'s price and unit stay as they are. The PO line stays in ${r?.requestedUnit || r?.unit} until its doer puts it on ${r?.existingVendorUnit || 'the vendor unit'} or raises a new change.`
+              : `${r?.vendorName}'s rate stays ${fmtRate(r?.currentVendorRate)}. If the PO is still a draft at ${fmtRate(r?.requestedRate)}, its line goes back to the vendor rate.`}
           </Typography>
           <TextField autoFocus fullWidth multiline minRows={3} required label="Reason for rejection" value={reason}
             onChange={(e) => setReason(e.target.value)} inputProps={{ maxLength: 500, 'data-testid': 'rc-reject-reason' }}

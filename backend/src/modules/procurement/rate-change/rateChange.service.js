@@ -20,8 +20,10 @@ import RateChangeRequest, { RATE_CHANGE_STATUS } from './rateChange.model.js';
 import RateChangeHistory, { RATE_CHANGE_EVENT } from './rateChangeHistory.model.js';
 import {
   LINE_RATE, evaluateLineRate, unsendableReason, matchVendorRate, lookupVendorRate, lookupMessage, sameRate, rateDiff,
-  selfApprovalBlock, isSelfApproval, otherLineAmounts, poTotals, inr,
+  selfApprovalBlock, isSelfApproval, otherLineAmounts, poTotals, inr, unitChangeRow, changeTypeOf, changeText,
 } from './rateChange.rules.js';
+import { sameUnit } from '../../skus/unitConversion.js';
+import { resolveDesignatedApprovers } from '../approvers/purchaseApprovers.js';
 import VendorPurchaseOrder, { PO_APPROVAL_STATUS, PO_STATUS } from '../purchase-order/purchaseOrder.model.js';
 import PurchaseIndent from '../indent/indent.model.js';
 import { itemVendorState } from '../indent/itemVendor.js';
@@ -72,10 +74,25 @@ const sourceSnap = (product, overrides = {}) => (product ? {
   ...overrides,
 } : null);
 
+// Does the request ask for a UNIT change (alone or with the rate)? Older requests have no changeType = RATE.
+const isUnitChange = (r) => Boolean(r?.changeType) && r.changeType !== 'RATE';
+// The request's unit as asked for, and whether a line is still in it.
+const requestedUnitOf = (r) => r?.requestedUnit || r?.unit || '';
+const unitMatches = (r, line) => !line?.unit || !requestedUnitOf(r) || sameUnit(requestedUnitOf(r), line.unit);
+const changeLabel = (r) => (r?.changeType === 'UNIT' ? 'Unit change' : r?.changeType === 'RATE_UNIT' ? 'Rate & unit change' : 'Rate change');
+const changeLine = (r) => changeText({
+  existingRate: r.existingVendorRate, existingUnit: r.existingVendorUnit, requestedRate: r.requestedRate,
+  requestedUnit: requestedUnitOf(r), changeType: r.changeType,
+});
+
+// The refusal a second approver (or a replay) gets — it names who decided, and nothing changed.
+const alreadyDecided = (r) => `${r.requestNumber} was already ${String(r.status || '').toLowerCase()}${r.decidedByName ? ` by ${r.decidedByName}` : ''} — nothing was changed`;
+
 // The request fields every history row repeats (so a row reads on its own).
 const historyBase = (r) => ({
   requestId: r._id, requestNumber: r.requestNumber,
   vendorId: r.vendorId, vendorName: r.vendorName,
+  changeType: r.changeType || 'RATE', previousUnit: r.existingVendorUnit || '', newUnit: requestedUnitOf(r),
   skuId: r.skuId || null, skuCode: r.skuCode, itemName: r.itemName, unit: r.unit, currency: r.currency || 'INR',
   requestedRate: r.requestedRate, originalPoRate: r.originalPoRate,
   poId: r.poId, poRef: r.poRef, indentId: r.indentId || null, indentNumber: r.indentNumber,
@@ -108,7 +125,9 @@ const sameSku = (src, line) => {
 const productFor = (vendor, r) => {
   const own = r.vendorProductId && (vendor?.products || []).find((p) => idStr(p._id) === idStr(r.vendorProductId));
   if (own) return own;
-  return matchVendorRate(vendor?.products || [], { skuId: r.skuId, skuCode: r.skuCode, itemName: r.itemName, unit: r.unit }).product;
+  // A unit change targets the row in the vendor's CURRENT (old) unit, not the requested one.
+  const unit = isUnitChange(r) ? r.existingVendorUnit : r.unit;
+  return matchVendorRate(vendor?.products || [], { skuId: r.skuId, skuCode: r.skuCode, itemName: r.itemName, unit }).product;
 };
 
 // Why the request's PO can no longer take the rate ('' = it can).
@@ -121,6 +140,7 @@ const poIneligibleReason = (po, r) => {
   const line = (po.items || []).find((l) => idStr(l._id) === idStr(r.poLineId));
   if (!line) return `The line was removed from PO ${poRefOf(po)}`;
   if (!sameRate(line.rate, r.requestedRate)) return `The line's rate on PO ${poRefOf(po)} is now ${inr(line.rate)}, not the requested ${inr(r.requestedRate)}`;
+  if (!unitMatches(r, line)) return `The line's unit on PO ${poRefOf(po)} is now ${line.unit}, not the requested ${requestedUnitOf(r)}`;
   return '';
 };
 
@@ -145,16 +165,34 @@ const approverIds = async () => {
     .map((u) => u._id);
 };
 
+/**
+ * Who is told about a new request: the designated approvers (the MD and the
+ * purchase approver, found by e-mail — approvers/purchaseApprovers.js) plus every
+ * user holding an approval permission, as before. One person once.
+ */
+const recipientIds = async () => {
+  const ids = new Map();
+  const { approvers } = await resolveDesignatedApprovers();
+  approvers.forEach((a) => ids.set(idStr(a._id), a._id));
+  (await approverIds()).forEach((id) => { if (!ids.has(idStr(id))) ids.set(idStr(id), id); });
+  return [...ids.values()];
+};
+
+/** One notification per request (so a decision settles exactly its own), never to the requester. */
+export const rateChangeRefKey = (id) => `rate-change:${idStr(id)}`;
 const notifyApprovers = async (requests, user) => {
   if (!requests?.length) return;
   try {
-    const ids = await approverIds();
-    const one = requests.length === 1 ? requests[0] : null;
-    const title = one ? `Rate change ${one.requestNumber} awaits approval` : `${requests.length} rate changes await approval`;
-    const body = requests.map((r) => `${r.vendorName} · ${r.itemName || r.skuCode}: ${inr(r.existingVendorRate)} → ${inr(r.requestedRate)} on ${r.poRef} (by ${r.requestedByName || 'someone'})`).join('\n');
-    for (const uid of ids) {
-      if (idStr(uid) === idStr(user?._id)) continue;
-      await notificationsService.notify(uid, { type: 'APPROVAL_REQUIRED', title, body, link: RATE_CHANGE_LINK });
+    const ids = await recipientIds();
+    for (const r of requests) {
+      const title = `${changeLabel(r)} ${r.requestNumber} awaits approval`;
+      const body = `${r.vendorName} · ${r.itemName || r.skuCode}: ${changeLine(r)} on ${r.poRef} (by ${r.requestedByName || 'someone'})`;
+      for (const uid of ids) {
+        if (idStr(uid) === idStr(user?._id)) continue;
+        await notificationsService.notifyOnce(uid, {
+          type: 'APPROVAL_REQUIRED', title, body, link: RATE_CHANGE_LINK, refKey: rateChangeRefKey(r._id),
+        });
+      }
     }
   } catch (err) {
     logger.error(`[rate-change] approver notification failed: ${err.message}`);
@@ -166,16 +204,21 @@ const notifyRequester = (r, title, body) => {
   return notificationsService.notify(r.requestedBy, { type: 'INFO', title, body, link: RATE_CHANGE_LINK });
 };
 
-const withDiff = (r, currentVendorRate) => {
+const withDiff = (r, currentVendorRate, currentVendorUnit = '') => {
   const base = r.existingVendorRate;
-  const d = rateDiff(base, r.requestedRate);
+  // A rate difference across two units says nothing (₹100/Kgs vs ₹5/Pcs): only same-unit changes show one.
+  const d = isUnitChange(r) ? { amount: null, percent: null } : rateDiff(base, r.requestedRate);
+  const unitMoved = isUnitChange(r) && currentVendorUnit && r.existingVendorUnit && !sameUnit(currentVendorUnit, r.existingVendorUnit);
   return {
     ...r,
+    changeType: r.changeType || 'RATE',
     diffAmount: d.amount,
     diffPercent: d.percent,
     lineImpact: d.amount == null ? null : Math.round(d.amount * (Number(r.quantity) || 0) * 100) / 100,
     currentVendorRate: currentVendorRate === undefined ? null : currentVendorRate,
-    stale: r.status === S.PENDING && currentVendorRate !== undefined && !sameRate(currentVendorRate, r.existingVendorRate),
+    currentVendorUnit: currentVendorUnit || '',
+    stale: r.status === S.PENDING && currentVendorRate !== undefined
+      && (!sameRate(currentVendorRate, r.existingVendorRate) || Boolean(unitMoved)),
   };
 };
 
@@ -213,7 +256,7 @@ export const rateChangeService = {
         return;
       }
       const lineId = idStr(line._id);
-      const standing = lineId && open.find((r) => idStr(r.poLineId) === lineId && sameRate(r.requestedRate, line.rate));
+      const standing = lineId && open.find((r) => idStr(r.poLineId) === lineId && sameRate(r.requestedRate, line.rate) && unitMatches(r, line));
       if (standing) {
         entries.push({ ...base, action: 'KEEP', request: standing });
         return;
@@ -221,6 +264,12 @@ export const rateChangeService = {
       const item = line.itemName || line.skuCode || 'an item';
       const blocked = unsendableReason(ev, line, vendor.name);
       if (blocked) { problems.push(blocked); return; }
+      const unitChanged = ev.state === LINE_RATE.UNIT_CHANGED;
+      // The vendor's rate is per ITS unit — it says nothing about the new one, so the new rate must be typed.
+      if (unitChanged && !(Number(line.rate) > 0)) {
+        problems.push(`Enter the rate per ${line.unit || 'the new unit'} for "${item}" — ${vendor.name} prices it per ${ev.vendorUnit || 'another unit'}, so that rate does not apply`);
+        return;
+      }
       if (line.indentItemId && indent) {
         const src = (indent.items || []).find((it) => idStr(it._id) === idStr(line.indentItemId));
         if (src && !sameSku(src, line)) {
@@ -230,7 +279,9 @@ export const rateChangeService = {
       }
       const reason = String(items[idx]?.rateChangeReason || '').trim();
       if (!reason) {
-        problems.push(`Give a reason for changing the rate of "${item}" (${vendor.name}'s rate ${inr(ev.vendorRate)} → ${inr(line.rate)}) — a changed rate goes to Rate Change Approvals`);
+        problems.push(unitChanged
+          ? `Give a reason for changing the unit of "${item}" (${vendor.name} prices it per ${ev.vendorUnit || 'another unit'}; the line is in ${line.unit}) — a changed unit goes to Purchase Approval`
+          : `Give a reason for changing the rate of "${item}" (${vendor.name}'s rate ${inr(ev.vendorRate)} → ${inr(line.rate)}) — a changed rate goes to Rate Change Approvals`);
         return;
       }
       entries.push({ ...base, action: 'NEW', reason });
@@ -280,6 +331,12 @@ export const rateChangeService = {
         itemName: line.itemName || '',
         unit: line.unit || '',
         currency: 'INR',
+        // RATE: same unit as the vendor's row. UNIT / RATE_UNIT: the row is in another unit.
+        existingVendorUnit: e.vendorProduct?.unit || line.unit || '',
+        requestedUnit: line.unit || '',
+        changeType: e.ev.state === LINE_RATE.UNIT_CHANGED
+          ? changeTypeOf({ existingRate: e.fetchedRate, existingUnit: e.vendorProduct?.unit, requestedRate: line.rate, requestedUnit: line.unit })
+          : 'RATE',
         existingVendorRate: e.fetchedRate,
         originalPoRate: prev ? Number(prev.rate) : e.fetchedRate,
         requestedRate: Number(line.rate),
@@ -351,6 +408,8 @@ export const rateChangeService = {
       previousRate: r.existingVendorRate, newRate: r.requestedRate,
       actorId: user?._id || null, actorName: user?.name || 'System', at: now, message,
     }], session);
+    // Nothing left to decide: clear the approvers' unread "awaits approval" copies (outside any transaction).
+    if (!session) await notificationsService.settleByRef(rateChangeRefKey(r._id));
     return true;
   },
 
@@ -390,7 +449,7 @@ export const rateChangeService = {
     for (const line of po.items || []) {
       const ev = evaluateLineRate({ line, products: vendor.products, quotationRate: quotationRateOf(indentById.get(idStr(line.indentId)), vendor._id, line) });
       if ([LINE_RATE.NO_SOURCE, LINE_RATE.MATCHES, LINE_RATE.QUOTATION].includes(ev.state)) continue;
-      const mine = requests.filter((r) => idStr(r.poLineId) === idStr(line._id) && sameRate(r.requestedRate, line.rate));
+      const mine = requests.filter((r) => idStr(r.poLineId) === idStr(line._id) && sameRate(r.requestedRate, line.rate) && unitMatches(r, line));
       if (mine.some((r) => r.status === S.APPROVED)) continue;
       const item = line.itemName || line.skuCode;
       const pending = mine.find((r) => r.status === S.PENDING);
@@ -398,7 +457,11 @@ export const rateChangeService = {
       if (unsendable) {
         problems.push(`"${item}": ${unsendable}`);
       } else if (pending) {
-        problems.push(`"${item}": rate change ${pending.requestNumber} (${inr(pending.existingVendorRate)} → ${inr(pending.requestedRate)}) is awaiting approval in Rate Change Approvals`);
+        problems.push(isUnitChange(pending)
+          ? `"${item}": ${changeLabel(pending).toLowerCase()} ${pending.requestNumber} (${changeLine(pending)}) is awaiting approval in Purchase Approval`
+          : `"${item}": rate change ${pending.requestNumber} (${inr(pending.existingVendorRate)} → ${inr(pending.requestedRate)}) is awaiting approval in Rate Change Approvals`);
+      } else if (ev.state === LINE_RATE.UNIT_CHANGED) {
+        problems.push(`"${item}": the line is in ${line.unit} but ${vendor.name} prices it per ${ev.vendorUnit} and the unit change has no approval — edit the PO and give a reason to send it for approval`);
       } else if (ev.vendorRate != null && line.fetchedRate != null && sameRate(line.fetchedRate, line.rate)) {
         problems.push(`"${item}": ${vendor.name}'s rate changed from ${inr(line.fetchedRate)} to ${inr(ev.vendorRate)} after this draft was saved — edit the PO to use ${inr(ev.vendorRate)}, or keep ${inr(line.rate)} with a reason to send it for approval`);
       } else {
@@ -429,7 +492,7 @@ export const rateChangeService = {
   async approve(id, body = {}, user) {
     const r0 = await RateChangeRequest.findById(id).lean();
     if (!r0) throw new AppError('Rate change request not found', 404);
-    if (r0.status !== S.PENDING) throw new AppError(`${r0.requestNumber} is already ${r0.status.toLowerCase()} — nothing was changed`, 409);
+    if (r0.status !== S.PENDING) throw new AppError(alreadyDecided(r0), 409);
     const block = selfApprovalBlock(user, r0);
     if (block) throw new AppError(block, 403);
 
@@ -452,14 +515,18 @@ export const rateChangeService = {
       }
       throw err;
     }
-    await notifyRequester(approved, `Rate change ${approved.requestNumber} approved`,
-      `${approved.vendorName} · ${approved.itemName}: ${inr(approved.requestedRate)} is now the vendor rate and applies on ${approved.poRef} (approved by ${approved.decidedByName}).`);
+    // Decided: the other approver's unread copy of the request is settled too.
+    await notificationsService.settleByRef(rateChangeRefKey(id));
+    await notifyRequester(approved, `${changeLabel(approved)} ${approved.requestNumber} approved`,
+      isUnitChange(approved)
+        ? `${approved.vendorName} · ${approved.itemName}: ${changeLine(approved)} is now the vendor's price and applies on ${approved.poRef} (approved by ${approved.decidedByName}).`
+        : `${approved.vendorName} · ${approved.itemName}: ${inr(approved.requestedRate)} is now the vendor rate and applies on ${approved.poRef} (approved by ${approved.decidedByName}).`);
     return approved;
   },
 
   async applyApproval(id, body, user, session) {
     const r = await RateChangeRequest.findById(id).session(session).lean();
-    if (!r || r.status !== S.PENDING) throw new AppError(`${r?.requestNumber || 'This request'} was just decided by someone else — nothing was changed`, 409);
+    if (!r || r.status !== S.PENDING) throw new AppError(r ? alreadyDecided(r) : 'This request was just decided by someone else — nothing was changed', 409);
 
     const po = await VendorPurchaseOrder.findOne({ _id: r.poId }).session(session).lean();
     const why = poIneligibleReason(po, r);
@@ -468,7 +535,13 @@ export const rateChangeService = {
     const vendor = await loadVendor(r.vendorId, session);
     if (!vendor) throw new PoIneligibleError(`Vendor ${r.vendorName} is no longer in the Vendor Master`);
     const product = productFor(vendor, r);
-    if (!product) throw new RateConflictError(`${vendor.name} no longer has a rate for "${r.itemName}" in ${r.unit} in the Vendor Master — reject this request and ask for a new one`, null);
+    const unitChange = isUnitChange(r);
+    const rowUnit = unitChange ? r.existingVendorUnit : r.unit;
+    if (!product) throw new RateConflictError(`${vendor.name} no longer has a rate for "${r.itemName}" in ${rowUnit} in the Vendor Master — reject this request and ask for a new one`, null);
+    // A unit change is made against the row as the requester saw it: if that row's unit moved, nothing is applied.
+    if (unitChange && product.unit && r.existingVendorUnit && !sameUnit(product.unit, r.existingVendorUnit)) {
+      throw new RateConflictError(`${vendor.name}'s unit for "${r.itemName}" changed from ${r.existingVendorUnit} to ${product.unit} after this request was raised — reject it and ask for a new one`, Number(product.rate));
+    }
     const current = Number(product.rate);
     if (!sameRate(current, r.existingVendorRate)) {
       if (!body.acknowledgeRateChange || !sameRate(body.expectedVendorRate, current)) {
@@ -480,7 +553,7 @@ export const rateChangeService = {
 
     const now = new Date();
     const before = sourceSnap(product);
-    const after = sourceSnap(product, { rate: r.requestedRate, lastUpdatedAt: now });
+    const after = sourceSnap(product, { rate: r.requestedRate, ...(unitChange ? { unit: requestedUnitOf(r) } : {}), lastUpdatedAt: now });
     const undo = []; // standalone mongod only — undone in reverse if a later write fails
     try {
       // 1) Claim the request: a second approver or a replayed request finds it decided.
@@ -500,18 +573,25 @@ export const rateChangeService = {
       ));
 
       // 2) Vendor rate — only while it is still the rate checked above.
+      // A unit change moves the row's unit with its rate (the new rate is per the new unit).
+      const rowMatch = { _id: product._id, rate: product.rate, ...(product.unit ? { unit: product.unit } : {}) };
       const vres = await Vendor.updateOne(
-        { _id: vendor._id, products: { $elemMatch: { _id: product._id, rate: product.rate } } },
+        { _id: vendor._id, products: { $elemMatch: rowMatch } },
         { $set: {
           'products.$.rate': r.requestedRate, 'products.$.lastUpdatedAt': now,
+          ...(unitChange ? { 'products.$.unit': requestedUnitOf(r) } : {}),
           'products.$.lastUpdatedBy': user?._id || null, updatedBy: user?._id || null,
         } },
         opt(session),
       );
-      if (!vres.matchedCount) throw new RateConflictError(`${vendor.name}'s rate for "${r.itemName}" was changed by someone else just now — review it again`, null);
+      if (!vres.matchedCount) throw new RateConflictError(`${vendor.name}'s ${unitChange ? 'price' : 'rate'} for "${r.itemName}" was changed by someone else just now — review it again`, null);
       undo.push(() => Vendor.updateOne(
         { _id: vendor._id, products: { $elemMatch: { _id: product._id, rate: r.requestedRate } } },
-        { $set: { 'products.$.rate': product.rate, 'products.$.lastUpdatedAt': product.lastUpdatedAt || null, 'products.$.lastUpdatedBy': product.lastUpdatedBy || null } },
+        { $set: {
+          'products.$.rate': product.rate, 'products.$.lastUpdatedAt': product.lastUpdatedAt || null,
+          ...(unitChange ? { 'products.$.unit': product.unit || '' } : {}),
+          'products.$.lastUpdatedBy': product.lastUpdatedBy || null,
+        } },
       ));
 
       // 3) PO line + totals — only while the PO is the draft checked above.
@@ -540,7 +620,9 @@ export const rateChangeService = {
           },
           $push: { activityTimeline: {
             action: 'RATE_CHANGE_APPROVED',
-            description: `Rate change ${r.requestNumber} approved — ${r.itemName}: ${inr(r.requestedRate)} (vendor rate was ${inr(product.rate)})`,
+            description: unitChange
+              ? `${changeLabel(r)} ${r.requestNumber} approved — ${r.itemName}: ${changeLine(r)} (vendor price was ${inr(product.rate)} / ${product.unit || '—'})`
+              : `Rate change ${r.requestNumber} approved — ${r.itemName}: ${inr(r.requestedRate)} (vendor rate was ${inr(product.rate)})`,
             actorId: user?._id, timestamp: now,
           } },
         },
@@ -562,12 +644,12 @@ export const rateChangeService = {
         skuId: product.skuId || r.skuId || null, skuCode: upper(product.skuCode || r.skuCode), itemName: product.productName || r.itemName,
         oldRate: Number(product.rate) || 0, newRate: r.requestedRate,
         oldGstRate: Number(product.gstRate) || 0, newGstRate: Number(product.gstRate) || 0,
-        hsn: product.hsn || '', unit: product.unit || r.unit || '',
+        hsn: product.hsn || '', unit: (unitChange ? requestedUnitOf(r) : product.unit) || r.unit || '',
         effectiveDate: now,
         source: PRICING_SOURCE.RATE_CHANGE_APPROVAL, referenceType: PRICING_SOURCE.RATE_CHANGE_APPROVAL,
         referenceId: po._id, referenceNumber: poRefOf(po),
         updatedBy: user?._id || null, updatedByName: user?.name || '',
-        remarks: `Rate change ${r.requestNumber} approved — requested by ${r.requestedByName || 'unknown'}: ${r.reason}`.slice(0, 1000),
+        remarks: `${changeLabel(r)} ${r.requestNumber} approved${unitChange ? ` (${changeLine(r)})` : ''} — requested by ${r.requestedByName || 'unknown'}: ${r.reason}`.slice(0, 1000),
       }], opt(session));
       undo.push(() => PricingHistory.deleteOne({ _id: ph._id }));
       await writeHistory([{
@@ -575,6 +657,7 @@ export const rateChangeService = {
         previousRate: Number(product.rate), newRate: r.requestedRate,
         actorId: user?._id || null, actorName: user?.name || '', at: now,
         message: [claimed.selfApproved ? 'Approved by the MD on their own request' : '',
+          unitChange ? `Vendor unit changed ${product.unit || '—'} → ${requestedUnitOf(r)}` : '',
           !sameRate(product.rate, r.existingVendorRate) ? `Vendor rate had changed to ${inr(product.rate)} since the request — confirmed by the approver` : '',
           claimed.decisionRemarks].filter(Boolean).join(' · '),
         vendorSourceBefore: before, vendorSourceAfter: after,
@@ -615,7 +698,7 @@ export const rateChangeService = {
     if (why.length < 3) throw new AppError('Give a reason for rejecting the rate change', 400);
     const r0 = await RateChangeRequest.findById(id).lean();
     if (!r0) throw new AppError('Rate change request not found', 404);
-    if (r0.status !== S.PENDING) throw new AppError(`${r0.requestNumber} is already ${r0.status.toLowerCase()} — nothing was changed`, 409);
+    if (r0.status !== S.PENDING) throw new AppError(alreadyDecided(r0), 409);
 
     const result = await inventoryService.runAtomically(async (session) => {
       const now = new Date();
@@ -624,11 +707,32 @@ export const rateChangeService = {
         { $set: { status: S.REJECTED, rejectionReason: why, decidedBy: user?._id || null, decidedByName: user?.name || '', decidedAt: now } },
         { new: true, ...opt(session) },
       ).lean();
-      if (!claimed) throw new AppError(`${r0.requestNumber} was just decided by someone else — nothing was changed`, 409);
+      if (!claimed) {
+        const now2 = await RateChangeRequest.findById(r0._id).session(session).lean();
+        throw new AppError(now2 && now2.status !== S.PENDING ? alreadyDecided(now2) : `${r0.requestNumber} was just decided by someone else — nothing was changed`, 409);
+      }
 
       let reverted = null;
+      let lineLeft = false;
       const po = await VendorPurchaseOrder.findOne({ _id: claimed.poId }).session(session).lean();
-      if (!poIneligibleReason(po, claimed)) {
+      if (isUnitChange(claimed) && !poIneligibleReason(po, claimed)) {
+        // The line's quantity is in the unit that was asked for, so it cannot be put back on the vendor's unit
+        // without converting the quantity: the line is only marked rejected, and its doer fixes the unit.
+        const line = po.items.find((l) => idStr(l._id) === idStr(claimed.poLineId));
+        const res = await VendorPurchaseOrder.updateOne(
+          { _id: po._id, approvalStatus: PO_APPROVAL_STATUS.DRAFT, isDeleted: { $ne: true }, items: { $elemMatch: { _id: line._id, rate: line.rate } } },
+          {
+            $set: { 'items.$[l].rateChangeStatus': S.REJECTED, updatedBy: user?._id || null },
+            $push: { activityTimeline: {
+              action: 'RATE_CHANGE_REJECTED',
+              description: `${changeLabel(claimed)} ${claimed.requestNumber} rejected (${why}) — ${claimed.itemName} stays in ${line.unit}; edit the line to ${claimed.existingVendorUnit || 'the vendor unit'} or raise a new change`,
+              actorId: user?._id, timestamp: now,
+            } },
+          },
+          { arrayFilters: [{ 'l._id': line._id }], ...opt(session) },
+        );
+        lineLeft = res.matchedCount > 0;
+      } else if (!poIneligibleReason(po, claimed)) {
         const vendor = await loadVendor(claimed.vendorId, session);
         const product = productFor(vendor, claimed);
         const back = product ? Number(product.rate) : claimed.existingVendorRate;
@@ -666,15 +770,19 @@ export const rateChangeService = {
         ...historyBase(claimed), event: E.REJECTED, status: S.REJECTED,
         previousRate: claimed.existingVendorRate, newRate: claimed.requestedRate,
         actorId: user?._id || null, actorName: user?.name || '', at: now, rejectionReason: why,
-        message: reverted != null
-          ? `Vendor rate unchanged; PO ${claimed.poRef} line set back to the vendor rate ${inr(reverted)}`
-          : `Vendor rate unchanged; PO ${claimed.poRef} was not changed (no longer a draft at the requested rate)`,
+        message: lineLeft
+          ? `Vendor unit and rate unchanged; PO ${claimed.poRef} line left in ${claimed.requestedUnit || claimed.unit} — its doer has to put it on the vendor's unit (${claimed.existingVendorUnit || '—'}) or raise a new change`
+          : reverted != null
+            ? `Vendor rate unchanged; PO ${claimed.poRef} line set back to the vendor rate ${inr(reverted)}`
+            : `Vendor rate unchanged; PO ${claimed.poRef} was not changed (no longer a draft at the requested rate)`,
       }], session);
-      return { ...claimed, revertedTo: reverted };
+      return { ...claimed, revertedTo: reverted, lineLeft };
     });
-    await notifyRequester(result, `Rate change ${result.requestNumber} rejected`,
-      `${result.vendorName} · ${result.itemName}: ${inr(result.requestedRate)} was rejected by ${result.decidedByName} — ${why}.`
-      + (result.revertedTo != null ? ` The PO line is back at ${inr(result.revertedTo)}; change it again with a new reason to resubmit.` : ''));
+    await notificationsService.settleByRef(rateChangeRefKey(id));
+    await notifyRequester(result, `${changeLabel(result)} ${result.requestNumber} rejected`,
+      `${result.vendorName} · ${result.itemName}: ${isUnitChange(result) ? changeLine(result) : inr(result.requestedRate)} was rejected by ${result.decidedByName} — ${why}.`
+      + (result.revertedTo != null ? ` The PO line is back at ${inr(result.revertedTo)}; change it again with a new reason to resubmit.` : '')
+      + (result.lineLeft ? ` The PO line is still in ${result.requestedUnit || result.unit}; put it on ${result.existingVendorUnit || 'the vendor unit'} or change it again with a new reason to resubmit.` : ''));
     return result;
   },
 
@@ -714,7 +822,7 @@ export const rateChangeService = {
       if (r.status !== S.PENDING) return withDiff(r);
       const v = vById.get(idStr(r.vendorId));
       const p = v && !v.isDeleted ? productFor(v, r) : null;
-      return withDiff(r, p ? Number(p.rate) : null);
+      return withDiff(r, p ? Number(p.rate) : null, p?.unit || '');
     });
     const [vendorOpts, requesterOpts] = await Promise.all([
       RateChangeRequest.aggregate([{ $group: { _id: '$vendorId', name: { $first: '$vendorName' } } }, { $sort: { name: 1 } }]),
@@ -754,7 +862,7 @@ export const rateChangeService = {
       }).select('poNumber draftNumber approvalStatus poStatus createdAt').sort({ createdAt: 1 }).limit(20).lean()
       : [];
     return {
-      ...withDiff(r, r.status === S.PENDING ? currentVendorRate : undefined),
+      ...withDiff(r, r.status === S.PENDING ? currentVendorRate : undefined, product?.unit || ''),
       currentVendorRate,
       vendorSourceNow: sourceSnap(product),
       po: po ? {
@@ -807,9 +915,12 @@ export const rateChangeService = {
     const line = { skuId, skuCode, itemName, unit: unit || '' };
     const lk = lookupVendorRate(vendor.products, line);
     const product = lk.found ? lk.product : null;
+    // Another unit, one row: the unit may be changed (it goes to approval) — the form needs that row's price.
+    const uc = unitChangeRow(lk);
     return {
       vendorId: vendor._id, vendorName: vendor.name,
       found: lk.found, problem: lk.problem,
+      unitChange: uc ? { vendorProductId: uc._id, rate: Number(uc.rate), unit: uc.unit || '' } : null,
       message: lookupMessage(lk, line, vendor.name),
       vendorProductId: product?._id || null,
       rate: product ? Number(product.rate) : null,

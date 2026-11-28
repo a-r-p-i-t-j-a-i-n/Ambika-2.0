@@ -1,10 +1,12 @@
 import asyncHandler from '../../../middleware/asyncHandler.js';
-import { userHasPermission } from '../../../middleware/permission.middleware.js';
 import { ApiResponse } from '../../../utils/apiResponse.js';
 import { rateChangeService, RATE_APPROVER_PERMISSIONS } from './rateChange.service.js';
 import { selfApprovalBlock } from './rateChange.rules.js';
+import { canDecideAs } from '../approvers/purchaseApprovers.js';
+import { newVendorPoApprovalService } from '../approvers/newVendorPoApproval.js';
 
-const canApprove = (req) => RATE_APPROVER_PERMISSIONS.some((s) => userHasPermission(req, s));
+// The approval permissions, or being the MD / the purchase approver.
+const canApprove = (req) => canDecideAs(req, RATE_APPROVER_PERMISSIONS);
 
 // A refused decision that carries data (e.g. the current vendor rate after a
 // stale-rate conflict) — the global error handler would drop it.
@@ -35,6 +37,17 @@ export const rateChangeController = {
       // Why this user can't approve this one ('' = they can, when it is pending).
       approveBlock: approver ? selfApprovalBlock(req.user, data) : 'You do not have permission to approve rate changes',
     }));
+  }),
+
+  // New-vendor POs for the Purchase Approval page (the same list for every signed-in user; `canDecide` is per viewer).
+  poApprovals: asyncHandler(async (req, res) => {
+    const data = await newVendorPoApprovalService.list(req.query, req.user, req.userPermissions);
+    res.json(ApiResponse.ok('New-vendor PO approvals', data));
+  }),
+
+  poApproval: asyncHandler(async (req, res) => {
+    const data = await newVendorPoApprovalService.getById(req.params.id, req.user, req.userPermissions);
+    res.json(ApiResponse.ok('New-vendor PO approval', data));
   }),
 
   history: asyncHandler(async (req, res) => {

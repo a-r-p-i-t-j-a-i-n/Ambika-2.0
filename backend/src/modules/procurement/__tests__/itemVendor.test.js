@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import {
   ITEM_VENDOR_SOURCE, ITEM_VENDOR_STATE, QUOTATION_PATH,
-  itemQuotationPath, itemVendorState, poVendorProblems, poVendorHistoryProblems, fixedVendorIds, usesApprovedVendorList, isJslVendorName,
+  itemQuotationPath, itemVendorState, itemVendorLocked, poVendorProblems, poPickedVendorProblems, fixedVendorIds, usesApprovedVendorList, isJslVendorName,
 } from '../indent/itemVendor.js';
 
 const ID = (n) => `64c000000000000000000${String(n).padStart(3, '0')}`;
@@ -87,21 +87,29 @@ test('PO vendor: same vendor passes, different vendor refused, an item approved 
   assert.match(wrong, /Ind-1\.1\/26-27 \(Item 1\): the approved quotation is "Alpha"/);
 
   const legacy = item(2);
-  // Step 1.3 no longer needs a vendor: the item reaches the PO, whose vendor is checked against the
-  // item's previous vendors (poVendorHistoryProblems) instead of being refused here.
+  // Step 1.3 does not need a vendor: the item reaches the PO, whose vendor is chosen there and checked by
+  // poPickedVendorProblems instead of being refused here.
   assert.deepEqual(poVendorProblems([{ indent: quoted([legacy]), item: legacy, ref: 'Ind-1.2/26-27' }], V1, master), []);
   assert.deepEqual(poVendorProblems([{ indent: quoted([legacy]), item: legacy }], V1, master, { skipMissing: true }), []);
 });
 
-test('PO vendor: open not-required item takes any vendor; a pre-selected one must match', () => {
+test('PO vendor: a vendor approved with the quotation is LOCKED; a Quote Required = No preselection is only a starting point the PO may change', () => {
   const open = item(1);
   const picked = item(2, { vendorId: V2, vendorName: 'Beta', vendorSource: ITEM_VENDOR_SOURCE.PO_PREPARATION });
+  const approved = item(3, { vendorId: V2, vendorName: 'Beta', vendorSource: ITEM_VENDOR_SOURCE.APPROVED_QUOTATION });
   const ind = skipped([open, picked]);
   const master = vendors(active(V1, 'Alpha'), active(V2, 'Beta'));
+  assert.equal(itemVendorLocked(ind, open), false);
+  assert.equal(itemVendorLocked(ind, picked), false);
+  assert.equal(itemVendorLocked(quoted([approved]), approved), true);
+  // open item: nothing held here (the vendor chosen on the PO is checked by poPickedVendorProblems)
   assert.deepEqual(poVendorProblems([{ indent: ind, item: open }], V1, master), []);
+  // preselection: the same vendor AND a different one are both fine here — the user may change it on the PO
   assert.deepEqual(poVendorProblems([{ indent: ind, item: picked }], V2, master), []);
-  const [p] = poVendorProblems([{ indent: ind, item: picked }], V1, master);
-  assert.match(p, /vendor selected on Pending for PO is "Beta"/);
+  assert.deepEqual(poVendorProblems([{ indent: ind, item: picked }], V1, master), []);
+  // approved with the quotation: held to that vendor
+  const [p] = poVendorProblems([{ indent: quoted([approved]), item: approved }], V1, master);
+  assert.match(p, /the approved quotation is "Beta" — this PO's vendor must be the same/);
 });
 
 test('PO vendor: fixed vendor deleted or deactivated in the Vendor Master is refused', () => {
@@ -111,10 +119,9 @@ test('PO vendor: fixed vendor deleted or deactivated in the Vendor Master is ref
   assert.match(poVendorProblems(entries, V1, vendors({ _id: V1, name: 'Alpha', isDeleted: true }))[0], /no longer exists/);
   const inactive = poVendorProblems(entries, V1, vendors({ _id: V1, name: 'Alpha', isActive: false }));
   assert.match(inactive[0], /"Alpha" is inactive in the Vendor Master — reactivate it$/);
-  // Not-required pick: the doer may also choose another vendor.
+  // A Quote Required = No preselection that has since gone inactive does not block the PO: the PO's own vendor decides.
   const p = item(2, { vendorId: V1, vendorName: 'Alpha', vendorSource: ITEM_VENDOR_SOURCE.PO_PREPARATION });
-  assert.match(poVendorProblems([{ indent: skipped([p]), item: p }], V1, vendors({ _id: V1, name: 'Alpha', isActive: false }))[0],
-    /or select another vendor on Pending for PO/);
+  assert.deepEqual(poVendorProblems([{ indent: skipped([p]), item: p }], V2, vendors({ _id: V1, name: 'Alpha', isActive: false }, active(V2, 'Beta'))), []);
 });
 
 test('multi-item indent: items fixed to different vendors cannot share one PO', () => {
@@ -136,39 +143,37 @@ test('older vendor-grain approvals are recognised', () => {
   assert.equal(usesApprovedVendorList(quoted([item(1)])), false);
 });
 
-// ── Items with no vendor fixed take the PO's vendor from their previous vendors only ──
-const HIST = (...pairs) => pairs.map(([vendorId, vendorName]) => ({ vendorId, vendorName }));
-test('PO vendor history: an item with no vendor fixed accepts only a previous vendor', () => {
+// ── The vendor chosen on the PO: any ACTIVE Vendor Master vendor for every item that is not locked ──
+test('PO vendor choice: an item with no vendor accepts any active vendor — previous or new, history or not', () => {
   const open = item(1);
-  const ind = quoted([open]); // quoted + approved WITHOUT a vendor → MISSING
-  const entries = [{ indent: ind, item: open, ref: 'Ind-1.1/26-27' }];
-  const history = new Map([[open._id, HIST([V1, 'Alpha'])]]);
-  assert.deepEqual(poVendorHistoryProblems(entries, V1, 'Alpha', history), []);
-  const [why] = poVendorHistoryProblems(entries, V2, 'Beta', history);
-  assert.match(why, /"Beta" has neither quoted for nor previously supplied this item — choose one of: Alpha/);
+  const entries = [{ indent: quoted([open]), item: open, ref: 'Ind-1.1/26-27' }]; // quoted + approved WITHOUT a vendor → MISSING
+  assert.deepEqual(poPickedVendorProblems(entries, active(V1, 'Alpha')), []);
+  assert.deepEqual(poPickedVendorProblems(entries, active(V2, 'Beta')), []);
+  // not-required items are held to the very same rule
+  assert.deepEqual(poPickedVendorProblems([{ indent: skipped([open]), item: open }], active(V2, 'Beta')), []);
 });
-test('PO vendor history: no eligible vendor at all → "No eligible vendors found" (never the whole Vendor Master)', () => {
+test('PO vendor choice: inactive, deleted or not-a-Vendor-Master-record (unknown id / legacy Party) is refused', () => {
   const open = item(1);
-  const [why] = poVendorHistoryProblems([{ indent: quoted([open]), item: open, ref: 'Ind-1.1/26-27' }], V1, 'Alpha', new Map());
-  assert.match(why, /No eligible vendors found/);
+  const entries = [{ indent: quoted([open]), item: open, ref: 'Ind-1.1/26-27' }];
+  assert.match(poPickedVendorProblems(entries, { _id: V1, name: 'Alpha', isActive: false })[0], /Ind-1\.1\/26-27 \(Item 1\): vendor "Alpha" is inactive in the Vendor Master — choose an active vendor/);
+  assert.match(poPickedVendorProblems(entries, { _id: V1, name: 'Alpha', isDeleted: true })[0], /must be an active vendor from the Vendor Master/);
+  assert.match(poPickedVendorProblems(entries, null)[0], /must be an active vendor from the Vendor Master/);
+  assert.match(poPickedVendorProblems(entries, undefined)[0], /must be an active vendor from the Vendor Master/);
 });
-test('PO vendor history: not-required items with no vendor are held to the same rule; items with a fixed vendor are left to poVendorProblems', () => {
-  const open = item(1);
-  const fixed = item(2, { vendorId: V1, vendorName: 'Alpha', vendorSource: ITEM_VENDOR_SOURCE.APPROVED_QUOTATION });
-  const ind = skipped([open]);
-  assert.equal(poVendorHistoryProblems([{ indent: ind, item: open, ref: 'r1' }], V2, 'Beta', new Map([[open._id, HIST([V1, 'Alpha'])]])).length, 1);
-  // a fixed item is not re-checked against history, even with an empty history
-  assert.deepEqual(poVendorHistoryProblems([{ indent: quoted([fixed]), item: fixed, ref: 'r2' }], V1, 'Alpha', new Map()), []);
+test('PO vendor choice: a vendor approved with the quotation is left to poVendorProblems; a Quote Required = No preselection is checked here', () => {
+  const locked = item(1, { vendorId: V1, vendorName: 'Alpha', vendorSource: ITEM_VENDOR_SOURCE.APPROVED_QUOTATION });
+  const pre = item(2, { vendorId: V1, vendorName: 'Alpha', vendorSource: ITEM_VENDOR_SOURCE.PO_PREPARATION });
+  // a locked item adds nothing, even for a vendor that is inactive (its own check reports that)
+  assert.deepEqual(poPickedVendorProblems([{ indent: quoted([locked]), item: locked, ref: 'r1' }], { _id: V2, name: 'Beta', isActive: false }), []);
+  // a preselection changed to an inactive vendor is refused
+  assert.equal(poPickedVendorProblems([{ indent: skipped([pre]), item: pre, ref: 'r2' }], { _id: V2, name: 'Beta', isActive: false }).length, 1);
 });
-test('PO vendor history: every open item on the PO must have the vendor in its history', () => {
-  const a = item(1); const b = item(2);
-  const ind = quoted([a, b]);
-  const history = new Map([[a._id, HIST([V1, 'Alpha'], [V2, 'Beta'])], [b._id, HIST([V2, 'Beta'])]]);
-  const entries = [{ indent: ind, item: a, ref: 'r1' }, { indent: ind, item: b, ref: 'r2' }];
-  assert.deepEqual(poVendorHistoryProblems(entries, V2, 'Beta', history), []);
-  const problems = poVendorHistoryProblems(entries, V1, 'Alpha', history);
+test('PO vendor choice: one message however many open items are on the PO', () => {
+  const a = item(1); const b = item(2); const c = item(3);
+  const ind = quoted([a, b, c]);
+  const problems = poPickedVendorProblems([a, b, c].map((it, i) => ({ indent: ind, item: it, ref: 'r' + (i + 1) })), { _id: V1, name: 'Alpha', isActive: false });
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /r2/);
+  assert.match(problems[0], /r1 \(Item 1\) and 2 more items/);
 });
 test('JSL vendor: only a Jindal vendor can take a JSL-format PO (name match, any case / suffix)', () => {
   assert.equal(isJslVendorName('Jindal Stainless Ltd'), true);

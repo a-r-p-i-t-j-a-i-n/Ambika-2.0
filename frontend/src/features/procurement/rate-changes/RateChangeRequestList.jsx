@@ -13,7 +13,7 @@ import { PFMS, pfmsCardSx, pfmsFieldLabelSx, ALL_WHEN_UNSET, pfmsKpiRowSx } from
 import { fmtDate } from '../approvals/approvalMeta';
 import useRowNavigation, { rowNavigationGridSx } from '../common/useRowNavigation';
 import RateChangeStatusChip from './RateChangeStatusChip';
-import { RATE_STATUS, RATE_STATUSES, fmtRate, fmtDiff, diffColor } from './rateChangeMeta';
+import { RATE_STATUS, RATE_STATUSES, fmtRate, fmtDiff, diffColor, isUnitChange, changeShort, existingPriceOf, requestedPriceOf } from './rateChangeMeta';
 
 const cellText = (v, sx = {}) => <Typography noWrap sx={{ fontSize: '0.8rem', ...sx }}>{v ?? '—'}</Typography>;
 
@@ -60,11 +60,13 @@ const RateChangeRequestList = ({ onOpen }) => {
         </Box>
       ) },
     { field: 'vendorName', headerName: 'Vendor', flex: 1, minWidth: 160, renderCell: (p) => cellText(p.value) },
-    { field: 'itemName', headerName: 'Item / SKU', flex: 1.1, minWidth: 190,
+    { field: 'itemName', headerName: 'Item / SKU', flex: 1.1, minWidth: 220,
       renderCell: (p) => (
         <Box sx={{ lineHeight: 1.2, minWidth: 0 }}>
           {cellText(p.value, { fontWeight: 600 })}
-          {cellText(`${p.row.skuCode || '—'} · ${p.row.unit || ''}`, { fontSize: '0.7rem', color: PFMS.sub })}
+          {cellText(isUnitChange(p.row)
+            ? `${p.row.skuCode || '—'} · ${changeShort(p.row)}: ${p.row.existingVendorUnit || '—'} → ${p.row.requestedUnit || p.row.unit || '—'}`
+            : `${p.row.skuCode || '—'} · ${p.row.unit || ''}`, { fontSize: '0.7rem', color: isUnitChange(p.row) ? '#7c3aed' : PFMS.sub, fontWeight: isUnitChange(p.row) ? 700 : 400 })}
         </Box>
       ) },
     { field: 'poRef', headerName: 'PO / Indent', width: 170,
@@ -74,9 +76,9 @@ const RateChangeRequestList = ({ onOpen }) => {
           {cellText(p.row.indentItemDisplayNumber || p.row.indentNumber, { fontSize: '0.7rem', color: PFMS.sub })}
         </Box>
       ) },
-    { field: 'existingVendorRate', headerName: 'Vendor Rate', width: 115, align: 'right', headerAlign: 'right', renderCell: (p) => cellText(fmtRate(p.value)) },
+    { field: 'existingVendorRate', headerName: 'Vendor Rate', width: 140, align: 'right', headerAlign: 'right', renderCell: (p) => cellText(existingPriceOf(p.row)) },
     { field: 'originalPoRate', headerName: 'Original PO Rate', width: 140, align: 'right', headerAlign: 'right', renderCell: (p) => cellText(fmtRate(p.value)) },
-    { field: 'requestedRate', headerName: 'Requested Rate', width: 135, align: 'right', headerAlign: 'right', renderCell: (p) => cellText(fmtRate(p.value), { fontWeight: 800 }) },
+    { field: 'requestedRate', headerName: 'Requested Rate', width: 150, align: 'right', headerAlign: 'right', renderCell: (p) => cellText(requestedPriceOf(p.row), { fontWeight: 800 }) },
     { field: 'diffAmount', headerName: 'Difference', width: 150, align: 'right', headerAlign: 'right',
       renderCell: (p) => cellText(fmtDiff(p.value, p.row.diffPercent), { fontWeight: 700, color: diffColor(p.value) }) },
     { field: 'status', headerName: 'Status', width: 115, renderCell: (p) => <RateChangeStatusChip status={p.value} /> },
